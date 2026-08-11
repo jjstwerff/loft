@@ -27,20 +27,18 @@ tables.
   catches an over-range index but NOT a `-1` sentinel / underflow — that reads a real
   element from the end.  Was documented only for slices; now in LOFT.md § indexing +
   loft-write.  Guard a possibly-negative index with `if i >= 0` first.
-- **A type with `OpDrop` in a container: struct fields work, collections do not yet**
-  (loft#849 / @PLN139). A droppable copied into a struct FIELD is now a MOVE — the source
-  stops dropping and the container's death releases it, own hook first and then its fields
-  in reverse declaration order. That closes the shape @PLN138's registry hit as a
-  use-after-free inside `sqlite3_step` (the container was RETURNED, so it outlived the
-  source whose scope end closed the handle). **Still open: an ENUM payload and a COLLECTION
-  element.** An enum payload behaves as it always did (the source drops, early if the
-  container escapes); a collection element LEAKS — nothing releases it — which is the safe
-  direction but is a leak. Until those land, keep spelling the transfer out for those two:
-  a method that zeroes the handles WITHOUT releasing them, called after constructing the
-  container (`disown` in `tests/fixtures/sqldb/*/src/*.loft`). Two ordering rules go with
-  it — a scope end runs AFTER the function body, so a resource whose owner is closed inside
-  that body must be released explicitly first; and the release must be idempotent, because
-  exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
+- **A type with `OpDrop` in a container is a MOVE** (loft#849 / @PLN139). Copying a droppable
+  into a struct field, an enum payload or a collection element transfers ownership: the source
+  no longer releases it, and the container's death does — its own hook first, then its members
+  in reverse declaration order, and a collection element by element. That closes the shape
+  @PLN138's registry hit as a use-after-free inside `sqlite3_step` (the container was RETURNED,
+  so it outlived the source whose scope end closed the handle), so `disown` is no longer needed
+  for it. Two ordering rules still hold — a scope end runs AFTER the function body, so a
+  resource whose owner is closed inside that body must be released explicitly first; and the
+  release must be idempotent, because exhaustion and the scope end both call it. **Two things
+  it does NOT do:** a KEYED collection (`hash`/`sorted`/…) does not release its records, since
+  they are shared with the collections they are indexed from; and moving one droppable into TWO
+  containers releases it twice, because loft has no move checker. INTERFACES.md § `OpDrop`.
   Two things worth knowing whatever the shape. The source's release is only VISIBLY
   early when the container OUTLIVES that scope — inside one scope the source dies last
   anyway, so a same-scope test reads as working and is not evidence. And the boundary the

@@ -1,9 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN139 stages B, C and D — a container's death releases what it OWNS, and the value it
-// took ownership of stops releasing itself. Struct fields and enum payloads; collection
-// elements are stage E.
+// @PLN139 stages B–E — a container's death releases what it OWNS, and the value it took
+// ownership of stops releasing itself. Struct fields, enum payloads and collection elements.
 //
 // Before this, a droppable copied into a struct field was released TWICE over: once by the
 // source at its own scope end, and never by the container. Whether that read as a bug
@@ -19,10 +18,10 @@
 // The two halves must be read together, which is why they are one file. Stage B gives every
 // type that owns a droppable field a synthesized cascade (`t_<LEN><Type>_OpDropAll`) that
 // runs the type's OWN hook first and then releases its fields in reverse declaration order.
-// Stage C stops the source dropping — but only when something has taken over, which is what
-// keeps the staging honest: a copy into a COLLECTION element is not cascaded yet (stage E),
-// so it is not treated as a transfer and its source keeps dropping exactly as before.
-// Suppressing there would turn today's early release into a silent leak.
+// Stage C stops the source dropping — but only when something has taken over. That scoping
+// is load-bearing while the stages land one at a time: a copy into a container the cascade
+// cannot yet release is NOT a transfer, so its source keeps dropping and nothing is silently
+// leaked in between.
 //
 // Stage D adds the enum: the value is a record of the VARIANT with a discriminator at its
 // head, so the enum's cascade reads it once and dispatches to the variant that is present.
@@ -30,6 +29,9 @@
 // It also needed the drop SITE widened — a struct-enum binding is a heap record exactly as a
 // `Reference` one is, and reading only `Reference` there is why the cascade was synthesized
 // and then never called.
+//
+// Stage E walks a collection's elements. A LOCAL vector needs no special case: it is backed
+// by a wrapper record whose field holds the elements, so the field cascade reaches it.
 //
 // Container-before-fields is the RAII order and not an accident: a wrapper's own release may
 // still need the resource it wraps — a connection says goodbye over the socket it is about
@@ -116,11 +118,31 @@ fn c10() { w: W = WNone; note("alive"); }
 // 11 — CONTROL: a unit-only enum synthesizes no cascade at all.
 fn c11() { u: Units = UA; note("alive{u == UA}"); }
 
-// 12 — CONTROL: a droppable that never enters a container. Untouched by all of this.
-fn c12() { a = mk(20); b = mk(21); note("alive{a.id}{b.id}"); }
+// 12 — a COLLECTION of droppables (stage E). A local vector is backed by a wrapper record
+//      whose field holds the elements, so the same field cascade reaches it — the loop walks
+//      the elements FORWARD and releases each. This is also the shape that used to close the
+//      last element once per element and the first never.
+fn c12() { v: vector<H> = [mk(40), mk(41), mk(42)]; note("alive{len(v)}"); }
 
-// 13 — CONTROL: no droppable anywhere. No cascade may be synthesized, and nothing may run.
-fn c13() { p = Plain { n: 1 }; note("alive{p.n}"); }
+// 13 — a collection of CONTAINERS: each element's own cascade runs, so the composition of
+//      the two constructors is what is under test, not either alone.
+fn c13() { v: vector<S> = [S { h: mk(43) }, S { h: mk(44) }]; note("alive{len(v)}"); }
+
+// 14 — a collection FIELD of a struct, rather than a bare local.
+struct Bag { v: vector<H>, tag: integer }
+fn c14() { b = Bag { v: [mk(45), mk(46)], tag: 1 }; note("alive{len(b.v)}"); }
+
+// 15 — CONTROL: an EMPTY collection of a droppable type. The loop must run zero times.
+fn c15() { v: vector<H> = []; note("alive{len(v)}"); }
+
+// 16 — CONTROL: a collection whose element owns nothing. No loop may be emitted at all.
+fn c16() { v: vector<Plain> = [Plain { n: 7 }]; note("alive{len(v)}"); }
+
+// 17 — CONTROL: a droppable that never enters a container. Untouched by all of this.
+fn c17() { a = mk(20); b = mk(21); note("alive{a.id}{b.id}"); }
+
+// 18 — CONTROL: no droppable anywhere. No cascade may be synthesized, and nothing may run.
+fn c18() { p = Plain { n: 1 }; note("alive{p.n}"); }
 
 fn main() {
   empty: vector<u8> = [];
@@ -163,10 +185,25 @@ fn main() {
   assert(got == "alivetrue", "c11 a unit-only enum has no cascade: {got}");
 
   c12(); got = drain();
-  assert(got == "alive2021,21,20", "c12 uncontainered droppables are unchanged: {got}");
+  assert(got == "alive3,40,41,42", "c12 every element released, in order: {got}");
 
   c13(); got = drain();
-  assert(got == "alive1", "c13 a program with no droppable runs nothing: {got}");
+  assert(got == "alive2,43,44", "c13 a collection of containers composes: {got}");
+
+  c14(); got = drain();
+  assert(got == "alive2,45,46", "c14 a collection FIELD of a struct: {got}");
+
+  c15(); got = drain();
+  assert(got == "alive0", "c15 an empty collection runs the loop zero times: {got}");
+
+  c16(); got = drain();
+  assert(got == "alive1", "c16 a collection of plain records emits no loop: {got}");
+
+  c17(); got = drain();
+  assert(got == "alive2021,21,20", "c17 uncontainered droppables are unchanged: {got}");
+
+  c18(); got = drain();
+  assert(got == "alive1", "c18 a program with no droppable runs nothing: {got}");
 
   delete(trace_path());
   println("139 cascade ok");

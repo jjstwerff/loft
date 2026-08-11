@@ -103,12 +103,31 @@ Each stage lands against the matrix below, on BOTH backends, with the full gate 
   always takes the work-ref path (declared type is the enum, constructed type the variant, so
   it cannot be built in place) and `w: W = WH { h: c }` otherwise cascaded twice. Cell c3.
   **This is @PLN138's shape.**
-- **E — collection elements.** The hand-built loop. Cells c7/c8. **Both LEAK until this
-  lands** — c7 since `fc3fb2c3` (the double-close fix), c8 since stage C moved its `S` temp's
-  ownership into the element. Leak, not corruption, and `LOFT_STRICT_STORES` is clean on the
-  matrix; but it is the gap that makes the cascade partial and it should not sit open long.
+- **E — collection elements. SHIPPED.** A per-element loop in the container's cascade,
+  check-then-read (no user body can shrink the vector — a drop receives only `self`), length
+  re-read each iteration, element var `skip_free` because it is a VIEW into the container's own
+  storage. A LOCAL vector needed no special case: it is backed by a wrapper record whose field
+  holds the elements, so the field cascade reaches it. Keyed collections (`hash`/`sorted`/…) are
+  deliberately excluded — they share records with the collections they are indexed from, so
+  releasing through one would release somebody else's element. Cells c7/c8.
+  It also forced the last ownership hole closed: a copy into an element from a NAMED local sets
+  no `0x8000` bit (the source stays live), so once elements release, the local releasing too is
+  one resource released twice. An element append is now a transfer on the same terms as a field.
 - **F — the contract.** INTERFACES.md § `OpDrop` rewritten to the owner rule, CAVEATS entry
-  retired, C111 cross-linked.
+  retired, C111 cross-linked. THE REMAINING STAGE.
+
+## Open, found while building
+
+- **A droppable moved into TWO containers is a double-close.** `s1 = S{h:c}; s2 = S{h:c}` — loft
+  has no move checker, so both containers release one resource. Statically detectable in the
+  common case (a var that is the source of more than one transfer); candidate is a
+  `warning`-tier diagnostic, which gates because ignoring it produces a wrong result.
+- **Two suite tests fail under full-suite concurrency and pass standalone**, both counting
+  assertions: `store_load_key_pages_over_the_browser_fetch_bridge` (bytes fetched) and
+  `a_pointer_bearing_element_relocates_in_bulk` (four-byte reads, 522 against a 500 bound).
+  Structurally unrelated to this plan — the stdlib declares no `OpDrop`, so no cascade is
+  synthesized and no drop is emitted for those programs — but a read COUNT that moves with
+  concurrency points at a shared scratch/fixture and is worth its own look.
 
 ## Known hazard, not yet designed
 

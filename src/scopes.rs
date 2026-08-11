@@ -1027,7 +1027,10 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
         match n {
             Value::Call(d, args) if *d == copy_d && args.len() >= 3 => {
                 let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
-                if !moved && !copy_hands_off(&args[1], function, data) {
+                if !moved
+                    && !copy_hands_off(&args[1], function, data)
+                    && !appends_to_element(&args[1], function, data)
+                {
                     return;
                 }
                 if let Some(src) = drop_bearing_source(&args[0]) {
@@ -1093,6 +1096,30 @@ fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
     };
     match function.tp(*cv).base() {
         Type::Reference(cd, _) | Type::Enum(cd, true, _) => data.has_drop_cascade(*cd),
+        _ => false,
+    }
+}
+
+/// Does a copy into `dest` hand ownership to a COLLECTION element?
+///
+/// `_elm_N` is the element `OpNewRecord` hands back, so a copy into it is the element-append.
+/// The releaser is not the element's own type but the COLLECTION's cascade, which walks every
+/// element — and that loop is emitted exactly when the element type owns a droppable, so that
+/// is the condition to test.
+///
+/// Needed beside the `0x8000` case, which only fires when the source is dead after the copy.
+/// A NAMED local appended to a collection (`v: vector<H> = [h1, h2]`) stays live, so no move
+/// bit is set — and once the collection releases its elements, leaving the local dropping too
+/// means one resource released twice.
+fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
+    let Value::Var(dv) = dest.unspan() else {
+        return false;
+    };
+    if !function.name(*dv).starts_with("_elm_") {
+        return false;
+    }
+    match function.tp(*dv).base() {
+        Type::Reference(ed, _) | Type::Enum(ed, true, _) => data.owns_droppable(*ed),
         _ => false,
     }
 }

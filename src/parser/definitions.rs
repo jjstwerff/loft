@@ -4194,7 +4194,8 @@ impl Parser {
                 // a variant is a record whose attributes are its payload.
                 DefType::Struct | DefType::EnumValue => {
                     self.data.def(d_nr).known_type() != u16::MAX
-                        && !self.cascade_fields(d_nr).is_empty()
+                        && (!self.cascade_fields(d_nr).is_empty()
+                            || !self.cascade_vectors(d_nr).is_empty())
                 }
                 // An ENUM releases through whichever variant it currently holds.
                 DefType::Enum => !self.cascade_variants(d_nr).is_empty(),
@@ -4252,7 +4253,7 @@ impl Parser {
             {
                 continue;
             }
-            if self.cascade_fields(v).is_empty() {
+            if self.cascade_fields(v).is_empty() && self.cascade_vectors(v).is_empty() {
                 continue;
             }
             let vname = self.data.def(v).name().to_string();
@@ -4359,6 +4360,126 @@ impl Parser {
         out
     }
 
+    /// @PLN139 stage E — the COLLECTION fields a cascade releases element by element:
+    /// `(byte offset, vector type, element type, element definition)`.
+    ///
+    /// Owning a collection of droppables is owning the droppables, so the container's death
+    /// releases every element. Only `Vector` — the keyed collections (`hash`/`sorted`/…) share
+    /// their records with the collections they are indexed from, so releasing through one
+    /// would release somebody else's element; they need the ownership question answered first
+    /// and are deliberately out of stage E.
+    fn cascade_vectors(&self, d_nr: u32) -> Vec<(u16, Type, Type, u32)> {
+        let kt = self.data.def(d_nr).known_type();
+        let mut out = Vec::new();
+        for a_nr in 0..self.data.def(d_nr).attributes().len() {
+            let a = &self.data.def(d_nr).attributes()[a_nr];
+            if a.hidden {
+                continue;
+            }
+            let Type::Vector(elm, _) = a.typedef.base() else {
+                continue;
+            };
+            let elm = (**elm).clone();
+            let (Type::Reference(ed, _) | Type::Enum(ed, true, _)) = elm.base() else {
+                continue;
+            };
+            let ed = *ed;
+            if !self.data.owns_droppable(ed) {
+                continue;
+            }
+            let name = self.data.attr_name(d_nr, a_nr);
+            let off = self.database.position(kt, &name);
+            if off == u16::MAX {
+                continue;
+            }
+            out.push((off, a.typedef.base().clone(), elm, ed));
+        }
+        out
+    }
+
+    /// The per-element release loop for one collection field — see [`Self::cascade_vectors`].
+    ///
+    /// Shaped check-then-read rather than the read-then-check a `for` loop lowers to, because
+    /// there is no user body that could shrink the vector mid-walk: a drop receives only
+    /// `self`. The length is still re-read each iteration rather than hoisted, so the loop
+    /// cannot outrun a vector that changed under it.
+    ///
+    /// The element variable is `skip_free`: it is a VIEW into the container's own storage, and
+    /// the container's cascade runs immediately before the free that releases that storage.
+    /// Freeing it here would release the container's block one element at a time.
+    fn drop_elements_loop(
+        &mut self,
+        self_var: u16,
+        idx: usize,
+        off: u16,
+        vec_tp: &Type,
+        elem_tp: &Type,
+        target: u32,
+    ) -> Value {
+        let int_tp = self
+            .data
+            .def(self.data.def_nr("integer"))
+            .returned()
+            .clone();
+        let i_var = self
+            .vars
+            .add_variable(&format!("__dc_i{idx}"), &int_tp, &mut self.lexer);
+        let e_var = self
+            .vars
+            .add_variable(&format!("__dc_e{idx}"), elem_tp, &mut self.lexer);
+        self.vars.set_skip_free(e_var);
+        let field = self.get_val(
+            vec_tp,
+            false,
+            u32::from(off),
+            Value::Var(self_var),
+            u32::MAX,
+        );
+
+        let len = self.cl("OpLengthVector", std::slice::from_ref(&field));
+        let past_end = self.cl("OpLeInt", &[len, Value::Var(i_var)]);
+        let stride = self.vector_elem_iter_stride(elem_tp);
+        let vec_def = self.data.type_def_nr(elem_tp);
+        let db_tp = self.data.def(vec_def).known_type();
+        let read = if self.database.is_linked(db_tp) {
+            self.cl("OpVectorRefNullable", &[field.clone(), Value::Var(i_var)])
+        } else {
+            self.cl(
+                "OpGetVectorNullable",
+                &[
+                    field.clone(),
+                    Value::Int(i32::from(stride)),
+                    Value::Var(i_var),
+                ],
+            )
+        };
+        let live = self.cl("OpConvBoolFromRef", &[Value::Var(e_var)]);
+        let step = self.cl("OpAddInt", &[Value::Var(i_var), Value::Int(1)]);
+
+        let body = vec![
+            v_if(
+                past_end,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            ),
+            crate::data::v_set(e_var, read),
+            v_if(
+                live,
+                Value::Call(target, vec![Value::Var(e_var)]),
+                Value::Null,
+            ),
+            crate::data::v_set(i_var, step),
+        ];
+        v_block(
+            vec![
+                crate::data::v_set(i_var, Value::Int(0)),
+                crate::data::v_loop(body, "drop_elements"),
+            ],
+            Type::Void,
+            "drop_elements_block",
+        )
+    }
+
     /// Build the body of the cascade declared for `t` — see [`Self::synth_drop_cascades`].
     fn fill_drop_cascade(&mut self, t: u32, c_nr: u32) {
         let name = Self::drop_cascade_name(&self.data, t);
@@ -4378,6 +4499,15 @@ impl Parser {
         let own = self.data.drop_hook_nr(t);
         if own != u32::MAX {
             ops.push(Value::Call(own, vec![Value::Var(self_var)]));
+        }
+        for (n, (off, vec_tp, elem_tp, ed)) in self.cascade_vectors(t).into_iter().enumerate().rev()
+        {
+            let target = self.data.drop_cascade_nr(ed);
+            if target == u32::MAX {
+                continue;
+            }
+            let loop_code = self.drop_elements_loop(self_var, n, off, &vec_tp, &elem_tp, target);
+            ops.push(loop_code);
         }
         for (off, ftype, fd) in self.cascade_fields(t).into_iter().rev() {
             let target = self.data.drop_cascade_nr(fd);
