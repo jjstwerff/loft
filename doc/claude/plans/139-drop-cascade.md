@@ -75,16 +75,30 @@ Each stage lands against the matrix below, on BOTH backends, with the full gate 
   type fails half of them. Two cycle cases — a self-referential node, and a two-type cycle where
   the hook is reachable only through the back edge, asserted from BOTH ends (a guard that cached
   its `false` for a revisited def would answer differently depending on which end asked).
-- **B — struct fields.** Synthesized per-type cascade fn; own hook first, then fields in
-  reverse-declaration order; recursion through nesting. Cells c1/c2/c4/c5/c6/c9.
-- **C — the field-side move.** Suppress the source's drop when a droppable is copied into a
-  field (the element side already landed in `fc3fb2c3`). Detect it as a copy whose DESTINATION is
-  an `OpGetField` and whose source is a plain `Var`. Must land WITH B: alone it converts today's
-  early-close into a silent leak.
+- **B — struct fields. SHIPPED.** `Parser::synth_drop_cascades` gives every type that owns a
+  droppable FIELD a synthesized `t_<LEN><Type>_OpDropAll`: own hook first, then fields in
+  reverse declaration order, each calling the field type's own cascade so nesting needs no
+  special case. Declared in two phases (all names, then all bodies) so a nested chain does not
+  depend on definition order. Runs at the five pass-2 tails beside `check_reshape_under_reference`
+  — where every type and every hook are known — and is idempotent. `Data::drop_cascade_nr` is
+  what a drop site calls: the cascade when one exists, the bare hook otherwise, so a program
+  with no containers is unchanged.
+- **C — the field-side move. SHIPPED.** A copy that hands its source off no longer leaves the
+  source dropping: the `0x8000` move into an element (already in `fc3fb2c3`) and now a copy whose
+  DESTINATION is a container field. **Scoped to containers that actually have a cascade**
+  (`Data::has_drop_cascade`) — a copy into an enum payload or a collection element is not yet
+  cascaded, so it is not treated as a transfer and its source keeps dropping. That scoping is
+  what keeps the staging honest; without it stages D/E's shapes turn today's early release into
+  a silent leak. The source also peels through a BLOCK tail, since an `Object` construction
+  reaches the copy as the block that builds it (`Nest { s: S { … } }` double-released without it).
+  Cells c1/c2/c4/c5/c6/c9 now match; guard: `tests/scripts/139-drop-cascade-fields.loft`.
 - **D — enum payloads.** Variant dispatch on the discriminator; only variants with a droppable
   payload get an arm. Cell c3. **This is @PLN138's shape** — the registry wraps its cursor in an
   enum — so it is the stage the consumer is actually waiting on.
-- **E — collection elements.** The hand-built loop. Cells c7/c8.
+- **E — collection elements.** The hand-built loop. Cells c7/c8. **Both LEAK until this
+  lands** — c7 since `fc3fb2c3` (the double-close fix), c8 since stage C moved its `S` temp's
+  ownership into the element. Leak, not corruption, and `LOFT_STRICT_STORES` is clean on the
+  matrix; but it is the gap that makes the cascade partial and it should not sit open long.
 - **F — the contract.** INTERFACES.md § `OpDrop` rewritten to the owner rule, CAVEATS entry
   retired, C111 cross-linked.
 

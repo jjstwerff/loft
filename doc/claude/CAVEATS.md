@@ -27,30 +27,27 @@ tables.
   catches an over-range index but NOT a `-1` sentinel / underflow — that reads a real
   element from the end.  Was documented only for slices; now in LOFT.md § indexing +
   loft-write.  Guard a possibly-negative index with `if i >= 0` first.
-- **A type with `OpDrop` does not survive being put in a container** (loft#849, open).
-  A struct field COPIES at construction, so wrapping one leaves two records holding one
-  resource — and it is the **source** that drops, while the container's copy is never
-  dropped at all (a field is released by its owner's cascade, and a cascade is a free,
-  not a drop). For a plain value that is harmless; for a type that owns a `#c` handle
-  the copy is born dead. @PLN138's registry hit it as a use-after-free inside
-  `sqlite3_step`. Until it is settled, spell the transfer out: a method that zeroes the
-  handles WITHOUT releasing them, called after constructing the container
-  (`disown` in `tests/fixtures/sqldb/*/src/*.loft`). Two ordering rules go with it —
-  a scope end runs AFTER the function body, so a resource whose owner is closed inside
-  that body must be released explicitly first; and the release must be idempotent,
-  because exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
-  One thing the filed scope does not say, measured on BOTH backends: the source
-  dropping is only VISIBLY early when the container OUTLIVES that scope (returned) —
-  inside one scope the source dies last anyway, which is why the shape reads as
-  working. A **collection** element no longer double-closes (that half is fixed: a
-  value MOVED into an element had its store released by the copy, and the consumed
-  source's scope-exit drop then ran on a recycled record — `[mk(8), mk(9)]` closed id
-  9 twice and id 8 never). A moved element now drops NOT AT ALL, which is the same
-  state a struct field is in. The remaining half is scheduled: a droppable copied into a
-  container is a MOVE, and the container's death drops what it owns (@PLN139) — with the
-  scope boundary decided in [DESIGN_DECISIONS.md § C111](DESIGN_DECISIONS.md): *a drop
-  runs when the value's OWNER dies; taking a value out of its owner does not*, so
-  removing or overwriting a collection element will not drop it.
+- **A type with `OpDrop` in a container: struct fields work, collections do not yet**
+  (loft#849 / @PLN139). A droppable copied into a struct FIELD is now a MOVE — the source
+  stops dropping and the container's death releases it, own hook first and then its fields
+  in reverse declaration order. That closes the shape @PLN138's registry hit as a
+  use-after-free inside `sqlite3_step` (the container was RETURNED, so it outlived the
+  source whose scope end closed the handle). **Still open: an ENUM payload and a COLLECTION
+  element.** An enum payload behaves as it always did (the source drops, early if the
+  container escapes); a collection element LEAKS — nothing releases it — which is the safe
+  direction but is a leak. Until those land, keep spelling the transfer out for those two:
+  a method that zeroes the handles WITHOUT releasing them, called after constructing the
+  container (`disown` in `tests/fixtures/sqldb/*/src/*.loft`). Two ordering rules go with
+  it — a scope end runs AFTER the function body, so a resource whose owner is closed inside
+  that body must be released explicitly first; and the release must be idempotent, because
+  exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
+  Two things worth knowing whatever the shape. The source's release is only VISIBLY
+  early when the container OUTLIVES that scope — inside one scope the source dies last
+  anyway, so a same-scope test reads as working and is not evidence. And the boundary the
+  cascade will stop at is already decided
+  ([DESIGN_DECISIONS.md § C111](DESIGN_DECISIONS.md)): *a drop runs when the value's OWNER
+  dies; taking a value out of its owner does not*, so removing or overwriting a collection
+  element will not release it even once the element cascade lands.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.

@@ -4143,6 +4143,163 @@ impl Parser {
         self.data.def_used(d_nr);
         Value::Call(d_nr, call_args)
     }
+
+    /// The mangled name of a type's synthesized drop CASCADE — `t_<LEN><Type>_OpDropAll`.
+    ///
+    /// Keyed exactly like the hook itself (`Data::drop_hook_nr`), so a cascade for a
+    /// library's type resolves through that library's source the same way its hook does.
+    /// The `_OpDropAll` suffix is deliberately not `_OpDrop`: `check_drop_signature` keys on
+    /// the latter, and a synthesized function must not be validated as a user declaration.
+    pub(crate) fn drop_cascade_name(data: &crate::data::Data, type_def: u32) -> String {
+        let n = data.def(type_def).name();
+        format!("t_{}{}_OpDropAll", n.len(), n)
+    }
+
+    /// @PLN139 stage B — give every type that OWNS a droppable through a field a function
+    /// that releases what it owns, so a container's death releases its members.
+    ///
+    /// The cascade is a synthesized loft function rather than IR emitted at each free site,
+    /// because the free sites live in `scopes.rs`, which holds `Data` and NOT the schema —
+    /// and a field cascade is nothing but field offsets. Here both are in hand, one function
+    /// per type serves every site that drops one, and nesting falls out of each cascade
+    /// calling the next.
+    ///
+    /// Body order is **the container's own hook first, then its fields in reverse
+    /// declaration order**. The container runs before the things it owns for the reason
+    /// RAII always gives: a wrapper's own release may still need the resource it wraps (a
+    /// connection says goodbye over the socket it is about to close). Reverse declaration
+    /// order among the fields matches the scope-exit free order a reader already knows.
+    ///
+    /// Runs at the end of pass 2, where every type and every `OpDrop` are known, and is
+    /// IDEMPOTENT — a type whose cascade already exists is skipped, so the several parse
+    /// tails that call it cost nothing after the first.
+    ///
+    /// **Stage B is fields only.** A droppable reachable only through an enum payload or a
+    /// collection element is deliberately NOT cascaded yet (stages D and E): emitting half a
+    /// cascade would be worse than none, because a partial release reads as a working one.
+    /// So the members walked here are exactly the members emitted here.
+    pub(crate) fn synth_drop_cascades(&mut self) {
+        // Cheap exit for the overwhelmingly common program: no `OpDrop` anywhere means no
+        // type can own a droppable, so nothing below can fire.
+        if !self.data.any_drop_hook() {
+            return;
+        }
+        let mut targets: Vec<u32> = Vec::new();
+        for d_nr in 0..self.data.definitions() {
+            if !matches!(self.data.def_type(d_nr), DefType::Struct) {
+                continue;
+            }
+            if self.data.def(d_nr).known_type() == u16::MAX {
+                continue; // never laid out — no offsets to read
+            }
+            if !self.cascade_fields(d_nr).is_empty()
+                && self.data.def_nr(&Self::drop_cascade_name(&self.data, d_nr)) == u32::MAX
+            {
+                targets.push(d_nr);
+            }
+        }
+        // Two phases, because a cascade body CALLS the cascade of each droppable field and a
+        // nested chain would otherwise depend on definition order: declare them all, then
+        // fill the bodies once every name resolves.
+        let mut made: Vec<(u32, u32)> = Vec::new();
+        for &t in &targets {
+            let name = Self::drop_cascade_name(&self.data, t);
+            let pos = self.data.def(t).position().clone();
+            let c_nr = self.data.add_def(&name, &pos, DefType::Function);
+            self.data.set_returned(c_nr, Type::Void);
+            let self_tp = Type::Reference(t, crate::data::Deps::none());
+            let _ = self
+                .data
+                .add_attribute(&mut self.lexer, c_nr, "self", self_tp);
+            made.push((t, c_nr));
+        }
+        for (t, c_nr) in made {
+            self.fill_drop_cascade(t, c_nr);
+        }
+    }
+
+    /// The DIRECT struct fields a stage-B cascade releases: `(byte offset, field type, field
+    /// definition)` for each field whose own type owns a droppable, in declaration order.
+    ///
+    /// Only `Reference` fields — a dense inline sub-record, whose offset is the whole of what
+    /// releasing it needs. An enum-payload or collection field is left for stages D/E and is
+    /// therefore NOT reported here, so `synth_drop_cascades` never declares a cascade it
+    /// cannot fully fill.
+    fn cascade_fields(&self, d_nr: u32) -> Vec<(u16, Type, u32)> {
+        let kt = self.data.def(d_nr).known_type();
+        let mut out = Vec::new();
+        for a_nr in 0..self.data.def(d_nr).attributes().len() {
+            let a = &self.data.def(d_nr).attributes()[a_nr];
+            if a.hidden {
+                continue;
+            }
+            let Type::Reference(fd, _) = a.typedef.base() else {
+                continue;
+            };
+            let fd = *fd;
+            if fd == d_nr || !self.data.owns_droppable(fd) {
+                continue; // a self-field cannot exist inline; skip defensively
+            }
+            let name = self.data.attr_name(d_nr, a_nr);
+            let off = self.database.position(kt, &name);
+            if off == u16::MAX {
+                continue; // not laid out in this record — nothing to reach
+            }
+            out.push((off, a.typedef.base().clone(), fd));
+        }
+        out
+    }
+
+    /// Build the body of the cascade declared for `t` — see [`Self::synth_drop_cascades`].
+    fn fill_drop_cascade(&mut self, t: u32, c_nr: u32) {
+        let name = Self::drop_cascade_name(&self.data, t);
+        let file = self.data.def(t).position().file.clone();
+        let mut vars = Function::new(&name, &file);
+        let self_tp = Type::Reference(t, crate::data::Deps::none());
+        let self_var = vars.add_variable("self", &self_tp, &mut self.lexer);
+        vars.become_argument(self_var);
+        vars.defined(self_var);
+        // Build the body with the cascade's OWN table current, so anything `get_val` mints
+        // for a field read lands in the function that will hold the code.
+        let outer_vars = std::mem::replace(&mut self.vars, vars);
+        let outer_context = self.context;
+        self.context = c_nr;
+
+        let mut ops: Vec<Value> = Vec::new();
+        let own = self.data.drop_hook_nr(t);
+        if own != u32::MAX {
+            ops.push(Value::Call(own, vec![Value::Var(self_var)]));
+        }
+        for (off, ftype, fd) in self.cascade_fields(t).into_iter().rev() {
+            let target = self.data.drop_cascade_nr(fd);
+            if target == u32::MAX {
+                continue;
+            }
+            let field = self.get_val(
+                &ftype,
+                false,
+                u32::from(off),
+                Value::Var(self_var),
+                u32::MAX,
+            );
+            // Guarded for the same reason the scope-exit call is: the free is null-tolerant
+            // and a drop is not, so a field on a record that was never written must not run
+            // the author's release against a record that does not exist.
+            let live = self.cl("OpConvBoolFromRef", std::slice::from_ref(&field));
+            ops.push(Value::If(
+                Box::new(live),
+                Box::new(Value::Call(target, vec![field])),
+                Box::new(Value::Null),
+            ));
+        }
+
+        let body = v_block(ops, Type::Void, "drop_cascade");
+        let built = std::mem::replace(&mut self.vars, outer_vars);
+        self.context = outer_context;
+        self.data.definitions[c_nr as usize].code = body;
+        self.data.definitions[c_nr as usize].variables = built;
+        self.data.def_used(c_nr);
+    }
 }
 
 /// Visit every variable index a constant's initialiser carries, in place.

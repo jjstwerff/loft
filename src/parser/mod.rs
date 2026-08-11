@@ -1676,6 +1676,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — the whole world is parsed here, so a callee's body can
             // be asked whether it removes from a `&` parameter.
             self.check_reshape_under_reference();
+            self.synth_drop_cascades();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2323,6 +2324,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — see `parse`.
             if !default {
                 self.check_reshape_under_reference();
+                self.synth_drop_cascades();
             }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -2369,6 +2371,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — see `parse`.
             if !default {
                 self.check_reshape_under_reference();
+                self.synth_drop_cascades();
             }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -2490,6 +2493,7 @@ impl Parser {
         self.check_subrule_wellformedness();
         // @PLN130 F9 (loft#779) — see `parse`.
         self.check_reshape_under_reference();
+        self.synth_drop_cascades();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2543,6 +2547,7 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // @PLN130 F9 (loft#779) — see `parse`.
         self.check_reshape_under_reference();
+        self.synth_drop_cascades();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 

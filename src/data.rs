@@ -5515,6 +5515,61 @@ impl Data {
         self.def_nr(&key)
     }
 
+    /// Does this program declare ANY `OpDrop`?
+    ///
+    /// The cheap gate in front of the whole cascade: with no hook anywhere, no type can own
+    /// a droppable, so every walk below would answer `false` and every synthesis step would
+    /// produce nothing. That is the overwhelmingly common program, and it should not pay for
+    /// a feature it does not use.
+    #[must_use]
+    pub fn any_drop_hook(&self) -> bool {
+        self.definitions
+            .iter()
+            .any(|d| d.def_type == DefType::Function && d.name.ends_with("_OpDrop"))
+    }
+
+    /// @PLN139 — the function that releases everything a value of this type owns: the
+    /// synthesized CASCADE when the type has members to release, else the type's own hook.
+    ///
+    /// This is what a drop site calls. The two-level answer is why the cascade is only
+    /// synthesized for types that actually own a member (`Parser::synth_drop_cascades`): a
+    /// type whose drop is just its own hook keeps calling that hook directly, so a program
+    /// that owns no containers is byte-identical to one compiled before the cascade existed.
+    #[must_use]
+    pub fn drop_cascade_nr(&self, type_def: u32) -> u32 {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return u32::MAX;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDropAll", def.name.len(), def.name);
+        let nr = self.source_nr(def.source, &key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        let nr = self.def_nr(&key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        self.drop_hook_nr(type_def)
+    }
+
+    /// Does this type have a SYNTHESIZED drop cascade (as opposed to only its own hook)?
+    ///
+    /// The question stage C asks before treating a copy into a container as a MOVE: a source
+    /// may only stop dropping when something else has taken over. While the cascade covers
+    /// fields but not yet enum payloads or collection elements (@PLN139 stages D/E), this is
+    /// what keeps the two halves in step — a container the cascade cannot yet release does
+    /// not take ownership, so its source keeps dropping and nothing is silently leaked.
+    #[must_use]
+    pub fn has_drop_cascade(&self, type_def: u32) -> bool {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return false;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDropAll", def.name.len(), def.name);
+        self.source_nr(def.source, &key) != u32::MAX || self.def_nr(&key) != u32::MAX
+    }
+
     /// @PLN139 stage A — does dropping a value of this type require doing ANYTHING?
     ///
     /// True when the type declares `OpDrop` itself, or when it transitively OWNS a member
