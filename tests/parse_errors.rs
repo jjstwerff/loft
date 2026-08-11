@@ -1413,6 +1413,72 @@ fn associated_type_name_must_be_camel_case() {
     );
 }
 
+/// @PLN125 arc C: a type that has not defined `OpIndex` names the line to add.
+///
+/// The old answer was the keyed-collection message, which sent a reader chasing
+/// a `hash<Row[id]>` constructor that has nothing to do with subscripting their
+/// struct. Now that a library type CAN be indexed, "it did not define `OpIndex`"
+/// is the actual cause and the fix is one signature.
+#[test]
+fn indexing_a_type_without_op_index_names_the_method() {
+    code!(
+        "struct Plain { v: integer }
+         fn test() { p = Plain { v: 1 }; p[0] }"
+    )
+    .error(
+        "`Plain` cannot be indexed — define `fn OpIndex(self: Plain, i: integer) -> \u{3c4}` \
+         to give it `x[i]` at indexing_a_type_without_op_index_names_the_method:2:45",
+    );
+}
+
+/// @PLN125 arc C: inside a generic, only the BOUNDS may be relied on — so an
+/// unbounded type variable cannot be subscripted even when every type it is ever
+/// instantiated with defines `OpIndex`.
+///
+/// This is a refusal that has to be enforced rather than fall out: a bound stub
+/// is named for the HOLDER (`t_1I_OpIndex`), and holder names are shared across
+/// generics, so a sibling `fn a<I: Indexable>` in the same program mints exactly
+/// the name an unbounded `fn b<I>` would find. Without the check `b` compiled and
+/// worked, promising nothing and delivering it.
+#[test]
+fn indexing_an_unbounded_type_variable_is_refused() {
+    code!(
+        "interface Indexable { op [] (self: Self, i: integer) -> integer }
+         struct Bits { words: vector<integer> }
+         fn OpIndex(self: Bits, i: integer) -> integer { self.words[i] ?? 0 }
+         fn good<I: Indexable>(x: I) -> integer { x[0] }
+         fn bad<I>(x: I) -> integer { x[0] }
+         fn test() { good(Bits{words:[7]}) + bad(Bits{words:[7]}) }"
+    )
+    .error(
+        "generic type I: `[\u{2026}]` needs a bound that declares it — add \
+         `op [] (self: Self, i: integer) -> \u{3c4}` to an interface and bound `I` by it \
+         at indexing_an_unbounded_type_variable_is_refused:5:42",
+    );
+}
+
+/// @PLN125 arc C: `OpIndex` READS. `x[i] = …` is refused, and the message says so
+/// in the author's terms.
+///
+/// A writing counterpart is a separate decision — it needs its own method, and a
+/// decision about whether `x[i] += 1` may then read-modify-write — so this is a
+/// refusal rather than a gap left silent. Before it, the assignment path reported
+/// "Cannot assign to attribute on type 't_4Bits_OpIndex'", naming an internal
+/// symbol the author never wrote.
+#[test]
+fn assigning_through_op_index_is_refused() {
+    code!(
+        "struct Bits { words: vector<integer> }
+         fn OpIndex(self: Bits, i: integer) -> integer { self.words[i] ?? 0 }
+         fn test() { b = Bits { words: [1,2] }; b[0] = 9; }"
+    )
+    .error(
+        "`Bits` defines `OpIndex`, which READS — `x[i] = \u{2026}` has nothing to write \
+         through; give the type a method that sets (`x.set(i, \u{2026})`) at \
+         assigning_through_op_index_is_refused:3:58",
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable

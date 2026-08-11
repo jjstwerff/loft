@@ -373,33 +373,79 @@ than it gets credit for. Measured on the current tree, not recalled:
 | bounded generics | **yes** | structural satisfaction, no `impl` block |
 | **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124). A hole may be a scalar OR a value of a named type, whose kind is its own name in method case (`SqlIdent` → `hole_sql_ident`) |
 | **associated types** | **yes** | `type Rows: Cursor` in an interface body; `Self.Rows` in its signatures (@PLN125 arc A) |
-| **`x[i]` indexing** | **no** | `OpIndex` is not dispatched: *"Indexing a non vector"* |
+| **`x[i]` indexing** | **yes** | `fn OpIndex(self: T, i: τ) -> υ`; an interface requires it with `op []` (@PLN125 arc C) |
 | **run at scope end** | **no** | no destructor / `#drop` hook |
 
-Two gaps are left. They are listed in the order the evidence supports, which is
-not the order of apparent size:
+One gap is left:
 
-1. **A hook at scope end.** loft already computes the fact — the ownership model
-   decides per binding whether this scope owns a value and whether it dies here,
-   which is what emits `OpFreeRef` today. So a drop is a call at an existing
-   point, not new analysis, and it inherits the early-`return` and loop-epilogue
-   cases that are easy to get wrong (loft#731 exists because of exactly those).
-   The cost to state up front: a drop **cannot fail** under C80, so anything
-   whose failure matters stays an explicit call. Designed in
-   [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
-   **@PLN125 arc B** — which requires a second, unrelated consumer before it
-   lands, because a hook with one user is a hook whose invariant is untested.
+**A hook at scope end.** loft already computes the fact — the ownership model
+decides per binding whether this scope owns a value and whether it dies here,
+which is what emits `OpFreeRef` today. So a drop is a call at an existing
+point, not new analysis, and it inherits the early-`return` and loop-epilogue
+cases that are easy to get wrong (loft#731 exists because of exactly those).
+The cost to state up front: a drop **cannot fail** under C80, so anything
+whose failure matters stays an explicit call. Designed in
+[plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
+**@PLN125 arc B** — which requires a second, unrelated consumer before it
+lands, because a hook with one user is a hook whose invariant is untested.
 
-2. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
-   bitset, a row or a ring buffer read as `x[i]` instead of `x.at(i)`. Nothing is
-   impossible without it; it is the one remaining place where a library type is
-   visibly not a built-in one. **@PLN125 arc C.**
-
-Each is independently landable, and each should land **inert first** — the
+Each arc is independently landable, and each lands **inert first** — the
 contract declared, every existing program proved byte-identical in IR and native
 Rust, before any new behaviour is routed through it. That ordering is what keeps
 a language change from being a rewrite: the proof that nothing changed is a
 smaller and much earlier step than the feature.
+
+## Indexing — `x[i]` on a library type
+
+A type that defines `OpIndex` is subscripted like a built-in collection:
+
+```loft
+struct Ring { data: vector<integer>, start: integer }
+
+fn OpIndex(self: Ring, i: integer) -> integer {
+  n = len(self.data);
+  if n == 0 { return 0; }
+  return self.data[(self.start + i) % n] ?? 0;
+}
+
+r = Ring { data: [10, 20, 30], start: 1 };
+r[0]        // 20 — the ring's own offset, not `data[0]`
+```
+
+This is the `OpAdd` / `OpEq` precedent and nothing more: `x[i]` lowers to the
+two-argument method call `OpIndex(x, i)`, so argument conversion, the heap-return
+buffer and the ownership deps all apply because it IS a method call.
+
+- **The index type is whatever the method declares.** `fn OpIndex(self: Row, name:
+  text) -> integer` gives a row addressed by column name. There is no requirement
+  that a subscript be an integer.
+- **Out of range is the TYPE's answer**, not the language's — `OpIndex` is an
+  ordinary method, so it decides what a miss means.
+- **An interface can require it**, with the operator sugar spelled `op []`:
+
+  ```loft
+  interface Indexable {
+    op [] (self: Self, i: integer) -> integer
+    fn count(self: Self) -> integer
+  }
+
+  fn total<I: Indexable>(x: I) -> integer {
+    s = 0;
+    for i in 0..x.count() { s += x[i]; }
+    return s;
+  }
+  ```
+
+  Inside a generic ONLY the bounds may be relied on, so an unbounded `<I>` cannot
+  be subscripted even when every type it is used with defines `OpIndex`.
+
+**`OpIndex` reads.** `x[i] = …` is refused, and the message says so: a writing
+counterpart is a separate decision — it needs its own method, and a decision about
+whether `x[i] += 1` may then read-modify-write — so a type that must be written
+through offers a setter (`x.set(i, v)`).
+
+Shipped as @PLN125 arc C; `tests/scripts/pln125-c-index.loft` is the behaviour
+matrix.
 
 ## Associated types — an interface that names a companion type
 

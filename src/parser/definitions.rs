@@ -3472,7 +3472,16 @@ impl Parser {
             let method_name = if self.lexer.has_keyword("op") {
                 if let crate::lexer::LexItem::Token(tok) = self.lexer.peek().has.clone() {
                     self.lexer.cont();
-                    format!("Op{}", rename(&tok))
+                    // @PLN125 arc C — subscripting is spelled `op [] (self: Self, i: τ)`.
+                    // The lexer has no `[]` token (the two brackets are separate, as they
+                    // must be for `v[i]`), so the pair is recognised here, where an `op`
+                    // has just been read and a `[` can be nothing else.
+                    if tok == "[" {
+                        self.lexer.token("]");
+                        "OpIndex".to_string()
+                    } else {
+                        format!("Op{}", rename(&tok))
+                    }
                 } else {
                     if !self.first_pass {
                         diagnostic!(

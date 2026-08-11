@@ -12,7 +12,7 @@ issue cannot: the running record of what shipped, and the instruments.
 |---|---|---|
 | **A** | associated types — an interface names a companion type | A1 / A2a / A2b / **A2c** shipped; A3–A4 here |
 | **B** | a hook at scope end (`#drop`) | not started |
-| **C** | `x[i]` dispatched to a library type | not started |
+| **C** | `x[i]` dispatched to a library type | **SHIPPED** |
 
 Each arc lands **inert first**: the contract declared, every existing program
 proved byte-identical in IR and native Rust, before any new behaviour routes
@@ -117,6 +117,36 @@ builder walks the same children and did not.
 first looked (a method-shaped return, a bound local, and the non-generic
 operator are all clean), and it is not what arc A needs. Recorded here rather
 than fixed inside another change.
+
+---
+
+## Arc C — shipped
+
+The reference lives in [INTERFACES.md § Indexing](../../INTERFACES.md); what
+belongs here is why it was three small pieces rather than one.
+
+`x[i]` had exactly one answer for a struct — the keyed-collection refusal — and
+`index_type` (the TYPE of `x[i]`) and `parse_index` (the CODE) are two functions
+that had to start agreeing. So the lookup is one home, `user_index_op`, and both
+read it: a type that answers one must answer the other or they disagree about
+what indexing means.
+
+Three refusals came with it, and each is a case that would otherwise have been
+silent or misleading:
+
+| shape | why it is not a fall-through |
+|---|---|
+| a struct with no `OpIndex` | the old message sent the reader to a `hash<Row[id]>` constructor unrelated to their struct; the cause is one missing signature and the message now names it |
+| an UNBOUNDED `<I>` subscripting | a bound stub is named for the HOLDER (`t_1I_OpIndex`), and holder names are shared — a sibling `fn a<I: Indexable>` mints exactly the name `fn b<I>` would find. Measured: `b` compiled and worked, promising nothing. The binary-operator path carries the same guard for the same reason |
+| `x[i] = …` | the assignment path reported *"Cannot assign to attribute on type `t_4Bits_OpIndex`"*, naming an internal symbol the author never wrote |
+
+**A writing counterpart is deliberately not here.** It needs its own method and a
+decision about whether `x[i] += 1` may then read-modify-write. Refused with a
+message that names the alternative, rather than left to a confusing error.
+
+The `op []` spelling is handled where an `op` has just been read and a `[` can be
+nothing else: the lexer has no `[]` token, and it must not have one, because `[`
+and `]` are separate everywhere else.
 
 ---
 

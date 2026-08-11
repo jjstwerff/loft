@@ -817,6 +817,30 @@ impl Parser {
             // @P285 — see the Hash/Radix arm above; the lookup result is nullable.
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
+        } else if self.user_index_op(&t) != u32::MAX {
+            // @PLN125 arc C — `x[i]` on a library type is the call the type declared.
+            // `OpIndex` takes the receiver and the index, so the lowering is the ordinary
+            // two-argument method call `t_<LEN><Type>_OpIndex(x, i)`, and every rule that
+            // governs a method call — argument conversion, the heap-return buffer, the
+            // ownership deps — governs this one because it IS one.
+            //
+            // The index expression is parsed here rather than by `parse_method`, which
+            // reads a parenthesised argument list; the brackets are the caller's
+            // (`operators.rs` consumes the `]`).
+            let md_nr = self.user_index_op(&t);
+            let arg_pos = vec![self.lexer.peek_pos().clone(), self.lexer.peek_pos().clone()];
+            let mut idx = Value::Null;
+            let idx_t = self.expression(&mut idx);
+            let recv = code.clone();
+            elm_type = self.call_nr(
+                code,
+                md_nr,
+                &[recv, idx],
+                &[t.clone(), idx_t],
+                true,
+                &arg_pos,
+                None,
+            );
         } else if t.is_unknown() {
             // @P278/P281 — pass-1 Unknown receiver: consume the
             // entire bracket content including range syntax
@@ -969,7 +993,58 @@ impl Parser {
         )
     }
 
+    /// @PLN125 arc C — the `OpIndex` a library type defines for `x[i]`, or `u32::MAX`.
+    ///
+    /// The last place a library type was visibly not a built-in one: `OpIndex` was the one
+    /// operator the parser never dispatched, so a matrix, a bitset, a row or a ring buffer
+    /// had to read as `x.at(i)` while every other operator already had its
+    /// `OpCamelCase` method (@PLN99). This follows that precedent exactly — the method is
+    /// found the same way, by the same `t_<LEN><Type>_Op…` name — so nothing about the
+    /// shape is new.
+    ///
+    /// Looked up as a METHOD, not through `find_fn`, whose fallback to a global
+    /// `n_OpIndex` would let an unrelated free function of that name capture every
+    /// subscript in the program.
+    ///
+    /// One home for the answer: [`Self::index_type`] uses it for the TYPE of `x[i]` and
+    /// [`Self::parse_index`] for the CODE, and a type that answers one must answer the
+    /// other or the two disagree about what indexing means.
+    pub(crate) fn user_index_op(&self, t: &Type) -> u32 {
+        let d = match t.base() {
+            Type::Reference(d, _) | Type::Enum(d, _, _) => *d,
+            _ => return u32::MAX,
+        };
+        if d as usize >= self.data.definitions.len() {
+            return u32::MAX;
+        }
+        let name = self.data.def(d).name();
+        let md = self
+            .data
+            .def_nr(&format!("t_{}{}_OpIndex", name.len(), name));
+        if md == u32::MAX || !matches!(self.data.def_type(md), DefType::Function | DefType::Generic)
+        {
+            return u32::MAX;
+        }
+        // A stub is named for the HOLDER — a type variable or an associated type — and
+        // holder names are shared: `fn a<I: Indexable>` mints `t_1I_OpIndex`, and an
+        // unrelated `fn b<I>(x: I) { x[0] }` in the same program would then find it and
+        // subscript a type it was never promised anything about. So for a holder the
+        // lookup is not enough; the BOUNDS have to declare it. (The same guard the
+        // binary-operator path carries, for the same reason.)
+        if self.data.is_type_var_placeholder(d) && !self.has_bound_for_method("OpIndex", d) {
+            return u32::MAX;
+        }
+        md
+    }
+
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {
+        // @PLN125 arc C — a library type that defines `OpIndex` indexes like a built-in
+        // one, and the element type is what that method returns.  Answered BEFORE the
+        // refusal below, which is what used to be the only answer for a struct.
+        let user_op = self.user_index_op(t);
+        if user_op != u32::MAX {
+            return self.data.def(user_op).returned().clone();
+        }
         if let Type::Vector(v_t, _) = t {
             *v_t.clone()
         } else if let Type::Sorted(d_nr, _, _)
@@ -1006,18 +1081,49 @@ impl Parser {
             // First pass: type not yet resolved; suppress error until second pass.
             Type::Unknown(0)
         } else {
-            // QUALITY 6d: the "Indexing a non vector" message fires for two
-            // very different user intents — real misuse of `[..]` on a
-            // scalar, and an attempted generic-constructor
-            // (`hash<Row[id]>()`, `sorted<Elm[k]>()`) that the language
-            // doesn't support.  The second case leaves readers stuck; point
-            // at the type-annotated local idiom that *does* work (a struct
-            // field works too, but the local form is usually what they want).
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row {{ id: 1 }}];` (a struct field `struct Db {{ h: hash<Row[id]> }}` works too)"
-            );
+            // @PLN125 arc C — a library type CAN be subscripted now, so a struct or enum
+            // arriving here has a cause of its own: it did not define `OpIndex`.  Saying
+            // that names the one line the author has to add, where the keyed-collection
+            // message below would send them to a construct that has nothing to do with it.
+            //
+            // A type VARIABLE gets the third message: the type may well define `OpIndex`,
+            // but inside a generic only the BOUNDS may be relied on, so the fix is a bound
+            // and not a method.
+            match t.base() {
+                Type::Reference(d, _) | Type::Enum(d, _, _)
+                    if self.data.is_type_var_placeholder(*d) =>
+                {
+                    let name = self.data.def(*d).name().to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "generic type {name}: `[…]` needs a bound that declares it — add \
+                         `op [] (self: Self, i: integer) -> τ` to an interface and bound \
+                         `{name}` by it"
+                    );
+                }
+                Type::Reference(d, _) | Type::Enum(d, _, _) => {
+                    let name = self.data.def(*d).name().to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`{name}` cannot be indexed — define \
+                         `fn OpIndex(self: {name}, i: integer) -> τ` to give it `x[i]`"
+                    );
+                }
+                // QUALITY 6d: the "Indexing a non vector" message fires for two
+                // very different user intents — real misuse of `[..]` on a
+                // scalar, and an attempted generic-constructor
+                // (`hash<Row[id]>()`, `sorted<Elm[k]>()`) that the language
+                // doesn't support.  The second case leaves readers stuck; point
+                // at the type-annotated local idiom that *does* work (a struct
+                // field works too, but the local form is usually what they want).
+                _ => diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row {{ id: 1 }}];` (a struct field `struct Db {{ h: hash<Row[id]> }}` works too)"
+                ),
+            }
             Type::Unknown(0)
         }
     }
