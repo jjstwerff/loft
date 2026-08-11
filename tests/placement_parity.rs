@@ -383,6 +383,299 @@ fn placed_and_unplaceable_calls_interleave() {
     }
 }
 
+/// @PLN119 arc B — every compound shape, both directions.
+///
+/// A struct or a vector does not fit in a call frame: it is a graph of records,
+/// and it crosses through the shared arena.  The rows here are the composition
+/// matrix's type-kind axis, and the ones that matter are the ones whose bytes
+/// are NOT plain words in the record — a `text` field is a pointer to a
+/// sub-record, a `vector` is a pointer to an element block, and both have to be
+/// re-homed into the arena's own store or the receiving side reads a rec-id that
+/// means something else over there.
+///
+/// `vector<text>` is here on purpose: @PLN97's paged relocator REFUSES it,
+/// because that path moves a matched entry into a different store and each
+/// element's pointer would dangle.  The arena is not that path — both sides map
+/// the same store — so the refusal does not apply, and this is what says so.
+#[test]
+fn compound_values_cross_in_both_directions() {
+    let library = "pub struct P { x: integer, y: integer }\n\
+                   pub struct N { id: integer, label: text }\n\
+                   pub struct O { tag: text, inner: P, tail: vector<integer> }\n\
+                   pub fn sum_p(p: P) -> integer { p.x + p.y }\n\
+                   pub fn make_p(x: integer, y: integer) -> P { P { x: x, y: y } }\n\
+                   pub fn describe(n: N) -> text { \"{n.id}:{n.label}\" }\n\
+                   pub fn make_n(id: integer, label: text) -> N { N { id: id, label: label } }\n\
+                   pub fn sum_v(v: vector<integer>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in v { t += e; }\n\
+                   \x20   t\n\
+                   }\n\
+                   pub fn range_v(n: integer) -> vector<integer> {\n\
+                   \x20   out: vector<integer> = [];\n\
+                   \x20   for i in 0..n { out += [i]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn make_o(tag: text, n: integer) -> O {\n\
+                   \x20   v: vector<integer> = [];\n\
+                   \x20   for i in 0..n { v += [i * 2]; }\n\
+                   \x20   O { tag: tag, inner: P { x: n, y: n * 10 }, tail: v }\n\
+                   }\n\
+                   pub fn show_o(o: O) -> text {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in o.tail { t += e; }\n\
+                   \x20   \"{o.tag}|{o.inner.x + o.inner.y}|{t}|{len(o.tail)}\"\n\
+                   }\n\
+                   pub fn names(n: integer) -> vector<N> {\n\
+                   \x20   out: vector<N> = [];\n\
+                   \x20   for i in 0..n { out += [N { id: i, label: \"n{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn join_names(v: vector<N>) -> text {\n\
+                   \x20   s = \"\";\n\
+                   \x20   for e in v { s += \"{e.id}={e.label};\"; }\n\
+                   \x20   s\n\
+                   }\n\
+                   pub fn words(n: integer) -> vector<text> {\n\
+                   \x20   out: vector<text> = [];\n\
+                   \x20   for i in 0..n { out += [\"w{i}\"]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn join_words(v: vector<text>) -> text {\n\
+                   \x20   s = \"\";\n\
+                   \x20   for e in v { s += \"{e},\"; }\n\
+                   \x20   s\n\
+                   }\n\
+                   pub fn maybe(p: P?) -> integer { if p == null { -1 } else { p.x + p.y } }\n\
+                   pub fn nested(n: integer) -> vector<vector<integer>> {\n\
+                   \x20   out: vector<vector<integer>> = [];\n\
+                   \x20   for i in 0..n {\n\
+                   \x20       row: vector<integer> = [];\n\
+                   \x20       for j in 0..n { row += [i * 10 + j]; }\n\
+                   \x20       out += [row];\n\
+                   \x20   }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn sum_nested(v: vector<vector<integer>>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for row in v { for e in row { t += e; } }\n\
+                   \x20   t\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   p = make_p(3, 4);\n\
+                    \x20   println(\"struct {sum_p(p)} {p.x} {p.y}\");\n\
+                    \x20   n = make_n(7, \"héllo\");\n\
+                    \x20   println(\"text-field {describe(n)} / {n.id} {n.label}\");\n\
+                    \x20   v = range_v(5);\n\
+                    \x20   println(\"vector {sum_v(v)} {len(v)} {v[4]}\");\n\
+                    \x20   o = make_o(\"tag\", 4);\n\
+                    \x20   println(\"nested-struct {show_o(o)} / {o.inner.y} {o.tail[3]}\");\n\
+                    \x20   vn = names(3);\n\
+                    \x20   println(\"vec-struct {join_names(vn)} {len(vn)} {vn[1].label}\");\n\
+                    \x20   vw = words(3);\n\
+                    \x20   println(\"vec-text {join_words(vw)} {len(vw)} {vw[2]}\");\n\
+                    \x20   empty: vector<integer> = [];\n\
+                    \x20   println(\"empty {sum_v(empty)} {len(empty)}\");\n\
+                    \x20   absent: P? = null;\n\
+                    \x20   println(\"null {maybe(p)} {maybe(absent)}\");\n\
+                    \x20   g = nested(3);\n\
+                    \x20   println(\"depth2 {sum_nested(g)} {len(g)} {g[1][1]}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("compound", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("compound values", &inproc, &placed);
+    // Hand-computed, so this is not two runs agreeing on a wrong answer:
+    // sum_p = 7; sum_v(0..5) = 10; show_o("tag",4) = inner 4+40 = 44, tail
+    // 0+2+4+6 = 12, len 4; nested(3) sums 0+1+2 + 10+11+12 + 20+21+22 = 99.
+    for expect in [
+        "struct 7 3 4",
+        "text-field 7:héllo / 7 héllo",
+        "vector 10 5 4",
+        "nested-struct tag|44|12|4 / 40 6",
+        "vec-struct 0=n0;1=n1;2=n2; 3 n1",
+        "vec-text w0,w1,w2, 3 w2",
+        "empty 0 0",
+        "null 7 -1",
+        "depth2 99 3 11",
+    ] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// The cell a copy-only crossing fails.
+///
+/// loft passes a compound BY REFERENCE: `pub fn bump(p: P)` that assigns `p.x`
+/// changes the CALLER's `p`, and a vector parameter that is appended to grows the
+/// caller's vector.  A marshal that copied the argument over and stopped would
+/// leave both silently unchanged under `placement = "process"` — a divergence
+/// with no error, no warning, and a plausible-looking answer.
+///
+/// The text case is the sharper one: the field is a pointer to a sub-record, so
+/// the write has to come back re-homed into the caller's store rather than as a
+/// rec-id that means something else there.
+#[test]
+fn a_callee_writing_to_a_compound_parameter_is_seen_by_the_caller() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn bump(p: P) -> integer {\n\
+                   \x20   p.x = p.x + 100;\n\
+                   \x20   p.label = \"{p.label}!\";\n\
+                   \x20   p.x\n\
+                   }\n\
+                   pub fn push(v: vector<integer>) -> integer {\n\
+                   \x20   v += [99];\n\
+                   \x20   len(v)\n\
+                   }\n\
+                   pub fn both(a: P, b: P) -> integer {\n\
+                   \x20   a.x = a.x + 1;\n\
+                   \x20   b.x = b.x + 10;\n\
+                   \x20   a.x + b.x\n\
+                   }\n\
+                   pub fn range_v(n: integer) -> vector<integer> {\n\
+                   \x20   out: vector<integer> = [];\n\
+                   \x20   for i in 0..n { out += [i]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   p = P { x: 11, label: \"a\" };\n\
+                    \x20   r = bump(p);\n\
+                    \x20   println(\"write {r} caller-sees {p.x} {p.label}\");\n\
+                    \x20   v = range_v(3);\n\
+                    \x20   n = push(v);\n\
+                    \x20   println(\"append {n} caller-sees {len(v)} {v[3]}\");\n\
+                    \x20   q = P { x: 5, label: \"q\" };\n\
+                    \x20   println(\"alias {both(q, q)} caller-sees {q.x}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("byref", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("a written-to compound parameter", &inproc, &placed);
+    // `both(q, q)` passes ONE record twice, so the two writes compound: 5 → 6 →
+    // 16, and `a.x + b.x` reads the same cell twice = 32.  Two independent
+    // copies would answer 6 + 15 = 21 and leave the caller at 6 or 15.
+    for expect in [
+        "write 111 caller-sees 111 a!",
+        "append 4 caller-sees 4 99",
+        "alias 32 caller-sees 16",
+    ] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// A value far larger than the arena's initial size, and enough repetitions that
+/// a per-call leak would show.
+///
+/// Growth is where the two mappings can disagree: a claim that outgrows the file
+/// resizes and re-mmaps it in the WRITER, and the reader's mapping still covers
+/// the old length — reading past it is a `SIGBUS`, not a wrong answer.  So the
+/// writer publishes its word count with every frame and the reader maps again.
+///
+/// The loop is the other half: the arena is reset per call rather than freed
+/// record by record, so a reset that did not actually reclaim would show here as
+/// a growing file rather than as a wrong value.
+#[test]
+fn a_value_that_outgrows_the_arena_still_crosses() {
+    let library = "pub struct N { id: integer, label: text }\n\
+                   pub fn range_v(n: integer) -> vector<integer> {\n\
+                   \x20   out: vector<integer> = [];\n\
+                   \x20   for i in 0..n { out += [i]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn sum_v(v: vector<integer>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in v { t += e; }\n\
+                   \x20   t\n\
+                   }\n\
+                   pub fn names(n: integer) -> vector<N> {\n\
+                   \x20   out: vector<N> = [];\n\
+                   \x20   for i in 0..n { out += [N { id: i, label: \"n{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn count(v: vector<N>) -> integer { len(v) }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   big = range_v(200000);\n\
+                    \x20   println(\"big {len(big)} {big[199999]} {sum_v(big)}\");\n\
+                    \x20   ns = names(20000);\n\
+                    \x20   println(\"names {count(ns)} {ns[19999].label}\");\n\
+                    \x20   acc = 0;\n\
+                    \x20   for i in 0..500 {\n\
+                    \x20       v = range_v(50);\n\
+                    \x20       acc += sum_v(v);\n\
+                    \x20   }\n\
+                    \x20   println(\"loop {acc}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("grow", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("a value larger than the arena", &inproc, &placed);
+    // Hand-computed: sum 0..200000 = 19999900000; 500 × sum(0..50) = 500 × 1225.
+    for expect in [
+        "big 200000 199999 19999900000",
+        "names 20000 n19999",
+        "loop 612500",
+    ] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// A signature the arena does not carry runs in-process, and that has to be
+/// INVISIBLE — which is the whole claim placement makes.
+///
+/// A polymorphic enum and a keyed collection are both reference-shaped, so they
+/// look placeable from a distance; they are refused because their crossing has
+/// questions of its own (an enum's payload type is a runtime discriminant, and a
+/// keyed collection carries an index whose ordering is the caller's).  The risk
+/// is not that they fail — it is that they are quietly marked and then read as
+/// the wrong shape, so this pins the refusal by requiring the program to be
+/// identical either way.
+#[test]
+fn a_compound_the_arena_does_not_carry_still_behaves_identically() {
+    let library = "pub struct P { a: integer, b: integer }\n\
+                   pub enum Shape { Circle { r: integer }, Square { s: integer } }\n\
+                   pub fn area(sh: Shape) -> integer {\n\
+                   \x20   match sh { Circle { r } => r * r * 3, Square { s } => s * s }\n\
+                   }\n\
+                   pub fn make_circle(r: integer) -> Shape { Circle { r: r } }\n\
+                   pub fn tally(h: hash<P[a]>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in h { t += e.b; }\n\
+                   \x20   t\n\
+                   }\n\
+                   pub fn sum_p(p: P) -> integer { p.a + p.b }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   c = make_circle(4);\n\
+                    \x20   println(\"enum {area(c)}\");\n\
+                    \x20   h: hash<P[a]> = [];\n\
+                    \x20   h += [P { a: 1, b: 10 }];\n\
+                    \x20   h += [P { a: 2, b: 20 }];\n\
+                    \x20   println(\"hash {tally(h)}\");\n\
+                    \x20   println(\"placed {sum_p(P { a: 6, b: 7 })}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("unsupported", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("an unsupported compound", &inproc, &placed);
+    for expect in ["enum 48", "hash 30", "placed 13"] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
 #[test]
 fn native_does_not_place_and_says_so_when_asked_to_insist() {
     let root = scratch("native_require");

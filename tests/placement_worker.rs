@@ -71,6 +71,61 @@ fn ping_crosses_the_boundary() {
     assert_eq!(w.call("ping", &[Value::Int(-1)]), Ok(Value::Int(0)));
 }
 
+/// @PLN119 arc B — the layout gate's control.
+///
+/// A record graph in the call arena is read as the RECEIVING program's own type,
+/// so the two sides must lay that type out identically. The dispatcher refuses
+/// to place a function whose layout the worker reports differently — and a
+/// comparison that cannot report a difference would pass forever, so this asks
+/// the question the gate asks and requires a DIFFERENT answer from two libraries
+/// that lay the same-named type out differently.
+///
+/// The pair is chosen so the two structs are the same size in bytes and differ
+/// only in field ORDER. A gate that compared sizes, or that compared nothing and
+/// returned a constant, passes on a field-swap and mis-reads every value.
+#[test]
+fn the_layout_gate_can_tell_two_programs_apart() {
+    let dir = scratch("layout");
+    let same = "pub struct P { a: integer, b: u8 }\n\
+                pub fn take(p: P) -> integer { p.a + p.b }\n";
+    let swapped = "pub struct P { b: u8, a: integer }\n\
+                   pub fn take(p: P) -> integer { p.a + p.b }\n";
+    let mut a = worker("layout_a", &library(&dir, "layout_a", same));
+    let mut b = worker("layout_b", &library(&dir, "layout_b", same));
+    let mut c = worker("layout_c", &library(&dir, "layout_c", swapped));
+
+    let la = a.layout("take").expect("worker a reported a layout");
+    let lb = b.layout("take").expect("worker b reported a layout");
+    let lc = c.layout("take").expect("worker c reported a layout");
+
+    assert_eq!(
+        la, lb,
+        "two workers holding the SAME library must agree, or the gate refuses \
+         every placement it should allow"
+    );
+    assert_ne!(
+        la, lc,
+        "the gate saw no difference between `P {{ a, b }}` and `P {{ b, a }}` — \
+         it is blind, and a placed call would read one program's bytes as the \
+         other's type"
+    );
+    // A signature with nothing compound in it has nothing to disagree about, and
+    // must not be made to look like it does.
+    let mut s = worker(
+        "layout_s",
+        &library(
+            &dir,
+            "layout_s",
+            "pub fn plain(x: integer) -> integer { x }\n",
+        ),
+    );
+    assert_eq!(
+        s.layout("plain").as_deref(),
+        Ok(".,."),
+        "a scalar signature's layout is its shape, not a hash"
+    );
+}
+
 #[test]
 fn every_scalar_shape_survives_the_crossing() {
     let dir = scratch("scalars");
