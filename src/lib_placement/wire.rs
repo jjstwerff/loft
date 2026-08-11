@@ -40,6 +40,15 @@ const OFF_PAYLOAD: usize = 192;
 /// quickly on one that is not.
 const SPIN_BUDGET: u32 = 2000;
 
+/// How long a caller sleeps before looking to see the worker is still there.
+///
+/// Only a call that has already spun past its budget ever sleeps, so this is not
+/// on the path of a busy exchange; what it bounds is how long a caller waits on
+/// a worker that will never answer. Short enough that a death is reported
+/// promptly, long enough that a genuinely slow library call costs a handful of
+/// wakeups rather than a spin.
+const LIVENESS_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// A request kind, the first word of every request frame.
 const REQ_CALL: u32 = 0;
 const REQ_SHUTDOWN: u32 = 1;
@@ -233,14 +242,31 @@ impl Wire {
     }
 
     /// Block until the channel's sequence passes `last`, spinning first.
-    fn await_past(&self, seq_off: usize, sleepers_off: usize, last: u32) -> u32 {
+    ///
+    /// `poll` bounds each individual sleep, and `keep_waiting` is asked after
+    /// every sleep that expires; answering `false` abandons the wait and returns
+    /// `None`. Pass `None` to sleep until woken, which is what a side with an
+    /// independent way of noticing the other has gone should do.
+    ///
+    /// The polling exists because a `FUTEX_WAIT` on a word nobody will ever
+    /// write again does not fail — it waits forever. Only a wait that has
+    /// already spun past its budget ever reaches a sleep, so a busy exchange
+    /// never pays for this.
+    fn await_past<F: FnMut() -> bool>(
+        &self,
+        seq_off: usize,
+        sleepers_off: usize,
+        last: u32,
+        poll: Option<std::time::Duration>,
+        mut keep_waiting: F,
+    ) -> Option<u32> {
         let seq = self.atomic(seq_off);
         let sleepers = self.atomic(sleepers_off);
         let mut spun = 0u32;
         loop {
             let cur = seq.load(std::sync::atomic::Ordering::SeqCst);
             if cur != last {
-                return cur;
+                return Some(cur);
             }
             if spun < SPIN_BUDGET {
                 spun += 1;
@@ -252,10 +278,16 @@ impl Wire {
             let cur = seq.load(std::sync::atomic::Ordering::SeqCst);
             if cur != last {
                 sleepers.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                return cur;
+                return Some(cur);
             }
-            futex_wait(seq, cur);
+            futex_wait(seq, cur, poll);
             sleepers.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            // Re-read before consulting the check: a wake and a timeout are
+            // indistinguishable here, and reporting the counterpart gone while
+            // its answer is already published would be a race, not a diagnosis.
+            if seq.load(std::sync::atomic::Ordering::SeqCst) == last && !keep_waiting() {
+                return None;
+            }
             spun = 0;
         }
     }
@@ -264,16 +296,29 @@ impl Wire {
         self.publish(OFF_REQ_SEQ, OFF_REQ_SLEEPERS, seq);
     }
 
+    /// The worker's wait for the next call. Untimed: a worker has its own way of
+    /// noticing the caller is gone (`PR_SET_PDEATHSIG`), so waking it on a timer
+    /// would burn a wakeup per idle period to learn nothing.
     fn await_request(&self, last: u32) -> u32 {
-        self.await_past(OFF_REQ_SEQ, OFF_REQ_SLEEPERS, last)
+        self.await_past(OFF_REQ_SEQ, OFF_REQ_SLEEPERS, last, None, || true)
+            .expect("an untimed wait never abandons")
     }
 
     fn send_response(&self, seq: u32) {
         self.publish(OFF_RESP_SEQ, OFF_RESP_SLEEPERS, seq);
     }
 
-    fn await_response(&self, last: u32) -> u32 {
-        self.await_past(OFF_RESP_SEQ, OFF_RESP_SLEEPERS, last)
+    /// The caller's wait for an answer, abandoned when `alive` reports the
+    /// worker has gone. The caller has no signal for a child's death — it has to
+    /// look — so this is the side that polls.
+    fn await_response<F: FnMut() -> bool>(&self, last: u32, alive: F) -> Option<u32> {
+        self.await_past(
+            OFF_RESP_SEQ,
+            OFF_RESP_SLEEPERS,
+            last,
+            Some(LIVENESS_POLL),
+            alive,
+        )
     }
 }
 
@@ -283,14 +328,19 @@ impl Wire {
 // two processes, and the private variant hashes on the mm, so the two sides
 // would queue on different keys and every wake would be lost.
 
-fn futex_wait(a: &std::sync::atomic::AtomicU32, expect: u32) {
+fn futex_wait(a: &std::sync::atomic::AtomicU32, expect: u32, limit: Option<std::time::Duration>) {
+    let ts = limit.map(|d| libc::timespec {
+        tv_sec: d.as_secs() as libc::time_t,
+        tv_nsec: libc::c_long::from(d.subsec_nanos()),
+    });
     unsafe {
         libc::syscall(
             libc::SYS_futex,
             std::ptr::from_ref(a),
             libc::FUTEX_WAIT,
             expect,
-            std::ptr::null::<libc::timespec>(),
+            ts.as_ref()
+                .map_or(std::ptr::null(), std::ptr::from_ref::<libc::timespec>),
         );
     }
 }
@@ -425,7 +475,9 @@ impl Frame {
 /// library keep state exactly as an in-process one does.
 pub struct Worker {
     wire: Wire,
-    child: std::process::Child,
+    /// Behind a `RefCell` so a call — which holds `&self` — can ask whether the
+    /// child is still running. `try_wait` reaps, which needs `&mut Child`.
+    child: std::cell::RefCell<std::process::Child>,
     /// Last request sequence sent. Requests and responses share the counter so
     /// a response can be matched to its request.
     seq: std::cell::Cell<u32>,
@@ -445,8 +497,9 @@ impl Drop for Worker {
             }
         }
         // A worker that ignores the shutdown word must not wedge the run.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let mut child = self.child.borrow_mut();
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -483,7 +536,7 @@ impl Worker {
 
         let w = Worker {
             wire,
-            child,
+            child: std::cell::RefCell::new(child),
             seq: std::cell::Cell::new(0),
             dead: std::cell::Cell::new(false),
             name: name.to_string(),
@@ -505,6 +558,30 @@ impl Worker {
     #[must_use]
     pub fn store_base(&self) -> u32 {
         self.wire.store_base()
+    }
+
+    /// The worker process's id — what a caller needs to observe or signal it.
+    ///
+    /// # Panics
+    /// If the handle is already borrowed, which only happens while this worker
+    /// is being dropped.
+    #[must_use]
+    pub fn child_id(&self) -> u32 {
+        self.child.borrow().id()
+    }
+
+    /// Is the worker process still running?
+    ///
+    /// `try_wait` rather than a signal probe, because a worker that has exited
+    /// but not been reaped is a zombie — still a live pid, answering `kill(0)`
+    /// perfectly happily, and never going to serve another call.
+    fn still_running(&self) -> bool {
+        match self.child.try_borrow_mut() {
+            Ok(mut c) => matches!(c.try_wait(), Ok(None)),
+            // Borrowed means `Drop` is already tearing this worker down; let the
+            // wait end rather than claim a liveness we cannot check.
+            Err(_) => false,
+        }
     }
 
     /// Call `func` in the worker.
@@ -548,7 +625,22 @@ impl Worker {
         let seq = self.seq.get() + 1;
         self.seq.set(seq);
         self.wire.send_request(seq);
-        self.wire.await_response(seq - 1);
+        if self
+            .wire
+            .await_response(seq - 1, || self.still_running())
+            .is_none()
+        {
+            // The worker died with this call outstanding. Nothing will ever
+            // write the response word, so the wait had to end by looking rather
+            // than by being woken. Remember it: the wire is unusable from here,
+            // and a later call must say so at once instead of waiting again.
+            self.dead.set(true);
+            return Err(format!(
+                "library '{}' worker died during the call to '{}'",
+                self.name,
+                if func.is_empty() { "<load>" } else { func }
+            ));
+        }
 
         let mut f = Frame::new(self.wire.payload());
         match f.get_u32() {

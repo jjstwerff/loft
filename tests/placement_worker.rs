@@ -176,6 +176,68 @@ fn a_fault_in_the_library_is_the_callers_error_not_a_dead_worker() {
     );
 }
 
+/// A worker that dies outright is an ERROR, not a hang (@PLN119 arc D).
+///
+/// This is the case the transport could not survive by construction: the caller
+/// waits on a futex word in the shared mapping, and a dead worker will never
+/// write it. `FUTEX_WAIT` does not fail when its counterpart disappears — it
+/// waits forever — so the wait has to end by LOOKING at the child rather than by
+/// being woken.
+///
+/// The test kills the worker with the caller mid-wait, which is why the call
+/// runs on its own thread: if the fix regresses, this hangs, and the harness has
+/// to be able to say so rather than hang with it.
+#[test]
+fn a_worker_killed_mid_call_is_an_error_not_a_hang() {
+    let dir = scratch("death");
+    let pkg = library(
+        &dir,
+        "deathlib",
+        // Long enough that the worker is still busy when the kill lands, so the
+        // caller is genuinely parked rather than racing it.
+        "pub fn slow(n: integer) -> integer {\n\
+         \x20   acc = 0;\n\
+         \x20   for i in 0..n { acc += i; }\n\
+         \x20   acc\n\
+         }\n\
+         pub fn ping(x: integer) -> integer { x + 1 }\n",
+    );
+    let w = worker("deathlib", &pkg);
+    // Prove the worker is really serving before killing it, or a pass could
+    // just be reporting a worker that never came up at all.
+    assert_eq!(w.call("ping", &[Value::Int(1)]), Ok(Value::Int(2)));
+    let pid = w.child_id();
+
+    // `Worker` is Send but deliberately not Sync — the dispatcher serialises
+    // calls — so the call MOVES to its own thread and the kill happens here.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let died = w.call("slow", &[Value::Int(4_000_000_000)]);
+        // A gone worker must stay gone, and say so at once rather than wait again.
+        let after = w.call("ping", &[Value::Int(1)]);
+        let _ = tx.send((died, after));
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    // SIGKILL: the worker gets no chance to answer, which is the whole point.
+    let killed = std::process::Command::new("kill")
+        .arg("-KILL")
+        .arg(pid.to_string())
+        .status()
+        .expect("run kill");
+    assert!(killed.success(), "could not kill the worker (pid {pid})");
+
+    let (died, after) = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the caller never returned — a dead worker hung the call");
+    let msg = died.expect_err("a killed worker cannot have answered");
+    assert!(
+        msg.contains("deathlib"),
+        "the failure must name the library: {msg}"
+    );
+    assert!(after.is_err(), "a gone worker must stay gone: {after:?}");
+}
+
 #[test]
 fn a_library_that_cannot_load_is_reported_against_its_name() {
     let dir = scratch("badload");
