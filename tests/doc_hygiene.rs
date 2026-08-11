@@ -1217,6 +1217,12 @@ fn readme_brick_buster_line_count_is_current() {
 ///
 /// So pin them together: every triple the shell can produce must appear in
 /// `PUBLISHED_TRIPLES`, which is itself checked against a real release.
+/// Gated on `registry`, the feature that compiles `self_update` at all: without
+/// it the list this pins against does not exist, and the local `--all-targets
+/// --no-default-features` clippy the docs prescribe failed to compile. CI never
+/// caught it because its own no-default-features step is `cargo check` WITHOUT
+/// `--all-targets`, so no test target was ever built that way.
+#[cfg(feature = "registry")]
 #[test]
 fn installer_and_self_update_agree_on_the_published_triples() {
     let sh = std::fs::read_to_string("scripts/install.sh").expect("read install.sh");
@@ -1295,6 +1301,10 @@ fn the_release_records_the_build_id_the_verifier_replays() {
 /// The two lists drift in one direction that is silent: adding a target to `release.yml`
 /// ships a binary, and forgetting the matching `repro-build.yml` row means nobody ever
 /// rebuilds it — the verification gap looks exactly like full coverage from the outside.
+/// Gated on `registry` for the same reason as
+/// `installer_and_self_update_agree_on_the_published_triples`: `PUBLISHED_TRIPLES`
+/// is compiled out without it.
+#[cfg(feature = "registry")]
 #[test]
 fn repro_matrix_covers_every_published_triple() {
     let wf =
