@@ -176,6 +176,66 @@ impl Arena {
             .capacity_words()
     }
 
+    /// The arena's live bytes — what a `remote` placement SENDS instead of
+    /// mapping (@PLN119 arc E).
+    ///
+    /// This is where the plan's "one mechanism at four latencies" survives the
+    /// network hop, and it survives it for a concrete reason: a store is a
+    /// self-contained image whose interior pointers are `u32` record ids, so
+    /// putting it on a socket is a copy of the value's own layout — not an
+    /// encoding of it. The remote crossing pays a copy where the local one pays
+    /// a page table, and neither pays a per-field marshal.
+    ///
+    /// Only the LIVE prefix travels. An arena that grew for one big call keeps
+    /// its capacity, and sending that afterwards would make every later small
+    /// call pay for it.
+    ///
+    /// # Panics
+    /// If the arena is currently bound into a `Stores`.
+    #[must_use]
+    pub fn image(&self) -> &[u8] {
+        let store = self
+            .store
+            .as_ref()
+            .expect("a call arena was read while bound");
+        let usage = store.usage();
+        // `live_end_words` is only the mark when the block walk COMPLETED; on a
+        // short walk it is a lower bound, and sending a lower bound would cut
+        // live records off the end. Fall back to the whole buffer, which is
+        // never wrong, only bigger.
+        let words = if usage.walk_complete {
+            usage.live_end_words.max(2)
+        } else {
+            store.capacity_words()
+        };
+        let len = (words as usize) * 8;
+        unsafe {
+            std::slice::from_raw_parts(
+                store.base_ptr(),
+                len.min(store.capacity_words() as usize * 8),
+            )
+        }
+    }
+
+    /// Adopt bytes another machine's arena sent.
+    ///
+    /// The image is a store, so this is a copy into the buffer plus a re-derive
+    /// of the allocator's cached state — the same [`resync`](Arena::resync) the
+    /// local transport needs when the other side has been claiming, and for the
+    /// same reason.
+    ///
+    /// # Panics
+    /// If the arena is currently bound into a `Stores`.
+    pub fn load_image(&mut self, bytes: &[u8]) {
+        if bytes.len() < 16 {
+            return; // not a store; the sender had nothing to say
+        }
+        self.store
+            .as_mut()
+            .expect("a call arena was written while bound")
+            .adopt_image(bytes);
+    }
+
     /// Re-map when the writer has grown the file past what this side mapped.
     ///
     /// A growing `claim` resizes the file and re-mmaps it in the WRITER; the

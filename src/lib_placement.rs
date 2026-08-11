@@ -66,6 +66,14 @@ pub enum Placement {
     /// A worker process of this machine holds the library; calls cross a shared
     /// memory-mapped file.
     Process,
+    /// A server somewhere else holds the library; calls cross a socket and the
+    /// call arena travels as bytes on it (@PLN119 arc E).
+    ///
+    /// The library declares that it is MEANT to run this way; WHERE is
+    /// deployment, and comes from the environment
+    /// (`LOFT_REMOTE_<NAME>=host:port`). A library author knows whether their
+    /// library is a service; only the operator knows which one.
+    Remote,
 }
 
 impl Placement {
@@ -80,24 +88,53 @@ impl Placement {
         match s.trim() {
             "inproc" => Ok(Placement::InProc),
             "process" => Ok(Placement::Process),
-            // `remote` is arc E. Name it as known-but-unbuilt rather than
-            // unknown, so a library written against the finished plan gets an
-            // accurate answer instead of "did you mean".
-            "remote" => Err(
-                "placement = \"remote\" is @PLN119 arc E and is not implemented yet; \
-                 use \"process\" for a worker on this machine"
-                    .to_string(),
-            ),
+            "remote" => Ok(Placement::Remote),
             other => Err(format!(
-                "unknown placement \"{other}\" — expected \"inproc\" or \"process\""
+                "unknown placement \"{other}\" — expected \"inproc\", \"process\" or \"remote\""
             )),
         }
     }
 
-    /// Does this placement need a worker process?
+    /// Does this placement put the library outside this process?
     #[must_use]
     pub fn is_out_of_process(self) -> bool {
-        self == Placement::Process
+        matches!(self, Placement::Process | Placement::Remote)
+    }
+
+    /// The environment variable that names WHERE a `remote` library runs.
+    ///
+    /// `LOFT_REMOTE_<NAME>` with the name upper-cased and non-alphanumerics
+    /// folded to `_`, so `hex_world` reads `LOFT_REMOTE_HEX_WORLD`.
+    #[must_use]
+    pub fn address_var(library: &str) -> String {
+        let name: String = library
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        format!("LOFT_REMOTE_{name}")
+    }
+
+    /// Where a `remote` library runs, or why that could not be answered.
+    ///
+    /// # Errors
+    /// No address configured. Refusing is the only honest answer: falling back
+    /// to in-process would run the library HERE, which for a library declared
+    /// remote is a different deployment with different data, not a slower one.
+    pub fn address_for(library: &str) -> Result<String, String> {
+        let var = Self::address_var(library);
+        match std::env::var(&var) {
+            Ok(v) if !v.trim().is_empty() => Ok(v.trim().to_string()),
+            _ => Err(format!(
+                "library '{library}' declares placement = \"remote\" but no address is \
+                 configured — set {var}=host:port to say where it runs"
+            )),
+        }
     }
 }
 
@@ -118,4 +155,4 @@ pub mod wire;
 pub mod dispatch;
 
 #[cfg(target_os = "linux")]
-pub use wire::{Wire, Worker, serve};
+pub use wire::{Wire, Worker, serve, serve_remote};

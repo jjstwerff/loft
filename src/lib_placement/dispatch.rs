@@ -370,7 +370,7 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
 pub fn install(
     state: &mut State,
     data: &Data,
-    libs: &[(String, String)],
+    libs: &[(String, String, crate::lib_placement::Placement)],
     stdlib_dir: &std::path::Path,
     cwd: &std::path::Path,
 ) -> Result<usize, String> {
@@ -380,9 +380,18 @@ pub fn install(
     };
     let dups = crate::generation::duplicate_fn_names(data);
     let mut wired = 0usize;
-    for (name, pkg_dir) in libs {
-        let worker = Worker::spawn(name, std::path::Path::new(pkg_dir), stdlib_dir, cwd)
-            .map_err(|e| e.to_string())?;
+    for (name, pkg_dir, placement) in libs {
+        // The one place the two transports are chosen between. A local worker is
+        // this process's to START; a remote server is already running and is
+        // only CONNECTED to — the asymmetry is real and is not smoothed over.
+        let worker = match placement {
+            crate::lib_placement::Placement::Remote => {
+                let address = crate::lib_placement::Placement::address_for(name)?;
+                Worker::connect(name, &address).map_err(|e| e.to_string())?
+            }
+            _ => Worker::spawn(name, std::path::Path::new(pkg_dir), stdlib_dir, cwd)
+                .map_err(|e| e.to_string())?,
+        };
         let w_idx = reg.workers.len();
         reg.workers.push(worker);
 
@@ -598,12 +607,16 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
         }),
         _ => None,
     };
+    // Emptied on EVERY call, not only one carrying a compound. Locally that is
+    // a couple of word writes either way; remotely it is what the argument
+    // arena's live prefix costs to SEND, and a scalar call has no business
+    // shipping the graph the last compound call left behind.
+    worker.arg_arena().reset();
     // Build every compound argument in the arena. The `seen` map is not an
     // optimisation: `f(p, p)` passes ONE record twice in-process, so two arena
     // copies would give the callee two independent values and the copy-back
     // would then have to pick which one won.
     if !compound.is_empty() {
-        worker.arg_arena().reset();
         let arena_nr = worker.arg_arena().bind(stores);
         // A list rather than a map: a signature has a handful of parameters, and
         // `DbRef` is a plain triple with no hash to spend.

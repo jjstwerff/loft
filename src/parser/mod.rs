@@ -340,7 +340,7 @@ pub struct Parser {
     /// routes the library's public functions to it.  A library's functions are
     /// identified by `def.position().file.starts_with(pkg_dir)`, the same
     /// ownership guard the native path uses.
-    pub pending_placed_libs: Vec<(String, String)>,
+    pub pending_placed_libs: Vec<(String, String, crate::lib_placement::Placement)>,
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir, queued-from file) — sibling packages are
     /// searched in `dir`, and the dep is only pulled in while the lexer is back
@@ -10932,8 +10932,13 @@ impl Parser {
                     .name
                     .clone()
                     .unwrap_or_else(|| pkg_dir.rsplit('/').next().unwrap_or(pkg_dir).to_string());
-                if !self.pending_placed_libs.iter().any(|(_, d)| d == pkg_dir) {
-                    self.pending_placed_libs.push((name, pkg_dir.to_string()));
+                if !self
+                    .pending_placed_libs
+                    .iter()
+                    .any(|(_, d, _)| d == pkg_dir)
+                {
+                    self.pending_placed_libs
+                        .push((name, pkg_dir.to_string(), p));
                 }
             }
             Ok(_) => {}

@@ -5965,6 +5965,57 @@ fn main() {
             }
         }
     }
+    // @PLN119 arc E — this process SERVES one library over a socket, so a
+    // consumer elsewhere can declare `placement = "remote"` and reach it.
+    //
+    // Unlike `--lib-worker` this one is typed by a person: an operator starts it
+    // where the library should run. It takes over the process and never returns,
+    // and it is armed before the watchdog for the same reason a worker is —
+    // sitting idle waiting to be asked is what it is FOR.
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).is_some_and(|a| a == "--lib-server") {
+        let a: Vec<String> = std::env::args().skip(1).collect();
+        let stdlib = a
+            .iter()
+            .position(|x| x == "--default")
+            .and_then(|p| a.get(p + 1))
+            .cloned()
+            .unwrap_or_else(|| {
+                let dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                    .unwrap_or_default()
+                    .join("../default");
+                if dir.exists() {
+                    dir.to_string_lossy().into_owned()
+                } else {
+                    "default".to_string()
+                }
+            });
+        match (a.get(1), a.get(2)) {
+            (Some(addr), Some(pkg)) => loft::lib_placement::serve_remote(
+                addr,
+                std::path::Path::new(pkg),
+                std::path::Path::new(&stdlib),
+            ),
+            _ => {
+                eprintln!(
+                    "loft: usage: --lib-server <host:port> <pkg_dir> [--default <stdlib_dir>]\n\
+                     \n\
+                     Serves ONE library's `pub fn` surface to consumers that declare\n\
+                     `placement = \"remote\"`.  Point them at it with\n\
+                     LOFT_REMOTE_<NAME>=<host:port>.\n\
+                     \n\
+                     The address is yours to choose and there is no default.  This is\n\
+                     not an authenticated or encrypted channel and it is not a sandbox:\n\
+                     it runs the library's functions for whoever connects, so bind it\n\
+                     where only what should reach it can — 127.0.0.1 for a local test,\n\
+                     a private network or a tunnel otherwise."
+                );
+                std::process::exit(2);
+            }
+        }
+    }
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     loft::crash_report::install("loft");
@@ -7885,8 +7936,9 @@ fn main() {
     // worker, so building it a cdylib here would compile code this process never
     // dispatches to. Drop it from the native candidates before that work starts;
     // its functions are marked for the placement route just below.
-    let placed_libs: Vec<(String, String)> = std::mem::take(&mut p.pending_placed_libs);
-    pending_native.retain(|d| !placed_libs.iter().any(|(_, pkg)| pkg == d));
+    let placed_libs: Vec<(String, String, loft::lib_placement::Placement)> =
+        std::mem::take(&mut p.pending_placed_libs);
+    pending_native.retain(|d| !placed_libs.iter().any(|(_, pkg, _)| pkg == d));
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
     // #460 — never auto-native-compile the package that OWNS the entry file: that
@@ -8066,7 +8118,7 @@ fn main() {
     // and start a worker process to sit idle for the run.
     #[cfg(target_os = "linux")]
     if !native_requested {
-        for (_, pkg_dir) in &placed_libs {
+        for (_, pkg_dir, _) in &placed_libs {
             loft::lib_placement::dispatch::mark_exports(&mut p.data, pkg_dir);
         }
     }

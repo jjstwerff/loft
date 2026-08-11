@@ -231,6 +231,39 @@ placed. The compiler gives such a function no result buffer, so there is nowhere
 in the caller for the answer to live. It runs in-process — the same program —
 but it is not isolated.
 
+### `placement = "remote"` — the library runs on another machine
+
+Same declaration, one word further. The library says it is meant to run as a
+service; where it runs is deployment, so the consumer's environment says that:
+
+```bash
+# where it runs — started by whoever deploys it
+loft --lib-server 127.0.0.1:9119 /srv/libs/pricing
+
+# where it is called from
+LOFT_REMOTE_PRICING=127.0.0.1:9119 loft report.loft
+```
+
+The consumer's source is unchanged, again — the same `use`, the same typed calls,
+the same values back, structs and vectors included. What travels is the value's
+own layout: a loft store is a self-contained image, so a `vector<Order>` goes on
+the socket as bytes rather than as an encoding of itself, and comes back the same
+way. Writes to a compound parameter still reach the caller.
+
+A remote call costs around **25 µs** on a local network interface, against ~1 µs
+for a worker on this machine — almost all of it the round trip, not the data, so
+the size of what you pass barely moves it. That makes it a fit for calls that do
+real work and a poor one for a getter.
+
+**A library with nowhere to run refuses**, naming the variable to set, rather
+than quietly running in-process: a library declared remote works on data that is
+over there, so running it here is a different deployment, not a slower one.
+
+`--lib-server` serves exactly the library you name and nothing else. It is not
+authenticated, not encrypted, and not a sandbox: it runs that library's functions
+for whoever connects. Bind it where only what should reach it can — `127.0.0.1`
+for a local test, a private network or a tunnel otherwise.
+
 Three limits worth knowing before reaching for it:
 
 - **Calls to one placed library serialise** (the wire has a single request slot),
@@ -239,7 +272,8 @@ Three limits worth knowing before reaching for it:
   struct or a vector, against ~50 ns for a native in-process one — so it pays for
   itself on a call that does real work, and does not on a getter in a loop.
 - **Linux only.** Elsewhere the library runs in-process — the same program,
-  without the isolation.
+  without the isolation. (A `remote` library is Linux-only on the CALLING side
+  for the same reason; the server can be anywhere loft runs.)
 - **Not under `--native`,** which compiles the library's own body into the
   program binary, so its calls never leave the process.
 

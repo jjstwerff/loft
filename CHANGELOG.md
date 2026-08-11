@@ -303,12 +303,24 @@ If the library crashes, the call ends as an ordinary loft error naming the
 library, and your own data is checked before you are told — not left to the
 argument that it must be fine.
 
-A call that leaves the process costs around a microsecond, so this is for
-libraries you call to do real work, not for a getter inside a loop. It is Linux
-only, and it does not apply under `--native`, which compiles the library into
-your binary; in both cases the library simply runs in-process, which is the same
-program without the isolation. Set `LOFT_REQUIRE_PLACEMENT=1` if you would rather
-be told than quietly lose it.
+Or on another machine — `placement = "remote"`, with
+`loft --lib-server <host:port> <library>` where it should run and
+`LOFT_REMOTE_<NAME>=<host:port>` where it is called from. Still the same source,
+still the same values; a `vector<Order>` goes on the socket as its own bytes
+rather than as an encoding of itself. A library with nowhere to run refuses and
+says which variable to set, rather than quietly running here on the wrong data.
+
+A call that leaves the process costs around a microsecond, and one that leaves
+the machine around 25 — almost all of it the round trip, not what you passed. So
+this is for libraries you call to do real work, not for a getter inside a loop.
+It is Linux only, and it does not apply under `--native`, which compiles the
+library into your binary; in both cases the library simply runs in-process, which
+is the same program without the isolation. Set `LOFT_REQUIRE_PLACEMENT=1` if you
+would rather be told than quietly lose it.
+
+`--lib-server` serves exactly the library you name and nothing else, but it is
+not authenticated and not a sandbox — bind it where only what should reach it
+can.
 
 ### A library whose native build cannot be used runs interpreted
 

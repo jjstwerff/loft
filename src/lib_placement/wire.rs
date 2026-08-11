@@ -391,15 +391,39 @@ fn futex_wake(a: &std::sync::atomic::AtomicU32) {
 struct Frame {
     base: *mut u8,
     at: usize,
+    cap: usize,
 }
+
+/// How much of the mapping a frame may use.
+const PAYLOAD_BYTES: usize = WIRE_BYTES - OFF_PAYLOAD;
 
 impl Frame {
     fn new(base: *mut u8) -> Frame {
-        Frame { base, at: 0 }
+        Frame {
+            base,
+            at: 0,
+            cap: PAYLOAD_BYTES,
+        }
+    }
+
+    /// A frame over an ordinary buffer — what a `remote` crossing builds into,
+    /// since it has no shared mapping to write through. The buffer must already
+    /// be `PAYLOAD_BYTES` long; the frame reports how much of it was used.
+    fn over(buf: &mut [u8]) -> Frame {
+        Frame {
+            base: buf.as_mut_ptr(),
+            at: 0,
+            cap: buf.len(),
+        }
+    }
+
+    /// How many bytes this frame has written or read.
+    fn len(&self) -> usize {
+        self.at
     }
 
     fn room(&self, n: usize) -> bool {
-        self.at + n <= WIRE_BYTES - OFF_PAYLOAD
+        self.at + n <= self.cap
     }
 
     fn put_u32(&mut self, v: u32) -> bool {
@@ -513,17 +537,23 @@ impl Frame {
 /// worker holds the library's stores across calls, which is what lets a placed
 /// library keep state exactly as an in-process one does.
 pub struct Worker {
-    wire: Wire,
+    /// How the frame and the arenas reach the other side — the ONE thing that
+    /// differs between `process` and `remote` (@PLN119 arc E).
+    ///
+    /// Everything else about a crossing — the marshal, the layout gate, the
+    /// delivery three-way, the `const` skip, the fault handling — is a property
+    /// of the BOUNDARY rather than of the wire, and is shared verbatim.
+    link: Link,
     /// The call arena, one store per direction (@PLN119 arc B).
     ///
     /// `arg` is written by the caller and `ret` by the worker — one writer each,
     /// because a `Store` caches its free list on the Rust side and two
     /// processes allocating out of one would hand out the same block twice.
+    ///
+    /// Under `remote` nobody else maps these; they are this side's scratch, and
+    /// their BYTES travel instead ([`Arena::image`]).
     arg: Arena,
     ret: Arena,
-    /// Behind a `RefCell` so a call — which holds `&self` — can ask whether the
-    /// child is still running. `try_wait` reaps, which needs `&mut Child`.
-    child: std::cell::RefCell<std::process::Child>,
     /// Last request sequence sent. Requests and responses share the counter so
     /// a response can be matched to its request.
     seq: std::cell::Cell<u32>,
@@ -533,19 +563,55 @@ pub struct Worker {
     name: String,
 }
 
+/// The two ways a crossing reaches the other side.
+///
+/// A `process` placement shares memory with a child of this process and signals
+/// it with a futex; a `remote` one owns nothing but a socket, and the arenas
+/// travel as bytes on it. The split is here — one enum, two arms — rather than
+/// spread through the dispatcher, because the plan's invariant is that placement
+/// is deployment policy: if the two transports had two boundaries, they would be
+/// two programs.
+enum Link {
+    /// A worker process of this machine: a shared mapping plus the child.
+    Local {
+        wire: Wire,
+        /// Behind a `RefCell` so a call — which holds `&self` — can ask whether
+        /// the child is still running. `try_wait` reaps, which needs `&mut`.
+        child: std::cell::RefCell<std::process::Child>,
+    },
+    /// A server, reachable at an address. Nothing is shared and nothing is
+    /// owned: this side did not start it and does not stop it.
+    Remote {
+        stream: std::cell::RefCell<std::net::TcpStream>,
+        address: String,
+        /// The last response's payload, kept so `reread_answer` can decode the
+        /// compound reference after the arenas are bound — the same two-step the
+        /// local transport does against the shared mapping.
+        last: std::cell::RefCell<Vec<u8>>,
+    },
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
-        if !self.dead.get() {
-            let seq = self.seq.get() + 1;
-            let mut f = Frame::new(self.wire.payload());
-            if f.put_u32(REQ_SHUTDOWN) {
-                self.wire.send_request(seq);
+        match &self.link {
+            Link::Local { wire, child } => {
+                if !self.dead.get() {
+                    let seq = self.seq.get() + 1;
+                    let mut f = Frame::new(wire.payload());
+                    if f.put_u32(REQ_SHUTDOWN) {
+                        wire.send_request(seq);
+                    }
+                }
+                // A worker that ignores the shutdown word must not wedge the run.
+                let mut child = child.borrow_mut();
+                let _ = child.kill();
+                let _ = child.wait();
             }
+            // A remote server outlives its callers by design — closing the
+            // socket is the whole goodbye, and killing it would be someone
+            // else's process.
+            Link::Remote { .. } => {}
         }
-        // A worker that ignores the shutdown word must not wedge the run.
-        let mut child = self.child.borrow_mut();
-        let _ = child.kill();
-        let _ = child.wait();
     }
 }
 
@@ -600,10 +666,12 @@ impl Worker {
         let child = command.spawn()?;
 
         let mut w = Worker {
-            wire,
+            link: Link::Local {
+                wire,
+                child: std::cell::RefCell::new(child),
+            },
             arg,
             ret,
-            child: std::cell::RefCell::new(child),
             seq: std::cell::Cell::new(0),
             dead: std::cell::Cell::new(false),
             name: name.to_string(),
@@ -620,34 +688,101 @@ impl Worker {
         }
     }
 
+    /// @PLN119 arc E — reach a library that is already running somewhere else.
+    ///
+    /// Nothing is spawned and nothing is owned: the server is started by whoever
+    /// deploys it, and this side only connects. That asymmetry with
+    /// [`spawn`](Worker::spawn) is the honest one — a local worker is this
+    /// process's to start and to kill, and a remote one never is.
+    ///
+    /// # Errors
+    /// A failure to reach the address, or to hear the ready response — each
+    /// reported with the library name, because the operator's next question is
+    /// always which library failed to place.
+    pub fn connect(name: &str, address: &str) -> io::Result<Worker> {
+        let stream = std::net::TcpStream::connect(address).map_err(|e| {
+            io::Error::other(format!(
+                "library '{name}' declares placement = \"remote\" but {address} could \
+                 not be reached: {e}"
+            ))
+        })?;
+        // A crossing is a request and its answer; batching them would trade a
+        // round trip for a latency spike on every call that fits in one packet,
+        // which is every call this carries.
+        let _ = stream.set_nodelay(true);
+        // The arenas are ordinary local scratch here — nobody else maps them,
+        // and it is their BYTES that travel.
+        let path = std::env::temp_dir().join(format!(
+            "loft-remote-{}-{}.wire",
+            std::process::id(),
+            name.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+        ));
+        let (arg_path, ret_path) = arena_paths(&path);
+        let arg = Arena::create(&arg_path)?;
+        let ret = Arena::create(&ret_path)?;
+
+        let mut w = Worker {
+            link: Link::Remote {
+                stream: std::cell::RefCell::new(stream),
+                address: address.to_string(),
+                last: std::cell::RefCell::new(Vec::new()),
+            },
+            arg,
+            ret,
+            seq: std::cell::Cell::new(0),
+            dead: std::cell::Cell::new(false),
+            name: name.to_string(),
+        };
+        match w.call_raw("", &[]) {
+            Ok(_) => Ok(w),
+            Err(e) => Err(io::Error::other(format!(
+                "library '{name}' at {address} did not answer: {e}"
+            ))),
+        }
+    }
+
     /// The store-numbering base the worker reported — arc B translates against
     /// it. Present here so attaching does not change when arc B lands.
+    ///
+    /// Zero for a remote placement, which shares no store numbering at all.
     #[must_use]
     pub fn store_base(&self) -> u32 {
-        self.wire.store_base()
+        match &self.link {
+            Link::Local { wire, .. } => wire.store_base(),
+            Link::Remote { .. } => 0,
+        }
     }
 
     /// The worker process's id — what a caller needs to observe or signal it.
+    /// Zero when there is no local process to name.
     ///
     /// # Panics
     /// If the handle is already borrowed, which only happens while this worker
     /// is being dropped.
     #[must_use]
     pub fn child_id(&self) -> u32 {
-        self.child.borrow().id()
+        match &self.link {
+            Link::Local { child, .. } => child.borrow().id(),
+            Link::Remote { .. } => 0,
+        }
     }
 
-    /// Is the worker process still running?
+    /// Is the worker still there?
     ///
     /// `try_wait` rather than a signal probe, because a worker that has exited
     /// but not been reaped is a zombie — still a live pid, answering `kill(0)`
     /// perfectly happily, and never going to serve another call.
     fn still_running(&self) -> bool {
-        match self.child.try_borrow_mut() {
-            Ok(mut c) => matches!(c.try_wait(), Ok(None)),
-            // Borrowed means `Drop` is already tearing this worker down; let the
-            // wait end rather than claim a liveness we cannot check.
-            Err(_) => false,
+        match &self.link {
+            Link::Local { child, .. } => match child.try_borrow_mut() {
+                Ok(mut c) => matches!(c.try_wait(), Ok(None)),
+                // Borrowed means `Drop` is already tearing this worker down; let
+                // the wait end rather than claim a liveness we cannot check.
+                Err(_) => false,
+            },
+            // A socket answers this question by failing to read, which the
+            // remote exchange already surfaces as the call's error.
+            Link::Remote { .. } => true,
         }
     }
 
@@ -670,11 +805,14 @@ impl Worker {
     /// # Errors
     /// A transport failure, or the worker not knowing the function.
     pub fn layout(&mut self, func: &str) -> Result<String, String> {
-        let mut f = Frame::new(self.wire.payload());
+        let mut buf = vec![0u8; PAYLOAD_BYTES];
+        let mut f = Frame::over(&mut buf);
         if !(f.put_u32(REQ_LAYOUT) && f.put_str(func)) {
             return Err("layout request does not fit the wire".to_string());
         }
-        match self.exchange(func)? {
+        let used = f.len();
+        buf.truncate(used);
+        match self.exchange(&buf, func)? {
             crate::host::Value::Text(s) => Ok(s),
             other => Err(format!("layout answer was {other:?}")),
         }
@@ -714,7 +852,8 @@ impl Worker {
         // have grown the file, and the worker has to map the new length before
         // it can read a record that lives past the old end.
         let arg_words = self.arg.words();
-        let mut f = Frame::new(self.wire.payload());
+        let mut buf = vec![0u8; PAYLOAD_BYTES];
+        let mut f = Frame::over(&mut buf);
         let built = f.put_u32(REQ_CALL)
             && f.put_u32(arg_words)
             && f.put_str(func)
@@ -727,21 +866,48 @@ impl Worker {
                 WIRE_BYTES / 1024
             ));
         }
-        self.exchange(func)
+        let used = f.len();
+        buf.truncate(used);
+        self.exchange(&buf, func)
     }
 
-    /// Send the request already built into the payload, wait for the answer,
-    /// re-map whatever grew, and decode. Split out because the layout request
-    /// and a call share every step but the frame they wrote.
-    fn exchange(&mut self, func: &str) -> Result<crate::host::Value, String> {
+    /// Send `request`, wait for the answer, bring both arenas up to date, and
+    /// decode.
+    ///
+    /// The two transports differ in exactly what "send" and "bring up to date"
+    /// mean, and in nothing else — a local crossing writes through a shared
+    /// mapping the other side already has, a remote one puts the arena's bytes
+    /// on the socket beside the frame. Everything after that point is common,
+    /// which is why the arms below are short.
+    fn exchange(&mut self, request: &[u8], func: &str) -> Result<crate::host::Value, String> {
         if self.dead.get() {
-            return Err(format!("library '{}' worker is gone", self.name));
+            return Err(format!("library '{}' is gone", self.name));
         }
         let seq = self.seq.get() + 1;
         self.seq.set(seq);
-        self.wire.send_request(seq);
-        if self
-            .wire
+        match &self.link {
+            Link::Local { .. } => self.exchange_local(request, func, seq),
+            Link::Remote { .. } => self.exchange_remote(request, func),
+        }
+    }
+
+    /// The shared-mapping crossing: copy the frame in, publish, wait, and let
+    /// the arenas re-map themselves — the other side wrote into the very files
+    /// this one has open.
+    fn exchange_local(
+        &mut self,
+        request: &[u8],
+        func: &str,
+        seq: u32,
+    ) -> Result<crate::host::Value, String> {
+        let Link::Local { wire, .. } = &self.link else {
+            unreachable!("dispatched on the link")
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(request.as_ptr(), wire.payload(), request.len());
+        }
+        wire.send_request(seq);
+        if wire
             .await_response(seq - 1, || self.still_running())
             .is_none()
         {
@@ -756,23 +922,8 @@ impl Worker {
                 if func.is_empty() { "<load>" } else { func }
             ));
         }
-        // Both arena sizes come back on EVERY answer, before the value. The ret
-        // arena may have grown because the answer is large; the ARG arena may
-        // have grown because the callee appended to a vector parameter — loft
-        // passes a compound by reference, so that write is the caller's to see.
-        let mut f = Frame::new(self.wire.payload());
-        let status = f.get_u32();
-        let ret_words = f.get_u32().unwrap_or(0);
-        let arg_words = f.get_u32().unwrap_or(0);
-        match status {
-            Some(RESP_OK) => {}
-            Some(RESP_ERR) => {
-                return Err(f
-                    .get_str()
-                    .unwrap_or_else(|| "malformed error frame".to_string()));
-            }
-            _ => return Err(format!("malformed response frame from '{}'", self.name)),
-        }
+        let mut f = Frame::new(wire.payload());
+        let (ret_words, arg_words) = read_answer_header(&mut f, &self.name)?;
         self.arg
             .remap_if_grown(arg_words)
             .map_err(|e| format!("call arena (arguments) of '{}': {e}", self.name))?;
@@ -783,21 +934,174 @@ impl Worker {
             .ok_or_else(|| format!("malformed response frame from '{}'", self.name))
     }
 
-    /// Re-read the answer that is still sitting in the payload, now that the
-    /// caller knows which store number to complete a compound reference with.
+    /// @PLN119 arc E — the socket crossing.
     ///
-    /// Only meaningful immediately after a successful [`call`](Worker::call) that
-    /// asked for `u16::MAX`, and before the next request overwrites the frame.
-    pub fn reread_answer(&self, arena_nr: u16) -> Option<crate::host::Value> {
-        let mut f = Frame::new(self.wire.payload());
-        if f.get_u32() != Some(RESP_OK) {
-            return None;
+    /// The arg arena travels WITH the request and comes back WITH the answer,
+    /// and both directions are load-bearing: loft passes a compound by
+    /// reference, so a callee's write to a parameter is the caller's to see, and
+    /// over a socket the only way it can be seen is for the bytes to come home.
+    fn exchange_remote(
+        &mut self,
+        request: &[u8],
+        func: &str,
+    ) -> Result<crate::host::Value, String> {
+        let response = {
+            let Link::Remote { stream, .. } = &self.link else {
+                unreachable!("dispatched on the link")
+            };
+            let mut stream = stream.borrow_mut();
+            let arg_image = self.arg.image();
+            if let Err(e) = put_message(&mut *stream, &[request, arg_image]) {
+                self.dead.set(true);
+                return Err(self.gone(func, &e));
+            }
+            match get_message(&mut *stream, 3) {
+                Ok(three) => three,
+                Err(e) => {
+                    self.dead.set(true);
+                    return Err(self.gone(func, &e));
+                }
+            }
+        };
+        let mut parts = response.into_iter();
+        let mut body = parts.next().unwrap_or_default();
+        let ret_image = parts.next().unwrap_or_default();
+        let arg_image = parts.next().unwrap_or_default();
+        // Adopt the answer's arenas before decoding, so a compound reference
+        // names a record that is already here.
+        self.ret.load_image(&ret_image);
+        self.arg.load_image(&arg_image);
+
+        let mut f = Frame::over(&mut body);
+        let _ = read_answer_header(&mut f, &self.name)?;
+        let value = f
+            .get_value(u16::MAX)
+            .ok_or_else(|| format!("malformed response frame from '{}'", self.name))?;
+        if let Link::Remote { last, .. } = &self.link {
+            *last.borrow_mut() = body;
         }
-        f.get_u32()?; // ret words
-        f.get_u32()?; // arg words
-        f.get_value(arena_nr)
+        Ok(value)
+    }
+
+    /// The message for a remote link that stopped answering. Named separately
+    /// because it is the one failure a remote placement has that a local one
+    /// does not: the far side is someone else's process on someone else's
+    /// machine, and "it died" is a guess where "it stopped answering" is a fact.
+    fn gone(&self, func: &str, why: &str) -> String {
+        let where_ = match &self.link {
+            Link::Remote { address, .. } => address.clone(),
+            Link::Local { .. } => "this machine".to_string(),
+        };
+        format!(
+            "library '{}' at {where_} stopped answering during the call to '{}': {why}",
+            self.name,
+            if func.is_empty() { "<load>" } else { func }
+        )
+    }
+
+    /// Re-read the answer, now that the caller knows which store number to
+    /// complete a compound reference with.
+    ///
+    /// Only meaningful immediately after a successful [`call`](Worker::call), and
+    /// before the next request replaces it.
+    pub fn reread_answer(&self, arena_nr: u16) -> Option<crate::host::Value> {
+        match &self.link {
+            Link::Local { wire, .. } => {
+                let mut f = Frame::new(wire.payload());
+                read_answer_header(&mut f, &self.name).ok()?;
+                f.get_value(arena_nr)
+            }
+            Link::Remote { last, .. } => {
+                let mut body = last.borrow_mut();
+                let mut f = Frame::over(&mut body);
+                read_answer_header(&mut f, &self.name).ok()?;
+                f.get_value(arena_nr)
+            }
+        }
     }
 }
+
+/// Read a response's status and the two arena sizes, which every answer carries
+/// before its value.
+///
+/// The sizes come back on the ERROR path too: the callee may have grown the
+/// argument arena before it faulted, and a caller that read the old size would
+/// then map short and read a hole where its own value was.
+fn read_answer_header(f: &mut Frame, name: &str) -> Result<(u32, u32), String> {
+    let status = f.get_u32();
+    let ret_words = f.get_u32().unwrap_or(0);
+    let arg_words = f.get_u32().unwrap_or(0);
+    match status {
+        Some(RESP_OK) => Ok((ret_words, arg_words)),
+        Some(RESP_ERR) => Err(f
+            .get_str()
+            .unwrap_or_else(|| "malformed error frame".to_string())),
+        _ => Err(format!("malformed response frame from '{name}'")),
+    }
+}
+
+/// Write every part of one crossing as a SINGLE message.
+///
+/// One `write_all` rather than one per part, and the reason is the same one that
+/// shaped the local handshake (@PLN119 Q4): the obvious implementation is the
+/// slow one. Three small writes on a socket are three syscalls and, with
+/// `TCP_NODELAY` on, three segments — measured, roughly a fifth of a loopback
+/// crossing's cost for parts that all belong to the same message anyway.
+fn put_message(w: &mut impl std::io::Write, parts: &[&[u8]]) -> Result<(), String> {
+    let body: usize = parts.iter().map(|p| p.len() + 4).sum();
+    let total = u32::try_from(body).map_err(|_| "message too large".to_string())?;
+    let mut msg = Vec::with_capacity(body + 4);
+    msg.extend_from_slice(&total.to_le_bytes());
+    for p in parts {
+        msg.extend_from_slice(&(p.len() as u32).to_le_bytes());
+        msg.extend_from_slice(p);
+    }
+    w.write_all(&msg).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())
+}
+
+/// Read one message and split it back into its parts.
+///
+/// The total length is checked against a ceiling BEFORE anything is allocated:
+/// this side is reading from a socket, and a length word is exactly what a wrong
+/// or hostile peer gets wrong. A mistyped port number should be a refusal, not
+/// an out-of-memory kill.
+fn get_message(r: &mut impl std::io::Read, parts: usize) -> Result<Vec<Vec<u8>>, String> {
+    let mut len = [0u8; 4];
+    r.read_exact(&mut len).map_err(|e| e.to_string())?;
+    let total = u32::from_le_bytes(len) as usize;
+    if total > MAX_MESSAGE_BYTES {
+        return Err(format!(
+            "message of {total} bytes exceeds the {MAX_MESSAGE_BYTES}-byte placement limit"
+        ));
+    }
+    let mut buf = vec![0u8; total];
+    r.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(parts);
+    let mut at = 0usize;
+    for _ in 0..parts {
+        if at + 4 > buf.len() {
+            return Err("truncated placement message".to_string());
+        }
+        let n = u32::from_le_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]) as usize;
+        at += 4;
+        if at + n > buf.len() {
+            return Err("truncated placement message".to_string());
+        }
+        out.push(buf[at..at + n].to_vec());
+        at += n;
+    }
+    Ok(out)
+}
+
+/// The largest single message a placement link will read.
+///
+/// A ceiling rather than trust: the length word arrives from another machine,
+/// and allocating what it asks for is how a mistyped port number becomes an
+/// out-of-memory kill. Generous enough for a real value graph — the arenas in
+/// @PLN119's own tests carry 200 000 records — and far below what a wrong number
+/// would ask for.
+const MAX_MESSAGE_BYTES: usize = 256 << 20;
 
 // ── worker side ─────────────────────────────────────────────────────────────
 
@@ -963,8 +1267,21 @@ fn serve_one(
         .remap_if_grown(arg_words)
         .map_err(|e| format!("cannot map the argument arena: {e}"))?;
     arenas.0.resync();
-    arenas.1.reset();
+    serve_bound(f, program, arenas)
+}
 
+/// The half of serving a call that is the same on every transport: bind both
+/// arenas, run, unbind.
+///
+/// The argument arena is already this side's to read — a shared mapping the
+/// caller wrote through, or an image it sent — and the return arena is reset
+/// here because this side owns it and last call's answer is dead.
+fn serve_bound(
+    f: &mut Frame,
+    program: &mut crate::host::Program,
+    arenas: &mut (Arena, Arena),
+) -> Result<crate::host::Value, String> {
+    arenas.1.reset();
     let arg_nr = arenas.0.bind(program.stores());
     let ret_nr = arenas.1.bind(program.stores());
     let out = run_bound(f, program, ret_nr, arg_nr);
@@ -1048,4 +1365,135 @@ fn run_bound(
         program.stores().free_named(&answer, "<placed return>");
     }
     Ok(crate::host::Value::Ref(landed))
+}
+
+// ── remote server ───────────────────────────────────────────────────────────
+
+/// @PLN119 arc E — serve one library's calls over a socket, so a consumer can
+/// place it on another machine.
+///
+/// Entered from `loft --lib-server <addr> <pkg_dir> --default <stdlib>`, the
+/// symmetric twin of `--lib-worker`. Never returns.
+///
+/// # What this is, and what it is not
+///
+/// It serves **exactly the library named on its command line**, and the protocol
+/// carries a function name that is resolved only within that library — there is
+/// no path by which a caller reaches anything else. The address is the
+/// operator's to choose and there is no default: a service that bound something
+/// helpful on its own would be a service nobody decided to run.
+///
+/// It is **not** an authenticated or encrypted channel, and it is not a sandbox.
+/// It executes its library's functions for whoever connects, which is the same
+/// trust an in-process `use` already extends — but over a socket that trust has
+/// to be arranged by the deployment (a loopback bind, a private network, a
+/// tunnel), not assumed. Binding it to a public interface publishes the library.
+///
+/// # Panics
+/// Never deliberately; a fault inside the library is caught and returned to the
+/// caller as an error, which is what makes a placed library's error behaviour
+/// match an in-process one.
+pub fn serve_remote(address: &str, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
+    let listener = match std::net::TcpListener::bind(address) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("loft: cannot serve {} on {address}: {e}", pkg_dir.display());
+            std::process::exit(1);
+        }
+    };
+    let mut program = match crate::host::Program::from_library_dir(pkg_dir, stdlib_dir) {
+        Ok(mut p) => {
+            // The same anchoring a local worker gets: a relative path means what
+            // it means to the code being served. On another machine that is this
+            // server's own directory, which is the only answer available and the
+            // one an operator can arrange for.
+            if let Ok(here) = std::env::current_dir() {
+                p.anchor_paths_at(&here);
+            }
+            p
+        }
+        Err(e) => {
+            eprintln!("loft: cannot load {} — {e}", pkg_dir.display());
+            std::process::exit(1);
+        }
+    };
+    // Scratch of this server's own; the caller's arena bytes land in it.
+    let base = std::env::temp_dir().join(format!("loft-serve-{}.wire", std::process::id()));
+    let (arg_path, ret_path) = arena_paths(&base);
+    let mut arenas = match (Arena::create(&arg_path), Arena::create(&ret_path)) {
+        (Ok(a), Ok(r)) => (a, r),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("loft: cannot create the call arena: {e}");
+            std::process::exit(1);
+        }
+    };
+    let served = listener
+        .local_addr()
+        .map_or_else(|_| address.to_string(), |a| a.to_string());
+    println!("loft: serving {} on {served}", pkg_dir.display());
+
+    // One caller at a time, which is not a limitation this transport invents:
+    // the local wire has a single request slot for the same reason, and a placed
+    // library's calls serialise either way.
+    loop {
+        let Ok((stream, _)) = listener.accept() else {
+            continue;
+        };
+        let _ = stream.set_nodelay(true);
+        serve_connection(stream, &mut program, &mut arenas);
+    }
+}
+
+/// Serve one connection until the caller goes away.
+fn serve_connection(
+    mut stream: std::net::TcpStream,
+    program: &mut crate::host::Program,
+    arenas: &mut (Arena, Arena),
+) {
+    loop {
+        let Ok(parts) = get_message(&mut stream, 2) else {
+            return; // the caller closed, or spoke nonsense; either way it is over
+        };
+        let mut parts = parts.into_iter();
+        let mut body = parts.next().unwrap_or_default();
+        arenas.0.load_image(&parts.next().unwrap_or_default());
+        let mut f = Frame::over(&mut body);
+        let reply = match f.get_u32() {
+            Some(REQ_SHUTDOWN) | None => return,
+            Some(REQ_LAYOUT) => answer_layout(&mut f, Some(program)),
+            _ => {
+                // The size word a local caller sends is meaningless here — the
+                // bytes came with the request — so it is read and dropped, which
+                // keeps ONE request shape across both transports.
+                f.get_u32();
+                serve_bound(&mut f, program, arenas)
+            }
+        };
+        let mut out = vec![0u8; PAYLOAD_BYTES];
+        let mut o = Frame::over(&mut out);
+        let (ret_words, arg_words) = (arenas.1.words(), arenas.0.words());
+        let built = match &reply {
+            Ok(v) => {
+                o.put_u32(RESP_OK) && o.put_u32(ret_words) && o.put_u32(arg_words) && o.put_value(v)
+            }
+            Err(e) => {
+                o.put_u32(RESP_ERR) && o.put_u32(ret_words) && o.put_u32(arg_words) && o.put_str(e)
+            }
+        };
+        let used = o.len();
+        if !built {
+            let mut o = Frame::over(&mut out);
+            let _ = o.put_u32(RESP_ERR)
+                && o.put_u32(0)
+                && o.put_u32(0)
+                && o.put_str("answer does not fit the placement frame");
+        }
+        out.truncate(used.max(16));
+        // Both arenas travel home: the return carries the answer, and the
+        // ARGUMENT carries whatever the callee wrote into a parameter — which
+        // loft's by-reference semantics make the caller's to see.
+        if put_message(&mut stream, &[&out, arenas.1.image(), arenas.0.image()]).is_err() {
+            return;
+        }
+    }
 }

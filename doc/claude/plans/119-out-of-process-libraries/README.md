@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B and D done (2026-08-11)**.  A library declares
+Open — **arcs A, B, C, D, E done and F's `lib/git` shipped (2026-08-11)**.  A library declares
 `placement = "process"` and its consumers call it unchanged, across a real
 process boundary.  The parity gate is green for **every scalar shape** — each
 integer width with its sign, `single`, boolean, text in both directions
@@ -22,10 +22,14 @@ deep-cloned on every entry into loft; fixed, and a placed call is now ~0.8 µs
 for scalars and ~1.4 µs carrying a struct or a vector
 ([Q4](#open-design-questions)).
 
-**Next: arc C** — ownership across the boundary, with the @PLN94 oracle.  It has
-something to say now, which it did not before the arena: a value that crosses is
-built in a store, freed by one side or the other, and — for an argument — WRITTEN
-by the callee and read back by the caller.
+A library also runs on **another machine** — `placement = "remote"`, the arena's
+bytes on a socket ([Arc E](#arc-e-as-built-2026-08-11)) — and the plan's first
+real consumer ships: `lib/git`, which deleted the review viewer's 135 lines of
+bash ([Arc F](#arc-f-as-built-2026-08-11)).
+
+**What is left:** the engine_host wire (arc F's second half), and `make index`'s
+"filter loft to bash-tracked files" workaround, which wants one more `lib/git`
+query.
 Opened 2026-07-24 from the question "does loft have a safe way to spawn
 sub-processes?".  It does not, and the answer is deliberately not to add one:
 `lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
@@ -78,8 +82,8 @@ placements consult, so the off-diagonal cells cannot disagree.
 ## Effort + design
 
 - **Effort:** H (arcs A–C are the core; E and F ride on them)
-- **Design:** ~ (partial — the boundary marshal is built and measured; the
-  ownership rules are still hypotheses until arc C runs; see
+- **Design:** + (built and measured on three placements, with a real consumer;
+  what remains is consumers, not design — see
   [Open design questions](#open-design-questions))
 - **Last touched:** 2026-08-11
 
@@ -111,7 +115,7 @@ argument-vector-not-a-string rule `67-process` had to invent.
 | Wire | a shared **mmap-backed store** as the call arena — BUILT, two of them, one per direction | `src/lib_placement/arena.rs` over `Store::open` |
 | Pointer portability | `DbRef = (store_nr, rec, pos)`, **no raw pointer** — survives mapping at another address. ~~only `store_nr` is translated~~ **not even that**: a record graph's interior pointers are plain `u32` rec ids, so it names no store and each side uses its own index | `src/keys.rs`, `relocate_ptr_fields` |
 | Schema safety | `.dschema` **layout-identity gate** — refuses a store whose layout differs from the loading program's type instead of misreading foreign bytes; `store_verify` backstop | @PLN97 arc G, `src/schema_sidecar.rs`, `src/native.rs:1252`, [formal/layout.md](../../formal/layout.md) |
-| Remote = same mechanism | working-set page loads from a file **or an `http(s)://` Range server** | `src/paged_reader.rs` |
+| Remote = same mechanism | ~~working-set page loads from an `http(s)://` Range server~~ — **BUILT differently**: the arena's live bytes on a socket. A page-fetch round trip per page is worse than one send for a value written once and read once; the Range reader stays the mechanism for data AT REST | `src/lib_placement/wire.rs` |
 | Concurrency | **single-writer per store** (the free-space LLRB tree + `needs_coalesce` are single-writer); readers map read-only | `read_only` / `free_protected` locks, `clone_locked` / `borrow_locked_for_light_worker` |
 | Staleness | the store's monotonic mutation counter (bumped on `claim`/`resize`/`delete`) is already the epoch a cross-process reader needs | CO1.9/S28, `src/store.rs:166-169` |
 | Transactional writes (later) | journal snapshot — the transactional world [SANDBOX.md](../../SANDBOX.md) S7 wanted and dropped | `src/database/journal.rs::snapshot` |
@@ -183,7 +187,7 @@ Guards: `tests/placement_parity.rs`.
 | **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | **Done 2026-08-11** — scalars ([first half](#arc-b-first-half-as-built-2026-08-11)), then structs and vectors through a shared store ([second half](#arc-b-second-half-as-built-2026-08-11)). Polymorphic enums and keyed collections are deliberately still outside |
 | **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
-| **E** — `placement = "remote"` over the existing paged / Range reader | @PLN97 arc G | Open — blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632): the paged loaders silently refuse a **field-declared** collection (the store's `known_type` is the wrapper struct), and the refusal is indistinguishable from "key absent" |
+| **E** — `placement = "remote"` | this README | **Done 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)) — over a socket, with the arena's bytes on it. NOT over the paged / Range reader, and [#632](https://github.com/loft-lang/loft/issues/632) was never a blocker |
 | **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **`lib/git` done 2026-08-11** ([Arc F as built](#arc-f-as-built-2026-08-11)) — the viewer's bash is deleted. The engine_host wire is the remaining half |
 
 ## Arc A as built (2026-08-11)
@@ -454,6 +458,109 @@ Borrowing a slot per CALL, rather than once, is new — and it found two things 
 which is the instrument that found (3) and (4) above in minutes — and, with the
 process id on each line, which of the two sides was walking the table.
 
+## Arc E as built (2026-08-11)
+
+A library declares `placement = "remote"`, an operator starts
+`loft --lib-server <host:port> <pkg_dir>` wherever it should run, and a consumer
+points at it with `LOFT_REMOTE_<NAME>=host:port`.  The consumer's source does not
+change, and neither does its output — the parity gate now has three placements
+in it.
+
+### The plan's assumed mechanism was the wrong one
+
+This row used to read "over the existing paged / Range reader", and marked itself
+blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632).
+
+The Range reader is right for **data at rest** — a consumer fetching the pages it
+touches of a big published store, which is what `store_load_key*` and lazy stores
+already do.  It is the wrong mechanism for a **call**: a call arena is small,
+freshly written, and read once, so a page-fetch round trip per page is strictly
+worse than sending the whole thing.  #632 was therefore never a blocker for arc
+E, and this plan should stop saying it was.
+
+### Only the transport differs
+
+The crossing has three parts, and exactly one of them is placement-specific:
+
+| part | `process` | `remote` |
+|---|---|---|
+| the frame | shared mapping + futex | one message on a socket |
+| the arg arena | a file both sides map | the same local file's BYTES, sent |
+| the ret arena | ditto | ditto, sent back |
+
+Everything else — the marshal, the layout gate, the delivery three-way, the
+`const` skip, the copy-back, the fault handling — is shared verbatim, because
+those are properties of the BOUNDARY and not of the wire.  In the code that is
+one `enum Link` with two arms; the dispatcher does not know which it has.
+
+**A store is a self-contained image whose interior pointers are `u32` record
+ids**, so putting one on a socket is a copy of the value's own layout, not an
+encoding of it.  That is this plan's "one mechanism at four latencies" surviving
+the network hop: the remote crossing pays a copy where the local one pays a page
+table, and neither pays a per-field marshal.
+
+**The argument arena travels in both directions**, and that is load-bearing
+rather than symmetric-looking: loft passes a compound by reference, so a callee's
+write to a parameter is the caller's to see, and over a socket the only way to
+see it is for the bytes to come home.  A transport that sent the arena only
+outward passes every other row of the matrix and fails that one.
+
+### An image is a PREFIX, and a prefix is not a store
+
+Sending an arena's unused capacity would make every small call pay for the
+largest one before it, so only the live prefix travels.  But a prefix is not a
+well-formed store — its last free block is cut short — and the receiving buffer's
+tail is whatever it held.  A zero word there reads as a **zero-size block**, and
+`fl_rebuild` stepped by it: an infinite loop, which in a release build is a hang
+with no output.
+
+Two fixes, and the second is worth more than this arc:
+
+* `Store::adopt_image` makes the space past the image one free block, exactly as
+  `init` makes a whole fresh store one.
+* **`fl_rebuild` now ENDS the walk on a zero-size block** instead of repeating
+  it.  `claims_rebuild` walks the same chain and has always stopped there; this
+  half had only a `debug_assert`, so any malformed store was a hang in release
+  rather than a diagnosis.
+
+### Cost, and what it is made of
+
+Measured on loopback (20 000 scalar and 20 000 16-element-vector calls, against
+the identical loop with the call removed): **~25 µs per crossing**, against ~1 µs
+for a local placed call and ~0.05 µs in-process.  It is dominated by the round
+trip, not by the data — which is the point of sending an image rather than an
+encoding, and is why the number barely moves with the value's size.
+
+Two things halved it, and both are the Q4 lesson again — the obvious
+implementation is the slow one:
+
+* the argument arena is emptied on **every** call, not only one carrying a
+  compound, so a scalar call stops shipping the graph the last compound call left
+  behind;
+* each direction is **one** message rather than one per part.  Three small writes
+  on a socket are three syscalls and, with `TCP_NODELAY`, three segments.
+
+So a remote placement is for a library whose calls do real work — which is what
+a service is — and the limit is stated rather than discovered.
+
+### What the server is, and what it is not
+
+`--lib-server` serves **exactly the library named on its command line**, and the
+protocol carries a function name resolved only within it; there is no path to
+anything else.  The address is the operator's to choose and there is no default,
+because a service that bound something helpful on its own would be a service
+nobody decided to run.
+
+It is **not** authenticated, not encrypted, and not a sandbox.  It runs its
+library's functions for whoever connects — the same trust an in-process `use`
+already extends, but over a socket that trust has to be arranged by the
+deployment (a loopback bind, a private network, a tunnel) rather than assumed.
+The `--lib-server` usage text says so where an operator will read it.
+
+One thing IS defended, because it comes from another machine: a length word.
+Every message is size-checked against a ceiling before anything is allocated, so
+a mistyped port number is a refusal rather than an out-of-memory kill.
+
 ## Arc F as built (2026-08-11)
 
 `lib/git` ships, and `tools/viewer/refresh.sh` is deleted — 135 lines of bash
@@ -690,7 +797,10 @@ the @PLN94 oracle, and that belongs with arc C.
    remains of arc F: `make index`'s "filter loft to bash-tracked files"
    workaround (it wants a `ls-files` query, which is one more `Query`), and the
    engine_host wire.
-9. **Arc E**, then the engine_host wire (F, second half).
+9. ~~**Arc E**~~ — **DONE 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)),
+   over a socket rather than the Range reader the row assumed.  What remains of
+   the plan is the engine_host wire (F, second half) and `make index`'s
+   bash-tracked-files workaround.
 
 ## The gate
 
