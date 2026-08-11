@@ -26,6 +26,21 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A big generated file compiles in a second, not a quarter of an hour
+
+A program holding one long vector literal took time proportional to the *square* of
+its length. A generated terrain file — a single 86 400-element `vector<integer>` —
+took **over 13 minutes**, at 99 % CPU, printing nothing. Nothing was wrong with it;
+it compiles correctly if you wait. But nothing says *"still working"* either, so it
+reads as a hang, and five build targets that imported it simply stopped being run.
+
+It now takes **under a second**, and the time grows with the length of the literal
+rather than its square.
+
+If you split a generated file into chunks to work around this, you can stop: the
+cost was never per-literal, so chunking one function into several literals did not
+help anyway.
+
 ### A library adding a function no longer takes a word away from you
 
 If a library you use gained a `pub fn turn`, then `turn = 0` stopped compiling

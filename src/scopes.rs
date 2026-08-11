@@ -126,6 +126,22 @@ struct Scopes {
     /// loft#849 / @PLN139 — vars that no longer OWN what they hold, so their scope end must
     /// not drop it.  See [`collect_drop_transferred`].
     drop_transferred: HashSet<u16>,
+    /// loft#854 — the whole-function half of the ownership oracle, computed once
+    /// for `d_nr` instead of once per question.
+    ///
+    /// `ownership_of` walks the entire function body (and clones each defining
+    /// right-hand side) to answer about ONE value. `scan_set` asks about every
+    /// assignment, so a function with n of them paid n whole-function walks: a
+    /// vector literal is one `Set` per element, and 86 400 elements took over 13
+    /// minutes at 99 % CPU.
+    ///
+    /// Safe to memo for exactly as long as this `Scopes` lives: the body it
+    /// summarises is `data.def(d_nr).code`, `data` is borrowed `&Data` for the
+    /// whole traversal, and `run_scan_phase` installs the rewritten body only
+    /// after the scan returns — so the borrow checker, not a convention, is what
+    /// keeps this from going stale. A `Scopes` is built per scan phase, so a
+    /// second phase re-derives it.
+    fn_defs: Option<crate::use_analysis::Defs>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -1220,6 +1236,7 @@ fn run_scan_phase(
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
         drop_transferred: collect_drop_transferred(orig_code, orig_vars, data),
+        fn_defs: None,
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -3953,7 +3970,7 @@ impl Scopes {
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
-                Self::ref_rhs_ownership(value, data, self.d_nr),
+                self.ref_rhs_ownership(value, data),
                 RefRhs::View
             )
             // `value` is pre-scan IR: reads may name the original id (`ov`)
@@ -3968,7 +3985,7 @@ impl Scopes {
         }
         // Track the LATEST assignment's ownership for this var.
         if matches!(function.tp(v), Type::Reference(_, _)) {
-            match Self::ref_rhs_ownership(value, data, self.d_nr) {
+            match self.ref_rhs_ownership(value, data) {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
                 }
@@ -4366,8 +4383,15 @@ impl Scopes {
     /// borrow — tracking it owned would over-free the NEXT transition).  So Join
     /// folds to View, not "don't-track" — the p462 conditional
     /// `chosen = t[i] ?? m_none()` reassign needs the prior-store free.
-    fn ref_rhs_ownership(value: &Value, data: &Data, d_nr: u32) -> RefRhs {
-        match crate::use_analysis::ownership_of(data, d_nr, value) {
+    /// loft#854 — the memoised form. `ownership_of` recomputes the whole-function
+    /// summary per question; `scan_set` asks once per assignment, which made a
+    /// function with n assignments cost n whole-function walks.
+    fn ref_rhs_ownership(&mut self, value: &Value, data: &Data) -> RefRhs {
+        let d_nr = self.d_nr;
+        let defs = self
+            .fn_defs
+            .get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+        match crate::use_analysis::ownership_of_with(data, d_nr, value, defs) {
             crate::use_analysis::Own::Owned => RefRhs::Owned,
             crate::use_analysis::Own::Borrowed { .. } | crate::use_analysis::Own::Join { .. } => {
                 RefRhs::View

@@ -1640,7 +1640,7 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// a `materialized_view_return` fills in place), and the vars some branch FILLS
 /// IN PLACE (loft#704).
 #[derive(Default)]
-struct Defs {
+pub(crate) struct Defs {
     rhs: HashMap<u16, Vec<Value>>,
     db_vars: HashSet<u16>,
     /// loft#704 — vars a branch fills IN PLACE (`OpClearVector(v)` /
@@ -2240,11 +2240,41 @@ pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
 /// entry point (the OWNERSHIP_MODEL north star).
 #[must_use]
 pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
-    let def = data.def(d_nr);
-    let mut own = Ownership::new(data);
+    ownership_of_with(data, d_nr, value, &function_defs(data, d_nr))
+}
+
+/// The whole-function half of [`ownership_of`]: every var's defining right-hand
+/// sides, the `OpDatabase` vars, and the vars a branch fills in place.
+///
+/// Split out because it depends on the FUNCTION, not on the value being asked
+/// about, while `ownership_of` recomputes it per question. That is quadratic
+/// wherever one function is asked many times — loft#854: a vector literal is one
+/// `Set` per element, `scopes::scan_set` asks about each, and each answer walked
+/// (and CLONED the right-hand side of) the whole function. 86 400 elements took
+/// over 13 minutes at 99 % CPU, reading as a hang.
+///
+/// A caller that asks repeatedly about ONE function computes this once and passes
+/// it to [`ownership_of_with`]. It is deliberately not cached on `Data`: the
+/// result is a function of `Definition::code`, which the scope pass REWRITES
+/// (`scopes.rs` assigns `definitions[d_nr].code` at four points), so a cache
+/// living as long as `Data` would answer from a body that no longer exists —
+/// silently, and in the direction that mis-classifies ownership. The memo belongs
+/// where a `&Data` borrow already proves the body cannot change underneath it.
+#[must_use]
+pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     let mut defs = Defs::default();
-    collect_defs(&def.code, &FillOps::of(own.data), &mut defs);
-    own.classify(value, &def.variables, &defs)
+    collect_defs(&data.def(d_nr).code, &FillOps::of(data), &mut defs);
+    defs
+}
+
+/// [`ownership_of`] against an already-computed [`function_defs`] for `d_nr`.
+///
+/// The caller owns the obligation the borrow cannot express: `defs` must be the
+/// defs of THIS `d_nr`, collected from the body `data` holds now.
+#[must_use]
+pub(crate) fn ownership_of_with(data: &Data, d_nr: u32, value: &Value, defs: &Defs) -> Own {
+    let def = data.def(d_nr);
+    Ownership::new(data).classify(value, &def.variables, defs)
 }
 
 /// True when `classify` resolves a `Call(d, …)` STRUCTURALLY — a store mint

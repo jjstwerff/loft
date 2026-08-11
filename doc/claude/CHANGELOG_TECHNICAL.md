@@ -9,6 +9,54 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The ownership oracle is asked once per function, not once per question (loft#854) (2026-08-12)
+
+`use_analysis::ownership_of` is documented as *"the ONE fact every own-vs-borrow
+chokepoint READS instead of re-deriving"*. It re-derived it on every read:
+
+```rust
+pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
+    let def = data.def(d_nr);
+    collect_defs(&def.code, &FillOps::of(own.data), &mut defs);  // the WHOLE function
+    own.classify(value, &def.variables, &defs)                   // …to answer about ONE value
+}
+```
+
+`scopes::scan_set` asks once per assignment, and a vector literal is one assignment per
+element — so an n-element literal walked the function n times, **cloning every defining
+right-hand side** on each walk. Quadratic: 2 000 elements 0.68 s, 4 000 2.34 s, 8 000
+9.42 s, a clean 4× per doubling. crawler's generated terrain file (one 86 400-element
+`vector<integer>`) took **over 13 minutes** at 99 % CPU with no output, which reads as a
+hang; five of its `make` targets imported that module, so none of them were ever run.
+It is now **0.99 s**.
+
+**The fix is a memo, and where it lives is the whole design.** `function_defs` is split
+out of `ownership_of` and memoised on `Scopes` — created per scan phase, holding the
+`d_nr` being scanned. Correct *by construction* rather than by convention: `data` is
+borrowed `&Data` for the entire traversal and `run_scan_phase` installs the rewritten body
+only after `scan` returns, so the borrow checker is what keeps the memo from going stale.
+It is the same value the old code recomputed — `data.def(d_nr).code` — computed once.
+
+**Not cached on `Data`**, which is where it would naturally go. `Data` must stay `Sync`
+(tests park it in a process-wide `OnceLock` and parallel workers read `&Data` across
+threads), and the existing precedent there — `caller_index` — is a write-once `OnceLock`
+that is never invalidated, which is sound only because the caller graph is stable after
+parse. `Defs` is not: `scopes.rs` rewrites `definitions[d_nr].code` at four points, so a
+`Data`-lived cache would answer from a body that no longer exists — silently, and in the
+direction that mis-classifies ownership. The other 14 `ownership_of` call sites are
+unchanged and keep recomputing; none of them is hot.
+
+**Verified behaviour-preserving, not just green:** `loft introspect` over 60
+`tests/scripts/*.loft` programs is **byte-identical** before and after, IR and bytecode.
+Guarded by `tests/compile_scaling.rs`, a new home for complexity bounds, whose margin is
+measured in both directions — 69.9 s against the reverted fix, 0.33 s with it.
+
+Two things the filed report had wrong, worth recording because both would misdirect a
+reader: it is **not parsing** (parse is linear: 12 → 17 → 34 ms while `scopes::check` went
+705 → 2 271 → 9 323 ms), and the suggested **chunking workaround does not work** — eight
+1 000-element literals in one function cost the same as one of 8 000, because the axis is
+per-FUNCTION, not per-literal. Splitting across functions is what helped.
+
 ### A method lookup asks the type's OWN source only to replace a foreign candidate (loft#850 follow-up) (2026-08-11)
 
 loft#850 taught `find_fn` that the mangled key `t_<len><Name>_<fn>` spells a type's NAME,
