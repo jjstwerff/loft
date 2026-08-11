@@ -1249,7 +1249,7 @@ impl Parser {
         {
             let td = *td;
             let last = l.len() - 1;
-            let w = self.materialize_view_return(td, &mut l[last]);
+            let w = self.materialize_view_value(td, &mut l[last]);
             return self.vars.tp(w).clone();
         }
         // #416 — set when the vector match/if tail below was materialised into the
@@ -9194,6 +9194,21 @@ impl Parser {
     fn materialize_view_return(&mut self, td: u32, tail: &mut Value) -> u16 {
         let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
+        self.materialize_return_into(td, tail, w);
+        w
+    }
+
+    /// `materialize_view_return` for a block used as a VALUE — the same owned-copy
+    /// rewrite, but drawing its work-ref from the PASS-2-ONLY `__ref_p2_N` sequence
+    /// (`Vars::work_ref_p2`), because the move-on-block-return site that calls it is
+    /// guarded by `!first_pass`.  Drawing from the shared counter handed this site
+    /// the name pass 1 left on the RETURN BUFFER, so the block materialised its value
+    /// into the buffer the real return re-mints — and the return copied from the
+    /// destroyed store, answering `null` (loft#848).  A block VALUE is not a return
+    /// and has no claim on the return buffer.
+    fn materialize_view_value(&mut self, td: u32, tail: &mut Value) -> u16 {
+        let ref_tp = Type::Reference(td, Deps::none());
+        let w = self.vars.work_refs_p2(&ref_tp, &mut self.lexer);
         self.materialize_return_into(td, tail, w);
         w
     }

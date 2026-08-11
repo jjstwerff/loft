@@ -2921,6 +2921,10 @@ impl Parser {
         let mut in_place_var: Option<u16> = None;
         let mut sinks = FieldSinks::default();
         let work = self.vars.work_ref();
+        // Both sequences: the construction arms below mint from the pass-2-only
+        // `__ref_p2_N` one (loft#848), and an abandoned construction must clean
+        // whichever it took.
+        let work_p2 = self.vars.work_ref_p2();
         if let Value::Var(v_nr) = code {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
@@ -3014,7 +3018,14 @@ impl Parser {
                 new_object = true;
                 self.data.set_referenced(td_nr, self.context, Value::Null);
                 let ret = self.data.def(td_nr).returned();
-                let w = self.vars.work_refs(ret, &mut self.lexer);
+                // This arm is PASS-2-ONLY (its own `!self.first_pass` guard) and it builds
+                // a value bound to a NAMED LOCAL, which outlives the statement — so it
+                // draws from the `__ref_p2_N` sequence rather than the shared one.  On the
+                // shared counter its position shifted relative to pass 1 and it was handed
+                // the name pass 1 left on the return buffer, so `v: E = EA { … }` built the
+                // variant INTO the buffer the return re-mints, and the return copied from
+                // the destroyed store: `null` (loft#848).  See `Vars::work_ref_p2`.
+                let w = self.vars.work_refs_p2(ret, &mut self.lexer);
                 let tp = i32::from(self.data.def(td_nr).known_type());
                 list.push(v_set(w, Value::Null));
                 list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
@@ -3066,6 +3077,7 @@ impl Parser {
             ) {
                 self.lexer.revert(link);
                 self.vars.clean_work_refs(work);
+                self.vars.clean_work_refs_p2(work_p2);
                 return Type::Unknown(0);
             }
             if !self.lexer.has_token(",") {
