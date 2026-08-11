@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I116 — Library placement — in-process, a worker, or another machine
 // @PLN119 arc A — out-of-process libraries: placement as policy, the store as the wire.
 
 //! Where a library RUNS, declared as deployment policy rather than written into

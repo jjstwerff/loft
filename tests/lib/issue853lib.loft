@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#853 — a library free function whose name the STDLIB declares as a METHOD on
+// the first argument's type.  `split` is the real case: the stdlib has
+// `split(self: text, separator: character)`, and the published `regex` package has
+// shipped `pub fn split(pattern: text, input: text)` since 0.2.0.
+pub fn split(pattern: text, input: text) -> integer {
+  len(pattern) + len(input)
+}

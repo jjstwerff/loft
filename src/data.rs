@@ -5106,15 +5106,31 @@ impl Data {
         // @PLN25 — a `τ?` receiver tries its own overload first and falls back to the base
         // (non-null) one; the second spelling is the same string when sig == base (gate-OFF
         // or a non-nullable receiver), and looking it up twice would only repeat the work.
+        //
+        // The type's own source is consulted ONLY to replace a candidate this scope
+        // answered with and that turned out to be foreign — never as a second place to
+        // find a method the caller's scope does not have. That distinction is the whole
+        // of loft#853: EVERY type has an own source, and for a builtin it is the stdlib,
+        // so searching it unconditionally let a stdlib method on `text` outrank a
+        // library's free function of the same name. `regex::split(pattern, input)` — a
+        // free `fn split(text, text)` — resolved to the stdlib's `split(self: text,
+        // separator: character)` and the published library stopped compiling, which the
+        // freeze forbids. No candidate here means nothing to disambiguate, so the search
+        // falls through to the free function below, as it did before loft#850.
         let spellings: &[&String] = if sig == base { &[&sig] } else { &[&sig, &base] };
         let own_source = self.definitions[type_nr as usize].source;
         for spelling in spellings {
             let key = format!("t_{}{}_{fn_name}", spelling.len(), spelling);
-            for from in [source, own_source] {
-                let d_nr = self.source_nr(from, &key);
-                if self.method_receives(d_nr, type_nr) {
-                    return d_nr;
-                }
+            let d_nr = self.source_nr(source, &key);
+            if d_nr == u32::MAX {
+                continue;
+            }
+            if self.method_receives(d_nr, type_nr) {
+                return d_nr;
+            }
+            let own = self.source_nr(own_source, &key);
+            if self.method_receives(own, type_nr) {
+                return own;
             }
         }
         let d_nr = self.source_nr(source, &format!("n_{fn_name}"));

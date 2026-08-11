@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I116 — Library placement — in-process, a worker, or another machine
 // @PLN119 arc B — the call arena: the store a compound value crosses in.
 
 //! Scalars fit in a frame; a struct or a vector does not. It is a graph of

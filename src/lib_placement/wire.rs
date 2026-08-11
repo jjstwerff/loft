@@ -1,3 +1,5 @@
+// @I116 — Library placement — in-process, a worker, or another machine
+
 //! The Linux transport for @PLN119 placement: the shared mapping, the
 //! spin-then-sleep handshake, the frame codec, and the two ends of a call.
 //!

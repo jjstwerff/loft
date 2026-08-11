@@ -303,7 +303,15 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) |
-          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
+          test(native_rs_functions_up_to_date) |
+          test(a_private_scope_end_hook_in_a_library_runs) |
+          test(a_delegating_producer_binds_its_companion_cleanly)${{ matrix.extra_filter }})'
+          # ^ the last two are the "spawns an uninstrumented binary" case the comment
+          #   above names, in its sharpest form: the spawned run BUILDS native artifacts
+          #   (a library cdylib, the `--native` runtime), and that build cannot resolve
+          #   loft's proc-macro deps under `-Zsanitizer` + `--target` — the same E0463
+          #   that keeps doctests out of this sweep. They carry no ASan coverage either
+          #   way, and the normal Test jobs validate what they assert.
 
   # @PLN85 — the interpreter LEAK GATE.  SEPARATE from the ASan UAF/OOB sweep above:
   # its own runner (the slow single-threaded leak pass never gates the fast sweep) and

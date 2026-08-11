@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I116 — Library placement — in-process, a worker, or another machine
 // @PLN119 arc A — routing a placed library's calls from the interpreter to its worker.
 
 //! What makes placement *policy*: a consumer writes `use maths;` and calls

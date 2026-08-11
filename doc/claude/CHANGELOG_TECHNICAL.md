@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A method lookup asks the type's OWN source only to replace a foreign candidate (loft#850 follow-up) (2026-08-11)
+
+loft#850 taught `find_fn` that the mangled key `t_<len><Name>_<fn>` spells a type's NAME,
+not a type: two packages may each declare a `Thing`, both register `t_5Thing_go`, and the
+caller's name table holds whichever import landed first. The fix checks each candidate
+against the receiver it declares and, when the candidate is foreign, re-asks in the type's
+OWN source — where the right package's method lives.
+
+The re-ask was written as a plain second search source:
+
+```rust
+for from in [source, own_source] {
+    let d_nr = self.source_nr(from, &key);
+    if self.method_receives(d_nr, type_nr) { return d_nr; }
+}
+```
+
+**Every type has an own source, and for a builtin it is the stdlib.** So this did not just
+resolve collisions — it added the whole stdlib method surface as a fallback for any call
+whose first argument is a builtin type, ahead of the free-function lookup below it. A
+library's free `split(pattern: text, input: text)` lost its own qualified call to the
+stdlib's `split(self: text, separator: character)`: `regex::split("[,;]", "a,b;c")` stopped
+compiling with *expected character, got text on argument 2*. The published `regex` package
+had shipped that call since 0.2.0, and a language change retro-breaking a shipped library is
+what the freeze forbids — `revalidate-libs` is the gate that caught it, green on `main` and
+red on the branch.
+
+The re-ask is now what it was meant to be: a REPLACEMENT for a candidate this scope answered
+with and that proved foreign, never a second place to find a method the caller's scope does
+not have. No candidate under the key means nothing to disambiguate, so the search falls
+through to the free function exactly as it did before loft#850.
+
+Pinned by `issue853_a_library_free_fn_outranks_a_stdlib_method_of_the_same_name`
+(`tests/imports.rs`, both backends), whose control line asserts the stdlib's own free
+functions and text methods still resolve from the same scope — a fix that reached the free
+function by losing the methods would satisfy the subject and break the language.
+
 ### A binding position mints a local, whatever else carries that name (loft#852, loft#756) (2026-08-11)
 
 A library's public function occupied the CONSUMER's variable namespace: with
