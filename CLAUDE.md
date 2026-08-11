@@ -228,6 +228,10 @@ the bug-filing policy above). It never blocks.
 bound to an image or `sqlite:` fetches on a MISS, query derived from its own type ·
 [LIFETIME.md](doc/claude/LIFETIME.md) deps/freeing ·
 [OWNERSHIP_MODEL.md](doc/claude/OWNERSHIP_MODEL.md) the deps north-star (borrow system) ·
+[PLACEMENT.md](doc/claude/PLACEMENT.md) a library runs in this process, a worker, or another
+machine — one manifest line, consumers unchanged; **the four rules for writing one that can
+be placed** (a `pub fn` must not BE a native; answer a value, not a cursor; closures do not
+cross; a returned VIEW cannot be placed) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
 

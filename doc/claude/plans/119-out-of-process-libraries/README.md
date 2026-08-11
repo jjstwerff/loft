@@ -5,1091 +5,165 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 119 — Out-of-process libraries: placement as policy, the store as the wire
 
-## Status
+## Status — DONE, 2026-08-11
 
-Open — **every arc A–F built (2026-08-11)**.  A library declares
-`placement = "process"` and its consumers call it unchanged, across a real
-process boundary.  The parity gate is green for **every scalar shape** — each
-integer width with its sign, `single`, boolean, text in both directions
-([Arc B, first half](#arc-b-first-half-as-built-2026-08-11)) — and for
-**structs and vectors**, which cross in a store both processes map
-([Arc B, second half](#arc-b-second-half-as-built-2026-08-11)).  A worker that
-dies is an error rather than a hang ([Arc D](#arc-d-as-built-2026-08-11)).
-**Q1 answered GREEN (2026-07-24)**; **Q4 answered, then CORRECTED (2026-08-11)**
-— the crossing is affordable and the handshake is right, but the 130 ns was a
-bare wire ping and a real call cost 4.7 µs, almost all of it a span table being
-deep-cloned on every entry into loft; fixed, and a placed call is now ~0.8 µs
-for scalars and ~1.4 µs carrying a struct or a vector
-([Q4](#open-design-questions)).
+Every arc **A–F** built and every consumer this plan named shipped.  A library
+declares where it runs in one line of its own manifest, and its consumers call it
+unchanged — in this process, in a worker, or on another machine.
 
-A library also runs on **another machine** — `placement = "remote"`, the arena's
-bytes on a socket ([Arc E](#arc-e-as-built-2026-08-11)) — and the plan's first
-real consumer ships: `lib/git`, which deleted the review viewer's 135 lines of
-bash ([Arc F](#arc-f-as-built-2026-08-11)).
+**The mechanism and the authoring rules live in
+[PLACEMENT.md](../../PLACEMENT.md)**; the user-facing declaration is in
+[PACKAGES.md § `placement`](../../PACKAGES.md).  This file is the closure record:
+what was decided, what the plan got wrong about itself, and what it found on the
+way.
 
-The engine host — sockets, client table, event queue — runs in a worker too, and
-a live websocket client sees the same conversation either way
-([the engine-host wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
+| arc | shipped |
+|---|---|
+| **A** declaration + attach handshake | `placement = "process"`, a worker per placed library, scalars and text crossing |
+| **B** the boundary marshal | the **arena** — a shared store, with `copy_claims` as the marshal; structs and vectors at any depth |
+| **C** ownership across the boundary | the delivery three-way, the `const` no-write skip, a failed crossing that maps neither arena |
+| **D** fault isolation | a worker that dies is an error rather than a hang, and the caller's stores are checked before it is told |
+| **E** `placement = "remote"` | `loft --lib-server`, the arena's live bytes on a socket |
+| **F** consumers | `lib/git` (which deleted the viewer's 135 lines of bash), the engine-host wire, the tracker index |
 
-**Every consumer this plan named is done**, including `make index`'s
-bash-tracked-files workaround — see
-[the tracker index](#arc-f-third-the-tracker-index-2026-08-11).  What is left is
-the open questions below that are genuinely open rather than answered.
-Opened 2026-07-24 from the question "does loft have a safe way to spawn
-sub-processes?".  It does not, and the answer is deliberately not to add one:
-`lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
-superseded by this plan, and a general `run()` is declined in
-[DESIGN_DECISIONS.md C101](../../DESIGN_DECISIONS.md).  The substrate this plan
-assembles is already in the tree (mmap-backed stores, position-independent
-`DbRef`, the @PLN97 layout contract, @PLN86 admission); what is missing is the
-boundary marshal, the ownership rules across it, and the proof.
-
-**Q1 (text residency) is settled, and it was NOT the hazard this plan first
-claimed.**  A probe wrote a record via `store_persist_bind` and read it back in a
-SEPARATE PROCESS: short text, a 300-char literal (past the 256-byte threshold
-where a constant stops being inlined in bytecode), runtime-concatenated text,
-multi-byte UTF-8, and a `vector<text>` all crossed intact — on both the
-mmap-adopt (`store_persist_bind`) and heap-copy (`store_load`) paths, and from an
-interpreter writer to a `--native` reader.  A canary proved the harness reports
-FAIL, and an absent-key control proved the reader invents nothing.  Text is
-store-resident, therefore mmap-resident.  Guard:
-`tests/scripts/store_handoff_residency.loft` driven by
-`tests/store_persist_loft.rs::handoff_text_residency_*`.
-
-The original Q1 conflated two paths.  The `vector<text>` refusal in
-`Stores::is_copyable_field` (`src/database/allocation.rs:2903`, pinned by
-`tests/scripts/store_load_vectext_refuse.loft`) belongs to the **paged
-working-set loader**, which RELOCATES a matched entry's heap graph into a
-DIFFERENT store — there each element's string pointer would dangle.  A shared
-arena never relocates: both sides map the same store.  That refusal therefore
-does not bound this design, and the "no serialization is aspirational for
-text-heavy APIs" caveat is withdrawn.
-
-## Goal
-
-Let a loft library run in its own process — or on another machine — addressed
-through the **same typed `pub fn` interface** it has in-process, with no second
-wire vocabulary and no serialization tax on the data it shares.
+Gates: `tests/placement_parity.rs` · `tests/placement_remote.rs` ·
+`tests/placement_worker.rs` · `tests/lib_git.rs` · `tests/engine_host_placed.rs`
+· the git-carries property in `tests/index_hygiene.rs`.
 
 ## The one invariant
 
-> **A call to a library is indistinguishable — in type, effect, ownership/lifetime,
-> and error behaviour — from the same call in-process.  Where it runs is deployment
-> policy, not source.**
+> **A call to a library is indistinguishable — in type, effect,
+> ownership/lifetime, and error behaviour — from the same call in-process.
+> Where it runs is deployment policy, not source.**
 
-Every arc below serves this.  Its **re-assertion sites** — the places the invariant
-must independently hold, and therefore the places that can disagree — are:
-argument marshal, return marshal, ownership transfer (who frees), null/sentinel
-propagation, effect classification, capability admission, and the leak check.
-Single-home discipline applies: each of those facts gets **one** home both
-placements consult, so the off-diagonal cells cannot disagree.
-
-## Effort + design
-
-- **Effort:** H (arcs A–C are the core; E and F ride on them)
-- **Design:** + (built and measured on three placements, with a real consumer;
-  what remains is consumers, not design — see
-  [Open design questions](#open-design-questions))
-- **Last touched:** 2026-08-11
+Held on three placements, by one consumer and library run unchanged across all of
+them.
 
 ## Why not a subprocess primitive
 
-**Built and shipped 2026-08-11** as `lib/git` — see
-[Arc F as built](#arc-f-as-built-2026-08-11). What follows is the argument; the
-one thing experience added to it is that "sealed behind the contract" has to be
-taken literally, or it degrades into the argv rule this section says it beats.
+`run(cmd, args)` is a *second, weaker interface* beside the one loft already has.
+The library interface carries typed signatures, structs, enums, vectors, tuples,
+methods, coroutines, effects and capability admission; a `{stdout, stderr, code}`
+triple carries bytes and an exit status, and every consumer of it re-parses text
+loft already knows how to type.  A general `run()` stays declined
+([DESIGN_DECISIONS.md C101](../../DESIGN_DECISIONS.md)); `lib_plans/67-process` is
+superseded, and its whole consumer list was served by the typed-library route.
 
-`run(cmd, args)` is a *second, weaker interface* beside the one we already have.
-The library interface carries typed signatures, structs/enums/vectors/tuples,
-methods, coroutines, effects, and capability admission; a `{stdout, stderr, code}`
-triple carries bytes and an exit status.  Adding it would mean every consumer
-re-parses text that loft already knows how to type.
+The one thing experience added: **"sealed behind the contract" has to be taken
+literally**, or it degrades into the argv-not-a-string rule this argument says it
+beats.  `lib/git`'s native is a closed query vocabulary — the caller names a
+question and loft builds the command — so `git -c core.sshCommand=…` is
+unreachable by construction rather than by filtering.
 
-So an external command lives **inside** a vetted library — `lib/git` exposes
-`git::log(range) -> vector<Commit>`, and the `execve` is an implementation detail
-sealed behind that contract with its own capability token (`git#read`).  This also
-removes the injection surface by construction, rather than by the
-argument-vector-not-a-string rule `67-process` had to invent.
+## Answered design questions
 
-## Shape — what crosses is data, not orders
+1. **Text residency** — GREEN.  Text, `vector<text>` included, is store-resident
+   and crosses intact; the paged relocator's `vector<text>` refusal is a different
+   path (it RELOCATES into a different store) and never bounded this design.  Its
+   sub-question — is a caller's local already arena-resident? — answered **one
+   copy at the boundary, and for an argument, two**.  In-place was never
+   available: the arena must be a store neither side's crash can corrupt, so it is
+   a THIRD store and a local is not in it.  Sharing the caller's heap would have
+   deleted the fault isolation arc D exists to provide.
+2. **Ownership of a returned graph** — answered, and **not with the hypothesis**.
+   The hypothesis was "the callee allocates in the arena the caller owns, and
+   `OpFreeRef` frees it".  The arena is not the caller's; it is a third store,
+   reset per call.  The rule is instead **the caller's own emitted code decides,
+   and the crossing must match it** — @PLN103's delivery three-way, now one home
+   that both marking and the worker's free consult.
+3. **Effect classification** — **no new category, structurally**.  Marking happens
+   after `scopes::check`, so a placed call carries exactly the effects the
+   in-process one does: there was never a cross-placement effect to classify.
+   Par-safety is therefore a runtime question, and it is green under both
+   parent-sharing modes.
+4. **Crossing cost** — affordable, and it **dictated the handshake**: the naive
+   "wake the worker" futex is 30× the spin-then-sleep one, so the naive version is
+   a performance bug rather than a simpler variant.  Numbers in
+   [PLACEMENT.md § Cost](../../PLACEMENT.md).
+5. **Writer discipline under real database support** — still open, and the only
+   open question left here.  The MVP is share-read-only plus explicit write-back;
+   when full DB access lands, does the writer path become a journal transaction,
+   and does that change the invariant's error behaviour?  Nothing in the built
+   system prejudges it.
 
-| Concern | Mechanism | Already in tree |
-|---|---|---|
-| Interface | the library's `pub fn` signatures | — |
-| Placement | `[lib] placement = "inproc" \| "process" \| "remote"` in `loft.toml` | new (arc A) |
-| Wire | a shared **mmap-backed store** as the call arena — BUILT, two of them, one per direction | `src/lib_placement/arena.rs` over `Store::open` |
-| Pointer portability | `DbRef = (store_nr, rec, pos)`, **no raw pointer** — survives mapping at another address. ~~only `store_nr` is translated~~ **not even that**: a record graph's interior pointers are plain `u32` rec ids, so it names no store and each side uses its own index | `src/keys.rs`, `relocate_ptr_fields` |
-| Schema safety | `.dschema` **layout-identity gate** — refuses a store whose layout differs from the loading program's type instead of misreading foreign bytes; `store_verify` backstop | @PLN97 arc G, `src/schema_sidecar.rs`, `src/native.rs:1252`, [formal/layout.md](../../formal/layout.md) |
-| Remote = same mechanism | ~~working-set page loads from an `http(s)://` Range server~~ — **BUILT differently**: the arena's live bytes on a socket. A page-fetch round trip per page is worse than one send for a value written once and read once; the Range reader stays the mechanism for data AT REST | `src/lib_placement/wire.rs` |
-| Concurrency | **single-writer per store** (the free-space LLRB tree + `needs_coalesce` are single-writer); readers map read-only | `read_only` / `free_protected` locks, `clone_locked` / `borrow_locked_for_light_worker` |
-| Staleness | the store's monotonic mutation counter (bumped on `claim`/`resize`/`delete`) is already the epoch a cross-process reader needs | CO1.9/S28, `src/store.rs:166-169` |
-| Transactional writes (later) | journal snapshot — the transactional world [SANDBOX.md](../../SANDBOX.md) S7 wanted and dropped | `src/database/journal.rs::snapshot` |
-| Admission | it's a library: gated by name (`allow_libs`) or capability (`group#right`), deny-by-default | @PLN86, `src/sandbox.rs` |
-| Typed entry point | `Program::call(func, args) -> Value` already marshals typed args into a loft fn | `src/host.rs:188` |
+## Where the plan was wrong about itself
 
-Two consequences worth stating explicitly:
+Worth keeping, because each was a coherent belief that a measurement or a test
+overturned.
 
-- **The mmap axis is the point, not an optimisation.** Because the arena is a
-  mapped file under the layout contract, *same process*, *another process*,
-  *another machine*, and *a later run of the same program* become one mechanism at
-  four latencies.  When full database access lands, an out-of-process library is
-  not a new concept — it is a second attached reader, and the library API is its
-  query vocabulary.
-- **`SANDBOX.md` gains a row.**  Its untrusted tier is documented as
-  *wasm-isolated, marshalled, slower*.  Out-of-process + mmap + layout gate is
-  isolated **and** direct-data, because the boundary is a page table rather than a
-  marshalling step.  Fault isolation is the upgrade an in-process library cannot
-  offer: a crashed worker aborts *the call* as a loft error and cannot corrupt the
-  caller's stores.
+- **Q4's 130 ns was a bare wire ping, and taking it for the cost of a *call* was
+  wrong by 30×.**  A real call cost 4.7 µs, of which 4.4 µs was the fault-site
+  span table being deep-cloned on every entry into loft — nothing to do with the
+  wire.  What made it findable was a **sweep**: three spin budgets, 2000 through
+  100000, produced the same time, and that flat line said "look elsewhere" before
+  any code changed on the strength of a coherent story.
+- **Arc E's assumed mechanism was the wrong one.**  The row read "over the
+  existing paged / Range reader" and marked itself blocked on
+  [#632](https://github.com/loft-lang/loft/issues/632).  The Range reader is right
+  for data AT REST and wrong for a CALL — an arena is small, written once and read
+  once, so a page-fetch round trip per page is strictly worse than sending it.
+  #632 was never a blocker.
+- **"Run the @PLN94 oracle on both placements" is vacuous.**  It runs inside
+  `scopes::check`, before marking, so it sees byte-identical IR either way and
+  agrees by having nothing to disagree about.  The question that CAN fail is
+  whether the runtime marshal obeys the ownership the static analysis already
+  assigns — and that found a leak on the first try.
+- **Arc B's ownership rule was a two-way where the language has a three-way.**  A
+  `View` return leaks per call when placed.
+- **The gate's leak half was corroboration, not a gate.**  `check_store_leaks`
+  reports what is unfreed AT EXIT, so it is structurally blind to
+  allocate-per-call-and-free — exactly a placed call's shape.  Made falsifiable
+  with `LOFT_STRICT_STORES`, it immediately caught three faults.
 
-**Expressiveness kept:** streaming is a **coroutine** yielding typed values (not
-`read_line() -> text` at EOF-null); state persists because the worker owns its
-stores across calls; errors are loft errors; and the same source runs in-proc,
-out-of-proc, or remote by flipping one policy line.
+## What the dogfood found
 
-## Composition matrix — Stage A
+None of these were this plan's own code.  They are the argument for building a
+real consumer rather than a probe.
 
-This plan does **not** invent a matrix.  It multiplies the existing axes
-([README § The composition axes](../README.md#the-composition-axes--the-dimensions-a-matrix-varies))
-by one new axis:
-
-> **Axis P — placement:** `inproc` · `process` · `remote`.
-
-A cell is green when the value round-trips across the boundary with identical
-value, length, ownership, and leak state.  Probes live in `probes/`, written on
-`--interpret` first, and graduate to `tests/scripts/119-placement.loft`.
-
-| Axis | Cells to cross with P | Why it can diverge |
-|---|---|---|
-| **1 Type-kind** | wide scalar · **narrow scalar** (`i8`/`i16`/`u8`/`u16`) · **text** · struct · enum · vector · tuple · closure/fn-ref · the **null** of each | narrow strides and text are the two representations that are not plain in-store words |
-| **2 Construction path** | literal · comprehension · fn return · append · copy · default-init | an appended vector may live in a different store than a literal one |
-| **3 Storage context** | local · struct field · vector element · global · const · argument | const lives in `CONST_STORE`, which the callee does not own |
-| **5 Nesting depth** | 1 / 2 / **3+** | `vector<vector<T>>` is the shape @PLN97's relocator refuses today |
-| **6 Null / sentinel** | per-type null across the boundary | a null `DbRef` must not become a *valid* rec-id after `store_nr` translation |
-| **7 Backend** | `--interpret` × `--native` | the marshal is emitted code on one side and interpreted on the other |
-
-**The text row is GREEN as of 2026-07-24** — every text shape, `vector<text>`
-included, survives a whole-store handoff between processes (see Status).  The
-matrix still has to run it per placement: residency proves the bytes are in the
-arena, not that a `remote` placement's page fetch delivers them.  And the
-discipline that found the error stands — a matrix that runs wide scalars and
-skips `vector<text>` would pass on the axes that cannot break, exactly the
-plan-58 failure.
-
-**As of 2026-08-11 the `inproc` × `process` half of this matrix is green for
-rows 1, 2, 5 and 6** — every scalar and text shape, structs and vectors by every
-construction path the probes used (literal, comprehension, fn return, append),
-nesting depth 2, and the null of each — with one row deliberately red: a
-polymorphic enum and a keyed collection are refused rather than carried.  Row 7
-(`--native`) is outside the gate by design, and row 3's `const` cell is untried.
-Guards: `tests/placement_parity.rs`.
-
-## Sub-arcs
-
-| Item | Source | Status |
-|---|---|---|
-| **A** — placement declaration + attach handshake (`store_nr` translation, epoch check) | this README | **Done 2026-08-11** (scalars + text arguments; see below) |
-| **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | **Done 2026-08-11** — scalars ([first half](#arc-b-first-half-as-built-2026-08-11)), then structs and vectors through a shared store ([second half](#arc-b-second-half-as-built-2026-08-11)). Polymorphic enums and keyed collections are deliberately still outside |
-| **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
-| **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
-| **E** — `placement = "remote"` | this README | **Done 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)) — over a socket, with the arena's bytes on it. NOT over the paged / Range reader, and [#632](https://github.com/loft-lang/loft/issues/632) was never a blocker |
-| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **Done 2026-08-11** — `lib/git` ([Arc F](#arc-f-as-built-2026-08-11)) deleted the viewer's bash, the engine host is placeable against a live client ([the wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)), and the tracker index asks git ([the index](#arc-f-third-the-tracker-index-2026-08-11)) |
-
-## Arc A as built (2026-08-11)
-
-A library writes one line in its own `loft.toml`:
-
-```toml
-[library]
-placement = "process"
-```
-
-and its consumers are unchanged — `use maths;` then `add(2, 3)`. The call
-compiles to an `OpStaticCall`, whose stub is replaced by a dispatcher that reads
-the arguments off the interpreter stack, crosses a shared mmap to a worker
-process holding the library, and writes the answer back.
-
-| Piece | Where |
+| found | surfaced by |
 |---|---|
-| Declaration + validation (portable) | `src/lib_placement.rs` |
-| The wire: mapping, handshake, frame codec, both ends | `src/lib_placement/wire.rs` |
-| Marking + the interpreter dispatcher | `src/lib_placement/dispatch.rs` |
-| Worker entry (`--lib-worker`, internal) | `src/main.rs` |
-| **The gate** — one consumer, one library, both placements | `tests/placement_parity.rs` |
-| Transport in isolation (`ping` crosses, shapes survive, faults) | `tests/placement_worker.rs` |
-
-Three things worth carrying forward:
-
-- **The boundary reuses `host::Value`.** The worker loads the library as a
-  `host::Program` and serves calls through the same typed marshaller a Rust
-  caller uses. That is the plan's own "no second wire vocabulary" rule applied to
-  its own implementation, and it is why arc A is small.
-- **A signature the wire cannot carry is not marked**, so it runs in-process —
-  byte-identically, the same fallback an uncompilable native library takes.
-  Nothing becomes a call that fails later. Arc A carries integer-family, boolean
-  and text ARGUMENTS, and void / integer-family / boolean RETURNS.
-- **A text return is excluded on purpose.** It travels the interpreter's
-  dest-buffer protocol (`n_set_bridge_dest`), which codegen emits only for a
-  cdylib call; approximating it would return a wrong value rather than refuse.
-  It belongs with arc B, next to `single`, structs, vectors and references.
-
-**The gate isolates ONE axis.** Left alone, the in-process side auto-compiles the
-library to a cdylib while the placed side does not, so the two runs would differ
-in whether a native build ran — and that build's chatter reads as a placement
-difference when it is nothing of the kind. Both sides are pinned to the
-interpreter (`LOFT_NO_NATIVE_LIBS=1`) so placement is the only thing that
-changed. The gate carries its own control (`the_gate_can_fail`): it compares two
-deliberately DIFFERENT libraries and requires the comparison to notice, because a
-parity gate that cannot report a difference passes forever.
-
-**Still honest about what is unproven.** `store_nr` translation and the epoch
-check are exchanged at handshake but nothing reads them — arc A sent no
-references, and arc B turned out not to need them either: a record graph names no
-store, so translation is the identity ([Arc B, second
-half](#arc-b-second-half-as-built-2026-08-11)). The words stay because they cost
-nothing and a `remote` placement may want them, but do not read them as evidence
-that translation works. The staleness word arc B actually needed is a different
-one — the arena's size, so a reader notices the writer grew the file.
-
-**Three known limits, all shaped rather than accidental:**
-
-1. **Calls to a placed library serialise.** The wire has one request slot, so
-   the dispatcher holds a lock across the crossing — correctness, not caution,
-   but it makes a placed library a poor fit for a hot `par` arm. The plan's
-   single-writer discipline is where this gets revisited.
-2. **The transport is Linux-only** (it is built on `futex`). Elsewhere a placed
-   library runs in-process, which by the invariant is the same program;
-   `LOFT_REQUIRE_PLACEMENT=1` makes the lost isolation an error instead.
-3. **`--native` does not place at all** — it compiles the library's body into
-   the program binary. Same treatment as (2) since arc D: no worker is started,
-   and `LOFT_REQUIRE_PLACEMENT=1` refuses and says why. See
-   [The gate](#the-gate).
-
-## Arc B, first half, as built (2026-08-11)
-
-Every scalar shape now crosses: each integer width **with its sign**, `single`
-both ways, and a text RETURN.  What is left of arc B is the arena — structs,
-vectors, references — which is where "no serialization tax" is actually won or
-lost.
-
-The half that landed was mostly not new mechanism.  It was **three bugs in
-shared code**, each of which had been sitting in a path older than this plan:
-
-1. **A narrow integer argument read the previous call's bytes.**  `loft::host`'s
-   marshal sized an integer by its *storage* width where the stack ABI needed its
-   *cell* width — eight bytes for every integer alias.  The stack steps in 8-byte
-   units, so the short write did not shorten the frame and nothing crashed: it
-   filled byte 0 and left the other seven holding the last call's data.  After a
-   call carrying `0x0F0F0F0F0F0F0F0F`, `f(1)` on a `u8` parameter answered
-   `0x0F0F0F0F0F0F0F01`.  The return direction was wrong in reverse — read narrow
-   and zero-extended, so `-1` as an `i8` came back as `255`.  This was never
-   placement-specific; it broke `loft::host` for any Rust caller.
-2. **A library that warns could not be placed at all.**  `parse_dir` refused a
-   directory whose parse reported *anything*, so one `never-read` warning made
-   the consumer exit 1 placed and 0 in-process — placement deciding whether the
-   program ran.
-3. **Entering loft deep-cloned the whole fault-site span table.**  Invisible for
-   a program entered once, and 4.4 µs of every 4.7 µs `host` call for one entered
-   in a loop.  See [Q4](#open-design-questions), which this corrects.
-
-The text return is the one piece that needed reading the emitted code rather
-than reasoning about it.  A text answer does not come back on the stack, and the
-call site picks between **two** conventions: assigned to a text variable, codegen
-stashes a destination record and expects nothing pushed; everywhere else it
-passes the hidden `&text` work buffer a promoted text return carries and expects
-a `Str` over it.  Both were already being emitted for a placed function — the
-routing keys on a native symbol plus a text return, exactly what marking leaves
-behind — so the dispatcher's job was to read which one the call site chose, not
-to impose one.  Two things only the bytecode said:
-
-- The hidden work buffer is **pushed like any other argument** and was not being
-  popped.  That does not fail where it happens; the cell stays behind and shifts
-  every later frame.
-- A text return the compiler never promoted — a constant, `fn version() -> text
-  { "1.0" }` — carries no work buffer at all, so the caller offers nowhere for
-  the answer to live and a `Str` over the worker's own String would dangle.  Such
-  a function **is not placed** and runs in-process, the same fallback every other
-  unsupported signature takes.  Making it uniform means promoting that return to
-  a retbuf (@PLN104's transform, which today considers only the main program's
-  own definitions) — the one loose end of this half.
-
-## Arc B, second half, as built (2026-08-11)
-
-Structs and vectors cross, in both directions, to any nesting depth the matrix
-asks for: a `text` field, a struct inside a struct, `vector<struct>`,
-`vector<text>`, `vector<vector<T>>`, an empty vector, a null struct.
-
-**The arena is an ordinary loft `Store` backed by an mmapped file that both
-processes map, and marshalling is `copy_claims` — the deep copy an assignment
-already uses — with the arena as the destination.**  No second wire vocabulary,
-which is this plan's own rule applied to its own implementation.  It works
-because of one fact that had to be read out of the tree rather than assumed:
-
-> **Nothing inside a store is a `DbRef`.**  A text's bytes, a vector's element
-> block, a child record are all plain `u32` record ids (`relocate_ptr_fields` is
-> the exhaustive list).  A graph copied into the arena is therefore independent
-> of the address it is mapped at **and** of the store NUMBER it is registered
-> under.
-
-So each side names the arena with its own index, the wire carries `(rec, pos)`
-only, and **no pointer is ever translated** — the `store_nr` translation this
-plan reserved a handshake word for turns out to be the identity.  The word stays
-(it costs nothing and a `remote` placement may yet need it), but nothing reads
-it, and this README should not be read as saying otherwise.
-
-`vector<text>` deserves its own line, because Q1 was originally wrong about it.
-It crosses.  @PLN97's PAGED relocator refuses that shape, and rightly — that path
-moves a matched entry into a DIFFERENT store, where each element's string pointer
-would dangle.  The arena is not that path.
-
-### Four things the emitted code decided, not the design
-
-1. **A compound argument is passed BY REFERENCE.**  `pub fn bump(p: Point)` that
-   assigns `p.x` changes the CALLER's `p`; a vector parameter appended to grows
-   the caller's vector.  A marshal that copied the argument over and stopped
-   would leave both silently unchanged under `placement = "process"` — a
-   divergence with no error and a plausible-looking answer.  So every compound
-   argument is copied in AND copied back.  Two arguments that are the same value
-   (`f(p, p)`) marshal to ONE arena record, because that is what the callee sees
-   in-process; two copies would give it two independent values and make the
-   copy-back a race between them decided by argument order.
-2. **The caller offers one of exactly two destinations for a compound answer,**
-   and neither is a null reference.  A vector return has its destination
-   MATERIALISED at function entry (`Database(var[8], …)`) and the result BORROWS
-   it; a struct return gets an empty placeholder store, and the callee mints its
-   own store and hands ownership over, with `FreeRefIfDistinct` cleaning up the
-   placeholder.  One rule covers both: **write into what the caller offered; if
-   it named no record, mint a store exactly as `OpDatabase` does.**
-3. **`rec == 0` is a third state, and reading it as "a destination" is silent.**
-   An `InitRef` placeholder is a real store with no record claimed — not
-   `DbRef::NULL` — and a valid-but-empty vector looks the same.  Taking it for a
-   destination put a `Point` answer in the store's own HEADER: the bytes went
-   somewhere, the program read back `null`, and nothing reported a fault.
-   `arena::names_a_record` is the one home of that test now.
-4. **`copy_claims` alone does not copy a value.**  It copies the graph a record
-   OWNS and leaves plain fields alone; the record's own bytes are `copy_block`'s
-   job.  A struct of two integers marshalled with `copy_claims` alone arrives
-   holding whatever the destination was initialised to — nulls.  `arena::copy_value`
-   is `OpCopyRecord`'s three steps in its order, for that reason.
-
-### The layout gate
-
-The two sides are different programs, and a record in the arena is read as the
-RECEIVING program's own type.  So at install, one round trip per placed function
-compares @PLN97's `layout_algo_hash` computed on each side; a function they
-disagree about is **not placed** and says so.  Its control is
-`the_layout_gate_can_tell_two_programs_apart`, which requires `P { a: integer,
-b: u8 }` and `P { b: u8, a: integer }` — same size, swapped order — to compare
-DIFFERENT, because a gate that compared sizes passes on a field swap and
-mis-reads every value.
-
-### One writer per arena, and the one exception
-
-There are **two** arenas, one per direction.  That is not caution: a `Store`
-caches its free list and claim set on the RUST side as well as in the mapping,
-so two processes claiming out of one would each allocate against their own idea
-of the free list and hand out the same block twice.
-
-The exception is forced by (1) above — the callee WRITES to an argument, and
-appending to a vector parameter allocates in the arena the caller just wrote.
-So the worker re-derives that cache from the mapping before it runs
-(`Store::resync_allocator`, which is `open`'s own walk made callable at the
-moment the store changes hands).
-
-**Growth** is the other place the two mappings can disagree: a claim that
-outgrows the file resizes and re-mmaps it in the WRITER, and the reader's
-mapping still covers the old length — reading past it is a `SIGBUS`, not a wrong
-answer.  The writer publishes its word count with every frame and the reader maps
-again.  Guard: a 200 000-element vector crossing.
-
-### Bound only while a call is crossing
-
-A store sitting in `Stores::allocations` at exit **is** a leak by definition, and
-the arena is not the program's data.  `Arena::bind` borrows a slot for the
-crossing (`adopt_store`) and `Arena::unbind` gives it back (`take_store` +
-`release_slot`).  That is what keeps the gate's leak half exactly as strict under
-`process` as under `inproc`, rather than needing an exemption — and an exemption
-is what the honest alternative would have been, in a plan whose own method warns
-that [an absent warning is not a pass](../../STABILITY_METHOD.md).
-
-### Cost — and what it says about "no serialization tax"
-
-Measured end to end: 200 000 calls, against the identical loop with the call
-removed, on the same placement, so worker startup and the loop itself subtract
-out.
-
-| shape | crossing, per call |
-|---|---|
-| scalar (`tick(n) -> integer`) | 0.80 µs |
-| two-field struct | 1.35 µs |
-| 16-element `vector<integer>` | 1.55 µs |
-
-The load-bearing reading is the last row against the second: **a sixteen-fold
-increase in payload costs 0.2 µs**, because the crossing is a copy of the value's
-own layout and not a per-field encode.  At 4096 elements — 32 KiB copied twice
-per call, 20 000 times — the placed run is not slower than the in-process one at
-all (13.9 s vs 14.3 s, reproduced).  That is the plan's "no serialization tax"
-claim measured rather than asserted.
-
-### What is deliberately still outside
-
-A polymorphic **enum** and a **keyed collection** (`hash` / `index` / `sorted`)
-are reference-shaped, so they look placeable from a distance.  They are refused —
-an enum's payload type is a runtime discriminant, and a keyed collection carries
-an index whose ordering is the caller's — and they run in-process, the same
-fallback every unsupported signature takes.  The risk with these is not that they
-fail: it is that they are quietly marked and then read as the wrong shape, so
-`a_compound_the_arena_does_not_carry_still_behaves_identically` pins the refusal
-by requiring the program to be identical either way.
-
-### What the arena cost the shared allocator
-
-Borrowing a slot per CALL, rather than once, is new — and it found two things in
-`Stores` that had been true since long before this plan:
-
-* `adopt_store` **pushed** a slot when nothing below the watermark was free,
-  growing the table by one every time, because the Vec never shrinks while `max`
-  does.  `database_named` has never done that.  Both now follow one rule: reuse
-  below the watermark, else take the watermark, else grow.
-* `release_slot` never lowered `max`, which `free_named` has always done for a
-  freed top slot.  Same fact, now one function.  Its walk stops on the free
-  BITMAP rather than the store's own `free` flag, and the two are not the same
-  question: `take_store` leaves a sentinel that IS flagged free but whose bit
-  stays clear on purpose, and trimming past one of those hands out a number
-  somebody still holds (`slot_recycling_tests` says exactly that, and said so
-  the moment the first version got it wrong).
-
-`LOFT_TRACE_ARENA=1` narrates what each side put in the arena and read back out,
-which is the instrument that found (3) and (4) above in minutes — and, with the
-process id on each line, which of the two sides was walking the table.
-
-## Arc F, third — the tracker index (2026-08-11)
-
-`make index`'s scanner walked a hard-coded list of eleven source roots, pruned by
-a hand-maintained set of directory names that mean "ignored" — `target`,
-`node_modules`, `pkg`, `pkg-*`, `generated`, `worktrees` — plus a special case
-for the top level.  Every comment in that skip list said what it really was:
-*"bash's `git ls-files` skips these"*.  A copy of `.gitignore` maintained by
-hand, in other words, and stale the moment anyone edits the real one.
-
-It now asks git: `git::tracked_files()` over one more `Query`
-(`ls-files --cached --others --exclude-standard` — what git would CARRY, so a
-file added but not committed is indexed and a build artefact is not).  The root
-list, the skip list and the top-level special case are all gone.
-
-**It was stale in both directions, which is the answer to "was this worth it".**
-Four TRACKED source trees — `fuzz/`, `loft-ffi/`, `loft-ffi-build/`,
-`loft-ffi-macros/` — were never indexed at all, because nobody added them to the
-root list; and a leftover `lib/.loft_test_tmp_*/` scratch directory WAS indexed,
-because nobody had added that name to the skip list.  Net: 8 files gained, 2 lost,
-and every tracker tag in loft's FFI crates became visible for the first time.
-
-Guard: `index_hygiene_clean` now also asserts the property that was always meant
-— **every file the index names is one git carries**, plus a coverage half so it
-cannot pass on an index that covers nothing.
-
-### And it closed a real gap in `lib/git`
-
-`make index` compiles its scanner (`--native-release`), which is how it turned
-out that **`lib/git` was interpreter-only**: the native backend resolves a
-runtime function through `CODEGEN_RUNTIME_FNS` by loft DEF NAME, and nothing had
-registered `n_git_query`.  Exactly the lesson the engine-host wire had just
-taught, arriving from the other direction.  Both backends now share one `answer`
-function, so they cannot drift.
-
-## Arc F, second half — the engine-host wire (2026-08-11)
-
-The engine host holds sockets, a client table and an event queue.  It is this
-plan's most demanding consumer, and demanding for a reason none of the earlier
-arcs touched: the library is not a function you call and forget, it is a
-**service with state that outlives every call**, driven in a loop.
-
-It now runs in a worker, and a real websocket client sees the same conversation
-either way (`tests/engine_host_placed.rs`).
-
-### What the boundary refused, and what that taught
-
-Two things had to change, and both are findings rather than plumbing.
-
-**1. A library whose public surface IS its natives cannot be placed.**
-Placement works by giving a function a native symbol and replacing the stub with
-the dispatcher — so a function that already HAS one is skipped.  Nearly all of
-`engine_host`'s surface was `pub fn send(…); #native "n_kernel_send"`, which
-means a placed `engine_host` would have placed *nothing*, and every call would
-have run in the caller where there is no kernel.
-
-The fix is the shape `lib/git` already has and that this very file already used
-for its text-returning natives: the native is PRIVATE (`kernel_send`) and the
-public name is a loft wrapper over it.  Consumers are unaffected — the public
-names and signatures are unchanged — and the wrapper is what gets placed.
-
-**2. A cursor is the wrong surface for a boundary.**  The kernel's event API is
-`next_event()` followed by four getters reading the current event: five calls per
-event.  In-process that is five function calls.  Across a placement boundary it
-is five crossings, and a busy frame becomes hundreds.
-
-So the loop is turned inside out and answers a VALUE:
-
-```loft
-pub struct Turn { const running: boolean, const tick: boolean, const events: vector<Event> }
-pub fn turn(max_events: integer) -> Turn
-```
-
-One crossing per FRAME, whatever the event count.  The caller owns the `while`,
-which it has to anyway — `run()` takes closures, and **closures do not cross a
-placement boundary**, so a library drivable only that way is drivable only
-in-process.
-
-`turn()` is also simply better in-process, which is the sign it was the right
-shape all along: one native call per frame instead of five per event.
-
-`Turn` is worth noting as a test of arc B, too — a struct carrying a vector of
-structs each carrying text is the deepest shape the arena carries, and here it is
-produced by a real library rather than a probe.
-
-### What is NOT done, deliberately
-
-`lib/engine_host` still declares no `placement`, so every existing consumer keeps
-exactly the deployment it has.  Flipping it to `"process"` changes where a game's
-sockets live, which is a deployment decision with real consequences for the
-games that consume it — and those live in other repositories.  The library is now
-*placeable*; whether to place it is the owner's call, and the test proves the
-answer works either way.
-
-## Arc E as built (2026-08-11)
-
-A library declares `placement = "remote"`, an operator starts
-`loft --lib-server <host:port> <pkg_dir>` wherever it should run, and a consumer
-points at it with `LOFT_REMOTE_<NAME>=host:port`.  The consumer's source does not
-change, and neither does its output — the parity gate now has three placements
-in it.
-
-### The plan's assumed mechanism was the wrong one
-
-This row used to read "over the existing paged / Range reader", and marked itself
-blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632).
-
-The Range reader is right for **data at rest** — a consumer fetching the pages it
-touches of a big published store, which is what `store_load_key*` and lazy stores
-already do.  It is the wrong mechanism for a **call**: a call arena is small,
-freshly written, and read once, so a page-fetch round trip per page is strictly
-worse than sending the whole thing.  #632 was therefore never a blocker for arc
-E, and this plan should stop saying it was.
-
-### Only the transport differs
-
-The crossing has three parts, and exactly one of them is placement-specific:
-
-| part | `process` | `remote` |
-|---|---|---|
-| the frame | shared mapping + futex | one message on a socket |
-| the arg arena | a file both sides map | the same local file's BYTES, sent |
-| the ret arena | ditto | ditto, sent back |
-
-Everything else — the marshal, the layout gate, the delivery three-way, the
-`const` skip, the copy-back, the fault handling — is shared verbatim, because
-those are properties of the BOUNDARY and not of the wire.  In the code that is
-one `enum Link` with two arms; the dispatcher does not know which it has.
-
-**A store is a self-contained image whose interior pointers are `u32` record
-ids**, so putting one on a socket is a copy of the value's own layout, not an
-encoding of it.  That is this plan's "one mechanism at four latencies" surviving
-the network hop: the remote crossing pays a copy where the local one pays a page
-table, and neither pays a per-field marshal.
-
-**The argument arena travels in both directions**, and that is load-bearing
-rather than symmetric-looking: loft passes a compound by reference, so a callee's
-write to a parameter is the caller's to see, and over a socket the only way to
-see it is for the bytes to come home.  A transport that sent the arena only
-outward passes every other row of the matrix and fails that one.
-
-### An image is a PREFIX, and a prefix is not a store
-
-Sending an arena's unused capacity would make every small call pay for the
-largest one before it, so only the live prefix travels.  But a prefix is not a
-well-formed store — its last free block is cut short — and the receiving buffer's
-tail is whatever it held.  A zero word there reads as a **zero-size block**, and
-`fl_rebuild` stepped by it: an infinite loop, which in a release build is a hang
-with no output.
-
-Two fixes, and the second is worth more than this arc:
-
-* `Store::adopt_image` makes the space past the image one free block, exactly as
-  `init` makes a whole fresh store one.
-* **`fl_rebuild` now ENDS the walk on a zero-size block** instead of repeating
-  it.  `claims_rebuild` walks the same chain and has always stopped there; this
-  half had only a `debug_assert`, so any malformed store was a hang in release
-  rather than a diagnosis.
-
-### Cost, and what it is made of
-
-Measured on loopback (20 000 scalar and 20 000 16-element-vector calls, against
-the identical loop with the call removed): **~25 µs per crossing**, against ~1 µs
-for a local placed call and ~0.05 µs in-process.  It is dominated by the round
-trip, not by the data — which is the point of sending an image rather than an
-encoding, and is why the number barely moves with the value's size.
-
-Two things halved it, and both are the Q4 lesson again — the obvious
-implementation is the slow one:
-
-* the argument arena is emptied on **every** call, not only one carrying a
-  compound, so a scalar call stops shipping the graph the last compound call left
-  behind;
-* each direction is **one** message rather than one per part.  Three small writes
-  on a socket are three syscalls and, with `TCP_NODELAY`, three segments.
-
-So a remote placement is for a library whose calls do real work — which is what
-a service is — and the limit is stated rather than discovered.
-
-### What the server is, and what it is not
-
-`--lib-server` serves **exactly the library named on its command line**, and the
-protocol carries a function name resolved only within it; there is no path to
-anything else.  The address is the operator's to choose and there is no default,
-because a service that bound something helpful on its own would be a service
-nobody decided to run.
-
-It is **not** authenticated, not encrypted, and not a sandbox.  It runs its
-library's functions for whoever connects — the same trust an in-process `use`
-already extends, but over a socket that trust has to be arranged by the
-deployment (a loopback bind, a private network, a tunnel) rather than assumed.
-The `--lib-server` usage text says so where an operator will read it.
-
-One thing IS defended, because it comes from another machine: a length word.
-Every message is size-checked against a ceiling before anything is allocated, so
-a mistyped port number is a refusal rather than an out-of-memory kill.
-
-## Arc F as built (2026-08-11)
-
-`lib/git` ships, and `tools/viewer/refresh.sh` is deleted — 135 lines of bash
-that existed for exactly one reason, and the dashboard's dependency on `jq` with
-it.
-
-### The seal, taken literally
-
-This plan says the execve inside a vetted library "removes the injection surface
-**by construction**, rather than by the argument-vector-not-a-string rule
-`67-process` had to invent".  Taken literally that rules out an
-`args: vector<text>` entry point, because that IS the argv rule.
-
-So the native (`src/git_query.rs`) is a **closed query vocabulary**: one entry,
-`git_query(kind, a, b, n, dir, out)`, where `kind` names a question whose argv is
-built in Rust.  The caller supplies values — a ref, a path, a count — never a
-subcommand and never an option.  `git -c <key>=<value>` is unreachable, which
-matters because `core.pager`, `core.sshCommand` and `alias.*` all name a program
-git will RUN.
-
-The price is stated rather than hidden: a new question needs a new `Query` and a
-loft release.  That is why this is `lib/git` for loft's own tooling and not a
-general subprocess library.  It lives in `lib/` beside `engine_host` — same
-shape, `[native] in_binary = true` — because a privileged host capability is the
-binary's to grant, not a published package's.  The library declares
-`capability git`, so a sandboxed script that may read files still cannot read a
-repository's history.
-
-**The seal had a hole, and the test that stated the claim is what found it.**
-Interpolating a ref into a range (`{a}...HEAD`) does not keep it out of an option
-position: `--exec-path=/tmp` becomes `--exec-path=/tmp...HEAD`, which git still
-reads as `--exec-path`, because that is decided by the leading `-`.  A ref may not
-begin with `-` (`git check-ref-format`), so refusing one closes the position by
-construction and costs nothing real.  A PATH may begin with `-` and is not
-refused — it always follows `--`, which is what `--` is for.
-
-### What the dogfood found
-
-Two bugs, neither of them @PLN119's, both found by writing a real consumer rather
-than a probe:
-
-1. **An internal compiler error.**  A file-scope `NAME: text = …` is a CONSTANT,
-   inlined at every use, so `NAME = x` is an assignment to a literal.  The
-   text-assignment arm intercepts before the general operator dispatch that
-   refuses `5 = 6`, and handed codegen a target naming no variable — an
-   index-out-of-bounds on variable 65535 that took the whole compiler down.  It
-   is an easy thing to write: the same declaration for an `integer` has always
-   been refused with a message.  Now a diagnostic that says what to do instead.
-   Guard: `tests/scripts/pln119-assign-to-file-scope-text.loft`.
-2. **A placed library resolved a relative path somewhere else** — see the
-   [commit](#) and `a_placed_library_sees_the_same_working_directory`.  Two
-   anchors decide what `file("x")` means and a worker inherited neither.  This is
-   the cell the matrix was missing, and it is worth naming as a class: every
-   other cell passes a value ACROSS the boundary, and this one asks what the far
-   side already IS.  **A worker inherits an environment, not only a frame.**
-
-### The library, and why it is placed
-
-`git::log(20) -> vector<Commit>`, `changed(base) -> vector<Change>`,
-`numstat(sha) -> vector<Stat>`, plus `branch`, `head`, `has_ref`,
-`ahead_behind`, `uncommitted`, `show`, `diff_file`, `changed_names`, `log_shas`.
-
-`placement = "process"` is not decoration on this one: it is the only library in
-the tree that starts an external process, so containing that is worth a crossing
-— and its answers are vectors of structs with text fields, which is precisely
-the shape arc B's arena carries.  Every test runs under BOTH placements.
-
-One improvement over the bash it replaces, for free: `refresh.sh` split
-`git log` output on TAB, and a commit subject may CONTAIN a tab, at which point
-its fields silently shift.  The library asks git for `%x1f` separators, which a
-subject cannot contain.  The probe repository's first commit is
-`first<TAB>commit with a tab` for that reason.
-
-### The oracle is git
-
-`tests/lib_git.rs` runs the real command beside every library call and requires
-the two to agree.  A test that checked "the answer looks like a sha" would pass
-on a library reading the wrong repository — which is exactly the bug arc F found.
-
-The viewer port was proven against the script it replaced at the moment of the
-swap: four JSON documents semantically identical (normalised through `jq`), 37
-per-file diffs and 20 commit diffs byte-identical.  The script is gone now, so
-the durable oracle is git itself.
-
-## Arc C as built (2026-08-11)
-
-### The instrument arc C actually needed was not the one the plan named
-
-The plan said "ownership, with the @PLN94 oracle run on both placements".  Run
-that and it is **vacuous**, for a reason worth writing down: the oracle runs
-inside `scopes::check`, which happens BEFORE placement marks anything, so it sees
-byte-identical IR under both placements and agrees by having nothing to disagree
-about — the shape this plan's own method warns against.
-
-The question that CAN fail is a different one: **does the runtime marshal obey
-the ownership the static analysis already assigns?**  That is a cross-check
-between two things that can drift, and it found a bug on the first try.
-
-The oracle is still run and still pinned
-(`the_ownership_oracle_is_clean_over_a_placed_program`), because under `process`
-it runs in TWO processes over two programs — the worker parses and checks the
-library itself — so placement gets MORE ownership checking than in-process, not
-less.  But its agreement is not evidence about the crossing, and the test says so.
-
-### A heap return is delivered three ways, and arc B's rule was a two-way
-
-`fn head(v: vector<P>) -> P { v[0] }` hands back a **view** of the caller's own
-argument.  In-process that is right and costs nothing: there is no new store, so
-the caller's emitted code frees none.  Placed, the answer has to be copied into
-the caller's address space, and a copy nobody frees is **a leak per call**.
-
-The three deliveries, which @PLN103's overlay already distinguished in prose and
-which are now one function (`use_analysis::heap_return_delivery`):
-
-| delivery | who frees | placeable |
-|---|---|---|
-| `Owned` — a fresh store the callee minted | the caller | yes: mint here, hand it over |
-| `RetBuf` — materialised into the caller's hidden buffer | the caller already owns it | yes: write into it |
-| `View` — a borrow of an argument or of the callee's own state | nobody | **no** |
-
-A `View` return is not placed.  It runs in-process, where the borrow means what
-it says — and a view across a process boundary is not a view anyway, because the
-thing it views is in the other process.
-
-Three consumers, one home: the `--show-ownership` overlay renders it, marking
-decides placement from it, and the worker's "free the callee's own store" gate
-reads it instead of the re-derivation from return-type deps arc B had written.
-That re-derivation happened to agree today; the point is that it could stop.
-
-### `const` is a compile-time no-write, so the copy-back can be skipped
-
-Arc B made every compound argument cross twice, because loft passes one by
-reference and a callee's write is the caller's to see.  But loft REJECTS every
-mutation through a `const` parameter at compile time, so for those there is
-provably nothing to bring home — and the copy-back is the expensive half.
-Measured: ~12% off a call carrying a 20 000-element vector.
-
-Acting on a compile-time promise needs a control, because the failure mode is
-silent: skip where the callee COULD have written and the caller keeps a stale
-value.  Forcing the skip on for every parameter makes
-`a_callee_writing_to_a_compound_parameter_is_seen_by_the_caller` fail, which is
-what says the guard is the `const` and not the skip.
-
-### A failed crossing maps neither arena
-
-This closes **arc D's second half**, which rested on a structural argument —
-"the worker has its own address space and only values are copied in and out".
-Arc B weakened that argument, and it is worth being explicit about how: a
-compound value does NOT cross by being copied through a frame.  It crosses in a
-store both processes map, and the worker WRITES to the one carrying the
-arguments.  A worker killed mid-write leaves that store in whatever state it
-reached, and may have resized the file out from under this side's mapping.
-
-So the failure path now binds neither arena and reads nothing from them, and the
-dispatcher walks every compound argument the caller passed with loft's own
-guard-before-dereference check (`verify_graph_ok`, which NAMES a broken edge
-rather than faulting on it) before it reports the error.  "The caller's stores
-are provably intact" is now a reading taken at the one moment it could be false,
-and it is in the error message when it is not.
-
-Guard: `a_worker_killed_with_a_compound_in_flight_leaves_the_caller_intact` —
-2000 records with a text field each in flight, `SIGKILL` to the worker, and the
-program required to end as a loft ERROR naming the library, under
-`LOFT_STRICT_STORES` so a read of a freed store during the teardown is its own
-non-zero exit.
-
-## Arc D as built (2026-08-11)
-
-A worker that dies is now the caller's error rather than its hang.
-
-`Worker::dead` existed and was read on entry to every call, which reads as the
-death being handled.  Nothing ever set it, because the wait had no way to
-notice: a caller waits on a futex word in the shared mapping, and `FUTEX_WAIT`
-does not fail when the process that would write that word is gone — it waits
-forever.  Killing a worker mid-call hung the caller with no timeout and no
-output, which looks exactly like the program itself having stopped.
-
-The caller's wait now sleeps in bounded steps and looks at the child when one
-expires — `try_wait`, not a signal probe, because an unreaped worker is a zombie:
-a live pid that answers `kill(0)` and will never serve another call.  The
-handshake takes the same path, so a worker that crashes while *loading* a library
-is caught too, where before it hung at startup.  The worker's own wait stays
-untimed; `PR_SET_PDEATHSIG` already tells it the caller is gone.
-
-Only a wait that has spun past its budget ever sleeps, so a busy exchange does
-not pay for this — measured, 200k placed calls cost the same either way.  Guard:
-`tests/placement_worker.rs::a_worker_killed_mid_call_is_an_error_not_a_hang`,
-whose control is the removal of the poll (that version times out).
-
-**What arc D does NOT yet prove** is the other half of its own row: *caller
-stores provably intact*.  The structural argument is strong — the worker has its
-own address space and only values are copied in and out — but "provably" wants
-the @PLN94 oracle, and that belongs with arc C.
-
-## Phase ordering
-
-1. ~~**Q1 probe before anything else**~~ — **DONE 2026-07-24, green** (Status).
-   Residency is proven for every text shape across a real process handoff, so
-   arc B is unblocked and starts from "build arguments in the arena", not from
-   "can text cross at all".
-2. ~~**Arc A** — attach handshake and `store_nr` translation~~ — **DONE
-   2026-08-11** ([Arc A as built](#arc-a-as-built-2026-08-11)).  `fn ping() ->
-   integer` crosses the boundary, and the parity gate holds for scalar and
-   text-argument calls.  The epoch/`store_nr` words are exchanged but unread
-   until references cross.
-3. ~~**Arc C** before arc B~~ — **REORDERED 2026-08-11.**  The original reason was
-   that "the leak half of the parity gate cannot pass before this".  Running the
-   gate settled it the other way: the leak half passes today, because nothing
-   that crosses owns anything — every value is copied through `host::Value`.  So
-   arc C run now would be an oracle agreeing with itself, and it moves to after
-   the arena, where a reference finally crosses and there is an ownership
-   question to answer.
-4. ~~**Arc B**, first half~~ — **DONE 2026-08-11**: every scalar shape, both
-   directions ([Arc B, first half](#arc-b-first-half-as-built-2026-08-11)).
-5. ~~**Arc B, second half**~~ — **DONE 2026-08-11** ([Arc B, second
-   half](#arc-b-second-half-as-built-2026-08-11)): the arena, and structs and
-   vectors to the nesting depths of Stage A's matrix.  It answered the
-   `store_nr` question by dissolving it — a record graph does not name a store,
-   so translation is the identity and the reserved word still has no reader.
-6. **Arc C** — ownership, with the @PLN94 oracle run on both placements.  The
-   sharpest question it now has is the one arc B's copy-back raised: a compound
-   argument is written by the callee and read back by the caller, so for the
-   duration of a call ONE value exists in two stores in two processes, and the
-   oracle should say who owns it and when.  Also finishes arc D's second half
-   (*caller stores provably intact*), which today rests on a structural argument
-   rather than the oracle.
-7. ~~**Arc D**~~ — **DONE 2026-08-11** ([Arc D](#arc-d-as-built-2026-08-11)),
-   taken out of order because the hang it fixes was reachable from arc A: a
-   killed worker hung the caller with no timeout and no output.  Still
-   interpreter-only; `--native` is untried (see the gate note below).
-8. ~~**Arc F** — `lib/git`, then the engine-host wire~~ — **DONE 2026-08-11**
-   ([Arc F](#arc-f-as-built-2026-08-11), [the engine-host
-   wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
-   `tools/viewer/refresh.sh` is deleted (135 lines of bash, and the dashboard's
-   dependency on `jq` with it), the engine host is placeable, and `make index`
-   asks git which files the repository carries instead of mirroring `.gitignore`
-   by hand ([the tracker index](#arc-f-third-the-tracker-index-2026-08-11)).
-9. ~~**Arc E**~~ — **DONE 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)),
-   over a socket rather than the Range reader the row assumed.
-
-## The gate
-
-One unchanged consumer + library, run under `placement = "inproc"` and
-`placement = "process"`, requiring **byte-identical output** *and* **identical
-`check_store_leaks` state** on `--interpret` (leak checking needs `--interpret`;
-bare `loft` is native and skips it).  Any divergence falsifies the invariant.
-This is the same instrument shape as the four-target parity gate in the
-loft-ship skill, with placement as the axis instead of target.
-
-**What the gate proves, and what it does not.**  Its VALUE half is proven live:
-`the_gate_can_fail` runs two deliberately different libraries and requires the
-comparison to notice.
-
-**Its LEAK half is now falsifiable too, and it caught something (2026-08-11).**
-The stderr channel alone was never enough, and the reason is worth stating
-because it generalises: `check_store_leaks` reports what is UNFREED AT EXIT, so
-it is structurally blind to a program that allocates a store per call and frees
-it — which is exactly the shape a placed call has, and exactly the shape that
-runs a long program out of store slots.  What makes it visible is
-`LOFT_STRICT_STORES`, which stops the allocator recycling a released slot: the
-peak slot count then becomes a straight count of how many stores a run ever
-needed, and the two placements have to agree on it.
-
-They did not.  Three separate contributors, one in this plan's dispatcher and
-two in the shared allocator, cost **two slots per call** against four for the
-whole in-process run — all 65535 gone after ~32k iterations, with the same loop
-in-process flat.  Guard:
-`placement_does_not_change_how_many_stores_a_run_needs`, which compares the two
-numbers rather than asserting a constant, so it fails if either side regresses.
-
-The lesson is the plan's own
-[absent-warning-is-not-a-pass](../../STABILITY_METHOD.md) with a twist: the leak
-channel was not silent because nothing was wrong, it was silent because it
-answers a different question than the one being asked.  Picking the instrument
-whose reading CHANGES when the fault is present is the whole job.
-
-**`--native` is outside the gate, deliberately.**  That backend compiles a
-library's own body into the whole-program binary, so a placed library's calls do
-not leave the process however they are marked — placement has no effect there,
-and measuring confirmed it (200k calls cost the same either way, ~10× too fast
-to be crossing).  Since arc D that is no longer silent: `--native` does not mark
-or start workers at all (it used to start one per library and never call it),
-and `LOFT_REQUIRE_PLACEMENT=1` refuses, naming `--native` as the reason, exactly
-as it refuses on a platform with no transport.  Guard:
-`tests/placement_parity.rs::native_does_not_place_and_says_so_when_asked_to_insist`.
-Making `--native` genuinely place a library is its own arc, and it is not free:
-the generated Rust would have to call the dispatcher rather than the body.
-
-## Open design questions
-
-1. **~~Text residency — the known-red cell~~ — ANSWERED GREEN 2026-07-24** (see
-   Status).  Text, `vector<text>` included, is store-resident and crosses a
-   whole-store handoff intact; the paged relocator's refusal is a different path
-   and does not apply to a shared arena.  What survives is narrower, and is arc
-   B's actual job: `Str{ptr,len}` is a raw Rust-heap pointer (`src/keys.rs`)
-   while a value is *live in a program*, so the marshal must **construct
-   arguments in the arena** — an ordinary store write, exactly what the probe's
-   writer did — rather than hand the callee a pointer into the caller's Rust
-   heap.  ~~Open sub-question: for a value the caller already holds as a local, is
-   that in-place (already arena-resident) or one copy at the boundary?~~
-   **ANSWERED 2026-08-11: one copy at the boundary, and for an argument, TWO.**
-   In-place was never available and the reason is the plan's own: the arena has
-   to be a store the caller's crash cannot corrupt and the worker's crash cannot
-   corrupt, so it is a THIRD store and a local is not already in it.  Sharing the
-   caller's heap instead would delete the fault isolation arc D exists to
-   provide.  The second copy is the callee's writes coming back — see
-   [Arc B, second half](#arc-b-second-half-as-built-2026-08-11) — and it is what
-   makes a placed `bump(p)` mean what an in-process one means.  Measured, the
-   pair costs ~0.5 µs on top of a scalar crossing and does not grow with the
-   value.
-2. **~~Ownership of a returned graph~~ — ANSWERED 2026-08-11, and the answer was
-   not the hypothesis.**  The hypothesis was "the callee allocates in the arena
-   the caller owns, and the existing `OpFreeRef` path frees it — the same rules,
-   one store number".  The arena is NOT a store the caller owns: it is a third
-   store both processes map, reset per call, and a value that crossed has been
-   copied out of it before the caller sees it.  So the rule is instead **the
-   caller's own emitted code decides, and the crossing must match what it
-   decided** — which is @PLN103's delivery three-way (`Owned` / `RetBuf` /
-   `View`), now the one home both marking and the worker's free consult.  A
-   `View` return is refused rather than placed.  See
-   [Arc C as built](#arc-c-as-built-2026-08-11).
-
-   The compound-ARGUMENT half is answered too, and by the language rather than by
-   this plan: for the duration of a call one value exists in two stores in two
-   processes, and it is the CALLER's throughout — the callee has a borrow, which
-   in loft cannot outlive the call.  That is why the arena can be reset per call
-   and why the callee's writes are copied home.  Where the language says the
-   callee cannot write at all (`const`), the copy home is skipped.
-3. **~~Effect classification~~ — ANSWERED 2026-08-11: no new category, and the
-   reason is structural.**  A placed call carries exactly the effects the
-   in-process one does, because marking happens AFTER `scopes::check`: the
-   effects were computed from the library's own body, and placement does not
-   touch the body.  There was never a cross-placement effect to classify.
-
-   Par-safety is therefore a runtime question rather than a typing one, and it
-   is green: a placed library called from a `par` arm answers correctly under
-   both parent-sharing modes, including `LOFT_PAR_SHARE=1`, where the parent's
-   stores are borrowed READ-ONLY and a copy-back aimed at one would be a write
-   to a read-only store rather than a wrong value.  The workers serialise (one
-   request slot, one lock across the crossing) and do not deadlock.  Guard:
-   `a_placed_call_from_a_par_arm_is_the_same_call`.
-
-   What remains is a PERFORMANCE property, not a correctness one, and it is
-   already stated as a limit: a placed library is a poor fit for a hot `par` arm
-   because its calls serialise.
-4. **~~Crossing cost~~ — ANSWERED 2026-08-11, premise SURVIVES, but it dictates
-   the handshake.**  Measured on x86_64 Linux (24 cores): two processes sharing
-   one mmap page, bouncing a `ping()` with no body, against the same trivial
-   `pub fn` called in-process (timed against the identical loop with the call
-   removed; matching checksums prove the subtraction).
-
-   | path | ns per call |
-   |---|---|
-   | in-process loft call, `--interpret` | 16 |
-   | in-process loft call, `--native` | 51 |
-   | **crossing, adaptive spin-then-sleep** | **124–138** |
-   | crossing, futex wake on every call | 3900–4200 |
-   | *control:* zero spin budget (forced sleep) | 5100 |
-
-   The load-bearing finding is that **the obvious implementation is the wrong
-   one by a factor of 30**.  A plain "wake the worker" futex costs ~4 µs — 77×
-   the native in-process call, 246× the interpreted one — and at that price
-   placement is *not* policy, because moving a library would change the shape of
-   the code calling it.  An **adaptive spin-then-sleep handshake with a sleeper
-   flag** — the waker pays the `FUTEX_WAKE` syscall only when the counterpart
-   actually went to sleep — lands at ~130 ns, i.e. **2.4× a native in-process
-   call and 8× an interpreted one**, while an idle worker still returns its
-   core.  That is ≪ the work for any library call that does more than a few
-   hundred nanoseconds, which is every consumer arc F names.
-
-   So the crossing is affordable, and arc A inherits a REQUIREMENT rather than a
-   free choice: the handshake is spin-then-sleep with a sleeper flag, and the
-   naive wake is a performance bug, not a simpler variant.  The control row is
-   what makes the shippable row trustworthy — with a zero spin budget the same
-   code lands on the futex number, proving the sleep path is genuinely taken and
-   the 130 ns is not a spin in disguise.
-
-   Probe: `probes/q4_crossing.rs` + `probes/q4_inproc.loft`.  What is NOT
-   measured yet: the cost of marshalling real arguments into the arena (arc B),
-   which is the term that actually grows with the call's data.
-
-   **Corrected 2026-08-11 — the wire was never the expensive part.**  Those
-   numbers are a bare ping between two processes, and taking them for the cost
-   of a *call* was wrong by a factor of thirty.  Measured end to end (200k calls
-   to a placed `fn tick(n) -> integer`, against the identical in-process loop),
-   a placed call cost **3.7 µs** — and raising the spin budget changed nothing,
-   which falsified the obvious reading that the caller was sleeping.  It was not
-   in the handshake at all: `loft::host::Program::call` itself cost **4.7 µs**
-   with no wire involved, of which **4.4 µs was publishing the fault-site span
-   table** — a `BTreeMap` deep-cloned into a fresh `Arc` on every entry into
-   loft.  Building that snapshot once brought a host call to **0.47 µs** and the
-   placed round trip to **~1 µs**, i.e. ~20× an interpreted in-process call.
-
-   Two lessons worth carrying, both of which cost time here:
-
-   - **A microbenchmark of the transport is not a measurement of the feature.**
-     The 130 ns is real and the handshake design it justified is right; it was
-     simply never the term that dominated.  The end-to-end number is the one that
-     answers "is placement policy".
-   - **The spin-budget sweep is what made this findable.**  The first story —
-     "the worker's turnaround exceeds the spin budget, so every call sleeps" —
-     was coherent, fitted the ~4 µs, and was wrong.  Three budgets, 2000 through
-     100000, produced the same time; that flat line is what said "look
-     elsewhere" before any code was changed on the strength of the story.
-5. **Writer discipline under real database support.**  MVP is share-read-only +
-   explicit write-back.  When full DB access lands, does the writer path become a
-   journal transaction, and does that change the invariant's error behaviour?
-
-## Cross-arc dependencies
-
-- **@PLN97** (layout contract / working-set loader) — this plan extends the layout
-  contract from data-at-rest to calls; arc E is its Range reader unchanged.
-- **@PLN86** (sandbox admission) — supplies the gate; this plan adds the fault
-  isolation @PLN86's compile-only decision deliberately left out.
-- **@PLN94** (ownership oracle) — the instrument arc C is proven with.
-- **@PLN103** (lifetime inspector) — should render "owned by which store" across a
-  placement boundary, or it goes blind exactly where this plan is riskiest.
+| **An internal compiler error** — assigning to a file-scope `NAME: text = …` (a CONSTANT, inlined at every use) crashed the compiler instead of diagnosing | writing `lib/git` |
+| **A placed library resolved a relative path elsewhere** — TWO anchors (the process cwd, and loft's `source_dir`), and a worker inherited neither | `lib/git` answering "not a git repository" in one placement |
+| **Two shared-allocator bugs** — `adopt_store` pushed a slot instead of taking the watermark; `release_slot` never lowered `max` | the arena borrowing a slot per CALL |
+| **`fl_rebuild` looped forever on a zero-size block** — a malformed store was a hang in release rather than a diagnosis | a remote arena image's short tail |
+| **`vector_def` left a stale `def_names` alias** — killing a live-reload session on the first bad edit | `engine_host::turn() -> Turn` |
+| **`lib/git` was interpreter-only** — the native backend keys its runtime table by loft DEF NAME, and nothing registered `n_git_query` | `make index` compiling its scanner |
+| **The tracker index's file list had drifted both ways** — four tracked source trees never indexed, one scratch directory indexed | asking git instead of mirroring `.gitignore` |
+
+Two lessons generalise beyond this plan:
+
+- **A worker inherits an ENVIRONMENT, not only a frame.**  Every matrix cell
+  before the cwd one passed a value ACROSS the boundary; that one asked what the
+  far side already IS, and nothing had tested it.
+- **A hand-maintained mirror of another tool's knowledge is stale in both
+  directions.**  The indexer's skip list and its root list were both copies of
+  `.gitignore`, and each had a gap the other did not.
+
+## Deliberately not done
+
+- A polymorphic **enum** and a **keyed collection** do not cross.  Both are
+  reference-shaped and so look placeable; the risk was never that they fail but
+  that they are quietly marked and read as the wrong shape, so the refusal is
+  pinned by a test.
+- **`--native` does not place**, and says so under `LOFT_REQUIRE_PLACEMENT=1`.
+  Making it place is its own arc: the generated Rust would have to call the
+  dispatcher rather than the body.
+- **`lib/engine_host` declares no `placement`.**  It is placeable and proven
+  against a live client; flipping it changes where a game's sockets live, and the
+  games that consume it are in other repositories.  That is the owner's call.
+
+## Probes
+
+`probes/q4_crossing.rs` + `probes/q4_inproc.loft` are Q4's measurement, kept as
+the evidence for the handshake design — including the control row (a zero spin
+budget lands on the futex number, proving the sleep path is genuinely taken).
+The behavioural probes graduated to the gates listed under Status.
 
 ## See also
 
-- [DESIGN_DECISIONS.md C72](../../DESIGN_DECISIONS.md) — a general `run()` declined.
+- [PLACEMENT.md](../../PLACEMENT.md) — the mechanism and the authoring rules.
+- [PACKAGES.md](../../PACKAGES.md) — declaring `placement`; what a consumer sees.
+- [DESIGN_DECISIONS.md C101](../../DESIGN_DECISIONS.md) — a general `run()` declined.
 - [lib_plans/67-process](../../lib_plans/67-process/README.md) — superseded; its
-  consumer list becomes arc F.
-- [DATABASE.md](../../DATABASE.md) — stores, `DbRef`, the working-set loader.
-- [SANDBOX.md](../../SANDBOX.md) — the trilemma table this plan adds a row to.
-- [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md) — the deps north-star arc C must hold.
-- [formal/layout.md](../../formal/layout.md) — the layout contract used as the wire.
-- `tests/scripts/store_handoff_residency.loft` +
-  `tests/store_persist_loft.rs::handoff_text_residency_*` — the Q1 residency
-  guard (writer task → reader task, both whole-store paths, both backends).
-- `tests/scripts/store_load_vectext_refuse.loft` — its counterpart: the PAGED
-  loader's `vector<text>` refusal.  Read the two together; conflating them is
-  what produced this plan's original wrong Q1.
+  consumer list is fully discharged.
 - @PLN119 — <https://github.com/loft-lang/plans/issues/119> (this plan).

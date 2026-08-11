@@ -168,7 +168,7 @@ fontdue = "0.9"
 png = "0.17"
 ```
 
-### `placement` — where the library runs (@PLN119 arcs A–B)
+### `placement` — where the library runs
 
 `[library] placement = "process"` puts the library in a **worker process**.
 Consumers do not change: the same `use`, the same typed `pub fn` calls, the same
@@ -184,8 +184,14 @@ cannot tell from the program:
 > deployment policy, not source.
 
 `tests/placement_parity.rs` is that sentence as a test: one consumer, one
-library, run under both placements, requiring identical stdout, stderr and exit
+library, run under every placement, requiring identical stdout, stderr and exit
 status.
+
+**Writing a library that can be placed** — and the mechanism underneath — is
+[PLACEMENT.md](PLACEMENT.md).  Four rules decide it, and each is better
+in-process too: a public function must not BE a native, answer a value rather
+than a cursor, closures do not cross, and a function that returns a VIEW of
+something it did not create cannot be placed.
 
 What crosses today: **every scalar** — integer at any declared width and with
 its sign, `single`, boolean and text — and **structs and vectors**, in both
