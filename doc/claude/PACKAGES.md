@@ -125,6 +125,13 @@ repository = "loft-libs-graphics"  # publishing repo — drives `loft package`'s
 
 [library]
 entry = "src/graphics.loft"
+placement = "process"       # @PLN119 — run this library in a WORKER PROCESS, so a
+                            # crash in it cannot corrupt its consumer's stores.
+                            # Consumers are unchanged: same `use`, same typed
+                            # `pub fn` calls.  "inproc" (the default, and what
+                            # every library without this line gets) runs it here.
+                            # Linux only; elsewhere it runs in-process — the same
+                            # program, without the isolation.  See below.
 
 [dependencies]
 # Other loft packages this package needs.
@@ -160,6 +167,44 @@ glutin = "0.32"
 fontdue = "0.9"
 png = "0.17"
 ```
+
+### `placement` — where the library runs (@PLN119 arc A)
+
+`[library] placement = "process"` puts the library in a **worker process**.
+Consumers do not change: the same `use`, the same typed `pub fn` calls, the same
+values back. What changes is containment — a crash inside the library aborts the
+call as a loft error instead of corrupting the caller's stores.
+
+The **library** declares it, not the consumer, because the library is what knows
+whether isolating it is safe and worth the crossing. The invariant is that you
+cannot tell from the program:
+
+> A call to a library is indistinguishable — in type, effect, ownership/lifetime,
+> and error behaviour — from the same call in-process. Where it runs is
+> deployment policy, not source.
+
+`tests/placement_parity.rs` is that sentence as a test: one consumer, one
+library, run under both placements, requiring identical stdout, stderr and exit
+status.
+
+What arc A carries today: **integer-family, boolean and text arguments**, and
+**void / integer-family / boolean returns**. A `pub fn` outside that runs
+in-process, byte-identically — it is never turned into a call that fails later.
+Text returns, `single`, structs, vectors and references are the boundary marshal
+of arc B.
+
+Two limits worth knowing before reaching for it:
+
+- **Calls to one placed library serialise** (the wire has a single request slot),
+  so it is a poor fit for a hot `par` arm and a good fit for coarse calls. The
+  crossing itself is ~130 ns, against ~50 ns for a native in-process call.
+- **Linux only.** Elsewhere the library runs in-process — the same program,
+  without the isolation. `LOFT_REQUIRE_PLACEMENT=1` makes that an error rather
+  than a silent fallback.
+
+A misspelled value is refused at load rather than treated as `inproc`: the two
+placements are meant to behave identically, so a typo would otherwise yield a
+program that runs correctly and isolates nothing, with no output ever showing it.
 
 ---
 
