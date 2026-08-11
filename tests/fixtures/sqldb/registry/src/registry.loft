@@ -318,46 +318,101 @@ pub fn db_exec(self: AnyDb, sql: text) -> boolean {
   }
 }
 
-pub fn db_select(self: AnyDb, sql: text) -> boolean {
+// --- SqlRows, forwarded (@PLN138) ------------------------------------------
+//
+// The cursor is its own type, so the runtime-dispatched connection needs a
+// runtime-dispatched cursor beside it — one arm per backend, and a `RowsNone`
+// that is what a failed connection yields. The shape is the enum's, not the
+// interface's: `AnyDb` already chooses a driver at RUN time where `SqlDb` chooses
+// at compile time, and the cursor simply follows its connection.
+//
+// `RowsNone` is not an error case to remember, it is the ordinary answer for a
+// connection that was never made — every method on it is defined, so a caller
+// reads nothing rather than reading something else's rows.
+pub enum AnyRows {
+  RowsSqlite { rs: SqliteRows },
+  RowsPostgres { rp: PgRows },
+  RowsMaria { rm: MariaRows },
+  RowsDuck { rd: DuckRows },
+  RowsNone,
+}
+
+pub fn ok(self: AnyRows) -> boolean {
   match self {
-    DbSqlite { sq } => sq.db_select(sql),
-    DbPostgres { pg } => pg.db_select(sql),
-    DbMaria { my } => my.db_select(sql),
-    DbDuck { dk } => dk.db_select(sql),
-    DbNone => false,
+    RowsSqlite { rs } => rs.ok(),
+    RowsPostgres { rp } => rp.ok(),
+    RowsMaria { rm } => rm.ok(),
+    RowsDuck { rd } => rd.ok(),
+    RowsNone => false,
   }
 }
 
-pub fn db_next(self: AnyDb) -> boolean {
+pub fn next(self: AnyRows) -> boolean {
   match self {
-    DbSqlite { sq } => sq.db_next(),
-    DbPostgres { pg } => pg.db_next(),
-    DbMaria { my } => my.db_next(),
-    DbDuck { dk } => dk.db_next(),
-    DbNone => false,
+    RowsSqlite { rs } => rs.next(),
+    RowsPostgres { rp } => rp.next(),
+    RowsMaria { rm } => rm.next(),
+    RowsDuck { rd } => rd.next(),
+    RowsNone => false,
   }
 }
 
-pub fn db_col(self: AnyDb, i: integer) -> text? {
+pub fn col(self: AnyRows, i: integer) -> text? {
   match self {
-    DbSqlite { sq } => sq.db_col(i),
-    DbPostgres { pg } => pg.db_col(i),
-    DbMaria { my } => my.db_col(i),
-    DbDuck { dk } => dk.db_col(i),
+    RowsSqlite { rs } => rs.col(i),
+    RowsPostgres { rp } => rp.col(i),
+    RowsMaria { rm } => rm.col(i),
+    RowsDuck { rd } => rd.col(i),
     // Not `""`. A connection that was never made has no column, and the empty
     // string is a VALUE — the distinction the whole binding layer exists to keep.
-    DbNone => null,
+    RowsNone => null,
   }
 }
 
-pub fn db_width(self: AnyDb) -> integer {
+pub fn width(self: AnyRows) -> integer {
   match self {
-    DbSqlite { sq } => sq.db_width(),
-    DbPostgres { pg } => pg.db_width(),
-    DbMaria { my } => my.db_width(),
-    DbDuck { dk } => dk.db_width(),
-    DbNone => 0,
+    RowsSqlite { rs } => rs.width(),
+    RowsPostgres { rp } => rp.width(),
+    RowsMaria { rm } => rm.width(),
+    RowsDuck { rd } => rd.width(),
+    RowsNone => 0,
   }
+}
+
+// Forwarded rather than left to the arms' own scope ends: the inner cursor is a
+// FIELD of this enum, and a droppable held as a field is released by its
+// owner's cascade, which is not the scope-end list. So `AnyRows` carries the
+// release itself, and its own `OpDrop` is what puts it on that list.
+pub fn close(self: AnyRows) {
+  match self {
+    RowsSqlite { rs } => rs.close(),
+    RowsPostgres { rp } => rp.close(),
+    RowsMaria { rm } => rm.close(),
+    RowsDuck { rd } => rd.close(),
+    RowsNone => {},
+  }
+}
+
+fn OpDrop(self: AnyRows) { self.close(); }
+
+// Built INTO a typed local rather than returned out of the match, and the shape
+// is load-bearing twice over.
+//
+// A variant constructor is typed as its VARIANT, so five arms each building a
+// different one do not unify — the local is what says they are one enum, exactly
+// as `refuse` above does for `AnyDb`. And the ARM must assign rather than
+// evaluate to a value: an arm whose value is a typed local of its own compiles
+// and then answers null for the first arm, silently.
+pub fn db_select(self: AnyDb, sql: text) -> AnyRows {
+  out: AnyRows = RowsNone;
+  match self {
+    DbSqlite { sq } => { cs = sq.db_select(sql); out = RowsSqlite { rs: cs }; cs.disown() },
+    DbPostgres { pg } => { cp = pg.db_select(sql); out = RowsPostgres { rp: cp }; cp.disown() },
+    DbMaria { my } => { cm = my.db_select(sql); out = RowsMaria { rm: cm }; cm.disown() },
+    DbDuck { dk } => { cd = dk.db_select(sql); out = RowsDuck { rd: cd }; cd.disown() },
+    DbNone => {},
+  }
+  return out;
 }
 
 pub fn db_last_error(self: AnyDb) -> text {
@@ -390,14 +445,16 @@ pub fn db_run(self: AnyDb, q: SqlText) -> boolean {
   }
 }
 
-pub fn db_rows(self: AnyDb, q: SqlText) -> boolean {
+pub fn db_rows(self: AnyDb, q: SqlText) -> AnyRows {
+  out: AnyRows = RowsNone;
   match self {
-    DbSqlite { sq } => sq.db_rows(q),
-    DbPostgres { pg } => pg.db_rows(q),
-    DbMaria { my } => my.db_rows(q),
-    DbDuck { dk } => dk.db_rows(q),
-    DbNone => false,
+    DbSqlite { sq } => { cs = sq.db_rows(q); out = RowsSqlite { rs: cs }; cs.disown() },
+    DbPostgres { pg } => { cp = pg.db_rows(q); out = RowsPostgres { rp: cp }; cp.disown() },
+    DbMaria { my } => { cm = my.db_rows(q); out = RowsMaria { rm: cm }; cm.disown() },
+    DbDuck { dk } => { cd = dk.db_rows(q); out = RowsDuck { rd: cd }; cd.disown() },
+    DbNone => {},
   }
+  return out;
 }
 
 pub fn db_begin(self: AnyDb) -> boolean {

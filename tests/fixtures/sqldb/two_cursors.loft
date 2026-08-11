@@ -1,0 +1,161 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN138 — the claim the cursor type exists to make, on a real driver.
+//
+// @PLN23 kept the cursor as state ON the connection because loft interfaces had
+// no associated types: a contract could not say "and this connection yields a
+// cursor of ITS OWN kind". The price was that a connection held exactly one
+// cursor and a second `db_select` silently replaced the first — a limitation the
+// type system could not state, so nothing could check it either.
+//
+// `type Rows: SqlRows` states it, and this measures it. Every function below is
+// GENERIC over `SqlDb` and names no backend, so what is being proved is the
+// contract and not sqlite.
+//
+// **sqlite is the cell, because sqlite needs no server.** A machine with no
+// database still runs this, which is what stops the guarantee evaporating into a
+// skip.
+
+use sql;
+use sqlite;
+
+// Answers 1 for a failure, so `main` can COUNT them. A `check` that only
+// printed would leave the summary line printing anyway, and a harness grepping
+// for it would read a run with failures in it as a pass — the false green this
+// whole fixture set exists to avoid.
+fn check(what: text, got: text, want: text) -> integer {
+  if got == want { return 0 }
+  println("FAIL {what}: expected [{want}], got [{got}]");
+  return 1;
+}
+
+// --- the limitation, gone --------------------------------------------------
+//
+// Two cursors from ONE connection, advanced in lockstep. Under @PLN23 the second
+// `db_select` destroyed the first's statement, so the first would have run dry
+// at once; here each row of `a` is paired with its own row of `b`.
+fn interleave <D: SqlDb> (d: D) -> text {
+  a = d.db_select("SELECT id FROM t ORDER BY id");
+  b = d.db_select("SELECT name FROM t ORDER BY id");
+  if !a.ok() || !b.ok() { return "open failed" }
+  out = "";
+  while a.next() {
+    if !b.next() { return "{out}| b ran out early" }
+    out += "{a.col(0) ?? "?"}={b.col(0) ?? "<null>"} ";
+  }
+  return "{out}w={a.width()}/{b.width()}";
+}
+
+// The same, through the BOUND path — a different code path on every backend
+// (prepare + bind, not a bare statement), and the one whose per-cursor state was
+// a process-wide array in two of the four shims.
+fn interleave_bound <D: SqlDb> (d: D) -> text {
+  lo: integer = 1;
+  q1: SqlText = "SELECT name FROM t WHERE id >= {lo} ORDER BY id";
+  q2: SqlText = "SELECT id FROM t WHERE id >= {lo} ORDER BY id DESC";
+  a = d.db_rows(q1);
+  b = d.db_rows(q2);
+  if !a.ok() || !b.ok() { return "rows failed" }
+  out = "";
+  while a.next() && b.next() { out += "{a.col(0) ?? "<null>"}/{b.col(0) ?? "?"} " }
+  return out.trim();
+}
+
+// NESTED, which is the shape `schema.loft` had to write around: a query run from
+// inside the walk of another. It read every index NAME into a vector first and
+// said why — "a second query cannot run while this one is being walked".
+fn nested <D: SqlDb> (d: D) -> text {
+  out = "";
+  outer = d.db_select("SELECT id FROM t ORDER BY id");
+  while outer.next() {
+    id = outer.col(0) ?? "?";
+    inner = d.db_select("SELECT name FROM t ORDER BY id DESC");
+    n = 0;
+    while inner.next() { n += 1 }
+    out += "{id}:{n} ";
+  }
+  return out.trim();
+}
+
+// --- the answers a cursor that never opened gives ---------------------------
+//
+// `db_select` returns `Self.Rows`, not `Self.Rows?`, and this is what pays for
+// that: every method is defined on a cursor that failed to open, so a caller who
+// forgets `ok` reads NOTHING rather than reading something else.
+fn dead <D: SqlDb> (d: D) -> text {
+  r = d.db_select("SELECT nope FROM no_such_table");
+  return "ok={r.ok()} next={r.next()} col={r.col(0) ?? "<null>"} width={r.width()}";
+}
+
+// `ok` is a fact about the OPEN and never moves, so it still answers after the
+// walk has ended. Exhaustion is what `next` reports, and the two are different
+// questions.
+fn ok_survives_the_walk <D: SqlDb> (d: D) -> text {
+  r = d.db_select("SELECT id FROM t ORDER BY id");
+  n = 0;
+  while r.next() { n += 1 }
+  return "rows={n} ok={r.ok()} width={r.width()} next={r.next()}";
+}
+
+// Closing twice, and closing after exhaustion, must both be no-ops — the scope
+// end calls `close` on a cursor a caller may already have closed.
+fn close_is_idempotent <D: SqlDb> (d: D) -> text {
+  r = d.db_select("SELECT id FROM t ORDER BY id");
+  _ = r.next();
+  r.close();
+  r.close();
+  e = d.db_select("SELECT id FROM t ORDER BY id");
+  while e.next() { }
+  e.close();
+  return "after={r.next()} col={r.col(0) ?? "<null>"} exhausted={e.next()}";
+}
+
+// A cursor ABANDONED mid-walk, which nothing in the program releases. The scope
+// end is the only thing that can, and `main` proves it did.
+fn abandon <D: SqlDb> (d: D) -> text {
+  r = d.db_select("SELECT id FROM t ORDER BY id");
+  _ = r.next();
+  return "stopped at {r.col(0) ?? "?"}";
+}
+
+fn main() {
+  bad = 0;
+  d = sqlite();
+  if !d.db_open(":memory:") {
+    if !sqlite_available() { println("SKIP sqlite not installed"); return }
+    println("FAIL open {d.db_last_error()}"); return
+  }
+  _ = d.db_exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+  _ = d.db_exec("INSERT INTO t VALUES (1,'ada'),(2,NULL),(3,'')");
+
+  // Row 2's name is SQL NULL and row 3's is the empty string — different
+  // answers, and the pairing is what shows each cursor kept its own position
+  // rather than reading the other's row.
+  bad += check("two cursors interleave", interleave(d), "1=ada 2=<null> 3= w=1/1");
+  bad += check("two bound cursors interleave", interleave_bound(d), "ada/3 <null>/2 /1");
+  // Three outer rows, each running a full inner walk of three.
+  bad += check("a query inside another query's walk", nested(d), "1:3 2:3 3:3");
+
+  bad += check("a cursor that never opened", dead(d),
+        "ok=false next=false col=<null> width=0");
+  bad += check("ok outlives the walk", ok_survives_the_walk(d),
+        "rows=3 ok=true width=1 next=false");
+  bad += check("close is idempotent", close_is_idempotent(d),
+        "after=false col=<null> exhausted=false");
+  bad += check("a cursor abandoned mid-walk", abandon(d), "stopped at 1");
+
+  // --- the leak oracle -------------------------------------------------------
+  //
+  // 40 more cursors abandoned mid-walk, then the connection is closed.
+  // `sqlite3_close` answers SQLITE_BUSY while ANY statement on it is
+  // unfinalized, so a scope end that failed to release is a RETURN CODE from the
+  // library rather than a leak inferred from memory growth. The count is well
+  // past anything a slot-reuse coincidence would hide.
+  for _i in 0..40 { _ = abandon(d) }
+  d.db_shut();
+  bad += check("every abandoned cursor was released", d.db_last_error(), "");
+
+  if bad > 0 { println("{bad} check(s) failed"); return }
+  println("two cursors ok");
+}

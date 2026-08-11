@@ -28,8 +28,20 @@ Behaviour matrices: `tests/scripts/pln125-{a2c-companion,b-drop,c-index}.loft`.
   lifted is the monomorph's identity. The reasoning for the premise being wrong is
   below, because the plan's own claim was that these were one feature.
 - **A3** — the SQL cursor split is a library migration, now unblocked. Filed as
-  **@PLN138**. The language claim it existed to prove ("two cursors coexist") is
-  proved in `pln125-a2c-companion.loft`.
+  **@PLN138** and since **SHIPPED**: `SqlRows` + `type Rows: SqlRows`, all four
+  backends, `schema.loft`'s index walk nested rather than buffered, and two
+  shims changed from one-per-process to one-per-cursor. The language claim it
+  existed to prove ("two cursors coexist") is proved in
+  `pln125-a2c-companion.loft`; the same claim on a real driver is
+  `tests/fixtures/sqldb/two_cursors.loft`.
+
+  It is also what measured arc A and arc B against a consumer neither had, and
+  three defects came back: a private `OpDrop` in a library never ran anywhere
+  (fixed here — `Data::drop_hook_nr`), an associated-type monomorph freed a stack
+  record when the implementor's producer delegated its return (loft#847, fixed —
+  the companion binds without deps), and a droppable copied into a struct or enum
+  field is released at the source and never through the container (loft#849,
+  open, worked around with `disown`).
 
 Each arc landed **inert first**: the contract declared, every existing program
 proved byte-identical in IR and native Rust, before any behaviour routed through

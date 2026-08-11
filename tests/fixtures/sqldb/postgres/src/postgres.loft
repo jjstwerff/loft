@@ -28,14 +28,66 @@ fn lp_set(i: integer, s: text) -> integer;     #c "lp_set" "int(int, const char*
 fn lp_set_null(i: integer) -> integer;         #c "lp_set_null" "int(int)"
 fn lp_vals() -> integer;                       #c "lp_vals" "void*(void)"
 
-// The same interface over a different result model: sqlite STEPS a statement,
-// libpq materialises the whole result and indexes it by (row, col). The cursor
-// the interface promises is kept here, in `at`, rather than by the library.
+// --- the cursor (@PLN138) ---------------------------------------------------
+//
+// A different result model from sqlite's, and the one that makes two cursors
+// obviously sound: sqlite STEPS a statement, libpq MATERIALISES the whole result
+// and indexes it by (row, col). So a `PGresult *` is already a complete,
+// self-contained answer — nothing about it is shared with the connection, and
+// the row index the interface promises is the only state a cursor adds.
+//
+// That is also why deallocating the prepared statement afterwards is harmless
+// here: the rows were copied out of the server before `db_rows` returned.
+pub struct PgRows { res: integer, at: integer, n: integer, w: integer, good: boolean }
+
+pub fn ok(self: PgRows) -> boolean { return self.good; }
+
+pub fn next(self: PgRows) -> boolean {
+  if self.res == 0 { return false }
+  self.at += 1;
+  if self.at < self.n { return true }
+  // Running out releases, so a walk to the end needs no close.
+  pq_clear(self.res);
+  self.res = 0;
+  return false;
+}
+
+pub fn col(self: PgRows, i: integer) -> text? {
+  if self.res == 0 { return null }
+  if pq_getisnull(self.res, self.at, i) == 1 { return null }
+  return pq_getvalue(self.res, self.at, i);
+}
+
+// Read at open and kept — the result is materialised, so its shape does not
+// depend on where the walk has reached.
+pub fn width(self: PgRows) -> integer { return self.w; }
+
+// Idempotent: the result handle IS the liveness flag, so a close after
+// exhaustion is a no-op rather than a second `PQclear`.
+pub fn close(self: PgRows) {
+  if self.res == 0 { return }
+  pq_clear(self.res);
+  self.res = 0;
+}
+
+// The scope end releases a result a caller stopped reading. Private: nothing
+// calls it by name.
+fn OpDrop(self: PgRows) { self.close(); }
+
+// The handle has been carried into a container; do not release it here.
+//
+// A struct field COPIES at construction and the copy is INDEPENDENT — so
+// wrapping a cursor leaves two records holding one `PGresult *`, and the source's
+// scope end would release it while the container is still reading through it.
+// loft has no move, so the transfer is spelled out: the container owns it, and
+// this makes the source's drop a no-op. Nothing is released — that is the whole
+// point, and it is why this is not `close`.
+pub fn disown(self: PgRows) { self.res = 0; }
+
+// The connection holds no cursor state now — only the things a connection
+// genuinely owns.
 pub struct Postgres {
   conn: integer,
-  res: integer,
-  at: integer,
-  n: integer,
   // A server-side prepared statement is NAMED, so the name is the handle. The
   // counter makes each one distinct, which is cheaper than asking the server
   // whether a name is already taken.
@@ -46,7 +98,7 @@ pub struct Postgres {
 }
 
 pub fn postgres() -> Postgres {
-  return Postgres { conn: 0, res: 0, at: -1, n: 0, seq: 0, ps: "", err: "", tx: tx_new() };
+  return Postgres { conn: 0, seq: 0, ps: "", err: "", tx: tx_new() };
 }
 
 // The soname exactly as `[c] optional-libs` spells it — the availability query
@@ -85,38 +137,33 @@ pub fn db_exec(self: Postgres, sql: text) -> boolean {
   return s == 1 || s == 2;                              // COMMAND_OK / TUPLES_OK
 }
 
-pub fn db_select(self: Postgres, sql: text) -> boolean {
+// The cursor is constructed HERE rather than in a shared helper: an
+// associated-type monomorph frees a stack record when the implementor's producer
+// delegates its return (loft#847).
+pub fn db_select(self: Postgres, sql: text) -> PgRows {
   // The `db_exec`/`db_select` contract is "author-written SQL with no values in
   // it".  A value written INTO the text is neither bound nor protected, and a
   // long digit run is the shape that says one was (`sql::inline_value_fault`).
   why = inline_value_fault(sql);
-  if why != null { self.err = why ?? ""; return false }
-  if self.res != 0 { pq_clear(self.res); self.res = 0; }
-  self.res = pq_exec(self.conn, sql);
-  if self.res == 0 || pq_res_status(self.res) != 2 { return false }
-  self.n = pq_ntuples(self.res);
-  self.at = -1;
-  return true;
+  if why != null {
+    self.err = why ?? "";
+    return PgRows { res: 0, at: -1, n: 0, w: 0, good: false }
+  }
+  r = pq_exec(self.conn, sql);
+  if r == 0 { return PgRows { res: 0, at: -1, n: 0, w: 0, good: false } }
+  if pq_res_status(r) != 2 {                              // 2 = TUPLES_OK
+    self.err = pq_errmsg(self.conn);
+    pq_clear(r);
+    return PgRows { res: 0, at: -1, n: 0, w: 0, good: false }
+  }
+  return PgRows { res: r, at: -1, n: pq_ntuples(r), w: pq_nfields(r), good: true };
 }
-
-pub fn db_next(self: Postgres) -> boolean {
-  if self.res == 0 { return false }
-  self.at += 1;
-  if self.at < self.n { return true }
-  pq_clear(self.res);
-  self.res = 0;
-  return false;
-}
-
-pub fn db_col(self: Postgres, i: integer) -> text? {
-  if pq_getisnull(self.res, self.at, i) == 1 { return null }
-  return pq_getvalue(self.res, self.at, i);
-}
-
-pub fn db_width(self: Postgres) -> integer { return pq_nfields(self.res); }
 
 pub fn db_last_error(self: Postgres) -> text {
   if self.err != "" { return self.err }
+  // A closed connection has nothing to ask, and libpq's answer for one is not
+  // about this program.
+  if self.conn == 0 { return "" }
   return pq_errmsg(self.conn);
 }
 
@@ -204,17 +251,20 @@ fn db_run_text(self: Postgres, sql: text, q: SqlText) -> boolean {
   return self.execute(q);
 }
 
-pub fn db_rows(self: Postgres, q: SqlText) -> boolean {
-  if !self.prepare_bind(q) { return false }
-  if self.res != 0 { pq_clear(self.res); self.res = 0; }
-  self.res = self.run_prepared(q);
-  if self.res == 0 || pq_res_status(self.res) != 2 {
+// Constructed inline, like `db_select` and for the same reason (loft#847).
+pub fn db_rows(self: Postgres, q: SqlText) -> PgRows {
+  if !self.prepare_bind(q) { return PgRows { res: 0, at: -1, n: 0, w: 0, good: false } }
+  r = self.run_prepared(q);
+  if r == 0 {
     self.err = pq_errmsg(self.conn);
-    return false
+    return PgRows { res: 0, at: -1, n: 0, w: 0, good: false }
   }
-  self.n = pq_ntuples(self.res);
-  self.at = -1;
-  return true;
+  if pq_res_status(r) != 2 {                              // 2 = TUPLES_OK
+    self.err = pq_errmsg(self.conn);
+    pq_clear(r);
+    return PgRows { res: 0, at: -1, n: 0, w: 0, good: false }
+  }
+  return PgRows { res: r, at: -1, n: pq_ntuples(r), w: pq_nfields(r), good: true };
 }
 
 // --- H7: procedures, in the server's catalogue --------------------------------
@@ -259,8 +309,9 @@ pub fn db_begin(self: Postgres) -> boolean { return tx_begin(self, self.tx, "BEG
 pub fn db_commit(self: Postgres) -> boolean { return tx_commit(self, self.tx); }
 pub fn db_rollback(self: Postgres) -> boolean { return tx_rollback(self, self.tx); }
 
+// Every result belongs to a cursor and every cursor clears its own, so closing
+// a connection no longer has to know what is in flight on it.
 pub fn db_shut(self: Postgres) {
-  if self.res != 0 { pq_clear(self.res); self.res = 0; }
   if self.conn != 0 { pq_finish(self.conn); self.conn = 0; }
   self.ps = "";
 }

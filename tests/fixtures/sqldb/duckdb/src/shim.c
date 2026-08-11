@@ -14,9 +14,18 @@
  * bytes, never a wrapper around the library, and it cannot drift from whichever
  * libduckdb the machine has.
  *
- * The slots are static, so this is single-connection — a real limit, stated
- * here rather than hidden, and the same one the sqlite shim carries. A
- * per-connection slot needs an allocator; this fixture proves the interface.
+ * The database, connection and statement slots are static, so this is
+ * single-connection — a real limit, stated here rather than hidden, and the same
+ * one the sqlite shim carries. A per-connection slot needs an allocator; this
+ * fixture proves the interface.
+ *
+ * @PLN138 — the RESULT is the exception, and it had to be. A cursor is its own
+ * type now and two can be walked at once, so a single `duckdb_result` would let
+ * the second `db_rows` overwrite the struct the first is still reading rows out
+ * of: a wrong VALUE, silently. Results therefore come from an ARENA, one slot
+ * per live cursor, handed out as a handle. The statement stays single because
+ * its life is prepare → execute → destroy with nothing in between — duckdb
+ * materialises the result, so the statement is gone before the cursor is read.
  */
 
 /* The database and connection handles, each written by duckdb through its
@@ -25,16 +34,80 @@
 static void *g_db;
 static void *g_conn;
 
-/* Storage for one `duckdb_result`.
+/* Storage for `duckdb_result`s — one per live cursor (@PLN138).
  *
- * Sized rather than declared, because declaring it needs `duckdb.h` and this
- * file must compile with duckdb absent. 256 bytes is safe for a specific
- * reason: duckdb's C API makes the CALLER allocate this struct, so its size is
- * part of the library's stable ABI — growing it would break every existing
- * caller — and it is six pointer-width fields (48 bytes on a 64-bit host)
- * today. `long long` gives the alignment any of those fields could need.
+ * Each slot is sized rather than declared, because declaring it needs
+ * `duckdb.h` and this file must compile with duckdb absent. 256 bytes is safe
+ * for a specific reason: duckdb's C API makes the CALLER allocate this struct,
+ * so its size is part of the library's stable ABI — growing it would break every
+ * existing caller — and it is six pointer-width fields (48 bytes on a 64-bit
+ * host) today. `long long` gives the alignment any of those fields could need.
  */
-static long long g_result[32];
+#include <stdlib.h>
+#include <string.h>
+
+#define LD_RESULT_WORDS 32
+
+typedef struct {
+  int used;
+  long long words[LD_RESULT_WORDS];
+} LD_RESULT;
+
+static LD_RESULT *g_results;
+static long g_nresults;
+
+/* Take a result slot, zeroed.  Returns a handle biased by one, so 0 stays "no
+ * result"; 0 also means the allocation failed, which the caller reports rather
+ * than handing duckdb an address it does not own. */
+long long ld_result_open(void);
+long long ld_result_open(void) {
+  long i;
+  for (i = 0; i < g_nresults; i++) {
+    if (!g_results[i].used) {
+      g_results[i].used = 1;
+      memset(g_results[i].words, 0, sizeof(g_results[i].words));
+      return i + 1;
+    }
+  }
+  {
+    LD_RESULT *grown = (LD_RESULT *)realloc(
+        g_results, (size_t)(g_nresults + 1) * sizeof(LD_RESULT));
+    if (grown == 0) {
+      return 0;
+    }
+    g_results = grown;
+    memset(&g_results[g_nresults], 0, sizeof(LD_RESULT));
+    g_results[g_nresults].used = 1;
+    g_nresults++;
+    return g_nresults;
+  }
+}
+
+/* The address duckdb writes into and reads back — every result call takes it.
+ * An unknown handle answers NULL, which every duckdb entry point treats as a
+ * refusal rather than a fault. */
+void *ld_result_at(long long h);
+void *ld_result_at(long long h) {
+  if (h < 1 || h > g_nresults) {
+    return 0;
+  }
+  if (!g_results[h - 1].used) {
+    return 0;
+  }
+  return (void *)g_results[h - 1].words;
+}
+
+/* Return the slot for reuse.  loft calls `duckdb_destroy_result` on the address
+ * FIRST — this only reclaims the storage, so it must never be the thing that
+ * frees duckdb's own buffers.  Idempotent, because a cursor closes on exhaustion
+ * and again at scope end. */
+void ld_result_close(long long h);
+void ld_result_close(long long h) {
+  if (h < 1 || h > g_nresults) {
+    return;
+  }
+  g_results[h - 1].used = 0;
+}
 
 void **ld_slot_db(void);
 void **ld_slot_db(void) { return &g_db; }
@@ -59,9 +132,6 @@ void *ld_take_db(void) { return g_db; }
 
 void *ld_take_conn(void);
 void *ld_take_conn(void) { return g_conn; }
-
-void *ld_result(void);
-void *ld_result(void) { return g_result; }
 
 /* Hand a `char *` back as something loft will read as text.
  *

@@ -441,6 +441,23 @@ What follows from that, and is worth knowing before you reach for it:
   through the source that declares the TYPE, which is what makes a private one
   reachable: a library's symbols are module-scoped (@PLN102 C97), and both askers
   run after parsing, when the current source is the main program.
+- **A droppable does not survive being put in a container** (loft#849). A struct
+  field copies at construction and the copy is independent, so wrapping one
+  leaves two records holding one resource — and it is the SOURCE that drops,
+  while the container's copy is never dropped at all (a field is released by its
+  owner's cascade, and a cascade is a free, not a drop). For a plain value that
+  is harmless; for a type that owns a `#c` handle the copy is born dead. Until
+  that is settled, spell the transfer out: give the type a method that zeroes its
+  handles WITHOUT releasing them, and call it after constructing the container.
+  @PLN138's `disown` is that method, and its registry is the worked example.
+
+**When to reach for it.** A drop pays for itself when the value owns something
+the program cannot see — a `#c` handle, a lock, a file — and the release is
+unconditional. It does not pay for loft-side data, which the ownership model
+already frees. And it is a poor fit for anything whose release ORDER matters
+against an explicit call: a scope end runs after the function body, so a cursor
+whose connection is shut inside that body is still live when the shut happens.
+@PLN138's `lazy_fetch` closes its cursor explicitly for exactly that reason.
 
 Shipped as @PLN125 arc B; `tests/scripts/pln125-b-drop.loft` is the behaviour
 matrix, with two unrelated consumers (a transaction and a lease) because a hook
@@ -506,6 +523,11 @@ methods. A `sql` connection and the cursor it produces are one contract, and
 without this the cursor has to become state ON the connection — which means a
 connection can hold only one, and the type system cannot say so.
 
+That example is not hypothetical: it is what `tests/fixtures/sqldb` did, across
+four real drivers, and @PLN138 has since moved it onto this feature.
+`tests/fixtures/sqldb/two_cursors.loft` is the worked consumer — two cursors from
+one connection, interleaved and nested, over a contract that names no backend.
+
 ```loft
 interface Cursor {
   fn width(self: Self) -> integer
@@ -552,6 +574,12 @@ Three consequences worth stating:
   implementor writes a concrete type. Return and parameter positions are both
   read, and they must AGREE — an implementor whose `open` yields one type while
   its `feed` takes another is refused rather than resolved by declaration order.
+  What is read is the SHAPE and not the lifetime: the implementor's return type
+  carries a dep list indexed in its own frame, non-empty exactly when its producer
+  returns a record from a nested call rather than constructing one inline, and
+  those indices name unrelated caller locals once substituted into a monomorph.
+  So the binding is recorded with its deps stripped — the same answer loft#666
+  needed for a type used as a hint.
 - **The bound is checked per monomorph**, because the companion is per
   implementor. A companion missing one of the bound's methods is a compile error
   naming the implementor, the associated type, the companion, the bound and the

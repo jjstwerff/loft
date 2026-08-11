@@ -31,10 +31,11 @@ use sql;
 // a backend, handed the value one connection string produced.
 fn uniform <D: SqlDb> (d: D) -> text {
   ran = d.db_exec("SELECT 1");
-  rows = d.db_select("SELECT 1");
-  nxt = d.db_next();
-  col = d.db_col(0);
-  w = d.db_width();
+  r = d.db_select("SELECT 1");
+  rows = r.ok();
+  nxt = r.next();
+  col = r.col(0);
+  w = r.width();
   tx = d.db_begin();
   return "exec={ran} select={rows} next={nxt} col_null={col == null} width={w} begin={tx}";
 }

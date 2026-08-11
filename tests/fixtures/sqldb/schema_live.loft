@@ -191,9 +191,10 @@ fn main() {
   // The CONTENT is the claim. Two rows, both values intact, and the new column
   // NULL rather than "" — the distinction the whole binding layer exists for.
   grows = "";
-  if d.db_select("SELECT gid, label, CASE WHEN memo IS NULL THEN 'null' ELSE memo END FROM grown ORDER BY gid") {
-    while d.db_next() {
-      grows += "{d.db_col(0) ?? "?"}|{d.db_col(1) ?? "?"}|{d.db_col(2) ?? "?"};";
+  rg = d.db_select("SELECT gid, label, CASE WHEN memo IS NULL THEN 'null' ELSE memo END FROM grown ORDER BY gid");
+  if rg.ok() {
+    while rg.next() {
+      grows += "{rg.col(0) ?? "?"}|{rg.col(1) ?? "?"}|{rg.col(2) ?? "?"};";
     }
   }
   println("grown rows {grows}");
@@ -216,8 +217,9 @@ fn main() {
     if !d.db_exec(ms.sql) { println("FAIL moved step [{ms.sql}]: {d.db_last_error()}"); return }
   }
   mrows = "";
-  if d.db_select("SELECT mid, tag FROM moved ORDER BY mid") {
-    while d.db_next() { mrows += "{d.db_col(0) ?? "?"}|{d.db_col(1) ?? "?"};" }
+  rm = d.db_select("SELECT mid, tag FROM moved ORDER BY mid");
+  if rm.ok() {
+    while rm.next() { mrows += "{rm.col(0) ?? "?"}|{rm.col(1) ?? "?"};" }
   }
   println("moved rows {mrows}");
 

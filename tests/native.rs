@@ -2165,6 +2165,92 @@ fn one_sql_interface_drives_four_different_c_libraries() -> std::io::Result<()> 
     Ok(())
 }
 
+/// @PLN138 — two cursors from one connection, and the resource each one owns.
+///
+/// The claim this whole plan exists to make. @PLN23 kept the cursor as state ON
+/// the connection because loft interfaces had no associated types, so a contract
+/// could not say "and this connection yields a cursor of ITS OWN kind"; the price
+/// was that a connection held exactly one, and a second `db_select` silently
+/// replaced the first. `type Rows: SqlRows` states it, and the fixture measures
+/// it — every function in it is generic over `SqlDb` and names no backend.
+///
+/// **UNCONDITIONAL, like the pure-derivation cell above and for the same reason.**
+/// sqlite needs no server, so a machine with no database still proves the
+/// guarantee. Every other SQL test here skips where a library or a server is
+/// missing; a guarantee whose gate can evaporate into a green is not one.
+///
+/// Two claims, and the second is the one a fixture alone cannot make:
+///
+///   - the VALUES, hand-computed per cell inside the script. Row 2's name is SQL
+///     NULL and row 3's is the empty string, so the interleaved pairing shows
+///     each cursor held its own position rather than reading the other's row.
+///   - the RELEASE, answered by sqlite itself. Forty cursors are abandoned
+///     mid-walk and the connection is then closed; `sqlite3_close` reports
+///     `SQLITE_BUSY` while any statement on it is unfinalized, so a scope end
+///     that failed to release is a return code rather than a leak inferred from
+///     memory growth. Verified to FAIL with the hook removed.
+///
+/// The script counts its own failures and withholds the summary line when there
+/// are any — a `check` that only printed would let a run with failures in it
+/// still print `two cursors ok`, which is exactly the false green this file's
+/// other tests are written against.
+#[test]
+fn one_connection_yields_two_independent_cursors() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // the sqlite backend ships a shim loft must compile
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let libdir = root.join("tests/fixtures/sqldb");
+    let script = libdir.join("two_cursors.loft");
+    let mut ran = false;
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&script)
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exited {}: stdout={stdout:?} stderr={:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if stdout.contains("SKIP") {
+            continue;
+        }
+        ran = true;
+        assert!(
+            stdout.contains("two cursors ok") && !stdout.contains("FAIL"),
+            "{backend}: a connection must yield independent cursors:\n{stdout}"
+        );
+        // A wrong free is refused rather than performed, so it costs a printed
+        // line and not a wrong answer — which means the values above can all
+        // agree while the ownership underneath is broken.
+        assert!(
+            !stdout.contains("BUG (#"),
+            "{backend}: cursors must not provoke an internal fault:\n{stdout}"
+        );
+    }
+    assert!(
+        ran,
+        "sqlite needs no server, so a skip here means the library went missing \
+         or the availability question broke — and a pass with it skipped asserts \
+         nothing about the guarantee"
+    );
+    Ok(())
+}
+
 /// @PLN133 S2–S5 — one table definition, derived and reconciled, with no
 /// database anywhere.
 ///

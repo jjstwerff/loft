@@ -61,22 +61,33 @@ fn lazy_fetch(coll: hash<RtPerson[id]>, source: text, key_int: integer, key_text
   want = derive(ti);
   if !want.table_ok() { d.db_shut(); store_lazy_fail(coll, want.refusal); return 0 }
   q = select_by_key(want, dial, key_int, key_text, false);
-  if !d.db_rows(q) {
+  r = d.db_rows(q);
+  if !r.ok() {
     why = d.db_last_error();
     d.db_shut();
     store_lazy_fail(coll, "query failed: {why}");
     return 0;
   }
-  if !d.db_next() {
+  if !r.next() {
     // Reached, and no such row. `0`, not a failure — the distinction @PLN129
-    // arc C exists for.
+    // arc C exists for. Running out already released the cursor, so there is
+    // nothing here for `close` to do — but the connection still must not be shut
+    // with a live one, which is why the order is the same on every path.
+    r.close();
     d.db_shut();
     return 0;
   }
-  got_id = ((d.db_col(0) ?? "") as integer?) ?? 0;
-  got_nm = d.db_col(1) ?? "";
-  got_score = ((d.db_col(2) ?? "") as float?) ?? 0.0;
-  got_flag = truthy(d.db_col(3) ?? "");
+  got_id = ((r.col(0) ?? "") as integer?) ?? 0;
+  got_nm = r.col(1) ?? "";
+  got_score = ((r.col(2) ?? "") as float?) ?? 0.0;
+  got_flag = truthy(r.col(3) ?? "");
+  // The cursor is CLOSED before the connection is. A connection with a live
+  // statement on it cannot be closed — sqlite answers SQLITE_BUSY and stays
+  // open, holding the table — and the scope end is too late: it runs after
+  // this function returns, while `db_shut` is called inside it. Ordering the
+  // release explicitly is what the cursor type asks for in exchange for
+  // letting two of them live at once.
+  r.close();
   d.db_shut();
   coll += [RtPerson { id: got_id, nm: got_nm, score: got_score, flag: got_flag }];
   return 1;

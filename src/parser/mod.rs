@@ -5066,15 +5066,27 @@ impl Parser {
                     // what the implementor put there.  Parameters align by index: an
                     // interface method carries no hidden parameters, and the hidden ones a
                     // concrete method carries are appended after the declared ones.
+                    //
+                    // **`without_deps`, because a companion is a TYPE and not a place.**
+                    // The implementor's `returned` carries a dep list indexed in the
+                    // IMPLEMENTOR's frame — `Reference(Rows, deps=[1])` where 1 is that
+                    // function's own return buffer — and it is non-empty exactly when the
+                    // producer's return comes from a nested call rather than an inline
+                    // construction.  Recorded verbatim, that list is then substituted into
+                    // every use of `Self.Rows` inside a monomorph, where the same indices
+                    // name unrelated CALLER locals: the caller's binding turns into a view
+                    // of whatever variable 1 happens to be, and the free lands on a stack
+                    // record (the `#306` guard, then a fault).  loft#666 is the same defect
+                    // through a different door, which is why the answer already had a name.
                     let mut candidates: Vec<Type> = Vec::new();
                     if self.data.def(child_nr).returned().contains_def(ph) {
-                        candidates.push(self.data.def(imp).returned().clone());
+                        candidates.push(self.data.def(imp).returned().without_deps());
                     }
                     for a in 0..self.data.def(child_nr).attributes().len() {
                         if self.data.attr_type(child_nr, a).contains_def(ph)
                             && a < self.data.def(imp).attributes().len()
                         {
-                            candidates.push(self.data.attr_type(imp, a));
+                            candidates.push(self.data.attr_type(imp, a).without_deps());
                         }
                     }
                     for cand in candidates {

@@ -29,7 +29,8 @@
  * which is exactly why guessing was not an option; the `libmariadb.so.3`
  * soname in loft.toml is what pins the ABI this matches.
  *
- * The one-statement-per-process limit of the other shims applies here too.
+ * @PLN138 — the RESULT sets below are one per CURSOR, not one per process; the
+ * parameter array stays single.  The reasoning is at the results section.
  */
 #include <stdint.h>
 #include <stdlib.h>
@@ -196,125 +197,220 @@ void *lm_param_binds(void);
 void *lm_param_binds(void) { return g_pn > 0 ? (void *)g_pb : (void *)0; }
 
 /* ---- results ------------------------------------------------------------- */
+/*
+ * @PLN138 — one bind SET per cursor, not one per process.
+ *
+ * Everything below used to be a single set of `g_r*` globals, and the file said
+ * so: "the one-statement-per-process limit of the other shims applies here
+ * too".  That was honest while a cursor was state ON the connection, because a
+ * connection could only hold one.  A cursor is its own type now, and two of them
+ * can be walked at once — so a shared set would let the second `db_rows` rebind
+ * the buffers the first is still fetching into, and the first cursor would start
+ * answering the second's rows.  A wrong VALUE, silently, which is the failure
+ * class this whole fixture exists to keep out.
+ *
+ * So a set is opened per cursor and closed with it.  `lm_result_open` hands back
+ * a HANDLE — an index into the arena, biased by one so that 0 stays "no set" —
+ * and every accessor takes it.  Handles are reused after a close, which keeps a
+ * long-lived connection's arena the size of its high-water mark rather than its
+ * total.
+ *
+ * The PARAMETER array above stays single.  A parameter's life is bind → execute,
+ * with nothing in between: `mysql_stmt_execute` reads the values, and
+ * `mysql_stmt_store_result` then buffers every row client-side, so a cursor is
+ * done with its parameters before the next statement is prepared.  A set per
+ * cursor there would cost memory to protect a window that does not exist.
+ */
 
 #define LM_COL_INIT 256
 
-static LM_BIND *g_rb;
-static char **g_rbuf;         /* the buffer bound for each column */
-static unsigned long *g_rcap; /* how much of it the library may write */
-static unsigned long *g_rlen; /* the TRUE length, set even when truncated */
-static char *g_rnull;
-static char *g_rerr;
-static char **g_rover;         /* per-column overflow buffer, grown on demand */
-static unsigned long *g_rovcap;
-static LM_BIND g_over;         /* the single bind `mysql_stmt_fetch_column` reads */
-static unsigned long g_over_len;
-static char g_over_err;
-static long g_rn;
-static long g_rcap_n;
+typedef struct {
+  int used;
+  LM_BIND *rb;
+  char **rbuf;         /* the buffer bound for each column */
+  unsigned long *rcap; /* how much of it the library may write */
+  unsigned long *rlen; /* the TRUE length, set even when truncated */
+  char *rnull;
+  char *rerr;
+  char **rover;        /* per-column overflow buffer, grown on demand */
+  unsigned long *rovcap;
+  LM_BIND over;        /* the bind `mysql_stmt_fetch_column` reads */
+  unsigned long over_len;
+  char over_err;
+  long n;
+  long cap_n;
+} LM_SET;
 
-/* Size the result array for `n` columns and bind each to a buffer of its own.
+static LM_SET *g_sets;
+static long g_nsets;
+
+/* The set behind a handle, or NULL — every accessor starts here, so a stale or
+ * fabricated handle is refused in ONE place rather than in nine. */
+static LM_SET *set_of(int64_t h) {
+  if (h < 1 || h > g_nsets) {
+    return 0;
+  }
+  if (!g_sets[h - 1].used) {
+    return 0;
+  }
+  return &g_sets[h - 1];
+}
+
+/* Open a result set for `n` columns and bind each to a buffer of its own.
+ * Returns a handle, or 0 when the allocation fails — which the caller reports
+ * rather than proceeding with a short array the library would read past.
  *
  * Every column is bound as STRING, whatever the server's type — the cursor
- * contract is `db_col -> text?`, so the conversion belongs to the library
- * rather than to a second type map here. */
-int lm_result_reset(int64_t n);
-int lm_result_reset(int64_t n) {
+ * contract is `col -> text?`, so the conversion belongs to the library rather
+ * than to a second type map here. */
+int64_t lm_result_open(int64_t n);
+int64_t lm_result_open(int64_t n) {
   long i;
+  long slot = -1;
+  LM_SET *s;
   if (n < 0) {
     return 0;
   }
-  if (n > g_rcap_n) {
-    LM_BIND *b = (LM_BIND *)realloc(g_rb, (size_t)n * sizeof(LM_BIND));
-    char **buf = (char **)realloc(g_rbuf, (size_t)n * sizeof(char *));
-    unsigned long *cap =
-        (unsigned long *)realloc(g_rcap, (size_t)n * sizeof(unsigned long));
-    unsigned long *len =
-        (unsigned long *)realloc(g_rlen, (size_t)n * sizeof(unsigned long));
-    char *nu = (char *)realloc(g_rnull, (size_t)n);
-    char *er = (char *)realloc(g_rerr, (size_t)n);
-    char **ov = (char **)realloc(g_rover, (size_t)n * sizeof(char *));
-    unsigned long *ovc =
-        (unsigned long *)realloc(g_rovcap, (size_t)n * sizeof(unsigned long));
-    if (b == 0 || buf == 0 || cap == 0 || len == 0 || nu == 0 || er == 0 ||
-        ov == 0 || ovc == 0) {
-      if (b) { g_rb = b; }
-      if (buf) { g_rbuf = buf; }
-      if (cap) { g_rcap = cap; }
-      if (len) { g_rlen = len; }
-      if (nu) { g_rnull = nu; }
-      if (er) { g_rerr = er; }
-      if (ov) { g_rover = ov; }
-      if (ovc) { g_rovcap = ovc; }
+  for (i = 0; i < g_nsets; i++) {
+    if (!g_sets[i].used) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0) {
+    LM_SET *grown =
+        (LM_SET *)realloc(g_sets, (size_t)(g_nsets + 1) * sizeof(LM_SET));
+    if (grown == 0) {
       return 0;
     }
-    g_rb = b;
-    g_rbuf = buf;
-    g_rcap = cap;
-    g_rlen = len;
-    g_rnull = nu;
-    g_rerr = er;
-    g_rover = ov;
-    g_rovcap = ovc;
-    for (i = g_rcap_n; i < n; i++) {
-      g_rbuf[i] = 0;
-      g_rcap[i] = 0;
-      g_rover[i] = 0;
-      g_rovcap[i] = 0;
-    }
-    g_rcap_n = n;
+    g_sets = grown;
+    slot = g_nsets;
+    memset(&g_sets[slot], 0, sizeof(LM_SET));
+    g_nsets++;
   }
-  memset(g_rb, 0, (size_t)n * sizeof(LM_BIND));
+  s = &g_sets[slot];
+  if (n > s->cap_n) {
+    LM_BIND *b = (LM_BIND *)realloc(s->rb, (size_t)n * sizeof(LM_BIND));
+    char **buf = (char **)realloc(s->rbuf, (size_t)n * sizeof(char *));
+    unsigned long *cap =
+        (unsigned long *)realloc(s->rcap, (size_t)n * sizeof(unsigned long));
+    unsigned long *len =
+        (unsigned long *)realloc(s->rlen, (size_t)n * sizeof(unsigned long));
+    char *nu = (char *)realloc(s->rnull, (size_t)n);
+    char *er = (char *)realloc(s->rerr, (size_t)n);
+    char **ov = (char **)realloc(s->rover, (size_t)n * sizeof(char *));
+    unsigned long *ovc =
+        (unsigned long *)realloc(s->rovcap, (size_t)n * sizeof(unsigned long));
+    if (b == 0 || buf == 0 || cap == 0 || len == 0 || nu == 0 || er == 0 ||
+        ov == 0 || ovc == 0) {
+      /* Keep whichever grew; the next open retries.  Nothing is bound yet, so a
+       * partial grow is inert rather than inconsistent. */
+      if (b) { s->rb = b; }
+      if (buf) { s->rbuf = buf; }
+      if (cap) { s->rcap = cap; }
+      if (len) { s->rlen = len; }
+      if (nu) { s->rnull = nu; }
+      if (er) { s->rerr = er; }
+      if (ov) { s->rover = ov; }
+      if (ovc) { s->rovcap = ovc; }
+      return 0;
+    }
+    s->rb = b;
+    s->rbuf = buf;
+    s->rcap = cap;
+    s->rlen = len;
+    s->rnull = nu;
+    s->rerr = er;
+    s->rover = ov;
+    s->rovcap = ovc;
+    for (i = s->cap_n; i < n; i++) {
+      s->rbuf[i] = 0;
+      s->rcap[i] = 0;
+      s->rover[i] = 0;
+      s->rovcap[i] = 0;
+    }
+    s->cap_n = n;
+  }
+  if (n > 0) {
+    memset(s->rb, 0, (size_t)n * sizeof(LM_BIND));
+  }
   for (i = 0; i < n; i++) {
-    if (g_rbuf[i] == 0) {
-      g_rbuf[i] = (char *)malloc(LM_COL_INIT + 1);
-      if (g_rbuf[i] == 0) {
+    if (s->rbuf[i] == 0) {
+      s->rbuf[i] = (char *)malloc(LM_COL_INIT + 1);
+      if (s->rbuf[i] == 0) {
         return 0;
       }
-      g_rcap[i] = LM_COL_INIT;
+      s->rcap[i] = LM_COL_INIT;
     }
-    g_rlen[i] = 0;
-    g_rnull[i] = 0;
-    g_rerr[i] = 0;
-    g_rb[i].buffer_type = LM_TYPE_STRING;
-    g_rb[i].buffer = g_rbuf[i];
-    g_rb[i].buffer_length = g_rcap[i];
-    g_rb[i].length = &g_rlen[i];
-    g_rb[i].is_null = &g_rnull[i];
-    g_rb[i].error = &g_rerr[i];
+    s->rlen[i] = 0;
+    s->rnull[i] = 0;
+    s->rerr[i] = 0;
+    s->rb[i].buffer_type = LM_TYPE_STRING;
+    s->rb[i].buffer = s->rbuf[i];
+    s->rb[i].buffer_length = s->rcap[i];
+    s->rb[i].length = &s->rlen[i];
+    s->rb[i].is_null = &s->rnull[i];
+    s->rb[i].error = &s->rerr[i];
   }
-  g_rn = n;
-  return 1;
+  s->n = n;
+  s->used = 1;
+  return slot + 1;
 }
 
-void *lm_result_binds(void);
-void *lm_result_binds(void) { return g_rn > 0 ? (void *)g_rb : (void *)0; }
+/* Return the set to the arena.  The BUFFERS are kept: a connection tends to run
+ * result sets of similar shape, so keeping them makes a reused handle free,
+ * and the arena is bounded by the high-water mark of live cursors either way.
+ * Idempotent, because a cursor closes on exhaustion AND at scope end. */
+void lm_result_close(int64_t h);
+void lm_result_close(int64_t h) {
+  LM_SET *s = set_of(h);
+  if (s == 0) {
+    return;
+  }
+  s->used = 0;
+  s->n = 0;
+}
 
-int lm_result_is_null(int64_t i);
-int lm_result_is_null(int64_t i) {
-  if (i < 0 || i >= g_rn) {
+void *lm_result_binds(int64_t h);
+void *lm_result_binds(int64_t h) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || s->n <= 0) {
+    return 0;
+  }
+  return (void *)s->rb;
+}
+
+/* An unknown handle answers NULL rather than a value.  A caller that lost its
+ * set has no row to read, and inventing one is the wrong half of the `text?`
+ * contract. */
+int lm_result_is_null(int64_t h, int64_t i);
+int lm_result_is_null(int64_t h, int64_t i) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || i < 0 || i >= s->n) {
     return 1;
   }
-  return g_rnull[i] != 0;
+  return s->rnull[i] != 0;
 }
 
 /* The TRUE length of the column's value.  The library sets it even when the
  * value did not fit, which is what makes truncation detectable without relying
  * on the fetch return code. */
-int64_t lm_result_len(int64_t i);
-int64_t lm_result_len(int64_t i) {
-  if (i < 0 || i >= g_rn) {
+int64_t lm_result_len(int64_t h, int64_t i);
+int64_t lm_result_len(int64_t h, int64_t i) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || i < 0 || i >= s->n) {
     return 0;
   }
-  return (long)g_rlen[i];
+  return (long)s->rlen[i];
 }
 
-int64_t lm_result_cap(int64_t i);
-int64_t lm_result_cap(int64_t i) {
-  if (i < 0 || i >= g_rn) {
+int64_t lm_result_cap(int64_t h, int64_t i);
+int64_t lm_result_cap(int64_t h, int64_t i) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || i < 0 || i >= s->n) {
     return 0;
   }
-  return (long)g_rcap[i];
+  return (long)s->rcap[i];
 }
 
 /* Prepare a bind for re-fetching one column that did not fit, and return its
@@ -325,29 +421,30 @@ int64_t lm_result_cap(int64_t i) {
  * still holds the original pointer: reallocating that buffer would leave the
  * statement pointing at freed memory for the next row — a use-after-free that
  * only a long value would ever reach. */
-void *lm_result_grow(int64_t i, int64_t need);
-void *lm_result_grow(int64_t i, int64_t need) {
-  if (i < 0 || i >= g_rn || need < 0) {
+void *lm_result_grow(int64_t h, int64_t i, int64_t need);
+void *lm_result_grow(int64_t h, int64_t i, int64_t need) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || i < 0 || i >= s->n || need < 0) {
     return 0;
   }
-  if ((unsigned long)need > g_rovcap[i] || g_rover[i] == 0) {
-    char *grown = (char *)realloc(g_rover[i], (size_t)need + 1);
+  if ((unsigned long)need > s->rovcap[i] || s->rover[i] == 0) {
+    char *grown = (char *)realloc(s->rover[i], (size_t)need + 1);
     if (grown == 0) {
       return 0;
     }
-    g_rover[i] = grown;
-    g_rovcap[i] = (unsigned long)need;
+    s->rover[i] = grown;
+    s->rovcap[i] = (unsigned long)need;
   }
-  memset(&g_over, 0, sizeof(g_over));
-  g_over_len = 0;
-  g_over_err = 0;
-  g_over.buffer_type = LM_TYPE_STRING;
-  g_over.buffer = g_rover[i];
-  g_over.buffer_length = (unsigned long)need;
-  g_over.length = &g_over_len;
-  g_over.is_null = &g_rnull[i];
-  g_over.error = &g_over_err;
-  return (void *)&g_over;
+  memset(&s->over, 0, sizeof(s->over));
+  s->over_len = 0;
+  s->over_err = 0;
+  s->over.buffer_type = LM_TYPE_STRING;
+  s->over.buffer = s->rover[i];
+  s->over.buffer_length = (unsigned long)need;
+  s->over.length = &s->over_len;
+  s->over.is_null = &s->rnull[i];
+  s->over.error = &s->over_err;
+  return (void *)&s->over;
 }
 
 /* The column's bytes, NUL-terminated.
@@ -355,23 +452,24 @@ void *lm_result_grow(int64_t i, int64_t need) {
  * Which buffer holds them is DERIVED from the same fact the caller used to
  * decide whether to re-fetch — a value longer than the bound buffer is in the
  * overflow one — so there is no separate flag to keep in step. */
-const char *lm_result_text(int64_t i);
-const char *lm_result_text(int64_t i) {
+const char *lm_result_text(int64_t h, int64_t i);
+const char *lm_result_text(int64_t h, int64_t i) {
   unsigned long n;
-  if (i < 0 || i >= g_rn) {
+  LM_SET *s = set_of(h);
+  if (s == 0 || i < 0 || i >= s->n) {
     return 0;
   }
-  n = g_rlen[i];
-  if (n > g_rcap[i]) {
-    if (g_rover[i] == 0) {
+  n = s->rlen[i];
+  if (n > s->rcap[i]) {
+    if (s->rover[i] == 0) {
       return 0;
     }
-    if (n > g_rovcap[i]) {
-      n = g_rovcap[i];
+    if (n > s->rovcap[i]) {
+      n = s->rovcap[i];
     }
-    g_rover[i][n] = 0;
-    return g_rover[i];
+    s->rover[i][n] = 0;
+    return s->rover[i];
   }
-  g_rbuf[i][n] = 0;
-  return g_rbuf[i];
+  s->rbuf[i][n] = 0;
+  return s->rbuf[i];
 }
