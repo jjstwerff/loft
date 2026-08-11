@@ -275,6 +275,16 @@ impl Program {
         (tp, self.state.database.layout_algo_hash(&[tp]))
     }
 
+    /// Who frees the storage `func`'s heap return names — @PLN103's delivery
+    /// lens, asked of the worker's own copy of the library.
+    pub(crate) fn return_delivery(&self, func: &str) -> crate::use_analysis::HeapDelivery {
+        let d_nr = self.data.def_nr(&format!("n_{func}"));
+        if d_nr == u32::MAX {
+            return crate::use_analysis::HeapDelivery::NotHeap;
+        }
+        crate::use_analysis::heap_return_delivery(&self.data, d_nr)
+    }
+
     /// The declared type of `func`'s parameters (hidden ones excluded) and of its
     /// return — the signature the placement layer hashes for the layout gate.
     pub(crate) fn signature(&self, func: &str) -> Option<(Vec<Type>, Type)> {

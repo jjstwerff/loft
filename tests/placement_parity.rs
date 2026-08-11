@@ -803,6 +803,357 @@ fn native_does_not_place_and_says_so_when_asked_to_insist() {
     );
 }
 
+/// @PLN119 arc C — a heap return is delivered one of THREE ways, and only two of
+/// them leave the caller owning what it gets.
+///
+/// `fn head(v: vector<P>) -> P { v[0] }` hands back a view of the caller's own
+/// argument.  In-process that is right and costs nothing: there is no new store,
+/// so the caller's emitted code frees none.  Placed, the answer has to be copied
+/// into the caller's address space — and a copy nobody frees is a leak PER CALL.
+/// It showed up here as one line of stderr the in-process run did not have.
+///
+/// So a `View` return is not placed.  A view across a process boundary is not a
+/// view anyway: the thing it views is in the other process.
+///
+/// The two placeable deliveries are here beside it, because the refusal has to
+/// be the narrow one — a rule that also caught `Owned` (a constructor) or
+/// `RetBuf` (a vector builder) would quietly un-place most of a library.
+#[test]
+fn a_return_that_borrows_its_argument_is_not_placed() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn head(v: vector<P>) -> P { v[0] }\n\
+                   pub fn make_p(x: integer) -> P { P { x: x, label: \"m{x}\" } }\n\
+                   pub fn make_v(n: integer) -> vector<P> {\n\
+                   \x20   out: vector<P> = [];\n\
+                   \x20   for i in 0..n { out += [P { x: i, label: \"e{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   v = make_v(4);\n\
+                    \x20   acc = 0;\n\
+                    \x20   for i in 0..200 {\n\
+                    \x20       h = head(v);\n\
+                    \x20       acc += h.x;\n\
+                    \x20   }\n\
+                    \x20   println(\"view {acc} {len(v)}\");\n\
+                    \x20   p = make_p(9);\n\
+                    \x20   println(\"owned {p.x} {p.label}\");\n\
+                    \x20   println(\"retbuf {len(make_v(3))}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("borrowret", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    // The loop is what makes this bite: one leaked store per call, so a
+    // divergence is a stderr line rather than a wrong number.
+    assert_indistinguishable("a borrowed return", &inproc, &placed);
+    assert!(
+        !inproc.stderr.contains("not freed"),
+        "the in-process reference itself leaks, so this proves nothing: {}",
+        inproc.stderr
+    );
+    for expect in ["view 0 4", "owned 9 m9", "retbuf 3"] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// A `const` compound parameter skips the copy-back, and that must be invisible.
+///
+/// loft REJECTS every mutation through a `const` parameter at compile time, so
+/// there is provably nothing for the copy-back to bring home — and the copy-back
+/// is the expensive half of a compound crossing.  The risk in acting on that is
+/// obvious: skip it where the callee COULD have written, and the caller silently
+/// keeps a stale value.  So both spellings of the same function are here, and
+/// the answers must match.
+#[test]
+fn a_const_parameter_crosses_without_a_copy_back() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn read_c(p: const P) -> integer { p.x * 100 + len(p.label) }\n\
+                   pub fn read_m(p: P) -> integer { p.x * 100 + len(p.label) }\n\
+                   pub fn sum_c(v: const vector<P>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in v { t += e.x; }\n\
+                   \x20   t\n\
+                   }\n\
+                   pub fn sum_m(v: vector<P>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in v { t += e.x; }\n\
+                   \x20   t\n\
+                   }\n\
+                   pub fn make_v(n: integer) -> vector<P> {\n\
+                   \x20   out: vector<P> = [];\n\
+                   \x20   for i in 0..n { out += [P { x: i, label: \"e{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   p = P { x: 7, label: \"abc\" };\n\
+                    \x20   println(\"scalar {read_c(p)} {read_m(p)} {p.x} {p.label}\");\n\
+                    \x20   v = make_v(6);\n\
+                    \x20   println(\"vector {sum_c(v)} {sum_m(v)} {len(v)}\");\n\
+                    \x20   acc = 0;\n\
+                    \x20   for i in 0..100 { acc += sum_c(v) + read_c(p); }\n\
+                    \x20   println(\"loop {acc} {len(v)} {p.x}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("constarg", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("a const compound parameter", &inproc, &placed);
+    // Hand-computed: read = 7*100 + 3 = 703; sum over 0..6 = 15; loop = 100*(15+703).
+    for expect in ["scalar 703 703 7 abc", "vector 15 15 6", "loop 71800 6 7"] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// @PLN119 arc C / Q3 — a placed library called from a `par` arm.
+///
+/// The wire has one request slot and the dispatcher holds a lock across the
+/// whole crossing, so N workers calling one placed library serialise.  That is
+/// correctness, not caution — two threads interleaving two frames in one buffer
+/// would be a wrong answer, not a slow one — but "they serialise" and "they
+/// deadlock" look the same from outside until someone runs it.
+///
+/// Both parent-sharing modes, because they are genuinely different situations
+/// for a crossing: `LOFT_PAR_SHARE=1` borrows the parent's stores READ-ONLY, so
+/// a copy-back aimed at one would be a write to a read-only store rather than a
+/// wrong value.
+#[test]
+fn a_placed_call_from_a_par_arm_is_the_same_call() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn score(p: const P) -> integer { p.x * 11 }\n\
+                   pub fn make_v(n: integer) -> vector<P> {\n\
+                   \x20   out: vector<P> = [];\n\
+                   \x20   for i in 0..n { out += [P { x: i, label: \"e{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   items = make_v(64);\n\
+                    \x20   sum = 0;\n\
+                    \x20   for a in items par(b=score(a), 4) {\n\
+                    \x20       sum += b;\n\
+                    \x20   }\n\
+                    \x20   println(\"par {sum}\");\n\
+                    }\n";
+    let root = scratch("par");
+    let consumer_path = root.join("consumer.loft");
+    std::fs::write(&consumer_path, consumer).expect("write consumer");
+    for share in ["0", "1"] {
+        let go = |mode: &str| -> Run {
+            write_library(&root, mode, library);
+            let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+                .arg("--interpret")
+                .arg("--lib")
+                .arg(root.join("libs"))
+                .arg(&consumer_path)
+                .env("LOFT_TIMEOUT", "60")
+                .env("LOFT_NO_NATIVE_LIBS", "1")
+                .env("LOFT_PAR_SHARE", share)
+                .output()
+                .expect("failed to invoke loft");
+            Run {
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                code: out.status.code().unwrap_or(-1),
+            }
+        };
+        let inproc = go("inproc");
+        let placed = go("process");
+        assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+        assert_indistinguishable(
+            &format!("a par arm (LOFT_PAR_SHARE={share})"),
+            &inproc,
+            &placed,
+        );
+        // 11 × sum(0..64) = 11 × 2016.
+        assert!(
+            inproc.stdout.contains("par 22176"),
+            "expected the hand-computed 22176, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// A callee REBINDING its compound parameter (`v = []`) is not a write THROUGH
+/// it, and must stay invisible to the caller on both placements.
+///
+/// The distinction matters because arc B's copy-back exists precisely to carry
+/// writes home, and a marshal that copied the parameter's final binding back
+/// would turn a rebind into a mutation the caller never asked for — the mirror
+/// image of the bug the copy-back fixes.
+#[test]
+fn a_callee_rebinding_its_parameter_changes_nothing_either_way() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn replace_all(v: vector<P>) -> integer {\n\
+                   \x20   v = [];\n\
+                   \x20   for i in 0..3 { v += [P { x: i * 5, label: \"r{i}\" }]; }\n\
+                   \x20   len(v)\n\
+                   }\n\
+                   pub fn clear_it(v: vector<P>) -> integer {\n\
+                   \x20   v = [];\n\
+                   \x20   len(v)\n\
+                   }\n\
+                   pub fn make_v(n: integer) -> vector<P> {\n\
+                   \x20   out: vector<P> = [];\n\
+                   \x20   for i in 0..n { out += [P { x: i, label: \"e{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   v = make_v(4);\n\
+                    \x20   println(\"replaced {replace_all(v)} {len(v)} {v[0].x} {v[3].label}\");\n\
+                    \x20   w = make_v(4);\n\
+                    \x20   println(\"cleared {clear_it(w)} {len(w)}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("rebind", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("a rebound parameter", &inproc, &placed);
+    for expect in ["replaced 3 4 0 e3", "cleared 0 4"] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+/// @PLN119 arcs C+D — a worker killed with a COMPOUND value in flight, and the
+/// caller's own stores surviving it.
+///
+/// This is the half arc D could not prove.  A crashed worker aborting the call
+/// was already an error rather than a hang, but "and the caller's stores are
+/// provably intact" rested on a structural argument: the worker has its own
+/// address space and only values are copied in and out.
+///
+/// Arc B made that argument weaker, because a compound value is NOT copied
+/// through a frame — it crosses in a store both processes map, and the worker
+/// WRITES to the one carrying the arguments.  A worker killed mid-write leaves
+/// that store in whatever state it reached, and may have resized the file out
+/// from under this side's mapping.  So the failure path now maps neither arena
+/// and reads nothing from them, and the dispatcher walks every compound
+/// argument the caller passed with loft's own guard-before-dereference check
+/// before it reports the error.
+///
+/// What is asserted here is what an operator sees: the program ends as a loft
+/// ERROR that names the library — not a signal, not a hang, not a corruption
+/// report — with the run under `LOFT_STRICT_STORES`, which turns any read of a
+/// freed store during the teardown into a non-zero exit of its own.
+#[test]
+fn a_worker_killed_with_a_compound_in_flight_leaves_the_caller_intact() {
+    let root = scratch("death_compound");
+    let consumer = root.join("consumer.loft");
+    std::fs::write(
+        &consumer,
+        "use parity;\n\
+         fn main() {\n\
+         \x20   v = make_v(2000);\n\
+         \x20   println(\"before {len(v)} {v[1999].x}\");\n\
+         \x20   println(\"after {grind(v, 4000000000)}\");\n\
+         }\n",
+    )
+    .expect("write consumer");
+    write_library(
+        &root,
+        "process",
+        // The argument is a real graph — 2000 records with a text field each —
+        // so the arena genuinely carries something when the worker dies.
+        "pub struct P { x: integer, label: text }\n\
+         pub fn make_v(n: integer) -> vector<P> {\n\
+         \x20   out: vector<P> = [];\n\
+         \x20   for i in 0..n { out += [P { x: i, label: \"p{i}\" }]; }\n\
+         \x20   out\n\
+         }\n\
+         pub fn grind(v: vector<P>, n: integer) -> integer {\n\
+         \x20   acc = 0;\n\
+         \x20   for e in v { acc += e.x; }\n\
+         \x20   for i in 0..n { acc += i; }\n\
+         \x20   acc\n\
+         }\n",
+    );
+
+    let child = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(root.join("libs"))
+        .arg(&consumer)
+        .env("LOFT_TIMEOUT", "60")
+        .env("LOFT_NO_NATIVE_LIBS", "1")
+        .env("LOFT_STRICT_STORES", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to invoke loft");
+
+    // Wait until the consumer is inside the long call, then kill ITS worker —
+    // not the consumer. Killing too early would test a worker that never served.
+    let mut pid = None;
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(p) = worker_child_of(child.id()) {
+            pid = Some(p);
+            break;
+        }
+    }
+    let pid = pid.expect("the consumer never started a worker");
+    // Long enough that `grind` is past its argument walk and deep in the loop.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert!(
+        Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .status()
+            .expect("run kill")
+            .success(),
+        "could not kill the worker (pid {pid})"
+    );
+
+    let out = child.wait_with_output().expect("consumer did not finish");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("before 2000 1999"),
+        "the consumer never got as far as the call: {stdout:?} / {stderr:?}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a dead worker must end the program as a loft error, not a signal \
+         ({:?}); stderr: {stderr}",
+        out.status
+    );
+    assert!(
+        stderr.contains("parity") && stderr.contains("worker died"),
+        "the error must name the library and what happened: {stderr}"
+    );
+    assert!(
+        !stderr.contains("did not survive"),
+        "the caller's own stores were reported broken after the worker died — \
+         that is the isolation this plan claims: {stderr}"
+    );
+    assert!(
+        !stderr.contains("[strict-store]"),
+        "the failed crossing touched a freed store: {stderr}"
+    );
+}
+
+/// The pid of the `--lib-worker` process `parent` started, if it has one yet.
+fn worker_child_of(parent: u32) -> Option<u32> {
+    let out = Command::new("pgrep")
+        .arg("-P")
+        .arg(parent.to_string())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.trim().parse::<u32>().ok())
+}
+
 #[test]
 fn the_gate_can_fail() {
     // A parity gate that cannot report a difference would pass forever. Give the

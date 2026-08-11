@@ -1013,10 +1013,17 @@ fn run_bound(
     // mints a store and hands ownership to its caller. Copy it into the arena,
     // then free it exactly as an in-process caller's `OpFreeRef` would: this
     // process IS that caller, and nothing else will ever free it.
+    //
+    // Only when the answer is genuinely OWNED, which is the analysis's verdict
+    // and not a second opinion derived here (@PLN119 arc C). A `View` return
+    // borrows storage the callee did not create, and freeing that would pull the
+    // ground out from under the library's own state — but a `View` return is
+    // refused at marking, so reaching this with one means the two sides of the
+    // decision have drifted apart.
     let (tp, _) = program.layout_of(&ret_ty);
     let landed = super::arena::alloc_value(program.stores(), ret_nr, tp);
     super::arena::copy_value(program.stores(), &landed, &answer, tp);
-    if ret_ty.depend().is_empty() {
+    if program.return_delivery(&func) == crate::use_analysis::HeapDelivery::Owned {
         program.stores().free_named(&answer, "<placed return>");
     }
     Ok(crate::host::Value::Ref(landed))

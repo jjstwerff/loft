@@ -62,6 +62,7 @@ use crate::database::Stores;
 use crate::host::Value;
 use crate::keys::DbRef;
 use crate::state::State;
+use crate::use_analysis::HeapDelivery;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -84,10 +85,21 @@ enum Kind {
     /// A struct or vector: a 12-byte `DbRef` on the stack, crossing through the
     /// [arena](super::arena).
     ///
-    /// The payload is THIS program's store type id for it, which only
-    /// [`install`] can resolve (it needs the live `Stores`); [`frame_kinds`]
-    /// leaves it `u16::MAX`.
-    Compound(u16),
+    /// `tp` is THIS program's store type id for it, which only [`install`] can
+    /// resolve (it needs the live `Stores`); [`frame_kinds`] leaves it
+    /// `u16::MAX`.
+    ///
+    /// `written` says whether the callee may write to it — false for a `const`
+    /// parameter, where loft has already REJECTED every mutation through the
+    /// name at compile time. That is worth knowing here because the copy-back
+    /// is the expensive half of a compound crossing (a full graph copy per
+    /// argument per call) and a `const` parameter cannot have changed. It also
+    /// keeps the crossing off a destination that may be read-only, which is what
+    /// a `const` argument's store is for the duration of the call.
+    Compound {
+        tp: u16,
+        written: bool,
+    },
     /// The hidden destination a compound-returning loft function carries — the
     /// `__retbuf` parameter. Like [`Kind::WorkBuf`], it is pushed by the emitted
     /// code and is not a value the worker is sent.
@@ -102,7 +114,10 @@ fn kind_of(ty: &Type, returning: bool) -> Option<Kind> {
         Type::Boolean => Some(Kind::Bool),
         Type::Single => Some(Kind::Single),
         Type::Text(_) => Some(Kind::Text),
-        _ if crate::host::is_compound(ty) => Some(Kind::Compound(u16::MAX)),
+        _ if crate::host::is_compound(ty) => Some(Kind::Compound {
+            tp: u16::MAX,
+            written: true,
+        }),
         _ => None,
     }
 }
@@ -212,14 +227,21 @@ fn resolve_ids(
     stores: &mut Stores,
     data: &Data,
 ) {
-    for (k, a) in kinds.iter_mut().zip(def.attributes().iter()) {
+    for (i, (k, a)) in kinds.iter_mut().zip(def.attributes().iter()).enumerate() {
         match k {
-            Kind::Compound(id) | Kind::RetBuf(id) => *id = type_id(stores, data, &a.typedef),
+            Kind::Compound { tp, written } => {
+                *tp = type_id(stores, data, &a.typedef);
+                // `const` on a parameter is a compile-time promise, not a hint:
+                // every mutation THROUGH the name is rejected, so there is
+                // nothing for the copy-back to bring home.
+                *written = !def.variables.is_value_const(i as u16);
+            }
+            Kind::RetBuf(id) => *id = type_id(stores, data, &a.typedef),
             _ => {}
         }
     }
-    if let Kind::Compound(id) = ret {
-        *id = type_id(stores, data, &def.returned);
+    if let Kind::Compound { tp, .. } = ret {
+        *tp = type_id(stores, data, &def.returned);
     }
 }
 
@@ -299,7 +321,28 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
         // somewhere in ITS OWN memory for the copy to land. That offer is the
         // hidden `__retbuf` the emitted code pushes; without one there is
         // nowhere, and the function runs in-process instead.
-        if matches!(ret, Kind::Compound(_)) && !frame.iter().any(|k| matches!(k, Kind::RetBuf(_))) {
+        if matches!(ret, Kind::Compound { .. })
+            && !frame.iter().any(|k| matches!(k, Kind::RetBuf(_)))
+        {
+            continue;
+        }
+        // @PLN119 arc C — and the caller has to be going to FREE it.
+        //
+        // A heap return is delivered one of three ways, and only two of them
+        // leave the caller owning what it gets. A `View` return hands back a
+        // borrow of something the callee did not create — an argument, or its
+        // own long-lived state — so the caller's emitted code frees nothing.
+        // In-process that is right: there is nothing new to free. Placed, the
+        // answer has to be COPIED into the caller's address space, and a copy
+        // nobody frees is a leak per call — which is exactly what
+        // `fn head(v: vector<P>) -> P { v[0] }` did.
+        //
+        // A view across a process boundary is not a view anyway: the thing it
+        // views is in the other process. So the function is not placed, and
+        // runs in-process, where the borrow means what it says.
+        if matches!(ret, Kind::Compound { .. })
+            && crate::use_analysis::heap_return_delivery(data, d) == HeapDelivery::View
+        {
             continue;
         }
         let sym = format!(
@@ -364,10 +407,10 @@ pub fn install(
             // The layout gate. Only a signature with something compound in it
             // has anything to disagree about, so the round trip is skipped
             // where it could only ever agree.
-            let carries_compound = matches!(ret, Kind::Compound(_))
+            let carries_compound = matches!(ret, Kind::Compound { .. })
                 || params
                     .iter()
-                    .any(|k| matches!(k, Kind::Compound(_) | Kind::RetBuf(_)));
+                    .any(|k| matches!(k, Kind::Compound { .. } | Kind::RetBuf(_)));
             if carries_compound {
                 let here = signature_layout_here(&mut state.database, data, def);
                 match reg.workers[w_idx].layout(&func) {
@@ -420,6 +463,23 @@ pub fn shutdown() {
     }
 }
 
+/// One compound argument of a call in flight: where the CALLER keeps it, what
+/// type it is, and whether the callee may have written to it.
+///
+/// Recorded while the frame is popped and read twice — to marshal the value into
+/// the arena, and to bring the callee's writes back out.
+#[derive(Clone, Copy)]
+struct CompoundArg {
+    /// Index into the argument list the worker is sent.
+    slot: usize,
+    /// The record in THIS process the value came from and goes back to.
+    caller: DbRef,
+    /// This program's store type id for it.
+    tp: u16,
+    /// False for a `const` parameter — see [`Kind::Compound`].
+    written: bool,
+}
+
 /// Do two references name the same record?
 ///
 /// Aliasing is not a corner case here: `f(p, p)` hands the callee ONE record
@@ -454,7 +514,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     let mut ret_buf: Option<DbRef> = None;
     // Which argument slots hold a compound, and where the caller keeps each —
     // needed twice: to marshal it in, and to copy the callee's writes back out.
-    let mut compound: Vec<(usize, DbRef, u16)> = Vec::new();
+    let mut compound: Vec<CompoundArg> = Vec::new();
     for k in placed.params.iter().rev() {
         match k {
             // The whole cell, unnarrowed: the callee's declared width is what
@@ -475,8 +535,13 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
             Kind::RetBuf(_) => ret_buf = Some(*stores.get::<DbRef>(stack)),
             // A placeholder now; the real value is a record in the arena, and
             // the arena is not bound until the frame has been popped clean.
-            Kind::Compound(tp) => {
-                compound.push((args.len(), *stores.get::<DbRef>(stack), *tp));
+            Kind::Compound { tp, written } => {
+                compound.push(CompoundArg {
+                    slot: args.len(),
+                    caller: *stores.get::<DbRef>(stack),
+                    tp: *tp,
+                    written: *written,
+                });
                 args.push(Value::Ref(DbRef::NULL));
             }
         }
@@ -486,7 +551,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     // wrong end. Turn them round together rather than searching for them again.
     let last = args.len().saturating_sub(1);
     for c in &mut compound {
-        c.0 = last - c.0;
+        c.slot = last - c.slot;
     }
 
     let ret = placed.ret;
@@ -523,7 +588,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     // empty placeholder store — in which case an in-process callee would mint
     // its own and hand ownership over, so that is what happens here.
     let compound_dest = match ret {
-        Kind::Compound(tp) => Some(match ret_buf {
+        Kind::Compound { tp, .. } => Some(match ret_buf {
             Some(d) if super::arena::names_a_record(&d) => d,
             _ => super::arena::mint_value(stores, tp),
         }),
@@ -539,7 +604,13 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
         // A list rather than a map: a signature has a handful of parameters, and
         // `DbRef` is a plain triple with no hash to spend.
         let mut seen: Vec<(DbRef, DbRef)> = Vec::new();
-        for &(slot, src, tp) in &compound {
+        for &CompoundArg {
+            slot,
+            caller: src,
+            tp,
+            ..
+        } in &compound
+        {
             if src.is_null() {
                 continue;
             }
@@ -569,6 +640,31 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
 
     let out = worker.call(&placed.func, &args);
 
+    // A FAILED crossing does not map or read the shared arenas at all — @PLN119
+    // arc C makes the fault isolation structural rather than incidental.
+    //
+    // A worker that died mid-call left both arenas in whatever state it got to,
+    // and may have resized one (which moves the file out from under this side's
+    // mapping). Nothing here has to look: on this path the answer does not exist
+    // and the callee's writes to the arguments are not ones the caller may see,
+    // because in-process the same fault would have halted before them. Skipping
+    // the bind is what makes "a crashed worker cannot corrupt the caller's
+    // stores" a property of the code rather than an argument about it.
+    let out = match out {
+        Err(e) => {
+            let intact = compound_arguments_intact(stores, &compound);
+            drop(guard);
+            let detail = if intact {
+                e
+            } else {
+                format!("{e} — AND this program's own stores did not survive it")
+            };
+            fault(stores, detail);
+            return;
+        }
+        Ok(v) => v,
+    };
+
     // Bind both arenas for the way back: the answer lives in one and the
     // callee's writes to the arguments in the other.
     let arg_nr = worker.arg_arena().bind(stores);
@@ -576,10 +672,10 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     // Re-read the answer now that the return arena has a store number on this
     // side — a compound reference could not be completed before it had one.
     let out = match out {
-        Ok(Value::Ref(_)) => worker
+        Value::Ref(_) => worker
             .reread_answer(ret_nr)
             .ok_or_else(|| "malformed compound answer".to_string()),
-        other => other,
+        other => Ok(other),
     };
 
     // loft passes a compound BY REFERENCE, so whatever the callee wrote into its
@@ -588,8 +684,19 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     // `placement = "process"` and not in-process.
     if out.is_ok() {
         let mut done: Vec<DbRef> = Vec::new();
-        for &(slot, dst, tp) in &compound {
-            if !super::arena::names_a_record(&dst) || done.iter().any(|d| same_record(d, &dst)) {
+        for &CompoundArg {
+            slot,
+            caller: dst,
+            tp,
+            written,
+        } in &compound
+        {
+            // A `const` parameter cannot have been written, so there is nothing
+            // to bring home — and the copy-back is the expensive half.
+            if !written
+                || !super::arena::names_a_record(&dst)
+                || done.iter().any(|d| same_record(d, &dst))
+            {
                 continue;
             }
             if let Some(Value::Ref(src)) = args.get(slot)
@@ -611,6 +718,40 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     // The lock is held across the crossing on purpose (see `PLACEMENT`), but a
     // fault must not poison it while a guard is live.
     drop(guard);
+}
+
+/// @PLN119 arcs C+D — is every compound value this call handed over still
+/// structurally sound in THIS process?
+///
+/// The plan claims a crashed worker cannot corrupt the caller's stores, and
+/// until now that rested on a structural argument: the worker has its own
+/// address space and only values are copied in and out. This turns the argument
+/// into a reading, taken at the one moment it could be false — a crossing that
+/// failed — using loft's own guard-before-dereference walk, which NAMES a broken
+/// edge rather than faulting on it.
+///
+/// Only on the failure path, so it costs a healthy call nothing, and a failed
+/// call is fatal anyway.
+fn compound_arguments_intact(stores: &Stores, compound: &[CompoundArg]) -> bool {
+    compound
+        .iter()
+        .filter(|c| super::arena::names_a_record(&c.caller))
+        .all(|c| stores.verify_graph_ok(&c.caller))
+}
+
+/// Surface a failed crossing as the CALLER's runtime error.
+///
+/// What makes a placed library's error behaviour match an in-process one: the
+/// message is the library's own, and no position is claimed because the position
+/// is the library's, not the caller's — pointing at the caller's file would name
+/// the wrong line with complete confidence.
+fn fault(stores: &mut Stores, message: String) {
+    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
+        message,
+        String::new(),
+        0,
+    )));
+    stores.had_fatal = true;
 }
 
 /// Write the answer back where the emitted code expects it — the half of a
@@ -665,7 +806,7 @@ fn finish_call(
             //   * nothing, a null placeholder (`p = make_point(3,4)`) — in-process
             //     the callee mints its own store and hands ownership over, so mint
             //     one here and hand that over. The caller's `OpFreeRef` frees it.
-            (Kind::Compound(tp), Value::Ref(src)) => {
+            (Kind::Compound { tp, .. }, Value::Ref(src)) => {
                 let dest = compound_dest.expect("a compound return always has a destination");
                 if !src.is_null() {
                     super::arena::copy_value(stores, &dest, &src, tp);
@@ -676,18 +817,8 @@ fn finish_call(
             }
             (k, v) => panic!("placed call returned {v:?} where the signature declares {k:?}"),
         },
-        // A fault inside a placed library surfaces as the caller's runtime
-        // error, which is what makes its error behaviour match an in-process
-        // call rather than a transport failure. The message is the library's
-        // own; the position is the library's, not the caller's, so none is
-        // claimed here rather than pointing at the wrong file.
-        Err(e) => {
-            stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
-                e,
-                String::new(),
-                0,
-            )));
-            stores.had_fatal = true;
-        }
+        // The only failure that reaches here is a malformed answer: a worker that
+        // faulted or died is handled before either arena is bound.
+        Err(e) => fault(stores, e),
     }
 }
