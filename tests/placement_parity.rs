@@ -335,6 +335,90 @@ fn a_warning_in_the_library_does_not_decide_whether_it_can_be_placed() {
     assert!(inproc.stdout.contains("ok = 42"), "{:?}", inproc.stdout);
 }
 
+/// `--native` runs a placed library IN-PROCESS, and saying so is the point.
+///
+/// That backend compiles the library's own body into the whole-program binary,
+/// so its calls never leave the process however they were marked.  By the
+/// invariant that is the same PROGRAM — but it is not the same ISOLATION, and a
+/// deployment that declared `placement = "process"` to contain a crash would
+/// have got no worker and no trace of it in any output.  (It was worse than
+/// silent: a worker was started per library and then never called.)
+///
+/// `LOFT_REQUIRE_PLACEMENT=1` is how a deployment insists, so it must refuse
+/// here for the same reason it refuses on a platform with no transport.
+/// One library, some functions placed and some not — which is the ordinary case,
+/// not an edge one, because a real library has signatures on both sides of the
+/// line (a struct, a constant text return).
+///
+/// The two kinds of call sit next to each other on the caller's stack, so this
+/// is where a dispatcher that popped the wrong number of cells would show up:
+/// not as a failure at the placed call, but as a wrong value in whatever ran
+/// next.  Hence the interleaving, and a placed call whose ARGUMENTS come from an
+/// unplaceable one.
+#[test]
+fn placed_and_unplaceable_calls_interleave() {
+    let library = "pub fn placed_add(a: integer, b: integer) -> integer { a + b }\n\
+                   pub fn version() -> text { \"1.0.0\" }\n\
+                   pub struct Point { x: integer, y: integer }\n\
+                   pub fn make_point(x: integer, y: integer) -> Point { Point { x: x, y: y } }\n\
+                   pub fn sum_point(p: Point) -> integer { p.x + p.y }\n\
+                   pub fn placed_txt(s: text) -> text { \"<{s}>\" }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   p = make_point(3, 4);\n\
+                    \x20   println(\"a {placed_add(1, 2)} {version()} {sum_point(p)} {placed_txt(\"z\")}\");\n\
+                    \x20   println(\"b {placed_add(sum_point(p), len(version()))}\");\n\
+                    \x20   println(\"c {placed_txt(version())}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("mixed", library, consumer);
+    assert_eq!(inproc.code, 0, "in-process run: {}", inproc.stderr);
+    assert_indistinguishable("mixed placeable and unplaceable", &inproc, &placed);
+    // Hand-computed: sum_point = 7, len("1.0.0") = 5, so b = 12.
+    for expect in ["a 3 1.0.0 7 <z>", "b 12", "c <1.0.0>"] {
+        assert!(
+            inproc.stdout.contains(expect),
+            "expected {expect:?}, got {:?}",
+            inproc.stdout
+        );
+    }
+}
+
+#[test]
+fn native_does_not_place_and_says_so_when_asked_to_insist() {
+    let root = scratch("native_require");
+    let consumer = root.join("consumer.loft");
+    std::fs::write(
+        &consumer,
+        "use parity;\nfn main() {\n    println(\"v = {add(2, 3)}\");\n}\n",
+    )
+    .expect("write consumer");
+    write_library(
+        &root,
+        "process",
+        "pub fn add(a: integer, b: integer) -> integer { a + b }\n",
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--native")
+        .arg("--lib")
+        .arg(root.join("libs"))
+        .arg(&consumer)
+        .env("LOFT_TIMEOUT", "120")
+        .env("LOFT_REQUIRE_PLACEMENT", "1")
+        .output()
+        .expect("failed to invoke loft");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "insisting on placement under --native must refuse; it exited {:?} with {stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("LOFT_REQUIRE_PLACEMENT") && stderr.contains("--native"),
+        "the refusal must name the reason, not just fail: {stderr}"
+    );
+}
+
 #[test]
 fn the_gate_can_fail() {
     // A parity gate that cannot report a difference would pass forever. Give the

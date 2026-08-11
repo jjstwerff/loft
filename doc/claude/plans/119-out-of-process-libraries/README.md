@@ -7,14 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arc A DONE (2026-08-11)**: a library declares `placement = "process"`
-and its consumers call it unchanged, across a real process boundary, with the
-parity gate green for scalar and text-argument calls
-([Arc A as built](#arc-a-as-built-2026-08-11)).  **Q1 answered GREEN
-(2026-07-24)**; **Q4 answered (2026-08-11)** — the crossing is affordable, and it
-pins the handshake to adaptive spin-then-sleep (the naive futex wake is 30×
-worse and would have made placement visible in the source).  Next: arc C
-(ownership) then arc B proper, per [Phase ordering](#phase-ordering).
+Open — **arcs A and D done, arc B half done (2026-08-11)**.  A library declares
+`placement = "process"` and its consumers call it unchanged, across a real
+process boundary.  The parity gate is green for **every scalar shape**: each
+integer width with its sign, `single`, boolean, and text in both directions
+([Arc B, first half](#arc-b-first-half-as-built-2026-08-11)).  A worker that
+dies is an error rather than a hang ([Arc D](#arc-d-as-built-2026-08-11)).
+**Q1 answered GREEN (2026-07-24)**; **Q4 answered, then CORRECTED (2026-08-11)**
+— the crossing is affordable and the handshake is right, but the 130 ns was a
+bare wire ping and a real call cost 4.7 µs, almost all of it a span table being
+deep-cloned on every entry into loft; fixed, and a placed call is now ~1 µs
+([Q4](#open-design-questions)).
+
+**Next: arc B's second half** — structs, vectors and references, i.e. the arena
+— and arc C rides on it.  This is a DEPARTURE from the phase ordering below,
+which put arc C first, and the reason is worth stating: arc C proves ownership
+across the boundary, and **nothing that crosses today owns anything**.  Every
+value is copied through `host::Value`, so the @PLN94 oracle would report
+agreement by having nothing to disagree about — the shape
+[absent-warning-is-not-a-pass](../../STABILITY_METHOD.md) warns against.  Arc C
+becomes real the moment a reference crosses, which is arc B's second half.
 Opened 2026-07-24 from the question "does loft have a safe way to spawn
 sub-processes?".  It does not, and the answer is deliberately not to add one:
 `lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
@@ -155,9 +167,9 @@ plan-58 failure.
 | Item | Source | Status |
 |---|---|---|
 | **A** — placement declaration + attach handshake (`store_nr` translation, epoch check) | this README | **Done 2026-08-11** (scalars + text arguments; see below) |
-| **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | Open — **unblocked**; residency proven, the job is to build args in the arena |
-| **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | Open |
-| **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | Open |
+| **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | **Scalars done 2026-08-11** — every integer width with its sign, `single`, and text RETURNS ([Arc B, first half](#arc-b-first-half-as-built-2026-08-11)). Structs, vectors and references — the arena proper — remain |
+| **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | Open — and still **vacuous until arc B's second half**: nothing that crosses today carries ownership, so the oracle would agree by having nothing to disagree about |
+| **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
 | **E** — `placement = "remote"` over the existing paged / Range reader | @PLN97 arc G | Open — blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632): the paged loaders silently refuse a **field-declared** collection (the store's `known_type` is the wrapper struct), and the refusal is indistinguishable from "key absent" |
 | **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | Open |
 
@@ -215,7 +227,7 @@ because adding them when arc B needs them would be a protocol change that
 silently mismatches a running worker. Do not read the handshake fields as
 evidence that translation works.
 
-**Two known limits, both arc-A-shaped rather than accidental:**
+**Three known limits, all shaped rather than accidental:**
 
 1. **Calls to a placed library serialise.** The wire has one request slot, so
    the dispatcher holds a lock across the crossing — correctness, not caution,
@@ -224,6 +236,86 @@ evidence that translation works.
 2. **The transport is Linux-only** (it is built on `futex`). Elsewhere a placed
    library runs in-process, which by the invariant is the same program;
    `LOFT_REQUIRE_PLACEMENT=1` makes the lost isolation an error instead.
+3. **`--native` does not place at all** — it compiles the library's body into
+   the program binary. Same treatment as (2) since arc D: no worker is started,
+   and `LOFT_REQUIRE_PLACEMENT=1` refuses and says why. See
+   [The gate](#the-gate).
+
+## Arc B, first half, as built (2026-08-11)
+
+Every scalar shape now crosses: each integer width **with its sign**, `single`
+both ways, and a text RETURN.  What is left of arc B is the arena — structs,
+vectors, references — which is where "no serialization tax" is actually won or
+lost.
+
+The half that landed was mostly not new mechanism.  It was **three bugs in
+shared code**, each of which had been sitting in a path older than this plan:
+
+1. **A narrow integer argument read the previous call's bytes.**  `loft::host`'s
+   marshal sized an integer by its *storage* width where the stack ABI needed its
+   *cell* width — eight bytes for every integer alias.  The stack steps in 8-byte
+   units, so the short write did not shorten the frame and nothing crashed: it
+   filled byte 0 and left the other seven holding the last call's data.  After a
+   call carrying `0x0F0F0F0F0F0F0F0F`, `f(1)` on a `u8` parameter answered
+   `0x0F0F0F0F0F0F0F01`.  The return direction was wrong in reverse — read narrow
+   and zero-extended, so `-1` as an `i8` came back as `255`.  This was never
+   placement-specific; it broke `loft::host` for any Rust caller.
+2. **A library that warns could not be placed at all.**  `parse_dir` refused a
+   directory whose parse reported *anything*, so one `never-read` warning made
+   the consumer exit 1 placed and 0 in-process — placement deciding whether the
+   program ran.
+3. **Entering loft deep-cloned the whole fault-site span table.**  Invisible for
+   a program entered once, and 4.4 µs of every 4.7 µs `host` call for one entered
+   in a loop.  See [Q4](#open-design-questions), which this corrects.
+
+The text return is the one piece that needed reading the emitted code rather
+than reasoning about it.  A text answer does not come back on the stack, and the
+call site picks between **two** conventions: assigned to a text variable, codegen
+stashes a destination record and expects nothing pushed; everywhere else it
+passes the hidden `&text` work buffer a promoted text return carries and expects
+a `Str` over it.  Both were already being emitted for a placed function — the
+routing keys on a native symbol plus a text return, exactly what marking leaves
+behind — so the dispatcher's job was to read which one the call site chose, not
+to impose one.  Two things only the bytecode said:
+
+- The hidden work buffer is **pushed like any other argument** and was not being
+  popped.  That does not fail where it happens; the cell stays behind and shifts
+  every later frame.
+- A text return the compiler never promoted — a constant, `fn version() -> text
+  { "1.0" }` — carries no work buffer at all, so the caller offers nowhere for
+  the answer to live and a `Str` over the worker's own String would dangle.  Such
+  a function **is not placed** and runs in-process, the same fallback every other
+  unsupported signature takes.  Making it uniform means promoting that return to
+  a retbuf (@PLN104's transform, which today considers only the main program's
+  own definitions) — the one loose end of this half.
+
+## Arc D as built (2026-08-11)
+
+A worker that dies is now the caller's error rather than its hang.
+
+`Worker::dead` existed and was read on entry to every call, which reads as the
+death being handled.  Nothing ever set it, because the wait had no way to
+notice: a caller waits on a futex word in the shared mapping, and `FUTEX_WAIT`
+does not fail when the process that would write that word is gone — it waits
+forever.  Killing a worker mid-call hung the caller with no timeout and no
+output, which looks exactly like the program itself having stopped.
+
+The caller's wait now sleeps in bounded steps and looks at the child when one
+expires — `try_wait`, not a signal probe, because an unreaped worker is a zombie:
+a live pid that answers `kill(0)` and will never serve another call.  The
+handshake takes the same path, so a worker that crashes while *loading* a library
+is caught too, where before it hung at startup.  The worker's own wait stays
+untimed; `PR_SET_PDEATHSIG` already tells it the caller is gone.
+
+Only a wait that has spun past its budget ever sleeps, so a busy exchange does
+not pay for this — measured, 200k placed calls cost the same either way.  Guard:
+`tests/placement_worker.rs::a_worker_killed_mid_call_is_an_error_not_a_hang`,
+whose control is the removal of the poll (that version times out).
+
+**What arc D does NOT yet prove** is the other half of its own row: *caller
+stores provably intact*.  The structural argument is strong — the worker has its
+own address space and only values are copied in and out — but "provably" wants
+the @PLN94 oracle, and that belongs with arc C.
 
 ## Phase ordering
 
@@ -236,14 +328,29 @@ evidence that translation works.
    integer` crosses the boundary, and the parity gate holds for scalar and
    text-argument calls.  The epoch/`store_nr` words are exchanged but unread
    until references cross.
-3. **Arc C** — ownership, with the @PLN94 oracle run on both placements; the leak
-   half of the parity gate cannot pass before this.
-4. **Arc B proper** — the full type-kind × placement matrix from Stage A.
-5. **Arc D** — kill the worker mid-call; assert a typed error and an intact caller
-   store, both backends.
-6. **Arc F** — `lib/git`, which deletes `tools/viewer/refresh.sh` (~140 lines of
+3. ~~**Arc C** before arc B~~ — **REORDERED 2026-08-11.**  The original reason was
+   that "the leak half of the parity gate cannot pass before this".  Running the
+   gate settled it the other way: the leak half passes today, because nothing
+   that crosses owns anything — every value is copied through `host::Value`.  So
+   arc C run now would be an oracle agreeing with itself, and it moves to after
+   the arena, where a reference finally crosses and there is an ownership
+   question to answer.
+4. ~~**Arc B**, first half~~ — **DONE 2026-08-11**: every scalar shape, both
+   directions ([Arc B, first half](#arc-b-first-half-as-built-2026-08-11)).
+5. **Arc B, second half** — the arena: structs, vectors, references, and the
+   nesting depths of Stage A's matrix.  This is where "no serialization tax" is
+   won or lost, and where the epoch and `store_nr` words finally get a reader.
+6. **Arc C** — ownership, with the @PLN94 oracle run on both placements, against
+   values that actually carry ownership.  Also finishes arc D's second half
+   (*caller stores provably intact*), which today rests on a structural argument
+   rather than the oracle.
+7. ~~**Arc D**~~ — **DONE 2026-08-11** ([Arc D](#arc-d-as-built-2026-08-11)),
+   taken out of order because the hang it fixes was reachable from arc A: a
+   killed worker hung the caller with no timeout and no output.  Still
+   interpreter-only; `--native` is untried (see the gate note below).
+8. **Arc F** — `lib/git`, which deletes `tools/viewer/refresh.sh` (~140 lines of
    bash) and removes `make index`'s "filter loft to bash-tracked files" workaround.
-7. **Arc E**, then the engine_host wire (F, second half).
+9. **Arc E**, then the engine_host wire (F, second half).
 
 ## The gate
 
@@ -253,6 +360,28 @@ One unchanged consumer + library, run under `placement = "inproc"` and
 bare `loft` is native and skips it).  Any divergence falsifies the invariant.
 This is the same instrument shape as the four-target parity gate in the
 loft-ship skill, with placement as the axis instead of target.
+
+**What the gate proves, and what it does not.**  Its VALUE half is proven live:
+`the_gate_can_fail` runs two deliberately different libraries and requires the
+comparison to notice.  Its LEAK half is not, and should not be read as though it
+were.  `check_store_leaks` prints to stderr and the gate compares stderr, so a
+leak *would* show — but no probe has yet made that channel report on demand, so
+"no leak" is corroboration rather than a proven gate.  Positive readings taken
+alongside it (`LOFT_ALLOC_REPORT`, `LOFT_TEXT_TIMELINE`, `LOFT_STRICT_STORES`)
+agree across placements, which is evidence of the same kind.  Making the leak
+half falsifiable belongs with arc C, where a leak becomes possible.
+
+**`--native` is outside the gate, deliberately.**  That backend compiles a
+library's own body into the whole-program binary, so a placed library's calls do
+not leave the process however they are marked — placement has no effect there,
+and measuring confirmed it (200k calls cost the same either way, ~10× too fast
+to be crossing).  Since arc D that is no longer silent: `--native` does not mark
+or start workers at all (it used to start one per library and never call it),
+and `LOFT_REQUIRE_PLACEMENT=1` refuses, naming `--native` as the reason, exactly
+as it refuses on a platform with no transport.  Guard:
+`tests/placement_parity.rs::native_does_not_place_and_says_so_when_asked_to_insist`.
+Making `--native` genuinely place a library is its own arc, and it is not free:
+the generated Rust would have to call the dispatcher rather than the body.
 
 ## Open design questions
 
@@ -308,6 +437,30 @@ loft-ship skill, with placement as the axis instead of target.
    Probe: `probes/q4_crossing.rs` + `probes/q4_inproc.loft`.  What is NOT
    measured yet: the cost of marshalling real arguments into the arena (arc B),
    which is the term that actually grows with the call's data.
+
+   **Corrected 2026-08-11 — the wire was never the expensive part.**  Those
+   numbers are a bare ping between two processes, and taking them for the cost
+   of a *call* was wrong by a factor of thirty.  Measured end to end (200k calls
+   to a placed `fn tick(n) -> integer`, against the identical in-process loop),
+   a placed call cost **3.7 µs** — and raising the spin budget changed nothing,
+   which falsified the obvious reading that the caller was sleeping.  It was not
+   in the handshake at all: `loft::host::Program::call` itself cost **4.7 µs**
+   with no wire involved, of which **4.4 µs was publishing the fault-site span
+   table** — a `BTreeMap` deep-cloned into a fresh `Arc` on every entry into
+   loft.  Building that snapshot once brought a host call to **0.47 µs** and the
+   placed round trip to **~1 µs**, i.e. ~20× an interpreted in-process call.
+
+   Two lessons worth carrying, both of which cost time here:
+
+   - **A microbenchmark of the transport is not a measurement of the feature.**
+     The 130 ns is real and the handshake design it justified is right; it was
+     simply never the term that dominated.  The end-to-end number is the one that
+     answers "is placement policy".
+   - **The spin-budget sweep is what made this findable.**  The first story —
+     "the worker's turnaround exceeds the spin budget, so every call sleeps" —
+     was coherent, fitted the ~4 µs, and was wrong.  Three budgets, 2000 through
+     100000, produced the same time; that flat line is what said "look
+     elsewhere" before any code was changed on the strength of the story.
 5. **Writer discipline under real database support.**  MVP is share-read-only +
    explicit write-back.  When full DB access lands, does the writer path become a
    journal transaction, and does that change the invariant's error behaviour?

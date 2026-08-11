@@ -187,20 +187,32 @@ cannot tell from the program:
 library, run under both placements, requiring identical stdout, stderr and exit
 status.
 
-What arc A carries today: **integer-family, boolean and text arguments**, and
-**void / integer-family / boolean returns**. A `pub fn` outside that runs
-in-process, byte-identically — it is never turned into a call that fails later.
-Text returns, `single`, structs, vectors and references are the boundary marshal
-of arc B.
+What crosses today: **every scalar** — integer at any declared width and with
+its sign, `single`, boolean and text — as arguments and as returns. A `pub fn`
+outside that runs in-process, byte-identically; it is never turned into a call
+that fails later. Structs, vectors and references are the boundary marshal still
+to come.
 
-Two limits worth knowing before reaching for it:
+One text return is worth knowing about because the rule is invisible: a function
+whose text return is a **constant**, `fn version() -> text { "1.0" }`, is not
+placed. The compiler gives such a function no result buffer, so there is nowhere
+in the caller for the answer to live. It runs in-process — the same program —
+but it is not isolated.
+
+Three limits worth knowing before reaching for it:
 
 - **Calls to one placed library serialise** (the wire has a single request slot),
-  so it is a poor fit for a hot `par` arm and a good fit for coarse calls. The
-  crossing itself is ~130 ns, against ~50 ns for a native in-process call.
+  so it is a poor fit for a hot `par` arm and a good fit for coarse calls. A
+  placed call costs roughly **1 µs**, against ~50 ns for a native in-process one
+  — so it pays for itself on a call that does real work, and does not on a
+  getter in a loop.
 - **Linux only.** Elsewhere the library runs in-process — the same program,
-  without the isolation. `LOFT_REQUIRE_PLACEMENT=1` makes that an error rather
-  than a silent fallback.
+  without the isolation.
+- **Not under `--native`,** which compiles the library's own body into the
+  program binary, so its calls never leave the process.
+
+`LOFT_REQUIRE_PLACEMENT=1` turns either of the last two from a silent fallback
+into an error that names which one applied.
 
 A misspelled value is refused at load rather than treated as `inproc`: the two
 placements are meant to behave identically, so a typo would otherwise yield a

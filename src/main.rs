@@ -8059,9 +8059,16 @@ fn main() {
     // stub the worker dispatcher can take over. A function whose signature the
     // wire cannot carry yet is left unmarked and runs in-process, which is the
     // same silent, byte-identical fallback an uncompilable native library takes.
+    //
+    // Not under `--native`: that backend compiles the library's own body into
+    // the whole-program binary, so its calls never reach a worker however they
+    // were marked. Marking anyway would leave a dispatch symbol nothing routes
+    // and start a worker process to sit idle for the run.
     #[cfg(target_os = "linux")]
-    for (_, pkg_dir) in &placed_libs {
-        loft::lib_placement::dispatch::mark_exports(&mut p.data, pkg_dir);
+    if !native_requested {
+        for (_, pkg_dir) in &placed_libs {
+            loft::lib_placement::dispatch::mark_exports(&mut p.data, pkg_dir);
+        }
     }
     let has_auto_native = !auto_native_libs.is_empty();
     // @PLN11 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
@@ -8140,23 +8147,39 @@ fn main() {
     // deployment that asked for a worker to contain a crash should be able to
     // insist. `LOFT_REQUIRE_PLACEMENT=1` turns the quiet fallback into a refusal
     // — the same shape as `LOFT_REQUIRE_NATIVE` for native dispatch.
-    if !placed_libs.is_empty()
-        && cfg!(not(target_os = "linux"))
+    //
+    // Two things withdraw it, and a deployment that asked for a worker should
+    // hear about either: a platform without the transport, and `--native`, whose
+    // backend compiles the library into the whole-program binary so its calls
+    // never leave the process.
+    let no_placement_because = if placed_libs.is_empty() {
+        None
+    } else if cfg!(not(target_os = "linux")) {
+        Some("out-of-process placement needs Linux")
+    } else if native_requested {
+        Some(
+            "`--native` compiles a library's own body into the program binary, so its \
+             calls do not cross a process boundary",
+        )
+    } else {
+        None
+    };
+    if let Some(why) = no_placement_because
         && std::env::var("LOFT_REQUIRE_PLACEMENT").is_ok_and(|v| v == "1" || v == "true")
     {
         eprintln!(
-            "loft: LOFT_REQUIRE_PLACEMENT is set, but out-of-process placement needs Linux, \
-             so {} library/libraries that declared `placement = \"process\"` would run \
-             in-process without isolation.",
+            "loft: LOFT_REQUIRE_PLACEMENT is set, but {why}, so {} library/libraries that \
+             declared `placement = \"process\"` would run in-process without isolation.",
             placed_libs.len()
         );
         std::process::exit(1);
     }
     // Start a worker for each process-placed library and point its marked
     // functions at it. After `byte_code`, because the stubs this replaces are
-    // what `byte_code` registered.
+    // what `byte_code` registered — and only where marking happened, since a
+    // worker with nothing routed to it is a process that idles for the run.
     #[cfg(target_os = "linux")]
-    if !placed_libs.is_empty() {
+    if !placed_libs.is_empty() && !native_requested {
         let stdlib = std::path::PathBuf::from(&default_str);
         match loft::lib_placement::dispatch::install(&mut state, &p.data, &placed_libs, &stdlib) {
             Ok(_) => {}
