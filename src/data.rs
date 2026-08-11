@@ -5222,7 +5222,24 @@ impl Data {
             // own `source`) reproduces the global `(name, 0)` binding — without
             // it, `name_type(name, other_source)` returns `u16::MAX` after a
             // warm start and codegen emits `OpDatabase(db_tp=u16::MAX)`.
+            let requested_from = self.definitions[vd as usize].source;
             self.definitions[vd as usize].source = 0;
+            // …and drop the binding `add_def` just made under the REQUESTING
+            // source, which the line above has made a lie: the def now lives at
+            // source 0, so `(name, requesting_source)` is a cross-source alias
+            // nothing records and nothing can replay.
+            //
+            // Harmless while the table only grows — every lookup finds the
+            // global binding anyway. It bites on a REBUILD: `rebuild_indices`
+            // reconstructs `def_names` from each definition's own source, so it
+            // reproduces `(name, 0)` and not the stale one, and @PLN120's
+            // rollback guard correctly reports an alias that went missing. A
+            // library `pub fn` returning `vector<SomeStruct>` is what first
+            // reached it — @PLN119 arc F's `engine_host::turn() -> Turn` — and
+            // it took down a live-reload session on the first bad edit.
+            if requested_from != STD_SOURCE {
+                self.def_names.remove(&(name.clone(), requested_from));
+            }
             self.add_attribute(
                 lexer,
                 vd,

@@ -217,6 +217,32 @@ rejects every mutation through such a parameter, so the crossing skips it. On a
 call taking a 20 000-element vector that is about a tenth of its cost. It changes
 nothing about what the program does, in-process or placed.
 
+**A library whose public surface IS its natives cannot be placed**, and the fix
+is one line per function. Placement works by giving a function a native symbol,
+so a function that already has one is skipped — and a library made entirely of
+`pub fn f(…); #native` would be marked nowhere and quietly run every call in the
+caller. Make the native private and let the public name be a wrapper over it:
+
+```loft
+fn kernel_send(cid: integer, msg: text) -> boolean;
+#native
+
+pub fn send(cid: integer, msg: text) -> boolean { kernel_send(cid, msg) }
+```
+
+Consumers do not change — the public name and signature are the same — and the
+wrapper is what gets placed.
+
+**Shape the surface for a call, not for a cursor.** An API of "advance, then read
+field, then read field" costs one crossing per read. One that answers a whole
+value costs one crossing, whatever it contains — and it is usually the nicer API
+anyway. `engine_host`'s `turn()` hands back a frame's entire event list for this
+reason, where the underlying kernel offers a cursor.
+
+**Closures do not cross.** A library whose entry point takes a function
+(`run(port, on_event, on_tick)`) can only be driven in-process; give it a form
+where the caller owns the loop as well, and both work.
+
 **One shape is quietly not placed**, and it is worth knowing which: a function
 that returns a *view* of something it did not create — `fn head(v: vector<P>) ->
 P { v[0] }`, or a reference into the library's own long-lived state. In-process

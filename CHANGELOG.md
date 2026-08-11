@@ -322,6 +322,13 @@ would rather be told than quietly lose it.
 not authenticated and not a sandbox — bind it where only what should reach it
 can.
 
+The engine host went through this first: its sockets, clients and event queue now
+run in a worker if you ask them to, and a browser on the other end cannot tell.
+Two things came out of doing it that apply to any library you want to place —
+make the native private and let the public name be a wrapper over it, and give
+the surface a call that answers a whole value instead of a cursor you step. Both
+are better in-process too, which is usually how you know.
+
 ### A library whose native build cannot be used runs interpreted
 
 `use <lib>` compiles a library to a native cdylib behind your back, and the deal

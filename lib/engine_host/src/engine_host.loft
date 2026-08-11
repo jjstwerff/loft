@@ -55,12 +55,25 @@ fn kernel_tick_due() -> boolean;
 
 // Send a text frame to one client.  False = the client is gone (a disconnect
 // event is queued for it).
-pub fn send(cid: integer, msg: text) -> boolean;
-#native "n_kernel_send"
+//
+// A WRAPPER over the native rather than the native itself, and that is what
+// makes it work at a distance: @PLN119 places a function by giving it a native
+// symbol, so a function that already HAS one cannot be placed.  The same
+// convention the text-returning natives below already follow.
+fn kernel_send(cid: integer, msg: text) -> boolean;
+#native
+
+pub fn send(cid: integer, msg: text) -> boolean {
+  kernel_send(cid, msg)
+}
 
 // Broadcast a text frame to every live client; returns the delivery count.
-pub fn broadcast(msg: text) -> integer;
-#native "n_kernel_broadcast"
+fn kernel_broadcast(msg: text) -> integer;
+#native
+
+pub fn broadcast(msg: text) -> integer {
+  kernel_broadcast(msg)
+}
 
 // Begin a NON-BLOCKING outbound HTTP request from inside the engine loop;
 // returns a request id immediately (no network I/O happens on this call).
@@ -133,16 +146,24 @@ fn kernel_idle(max_us: integer);
 #native
 
 // Live connection count (diagnostics).
-pub fn clients() -> integer;
-#native "n_kernel_clients"
+fn kernel_clients() -> integer;
+#native
+
+pub fn clients() -> integer {
+  kernel_clients()
+}
 
 // Enqueue a LOCAL event on the running kernel (any role): window input — or
 // any script-side source — becomes an ordinary events-class message, so
 // handlers treat keys and remote messages identically (`ev.cid == -1` marks
 // local origin).  Sub-tick input stops being lost to polling: post edges as
 // you see them; the next drain delivers them in order.  False = no kernel.
-pub fn post(msg: text) -> boolean;
-#native "n_kernel_post"
+fn kernel_post(msg: text) -> boolean;
+#native
+
+pub fn post(msg: text) -> boolean {
+  kernel_post(msg)
+}
 
 fn kernel_alive() -> boolean;
 #native
@@ -246,6 +267,74 @@ fn kernel_sync_payload() -> text;
 
 pub fn sync_payload() -> text {
   kernel_sync_payload()
+}
+
+// ── The turn surface: one call per FRAME, shaped for a boundary ────────────
+//
+// @PLN119 arc F.  `run` below is the closure form, and closures do not cross a
+// process boundary — so a library that can only be driven that way can only be
+// driven in-process.  These functions are the same loop turned inside out: the
+// caller owns the `while`, and one call hands back everything a frame needs.
+//
+// The shape is the point, not the availability.  The natives underneath are a
+// CURSOR — `next_event()` then four getters reading the current event — which
+// costs five calls per event.  In-process that is five function calls; across a
+// placement boundary it is five crossings, and a busy frame turns into hundreds.
+// `turn()` answers a VALUE: every event of this frame, in one crossing,
+// whatever the count.  That is also simply better in-process, which is the sign
+// it was the right shape all along.
+
+// Everything one turn of the loop produced.
+pub struct Turn {
+  // False once the kernel has stopped; the caller's `while` ends on it.
+  const running: boolean,
+  // The tick came due this turn.
+  const tick: boolean,
+  // Arrival-ordered, and already including the fast-lane state that late-latches
+  // to a tick — ONE receive surface, exactly as `run` gives a handler.
+  const events: vector<Event>,
+}
+
+// Bind the listener.  False = the port is taken.
+pub fn listen(port: integer, tick_interval_us: integer) -> boolean {
+  kernel_listen(port, tick_interval_us)
+}
+
+// Is the kernel still serving?
+pub fn alive() -> boolean {
+  kernel_alive()
+}
+
+// Run one turn: pump, drain up to `max_events`, and check the tick.
+//
+// The bound is the caller's rather than a constant because it is the caller's
+// frame budget: a drain with no ceiling lets a flood starve the tick, which is
+// the same reason `run` drains 256 at a time.
+pub fn turn(max_events: integer) -> Turn {
+  none: vector<Event> = [];
+  if !kernel_alive() {
+    return Turn { running: false, tick: false, events: none };
+  }
+  work = kernel_pump();
+  evs: vector<Event> = [];
+  for _ in 0..max_events {
+    if !kernel_next_event() { break; }
+    evs += [Event {
+      cid: kernel_event_cid(),
+      kind: kernel_event_kind(),
+      payload: kernel_event_payload(),
+      status: kernel_event_status(),
+    }];
+  }
+  due = kernel_tick_due();
+  if due {
+    while sync_next() {
+      evs += [Event { cid: sync_cid(), kind: 1, payload: sync_payload() }];
+    }
+  }
+  if work == 0 && len(evs) == 0 && !due { kernel_idle(2000); }
+  kernel_frame();
+  Turn { running: true, tick: due, events: evs }
 }
 
 // The kernel loop: pump → budgeted event drain → tick when due → idle.

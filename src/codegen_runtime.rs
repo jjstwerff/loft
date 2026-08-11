@@ -161,6 +161,14 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_broadcast",                  abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_idle",                abi: Abi::Cell },
     RuntimeFn { name: "n_clients",                    abi: Abi::Cell },
+    // @PLN119 arc F — the same four under the names the loft surface uses now
+    // that its public functions are WRAPPERS (a function that already carries a
+    // native symbol cannot be placed).  The old names stay: this table is keyed
+    // by loft def name, and a library elsewhere may still spell them the old way.
+    RuntimeFn { name: "n_kernel_send",                abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_broadcast",           abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_clients",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_post",                abi: Abi::Cell },
     RuntimeFn { name: "n_udp_bound",                  abi: Abi::Cell },
     RuntimeFn { name: "n_sync_class",                 abi: Abi::Cell },
     RuntimeFn { name: "n_sync_class_keyed",           abi: Abi::Cell },

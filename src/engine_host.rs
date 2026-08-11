@@ -2920,6 +2920,27 @@ pub mod typed {
     pub fn n_kernel_alive(_cell: &UnsafeCell<Stores>) -> u8 {
         u8::from(with_kernel(|k| k.alive).unwrap_or(false))
     }
+
+    // @PLN119 arc F — the four the loft surface now reaches through a WRAPPER.
+    //
+    // A library function that already carries a native symbol cannot be PLACED
+    // (placement works by giving one), so `send` / `broadcast` / `clients` /
+    // `post` became loft wrappers over private `kernel_*` natives. The native
+    // backend resolves a runtime fn by the loft DEF name, so the rename moved
+    // them out of its table — these are the same implementations under the names
+    // it now looks for.
+    pub fn n_kernel_send(cell: &UnsafeCell<Stores>, cid: i64, msg: &str) -> u8 {
+        n_send(cell, cid, msg)
+    }
+    pub fn n_kernel_broadcast(cell: &UnsafeCell<Stores>, msg: &str) -> i64 {
+        n_broadcast(cell, msg)
+    }
+    pub fn n_kernel_clients(cell: &UnsafeCell<Stores>) -> i64 {
+        n_clients(cell)
+    }
+    pub fn n_kernel_post(cell: &UnsafeCell<Stores>, msg: &str) -> u8 {
+        n_post(cell, msg)
+    }
     pub fn n_kernel_stop(_cell: &UnsafeCell<Stores>) {
         let _ = with_kernel(|k| k.alive = false);
     }

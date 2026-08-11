@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **arcs A, B, C, D, E done and F's `lib/git` shipped (2026-08-11)**.  A library declares
+Open — **every arc A–F built (2026-08-11)**.  A library declares
 `placement = "process"` and its consumers call it unchanged, across a real
 process boundary.  The parity gate is green for **every scalar shape** — each
 integer width with its sign, `single`, boolean, text in both directions
@@ -27,9 +27,13 @@ bytes on a socket ([Arc E](#arc-e-as-built-2026-08-11)) — and the plan's first
 real consumer ships: `lib/git`, which deleted the review viewer's 135 lines of
 bash ([Arc F](#arc-f-as-built-2026-08-11)).
 
-**What is left:** the engine_host wire (arc F's second half), and `make index`'s
-"filter loft to bash-tracked files" workaround, which wants one more `lib/git`
-query.
+The engine host — sockets, client table, event queue — runs in a worker too, and
+a live websocket client sees the same conversation either way
+([the engine-host wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
+
+**What is left:** `make index`'s "filter loft to bash-tracked files" workaround,
+which wants one more `lib/git` query (`ls-files`); and the open questions below
+that are genuinely open rather than answered.
 Opened 2026-07-24 from the question "does loft have a safe way to spawn
 sub-processes?".  It does not, and the answer is deliberately not to add one:
 `lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
@@ -188,7 +192,7 @@ Guards: `tests/placement_parity.rs`.
 | **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
 | **E** — `placement = "remote"` | this README | **Done 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)) — over a socket, with the arena's bytes on it. NOT over the paged / Range reader, and [#632](https://github.com/loft-lang/loft/issues/632) was never a blocker |
-| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **`lib/git` done 2026-08-11** ([Arc F as built](#arc-f-as-built-2026-08-11)) — the viewer's bash is deleted. The engine_host wire is the remaining half |
+| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **Done 2026-08-11** — `lib/git` ([Arc F](#arc-f-as-built-2026-08-11)) deleted the viewer's bash; the engine host is placeable and proven against a live client ([the engine-host wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)) |
 
 ## Arc A as built (2026-08-11)
 
@@ -457,6 +461,65 @@ Borrowing a slot per CALL, rather than once, is new — and it found two things 
 `LOFT_TRACE_ARENA=1` narrates what each side put in the arena and read back out,
 which is the instrument that found (3) and (4) above in minutes — and, with the
 process id on each line, which of the two sides was walking the table.
+
+## Arc F, second half — the engine-host wire (2026-08-11)
+
+The engine host holds sockets, a client table and an event queue.  It is this
+plan's most demanding consumer, and demanding for a reason none of the earlier
+arcs touched: the library is not a function you call and forget, it is a
+**service with state that outlives every call**, driven in a loop.
+
+It now runs in a worker, and a real websocket client sees the same conversation
+either way (`tests/engine_host_placed.rs`).
+
+### What the boundary refused, and what that taught
+
+Two things had to change, and both are findings rather than plumbing.
+
+**1. A library whose public surface IS its natives cannot be placed.**
+Placement works by giving a function a native symbol and replacing the stub with
+the dispatcher — so a function that already HAS one is skipped.  Nearly all of
+`engine_host`'s surface was `pub fn send(…); #native "n_kernel_send"`, which
+means a placed `engine_host` would have placed *nothing*, and every call would
+have run in the caller where there is no kernel.
+
+The fix is the shape `lib/git` already has and that this very file already used
+for its text-returning natives: the native is PRIVATE (`kernel_send`) and the
+public name is a loft wrapper over it.  Consumers are unaffected — the public
+names and signatures are unchanged — and the wrapper is what gets placed.
+
+**2. A cursor is the wrong surface for a boundary.**  The kernel's event API is
+`next_event()` followed by four getters reading the current event: five calls per
+event.  In-process that is five function calls.  Across a placement boundary it
+is five crossings, and a busy frame becomes hundreds.
+
+So the loop is turned inside out and answers a VALUE:
+
+```loft
+pub struct Turn { const running: boolean, const tick: boolean, const events: vector<Event> }
+pub fn turn(max_events: integer) -> Turn
+```
+
+One crossing per FRAME, whatever the event count.  The caller owns the `while`,
+which it has to anyway — `run()` takes closures, and **closures do not cross a
+placement boundary**, so a library drivable only that way is drivable only
+in-process.
+
+`turn()` is also simply better in-process, which is the sign it was the right
+shape all along: one native call per frame instead of five per event.
+
+`Turn` is worth noting as a test of arc B, too — a struct carrying a vector of
+structs each carrying text is the deepest shape the arena carries, and here it is
+produced by a real library rather than a probe.
+
+### What is NOT done, deliberately
+
+`lib/engine_host` still declares no `placement`, so every existing consumer keeps
+exactly the deployment it has.  Flipping it to `"process"` changes where a game's
+sockets live, which is a deployment decision with real consequences for the
+games that consume it — and those live in other repositories.  The library is now
+*placeable*; whether to place it is the owner's call, and the test proves the
+answer works either way.
 
 ## Arc E as built (2026-08-11)
 
@@ -791,16 +854,15 @@ the @PLN94 oracle, and that belongs with arc C.
    taken out of order because the hang it fixes was reachable from arc A: a
    killed worker hung the caller with no timeout and no output.  Still
    interpreter-only; `--native` is untried (see the gate note below).
-8. ~~**Arc F** — `lib/git`~~ — **DONE 2026-08-11** ([Arc F as
-   built](#arc-f-as-built-2026-08-11)).  `tools/viewer/refresh.sh` is deleted
-   (135 lines of bash, and the dashboard's dependency on `jq` with it).  What
-   remains of arc F: `make index`'s "filter loft to bash-tracked files"
-   workaround (it wants a `ls-files` query, which is one more `Query`), and the
-   engine_host wire.
+8. ~~**Arc F** — `lib/git`, then the engine-host wire~~ — **DONE 2026-08-11**
+   ([Arc F](#arc-f-as-built-2026-08-11), [the engine-host
+   wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
+   `tools/viewer/refresh.sh` is deleted (135 lines of bash, and the dashboard's
+   dependency on `jq` with it), and the engine host is placeable.  What remains:
+   `make index`'s "filter loft to bash-tracked files" workaround, which wants one
+   more `Query` (`ls-files`).
 9. ~~**Arc E**~~ — **DONE 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)),
-   over a socket rather than the Range reader the row assumed.  What remains of
-   the plan is the engine_host wire (F, second half) and `make index`'s
-   bash-tracked-files workaround.
+   over a socket rather than the Range reader the row assumed.
 
 ## The gate
 
