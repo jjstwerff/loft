@@ -630,6 +630,97 @@ fn a_value_that_outgrows_the_arena_still_crosses() {
     }
 }
 
+/// The leak half of the gate, made falsifiable.
+///
+/// `check_store_leaks` reports what is unfreed at EXIT, so it cannot see a
+/// program that allocates a store per call and frees it — which is exactly the
+/// shape a placed call has, and exactly the shape that runs a long program out
+/// of store slots.  `LOFT_STRICT_STORES` is what makes it visible: it stops the
+/// allocator recycling a released slot, so the peak slot count becomes a
+/// straight count of how many stores a run ever needed, and the two placements
+/// have to agree on it.
+///
+/// They did not.  A placed struct return minted its destination store while the
+/// call arena was registered, so the arena's slots could never come back below
+/// it; and adopting the arena PUSHED a slot rather than taking the one at the
+/// watermark, so the table walked upward once per call.  Together that was two
+/// slots per call against four for the whole in-process run — all 65535 gone
+/// after ~32k iterations, with the same loop in-process flat.
+///
+/// Comparing the numbers rather than asserting a constant is what keeps this
+/// honest: it fails if EITHER side regresses, and it cannot pass by both being
+/// wrong in the same direction, because in-process placement is not doing
+/// anything this plan changed.
+#[test]
+fn placement_does_not_change_how_many_stores_a_run_needs() {
+    let library = "pub struct P { x: integer, y: integer }\n\
+                   pub fn make_p(x: integer) -> P { P { x: x, y: x * 2 } }\n\
+                   pub fn sum_p(p: P) -> integer { p.x + p.y }\n\
+                   pub fn range_v(n: integer) -> vector<integer> {\n\
+                   \x20   out: vector<integer> = [];\n\
+                   \x20   for i in 0..n { out += [i]; }\n\
+                   \x20   out\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   acc = 0;\n\
+                    \x20   for i in 0..2000 {\n\
+                    \x20       p = make_p(i);\n\
+                    \x20       acc += sum_p(p);\n\
+                    \x20       v = range_v(4);\n\
+                    \x20       acc += len(v);\n\
+                    \x20   }\n\
+                    \x20   println(\"acc {acc}\");\n\
+                    }\n";
+    let root = scratch("slots");
+    let consumer_path = root.join("consumer.loft");
+    std::fs::write(&consumer_path, consumer).expect("write consumer");
+
+    let peak_of = |mode: &str| -> (u32, String) {
+        write_library(&root, mode, library);
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(root.join("libs"))
+            .arg(&consumer_path)
+            .env("LOFT_TIMEOUT", "120")
+            .env("LOFT_NO_NATIVE_LIBS", "1")
+            .env("LOFT_STRICT_STORES", "1")
+            .env("LOFT_ALLOC_REPORT", "1")
+            .output()
+            .expect("failed to invoke loft");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let peak = stderr
+            .lines()
+            .find_map(|l| l.strip_prefix("loft-alloc: peak="))
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or_else(|| panic!("no alloc report under {mode}: {stderr}"));
+        (peak, String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+
+    let (inproc_peak, inproc_out) = peak_of("inproc");
+    let (placed_peak, placed_out) = peak_of("process");
+    assert_eq!(
+        inproc_out, placed_out,
+        "the two runs did not even produce the same answer"
+    );
+    // 2000 iterations, so a per-call slot lost is a peak in the thousands. The
+    // in-process side is the reference; a small constant either way would be a
+    // real difference in how many stores are live AT ONCE, which is not what
+    // this is measuring.
+    assert!(
+        placed_peak <= inproc_peak + 4,
+        "placement needed {placed_peak} store slots where in-process needed \
+         {inproc_peak} — a slot per call is a table that runs out"
+    );
+    assert!(
+        inproc_peak < 100,
+        "the in-process reference is itself growing ({inproc_peak}), so this \
+         test is measuring nothing"
+    );
+}
+
 /// A signature the arena does not carry runs in-process, and that has to be
 /// INVISIBLE — which is the whole claim placement makes.
 ///

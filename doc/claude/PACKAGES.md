@@ -168,7 +168,7 @@ fontdue = "0.9"
 png = "0.17"
 ```
 
-### `placement` — where the library runs (@PLN119 arc A)
+### `placement` — where the library runs (@PLN119 arcs A–B)
 
 `[library] placement = "process"` puts the library in a **worker process**.
 Consumers do not change: the same `use`, the same typed `pub fn` calls, the same
@@ -188,10 +188,27 @@ library, run under both placements, requiring identical stdout, stderr and exit
 status.
 
 What crosses today: **every scalar** — integer at any declared width and with
-its sign, `single`, boolean and text — as arguments and as returns. A `pub fn`
-outside that runs in-process, byte-identically; it is never turned into a call
-that fails later. Structs, vectors and references are the boundary marshal still
-to come.
+its sign, `single`, boolean and text — and **structs and vectors**, in both
+directions, to any nesting depth: a `text` field, a struct inside a struct,
+`vector<struct>`, `vector<text>`, `vector<vector<T>>`, an empty vector, a null
+struct. A `pub fn` outside that runs in-process, byte-identically; it is never
+turned into a call that fails later. A polymorphic enum and a keyed collection
+(`hash` / `index` / `sorted`) are outside for now — both are reference-shaped
+and so look placeable, but their crossing has questions of its own.
+
+A struct or a vector does not travel as bytes in the request. It is a graph of
+records, and it crosses as itself, in a **shared store both processes map**.
+That is why the crossing does not get proportionally more expensive as the value
+gets bigger: it is a copy, not an encoding. Measured, a 16-element vector costs
+about the same to cross as a two-field struct, and a 4096-element one adds
+nothing measurable to a call that then loops over it.
+
+**A compound argument is passed by reference, and stays that way.** In loft, a
+`pub fn bump(p: Point)` that assigns `p.x` changes the CALLER's `p`, and a
+vector parameter appended to grows the caller's vector. That holds across the
+boundary too — a placed library that writes to a parameter is not quietly
+writing to a copy. Passing the same value twice (`f(p, p)`) also stays one
+value, as it is in-process.
 
 One text return is worth knowing about because the rule is invisible: a function
 whose text return is a **constant**, `fn version() -> text { "1.0" }`, is not
@@ -203,9 +220,9 @@ Three limits worth knowing before reaching for it:
 
 - **Calls to one placed library serialise** (the wire has a single request slot),
   so it is a poor fit for a hot `par` arm and a good fit for coarse calls. A
-  placed call costs roughly **1 µs**, against ~50 ns for a native in-process one
-  — so it pays for itself on a call that does real work, and does not on a
-  getter in a loop.
+  placed call costs roughly **0.8 µs** for scalars and **1.4 µs** carrying a
+  struct or a vector, against ~50 ns for a native in-process one — so it pays for
+  itself on a call that does real work, and does not on a getter in a loop.
 - **Linux only.** Elsewhere the library runs in-process — the same program,
   without the isolation.
 - **Not under `--native`,** which compiles the library's own body into the

@@ -1077,13 +1077,25 @@ impl Stores {
                 }
             }
         }
-        let store_nr = if let Some(slot) = chosen {
-            self.allocations[slot as usize] = store;
-            slot
+        // With no reusable slot BELOW the watermark, take the one AT it — every
+        // index from `max` up is unused by definition, so a slot the table
+        // already holds there is free to overwrite.  Pushing instead (what this
+        // did) grows `allocations` by one on every adoption that finds nothing
+        // below `max`, because the Vec never shrinks while `max` does: a
+        // borrow-and-release pair — @PLN119's call arena, once per placed call —
+        // then walked the table upward forever, and under `LOFT_STRICT_STORES`
+        // (which keeps `max` trimmed by never recycling) it exhausted all 65535
+        // slots.  Same rule as `database_named`'s `find_free_slot`: reuse below
+        // the watermark, else take the watermark, else grow.
+        let store_nr = chosen.unwrap_or(self.max);
+        if (store_nr as usize) < self.allocations.len() {
+            self.allocations[store_nr as usize] = store;
         } else {
+            while self.allocations.len() < store_nr as usize {
+                self.allocations.push(Store::new_freed_sentinel());
+            }
             self.allocations.push(store);
-            (self.allocations.len() - 1) as u16
-        };
+        }
         if store_nr >= self.max {
             self.max = store_nr + 1;
         }

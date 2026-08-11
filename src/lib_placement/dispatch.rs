@@ -507,6 +507,28 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
          destination nor a work buffer reached the dispatcher",
         placed.func
     );
+    // Where a compound answer will land, decided BEFORE either arena is bound.
+    //
+    // Not merely tidy: `stores.null()` takes the next store slot, so minting
+    // this while the arenas are registered puts it ABOVE them, and the slot
+    // watermark can then never come back down past a live store. Under
+    // `LOFT_STRICT_STORES` (where a released slot is deliberately never
+    // recycled) that grew the table by two slots per call and exhausted all
+    // 65535 of them after ~32k iterations — a loop that ran flat at four slots
+    // in-process. Minting first puts the answer BELOW the arenas, so releasing
+    // them lowers the watermark again.
+    //
+    // The caller offers one of exactly two destinations and neither is a null
+    // reference: a materialised record (which the result then borrows), or an
+    // empty placeholder store — in which case an in-process callee would mint
+    // its own and hand ownership over, so that is what happens here.
+    let compound_dest = match ret {
+        Kind::Compound(tp) => Some(match ret_buf {
+            Some(d) if super::arena::names_a_record(&d) => d,
+            _ => super::arena::mint_value(stores, tp),
+        }),
+        _ => None,
+    };
     // Build every compound argument in the arena. The `seen` map is not an
     // optimisation: `f(p, p)` passes ONE record twice in-process, so two arena
     // copies would give the callee two independent values and the copy-back
@@ -583,7 +605,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
         }
     }
 
-    finish_call(stores, stack, ret, out, text_dest, work_buf, ret_buf);
+    finish_call(stores, stack, ret, out, text_dest, work_buf, compound_dest);
     worker.arg_arena().unbind(stores, arg_nr);
     worker.ret_arena().unbind(stores, ret_nr);
     // The lock is held across the crossing on purpose (see `PLACEMENT`), but a
@@ -601,7 +623,7 @@ fn finish_call(
     out: Result<Value, String>,
     text_dest: Option<DbRef>,
     work_buf: Option<DbRef>,
-    ret_buf: Option<DbRef>,
+    compound_dest: Option<DbRef>,
 ) {
     match out {
         Ok(v) => match (ret, v) {
@@ -644,10 +666,7 @@ fn finish_call(
             //     the callee mints its own store and hands ownership over, so mint
             //     one here and hand that over. The caller's `OpFreeRef` frees it.
             (Kind::Compound(tp), Value::Ref(src)) => {
-                let dest = match ret_buf {
-                    Some(d) if super::arena::names_a_record(&d) => d,
-                    _ => super::arena::mint_value(stores, tp),
-                };
+                let dest = compound_dest.expect("a compound return always has a destination");
                 if !src.is_null() {
                     super::arena::copy_value(stores, &dest, &src, tp);
                 }

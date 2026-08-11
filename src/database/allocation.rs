@@ -927,14 +927,7 @@ impl Stores {
         // S29: mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
         self.set_free_bit(al);
-        // Trim max when freeing the top slot(s) so that database_named() doesn't
-        // needlessly grow the allocations Vec when all top slots are free.
-        if al == self.max - 1 {
-            self.max -= 1;
-            while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
-                self.max -= 1;
-            }
-        }
+        self.trim_free_top(al);
         // P259 commit 4: cascade-free the captured-cell DbRefs collected
         // above.  Done AFTER the closure record's own free so that
         // a recursive cascade on a closure-record cell sees this slot
@@ -986,6 +979,32 @@ impl Stores {
     /// as scratch has to say so.  Pinned by `slot_recycling_tests`.
     pub(crate) fn release_slot(&mut self, slot: u16) {
         self.set_free_bit(slot);
+        self.trim_free_top(slot);
+    }
+
+    /// Bring `max` back down when `slot` was the top one and is now free.
+    ///
+    /// `max` is the watermark `database_named` grows the table from, so a slot
+    /// released at the top has to lower it or the table only ever climbs. The
+    /// walk continues downward because several top slots can be free at once —
+    /// a call that borrowed two of them (@PLN119's call arena) releases them one
+    /// at a time, and stopping after the first would leave the other stranded
+    /// above the mark.
+    ///
+    /// Ordinarily invisible: the free bitmap hands a released slot straight back,
+    /// so a table that never came down still allocated nothing extra. It becomes
+    /// load-bearing under `LOFT_NO_SLOT_REUSE` / `LOFT_STRICT_STORES`, where a
+    /// released slot is deliberately never recycled and `max` is the ONLY thing
+    /// that can come down — without this, a loop calling a placed library ran out
+    /// of the 65535 store slots after ~32k iterations while the same loop
+    /// in-process sat flat at four.
+    fn trim_free_top(&mut self, slot: u16) {
+        if self.max > 0 && slot == self.max - 1 {
+            self.max -= 1;
+            while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
+                self.max -= 1;
+            }
+        }
     }
 
     /// S29: Clear bit `slot` in `free_bits` (slot is now active).

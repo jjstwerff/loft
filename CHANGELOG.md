@@ -247,6 +247,38 @@ Add `?? ""` where the distinction does not matter. The stderr warning that names
 both readers now appears under `--native` too; it used to be printed only by the
 interpreter, so the compiled build read binary in silence.
 
+### A library can run in its own process, and you cannot tell from the code
+
+A library adds one line to its own `loft.toml`:
+
+```toml
+[library]
+placement = "process"
+```
+
+and its consumers do not change — the same `use`, the same typed calls, the same
+values back. What changes is containment: a crash inside the library ends the
+call as a loft error instead of taking the program's data with it.
+
+Structs and vectors cross too, in both directions and at any depth — a `text`
+field, a struct inside a struct, `vector<text>`, `vector<vector<T>>`. They are
+not encoded into some second format on the way; they cross as themselves, in a
+store both processes map. That is why a bigger value is not proportionally more
+expensive to pass: a sixteen-element vector costs a fifth of a microsecond more
+than a two-field struct, and a four-thousand-element one adds nothing you can
+measure.
+
+Passing by reference keeps meaning what it means. A library function that writes
+to a struct parameter, or appends to a vector one, changes the caller's
+value — placed or not. Passing the same value twice stays one value.
+
+A call that leaves the process costs around a microsecond, so this is for
+libraries you call to do real work, not for a getter inside a loop. It is Linux
+only, and it does not apply under `--native`, which compiles the library into
+your binary; in both cases the library simply runs in-process, which is the same
+program without the isolation. Set `LOFT_REQUIRE_PLACEMENT=1` if you would rather
+be told than quietly lose it.
+
 ### A library whose native build cannot be used runs interpreted
 
 `use <lib>` compiles a library to a native cdylib behind your back, and the deal
