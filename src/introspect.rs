@@ -890,27 +890,30 @@ fn emit_ownership(
                 vars.name(store)
             )?;
         }
-        // @PLN103 P1.5 — delivery lens: the delivery OUTCOME for a heap (vector/reference)
-        // return, read from `def.returned`'s deps on the COMMITTED IR — `["__retbuf"]` (a
-        // synth buffer) = MATERIALISED into the return buffer, `[arg]` = a borrowed VIEW
-        // returned, empty = OWNED fresh store. (Read from the return type, so it is robust;
-        // a per-arm walk of the delivered IR was tried and dropped — post-synthesis the arm
-        // structure is rewritten, so per-arm `ownership_of` is misleading. The per-arm
-        // delivery target needs the parser to PERSIST its `Delivery` verdict — a later step.)
-        if let Some(deps) = def.returned.heap_dep() {
-            let note = if deps.is_empty() {
-                "owned (fresh store)".to_string()
-            } else if deps
-                .iter()
-                .any(|&d| d != u16::MAX && crate::use_analysis::is_synth_buffer(vars.name(d)))
-            {
-                "materialised → return buffer".to_string()
-            } else {
-                let names: Vec<&str> = deps
-                    .iter()
-                    .map(|&d| if d == u16::MAX { "?" } else { vars.name(d) })
-                    .collect();
-                format!("borrows {} (view returned)", names.join(", "))
+        // @PLN103 P1.5 — the delivery lens: WHO frees the storage a heap return
+        // names.  The verdict itself lives in `use_analysis::heap_return_delivery`,
+        // because @PLN119 decides from the same three-way whether a library
+        // function can be placed at all, and an overlay that said something else
+        // would be describing a different program.
+        let delivery = crate::use_analysis::heap_return_delivery(data, d_nr);
+        if delivery != crate::use_analysis::HeapDelivery::NotHeap {
+            let note = match delivery {
+                crate::use_analysis::HeapDelivery::Owned => "owned (fresh store)".to_string(),
+                crate::use_analysis::HeapDelivery::RetBuf => {
+                    "materialised → return buffer".to_string()
+                }
+                _ => {
+                    let names: Vec<&str> = def
+                        .returned
+                        .heap_dep()
+                        .map(|deps| {
+                            deps.iter()
+                                .map(|&d| if d == u16::MAX { "?" } else { vars.name(d) })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    format!("borrows {} (view returned)", names.join(", "))
+                }
             };
             writeln!(w, "  delivery: {}  — {note}", def.returned.show(data, vars))?;
         }

@@ -2107,6 +2107,61 @@ pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
     Ownership::new(data).return_ownership(d_nr)
 }
 
+/// @PLN103 P1.5 — how a function DELIVERS a heap (vector / reference) return, and
+/// therefore **who frees the storage it names**.
+///
+/// The three answers are genuinely different obligations, and reading them as two
+/// is how storage goes missing or gets freed twice:
+///
+/// * [`Owned`](HeapDelivery::Owned) — a fresh store the callee minted and hands
+///   over. The CALLER frees it.
+/// * [`RetBuf`](HeapDelivery::RetBuf) — written into the hidden buffer the caller
+///   supplied; the result borrows that buffer, which the caller already owns.
+/// * [`View`](HeapDelivery::View) — a view of something the callee did not create:
+///   an argument, or its own long-lived state. Nobody frees it on the caller's
+///   behalf, because there is nothing new to free.
+///
+/// Read from the return type's deps on the COMMITTED IR, which is robust: a
+/// per-arm walk of the delivered IR was tried and dropped, because post-synthesis
+/// the arm structure is rewritten and per-arm `ownership_of` then misleads.
+///
+/// One home because the answers are consumed far apart — the `--show-ownership`
+/// overlay renders it, and @PLN119 decides from it whether a library function can
+/// be placed at all. A placed `View` return would hand the caller a copy it never
+/// frees (a leak) where in-process it gets a borrow it correctly ignores.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeapDelivery {
+    /// Not a heap return (a scalar, text, or void).
+    NotHeap,
+    /// A fresh store the callee owns and hands over; the caller frees it.
+    Owned,
+    /// Materialised into the caller-supplied return buffer.
+    RetBuf,
+    /// A borrowed view of an argument or of the callee's own state.
+    View,
+}
+
+/// See [`HeapDelivery`].
+#[must_use]
+pub fn heap_return_delivery(data: &Data, d_nr: u32) -> HeapDelivery {
+    let def = data.def(d_nr);
+    let Some(deps) = def.returned.heap_dep() else {
+        return HeapDelivery::NotHeap;
+    };
+    if deps.is_empty() {
+        return HeapDelivery::Owned;
+    }
+    let vars = &def.variables;
+    if deps
+        .iter()
+        .any(|&d| d != u16::MAX && is_synth_buffer(vars.name(d)))
+    {
+        HeapDelivery::RetBuf
+    } else {
+        HeapDelivery::View
+    }
+}
+
 /// @PLN104 — the loft#568 interpreter-orphan predicate, in ONE place so the promotion
 /// oracle (`report_tret_promotions`) and the `--show-ownership` overlay name the same
 /// class.  Returns the risk kind when a text-returning fn hands owned text back BY VALUE:

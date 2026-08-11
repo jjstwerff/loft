@@ -883,6 +883,13 @@ can return "one of them". `sql.loft`'s own header states this as the reason the
 cursor is state ON the connection rather than a second type the connection
 returns; it applied to the registry too.
 
+> **Half of that has since changed.** @PLN125 arc A gave interfaces associated
+> types, and @PLN138 moved the cursor onto one — so `sql.loft` no longer says
+> what is quoted above, and a connection yields as many cursors as a caller
+> wants. The registry's half stands: `AnyDb` is still an enum, because choosing
+> an implementation at RUN time is a different question from naming a companion
+> type at compile time. It gained an `AnyRows` beside it.
+
 Three shapes, and the choice was not free:
 
 1. **A struct-enum over the four backends** (`enum AnyDb { DbSqlite { sq: Sqlite }, … }`).

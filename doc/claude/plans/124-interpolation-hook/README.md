@@ -151,12 +151,13 @@ Each is a decision rather than an unfinished step, which is why this plan closes
 with them standing:
 
 - **A boxed value type** collapsing the per-kind `hole_*` methods into one needs
-  a GENERIC METHOD (`fn hole<T>(self: Self, v: T)`), which is **@PLN137** — not
-  @PLN125 arc A as first recorded. Arc A shipped associated types and they turn
-  out not to reach this: a type variable must still appear in the first
-  parameter, so the collapse waits on that restriction lifting. The per-kind form
-  was chosen first precisely because it can be collapsed later without changing
-  what the author writes.
+  a GENERIC METHOD (`fn hole<T>(self: Self, v: T)`) — not @PLN125 arc A as first
+  recorded; arc A shipped associated types and they do not reach this. It was
+  filed as @PLN137 and is now **DECLINED** (C110): a generic method accepts every
+  type by construction, which deletes the per-kind opt-in that makes this plan's
+  own refusal auditable. The per-kind form was chosen first because it could be
+  collapsed later; the evaluation found that collapsing it would cost the safety
+  property, so it stays.
 - **Specs on holes** are refused rather than delivered; if a target ever wants
   them, they have to reach the hole as data, not as a rendering.
 - **A procedural body** on the two backends that could carry one — refused

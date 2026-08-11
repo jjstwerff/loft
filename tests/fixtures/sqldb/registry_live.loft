@@ -42,15 +42,17 @@ struct Person {
 fn read_names <D: SqlDb> (d: D) -> text {
   out = "";
   q: SqlText = "SELECT nm FROM person WHERE id >= {0} ORDER BY id";
-  if !d.db_rows(q) { return "FAIL rows {d.db_last_error()}" }
-  while d.db_next() { out += "{d.db_col(0) ?? "?"} " }
+  r = d.db_rows(q);
+  if !r.ok() { return "FAIL rows {d.db_last_error()}" }
+  while r.next() { out += "{r.col(0) ?? "?"} " }
   return out.trim();
 }
 
 fn count_rows <D: SqlDb> (d: D) -> integer {
   n = 0;
-  if !d.db_select("SELECT id FROM person") { return -1 }
-  while d.db_next() { n += 1 }
+  r = d.db_select("SELECT id FROM person");
+  if !r.ok() { return -1 }
+  while r.next() { n += 1 }
   return n;
 }
 
@@ -130,12 +132,14 @@ fn main() {
   upd: SqlText = "UPDATE person SET score = {hard} WHERE id = {0}";
   if !d.db_run(upd) { println("FAIL update: {d.db_last_error()}"); return }
   naive = 0.0;
-  if d.db_select("SELECT score FROM person WHERE id = 0") {
-    while d.db_next() { naive = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+  rn = d.db_select("SELECT score FROM person WHERE id = 0");
+  if rn.ok() {
+    while rn.next() { naive = ((rn.col(0) ?? "") as float?) ?? 0.0 }
   }
   exact = 0.0;
-  if d.db_select("SELECT {dial.float_read("score")} FROM person WHERE id = 0") {
-    while d.db_next() { exact = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+  rx = d.db_select("SELECT {dial.float_read("score")} FROM person WHERE id = 0");
+  if rx.ok() {
+    while rx.next() { exact = ((rx.col(0) ?? "") as float?) ?? 0.0 }
   }
   println("float naive={naive == hard} dialect={exact == hard}");
 

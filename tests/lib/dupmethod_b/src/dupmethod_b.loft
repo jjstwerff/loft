@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 regression fixture — package B, the twin of `dupmethod_a`.
+//
+// Same struct NAME, different struct: `go` here is a METHOD (`self:`), and its
+// receiver is B's `Thing`, never A's. A call passing A's `Thing` must not reach
+// it, and a call passing B's must.
+pub struct Thing { tx: integer }
+
+pub fn make_b(v: integer) -> Thing { Thing { tx: v } }
+
+pub fn go(self: Thing, k: integer) -> integer { self.tx + k + 200 }
+
+pub fn stretch(self: Thing, k: integer) -> integer { self.tx + k + 200 }

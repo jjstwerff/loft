@@ -133,3 +133,5 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@I87](I87.md) | Auto-use / lazy library triggers |
 | [@I90](I90.md) | Shared utilities & data structures |
 | [@I91](I91.md) | Editor tooling: language server (LSP), debug adapter (DAP), resolution index |
+| [@I116](I116.md) | Library placement — in-process, a worker, or another machine |
+| [@I117](I117.md) | Git query natives — a repository as a typed library, not a subprocess |

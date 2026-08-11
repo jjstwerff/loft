@@ -44,14 +44,24 @@ fn lm_param_text(i: integer, s: text) -> integer; #c "lm_param_text" "int(int64_
 fn lm_param_int(i: integer, v: integer) -> integer; #c "lm_param_int" "int(int64_t, long long)"
 fn lm_param_null(i: integer) -> integer;       #c "lm_param_null" "int(int64_t)"
 fn lm_param_binds() -> integer;                #c "lm_param_binds" "void*(void)"
-fn lm_result_reset(n: integer) -> integer;     #c "lm_result_reset" "int(int64_t)"
-fn lm_result_binds() -> integer;               #c "lm_result_binds" "void*(void)"
-fn lm_result_is_null(i: integer) -> integer;   #c "lm_result_is_null" "int(int64_t)"
-fn lm_result_len(i: integer) -> integer;       #c "lm_result_len" "int64_t(int64_t)"
-fn lm_result_cap(i: integer) -> integer;       #c "lm_result_cap" "int64_t(int64_t)"
-fn lm_result_grow(i: integer, need: integer) -> integer;
-#c "lm_result_grow" "void*(int64_t, int64_t)"
-fn lm_result_text(i: integer) -> text?;        #c "lm_result_text" "const char*(int64_t)"
+// @PLN138 — a result bind SET per cursor. `lm_result_open` answers a handle
+// (0 = none) and every accessor takes it, so two cursors cannot fetch into each
+// other's buffers. The parameter array above stays single: a parameter's life is
+// bind → execute, and `mysql_stmt_store_result` has buffered every row before
+// the next statement is prepared.
+fn lm_result_open(n: integer) -> integer;      #c "lm_result_open" "int64_t(int64_t)"
+fn lm_result_close(h: integer);                #c "lm_result_close" "void(int64_t)"
+fn lm_result_binds(h: integer) -> integer;     #c "lm_result_binds" "void*(int64_t)"
+fn lm_result_is_null(h: integer, i: integer) -> integer;
+#c "lm_result_is_null" "int(int64_t, int64_t)"
+fn lm_result_len(h: integer, i: integer) -> integer;
+#c "lm_result_len" "int64_t(int64_t, int64_t)"
+fn lm_result_cap(h: integer, i: integer) -> integer;
+#c "lm_result_cap" "int64_t(int64_t, int64_t)"
+fn lm_result_grow(h: integer, i: integer, need: integer) -> integer;
+#c "lm_result_grow" "void*(int64_t, int64_t, int64_t)"
+fn lm_result_text(h: integer, i: integer) -> text?;
+#c "lm_result_text" "const char*(int64_t, int64_t)"
 
 // Each backend reads `target` in its OWN dialect — sqlite a path, libpq a
 // conninfo string, and this one `key=value` pairs — which is what a uniform API
@@ -69,22 +79,108 @@ fn opt(target: text, key: text, fallback: text) -> text {
   return v;
 }
 
-// `res`/`row` are the text-protocol cursor; `ps`/`cols` are the prepared one.
-// `from_ps` says which the cursor methods are reading, so the two result models
-// stay one cursor from the outside.
-pub struct Maria {
-  conn: integer,
+// --- the cursor (@PLN138) ---------------------------------------------------
+//
+// mariadb is the backend with TWO result models, and the cursor is where they
+// meet: `res`/`row` is the text protocol (`mysql_query` + `mysql_store_result`),
+// `ps`/`set` is the prepared one (`mysql_stmt_*` reading into a bind array).
+// `from_ps` says which this cursor is, so the two stay one type from the
+// outside — the same job the flag did on the connection, now scoped to the one
+// thing it describes.
+//
+// `set` is the handle to this cursor's OWN result binds. It is what let the
+// prepared path become per-cursor at all: the shim used to own a single array,
+// and a second `db_rows` would have rebound the buffers the first was still
+// fetching into.
+pub struct MariaRows {
   res: integer,
   row: integer,
   ps: integer,
-  cols: integer,
+  set: integer,
+  w: integer,
   from_ps: boolean,
+  good: boolean,
+}
+
+pub fn ok(self: MariaRows) -> boolean { return self.good; }
+
+pub fn next(self: MariaRows) -> boolean {
+  if self.from_ps {
+    if self.ps == 0 { return false }
+    r = my_stmt_fetch(self.ps);
+    // 0 = a row. 101 = MYSQL_DATA_TRUNCATED, which is ALSO a row: a column did
+    // not fit its buffer, and `col` re-fetches that one at its true length.
+    if r == 0 || r == 101 { return true }
+    self.close();
+    return false
+  }
+  if self.res == 0 { return false }
+  self.row = my_fetch(self.res);
+  if self.row != 0 { return true }
+  self.close();
+  return false;
+}
+
+// Two sources: a plain result row reads the column directly, a prepared
+// statement reads it out of this cursor's own bound result buffer.
+pub fn col(self: MariaRows, i: integer) -> text? {
+  if !self.from_ps {
+    if self.row == 0 { return null }
+    return my_col(self.row, i)
+  }
+  if self.set == 0 { return null }
+  if lm_result_is_null(self.set, i) != 0 { return null }
+  // The library reports the value's TRUE length even when it did not fit, so
+  // a longer-than-buffer column is re-fetched at exactly its own size rather
+  // than silently returning a prefix.
+  need = lm_result_len(self.set, i);
+  if need > lm_result_cap(self.set, i) {
+    b = lm_result_grow(self.set, i, need);
+    if b == 0 { return null }
+    if my_stmt_fetch_column(self.ps, b, i, 0) != 0 { return null }
+  }
+  return lm_result_text(self.set, i);
+}
+
+// Read at open and kept, so it still answers after the walk ends.
+pub fn width(self: MariaRows) -> integer { return self.w; }
+
+// Idempotent, and it releases every resource this cursor owns — the statement
+// and its bind set on the prepared path, the stored result on the text one.
+// Called by exhaustion AND by the scope end, so it must be safe twice.
+pub fn close(self: MariaRows) {
+  if self.ps != 0 {
+    _ = my_stmt_free_result(self.ps);
+    _ = my_stmt_close(self.ps);
+    self.ps = 0;
+  }
+  if self.set != 0 { lm_result_close(self.set); self.set = 0 }
+  if self.res != 0 { my_free(self.res); self.res = 0 }
+  self.row = 0;
+  self.from_ps = false;
+}
+
+fn OpDrop(self: MariaRows) { self.close(); }
+
+// The handle has been carried into a container; do not release it here.
+//
+// A struct field COPIES at construction and the copy is INDEPENDENT — so
+// wrapping a cursor leaves two records holding one `MYSQL_STMT * / MYSQL_RES *`, and the source's
+// scope end would release it while the container is still reading through it.
+// loft has no move, so the transfer is spelled out: the container owns it, and
+// this makes the source's drop a no-op. Nothing is released — that is the whole
+// point, and it is why this is not `close`.
+pub fn disown(self: MariaRows) { self.ps = 0; self.set = 0; self.res = 0; }
+
+// The connection holds no cursor state now.
+pub struct Maria {
+  conn: integer,
   err: text,
   tx: Tx,
 }
 
 pub fn maria() -> Maria {
-  return Maria { conn: 0, res: 0, row: 0, ps: 0, cols: 0, from_ps: false, err: "", tx: tx_new() };
+  return Maria { conn: 0, err: "", tx: tx_new() };
 }
 
 // The soname exactly as `[c] optional-libs` spells it — the availability query
@@ -124,68 +220,40 @@ pub fn db_exec(self: Maria, sql: text) -> boolean {
   return my_query(self.conn, sql) == 0;
 }
 
-pub fn db_select(self: Maria, sql: text) -> boolean {
+// The cursor is constructed HERE rather than in a shared helper (loft#847).
+pub fn db_select(self: Maria, sql: text) -> MariaRows {
   // The `db_exec`/`db_select` contract is "author-written SQL with no values in
   // it".  A value written INTO the text is neither bound nor protected, and a
   // long digit run is the shape that says one was (`sql::inline_value_fault`).
   why = inline_value_fault(sql);
-  if why != null { self.err = why ?? ""; return false }
-  if my_query(self.conn, sql) != 0 { return false }
-  self.res = my_store(self.conn);
-  return self.res != 0;
-}
-
-pub fn db_next(self: Maria) -> boolean {
-  if self.from_ps {
-    r = my_stmt_fetch(self.ps);
-    // 0 = a row. 101 = MYSQL_DATA_TRUNCATED, which is ALSO a row: a column did
-    // not fit its buffer, and `db_col` re-fetches that one at its true length.
-    if r == 0 || r == 101 { return true }
-    _ = my_stmt_free_result(self.ps);
-    self.from_ps = false;
-    return false
+  if why != null {
+    self.err = why ?? "";
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
   }
-  if self.res == 0 { return false }
-  self.row = my_fetch(self.res);
-  if self.row != 0 { return true }
-  my_free(self.res);
-  self.res = 0;
-  return false;
-}
-
-// Two sources: a plain result row reads the column directly, a prepared
-// statement reads it out of the bound result buffer.
-pub fn db_col(self: Maria, i: integer) -> text? {
-  if !self.from_ps { return my_col(self.row, i) }
-  if lm_result_is_null(i) != 0 { return null }
-  // The library reports the value's TRUE length even when it did not fit, so
-  // a longer-than-buffer column is re-fetched at exactly its own size rather
-  // than silently returning a prefix.
-  need = lm_result_len(i);
-  if need > lm_result_cap(i) {
-    b = lm_result_grow(i, need);
-    if b == 0 { return null }
-    if my_stmt_fetch_column(self.ps, b, i, 0) != 0 { return null }
+  if my_query(self.conn, sql) != 0 {
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
   }
-  return lm_result_text(i);
-}
-
-pub fn db_width(self: Maria) -> integer {
-  if self.from_ps { return self.cols }
-  return my_nfields(self.res);
+  res = my_store(self.conn);
+  if res == 0 {
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
+  }
+  return MariaRows { res: res, row: 0, ps: 0, set: 0, w: my_nfields(res),
+                     from_ps: false, good: true };
 }
 
 pub fn db_last_error(self: Maria) -> text {
   if self.err != "" { return self.err }
+  // A closed connection has nothing to ask.
+  if self.conn == 0 { return "" }
   return my_error(self.conn);
 }
 
 // --- S4: prepare, bind, execute ---------------------------------------------
 
-fn release(self: Maria) {
-  if self.from_ps { self.from_ps = false }
-  if self.ps != 0 { _ = my_stmt_close(self.ps); self.ps = 0 }
-}
+// These answer with the STATEMENT HANDLE, `0` for a failure, rather than storing
+// it on the connection. The handle is what the caller then owns — a cursor keeps
+// it, a one-shot run closes it — which is what removes the connection's `ps`
+// slot and with it the `release` that had to guess whose statement it was.
 
 // Compile the statement and fill the parameter MYSQL_BIND array.
 //
@@ -197,51 +265,66 @@ fn release(self: Maria) {
 // — mariadb reads a double-quoted name as a string literal unless the server is
 // in `ANSI_QUOTES` mode — which is why the quote is chosen at assembly time by
 // the backend rather than baked in when the hole was filled.
-fn prepare_bind(self: Maria, q: SqlText) -> boolean {
+fn prepare_bind(self: Maria, q: SqlText) -> integer {
   sql = q.statement(SQL_QMARK, "`");
-  if sql == null { self.err = "an identifier was refused"; return false }
+  if sql == null { self.err = "an identifier was refused"; return 0 }
   return self.prepare_text(sql, q);
 }
 
 // The same prepare-and-bind, given the statement TEXT rather than deriving it —
 // which is what a CALL has: its name and arity come from the procedure, and its
 // values arrive beside them.
-fn prepare_text(self: Maria, sql: text, q: SqlText) -> boolean {
+//
+// A statement that fails part-way is CLOSED here rather than handed back: it is
+// this function's, and there is no connection slot left to leave it in.
+fn prepare_text(self: Maria, sql: text, q: SqlText) -> integer {
   self.err = "";
-  self.release();
-  self.ps = my_stmt_init(self.conn);
-  if self.ps == 0 { self.err = "cannot allocate a statement"; return false }
-  if my_stmt_prepare(self.ps, sql, size(sql)) != 0 {
-    self.err = my_stmt_error(self.ps);
-    return false
+  st = my_stmt_init(self.conn);
+  if st == 0 { self.err = "cannot allocate a statement"; return 0 }
+  if my_stmt_prepare(st, sql, size(sql)) != 0 {
+    self.err = my_stmt_error(st);
+    _ = my_stmt_close(st);
+    return 0
   }
   // The driver's own count, against the one the parser produced.
-  np = my_stmt_param_count(self.ps);
+  np = my_stmt_param_count(st);
   if np != q.params() {
     self.err = "statement wants {np} parameters, {q.params()} were interpolated";
-    return false
+    _ = my_stmt_close(st);
+    return 0
   }
-  if lm_param_reset(np) == 0 { self.err = "no memory for parameters"; return false }
+  if lm_param_reset(np) == 0 {
+    self.err = "no memory for parameters";
+    _ = my_stmt_close(st);
+    return 0
+  }
   for b in q.binds {
     at = b#count;
     ok = if b.kind == SQL_NULL { lm_param_null(at) }
       else if b.kind == SQL_INT { lm_param_int(at, b.i) }
       else if b.kind == SQL_BOOLEAN { lm_param_int(at, b.i) }
       else { lm_param_text(at, b.as_text()) };
-    if ok == 0 { self.err = "binding parameter {at} failed"; return false }
+    if ok == 0 {
+      self.err = "binding parameter {at} failed";
+      _ = my_stmt_close(st);
+      return 0
+    }
   }
-  if np > 0 && my_stmt_bind_param(self.ps, lm_param_binds()) != 0 {
-    self.err = my_stmt_error(self.ps);
-    return false
+  if np > 0 && my_stmt_bind_param(st, lm_param_binds()) != 0 {
+    self.err = my_stmt_error(st);
+    _ = my_stmt_close(st);
+    return 0
   }
-  return true;
+  return st;
 }
 
 pub fn db_run(self: Maria, q: SqlText) -> boolean {
-  if !self.prepare_bind(q) { return false }
-  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
-  self.release();
-  return true;
+  st = self.prepare_bind(q);
+  if st == 0 { return false }
+  ok = my_stmt_execute(st) == 0;
+  if !ok { self.err = my_stmt_error(st) }
+  _ = my_stmt_close(st);
+  return ok;
 }
 
 // --- H7: procedures, in the server's catalogue --------------------------------
@@ -277,26 +360,52 @@ pub fn db_call(self: Maria, p: SqlProc, args: SqlText) -> boolean {
   // Through a LOCAL: a text returned across a package boundary is empty if it is
   // consumed where it is produced (loft#773).
   call = p.proc_call_sql(SQL_QMARK, "`");
-  if !self.prepare_text(call, args) { return false }
-  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
-  self.release();
-  return true;
+  st = self.prepare_text(call, args);
+  if st == 0 { return false }
+  ok = my_stmt_execute(st) == 0;
+  if !ok { self.err = my_stmt_error(st) }
+  _ = my_stmt_close(st);
+  return ok;
 }
 
-pub fn db_rows(self: Maria, q: SqlText) -> boolean {
-  if !self.prepare_bind(q) { return false }
-  if my_stmt_execute(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
-  self.cols = my_stmt_field_count(self.ps);
-  // Every column is bound as a string, so the conversion is the library's job
-  // and `db_col` keeps its one answer: text, or null.
-  if lm_result_reset(self.cols) == 0 { self.err = "no memory for the result"; return false }
-  if self.cols > 0 && my_stmt_bind_result(self.ps, lm_result_binds()) != 0 {
-    self.err = my_stmt_error(self.ps);
-    return false
+// The cursor takes ownership of the statement AND of its own bind set. Every
+// failure path closes both before answering — a half-built cursor is not handed
+// out, because nothing downstream would know to release it.
+//
+// Constructed inline rather than through a helper (loft#847).
+pub fn db_rows(self: Maria, q: SqlText) -> MariaRows {
+  st = self.prepare_bind(q);
+  if st == 0 {
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
   }
-  if my_stmt_store_result(self.ps) != 0 { self.err = my_stmt_error(self.ps); return false }
-  self.from_ps = true;
-  return true;
+  if my_stmt_execute(st) != 0 {
+    self.err = my_stmt_error(st);
+    _ = my_stmt_close(st);
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
+  }
+  cols = my_stmt_field_count(st);
+  // Every column is bound as a string, so the conversion is the library's job
+  // and `col` keeps its one answer: text, or null.
+  set = lm_result_open(cols);
+  if set == 0 {
+    self.err = "no memory for the result";
+    _ = my_stmt_close(st);
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
+  }
+  if cols > 0 && my_stmt_bind_result(st, lm_result_binds(set)) != 0 {
+    self.err = my_stmt_error(st);
+    lm_result_close(set);
+    _ = my_stmt_close(st);
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
+  }
+  if my_stmt_store_result(st) != 0 {
+    self.err = my_stmt_error(st);
+    lm_result_close(set);
+    _ = my_stmt_close(st);
+    return MariaRows { res: 0, row: 0, ps: 0, set: 0, w: 0, from_ps: false, good: false }
+  }
+  return MariaRows { res: 0, row: 0, ps: st, set: set, w: cols,
+                     from_ps: true, good: true };
 }
 
 // --- T1–T3: transactions ----------------------------------------------------
@@ -307,8 +416,8 @@ pub fn db_begin(self: Maria) -> boolean { return tx_begin(self, self.tx, "BEGIN"
 pub fn db_commit(self: Maria) -> boolean { return tx_commit(self, self.tx); }
 pub fn db_rollback(self: Maria) -> boolean { return tx_rollback(self, self.tx); }
 
+// Every statement and every stored result belongs to a cursor, and each closes
+// its own — so shutting a connection no longer has to know what is in flight.
 pub fn db_shut(self: Maria) {
-  self.release();
-  if self.res != 0 { my_free(self.res); self.res = 0; }
   if self.conn != 0 { my_close(self.conn); self.conn = 0; }
 }

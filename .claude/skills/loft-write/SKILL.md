@@ -750,13 +750,16 @@ Use `_` for an unused loop variable to keep the build warning-clean.
   `float`, `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`,
   `index`, `radix`, `spatial`, `iterator`, `i8`/`i16`/`i32`, `u8`/`u16`/`u32`,
   `reference`.  This holds for `struct`, `enum`, and `type` alike.
-- **A few builtin names break as a local variable name** — the literal `null`
-  (`Not implemented operation = for type null`), the special `ticks`
-  (`Cannot redefine function 'ticks' as a variable`), and the higher-order method
-  names `map`/`filter`/`reduce` (a local of that name derails the later
-  `v.map(x => …)` lambda parse → `Expect token )`).  Most builtins are safe as
-  variable names — `len`, `round`, `rev`, and `sorted` (as a value) all work — but
-  distinct, descriptive names sidestep the question entirely.
+- **A function's name is free as a local** (loft#852).  Values and functions are
+  separate namespaces: `chr = 65` binds a local and `chr(65)` in the same scope
+  still calls the function.  True for every binding form — assignment, the typed
+  local, a tuple element, a parameter, a `for` variable, a struct field — and for
+  library functions as much as stdlib ones, which is what stops a library's new
+  `pub fn` from taking a word away from its consumers.
+- **Two builtin names still break as a local variable name** — the literal `null`
+  (`Not implemented operation = for type null`), and the higher-order method names
+  `map`/`filter`/`reduce` (a local of that name derails the later `v.map(x => …)`
+  lambda parse → `Expect token )`).  Distinct, descriptive names sidestep both.
 
 ---
 

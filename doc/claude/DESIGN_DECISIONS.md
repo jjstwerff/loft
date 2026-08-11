@@ -3065,3 +3065,220 @@ can just be correct.  That is the trade C107 had already declined for arguments.
   function type and index list disagree transmutes to the wrong arity with nothing to catch it.
 - **Revisit when** someone needs a float argument badly enough to pay for an SSE-aware ladder;
   it moves for both backends at once, as C106 requires.
+
+---
+
+## C110 — a generic's type variable stays in the FIRST parameter, and a keyed collection stays a record set
+
+**Catalogue:** @F26 (interfaces & bounded generics) · @F94 (type-directed interpolation)
+
+### Context
+
+Two proposals arrived together and were evaluated together, because they had been filed as one
+plan (@PLN137). They are not one feature, and separating them is most of the answer.
+
+**(a) A type variable outside the first parameter.** `fn hole<T>(self: Acc, v: T)` — a generic
+METHOD, whose receiver is concrete and whose type variable is an argument — is refused today:
+
+```
+Type variable T must appear in the first parameter — move T to the first parameter position
+```
+
+**(b) Multiple type variables**, for a freer keyed type such as `hash<K, V>` or `sorted<K, V>`.
+loft does not parse `<A, B>` at all.
+
+Filing them together implied that lifting (a) moves toward (b). It does not: (a) is about which
+POSITION a single type variable may occupy, (b) is about how MANY there may be.
+
+### Evaluation
+
+**The first-parameter rule is the monomorph's identity, not a parser convenience.** A monomorph
+is named `t_<LEN><Type>_<fn>` from the FIRST argument's type, and that name is load-bearing in
+four places: `find_fn` locates a method by it, native emits it as the symbol, `original_name`
+parses it back, and the H5 two-pass guard recognises a legal lazy bound stub by it. Lifting the
+rule means the name must encode a second type and every back-parsing site follows. C95 already
+anticipated this ("when mangling extends beyond the first parameter, this predicate follows it
+automatically"), so the cost is understood — it has simply never been worth paying.
+
+**The sole named consumer would be HARMED by (a).** @PLN125's A4 wanted the generic `hole<T>` to
+collapse @PLN124's `hole_text` / `hole_int` / `hole_sql_ident` / … family. But the per-kind form
+is a safety REFUSAL rather than an accident: *"a kind the target does not define is a compile
+error naming the method to add — never a quiet fall back to text, which would put a value back on
+the path this exists to close"*. A generic `hole<T>` accepts every type by construction, which
+deletes the per-kind opt-in that makes "nothing but `lit` reaches SQL syntax" auditable. The
+feature's only justification is a regression in the property @PLN124 was built to guarantee.
+
+**(b) is a missing SPELLING, not a missing capability, and the existing spelling is better.** A
+keyed collection is already a dictionary — `hash<Count[word]>` over `struct Count { word: text, n:
+integer }` IS `hash<text, integer>`, measured. And the record-set model beats `hash<K, V>` on
+three counts:
+
+- the value CARRIES its own key, so the two cannot desync — `hash<K, V>` permits
+  `h["a"] = Count { word: "b", … }` and nothing objects;
+- a compound key is `[c, t]` by field NAME, not a tuple whose element order must be remembered;
+- it is the SAME model across `hash` / `sorted` / `index` / `trie` / `spatial` — one concept
+  behind five collections, per C99's uniform key-addressing.
+
+Adding `hash<K, V>` would give one idea two spellings, which is the shape C103 already
+refused for type names. The dominant real use — a keyed collection as an INDEX
+into a store, pointing at records that hold their own key — is exactly what the record set is for.
+
+### Decision
+
+- **Closed 2026-08-11.** A generic's type variable stays in the first parameter, and keyed
+  collections stay record sets keyed on a named field. @PLN137 is closed as declined.
+- **The two halves are separable and stay separate.** A future case for multi-parameter generics
+  must argue for itself; it does not ride in on generic methods, and neither rides in on
+  associated types (@PLN125 arc A shipped those and moved neither, which is what this entry
+  records so the conflation does not recur).
+- **The `hole_*` family stays per-kind**, and the ugliness is priced correctly: it is paid ONCE
+  per target type by a library author, never by a consumer, and it buys a compile error where a
+  generic method would silently accept.
+- **Revisit when** a consumer wants a generic method AND is not a safety-refusal surface — a
+  builder or accumulator that legitimately takes any renderable value — or when a
+  multi-parameter generic type has a use that a record set genuinely cannot express. New
+  evidence means a real consumer, not a shape that reads more familiar from another language.
+
+---
+
+## C111 — a drop cascade reaches a container's death, not an element's removal
+
+**Catalogue:** @F-drop (`OpDrop`, @PLN125 arc B) · loft#849
+
+### Context
+
+`OpDrop` runs where a value's own free runs. loft#849 is what happens when the value is put
+INSIDE something: a struct field, an enum payload, a collection element. A field COPIES at
+construction, so wrapping a droppable leaves two records holding one resource — and it is the
+SOURCE that drops, while the container's copy is never dropped at all.
+
+The answer chosen is **move-on-construction**: copying a droppable into a container transfers
+ownership, so the source no longer drops and the container's death drops what it owns. The
+refusal alternative (a type with `OpDrop` may not be a container member) was rejected because the
+sanctioned workaround — `disown` after constructing the container — REQUIRES the droppable to be
+a field, so a declaration-site refusal rejects its own cure, and with the collection case in
+scope it would have to cover `vector<T>` as well.
+
+That leaves one question, and it is a question about the GUARANTEE rather than the mechanism:
+which container deaths run the cascade?
+
+### Evaluation
+
+Every death site with a statically known type can be emitted: a named binding's scope end, a
+temp's, a nested field's, a collection's own scope end. One class cannot: an element that dies
+**without** its container dying — `v.remove(i)`, or `v[i] = x` overwriting the old element. Those
+release through the runtime store cascade (`free_named` walking DbRef fields), so running a drop
+there means the runtime calling back into user code — re-entering `State` for the interpreter and
+calling a generated symbol for `--native`.
+
+Two things argue against paying that:
+
+- **A drop cannot fail and cannot be observed by its caller** (the @PLN125 arc B contract), so a
+  drop invoked from inside a free has no way to report anything either. It would be the deepest
+  re-entrancy in the runtime for the least observable effect.
+- **The free cascade is the one path the heap invariant rests on** (priority #1). Making it call
+  user code — which can allocate, free, and reach the same store — puts arbitrary loft execution
+  inside the operation that maintains the invariant.
+
+The cost of NOT paying it is a partial guarantee, which for RAII is the uncomfortable kind: it
+looks like it works until someone removes an element. That is real, and it is why this is a
+register entry rather than a footnote — the boundary has to be stated where a reader will find
+it, not discovered.
+
+### Decision
+
+**Partial, 2026-08-11.** The cascade covers container deaths whose type is statically known at
+the death site. **Removing or overwriting a collection element does NOT run the element's drop**
+— the resource leaks and the program is otherwise correct. A droppable meant to be released on
+removal needs an explicit call (`v[i].close()` before the overwrite), the same way a resource
+whose owner closes inside the function body already does.
+
+The rule to state in the contract is therefore not "a drop always runs" but:
+
+> A drop runs when the value's OWNER dies. Taking a value out of its owner does not.
+
+### Revisit when
+
+A consumer meets it for real — a long-lived collection of live resources that is churned rather
+than dropped whole (a connection pool that evicts, a cache of open handles). That is the shape
+this boundary actually hurts, and none exists yet: @PLN138's registry wraps ONE cursor per
+backend and drops it whole. New evidence means such a consumer, not the observation that Rust's
+`Vec` drops its elements on `remove` — Rust can afford it because `Drop::drop` is an ordinary
+monomorphised call, not a re-entry into an interpreter.
+
+## C112 — a binding position mints a local whatever else carries that name; the function stays reachable as a call
+
+**Catalogue:** @F2 (operators) / modules + naming · [C98](#c98--)'s consumer-facing half · loft#852, loft#756
+
+### Question
+
+A library's public functions occupied the **consumer's variable namespace**. With `use engine_host;`
+in scope, `turn = 0` was a compile error anywhere in the consuming program — so adding one public
+verb to a library was a breaking change for every consumer that already used that word as a local.
+crawler's gate went red across 109 rows, on a commit crawler did not make, when `engine_host` gained
+`pub fn turn()`.
+
+[C97](#c97--) and [C98](#c98--) exist to make exactly this impossible for the *stdlib*: the stdlib may
+grow additively forever because a library's symbols are module-scoped. The question C98 left is the
+same hazard one level up, and it is worse there — a package ecosystem has no chokepoint weighing each
+new name, and nothing announces "this release claims the word `turn`".
+
+### Evaluation
+
+**The refusal was never a rule loft held.** It held in exactly three binding forms — `name = …`, the
+typed local `name: T = …`, and a tuple-destructuring element — all three of which route through one
+path, the bare-function-reference fallback in `parse_var`. The other three binding forms never
+refused, for the stdlib either:
+
+```loft
+for chr in 65..67 { chr(chr) }   // binds a local AND calls the function → "A", "B"
+fn go(chr: integer) -> text { chr(chr + 1) }
+struct S { chr: integer }
+```
+
+So loft already keeps **values and functions in separate namespaces**, and the parentheses already
+pick between them. The three refusing forms were not enforcing a namespace; they were reporting a
+parser-recovery problem (@P335/@P392: the function-ref left the `:` or `=` unconsumed and the author
+saw a confusing `Expect token ;`). Binding is what supplies the `Value::Var` that recovery wanted.
+
+The alternative — keep the refusal and let the consumer rename — is what crawler did, and it is a
+clean workaround for the instance. It is not an answer to the class: the cost lands on the consumer
+with no local change, and it is not available in advance. You find out which words are forbidden by
+compiling against each new library release.
+
+**This does not re-open [C95](#c95--).** C95 refuses a top-level *function definition* that a method
+would silently shadow, because that definition is dead code the author believes runs. A local binding
+is scoped to one function body, re-points no other call site, and is not silent — the author wrote
+the name. The three forms that never refused are the proof that the language already accepted that
+reasoning.
+
+### Decision
+
+- **A name at a binding position mints a local, whatever else carries that name.** All six binding
+  forms agree: assignment, the typed local, a tuple-destructuring element, a parameter, a `for`
+  variable, a struct field.
+- **The function stays reachable as a call in the same scope** — `chr = 65` beside `chr(65)` — and a
+  bare mention reads the local once one is bound. Parentheses pick the namespace.
+- **A library's new `pub fn` therefore cannot break a consumer's locals**, which is C97's guarantee
+  extended from the stdlib to packages, where the argument for it is stronger.
+- **Rejected:** keeping the refusal (makes every short verb a library exports a word its consumers
+  may not use, revoked on someone else's release); a diagnostic naming the collision instead (loft#756
+  earned that message, and #852's point is that the cost is not the message — there is nothing the
+  consumer can do in advance).
+- Implemented 2026-08-11 in `src/parser/objects.rs` (`parse_var`: the function-ref fallback yields at
+  a binding position; the pass-2 placeholder rescue beside it takes the same guard). Pinned by
+  `tests/scripts/852-local-shadows-a-function-name.loft` — which carries the parameter / loop / field
+  cells as CONTROLS, so a change that freed the three forms by breaking the three that already worked
+  fails there — and `pln102_c98_a_local_may_shadow_a_library_function` (`tests/imports.rs`, the
+  library half, both backends).
+
+### Residual — C98's own half is still open
+
+Measured while fixing this, and unchanged by it: **a bare `use lib;` still wildcard-imports every
+public name into the unqualified namespace** (`src/parser/mod.rs`, `None => Some(ImportSpec::Wildcard)`),
+so `turn(3)` is callable unqualified after `use mylib;`. C98 rules that it must bind only the `lib`
+handle. That migration is mechanical for a consumer (`use lib;` → `use lib::*;`) but it is a
+**breaking** resolution change, it must land pre-freeze, and it breaks out-of-repo consumers on the
+day it lands — so it is owner-timed work, not a fix to fold into a bug. C112 is independent of it and
+forward-compatible with it: once a bare `use` stops importing, a local named after a library function
+is legal for a second reason as well.

@@ -334,6 +334,13 @@ pub struct Parser {
     /// `byte_code`) and builds + loads the cdylib (after `byte_code`).  A library's
     /// functions are identified by `def.position().file.starts_with(pkg_dir)`.
     pub pending_native_compile: Vec<String>,
+    /// @PLN119 arc A — libraries that declared `[library] placement = "process"`,
+    /// as (library name, package dir).  Recorded during `use` processing; the
+    /// driver (`main.rs`) starts one worker per entry after `scopes::check` and
+    /// routes the library's public functions to it.  A library's functions are
+    /// identified by `def.position().file.starts_with(pkg_dir)`, the same
+    /// ownership guard the native path uses.
+    pub pending_placed_libs: Vec<(String, String, crate::lib_placement::Placement)>,
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir, queued-from file) — sibling packages are
     /// searched in `dir`, and the dep is only pulled in while the lexer is back
@@ -881,6 +888,7 @@ impl Parser {
             pending_native_libs: Vec::new(),
             native_lib_regs: Vec::new(),
             pending_native_compile: Vec::new(),
+            pending_placed_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
@@ -1676,6 +1684,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — the whole world is parsed here, so a callee's body can
             // be asked whether it removes from a `&` parameter.
             self.check_reshape_under_reference();
+            self.synth_drop_cascades();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -2323,6 +2332,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — see `parse`.
             if !default {
                 self.check_reshape_under_reference();
+                self.synth_drop_cascades();
             }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -2369,6 +2379,7 @@ impl Parser {
             // @PLN130 F9 (loft#779) — see `parse`.
             if !default {
                 self.check_reshape_under_reference();
+                self.synth_drop_cascades();
             }
         }
         self.diagnostics.fill(self.lexer.diagnostics());
@@ -2399,11 +2410,26 @@ impl Parser {
             let data = metadata(&f)?;
             if data.is_dir() {
                 self.parse_dir(&f, default, debug)?;
-            } else if !self.parse(&f, default) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{}", self.diagnostics),
-                ));
+            } else {
+                self.parse(&f, default);
+                // Errors stop the load; warnings and advice do not.  `parse`
+                // answers the narrower question "was anything at all reported",
+                // so gating on it refuses a directory over a deprecation notice
+                // — against loft's own tier rule, which is that a diagnostic
+                // gates if and only if ignoring it can produce a wrong result.
+                //
+                // The refusal was not academic.  This is the path a
+                // process-placed library's worker loads through (@PLN119), so
+                // one `never-read` warning in a library made its consumer exit
+                // 1 under `placement = "process"` and 0 in-process — placement
+                // deciding whether the program ran at all, which is exactly the
+                // invariant it must not touch.
+                if self.diagnostics.level() >= Level::Error {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{}", self.diagnostics),
+                    ));
+                }
             }
             scopes::check(&mut self.data);
             if debug {
@@ -2490,6 +2516,7 @@ impl Parser {
         self.check_subrule_wellformedness();
         // @PLN130 F9 (loft#779) — see `parse`.
         self.check_reshape_under_reference();
+        self.synth_drop_cascades();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2543,6 +2570,7 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // @PLN130 F9 (loft#779) — see `parse`.
         self.check_reshape_under_reference();
+        self.synth_drop_cascades();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -4301,7 +4329,7 @@ impl Parser {
                 // field-access hint that covers the method→free direction.
                 // P07.5: when no method receiver is found EITHER, fall back to
                 // a similar-name suggestion across all user functions.
-                let method_types = self.find_method_receivers(name);
+                let (method_types, from_stdlib) = self.find_method_receivers(name);
                 if method_types.is_empty() {
                     // @PLN13 phase 6 (diagnostics slice): the name may simply be
                     // unimported rather than wrong.  An EXACT hit in a published
@@ -4354,11 +4382,19 @@ impl Parser {
                     }
                 } else {
                     let receivers = method_types.join(" / ");
+                    // loft#850 — say who declared it as a method, and only say "stdlib"
+                    // when that is true. A hint that blames the stdlib for a name a
+                    // `use`d package declared sends the reader to the wrong source file.
+                    let declared_by = if from_stdlib {
+                        format!("stdlib declared `{name}` as a method")
+                    } else {
+                        format!("`{name}` is declared as a method, not as a free function")
+                    };
                     diagnostic_at!(
                         self.lexer,
                         name_pos,
                         Level::Error,
-                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
+                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? ({declared_by}; see LOFT.md § Methods and function calls)"
                     );
                 }
             }
@@ -4641,11 +4677,19 @@ impl Parser {
     }
 
     /// Scan all definitions for methods named `name` (encoded as
-    /// `t_<LEN><TypeName>_<name>`) and return the list of receiver type
-    /// names in definition order, de-duplicated.  Powers the 6c
-    /// free→method hint in `call`.
-    fn find_method_receivers(&self, name: &str) -> Vec<String> {
+    /// `t_<LEN><TypeName>_<name>`) and return how to NAME each receiver, in
+    /// definition order and de-duplicated, plus whether every one of them was
+    /// declared by the stdlib.  Powers the 6c free→method hint in `call`.
+    ///
+    /// loft#850 — a receiver is named `pkg::Type` unless it is the stdlib's.
+    /// The bare name is what the mangled key already spells, and it stops
+    /// identifying anything once two packages declare it: a hint reading
+    /// "did you mean `x.go(…)` on Thing?" points at a `Thing` the author is
+    /// already holding one of. The qualified name says which package's, and
+    /// is also what they would have to type to reach it.
+    fn find_method_receivers(&self, name: &str) -> (Vec<String>, bool) {
         let suffix = format!("_{name}");
+        let mut all_stdlib = true;
         let mut receivers: Vec<String> = Vec::new();
         for d_nr in 0..self.data.definitions() {
             let def_name = self.data.def(d_nr).name();
@@ -4670,11 +4714,30 @@ impl Parser {
                 continue;
             }
             let type_name = &rest[type_start..type_end];
-            if !type_name.is_empty() && !receivers.iter().any(|t| t == type_name) {
-                receivers.push(type_name.to_string());
+            if type_name.is_empty() {
+                continue;
+            }
+            // The receiver the definition itself declares outranks the name parsed out
+            // of its key — that name is exactly what cannot tell two packages apart.
+            let receiver_nr = self
+                .data
+                .def(d_nr)
+                .attributes()
+                .first()
+                .map_or(u32::MAX, |a| self.data.type_def_nr(&a.typedef));
+            let display = if receiver_nr == u32::MAX {
+                type_name.to_string()
+            } else if self.data.def(receiver_nr).source == crate::data::STD_SOURCE {
+                self.data.def(receiver_nr).name.clone()
+            } else {
+                all_stdlib = false;
+                self.data.qualified_type_name(receiver_nr)
+            };
+            if !receivers.contains(&display) {
+                receivers.push(display);
             }
         }
-        receivers
+        (receivers, all_stdlib)
     }
 
     /// Plan-17 phase 01 (A) — predict the substituted return type of a
@@ -5066,15 +5129,27 @@ impl Parser {
                     // what the implementor put there.  Parameters align by index: an
                     // interface method carries no hidden parameters, and the hidden ones a
                     // concrete method carries are appended after the declared ones.
+                    //
+                    // **`without_deps`, because a companion is a TYPE and not a place.**
+                    // The implementor's `returned` carries a dep list indexed in the
+                    // IMPLEMENTOR's frame — `Reference(Rows, deps=[1])` where 1 is that
+                    // function's own return buffer — and it is non-empty exactly when the
+                    // producer's return comes from a nested call rather than an inline
+                    // construction.  Recorded verbatim, that list is then substituted into
+                    // every use of `Self.Rows` inside a monomorph, where the same indices
+                    // name unrelated CALLER locals: the caller's binding turns into a view
+                    // of whatever variable 1 happens to be, and the free lands on a stack
+                    // record (the `#306` guard, then a fault).  loft#666 is the same defect
+                    // through a different door, which is why the answer already had a name.
                     let mut candidates: Vec<Type> = Vec::new();
                     if self.data.def(child_nr).returned().contains_def(ph) {
-                        candidates.push(self.data.def(imp).returned().clone());
+                        candidates.push(self.data.def(imp).returned().without_deps());
                     }
                     for a in 0..self.data.def(child_nr).attributes().len() {
                         if self.data.attr_type(child_nr, a).contains_def(ph)
                             && a < self.data.def(imp).attributes().len()
                         {
-                            candidates.push(self.data.attr_type(imp, a));
+                            candidates.push(self.data.attr_type(imp, a).without_deps());
                         }
                     }
                     for cand in candidates {
@@ -10565,6 +10640,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
             self.pending_native_compile.push(pkg_dir.clone());
         }
+        self.record_placement(&m, &pkg_dir);
         self.register_c_libraries(&m, &pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
@@ -10840,6 +10916,39 @@ impl Parser {
     /// **A built shim is registered as an ordinary library**, so the
     /// interpreter's `dlopen`, the `--native` link line and the symbol resolver
     /// stay one code path and cannot disagree about what a shim is.
+    /// @PLN119 arc A — note a library that asked to run out of process.
+    ///
+    /// An unreadable `placement` value is an ERROR rather than a fallback to
+    /// in-process: the two placements are meant to be indistinguishable in
+    /// behaviour, so a typo would produce a program that runs correctly and
+    /// isolates nothing, and no output would ever show the difference.
+    fn record_placement(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
+        let Some(ref spelled) = m.placement else {
+            return;
+        };
+        match crate::lib_placement::Placement::parse(spelled) {
+            Ok(p) if p.is_out_of_process() => {
+                let name = m
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| pkg_dir.rsplit('/').next().unwrap_or(pkg_dir).to_string());
+                if !self
+                    .pending_placed_libs
+                    .iter()
+                    .any(|(_, d, _)| d == pkg_dir)
+                {
+                    self.pending_placed_libs
+                        .push((name, pkg_dir.to_string(), p));
+                }
+            }
+            Ok(_) => {}
+            Err(why) => self.lexer.diagnostic(
+                Level::Error,
+                &format!("`[library] placement` for `{pkg_dir}`: {why}"),
+            ),
+        }
+    }
+
     fn register_c_libraries(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
         let mut entries: Vec<String> = m.c_libs.clone();
         if !m.c_shim.is_empty() {
@@ -10906,6 +11015,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == pkg_dir) {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
+        self.record_placement(m, pkg_dir);
         // PKG.4: register native function symbols and package crate info.
         self.register_c_libraries(m, pkg_dir);
         if let Some(ref crate_name) = m.native_crate {

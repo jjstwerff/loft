@@ -27,6 +27,21 @@ tables.
   catches an over-range index but NOT a `-1` sentinel / underflow — that reads a real
   element from the end.  Was documented only for slices; now in LOFT.md § indexing +
   loft-write.  Guard a possibly-negative index with `if i >= 0` first.
+- **`OpDrop` releases at the OWNER's death, and three things it does not do.** Copying a
+  droppable into a struct field, an enum payload or a collection element MOVES it: the source
+  stops releasing, and the container's death releases what it holds. The full contract is
+  [INTERFACES.md § `OpDrop`](INTERFACES.md); what surprises people is what it deliberately
+  leaves out. **Taking a value back OUT does not release it** — `v.remove(i)` and
+  `v[i] = other` leak the element that goes away, by decision
+  ([DESIGN_DECISIONS.md § C111](DESIGN_DECISIONS.md)), so release it yourself before you
+  replace it. **A keyed collection does not release its records**, because a `hash`/`sorted`
+  shares them with the collection it is indexed from. **Moving one droppable into TWO
+  containers releases it twice**, because loft has no move checker. Two ordering rules go
+  with it: a scope end runs AFTER the function body, so a resource whose owner is closed
+  inside that body must be released explicitly first, and the release must be idempotent
+  because exhaustion and the scope end both call it. When testing one, note that a same-scope
+  test proves little — the source dies last there anyway, so a mistake only shows once the
+  container OUTLIVES it (a return).
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.

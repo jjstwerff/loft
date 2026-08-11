@@ -1127,16 +1127,17 @@ pub fn introspect <D: SqlDb> (d: D, dial: Dialect, table: text) -> TableDef {
   }
   cols: vector<ColumnDef> = [];
   qc = catalog_columns(dial, table);
-  if !d.db_rows(qc) {
+  rc = d.db_rows(qc);
+  if !rc.ok() {
     return no_table("cannot read the catalogue: {d.db_last_error()}");
   }
-  while d.db_next() {
-    cn = d.db_col(0) ?? "";
-    ct = d.db_col(1) ?? "";
+  while rc.next() {
+    cn = rc.col(0) ?? "";
+    ct = rc.col(1) ?? "";
     // sqlite answers `notnull` as `1`/`0`, `information_schema` as `YES`/`NO`.
     // Two spellings of one fact, and each engine's own is what it is read in.
-    nn = d.db_col(2) ?? "";
-    dflt = d.db_col(3);
+    nn = rc.col(2) ?? "";
+    dflt = rc.col(3);
     ck: ColumnType = ColOther;
     if dial.nm == "sqlite" { ck = sqlite_kind(ct) } else { ck = ansi_kind(ct) }
     can_null = nn.to_uppercase() != "NO";
@@ -1161,40 +1162,46 @@ pub fn introspect <D: SqlDb> (d: D, dial: Dialect, table: text) -> TableDef {
 
   ixs: vector<IndexDef> = [];
   if dial.nm == "sqlite" {
-    // The index names first, in full. There is one cursor per connection — it
-    // is state ON the connection, not a second type — so a second query cannot
-    // run while this one is being walked.
-    ix_names: vector<text> = [];
+    // @PLN138 — NESTED, which is what the cursor type bought. Each index name
+    // is used the moment it is read, from inside the walk that produced it.
+    //
+    // This used to read every name into a vector first, and said why: "there is
+    // one cursor per connection — it is state ON the connection, not a second
+    // type — so a second query cannot run while this one is being walked". The
+    // vector was not a choice about clarity, it was the shape the type system
+    // could not express its way out of. The cursor owns its statement now, so
+    // the inner query is simply an inner query.
     qi: SqlText = "SELECT name FROM pragma_index_list({table})";
-    if d.db_rows(qi) {
-      while d.db_next() { ix_names += [d.db_col(0) ?? ""] }
-    }
-    for ixn in ix_names {
+    ri = d.db_rows(qi);
+    while ri.next() {
+      ixn = ri.col(0) ?? "";
+      if ixn == "" { continue }
       ixc: vector<IndexColumn> = [];
       qx: SqlText = "SELECT name, \"desc\" FROM pragma_index_xinfo({ixn}) WHERE key = 1 ORDER BY seqno";
-      if d.db_rows(qx) {
-        while d.db_next() {
-          xn = d.db_col(0) ?? "";
-          xd = d.db_col(1) ?? "0";
-          if xn != "" { ixc += [IndexColumn { nm: xn, ascending: xd != "1" }] }
-        }
+      rx = d.db_rows(qx);
+      while rx.next() {
+        xn = rx.col(0) ?? "";
+        xd = rx.col(1) ?? "0";
+        if xn != "" { ixc += [IndexColumn { nm: xn, ascending: xd != "1" }] }
       }
       if len(ixc) > 0 { ixs += [IndexDef { nm: ixn, columns: ixc }] }
     }
     return TableDef { nm: table, columns: cols, indexes: ixs };
   }
 
-  // The other three answer in ONE query, so the whole result is read out before
-  // anything is built from it — the single cursor again.
+  // The other three answer in ONE query — not because a second cursor is
+  // impossible now, but because their catalogues genuinely give the whole answer
+  // at once, and one round trip beats several.
   ix_of: vector<text> = [];
   ix_col: vector<text> = [];
   ix_desc: vector<boolean> = [];
   qx2 = catalog_indexes(dial, table);
-  if d.db_rows(qx2) {
-    while d.db_next() {
-      i0 = d.db_col(0) ?? "";
-      i1 = d.db_col(1) ?? "";
-      i2 = d.db_col(2) ?? "0";
+  r2 = d.db_rows(qx2);
+  if r2.ok() {
+    while r2.next() {
+      i0 = r2.col(0) ?? "";
+      i1 = r2.col(1) ?? "";
+      i2 = r2.col(2) ?? "0";
       if i0 != "" { ix_of += [i0]; ix_col += [i1]; ix_desc += [i2 == "1" || i2.to_lowercase() == "true"] }
     }
   }

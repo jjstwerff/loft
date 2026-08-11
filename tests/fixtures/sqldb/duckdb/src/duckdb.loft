@@ -54,21 +54,86 @@ fn take_db() -> integer;     #c "ld_take_db" "void*(void)"
 fn take_conn() -> integer;   #c "ld_take_conn" "void*(void)"
 fn slot_stmt() -> integer;   #c "ld_slot_stmt" "void*(void)"
 fn take_stmt() -> integer;   #c "ld_take_stmt" "void*(void)"
-fn result_buf() -> integer;  #c "ld_result" "void*(void)"
 fn as_text(p: integer) -> text?; #c "ld_str" "const char*(void*)"
+// @PLN138 — a `duckdb_result` per live cursor. `res_open` answers a handle
+// (0 = none) and `res_at` turns it into the address duckdb writes into, so two
+// cursors cannot overwrite each other's rows.
+fn res_open() -> integer;             #c "ld_result_open" "long long(void)"
+fn res_at(h: integer) -> integer;     #c "ld_result_at" "void*(long long)"
+fn res_close(h: integer);             #c "ld_result_close" "void(long long)"
 
 // The soname exactly as `[c] optional-libs` spells it — the availability query
 // is keyed on the declaration, not on a guess about the file name.
 pub const DUCKDB_SONAME = "libduckdb.so";
 
+// --- the cursor (@PLN138) ---------------------------------------------------
+//
+// duckdb materialises the whole result, so a cursor is a row INDEX over its own
+// `duckdb_result` rather than a step function. `h` is the arena handle for that
+// result, which is what lets two coexist.
+//
+// UNPROVEN like the rest of this backend: libduckdb is not installed on the
+// machine this was written on, so everything here has been read and never run.
+// Said plainly rather than left to look covered.
+pub struct DuckRows { h: integer, row: integer, rows: integer, w: integer, good: boolean }
+
+pub fn ok(self: DuckRows) -> boolean { return self.good; }
+
+// The index starts one behind, so the first call moves it to row 0.
+pub fn next(self: DuckRows) -> boolean {
+  if self.h == 0 { return false }
+  self.row += 1;
+  if self.row < self.rows { return true }
+  self.close();
+  return false;
+}
+
+// SQL NULL and the empty string are different answers, and this is where the
+// difference is preserved: `duckdb_value_is_null` is asked FIRST, because
+// `duckdb_value_varchar` renders both as something a pointer test alone would
+// not separate reliably.
+pub fn col(self: DuckRows, i: integer) -> text? {
+  if self.h == 0 { return null }
+  at = res_at(self.h);
+  if at == 0 { return null }
+  if ddb_value_is_null(at, i, self.row) { return null }
+  p = ddb_value_ptr(at, i, self.row);
+  if p == 0 { return null }
+  s = as_text(p);
+  // duckdb allocated it, so duckdb frees it — after loft has copied the bytes.
+  ddb_free(p);
+  return s;
+}
+
+pub fn width(self: DuckRows) -> integer { return self.w; }
+
+// Idempotent. The result is DESTROYED first and its slot returned second: the
+// shim only reclaims storage, so reversing the order would hand duckdb an
+// address the arena had already handed to someone else.
+pub fn close(self: DuckRows) {
+  if self.h == 0 { return }
+  at = res_at(self.h);
+  if at != 0 { ddb_destroy_result(at) }
+  res_close(self.h);
+  self.h = 0;
+}
+
+fn OpDrop(self: DuckRows) { self.close(); }
+
+// The handle has been carried into a container; do not release it here.
+//
+// A struct field COPIES at construction and the copy is INDEPENDENT — so
+// wrapping a cursor leaves two records holding one `duckdb_result`, and the source's
+// scope end would release it while the container is still reading through it.
+// loft has no move, so the transfer is spelled out: the container owns it, and
+// this makes the source's drop a no-op. Nothing is released — that is the whole
+// point, and it is why this is not `close`.
+pub fn disown(self: DuckRows) { self.h = 0; }
+
 // --- the loft type that satisfies SqlDb ------------------------------------
 pub struct Duck {
   db: integer,
   conn: integer,
-  row: integer,
-  rows: integer,
-  live: boolean,
-  stmt: integer,
   err: text,
   tx: Tx,
   // H7 — duckdb has no `CREATE PROCEDURE`, so the definitions live here, the
@@ -77,8 +142,7 @@ pub struct Duck {
 }
 
 pub fn duck() -> Duck {
-  return Duck { db: 0, conn: 0, row: 0, rows: 0, live: false, stmt: 0, err: "",
-                tx: tx_new(), procs: procs_new() };
+  return Duck { db: 0, conn: 0, err: "", tx: tx_new(), procs: procs_new() };
 }
 
 // Is this backend usable on this machine?
@@ -109,6 +173,9 @@ pub fn db_open(self: Duck, target: text) -> boolean {
 
 // Run a statement for its effect. The result still has to be destroyed — duckdb
 // allocates one for every query, including a DDL statement that returns no rows.
+// Run a statement for its effect. The result still has to be destroyed — duckdb
+// allocates one for every query, including a DDL statement that returns no rows
+// — and its arena slot returned with it.
 pub fn db_exec(self: Duck, sql: text) -> boolean {
   // The `db_exec`/`db_select` contract is "author-written SQL with no values in
   // it".  A value written INTO the text is neither bound nor protected, and a
@@ -116,61 +183,41 @@ pub fn db_exec(self: Duck, sql: text) -> boolean {
   why = inline_value_fault(sql);
   if why != null { self.err = why ?? ""; return false }
   if self.conn == 0 { return false }
-  ok = ddb_query(self.conn, sql, result_buf()) == 0;
-  if !ok { self.err = ddb_result_error(result_buf()) ?? "query failed" }
-  ddb_destroy_result(result_buf());
+  h = res_open();
+  if h == 0 { self.err = "no memory for the result"; return false }
+  at = res_at(h);
+  ok = ddb_query(self.conn, sql, at) == 0;
+  if !ok { self.err = ddb_result_error(at) ?? "query failed" }
+  ddb_destroy_result(at);
+  res_close(h);
   return ok;
 }
 
-// duckdb materialises the whole result, so the cursor is a row index rather
-// than a step function. `db_next` is called BEFORE the first read, so the index
-// starts one behind and the first call moves it to row 0.
-pub fn db_select(self: Duck, sql: text) -> boolean {
+// The cursor is constructed HERE rather than in a shared helper (loft#847).
+pub fn db_select(self: Duck, sql: text) -> DuckRows {
   // The `db_exec`/`db_select` contract is "author-written SQL with no values in
   // it".  A value written INTO the text is neither bound nor protected, and a
   // long digit run is the shape that says one was (`sql::inline_value_fault`).
   why = inline_value_fault(sql);
-  if why != null { self.err = why ?? ""; return false }
-  if self.conn == 0 { return false }
-  if self.live { ddb_destroy_result(result_buf()); self.live = false }
-  if ddb_query(self.conn, sql, result_buf()) != 0 {
-    self.err = ddb_result_error(result_buf()) ?? "select failed";
-    ddb_destroy_result(result_buf());
-    return false
+  if why != null {
+    self.err = why ?? "";
+    return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false }
   }
-  self.rows = ddb_row_count(result_buf());
-  self.row = -1;
-  self.live = true;
-  return true;
-}
-
-pub fn db_next(self: Duck) -> boolean {
-  if !self.live { return false }
-  self.row += 1;
-  if self.row < self.rows { return true }
-  ddb_destroy_result(result_buf());
-  self.live = false;
-  return false;
-}
-
-// SQL NULL and the empty string are different answers, and this is where the
-// difference is preserved: `duckdb_value_is_null` is asked FIRST, because
-// `duckdb_value_varchar` renders both as something a pointer test alone would
-// not separate reliably.
-pub fn db_col(self: Duck, i: integer) -> text? {
-  if !self.live { return null }
-  if ddb_value_is_null(result_buf(), i, self.row) { return null }
-  p = ddb_value_ptr(result_buf(), i, self.row);
-  if p == 0 { return null }
-  s = as_text(p);
-  // duckdb allocated it, so duckdb frees it — after loft has copied the bytes.
-  ddb_free(p);
-  return s;
-}
-
-pub fn db_width(self: Duck) -> integer {
-  if !self.live { return 0 }
-  return ddb_column_count(result_buf());
+  if self.conn == 0 { return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false } }
+  h = res_open();
+  if h == 0 {
+    self.err = "no memory for the result";
+    return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false }
+  }
+  at = res_at(h);
+  if ddb_query(self.conn, sql, at) != 0 {
+    self.err = ddb_result_error(at) ?? "select failed";
+    ddb_destroy_result(at);
+    res_close(h);
+    return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false }
+  }
+  return DuckRows { h: h, row: -1, rows: ddb_row_count(at),
+                    w: ddb_column_count(at), good: true };
 }
 
 pub fn db_last_error(self: Duck) -> text { return self.err; }
@@ -182,70 +229,96 @@ pub fn db_last_error(self: Duck) -> text { return self.err; }
 // Said plainly rather than left to look covered — a skip that reads as a pass is
 // how a dead binding stays green.
 
-fn release(self: Duck) {
-  if self.stmt != 0 { ddb_destroy_prepare(slot_stmt()); self.stmt = 0 }
-}
+// These answer with the STATEMENT HANDLE, `0` for a failure, rather than storing
+// it on the connection — the same shape the other three backends take. The
+// statement is destroyed by whoever executes it: duckdb materialises the result,
+// so a cursor never needs the statement that made it.
+//
+// `ddb_destroy_prepare` takes the ADDRESS again, and the shim's one statement
+// slot still holds it — which is sound because a statement's whole life here is
+// prepare → execute → destroy, with nothing prepared in between.
+fn drop_stmt(self: Duck) { ddb_destroy_prepare(slot_stmt()); }
 
-fn prepare_bind(self: Duck, q: SqlText) -> boolean {
+fn prepare_bind(self: Duck, q: SqlText) -> integer {
   // A refused identifier has no statement (H6) — nothing to prepare, nothing sent.
   stmt = q.statement(SQL_QMARK, "\"");
-  if stmt == null { self.err = "an identifier was refused"; return false }
+  if stmt == null { self.err = "an identifier was refused"; return 0 }
   return self.prepare_text(stmt, q);
 }
 
 // The same bind, given the statement TEXT rather than deriving it — which is
 // what a registered procedure has: its body was assembled at deploy, and its
 // values arrive later.
-fn prepare_text(self: Duck, sql: text, q: SqlText) -> boolean {
-  if self.conn == 0 { return false }
-  self.release();
+fn prepare_text(self: Duck, sql: text, q: SqlText) -> integer {
+  if self.conn == 0 { return 0 }
   if ddb_prepare(self.conn, sql, slot_stmt()) != 0 {
-    self.stmt = take_stmt();
-    self.err = ddb_prepare_error(self.stmt) ?? "prepare failed";
-    self.release();
-    return false
+    st = take_stmt();
+    self.err = ddb_prepare_error(st) ?? "prepare failed";
+    self.drop_stmt();
+    return 0
   }
-  self.stmt = take_stmt();
-  if self.stmt == 0 { self.err = "prepare gave no statement"; return false }
+  st = take_stmt();
+  if st == 0 { self.err = "prepare gave no statement"; return 0 }
   // The driver's own count against the parser's — the same independent check
   // the other three backends make.
-  if ddb_nparams(self.stmt) != q.params() {
-    self.err = "statement wants {ddb_nparams(self.stmt)} parameters, {q.params()} were interpolated";
-    return false
+  np = ddb_nparams(st);
+  if np != q.params() {
+    self.err = "statement wants {np} parameters, {q.params()} were interpolated";
+    self.drop_stmt();
+    return 0
   }
   for b in q.binds {
     at = b#count + 1;                       // duckdb counts parameters from 1
-    ok = if b.kind == SQL_NULL { ddb_bind_null(self.stmt, at) }
-      else if b.kind == SQL_INT { ddb_bind_int64(self.stmt, at, b.i) }
-      else if b.kind == SQL_BOOLEAN { ddb_bind_int64(self.stmt, at, b.i) }
-      else { ddb_bind_varchar(self.stmt, at, b.as_text()) };
-    if ok != 0 { self.err = "binding parameter {at} failed"; return false }
+    ok = if b.kind == SQL_NULL { ddb_bind_null(st, at) }
+      else if b.kind == SQL_INT { ddb_bind_int64(st, at, b.i) }
+      else if b.kind == SQL_BOOLEAN { ddb_bind_int64(st, at, b.i) }
+      else { ddb_bind_varchar(st, at, b.as_text()) };
+    if ok != 0 {
+      self.err = "binding parameter {at} failed";
+      self.drop_stmt();
+      return 0
+    }
   }
-  return true;
+  return st;
 }
 
 pub fn db_run(self: Duck, q: SqlText) -> boolean {
-  if !self.prepare_bind(q) { return false }
-  ok = ddb_execute_prepared(self.stmt, result_buf()) == 0;
-  if !ok { self.err = ddb_result_error(result_buf()) ?? "execute failed" }
-  ddb_destroy_result(result_buf());
-  self.release();
+  st = self.prepare_bind(q);
+  if st == 0 { return false }
+  h = res_open();
+  if h == 0 { self.err = "no memory for the result"; self.drop_stmt(); return false }
+  at = res_at(h);
+  ok = ddb_execute_prepared(st, at) == 0;
+  if !ok { self.err = ddb_result_error(at) ?? "execute failed" }
+  ddb_destroy_result(at);
+  res_close(h);
+  self.drop_stmt();
   return ok;
 }
 
-pub fn db_rows(self: Duck, q: SqlText) -> boolean {
-  if !self.prepare_bind(q) { return false }
-  if self.live { ddb_destroy_result(result_buf()); self.live = false }
-  if ddb_execute_prepared(self.stmt, result_buf()) != 0 {
-    self.err = ddb_result_error(result_buf()) ?? "execute failed";
-    ddb_destroy_result(result_buf());
-    self.release();
-    return false
+// Constructed inline, like `db_select` and for the same reason (loft#847).
+pub fn db_rows(self: Duck, q: SqlText) -> DuckRows {
+  st = self.prepare_bind(q);
+  if st == 0 { return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false } }
+  h = res_open();
+  if h == 0 {
+    self.err = "no memory for the result";
+    self.drop_stmt();
+    return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false }
   }
-  self.rows = ddb_row_count(result_buf());
-  self.row = -1;
-  self.live = true;
-  return true;
+  at = res_at(h);
+  if ddb_execute_prepared(st, at) != 0 {
+    self.err = ddb_result_error(at) ?? "execute failed";
+    ddb_destroy_result(at);
+    res_close(h);
+    self.drop_stmt();
+    return DuckRows { h: 0, row: -1, rows: 0, w: 0, good: false }
+  }
+  // The statement is done the moment the result exists — duckdb copied the rows
+  // out — so the cursor carries no statement of its own.
+  self.drop_stmt();
+  return DuckRows { h: h, row: -1, rows: ddb_row_count(at),
+                    w: ddb_column_count(at), good: true };
 }
 
 // --- T1–T3: transactions ----------------------------------------------------
@@ -278,19 +351,24 @@ pub fn db_call(self: Duck, p: SqlProc, args: SqlText) -> boolean {
   // empty if it is consumed where it is produced (loft#773).
   nm = p.proc_name();
   sql = self.procs.proc_lookup(nm);
-  if sql == null { self.err = "no procedure {p.proc_name()}"; return false }
+  if sql == null { self.err = "no procedure {nm}"; return false }
   if args.params() != p.proc_arity() { self.err = "wrong number of arguments"; return false }
-  if !self.prepare_text(sql, args) { return false }
-  ok = ddb_execute_prepared(self.stmt, result_buf()) == 0;
-  if !ok { self.err = ddb_result_error(result_buf()) ?? "execute failed" }
-  ddb_destroy_result(result_buf());
-  self.release();
+  st = self.prepare_text(sql, args);
+  if st == 0 { return false }
+  h = res_open();
+  if h == 0 { self.err = "no memory for the result"; self.drop_stmt(); return false }
+  at = res_at(h);
+  ok = ddb_execute_prepared(st, at) == 0;
+  if !ok { self.err = ddb_result_error(at) ?? "execute failed" }
+  ddb_destroy_result(at);
+  res_close(h);
+  self.drop_stmt();
   return ok;
 }
 
+// Every result belongs to a cursor and every cursor destroys its own, so shutting
+// a connection no longer has to know what is in flight on it.
 pub fn db_shut(self: Duck) {
-  self.release();
-  if self.live { ddb_destroy_result(result_buf()); self.live = false }
   if self.conn != 0 { ddb_disconnect(slot_conn()); self.conn = 0 }
   if self.db != 0 { ddb_close(slot_db()); self.db = 0 }
 }

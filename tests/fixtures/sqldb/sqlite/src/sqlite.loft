@@ -8,7 +8,6 @@ fn s3_prepare(db: integer, sql: text, n: integer, out: integer, tail: integer) -
 #c "sqlite3_prepare_v2" "int(void*, const char*, int, void*, void*)"
 fn s3_step(st: integer) -> integer;                #c "sqlite3_step" "int(void*)"
 fn s3_finalize(st: integer) -> integer;            #c "sqlite3_finalize" "int(void*)"
-fn s3_reset(st: integer) -> integer;               #c "sqlite3_reset" "int(void*)"
 fn s3_col_count(st: integer) -> integer;           #c "sqlite3_column_count" "int(void*)"
 fn s3_col_text(st: integer, i: integer) -> text?;  #c "sqlite3_column_text" "const char*(void*, int)"
 fn s3_col_type(st: integer, i: integer) -> integer; #c "sqlite3_column_type" "int(void*, int)"
@@ -36,15 +35,83 @@ fn take_b() -> integer;      #c "ls_take_b" "void*(void)"
 // `void*`. The shim names it, which keeps the shim free of sqlite symbols.
 fn transient() -> integer;   #c "ls_transient" "void*(void)"
 
+// --- the cursor (@PLN138) ---------------------------------------------------
+//
+// A cursor OWNS its `sqlite3_stmt *`. That is the whole change, and it is what
+// makes two of them able to coexist: every statement is compiled fresh — an
+// ad-hoc `db_select` and a bound `db_rows` both call `sqlite3_prepare_v2` — so
+// nothing was ever shared between them but the connection's single slot.
+//
+// Owning it also deletes `from_ps`. That flag existed because the CONNECTION
+// held the statement and had to remember whether reaching the end should
+// finalize it (an ad-hoc select owns its own) or merely reset it (a prepared one
+// was to be reused). A cursor always owns, so it always finalizes, and the
+// question is gone rather than answered.
+//
+// `w` is READ AT OPEN and kept, rather than asked of the statement on every
+// call. A column count is a property of the RESULT SET, so a caller means the
+// same number before the first row and after the last — but the statement is
+// finalized the moment the walk ends, and asking a finalized one answers 0. That
+// would make `width` say "no columns" and "this cursor is spent" with one value,
+// which is the conflation `ok` exists to avoid.
+pub struct SqliteRows { st: integer, w: integer, good: boolean }
+
+// A cursor that never opened is spelled out at each refusal rather than built by
+// a `no_rows()` helper. loft#847: an associated-type monomorph frees a stack
+// record when the implementor's producer DELEGATES its return, and
+// `return no_rows()` is exactly that delegation — it crashed the interpreter
+// here before the literal replaced it. Every method answers on such a cursor
+// (`next` false, `col` null, `width` 0), so a caller who does not check `ok`
+// reads nothing.
+pub fn ok(self: SqliteRows) -> boolean { return self.good; }
+
+pub fn next(self: SqliteRows) -> boolean {
+  if self.st == 0 { return false }
+  if s3_step(self.st) == 100 { return true }   // 100 = SQLITE_ROW
+  // Running out releases, so a walk to the end needs no close.
+  _ = s3_finalize(self.st);
+  self.st = 0;
+  return false;
+}
+
+pub fn col(self: SqliteRows, i: integer) -> text? {
+  if self.st == 0 { return null }
+  if s3_col_type(self.st, i) == 5 { return null }   // 5 = SQLITE_NULL
+  return s3_col_text(self.st, i);
+}
+
+pub fn width(self: SqliteRows) -> integer { return self.w; }
+
+// Idempotent: the statement handle IS the liveness flag, so a second close and
+// a close after exhaustion are both no-ops rather than a double finalize.
+pub fn close(self: SqliteRows) {
+  if self.st == 0 { return }
+  _ = s3_finalize(self.st);
+  self.st = 0;
+}
+
+// The scope end releases a cursor a caller stopped reading. Private: nothing
+// calls it by name, and a `pub` hook would only widen the surface.
+fn OpDrop(self: SqliteRows) { self.close(); }
+
+// The handle has been carried into a container; do not release it here.
+//
+// A struct field COPIES at construction and the copy is INDEPENDENT — so
+// wrapping a cursor leaves two records holding one `sqlite3_stmt *`, and the
+// source’s
+// scope end would release it while the container is still reading through it.
+// loft has no move, so the transfer is spelled out: the container owns it, and
+// this makes the source's drop a no-op. Nothing is released — that is the whole
+// point, and it is why this is not `close`.
+pub fn disown(self: SqliteRows) { self.st = 0; }
+
 // --- the loft type that satisfies SqlDb ------------------------------------
 //
-// `st` is the statement the CURSOR is walking; `ps` is the prepared statement
-// that owns it when `from_ps`. Keeping both means `db_next` / `db_col` /
-// `db_width` are unchanged — they read `st` either way — while `db_next` still
-// knows whether reaching the end should FINALIZE the statement (an ad-hoc
-// select owns its own) or merely RESET it (a prepared one is reused).
+// No cursor state at all now — the connection holds a database handle, an error
+// and the two things a connection genuinely owns (its transaction and, because
+// sqlite has no catalogue, its procedures).
 pub struct Sqlite {
-  db: integer, st: integer, ps: integer, live: boolean, from_ps: boolean,
+  db: integer,
   err: text,
   tx: Tx,
   // H7 — sqlite has no catalogue to put a procedure in, so this connection is
@@ -53,8 +120,7 @@ pub struct Sqlite {
 }
 
 pub fn sqlite() -> Sqlite {
-  return Sqlite { db: 0, st: 0, ps: 0, live: false, from_ps: false, err: "",
-                  tx: tx_new(), procs: procs_new() };
+  return Sqlite { db: 0, err: "", tx: tx_new(), procs: procs_new() };
 }
 
 // The sonames exactly as `[c] optional-libs` spells them — the availability
@@ -97,50 +163,40 @@ pub fn db_exec(self: Sqlite, sql: text) -> boolean {
   return r == 101 || r == 100;
 }
 
-pub fn db_select(self: Sqlite, sql: text) -> boolean {
+// The statement is constructed into the cursor HERE rather than in a shared
+// helper: an associated-type monomorph frees a stack record when the
+// implementor's producer delegates its return (loft#847), and `db_select` is
+// exactly such a producer.
+pub fn db_select(self: Sqlite, sql: text) -> SqliteRows {
   // The `db_exec`/`db_select` contract is "author-written SQL with no values in
   // it".  A value written INTO the text is neither bound nor protected, and a
   // long digit run is the shape that says one was (`sql::inline_value_fault`).
   why = inline_value_fault(sql);
-  if why != null { self.err = why ?? ""; return false }
-  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
-  self.st = take_b();
-  self.live = true;
-  self.from_ps = false;
-  return self.st != 0;
+  if why != null { self.err = why ?? ""; return SqliteRows { st: 0, w: 0, good: false } }
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return SqliteRows { st: 0, w: 0, good: false } }
+  st = take_b();
+  if st == 0 { return SqliteRows { st: 0, w: 0, good: false } }
+  return SqliteRows { st: st, w: s3_col_count(st), good: true };
 }
 
-pub fn db_next(self: Sqlite) -> boolean {
-  if !self.live { return false }
-  if s3_step(self.st) == 100 { return true }   // 100 = SQLITE_ROW
-  // A prepared statement outlives its rows; an ad-hoc cursor does not.
-  if self.from_ps { _ = s3_reset(self.st) } else { _ = s3_finalize(self.st) }
-  self.st = 0;
-  self.live = false;
-  self.from_ps = false;
-  return false;
-}
-
-pub fn db_col(self: Sqlite, i: integer) -> text? {
-  if s3_col_type(self.st, i) == 5 { return null }   // 5 = SQLITE_NULL
-  return s3_col_text(self.st, i);
-}
-
-pub fn db_width(self: Sqlite) -> integer { return s3_col_count(self.st); }
 // The stored reason wins: when the library is absent there is no connection to
 // ask, and `s3_errmsg` is itself a `#c` call into the library that is not there.
 pub fn db_last_error(self: Sqlite) -> text {
   if self.err != "" { return self.err }
+  // A CLOSED connection has nothing to ask. `sqlite3_errmsg(NULL)` is not an
+  // error about this program — it answers its own stock "out of memory" — and
+  // reporting that after `db_shut` would put a fault in the channel where the
+  // caller is looking for one.
+  if self.db == 0 { return "" }
   return s3_errmsg(self.db);
 }
 
 // --- S4: prepare, bind, execute ---------------------------------------------
-
-// Release the held statement. Preparing replaces, so this runs first there too.
-fn release(self: Sqlite) {
-  if self.from_ps { self.st = 0; self.live = false; self.from_ps = false }
-  if self.ps != 0 { _ = s3_finalize(self.ps); self.ps = 0 }
-}
+//
+// These answer with the STATEMENT HANDLE rather than a boolean, `0` for a
+// failure. The handle is what the caller then owns — a cursor keeps it, a
+// one-shot run finalizes it — which is what removes the connection's `ps` slot
+// and with it the "whose statement is this" question `release` used to settle.
 
 // Compile the statement and bind every value.
 //
@@ -150,48 +206,50 @@ fn release(self: Sqlite) {
 //
 // A refused identifier has no statement (H6), and the `text?` says so: there is
 // nothing to prepare, and nothing is sent.
-fn bind_all(self: Sqlite, q: SqlText) -> boolean {
+fn bind_all(self: Sqlite, q: SqlText) -> integer {
   sql = q.statement(SQL_QMARK, "\"");
-  if sql == null { return false }
+  if sql == null { return 0 }
   return self.bind_text(sql, q);
 }
 
 // The same bind, given the statement TEXT rather than deriving it — which is
 // what a registered procedure has: its body was assembled at deploy, and its
 // values arrive later.
-fn bind_text(self: Sqlite, sql: text, q: SqlText) -> boolean {
-  self.release();
-  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return false }
-  self.ps = take_b();
-  if self.ps == 0 { return false }
+fn bind_text(self: Sqlite, sql: text, q: SqlText) -> integer {
+  if s3_prepare(self.db, sql, -1, slot_b(), 0) != 0 { return 0 }
+  st = take_b();
+  if st == 0 { return 0 }
   // The driver's own count, against the one the parser produced. They can only
   // disagree if the statement text and the value list came apart, which is the
   // one thing that must never pass silently.
-  if s3_param_count(self.ps) != q.params() { return false }
+  if s3_param_count(st) != q.params() { _ = s3_finalize(st); return 0 }
   for b in q.binds {
     at = b#count + 1;
-    ok = if b.kind == SQL_NULL { s3_bind_null(self.ps, at) }
-      else if b.kind == SQL_INT { s3_bind_int(self.ps, at, b.i) }
-      else if b.kind == SQL_BOOLEAN { s3_bind_int(self.ps, at, b.i) }
-      else { s3_bind_text(self.ps, at, b.as_text(), -1, transient()) };
-    if ok != 0 { return false }
+    ok = if b.kind == SQL_NULL { s3_bind_null(st, at) }
+      else if b.kind == SQL_INT { s3_bind_int(st, at, b.i) }
+      else if b.kind == SQL_BOOLEAN { s3_bind_int(st, at, b.i) }
+      else { s3_bind_text(st, at, b.as_text(), -1, transient()) };
+    // A half-bound statement is finalized rather than left for a later call to
+    // find: it is this function's now, and there is no slot to leave it in.
+    if ok != 0 { _ = s3_finalize(st); return 0 }
   }
-  return true;
+  return st;
 }
 
 pub fn db_run(self: Sqlite, q: SqlText) -> boolean {
-  if !self.bind_all(q) { return false }
-  r = s3_step(self.ps);
-  _ = s3_reset(self.ps);
+  st = self.bind_all(q);
+  if st == 0 { return false }
+  r = s3_step(st);
+  _ = s3_finalize(st);
   return r == 101 || r == 100;
 }
 
-pub fn db_rows(self: Sqlite, q: SqlText) -> boolean {
-  if !self.bind_all(q) { return false }
-  self.st = self.ps;
-  self.live = true;
-  self.from_ps = true;
-  return true;
+// Constructed inline rather than through a helper that returns the cursor —
+// loft#847, the same reason `db_select` is written out.
+pub fn db_rows(self: Sqlite, q: SqlText) -> SqliteRows {
+  st = self.bind_all(q);
+  if st == 0 { return SqliteRows { st: 0, w: 0, good: false } }
+  return SqliteRows { st: st, w: s3_col_count(st), good: true };
 }
 
 // --- T1–T3: transactions ----------------------------------------------------
@@ -228,14 +286,27 @@ pub fn db_call(self: Sqlite, p: SqlProc, args: SqlText) -> boolean {
   sql = self.procs.proc_lookup(nm);
   if sql == null { return false }
   if args.params() != p.proc_arity() { return false }
-  if !self.bind_text(sql, args) { return false }
-  r = s3_step(self.ps);
-  _ = s3_reset(self.ps);
+  st = self.bind_text(sql, args);
+  if st == 0 { return false }
+  r = s3_step(st);
+  _ = s3_finalize(st);
   return r == 101 || r == 100;
 }
 
+// Nothing to release but the database. Every statement belongs to a cursor or
+// to the call that made it, and both finalize their own — which is why closing
+// a connection no longer has to know what is in flight on it.
+//
+// **And that claim is CHECKED here.** `sqlite3_close` answers `SQLITE_BUSY` when
+// the connection still has an unfinalized statement, so a cursor whose scope end
+// failed to release it is not a leak that has to be inferred from memory growth
+// — it is a return code, on every run, from the library itself. The reason is
+// stored rather than raised (a shut has nothing to answer), which puts it where
+// a caller already looks.
 pub fn db_shut(self: Sqlite) {
-  self.release();
-  if self.live { _ = s3_finalize(self.st); self.live = false; self.st = 0 }
-  if self.db != 0 { _ = s3_close(self.db); self.db = 0 }
+  if self.db == 0 { return }
+  if s3_close(self.db) == 5 {     // 5 = SQLITE_BUSY
+    self.err = "the connection still holds an unfinalized statement — a cursor was not released";
+  }
+  self.db = 0;
 }

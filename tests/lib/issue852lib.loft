@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#852 — a library exporting a short, ordinary verb.  The point of the
+// fixture is the NAME: `turn` is a word a consumer is likely to have used as a
+// local long before this library existed, and adding a `pub fn` must not take
+// it away from them.
+pub fn turn(n: integer) -> integer {
+  n * 100
+}

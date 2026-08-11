@@ -1,0 +1,20 @@
+// The redundant-`#native` error must name the annotation it rejects, not the
+// declaration that follows it.
+//
+// `has_cstring()` CONSUMES the symbol, so by the time the redundancy is known
+// the lexer already sits on the next token — the start of the following
+// declaration.  Reporting at the live cursor therefore pointed the caret at
+// `fn later_declaration_must_not_be_named` below, blaming a line that is
+// perfectly fine.  Same shape as #625 (case 42): a position read AFTER the
+// token was consumed.  The fix captures the position BEFORE the consume.
+//
+// The lock is the caret: it must land on the `#native "n_redundant_symbol"`
+// line, at the string — never on the `fn` that comes after it.
+fn redundant_symbol() -> integer;
+#native "n_redundant_symbol"
+
+fn later_declaration_must_not_be_named() -> integer {
+  return 6
+}
+
+print("{later_declaration_must_not_be_named()}");

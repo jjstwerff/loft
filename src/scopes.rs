@@ -123,6 +123,9 @@ struct Scopes {
     /// is a runtime value, so this local fact is what lets the lift ask the
     /// callee's own `returns_borrowed_view()` instead of guessing from the type.
     fnref_target: HashMap<u16, u32>,
+    /// loft#849 / @PLN139 — vars that no longer OWN what they hold, so their scope end must
+    /// not drop it.  See [`collect_drop_transferred`].
+    drop_transferred: HashSet<u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -993,6 +996,149 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
     out
 }
 
+/// @PLN139 stage C — the vars that HANDED OFF what they hold, so their scope end must not
+/// drop it.  Two ways a value stops being its variable's to release, both an `OpCopyRecord`:
+///
+/// - **the source-free bit (`0x8000`)** — "deep-copy me, then FREE my source store", the
+///   move a collection element-append does for a value it knows is dead after the copy.
+///   The store is gone but the variable still names it, so the scope-exit drop ran the
+///   author's release on a freed record — and once the slot was recycled by the next
+///   allocation, on somebody else's LIVE one. Two elements closed the second's resource
+///   twice and the first's never (loft#849); `LOFT_STRICT_STORES` called it a use-after-free.
+/// - **a FIELD destination (`OpGetField`)** — construction copies a droppable into a
+///   container, and @PLN139 makes that a MOVE: the container's copy is the owner now, and
+///   the container's death releases it through the cascade. Without this the resource is
+///   released twice — once by the source at its own scope end (early, while the container
+///   still holds it, which is the use-after-free @PLN138 met) and once by the cascade.
+///
+/// Only the DROP is suppressed. The two cases differ in what happens to the store — the
+/// first has already been freed, the second keeps its own copy — so the free is left to the
+/// ordinary sweep, which is null-tolerant either way.
+///
+/// Only a plain `Var` source can be marked: any other expression names no slot that could
+/// carry a scope-exit drop.
+fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
+    let copy_d = data.def_nr("OpCopyRecord");
+    let mut out: HashSet<u16> = HashSet::new();
+    if copy_d == u32::MAX {
+        return out;
+    }
+    code.walk(&mut |n| {
+        match n {
+            Value::Call(d, args) if *d == copy_d && args.len() >= 3 => {
+                let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
+                if !moved
+                    && !copy_hands_off(&args[1], function, data)
+                    && !appends_to_element(&args[1], function, data)
+                {
+                    return;
+                }
+                if let Some(src) = drop_bearing_source(&args[0]) {
+                    out.insert(src);
+                }
+            }
+            // A CONSTRUCTION block delivers its work-ref's record to the binding rather than
+            // copying it, so the two then name ONE record and only the binding owns it.
+            // Without this both released it: a struct-enum literal always takes the work-ref
+            // path (its declared type is the enum, the constructed one the variant, so the
+            // record cannot be built in place) and `w: W = WH { h: c }` cascaded twice.
+            Value::Set(v, rhs) => {
+                if let Some(w) = construction_work_ref(rhs, function)
+                    && w != *v
+                {
+                    out.insert(w);
+                }
+            }
+            _ => {}
+        }
+    });
+    out
+}
+
+/// The work-ref a CONSTRUCTION block hands to its target, if that is what `rhs` is.
+///
+/// Deliberately not a bare `Var`: `x = y` between two locals deep-copies, so both keep their
+/// own store and both must release. Only a block/insert whose tail is a work-ref delivers
+/// the record itself.
+fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
+    match rhs.unspan() {
+        Value::Block(_) | Value::Insert(_) => {
+            let v = drop_bearing_source(rhs)?;
+            let n = function.name(v);
+            (n.starts_with("__ref_") || n.starts_with("__rref_")).then_some(v)
+        }
+        _ => None,
+    }
+}
+
+/// Does a copy into `dest` hand the source's OWNERSHIP over — i.e. will something else
+/// release it?  True for a field of a container whose type has a synthesized cascade.
+///
+/// The cascade coverage is the whole point of asking (see `Data::has_drop_cascade`): while
+/// enum payloads and collection elements are not cascaded yet, a copy into one of those is
+/// NOT a hand-off, so its source keeps dropping exactly as it does today. Suppressing there
+/// would turn today's early release into a silent leak — the failure mode that makes half a
+/// cascade worse than none.
+fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
+    let get_field_d = data.def_nr("OpGetField");
+    if get_field_d == u32::MAX {
+        return false;
+    }
+    let Value::Call(d, fargs) = dest.unspan() else {
+        return false;
+    };
+    if *d != get_field_d {
+        return false;
+    }
+    // The container holding the field: the only form that names a type here is a var.
+    let Some(Value::Var(cv)) = fargs.first().map(Value::unspan) else {
+        return false;
+    };
+    match function.tp(*cv).base() {
+        Type::Reference(cd, _) | Type::Enum(cd, true, _) => data.has_drop_cascade(*cd),
+        _ => false,
+    }
+}
+
+/// Does a copy into `dest` hand ownership to a COLLECTION element?
+///
+/// `_elm_N` is the element `OpNewRecord` hands back, so a copy into it is the element-append.
+/// The releaser is not the element's own type but the COLLECTION's cascade, which walks every
+/// element — and that loop is emitted exactly when the element type owns a droppable, so that
+/// is the condition to test.
+///
+/// Needed beside the `0x8000` case, which only fires when the source is dead after the copy.
+/// A NAMED local appended to a collection (`v: vector<H> = [h1, h2]`) stays live, so no move
+/// bit is set — and once the collection releases its elements, leaving the local dropping too
+/// means one resource released twice.
+fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
+    let Value::Var(dv) = dest.unspan() else {
+        return false;
+    };
+    if !function.name(*dv).starts_with("_elm_") {
+        return false;
+    }
+    match function.tp(*dv).base() {
+        Type::Reference(ed, _) | Type::Enum(ed, true, _) => data.owns_droppable(*ed),
+        _ => false,
+    }
+}
+
+/// The variable a copy SOURCE ultimately names, or `None` when it names no slot.
+///
+/// A plain `Var` is the named-local case. An `Object` construction reaches here as the block
+/// that BUILDS it, whose tail is the work-ref holding the finished record — `Nest { s: S { … } }`
+/// copies such a block into `Nest`'s field, and without peeling it the inner `S` temp kept a
+/// scope-exit drop and released the payload a second time.
+fn drop_bearing_source(src: &Value) -> Option<u16> {
+    match src.unspan() {
+        Value::Var(v) => Some(*v),
+        Value::Block(bl) => bl.operators.last().and_then(drop_bearing_source),
+        Value::Insert(ops) => ops.last().and_then(drop_bearing_source),
+        _ => None,
+    }
+}
+
 fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
     let mut out: HashMap<u16, u32> = HashMap::new();
     code.walk(&mut |v| {
@@ -1073,6 +1219,7 @@ fn run_scan_phase(
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
+        drop_transferred: collect_drop_transferred(orig_code, orig_vars, data),
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -3301,6 +3448,17 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
 }
 
 impl Scopes {
+    /// The type's scope-end hook for `v`, unless a MOVE-copy already released `v`'s
+    /// store — see [`collect_drop_transferred`].  One home for the rule, because
+    /// both emission sites (the buffer-adoption leg and the ordinary one) must agree:
+    /// a drop that runs on a released store is a use-after-free either way.
+    fn scope_end_drop(&self, function: &Function, v: u16, data: &Data) -> Option<Value> {
+        if self.drop_transferred.contains(&v) {
+            return None;
+        }
+        drop_hook(function, v, data)
+    }
+
     fn enter_scope(&mut self) -> u16 {
         self.stack.push(self.scope);
         self.scope = self.max_scope;
@@ -5292,7 +5450,7 @@ impl Scopes {
                         // The FREE is skipped in the adoption case; the DROP is not.
                         // The store surviving into the next iteration is a reuse
                         // optimisation, and the value it held is over either way.
-                        if let Some(hook) = drop_hook(function, v, data) {
+                        if let Some(hook) = self.scope_end_drop(function, v, data) {
                             ls.push(hook);
                         }
                         ls.push(Value::Call(
@@ -5309,7 +5467,7 @@ impl Scopes {
                         // the value's life — unless `v` is a buffer whose witness already
                         // ran it.
                         if !is_buffer
-                            && let Some(hook) = drop_hook(function, v, data)
+                            && let Some(hook) = self.scope_end_drop(function, v, data)
                         {
                             ls.push(hook);
                         }
@@ -5555,6 +5713,21 @@ impl Scopes {
         // works on both backends.  Gated on a CreateStack-receiver first arg so
         // ordinary calls keep their existing argument lowering untouched.
         let create_stack_nr = data.def_nr("OpCreateStack");
+        // @PLN139 stage C — the lift-site half of [`collect_drop_transferred`].  A copy that
+        // hands its source off — the `0x8000` move into a collection element, or a copy
+        // whose destination is a container FIELD — must not leave the source dropping what
+        // it no longer owns.  When that source is an inline call it is lifted into a
+        // `__lift_N` temp right here, so this is the only point that knows which temp the
+        // copy took: before the lift the IR still names the CALL, and after it nothing
+        // records the pairing.  The copy's source is arg 0.
+        let transfer_copy = outer_call == data.def_nr("OpCopyRecord") && {
+            let moved =
+                matches!(args.get(2).map(Value::unspan), Some(Value::Int(tp)) if tp & 0x8000 != 0);
+            moved
+                || args
+                    .get(1)
+                    .is_some_and(|d| copy_hands_off(d, function, data))
+        };
         let has_create_stack_receiver = args.first().is_some_and(|a| {
             matches!(a.unspan(), Value::Call(d, cargs)
                 if *d == create_stack_nr
@@ -5591,6 +5764,9 @@ impl Scopes {
                 // the same call to a named local yields `flat:vector<integer>
                 // ["__ref_1"]` and NO `OpFreeRef`.
                 function.set_skip_free(tmp);
+                if transfer_copy && arg_idx == 0 {
+                    self.drop_transferred.insert(tmp);
+                }
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;
@@ -5658,6 +5834,9 @@ impl Scopes {
                         self.inline_struct_return(&final_val, data, outer_call, function)
                     {
                         let tmp = self.new_lift_var(function, &tp);
+                        if transfer_copy && arg_idx == 0 {
+                            self.drop_transferred.insert(tmp);
+                        }
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -5679,6 +5858,9 @@ impl Scopes {
                 // get_free_vars emits OpFreeRef(tmp) at scope exit because
                 // the dep is empty (owned).
                 let tmp = self.new_lift_var(function, &tp);
+                if transfer_copy && arg_idx == 0 {
+                    self.drop_transferred.insert(tmp);
+                }
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
@@ -6173,11 +6355,18 @@ fn call(to: &'static str, v: u16, data: &Data) -> Value {
 /// null here and correctly does not fire, while one that WAS adopted never reaches this
 /// branch at all (it takes the `OpFreeRefIfDistinct` pairing above).
 fn drop_hook(function: &Function, v: u16, data: &Data) -> Option<Value> {
-    let Type::Reference(d, _) = function.tp(v).base() else {
+    // A struct-enum binding is a heap record exactly as a `Reference` one is — it just
+    // carries a discriminator at its head — so it drops the same way. Reading only
+    // `Reference` here is why an enum's cascade was synthesized and then never called
+    // (@PLN139 stage D).
+    let (Type::Reference(d, _) | Type::Enum(d, true, _)) = function.tp(v).base() else {
         return None;
     };
-    let name = data.def(*d).name();
-    let nr = data.def_nr(&format!("t_{}{}_OpDrop", name.len(), name));
+    // @PLN139 — the CASCADE, not the bare hook: for a type that owns droppable members it
+    // is the synthesized function that runs the type's own hook and then releases what it
+    // owns, and for every other type it IS the bare hook (`Data::drop_cascade_nr`), so a
+    // program with no containers is unchanged.
+    let nr = data.drop_cascade_nr(*d);
     if nr == u32::MAX {
         return None;
     }

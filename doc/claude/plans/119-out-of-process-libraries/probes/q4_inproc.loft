@@ -1,0 +1,35 @@
+// @PLN119 Q4 — the in-process baseline the crossing is measured against.
+// A trivial `pub fn` call, timed against the same loop with the call removed,
+// so what is reported is the CALL, not the loop.
+
+pub fn ping(x: integer) -> integer {
+    x + 1
+}
+
+fn main() {
+    const n = 3000000;
+
+    t0 = ticks();
+    acc_base = 0;
+    for bi in 0..n {
+        acc_base += bi + 1;
+    }
+    t1 = ticks();
+
+    acc_call = 0;
+    for ci in 0..n {
+        acc_call += ping(ci);
+    }
+    t2 = ticks();
+
+    loop_us = t1 - t0;
+    call_us = t2 - t1;
+    per_ns = (call_us - loop_us) * 1000 / n;
+
+    println("loop only   : {loop_us} us");
+    println("loop + call : {call_us} us");
+    println("per call    : {per_ns} ns");
+    // Prove the loops did the same work — a differing checksum means the
+    // baseline is not the same computation and the subtraction is meaningless.
+    println("checksum    : {acc_base} vs {acc_call}");
+}

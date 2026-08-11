@@ -5934,6 +5934,88 @@ fn run_tag_command(args: &[String]) -> i32 {
 
 #[allow(clippy::too_many_lines)]
 fn main() {
+    // @PLN119 arc A — this process is the worker holding one process-placed
+    // library. Internal: spawned by `lib_placement::Worker::spawn`, never typed
+    // by a user, so it is deliberately absent from `--help`. It takes over the
+    // process and never returns.
+    //
+    // FIRST, before the execution-timeout watchdog below: a worker is idle
+    // between calls by design, and the caller's `LOFT_TIMEOUT` is a bound on the
+    // caller's work, not on how long a library is allowed to sit waiting to be
+    // asked. Arming it here would kill a healthy worker mid-run.
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).is_some_and(|a| a == "--lib-worker") {
+        let a: Vec<String> = std::env::args().skip(1).collect();
+        let stdlib = a
+            .iter()
+            .position(|x| x == "--default")
+            .and_then(|p| a.get(p + 1));
+        match (a.get(1), a.get(2), stdlib) {
+            (Some(w), Some(p), Some(s)) => loft::lib_placement::serve(
+                std::path::Path::new(w),
+                std::path::Path::new(p),
+                std::path::Path::new(s),
+            ),
+            _ => {
+                eprintln!(
+                    "loft: --lib-worker is internal; usage: \
+                     --lib-worker <wire> <pkg_dir> --default <stdlib_dir>"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+    // @PLN119 arc E — this process SERVES one library over a socket, so a
+    // consumer elsewhere can declare `placement = "remote"` and reach it.
+    //
+    // Unlike `--lib-worker` this one is typed by a person: an operator starts it
+    // where the library should run. It takes over the process and never returns,
+    // and it is armed before the watchdog for the same reason a worker is —
+    // sitting idle waiting to be asked is what it is FOR.
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).is_some_and(|a| a == "--lib-server") {
+        let a: Vec<String> = std::env::args().skip(1).collect();
+        let stdlib = a
+            .iter()
+            .position(|x| x == "--default")
+            .and_then(|p| a.get(p + 1))
+            .cloned()
+            .unwrap_or_else(|| {
+                let dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                    .unwrap_or_default()
+                    .join("../default");
+                if dir.exists() {
+                    dir.to_string_lossy().into_owned()
+                } else {
+                    "default".to_string()
+                }
+            });
+        match (a.get(1), a.get(2)) {
+            (Some(addr), Some(pkg)) => loft::lib_placement::serve_remote(
+                addr,
+                std::path::Path::new(pkg),
+                std::path::Path::new(&stdlib),
+            ),
+            _ => {
+                eprintln!(
+                    "loft: usage: --lib-server <host:port> <pkg_dir> [--default <stdlib_dir>]\n\
+                     \n\
+                     Serves ONE library's `pub fn` surface to consumers that declare\n\
+                     `placement = \"remote\"`.  Point them at it with\n\
+                     LOFT_REMOTE_<NAME>=<host:port>.\n\
+                     \n\
+                     The address is yours to choose and there is no default.  This is\n\
+                     not an authenticated or encrypted channel and it is not a sandbox:\n\
+                     it runs the library's functions for whoever connects, so bind it\n\
+                     where only what should reach it can — 127.0.0.1 for a local test,\n\
+                     a private network or a tunnel otherwise."
+                );
+                std::process::exit(2);
+            }
+        }
+    }
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     loft::crash_report::install("loft");
@@ -7844,12 +7926,19 @@ fn main() {
     let native_required = std::env::var("LOFT_REQUIRE_NATIVE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let pending_native = if native_libs_off {
+    let mut pending_native = if native_libs_off {
         p.pending_native_compile.clear();
         Vec::new()
     } else {
         std::mem::take(&mut p.pending_native_compile)
     };
+    // @PLN119 arc A — a library that declared `placement = "process"` runs in a
+    // worker, so building it a cdylib here would compile code this process never
+    // dispatches to. Drop it from the native candidates before that work starts;
+    // its functions are marked for the placement route just below.
+    let placed_libs: Vec<(String, String, loft::lib_placement::Placement)> =
+        std::mem::take(&mut p.pending_placed_libs);
+    pending_native.retain(|d| !placed_libs.iter().any(|(_, pkg, _)| pkg == d));
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
     // #460 — never auto-native-compile the package that OWNS the entry file: that
@@ -8017,6 +8106,22 @@ fn main() {
             }
         }
     }
+    // @PLN119 arc A — mark each process-placed library's routable functions
+    // BEFORE `byte_code`, so their calls compile to `OpStaticCall` and get a
+    // stub the worker dispatcher can take over. A function whose signature the
+    // wire cannot carry yet is left unmarked and runs in-process, which is the
+    // same silent, byte-identical fallback an uncompilable native library takes.
+    //
+    // Not under `--native`: that backend compiles the library's own body into
+    // the whole-program binary, so its calls never reach a worker however they
+    // were marked. Marking anyway would leave a dispatch symbol nothing routes
+    // and start a worker process to sit idle for the run.
+    #[cfg(target_os = "linux")]
+    if !native_requested {
+        for (_, pkg_dir, _) in &placed_libs {
+            loft::lib_placement::dispatch::mark_exports(&mut p.data, pkg_dir);
+        }
+    }
     let has_auto_native = !auto_native_libs.is_empty();
     // @PLN11 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
@@ -8088,6 +8193,74 @@ fn main() {
     // build-before-mark, so `byte_code` has emitted `OpStaticCall` only for the
     // libraries that compiled.)
     compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
+    // @PLN119 arc A — a platform without the placement transport runs a placed
+    // library in-process. By the plan's invariant that is the same PROGRAM, so
+    // it is silent by default; but it is not the same ISOLATION, and a
+    // deployment that asked for a worker to contain a crash should be able to
+    // insist. `LOFT_REQUIRE_PLACEMENT=1` turns the quiet fallback into a refusal
+    // — the same shape as `LOFT_REQUIRE_NATIVE` for native dispatch.
+    //
+    // Two things withdraw it, and a deployment that asked for a worker should
+    // hear about either: a platform without the transport, and `--native`, whose
+    // backend compiles the library into the whole-program binary so its calls
+    // never leave the process.
+    let no_placement_because = if placed_libs.is_empty() {
+        None
+    } else if cfg!(not(target_os = "linux")) {
+        Some("out-of-process placement needs Linux")
+    } else if native_requested {
+        Some(
+            "`--native` compiles a library's own body into the program binary, so its \
+             calls do not cross a process boundary",
+        )
+    } else {
+        None
+    };
+    if let Some(why) = no_placement_because
+        && std::env::var("LOFT_REQUIRE_PLACEMENT").is_ok_and(|v| v == "1" || v == "true")
+    {
+        eprintln!(
+            "loft: LOFT_REQUIRE_PLACEMENT is set, but {why}, so {} library/libraries that \
+             declared `placement = \"process\"` would run in-process without isolation.",
+            placed_libs.len()
+        );
+        std::process::exit(1);
+    }
+    // Start a worker for each process-placed library and point its marked
+    // functions at it. After `byte_code`, because the stubs this replaces are
+    // what `byte_code` registered — and only where marking happened, since a
+    // worker with nothing routed to it is a process that idles for the run.
+    #[cfg(target_os = "linux")]
+    if !placed_libs.is_empty() && !native_requested {
+        let stdlib = std::path::PathBuf::from(&default_str);
+        // The directory the program will RUN in, which is not the one this
+        // process is in yet: relative file access is anchored at `source_dir`
+        // and the chdir for it happens much later (search `set_current_dir`).
+        // A worker started now would inherit the INVOCATION directory instead,
+        // and then every relative path a placed library touched would resolve
+        // somewhere else than the same library in-process.
+        let run_cwd = if state.database.program_relative && !state.database.source_dir.is_empty() {
+            std::path::PathBuf::from(&state.database.source_dir)
+        } else {
+            std::path::PathBuf::new()
+        };
+        match loft::lib_placement::dispatch::install(
+            &mut state,
+            &p.data,
+            &placed_libs,
+            &stdlib,
+            &run_cwd,
+        ) {
+            Ok(_) => {}
+            // A placed library that will not start is fatal rather than a quiet
+            // fall back to in-process: the declaration exists to get isolation,
+            // and withdrawing it silently would leave no trace in any output.
+            Err(why) => {
+                eprintln!("loft: {why}");
+                std::process::exit(1);
+            }
+        }
+    }
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
@@ -8867,6 +9040,12 @@ fn main() {
         // headless templates.  gl_js references it, so it is emitted FIRST.
         let asyncify_js =
             include_str!("../doc/loft-asyncify.js").replace("export { AsyncifyCtrl };", "");
+        // loft#851 — the page's filesystem.  Emitted BEFORE gl_js, whose
+        // `loft_io` block spreads `loftFSImports(getMem)` into its handlers, and
+        // used directly by the minimal shell below.  Module `export` stripped
+        // like the asyncify and deliver glue, so a page stays a single file.
+        let fs_js = include_str!("../doc/loft-fs.js")
+            .replace("export { LoftPageFS, loftFS, loftFSImports };", "");
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
         // @PLN105 Phase 2/3 — the generic deliver reader, embedded so both page shells reconstruct a
         // JS value from a `deliver`/`expose` handle. Strip the trailing `export` (the file is a
@@ -8937,7 +9116,7 @@ fn main() {
         // engine page: the minimal shell is chosen because the program imports `loft_io`
         // alone, which that shell defines in full.
         if !minimal_page {
-            let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
+            let provided = format!("{gl_js}{fs_js}{host_js_extensions}{thread_js}");
             let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
             if !missing.is_empty() {
                 // loft#681 — the check assumes the page it is about to write is the one
@@ -8994,6 +9173,7 @@ fn main() {
 {asyncify_js}
 {reader_js}
 {thread_js}
+{fs_js}
 // Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
 // canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
 // Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
@@ -9021,6 +9201,9 @@ globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 // fetch, stashed between the unwind and rewind halves of loft_host_http_get.
 const ctrl={{ac:null,httpBytes:null,httpTotal:-1}};
 const imports={{loft_io:{{
+  // loft#851 — the page's filesystem (loft-fs.js, inlined above).  `mem` is
+  // re-read per call because growing the wasm heap detaches the old buffer.
+  ...loftFSImports(()=>mem),
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
   // #620: the browser CLOCK bridge.  This target has no std clock, so without
   // these `now()`/`ticks()` returned a hardcoded 0 — every duration measured
@@ -9138,6 +9321,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
 {asyncify_js}
 {reader_js}
 {thread_js}
+{fs_js}
 {gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";
@@ -10129,6 +10313,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if runtime_err.is_none() {
         state.check_store_leaks();
     }
+    // @PLN119 arc A — say goodbye to each placed library's worker rather than
+    // leaving the kernel to do it. `PR_SET_PDEATHSIG` is the backstop that
+    // covers every `exit` path below and an outright kill; this is the graceful
+    // one, and it runs after the leak check so a worker teardown can never be
+    // what a leak report is describing.
+    #[cfg(target_os = "linux")]
+    loft::lib_placement::dispatch::shutdown();
     // @PLN130 F8 — LOFT_STRICT_STORES makes both store-lifetime faults fatal: a reference
     // that outlived its store, and a store nobody freed.  Reported at every site during the
     // run (so one run surfaces all of them), and turned into a non-zero exit here so a probe

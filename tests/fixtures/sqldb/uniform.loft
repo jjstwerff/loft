@@ -33,9 +33,10 @@ fn seed <D: SqlDb> (d: D, create: text) -> boolean {
 
 fn dump <D: SqlDb> (d: D, sql: text) -> text {
   out = "";
-  if !d.db_select(sql) { return "select failed: {d.db_last_error()}" }
-  while d.db_next() {
-    c = d.db_col(1);
+  r = d.db_select(sql);
+  if !r.ok() { return "select failed: {d.db_last_error()}" }
+  while r.next() {
+    c = r.col(1);
     if c == null { out += "<null> " } else { out += "[{c ?? ""}] " }
   }
   return out;
@@ -93,14 +94,16 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
   // row. It could only do that by arriving intact, as data.
   hit = "";
   q6: SqlText = "SELECT id FROM loft_p WHERE name = {attack}";
-  if !d.db_rows(q6) { return "FAIL q6 {d.db_last_error()}" }
-  while d.db_next() { hit += "{d.db_col(0) ?? "?"}" }
+  r6 = d.db_rows(q6);
+  if !r6.ok() { return "FAIL q6 {d.db_last_error()}" }
+  while r6.next() { hit += "{r6.col(0) ?? "?"}" }
 
   // The long value round-trips at full length, through the prepared cursor.
   got = 0;
   q7: SqlText = "SELECT name FROM loft_p WHERE id = {5}";
-  if !d.db_rows(q7) { return "FAIL q7 {d.db_last_error()}" }
-  while d.db_next() { got = size(d.db_col(0) ?? "") }
+  r7 = d.db_rows(q7);
+  if !r7.ok() { return "FAIL q7 {d.db_last_error()}" }
+  while r7.next() { got = size(r7.col(0) ?? "") }
 
   // --- H6: the identifier, and the two answers it can give -----------------
   //
@@ -115,8 +118,9 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
   tbl = ident("loft_p");
   id_hit = "";
   q8: SqlText = "SELECT id FROM {tbl} WHERE name = {attack}";
-  if !d.db_rows(q8) { return "FAIL q8 {d.db_last_error()}" }
-  while d.db_next() { id_hit += "{d.db_col(0) ?? "?"}" }
+  r8 = d.db_rows(q8);
+  if !r8.ok() { return "FAIL q8 {d.db_last_error()}" }
+  while r8.next() { id_hit += "{r8.col(0) ?? "?"}" }
 
   // The refused cell, and it is the one that matters. This is exactly the text a
   // caller would splice in if identifiers were ordinary interpolation, and there
@@ -126,7 +130,7 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
   evil = ident("loft_p; DROP TABLE loft_p; --");
   refused = evil == null;
   q9: SqlText = "SELECT id FROM {evil} WHERE id = {1}";
-  ran = d.db_rows(q9);
+  ran = d.db_rows(q9).ok();
   survived = dump(d, "SELECT id, name FROM loft_p WHERE id = 1") != "";
 
   _ = d.db_exec("DROP TABLE loft_p");
@@ -154,8 +158,9 @@ fn bound <D: SqlDb> (d: D, create: text) -> text {
 //                     — the caller believes it has work, and it has none.
 fn count_x <D: SqlDb> (d: D) -> integer {
   n = 0;
-  if !d.db_select("SELECT id FROM loft_x") { return -1 }
-  while d.db_next() { n += 1 }
+  r = d.db_select("SELECT id FROM loft_x");
+  if !r.ok() { return -1 }
+  while r.next() { n += 1 }
   return n;
 }
 
@@ -208,11 +213,10 @@ fn floats <D: SqlDb> (d: D, create: text, read: text) -> text {
   // for.  A VALUE would still have to be bound.
   same = 0;
   for v in vals {
-    if !d.db_select("SELECT {read} FROM loft_f WHERE id = {v#count}") {
-      return "FAIL select {d.db_last_error()}"
-    }
+    r = d.db_select("SELECT {read} FROM loft_f WHERE id = {v#count}");
+    if !r.ok() { return "FAIL select {d.db_last_error()}" }
     back = 0.0;
-    while d.db_next() { back = ((d.db_col(0) ?? "") as float?) ?? 0.0 }
+    while r.next() { back = ((r.col(0) ?? "") as float?) ?? 0.0 }
     if back == v { same += 1 }
   }
   // And the CALLER-side hole, closed by `inline_value_fault`: the same float
@@ -296,7 +300,8 @@ fn procedures <D: SqlDb> (d: D, create: text) -> text {
   guard = d.db_call(p, short);
 
   rows = 0;
-  if d.db_select("SELECT id FROM loft_q") { while d.db_next() { rows += 1 } }
+  rq = d.db_select("SELECT id FROM loft_q");
+  if rq.ok() { while rq.next() { rows += 1 } }
 
   // Two statements in one body: a procedural language, or nothing.
   two: SqlText = "DELETE FROM {tbl}; DELETE FROM {tbl}";

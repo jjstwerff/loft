@@ -9,6 +9,16 @@ fn greet(name: text) -> text { "hi {name}" }
 fn is_big(n: integer) -> boolean { n > 100 }
 fn dbl(x: single) -> single { x + x }
 fn boom(n: integer) -> integer { assert(n > 0, "must be positive"); n }
+fn taint(v: integer) -> integer { v }
+fn thru_u8(v: u8) -> integer { v }
+fn thru_i8(v: i8) -> integer { v }
+fn thru_i16(v: i16) -> integer { v }
+fn thru_i32(v: i32) -> integer { v }
+fn thru_u32(v: u32) -> integer { v }
+fn ret_i8(v: integer) -> i8 { v as i8 }
+fn ret_i16(v: integer) -> i16 { v as i16 }
+fn ret_i32(v: integer) -> i32 { v as i32 }
+fn ret_u8(v: integer) -> u8 { v as u8 }
 "#;
 
 fn prog() -> Program {
@@ -54,6 +64,73 @@ fn boolean_and_single_returns() {
         p.call("dbl", &[Value::Float(9.0)]).unwrap(),
         Value::Float(18.0)
     );
+}
+
+/// A narrow integer parameter occupies a FULL stack cell, so the host marshal
+/// must fill all eight bytes of it.
+///
+/// The stack steps in 8-byte units, so writing a `u8` argument as one byte does
+/// not shorten the frame — the later arguments still land where the callee
+/// expects them, and nothing crashes.  What happens instead is that the cell's
+/// other seven bytes keep whatever the PREVIOUS call left there, and the callee
+/// reads them as part of the number.  Hence `taint` first: it puts a
+/// recognisable pattern in that cell, so a regression answers
+/// `0x0F0F0F0F0F0F0F01` instead of `1` and says so in its own value.
+#[test]
+fn a_narrow_argument_does_not_inherit_the_previous_calls_bytes() {
+    let mut p = prog();
+    assert_eq!(p.call("thru_u8", &[Value::Int(1)]).unwrap(), Value::Int(1));
+    assert_eq!(
+        p.call("taint", &[Value::Int(0x0F0F_0F0F_0F0F_0F0F)])
+            .unwrap(),
+        Value::Int(0x0F0F_0F0F_0F0F_0F0F)
+    );
+    assert_eq!(
+        p.call("thru_u8", &[Value::Int(1)]).unwrap(),
+        Value::Int(1),
+        "the u8 argument inherited the previous call's upper bytes"
+    );
+}
+
+/// Sign is part of the value, in both directions.  A narrow signed type is
+/// sign-extended in its stack cell, so reading or writing that cell at the
+/// declared STORAGE width (`u8` = 1 byte) turns every negative into a large
+/// positive — `-1` as an `i8` came back as `255`.
+#[test]
+fn narrow_integers_keep_their_sign_across_a_host_call() {
+    let mut p = prog();
+    for (func, v) in [
+        ("thru_i8", -1),
+        ("thru_i8", -128),
+        ("thru_i8", 127),
+        ("thru_i16", -1),
+        ("thru_i16", -32_768),
+        ("thru_i32", -1),
+        ("thru_i32", -2_147_483_648),
+        ("thru_u8", 255),
+        ("thru_u32", 4_294_967_294),
+    ] {
+        assert_eq!(
+            p.call(func, &[Value::Int(v)]).unwrap(),
+            Value::Int(v),
+            "{func}({v}) did not round-trip"
+        );
+    }
+    for (func, v) in [
+        ("ret_i8", -1),
+        ("ret_i8", -128),
+        ("ret_i16", -1),
+        ("ret_i16", -32_768),
+        ("ret_i32", -1),
+        ("ret_i32", -2_147_483_648),
+        ("ret_u8", 255),
+    ] {
+        assert_eq!(
+            p.call(func, &[Value::Int(v)]).unwrap(),
+            Value::Int(v),
+            "{func} returning {v} did not round-trip"
+        );
+    }
 }
 
 #[test]
@@ -212,4 +289,29 @@ fn formatter_width_counts_characters_not_bytes() {
         !out.contains("assert(\n"),
         "args must not wrap — width is character count, not bytes: {out:?}"
     );
+}
+
+/// What one host call costs, as a REPORT — run it, read the number, never gate
+/// on it (`cargo test --release --test host_call measure_call_cost -- --ignored
+/// --nocapture`).
+///
+/// It exists because this cost is invisible in the tests above and used to be
+/// dominated by something none of them could see: publishing the fault-site span
+/// table deep-cloned the whole map on every entry, which costs nothing for a
+/// program entered once and 4.4 µs of every 4.7 µs call for a program entered in
+/// a loop.  A `loft::host` caller does exactly that, and so does every call to a
+/// process-placed library (@PLN119), which travels the same path.  Roughly 0.5 µs
+/// on this machine after the fix; an answer in microseconds means the snapshot is
+/// being rebuilt per call again.
+#[test]
+#[ignore = "a measurement, not a gate"]
+fn measure_call_cost() {
+    let mut p = prog();
+    let n = 100_000;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        let _ = p.call("add", &[Value::Int(2), Value::Int(3)]).unwrap();
+    }
+    let d = t.elapsed();
+    println!("host call: {d:?} total, {:?}/call", d / n);
 }

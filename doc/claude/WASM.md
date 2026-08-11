@@ -40,7 +40,7 @@ Bridge API and concluded `--html` has a filesystem; it does not):
 
 | Build | Target | Host surface | Use it for |
 |---|---|---|---|
-| **`--html`** | `wasm32-unknown-unknown` cdylib, raw `extern "C"` (no wasm-bindgen), driven by `doc/loft-gl-wasm.js` | ONLY `loft_io.loft_host_print`, `loft_io` input queue + `host_output`, `loft_gl.*`, plus any `[wasm.bridge]` routes a used library ships (e.g. `web`'s WebSocket).  **No filesystem, no args, no env.** | The browser.  Small: ~1.1 MB (~330 KB gz) for a real kernel |
+| **`--html`** | `wasm32-unknown-unknown` cdylib, raw `extern "C"` (no wasm-bindgen), driven by `doc/loft-gl-wasm.js` + `doc/loft-fs.js` | `loft_io.loft_host_print`, `loft_io` input queue + `host_output`, the `loft_io.loft_host_fs_*` filesystem (loft#851), `loft_gl.*`, plus any `[wasm.bridge]` routes a used library ships (e.g. `web`'s WebSocket).  **No args, no env.** | The browser.  Small: ~1.1 MB (~330 KB gz) for a real kernel |
 | **`--native-wasm`** | `wasm32-wasip2`, full `std` + WASI + component adapter | WASI (a real fs, args, env via the runtime) | Headless/server wasm.  **Compile-only** — needs an external runtime (wasmtime).  ~4× heavier than `--html` (measured 5.4 MB / 1.5 MB gz on the same kernel) — do not ship it to a browser |
 | **IDE `make wasm`** | wasm-bindgen build (`wasm` Cargo feature) | the `globalThis.loftHost` bridges **this document describes** | The in-browser IDE/playground |
 
@@ -48,6 +48,88 @@ Everything below — the virtual filesystem, the Host Bridge API, the Node
 harness — applies to the **third** build only.  For `--html` see
 [HTML_EXPORT.md](HTML_EXPORT.md) (its host-import list is complete);
 for the browser-interaction design see [BROWSER_INTEROP.md](BROWSER_INTEROP.md).
+
+### What each target binds
+
+The table above says which world a build belongs to.  This one says what a
+program can actually CALL in each, by host group — the question a consumer
+arrives with, and the one that previously took a grep of an emitted page to
+answer (loft#851).
+
+| Host group | interpreter / `--native` | `--html` | `--native-wasm` | IDE `make wasm` |
+|---|---|---|---|---|
+| file I/O (`file`, `read_bytes`, `write_bytes`, `list_dir`, `exists`, …) | yes | yes (page FS, `doc/loft-fs.js`) | yes (WASI) | yes (VirtFS / `loftHost.fs_*`) |
+| graphics + audio (`gl_*`, `audio_*`) | yes | yes | no | no |
+| stdout / stdin (`println`, `host_input`) | yes | yes | yes | yes |
+| structured messages (`host_output` → `loftPush`) | no | yes | no | no |
+| http (`store_load_url`, range reads) | yes | yes | yes | yes |
+| clock (`now`, `ticks`) | yes | yes | yes | yes |
+| args / env | yes | **no** | yes | yes |
+| key–value storage | no | no | no | yes (`loftHost.storage_*`) |
+
+**Calling into a group this target does not bind is not an error.**  The loft
+side compiles either way and the call answers as if the resource were absent —
+a write reports failure, a read answers null, a size answers 0.  That is the
+deliberate rule (loft#709: one source runs on every target, so a call this
+target cannot serve answers at runtime rather than refusing the build).
+
+### The page filesystem (`--html`)
+
+A page draws AND stores.  `--html` used to bind no filesystem at all: the file
+calls compiled, each took an inert branch and answered "absent", and the build
+reported success — so a rendering editor in a page could not save, and the
+consumer found that out by grepping the emitted bundle (loft#851).
+
+**What a page gets.**  The whole file surface — `file(p)` with `#size` /
+`#next` / `#read(n)` / `+=`, `read_bytes` / `write_bytes`, `delete` / `move` /
+`mkdir` / `mkdir_all` / `list_dir` / `is_dir` / `is_file` / `exists`, and
+`set_file_size` — answering exactly what `--interpret` and `--native` answer for
+the same program.  Both page shells bind it, so a program that only stores still
+gets the minimal engine-less page rather than the WebGL2 one.
+
+**Where the bytes live.**  `doc/loft-fs.js` is the host half: an immutable
+**base tree** the page supplies, plus a **delta** holding every write, persisted
+to `localStorage`.  Reads consult the delta and fall back to the base; writes
+only ever land in the delta.  So closing the tab keeps the user's work and
+`resetToBase()` throws it away — the shape `LayeredFS` (§ *Layered Filesystem*)
+proved for the IDE, which is what a page actually needs.
+
+Four page globals tune it, all optional:
+
+| global | meaning |
+|---|---|
+| `loftBaseFS` | `{"/abs/path": string \| Uint8Array}` — the read-only base tree (default empty) |
+| `loftFSKey` | `localStorage` key for the delta (default `loft-fs-delta`) |
+| `loftFSPersist` | `false` keeps the delta in memory for the tab's lifetime |
+| `loftFSCwd` | what a relative path resolves against (default `/`) |
+
+**It is the PAGE's filesystem, not the user's disk.**  A browser cannot read
+`/home/you/data.csv`, and nothing here pretends otherwise: a path the page was
+not given simply reads as absent.  Seed `loftBaseFS` with the data the program
+needs, or fetch it (`store_load_url_trusted`).
+
+**Two things a page still answers differently.**  A failed mutation reports
+`Other` where native distinguishes `NotFound` / `PermissionDenied` /
+`IsDirectory` — the host bridge carries success and failure, not an errno.  And
+a `localStorage` quota failure is reported once to the console and then
+tolerated: the run continues against the in-memory delta, because losing the
+session is worse than losing the persistence.
+
+**Why it could not reuse the `loftHost.fs_*` bridges below.**  Those are
+`js_sys::Reflect` lookups compiled under the `wasm` (wasm-bindgen) Cargo
+feature.  `--html` deliberately builds its runtime rlib
+`--no-default-features --features random`, and it REFUSES to write a page whose
+wasm imports anything beyond `loft_gl` and `loft_io` — a wasm-bindgen build
+imports `__wbindgen_placeholder__` 35+ times and cannot instantiate against the
+page's raw-extern glue (§ *The rlib-stomp hazard*).  So the file functions are
+raw `loft_io` imports declared in `src/lib.rs`, and `src/wasm.rs` is the ONE
+place that picks a transport: `js_sys` under the `wasm` feature, raw imports
+otherwise.  Everything above it calls `host_fs_*` and never learns which it got,
+which is why the two browsers cannot answer differently.
+
+The build-side name for "this build reaches the filesystem through a JS host" is
+the `host_fs` cfg (`build.rs`), set for the wasm-bindgen bundle and for `--html`
+and deliberately NOT for `wasm32-wasip2`, which has a real WASI filesystem.
 
 ---
 

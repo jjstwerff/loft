@@ -20,6 +20,11 @@ import fs from "node:fs";
 import process from "node:process";
 import { readLoftValue } from "../doc/loft-deliver.js";
 import { AsyncifyCtrl } from "../doc/loft-asyncify.js";
+// loft#851 — the page's filesystem, imported rather than restubbed so every
+// harness answers what a real page answers.  A stub returning 0 would mean "an
+// empty file that EXISTS" where the contract says absent, and a missing import
+// is a LinkError the moment a program under test touches a file.
+import { loftFSImports } from '../doc/loft-fs.js';
 
 const wasmPath = process.argv[2];
 if (!wasmPath) {
@@ -49,6 +54,7 @@ function jsonSafe(v) {
 }
 
 const loft_io = {
+  ...loftFSImports(() => mem),
   loft_host_print(ptr, len) {
     process.stderr.write(dec.decode(new Uint8Array(mem.buffer, ptr, len)));
   },

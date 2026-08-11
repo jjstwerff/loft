@@ -1,0 +1,99 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN119 Q1 — TEXT RESIDENCY across a process handoff. One task writes a
+// store file; a SEPARATE PROCESS reads it back. Nothing but the file crosses,
+// so a cell passes only if the bytes live in the store itself — which is what
+// makes the store shareable as an mmap arena between tasks.
+//
+// The text shapes are the point: a short literal, a literal over the 256-byte
+// CONST_STORE threshold (where a long constant stops being inlined in
+// bytecode), a runtime-concatenated text, multi-byte UTF-8, and a
+// `vector<text>` whose elements are string pointers.
+//
+// Complements `store_load_vectext_refuse.loft`: the PAGED working-set loader
+// refuses `vector<text>` because relocating an entry into a DIFFERENT store
+// would dangle each element pointer. Whole-store transfer never relocates, so
+// the same field crosses intact here. Both facts are true; they are different
+// paths, and conflating them is the mistake this pair pins.
+//
+// Driven by `store_persist_loft.rs` (write, then readimage / readmmap, each a
+// fresh process).
+
+// 10 x 30 chars = 300, deliberately over the 256-byte inline threshold.
+LONG_LIT = "Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.Q1LONGTEXTRESIDENCYPROBE-0123.";
+
+struct HRec {
+  id: integer,
+  s_short: text,
+  s_long: text,
+  s_built: text,
+  s_utf8: text,
+  words: vector<text>,
+  nums: vector<integer>,
+  b: u8,
+  w: i16,
+}
+
+fn built_text() -> text {
+  s = "R-";
+  for bi in 0..5 {
+    s += "{bi}#";
+  }
+  s
+}
+
+fn report(h: hash<HRec[id]>) {
+  r = h[4207];
+  if r == null {
+    println("h ABSENT");
+    return
+  }
+  words = r.words;
+  nums = r.nums;
+  println("h short={r.s_short} len={len(r.s_short)}");
+  println("h long={len(r.s_long)} match={r.s_long == LONG_LIT}");
+  println("h built={r.s_built}");
+  println("h utf8={r.s_utf8} len={len(r.s_utf8)}");
+  println("h words={len(words)} w0={words[0]} w1={words[1]} w2={words[2]}");
+  println("h nums={len(nums)} n3={nums[3]}");
+  println("h narrow b={r.b} w={r.w}");
+  // Negative control: an unwritten key must read null, so a "present" cell
+  // above cannot be the reader inventing records.
+  if h[9999] == null { println("h absent=null") } else { println("h absent=RECORD") }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  h: hash<HRec[id]> = [];
+
+  if mode == "write" {
+    h += HRec {
+      id: 4207,
+      s_short: "zeta-42",
+      s_long: LONG_LIT,
+      s_built: built_text(),
+      s_utf8: "héllo-π",
+      words: ["kappa", "lambda-9", "mu"],
+      nums: [11, 22, 33, 44],
+      b: 217 as u8,
+      w: -31000 as i16,
+    };
+    if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "readimage" {
+    // Portable heap-copy path — no mmap, works on every backend.
+    ok = store_load(h, path);
+    println("readimage load={ok}");
+    report(h);
+  } else if mode == "readmmap" {
+    // Durable mmap path — the reader ADOPTS the on-disk image.
+    ok = store_persist_bind(h, path);
+    println("readmmap bind={ok}");
+    report(h);
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

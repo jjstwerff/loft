@@ -2017,11 +2017,55 @@ impl Store {
             let header = *self.addr::<i32>(pos, 0);
             let block_size = i32::abs(header);
             debug_assert!(block_size > 0, "zero-size block at {pos}");
+            // A zero-size block ENDS the walk rather than repeating it. The
+            // chain is malformed at that point — `validate_structure` is what
+            // refuses it — and stepping by zero is an infinite loop, which in a
+            // release build is a hang with no output rather than a diagnosis.
+            // `claims_rebuild` walks the same chain and has always stopped here;
+            // this half had only the debug assertion, so an image with a short
+            // tail hung @PLN119's remote transport (arc E) instead of failing.
+            if block_size == 0 {
+                break;
+            }
             if header < 0 && -header >= MIN_FREE_TREE {
                 self.fl_insert(pos);
             }
             pos += block_size as u32;
         }
+    }
+
+    /// @PLN119 arc E — take on a store image another machine sent.
+    ///
+    /// An image is the LIVE PREFIX of a store, not a whole one: sending a
+    /// store's unused capacity would make every small call pay for the largest
+    /// one before it. So the prefix has to be made into a well-formed store
+    /// again on arrival, and that is one step — the space past the image becomes
+    /// a single free block, exactly as `init` makes the whole store one.
+    ///
+    /// Without it the tail is whatever this buffer held, and a zero word there
+    /// reads as a zero-size block: the chain walk then never terminates.
+    pub fn adopt_image(&mut self, bytes: &[u8]) {
+        let words = u32::try_from(bytes.len() / 8)
+            .unwrap_or(u32::MAX)
+            .max(PRIMARY + 1);
+        if words > self.size {
+            self.resize_store(words);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.ptr,
+                bytes.len().min(self.size as usize * 8),
+            );
+        }
+        // Everything past the image is free space, in one block. `init` writes
+        // the same negative-header form for a whole fresh store.
+        if words < self.size {
+            *self.addr_mut(words, 0) = -((self.size - words) as i32);
+        }
+        self.free_root = 0;
+        self.fl_rebuild();
+        self.claims_rebuild();
     }
 
     /// Rebuild `claims` from the arena, for a store whose records arrived as an IMAGE
@@ -2052,6 +2096,23 @@ impl Store {
             }
             pos += block_size as u32;
         }
+    }
+
+    /// @PLN119 arc B — re-derive the allocator's cached state from the store's
+    /// own bytes.
+    ///
+    /// The free tree and the claim set live in the block chain; the `Store`
+    /// struct only caches them, and a cache is only ever right for the process
+    /// that made the claims. A store shared through a mapping therefore has a
+    /// second reader whose cache says nothing happened — and allocating against
+    /// that stale cache hands out a block that is already in use.
+    ///
+    /// This is the same walk `open` does, made callable at the moment the other
+    /// side hands the store over. It is not a repair: nothing about the bytes
+    /// changes, only this side's opinion of them.
+    pub fn resync_allocator(&mut self) {
+        self.fl_rebuild();
+        self.claims_rebuild();
     }
 
     /// P6: merge every run of adjacent free blocks in place, then rebuild

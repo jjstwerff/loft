@@ -252,6 +252,41 @@ pub struct Function {
     /// decidable at the call site.
     work_text_p2: u16,
     work_ref: u16,
+    /// loft#848 — the PASS-2-ONLY `__ref` sequence, the reference twin of
+    /// `work_text_p2`, and for the same reason: the variable tables persist across
+    /// passes BY NAME while the counter restarts, so a mint that fires on only one
+    /// pass shifts every later name in that function by one.
+    ///
+    /// What makes the reference sequence's version of that a WRONG VALUE rather than
+    /// a mismatched buffer is where the shifted name lands.  `ref_return` promotes
+    /// the returned work-ref to an ARGUMENT on pass 1, so the `__ref_N` it leaves
+    /// behind denotes the function's RETURN BUFFER — and a shifted pass-2 site is
+    /// handed that buffer as scratch.  It then writes a value that must stay live
+    /// into the buffer the return re-mints with `OpDatabase`, and the copy at the
+    /// return reads the destroyed store: `null`, no diagnostic.  In loft#848 a
+    /// value-block's result and an enum variant's payload both died that way.
+    ///
+    /// Pass-availability is a STATIC property of each mint site (every site routed
+    /// here sits under a `!self.first_pass` guard), so the split is decidable at the
+    /// call site — `work_refs_p2`.
+    ///
+    /// Routed here are the pass-2-only sites whose value is bound to something that
+    /// OUTLIVES the statement — a block's value, a named local's construction.  A
+    /// pass-2-only site whose value is consumed inside its own expression can share
+    /// the buffer harmlessly, and the value-position construction that cannot
+    /// (`fn h() -> vector<E> { g(Filled { … }) }`, where the subject must outlive the
+    /// call) is already defended one layer later, by @PLN90 A1b's promotion-skip in
+    /// `classify_ret_promotion`.  Moving that one here too would work and would make
+    /// A1b's materialise redundant for the shape — but it also takes away what
+    /// `oracle_flags_the_a1b_wrong_plan` proves, so it is a deliberate choice and not
+    /// an oversight (loft#848).
+    ///
+    /// The name stays `__ref_p2_N` and does not become its own stem: every
+    /// downstream work-ref rule keys on the `__ref_` prefix (the scope-exit free
+    /// emission in `scopes.rs`, `use_analysis`, `emit.rs`), and these ARE ordinary
+    /// work-refs — only their numbering is separate.  `sync_work_counters`
+    /// self-disambiguates, since `p2_1` does not parse as a number.
+    work_ref_p2: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
     // `vector_db` only runs on the second pass (first_pass guard), so it cannot
     // use the shared `work_ref` counter: that would shift the counter relative to
@@ -392,6 +427,7 @@ impl Function {
             work_ctext: 0,
             work_text_p2: 0,
             work_ref: 0,
+            work_ref_p2: 0,
             work_vdb: 0,
             work_kvb: 0,
             work_fmt: 0,
@@ -540,6 +576,7 @@ impl Function {
         self.work_ctext = 0;
         self.work_text_p2 = 0;
         self.work_ref = 0;
+        self.work_ref_p2 = 0;
         self.work_vdb = 0;
         self.work_kvb = 0;
         self.work_fmt = 0;
@@ -583,6 +620,7 @@ impl Function {
             work_ctext: 0,
             work_text_p2: 0,
             work_ref: 0,
+            work_ref_p2: 0,
             work_vdb: 0,
             work_kvb: 0,
             work_fmt: 0,
@@ -1989,11 +2027,9 @@ impl Function {
             if !var.argument
                 && let Type::Reference(d, _) = var.type_def.base()
                 && *d < data.definitions()
+                && data.drop_hook_nr(*d) != u32::MAX
             {
-                let tn = data.def(*d).name();
-                if data.def_nr(&format!("t_{}{}_OpDrop", tn.len(), tn)) != u32::MAX {
-                    continue;
-                }
+                continue;
             }
             if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
@@ -2134,11 +2170,12 @@ impl Function {
         fn index(name: &str, prefix: &str) -> Option<u16> {
             name.strip_prefix(prefix)?.parse::<u16>().ok()
         }
-        let (mut text, mut ctext, mut p2, mut refs, mut vdb, mut kvb, mut fmt) = (
+        let (mut text, mut ctext, mut p2, mut refs, mut refs_p2, mut vdb, mut kvb, mut fmt) = (
             self.work_text,
             self.work_ctext,
             self.work_text_p2,
             self.work_ref,
+            self.work_ref_p2,
             self.work_vdb,
             self.work_kvb,
             self.work_fmt,
@@ -2156,6 +2193,9 @@ impl Function {
             if let Some(k) = index(name, "__ref_") {
                 refs = refs.max(k);
             }
+            if let Some(k) = index(name, "__ref_p2_") {
+                refs_p2 = refs_p2.max(k);
+            }
             if let Some(k) = index(name, "__vdb_") {
                 vdb = vdb.max(k);
             }
@@ -2170,6 +2210,7 @@ impl Function {
         self.work_ctext = ctext;
         self.work_text_p2 = p2;
         self.work_ref = refs;
+        self.work_ref_p2 = refs_p2;
         self.work_vdb = vdb;
         self.work_kvb = kvb;
         self.work_fmt = fmt;
@@ -2249,16 +2290,57 @@ impl Function {
         self.work_ref
     }
 
+    pub fn work_ref_p2(&self) -> u16 {
+        self.work_ref_p2
+    }
+
     pub fn clean_work_refs(&mut self, work_ref: u16) {
         for w in work_ref..self.work_ref {
             let n = format!("__ref_{}", w + 1);
-            let v_nr = self.var(&n);
-            // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
-            // with this explicit flag, keeping the type_def intact for downstream passes.
-            self.variables[v_nr as usize].skip_free = true;
+            self.mark_skip_free_by_name(&n);
         }
     }
 
+    /// `clean_work_refs` for the pass-2-only sequence — the caller saves both marks
+    /// (`work_ref()` and `work_ref_p2()`) and cleans both, since one abandoned
+    /// construction can have minted from either.
+    pub fn clean_work_refs_p2(&mut self, work_ref_p2: u16) {
+        for w in work_ref_p2..self.work_ref_p2 {
+            let n = format!("__ref_p2_{}", w + 1);
+            self.mark_skip_free_by_name(&n);
+        }
+    }
+
+    fn mark_skip_free_by_name(&mut self, n: &str) {
+        let v_nr = self.var(n);
+        if v_nr == u16::MAX {
+            return;
+        }
+        // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
+        // with this explicit flag, keeping the type_def intact for downstream passes.
+        self.variables[v_nr as usize].skip_free = true;
+    }
+
+    /// A fresh function-scoped work-ref (`__ref_N`), reusing the same variable across
+    /// passes when the name is already taken.
+    ///
+    /// **A work-ref is function SCRATCH, and the return buffer is not scratch.**  On
+    /// pass 1 `ref_return` promotes the returned work-ref to an ARGUMENT — so the
+    /// `__ref_N` name it leaves behind now denotes the function's return buffer.  The
+    /// variable tables persist across passes BY NAME while the counter restarts, and
+    /// the sequence is NOT pass-stable (many mint sites can only fire on pass 2, once
+    /// types and layouts are known — that is why `__vdb_N` / `__kvb_N` / `__work_p2_N`
+    /// have their own counters).  A shifted pass-2 site was therefore handed the
+    /// return buffer, and wrote a live value into the buffer the return re-mints with
+    /// `OpDatabase`: in loft#848 a value-block's result and an enum variant's payload
+    /// both died that way, and the copy at the return read the destroyed store as
+    /// `null`.
+    ///
+    /// So a name that resolves to an argument is STEPPED OVER rather than reused.
+    /// Nothing needs that reuse: `__retbuf` is reserved at signature time, so
+    /// `ref_return` no longer re-finds the buffer by work-ref name (@PLAN59 H1), and a
+    /// return site handed a fresh local is delivered into the buffer by the same
+    /// `Bind`/substitute leg that already serves every site whose numbering shifted.
     #[track_caller]
     pub fn work_refs(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
         let n = format!("__ref_{}", self.work_ref + 1);
@@ -2274,6 +2356,27 @@ impl Function {
             self.set_type(v, tp.clone());
             self.variables[v as usize].source = lexer.at();
         }
+        self.work_refs.insert(v);
+        v
+    }
+
+    /// A work-ref for a mint site that can fire ONLY on pass 2 (every caller sits
+    /// under a `!self.first_pass` guard) — see [`work_ref_p2`](Self::work_ref_p2) for
+    /// why such a site must not draw from the shared `__ref_N` sequence (loft#848).
+    /// Otherwise identical to [`work_refs`](Self::work_refs): the variable is an
+    /// ordinary work-ref, so it gets the null-init preamble and the scope-exit free.
+    #[track_caller]
+    pub fn work_refs_p2(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        let n = format!("__ref_p2_{}", self.work_ref_p2 + 1);
+        self.work_ref_p2 += 1;
+        let v = if let Some(nr) = self.names.get(&n) {
+            let nr = *nr;
+            self.set_type(nr, tp.clone());
+            self.variables[nr as usize].source = lexer.at();
+            nr
+        } else {
+            self.add_variable(&n, tp, lexer)
+        };
         self.work_refs.insert(v);
         v
     }

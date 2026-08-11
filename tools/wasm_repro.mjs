@@ -28,6 +28,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
+// loft#851 — the page's filesystem, imported rather than restubbed: this
+// harness must exercise the SAME implementation a real page ships, or a
+// round-trip proven here says nothing about the browser.  In node there is no
+// localStorage, so the delta stays in memory for the run.
+import { loftFSImports } from '../doc/loft-fs.js';
 
 const argv = process.argv.slice(2);
 if (argv.length < 1) {
@@ -198,6 +203,11 @@ const loftGlExplicit = {
 
 const stubs = {
   loft_io: {
+    // loft#851: the real page filesystem, not a stub.  It has to come first —
+    // a read answering the proxy's blanket 0 would mean "an empty file that
+    // exists" rather than "absent", which is the one distinction every file
+    // test in this harness turns on.
+    ...loftFSImports(() => instance.exports.memory),
     // @PLN97: store_load_url_trusted's fetch import is now in every --html
     // wasm; this repro never fetches, so stub to the error sentinel so the
     // module still links (an absent import would LinkError at instantiate).

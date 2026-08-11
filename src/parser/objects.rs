@@ -324,7 +324,14 @@ impl Parser {
             let index_var = self.vars.var(name);
             // on pass 2, if a variable has Unknown type, it may be a pass-1
             // placeholder for a forward-declared function. Try fn-ref resolution.
-            if !self.first_pass && self.vars.tp(index_var).is_unknown() {
+            //
+            // Not at a BINDING position: there the name is the local being
+            // written, and a local may share a function's spelling (see the
+            // bare-name path below).  A binding whose type pass 1 could not yet
+            // infer — `turn = a_forward_fn();` — still arrives here as an
+            // untyped placeholder, and resolving it to the function would hand
+            // parse_assign a function-ref where its target belongs.
+            if !self.first_pass && self.vars.tp(index_var).is_unknown() && !self.at_binding_name() {
                 let prefixed = format!("n_{nm}");
                 let fn_d_nr = self.data.def_nr(&prefixed);
                 if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
@@ -540,44 +547,40 @@ impl Parser {
                     nr
                 }
             };
-            if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
-                // @P392: the un-annotated form `<name> = …` is caught by the
-                // `=` check; the typed-local form `<name>: T = …` lands here
-                // with the lexer parked on `:`.  Without the typed-position
-                // branch the parser silently produces a function-ref
-                // `Value::Int`, back in parse_assign the `if let Value::Var(_)
-                // = code` arm doesn't match, the `:` is never consumed, and
-                // the user sees a confusing `Expect token ;` at the `:`.
-                // loft#756 — a tuple-destructuring element binds too, and it
-                // reaches here spelled `, ` / `)` rather than `=`.  Routing it
-                // through the same predicate makes `(a, chr) = pair()` report
-                // the collision by name, instead of the misleading "requires
-                // plain variable names".
-                let un_annotated = self.at_binding_name();
-                let typed_local = self.lexer.peek_token(":");
-                if un_annotated || typed_local {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Cannot redefine function '{nm}' as a variable"
-                    );
-                    // RECOVER as a Var so parse_assign's downstream arms
-                    // (typed-annotation `:` consumer; bare `=` assignment)
-                    // run on a sane shape — otherwise the function-ref
-                    // `Value::Int` below leaves the `:`/`=` un-consumed and
-                    // we double-emit `Expect token ;`.  Both un-annotated
-                    // and typed-local now recover with a single, clear
-                    // diagnostic.
-                    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-                    t = Type::Unknown(0);
-                } else {
-                    *code = Value::Int(fn_d_nr as i32);
-                    self.data.def_used(fn_d_nr);
-                    self.record_sandbox_fn_ref(fn_d_nr); // @PLN86 L4
-                    let arg_types = self.fn_ref_arg_types(fn_d_nr);
-                    let ret_type = self.data.def(fn_d_nr).returned().clone();
-                    t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
-                }
+            // A name at a BINDING position is the author naming a local, not a
+            // reference to a function that happens to share the spelling — so it
+            // binds, and the function stays reachable as a call.
+            //
+            // loft keeps values and functions in SEPARATE namespaces, which the
+            // other binding forms already rely on: a parameter, a `for` variable
+            // and a struct field may all be called `chr` while `chr(65)` in the
+            // same scope still reaches the stdlib function.  Three forms route
+            // through here and must agree with them — `<name> = …`, the typed
+            // local `<name>: T = …` (the lexer is parked on `:`), and a
+            // tuple-destructuring element (spelled `,` / `)`).
+            //
+            // Refusing them instead made every public function a library adds a
+            // breaking change for any consumer already using that word as a local
+            // — a cost the consumer cannot see coming and cannot prepare for
+            // (loft#852; loft#756 is the same collision against the stdlib).
+            // The refusal was never a namespace rule, only this path: `for turn`
+            // and `fn go(turn: integer)` accepted the name throughout.
+            //
+            // The `:` peek is what @P392 added: without it the typed-local form
+            // produced a function-ref `Value::Int`, back in parse_assign the
+            // `if let Value::Var(_) = code` arm did not match, the `:` was never
+            // consumed, and the user saw a confusing `Expect token ;`.  Binding
+            // yields the `Value::Var` that arm needs, so the form parses.
+            if fn_d_nr != u32::MAX
+                && matches!(self.data.def_type(fn_d_nr), DefType::Function)
+                && !(self.at_binding_name() || self.lexer.peek_token(":"))
+            {
+                *code = Value::Int(fn_d_nr as i32);
+                self.data.def_used(fn_d_nr);
+                self.record_sandbox_fn_ref(fn_d_nr); // @PLN86 L4
+                let arg_types = self.fn_ref_arg_types(fn_d_nr);
+                let ret_type = self.data.def(fn_d_nr).returned().clone();
+                t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
             } else {
                 // @PLN22 Phase 1 — a bare name that is a VARIANT of some enum,
                 // used with no type context, is the "needs qualification" error.
@@ -2921,6 +2924,10 @@ impl Parser {
         let mut in_place_var: Option<u16> = None;
         let mut sinks = FieldSinks::default();
         let work = self.vars.work_ref();
+        // Both sequences: the construction arms below mint from the pass-2-only
+        // `__ref_p2_N` one (loft#848), and an abandoned construction must clean
+        // whichever it took.
+        let work_p2 = self.vars.work_ref_p2();
         if let Value::Var(v_nr) = code {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
@@ -3014,7 +3021,14 @@ impl Parser {
                 new_object = true;
                 self.data.set_referenced(td_nr, self.context, Value::Null);
                 let ret = self.data.def(td_nr).returned();
-                let w = self.vars.work_refs(ret, &mut self.lexer);
+                // This arm is PASS-2-ONLY (its own `!self.first_pass` guard) and it builds
+                // a value bound to a NAMED LOCAL, which outlives the statement — so it
+                // draws from the `__ref_p2_N` sequence rather than the shared one.  On the
+                // shared counter its position shifted relative to pass 1 and it was handed
+                // the name pass 1 left on the return buffer, so `v: E = EA { … }` built the
+                // variant INTO the buffer the return re-mints, and the return copied from
+                // the destroyed store: `null` (loft#848).  See `Vars::work_ref_p2`.
+                let w = self.vars.work_refs_p2(ret, &mut self.lexer);
                 let tp = i32::from(self.data.def(td_nr).known_type());
                 list.push(v_set(w, Value::Null));
                 list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
@@ -3066,6 +3080,7 @@ impl Parser {
             ) {
                 self.lexer.revert(link);
                 self.vars.clean_work_refs(work);
+                self.vars.clean_work_refs_p2(work_p2);
                 return Type::Unknown(0);
             }
             if !self.lexer.has_token(",") {

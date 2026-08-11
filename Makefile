@@ -580,8 +580,17 @@ view-build:
 	@echo "loft-view ready: tools/viewer/src/main.loft (interp-mode)"
 	@echo "  See tools/viewer/BUILD_NOTES.md for native-mode blockers."
 
+# @PLN119 arc F — the state dump is loft now, not bash.  It replaced
+# `tools/viewer/refresh.sh`, which existed only because loft could not call
+# `git`; `lib/git` is that call as a typed library, so the viewer's state is
+# produced by the same language the viewer is written in — and `jq` is no longer
+# needed to run the dashboard.
 view-refresh:
-	@./tools/viewer/refresh.sh
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: make view-build"; \
+	    exit 1; \
+	fi
+	@./target/release/loft --interpret --lib lib tools/viewer/refresh.loft
 
 # ── Tracker-tag indexer (plan-37) ───────────────────────────────
 # Scans the repo for @P-id / @PLAN-id references, writes

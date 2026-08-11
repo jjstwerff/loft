@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 — the free→method hint when the method belongs to a `use`d PACKAGE
+// rather than to the stdlib.
+//
+// `dupname_a::Chunk` has no `go`; `dupmethod_b::Thing` has one, as a method. The
+// call below therefore cannot resolve, and the hint that explains why has to name
+// a receiver the reader can act on. It used to print the bare `Thing` — the one
+// name that identifies nothing here, since it is exactly what several packages
+// declare — and to assert that the *stdlib* had made the method/free choice,
+// sending the reader to a file that never mentions `go`.
+use dupname_a;
+use dupmethod_b;
+
+fn main() {
+  c = Chunk { ck_cx: 1, ck_cz: 2, ck_cells: 9 };
+  print("{go(c, 5)}")
+}

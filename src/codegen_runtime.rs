@@ -147,6 +147,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     // `engine_host::typed` (re-exported below): a compiled kernel program
     // calls the SAME in-binary kernel the interpreter uses — one
     // implementation, two calling conventions.
+    RuntimeFn { name: "n_git_query",                  abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_listen",              abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_pump",                abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_next_event",          abi: Abi::Cell },
@@ -161,6 +162,14 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_broadcast",                  abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_idle",                abi: Abi::Cell },
     RuntimeFn { name: "n_clients",                    abi: Abi::Cell },
+    // @PLN119 arc F — the same four under the names the loft surface uses now
+    // that its public functions are WRAPPERS (a function that already carries a
+    // native symbol cannot be placed).  The old names stay: this table is keyed
+    // by loft def name, and a library elsewhere may still spell them the old way.
+    RuntimeFn { name: "n_kernel_send",                abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_broadcast",           abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_clients",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_post",                abi: Abi::Cell },
     RuntimeFn { name: "n_udp_bound",                  abi: Abi::Cell },
     RuntimeFn { name: "n_sync_class",                 abi: Abi::Cell },
     RuntimeFn { name: "n_sync_class_keyed",           abi: Abi::Cell },
@@ -207,6 +216,8 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
 // @PLN18 08-S1 — the typed kernel twins, glob-importable by generated crates.
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::engine_host::typed::*;
+// @PLN119 arc F — `lib/git`'s single native, so a COMPILED program can ask git too.
+pub use crate::git_query::typed::*;
 // @PLN18 08-S2 — the live-flip surface (typed twin in live_dispatch).
 pub use crate::live_dispatch::n_live_flip;
 // @PLN18 08-S4 — the background-rebuild surface.
@@ -275,9 +286,9 @@ pub fn from_loft_ref(stores: &mut Stores, r: loft_ffi::LoftRef) -> DbRef {
 }
 use crate::vector;
 use std::cell::RefCell;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::fs::{File, OpenOptions};
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::io::{Read, Seek, SeekFrom, Write as _};
 // #620 — see `n_now`: `wasm32-wasip2` shares the real-clock path.
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
@@ -381,7 +392,7 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
     }
     // Plan-57 Phase C: single-ownership (ref-count removed) — close the file
     // handle whenever its File store is freed.
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     if !stores.allocations[db.store_nr as usize].free
         && db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
@@ -1294,7 +1305,7 @@ pub fn OpStep(
 /// UTF-8, and warns on the latter.  Emptiness alone does not tell the caller
 /// which happened; the loft-level `content()` reads the file's byte size beside
 /// it and answers null when a file that HAS bytes yielded no text (loft#829).
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn read_file_text_into(path: &str, buf: &mut String) {
     buf.clear();
     let Ok(mut f) = File::open(path) else { return };
@@ -1314,10 +1325,44 @@ pub fn read_file_text_into(path: &str, buf: &mut String) {
     }
 }
 
+// ─── loft#851  The page's filesystem ──────────────────────────────────────────
+//
+// Under `host_fs` the file lives on the JS host, not behind a `std::fs::File`
+// handle, so there is no `stores.files[]` entry and no OS cursor.  The host owns
+// BOTH: it resolves the path against its own working directory, and it keeps a
+// per-path read/write cursor (`host_fs_seek` / `host_fs_get_cursor`).  That is
+// why the browser bodies below pass the RAW path — `resolve_path` re-homes
+// against a program anchor that exists only where there is a real filesystem to
+// anchor to.
+//
+// Each of these mirrors the interpreter's browser branch in `src/state/io.rs`
+// line for line.  They are the same contract reached from two backends, and
+// #851's report is exactly what happens when only one of them has it.
+
+/// The path recorded in a loft `File` record.
+#[cfg(host_fs)]
+fn file_record_path(stores: &Stores, file: &DbRef) -> String {
+    let store = stores.store(file);
+    store
+        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+        .to_owned()
+}
+
+/// Read `path` as UTF-8 text into `buf` through the host bridge.  Leaves `buf`
+/// EMPTY when the path is absent or its bytes are not text — the same two
+/// outcomes the native reader collapses, so `content()` answers alike on both.
+#[cfg(host_fs)]
+pub fn read_file_text_into(path: &str, buf: &mut String) {
+    buf.clear();
+    if let Some(text) = crate::wasm::host_fs_read_text(path) {
+        *buf = text;
+    }
+}
+
 /// Read the entire contents of a file into `content`, replacing its previous value.
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content: &mut String) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
@@ -1335,17 +1380,23 @@ pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content:
     read_file_text_into(&file_path, content);
 }
 
-/// WASM stub: file I/O not available; clears content.
-#[cfg(feature = "wasm")]
-pub fn OpGetFileText(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, content: &mut String) {
+/// Read the whole file through the host bridge.
+#[cfg(host_fs)]
+pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content: &mut String) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     content.clear();
+    if file.rec == 0 {
+        return;
+    }
+    let path = file_record_path(stores, &file);
+    read_file_text_into(&path, content);
 }
 
 /// Seek to `pos` bytes from the start of the file.
 /// If the file handle is not yet open, stores `pos` in `#next` so the first
 /// read/write applies the seek after opening.
 /// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
@@ -1363,14 +1414,25 @@ pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
     }
 }
 
-/// WASM stub: file I/O not available.
-#[cfg(feature = "wasm")]
-pub fn OpSeekFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _pos: i64) {}
+/// Seek the host's per-path cursor, and record the position in `#next` so a
+/// following read/write starts there.
+#[cfg(host_fs)]
+pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if file.rec == 0 {
+        return;
+    }
+    let path = file_record_path(stores, &file);
+    crate::wasm::host_fs_seek(&path, pos);
+    stores
+        .store_mut(&file)
+        .set_long(file.rec, file.pos + 16, pos);
+}
 
 /// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
 /// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
 #[must_use]
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
     let stores: &Stores = unsafe { &*cell.get() };
     if file.rec == 0 {
@@ -1391,17 +1453,25 @@ pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
     }
 }
 
-/// WASM stub: file I/O not available; always returns `i64::MIN`.
+/// Ask the host for the size.  `i64::MIN` when the path is absent — the same
+/// sentinel `std::fs::metadata` failing produces, which is what `f#size`
+/// answers null on.
 #[must_use]
-#[cfg(feature = "wasm")]
-pub fn OpSizeFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> i64 {
-    i64::MIN
+#[cfg(host_fs)]
+pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
+    if file.rec == 0 {
+        return i64::MIN;
+    }
+    let path = file_record_path(stores, &file);
+    let size = crate::wasm::host_fs_file_size(&path);
+    if size < 0 { i64::MIN } else { size }
 }
 
 /// Truncate (or extend) the file to `size` bytes.  Closes any open handle first.
 /// Returns `true` on success, `false` on failure.
 /// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i64) -> bool {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
@@ -1436,17 +1506,29 @@ pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i
         .is_ok()
 }
 
-/// WASM stub: file I/O not available; always returns `false`.
-#[cfg(feature = "wasm")]
-pub fn OpTruncateFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _size: i64) -> bool {
-    false
+/// Resize through the host: read, slice or zero-extend, write back.  The host
+/// contract has no truncate of its own, and composing it here keeps the page's
+/// import list one name shorter (`src/lib.rs`).
+#[cfg(host_fs)]
+pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i64) -> bool {
+    let stores: &Stores = unsafe { &*cell.get() };
+    if file.rec == 0 {
+        return false;
+    }
+    let path = file_record_path(stores, &file);
+    let Some(mut bytes) = crate::wasm::host_fs_read_binary(&path) else {
+        return false;
+    };
+    let new_len = size.max(0) as usize;
+    bytes.resize(new_len, 0);
+    crate::wasm::host_fs_write_binary(&path, &bytes) == 0
 }
 
 /// Flush buffered bytes for the open handle backing `file` so that
 /// preceding writes are durable.  Returns `true` on success.  If the
 /// file is not currently open returns `true` — there is nothing to flush.
 /// Bytecode equivalent: `State::sync_file` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpSyncFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> bool {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
@@ -1463,10 +1545,13 @@ pub fn OpSyncFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> bool {
     }
 }
 
-/// WASM stub: file sync not available.
-#[cfg(feature = "wasm")]
-pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> bool {
-    false
+/// A host write lands when the call returns — there is no buffered handle to
+/// flush — so a sync succeeds with nothing to do.  It answers `true` for the
+/// same reason the native path does when no handle is open: `false` means the
+/// bytes did NOT reach the file, and on this target they already have.
+#[cfg(host_fs)]
+pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> bool {
+    file.rec != 0
 }
 
 // ─── File I/O ─────────────────────────────────────────────────────────────────
@@ -1478,7 +1563,7 @@ pub fn OpSyncFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> bool {
 /// successive `f += …` appends preserve earlier bytes.  Explicit
 /// truncation goes through `OpTruncateFile` (`f.set_file_size(0)`
 /// / `f#size = 0`).
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
@@ -1525,7 +1610,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 
 /// Open (or reuse) a file handle for reading, seeking to `initial_pos`.
 /// Returns the index into `stores.files`, or `i32::MIN` on error.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
@@ -1977,7 +2062,7 @@ impl FileVal for DbRef {
 
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpWriteFile<T: FileVal>(
     cell: &std::cell::UnsafeCell<Stores>,
     file: DbRef,
@@ -2042,19 +2127,50 @@ pub fn OpWriteFile<T: FileVal>(
         .set_long(file.rec, file.pos + 16, next_pos + written);
 }
 
-/// WASM stub: file write not available.
-#[cfg(feature = "wasm")]
+/// Write through the host bridge at the position `#next` names.
+#[cfg(host_fs)]
 pub fn OpWriteFile<T: FileVal>(
-    _cell: &std::cell::UnsafeCell<Stores>,
-    _file: DbRef,
-    _val: &mut T,
-    _db_tp: i32,
+    cell: &std::cell::UnsafeCell<Stores>,
+    file: DbRef,
+    val: &mut T,
+    db_tp: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if file.rec == 0 {
+        return;
+    }
+    let format = stores.store(&file).get_byte(file.rec, file.pos + 32, 0);
+    // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists
+    if format != 1 && format != 2 && format != 3 && format != 5 {
+        return;
+    }
+    let little_endian = format == 2;
+    let path = file_record_path(stores, &file);
+    // `+=` is append-only unless the user set `f#next = N`: with no explicit
+    // position the write starts at the current end of file, which here is what
+    // the host reports rather than what an open handle's cursor says.  A path
+    // the host does not have yet reports -1 and starts at 0.
+    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
+    let next_pos = if raw_next == i64::MIN {
+        crate::wasm::host_fs_file_size(&path).max(0)
+    } else {
+        raw_next
+    };
+    stores
+        .store_mut(&file)
+        .set_long(file.rec, file.pos + 8, next_pos);
+    let data = val.file_to_bytes(stores, db_tp, little_endian);
+    let written = data.len() as i64;
+    crate::wasm::host_fs_seek(&path, next_pos);
+    crate::wasm::host_fs_write_bytes(&path, &data);
+    stores
+        .store_mut(&file)
+        .set_long(file.rec, file.pos + 16, next_pos + written);
 }
 
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 pub fn OpReadFile<T: FileVal>(
     cell: &std::cell::UnsafeCell<Stores>,
     file: DbRef,
@@ -2106,15 +2222,42 @@ pub fn OpReadFile<T: FileVal>(
         .set_long(file.rec, file.pos + 16, next_pos + nread as i64);
 }
 
-/// WASM stub: file read not available.
-#[cfg(feature = "wasm")]
+/// Read through the host bridge from the position `#next` names.
+#[cfg(host_fs)]
 pub fn OpReadFile<T: FileVal>(
-    _cell: &std::cell::UnsafeCell<Stores>,
-    _file: DbRef,
-    _val: &mut T,
-    _bytes: i64,
-    _db_tp: i32,
+    cell: &std::cell::UnsafeCell<Stores>,
+    file: DbRef,
+    val: &mut T,
+    bytes: i64,
+    db_tp: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if file.rec == 0 {
+        return;
+    }
+    let format = stores.store(&file).get_byte(file.rec, file.pos + 32, 0);
+    if format != 1 && format != 2 && format != 3 && format != 5 {
+        return;
+    }
+    let little_endian = format == 2;
+    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
+    let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
+    stores
+        .store_mut(&file)
+        .set_long(file.rec, file.pos + 8, next_pos);
+    let path = file_record_path(stores, &file);
+    let n = bytes.max(0) as usize;
+    crate::wasm::host_fs_seek(&path, next_pos);
+    // A read past the end answers FEWER bytes, and `#next` must advance by what
+    // actually arrived — advancing by the requested `n` would walk the cursor
+    // past the file and make every following read empty.
+    if let Some(data) = crate::wasm::host_fs_read_bytes(&path, n) {
+        let actual = data.len() as i64;
+        val.file_from_bytes(stores, db_tp, little_endian, &data);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 16, next_pos + actual);
+    }
 }
 
 /// Trait allowing `OpRemove` to work with both plain-vector (`i32` index) and
@@ -4507,8 +4650,8 @@ pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
 // Called from fill.rs (interpreter) and generated native code alike.
 // Paths: interpreter uses `crate::codegen_runtime::*`; native uses
 // `use loft::codegen_runtime::*` so these names resolve in both contexts.
-// Under `--features wasm` each function calls the host bridge; otherwise it
-// calls the real filesystem.
+// Under `host_fs` (the wasm-bindgen bundle, and `--html`) each function calls
+// the host bridge; otherwise it calls the real filesystem.
 
 // Filesystem-op result codes shared by the interpreter and the native runtime.
 // The `default/02_files.loft` wrappers map these to `FileResult` variants via an
@@ -4519,9 +4662,9 @@ const FS_OTHER: i64 = 9;
 // Ungated: the `*_at` wrappers answer `NotFound` for a path outside the project
 // on every target, so this code is reachable in the wasm build too (loft#708).
 const FS_NOT_FOUND: i64 = 1;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 const FS_PERMISSION_DENIED: i64 = 2;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 const FS_IS_DIRECTORY: i64 = 3;
 
 /// Classify a filesystem mutation's result into an `FS_*` code.  `dir_is_err`
@@ -4530,7 +4673,7 @@ const FS_IS_DIRECTORY: i64 = 3;
 /// detected by a portable `fs_is_dir` stat rather than `ErrorKind::IsADirectory`,
 /// which only stabilised in Rust 1.83 and this file is recompiled by the user's
 /// rustc for `--native`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
     match r {
         Ok(()) => FS_OK,
@@ -4556,7 +4699,7 @@ fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
 /// Delete file `path`.  Returns an `FS_*` code (mapped to `FileResult` by the
 /// `delete` wrapper).  A directory target yields `FS_IS_DIRECTORY`.
 pub fn fs_delete(path: &str) -> i64 {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         if crate::wasm::host_fs_delete(path) == 0 {
             FS_OK
@@ -4564,7 +4707,7 @@ pub fn fs_delete(path: &str) -> i64 {
             FS_OTHER
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         fs_classify(std::fs::remove_file(path), path, true)
     }
@@ -4573,7 +4716,7 @@ pub fn fs_delete(path: &str) -> i64 {
 /// Rename / move `from` to `to`.  Returns an `FS_*` code.
 #[must_use]
 pub fn fs_move(from: &str, to: &str) -> i64 {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         if crate::wasm::host_fs_move(from, to) == 0 {
             FS_OK
@@ -4581,7 +4724,7 @@ pub fn fs_move(from: &str, to: &str) -> i64 {
             FS_OTHER
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         fs_classify(std::fs::rename(from, to), from, false)
     }
@@ -4590,7 +4733,7 @@ pub fn fs_move(from: &str, to: &str) -> i64 {
 /// Create directory `path`.  Returns an `FS_*` code.
 #[must_use]
 pub fn fs_mkdir(path: &str) -> i64 {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         if crate::wasm::host_fs_mkdir(path) == 0 {
             FS_OK
@@ -4598,7 +4741,7 @@ pub fn fs_mkdir(path: &str) -> i64 {
             FS_OTHER
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         fs_classify(std::fs::create_dir(path), path, false)
     }
@@ -4607,7 +4750,7 @@ pub fn fs_mkdir(path: &str) -> i64 {
 /// Create directory `path` and all parents.  Returns an `FS_*` code.
 #[must_use]
 pub fn fs_mkdir_all(path: &str) -> i64 {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         if crate::wasm::host_fs_mkdir_all(path) == 0 {
             FS_OK
@@ -4615,7 +4758,7 @@ pub fn fs_mkdir_all(path: &str) -> i64 {
             FS_OTHER
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         fs_classify(std::fs::create_dir_all(path), path, false)
     }
@@ -4624,11 +4767,11 @@ pub fn fs_mkdir_all(path: &str) -> i64 {
 /// Returns `true` if `path` exists and is a directory.
 #[must_use]
 pub fn fs_is_dir(path: &str) -> bool {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         crate::wasm::host_fs_is_dir(path)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         std::path::Path::new(path).is_dir()
     }
@@ -4637,11 +4780,11 @@ pub fn fs_is_dir(path: &str) -> bool {
 /// Returns `true` if `path` exists and is a regular file.
 #[must_use]
 pub fn fs_is_file(path: &str) -> bool {
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     {
         crate::wasm::host_fs_is_file(path)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     {
         std::path::Path::new(path).is_file()
     }

@@ -362,13 +362,14 @@ fn piece_row(t: TableDef, root: Ledger, e: Piece, ords: vector<integer>) -> vect
 /// a value in the wrong place rather than as a query nobody compared.
 fn dump(d: AnyDb, dial: Dialect, t: TableDef) -> text {
   q = t.select_rows(dial);
-  if !d.db_rows(q) { return "QUERY-FAILED {d.db_last_error()}" }
+  r = d.db_rows(q);
+  if !r.ok() { return "QUERY-FAILED {d.db_last_error()}" }
   out = "";
-  while d.db_next() {
+  while r.next() {
     if out != "" { out += ";" }
     for c in t.columns {
       if c#count > 0 { out += "|" }
-      v = d.db_col(c#count);
+      v = r.col(c#count);
       if v == null { out += "~" } else { out += v ?? "" }
     }
   }

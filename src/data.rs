@@ -5041,6 +5041,30 @@ impl Data {
         }
     }
 
+    /// loft#850 — can `d_nr` be the method of `type_nr`, judged by the receiver it declares
+    /// rather than by the name it is filed under?
+    ///
+    /// The `t_<len><Name>_<fn>` key carries a type's NAME, so it stops telling one type from
+    /// another the moment two packages in one graph both declare that name. The definition
+    /// itself still knows: its first parameter is the `self`/`both` receiver.
+    ///
+    /// Answers "yes" whenever the candidate does not demonstrably belong to a DIFFERENT
+    /// type — a candidate with no parameters, or whose receiver names no def (a generic
+    /// still carrying its type variable, a forward-reference stub, a `Function` receiver),
+    /// makes no claim to contradict, and rejecting it would refuse dispatch that works
+    /// today. Only a receiver that resolves to some other def is a mismatch.
+    #[must_use]
+    fn method_receives(&self, d_nr: u32, type_nr: u32) -> bool {
+        if d_nr == u32::MAX {
+            return false;
+        }
+        let Some(receiver) = self.def(d_nr).attributes.first() else {
+            return true;
+        };
+        let declared = self.type_def_nr(&receiver.typedef);
+        declared == u32::MAX || declared == type_nr
+    }
+
     #[must_use]
     pub fn find_fn(&self, source: u16, fn_name: &str, tp: &Type) -> u32 {
         if matches!(tp, Type::Unknown(_)) {
@@ -5067,16 +5091,30 @@ impl Data {
         }
         let base = self.def(type_nr).name.clone();
         let sig = Self::sig_type_name(&base, tp);
-        let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
-        if d_nr != u32::MAX {
-            return d_nr;
-        }
-        // @PLN25 — a `τ?` receiver falls back to the base (non-null) overload (inert when
-        // sig == base, i.e. gate-OFF or a non-nullable receiver).
-        if sig != base {
-            let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", base.len(), base));
-            if d_nr != u32::MAX {
-                return d_nr;
+        // loft#850 — the mangled key spells the receiver's NAME, and a name is not a type.
+        // Two packages may each declare a `Thing`, and both then register their methods
+        // under `t_5Thing_go`; whichever import landed first owns that key in the caller's
+        // name table. Asking by name alone therefore answers with the OTHER package's
+        // method, whose `self` is a different def — reported downstream as the
+        // unactionable `expected Thing, got Thing`, or, when a free function of the same
+        // name was the right answer all along, by never reaching it.
+        //
+        // So each candidate is CHECKED against the receiver it must accept, and a
+        // rejected one is looked up again in the type's OWN source, which is where the
+        // right package's method lives. `method_receives` only rejects a demonstrably
+        // foreign receiver, so a generic or stub candidate resolves exactly as before.
+        // @PLN25 — a `τ?` receiver tries its own overload first and falls back to the base
+        // (non-null) one; the second spelling is the same string when sig == base (gate-OFF
+        // or a non-nullable receiver), and looking it up twice would only repeat the work.
+        let spellings: &[&String] = if sig == base { &[&sig] } else { &[&sig, &base] };
+        let own_source = self.definitions[type_nr as usize].source;
+        for spelling in spellings {
+            let key = format!("t_{}{}_{fn_name}", spelling.len(), spelling);
+            for from in [source, own_source] {
+                let d_nr = self.source_nr(from, &key);
+                if self.method_receives(d_nr, type_nr) {
+                    return d_nr;
+                }
             }
         }
         let d_nr = self.source_nr(source, &format!("n_{fn_name}"));
@@ -5184,7 +5222,24 @@ impl Data {
             // own `source`) reproduces the global `(name, 0)` binding — without
             // it, `name_type(name, other_source)` returns `u16::MAX` after a
             // warm start and codegen emits `OpDatabase(db_tp=u16::MAX)`.
+            let requested_from = self.definitions[vd as usize].source;
             self.definitions[vd as usize].source = 0;
+            // …and drop the binding `add_def` just made under the REQUESTING
+            // source, which the line above has made a lie: the def now lives at
+            // source 0, so `(name, requesting_source)` is a cross-source alias
+            // nothing records and nothing can replay.
+            //
+            // Harmless while the table only grows — every lookup finds the
+            // global binding anyway. It bites on a REBUILD: `rebuild_indices`
+            // reconstructs `def_names` from each definition's own source, so it
+            // reproduces `(name, 0)` and not the stale one, and @PLN120's
+            // rollback guard correctly reports an alias that went missing. A
+            // library `pub fn` returning `vector<SomeStruct>` is what first
+            // reached it — @PLN119 arc F's `engine_host::turn() -> Turn` — and
+            // it took down a live-reload session on the first bad edit.
+            if requested_from != STD_SOURCE {
+                self.def_names.remove(&(name.clone(), requested_from));
+            }
             self.add_attribute(
                 lexer,
                 vd,
@@ -5482,6 +5537,169 @@ impl Data {
             *nr
         } else {
             u32::MAX
+        }
+    }
+
+    /// @PLN125 arc B — the scope-end hook declared for a type, or `u32::MAX` when it has
+    /// none.
+    ///
+    /// The lookup is keyed to the source that defines the TYPE, not to whichever source is
+    /// current. `def_nr` searches `self.source` and the stdlib, and both askers run AFTER
+    /// parsing — by then the current source is the main program — so a hook declared in a
+    /// library was reachable only when @PLN102 C97 had also injected it into the global
+    /// namespace, which happens for a `pub` function and not for a private one. The effect
+    /// was a hook the compiler VALIDATED (`check_drop_signature` accepts it) and then never
+    /// called anywhere, including inside its own package: a `#c` handle a cursor was written
+    /// to release stayed open, silently. A drop belongs to its type, so the type's source is
+    /// the one place to ask.
+    ///
+    /// One home for the fact, because the two askers must agree: the emitter puts the call
+    /// in, and the never-read lint stays quiet for a binding held only for its drop. If they
+    /// disagreed, one of the two would be wrong about the same declaration.
+    #[must_use]
+    pub fn drop_hook_nr(&self, type_def: u32) -> u32 {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return u32::MAX;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDrop", def.name.len(), def.name);
+        let nr = self.source_nr(def.source, &key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        self.def_nr(&key)
+    }
+
+    /// Does this program declare ANY `OpDrop`?
+    ///
+    /// The cheap gate in front of the whole cascade: with no hook anywhere, no type can own
+    /// a droppable, so every walk below would answer `false` and every synthesis step would
+    /// produce nothing. That is the overwhelmingly common program, and it should not pay for
+    /// a feature it does not use.
+    #[must_use]
+    pub fn any_drop_hook(&self) -> bool {
+        self.definitions
+            .iter()
+            .any(|d| d.def_type == DefType::Function && d.name.ends_with("_OpDrop"))
+    }
+
+    /// @PLN139 — the function that releases everything a value of this type owns: the
+    /// synthesized CASCADE when the type has members to release, else the type's own hook.
+    ///
+    /// This is what a drop site calls. The two-level answer is why the cascade is only
+    /// synthesized for types that actually own a member (`Parser::synth_drop_cascades`): a
+    /// type whose drop is just its own hook keeps calling that hook directly, so a program
+    /// that owns no containers is byte-identical to one compiled before the cascade existed.
+    #[must_use]
+    pub fn drop_cascade_nr(&self, type_def: u32) -> u32 {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return u32::MAX;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDropAll", def.name.len(), def.name);
+        let nr = self.source_nr(def.source, &key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        let nr = self.def_nr(&key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        self.drop_hook_nr(type_def)
+    }
+
+    /// Does this type have a SYNTHESIZED drop cascade (as opposed to only its own hook)?
+    ///
+    /// The question stage C asks before treating a copy into a container as a MOVE: a source
+    /// may only stop dropping when something else has taken over. While the cascade covers
+    /// fields but not yet enum payloads or collection elements (@PLN139 stages D/E), this is
+    /// what keeps the two halves in step — a container the cascade cannot yet release does
+    /// not take ownership, so its source keeps dropping and nothing is silently leaked.
+    #[must_use]
+    pub fn has_drop_cascade(&self, type_def: u32) -> bool {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return false;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDropAll", def.name.len(), def.name);
+        self.source_nr(def.source, &key) != u32::MAX || self.def_nr(&key) != u32::MAX
+    }
+
+    /// @PLN139 stage A — does dropping a value of this type require doing ANYTHING?
+    ///
+    /// True when the type declares `OpDrop` itself, or when it transitively OWNS a member
+    /// that does: a struct field, an enum variant's payload, a collection's element. It is
+    /// the question the drop cascade asks per type, and the reason it is a separate fact
+    /// from [`drop_hook_nr`](Self::drop_hook_nr): the hook answers *"does T run code of its
+    /// own"*, this answers *"does T's death mean any work at all"*. A wrapper with no hook
+    /// of its own around a type that has one answers `false` to the first and `true` here,
+    /// and that combination is exactly loft#849 — the container nobody drops.
+    ///
+    /// **Cycle-guarded, because a type may reach itself.** A tree node holding
+    /// `children: vector<Node>` is ordinary loft, and a naive walk recurses forever. A def
+    /// already on the current path answers `false`: it contributes nothing the walk has not
+    /// already asked about, so the fixpoint is the union over the acyclic paths.
+    ///
+    /// Answering per CALL rather than memoising is deliberate at this stage — the query is
+    /// asked once per type at a drop site, not per site, and a cache would have to be
+    /// invalidated as definitions arrive (a library's hook is registered after its type).
+    /// If a later stage measures it hot, the memo belongs beside `known_type`, keyed the
+    /// same way.
+    #[must_use]
+    pub fn owns_droppable(&self, type_def: u32) -> bool {
+        let mut path = HashSet::new();
+        self.owns_droppable_walk(type_def, &mut path)
+    }
+
+    fn owns_droppable_walk(&self, d_nr: u32, path: &mut HashSet<u32>) -> bool {
+        if d_nr == u32::MAX || d_nr as usize >= self.definitions.len() {
+            return false;
+        }
+        if !path.insert(d_nr) {
+            return false; // already on this path — see the cycle note above
+        }
+        if self.drop_hook_nr(d_nr) != u32::MAX {
+            return true;
+        }
+        if self
+            .def(d_nr)
+            .attributes()
+            .iter()
+            .any(|a| self.type_owns_droppable(&a.typedef, path))
+        {
+            return true;
+        }
+        // An enum's variants are its CHILDREN, not its attributes, and each carries its own
+        // payload fields — so a droppable in `WH { h: H }` is reachable only this way.
+        self.children_of(d_nr)
+            .filter(|&c| self.def_type(c) == DefType::EnumValue)
+            .any(|c| self.owns_droppable_walk(c, path))
+    }
+
+    /// The [`owns_droppable`](Self::owns_droppable) walk over a member's TYPE — the step
+    /// that decides which type constructors can carry a droppable inside them.
+    ///
+    /// Every heap-record constructor forwards to its record definition; `Vector` and the
+    /// keyed collections forward to their element, because owning a collection of
+    /// droppables is owning the droppables. `Optional` / `RefVar` / `Rewritten` are
+    /// wrappers over a base type and peel. A `Function` does NOT forward: a closure record
+    /// is owned by the fn-ref slot's own cascade, not by the type that names it, and
+    /// following it would make every fn-ref-holding struct answer for its captures.
+    fn type_owns_droppable(&self, t: &Type, path: &mut HashSet<u32>) -> bool {
+        match t {
+            Type::Reference(d, _)
+            | Type::Enum(d, true, _)
+            | Type::Sorted(d, _, _)
+            | Type::Index(d, _, _)
+            | Type::Radix(d, _, _)
+            | Type::Trie(d, _, _)
+            | Type::Hash(d, _, _) => self.owns_droppable_walk(*d, path),
+            Type::Vector(elm, _) => self.type_owns_droppable(elm, path),
+            Type::Optional(inner) | Type::RefVar(inner) | Type::Rewritten(inner) => {
+                self.type_owns_droppable(inner, path)
+            }
+            Type::Tuple(elms) => elms.iter().any(|e| self.type_owns_droppable(e, path)),
+            _ => false,
         }
     }
 

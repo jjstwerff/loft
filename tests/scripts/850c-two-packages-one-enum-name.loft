@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// loft#850 family — two packages declaring an enum of the same name used to
+// CRASH the compiler, in released 2026.8.0 as well as on main.
+//
+// It needed no call to trigger: a program whose `main` only printed a greeting
+// aborted with `internal compiler error — index out of bounds … the index is
+// 4294967295`. The synthesised variant dispatcher decided "this enum has no
+// dispatcher yet" by searching the source being PARSED, while the scan that
+// question guards runs over every definition in the program. Reaching the second
+// package it therefore re-answered "no" for the first package's enum — whose
+// dispatcher was filed under the first package's source — set out to synthesise
+// a duplicate, and indexed the definition table with the sentinel `add_fn`
+// returns when it refuses one.
+//
+// Both halves are asserted: that the program compiles at all, and that each
+// call lands in ITS OWN package. The variants' field sets differ, so a call
+// reaching the wrong package would read the wrong offset.
+use dupenum_a;
+use dupenum_b;
+
+fn main() {
+  a = make_a(1);
+  b = make_b(1);
+
+  assert(area(a, 5) == 106, "A's Box: {area(a, 5)}");
+  assert(area(b, 5) == 206, "B's Box: {area(b, 5)}");
+  assert(a.area(5) == 106, "method spelling on A: {a.area(5)}");
+  assert(b.area(5) == 206, "method spelling on B: {b.area(5)}");
+
+  print("850 two packages, one enum name: ok\n");
+}

@@ -1,12 +1,22 @@
-// @PLN23 — the uniform contract every backend satisfies.
+// @PLN23 / @PLN138 — the uniform contract every backend satisfies.
 //
-// loft interfaces are STATIC dispatch and have no associated types, so the
-// cursor cannot be a second type the connection returns. It is state ON the
-// connection instead: `select` opens a cursor, `next` advances it, `col` reads
-// the current row. One type per backend, satisfying one interface.
+// A connection opens a CURSOR, and the cursor is its own type: `db_select` and
+// `db_rows` return one, `next` advances it, `col` reads the current row. Two
+// types per backend, satisfying two interfaces that name each other.
 //
-// That is a real constraint, not a preference — and it is the honest shape for
-// a language whose generics specialise at compile time.
+// It was one type until @PLN138. loft interfaces are static dispatch, and until
+// @PLN125 arc A they had no associated types — so a contract could not say
+// "and this connection yields a cursor of ITS OWN kind", and the cursor had to
+// be state ON the connection. That worked and shipped, at a price the type
+// system could not state: a connection held exactly one cursor, and a second
+// `db_select` silently replaced the first. `schema.loft` paid it in full,
+// reading every index NAME into a vector before it could query any index's
+// columns, because the inner query would have destroyed the outer walk.
+//
+// `type Rows: SqlRows` is what removes it. The companion is inferred from each
+// backend's own signature — where this interface writes `Self.Rows`, the
+// implementor writes its concrete cursor — so nothing is declared twice and a
+// generic over `SqlDb` can hold two cursors from one connection at once.
 //
 // A nullable column is ONE accessor returning `text?`: SQL NULL and the empty
 // string are different answers and the type says so, so a caller must discharge
@@ -496,23 +506,61 @@ pub fn proc_lookup(self: Procs, nm: text) -> text? {
   return null;
 }
 
+// --- @PLN138: the cursor, and why it answers rather than refuses ------------
+//
+// A cursor is opened by the connection and read until it runs out. Every method
+// here is answerable on a cursor that never opened, which is what lets
+// `db_select` return `Self.Rows` rather than `Self.Rows?`:
+//
+//   r = d.db_select(sql);
+//   if !r.ok() { … d.db_last_error() … }
+//
+// **`ok` is a fact about the OPEN, not about liveness.** It is set once, when
+// the cursor is made, and never moves — so a caller can ask it after the walk
+// and still learn whether the statement ran. Exhaustion is what `next` reports.
+//
+// A nullable cursor was the other candidate and is the worse one. `Self.Rows?`
+// makes every read a nullable-struct access, which is the shape that leaks a
+// record when a field is read straight out of it (loft#771) and the shape a
+// caller must discharge at every hop. A cursor that failed to open is not a
+// missing value: it is a real cursor with no rows, and every one of its answers
+// is defined — `next` false, `col` null, `width` 0. A caller who forgets `ok`
+// therefore reads nothing rather than reading garbage, which is the right way
+// for this to degrade.
+pub interface SqlRows {
+  // Did the statement open? Never changes; `next` reports exhaustion.
+  fn ok(self: Self) -> boolean
+  // Advance to the next row, or run out — and running out RELEASES, so a walk
+  // to the end needs no close.
+  fn next(self: Self) -> boolean
+  // The current row's `i`th column, or `null` for SQL NULL — which is not the
+  // empty string, and the type is what keeps the two apart.
+  fn col(self: Self, i: integer) -> text?
+  fn width(self: Self) -> integer
+  // Release early, for a caller that stops before the end. Idempotent, and the
+  // same call the scope-end hook makes — so abandoning a cursor is safe and
+  // closing one twice is not a double free.
+  fn close(self: Self)
+}
+
 pub interface SqlDb {
+  // The cursor THIS connection yields. Inferred from the backend's own
+  // `db_select` / `db_rows` signatures, which must agree on it.
+  type Rows: SqlRows
+
   fn db_open(self: Self, target: text) -> boolean
   // Author-written SQL with no values in it — DDL, and the statements a
   // backend cannot prepare. There is nothing to bind, so there is nothing to
   // get wrong.
   fn db_exec(self: Self, sql: text) -> boolean
-  fn db_select(self: Self, sql: text) -> boolean
-  fn db_next(self: Self) -> boolean
-  fn db_col(self: Self, i: integer) -> text?
-  fn db_width(self: Self) -> integer
+  fn db_select(self: Self, sql: text) -> Self.Rows
   fn db_last_error(self: Self) -> text
   fn db_shut(self: Self)
 
   // S4 — a statement WITH values. Prepare, bind, execute; `db_run` for effect,
-  // `db_rows` for a cursor the methods above then read.
+  // `db_rows` for a cursor to read.
   fn db_run(self: Self, q: SqlText) -> boolean
-  fn db_rows(self: Self, q: SqlText) -> boolean
+  fn db_rows(self: Self, q: SqlText) -> Self.Rows
 
   // T1–T3 — a transaction is a state of the CONNECTION. Each backend forwards
   // to `tx_begin` / `tx_commit` / `tx_rollback` above with its own keyword, so

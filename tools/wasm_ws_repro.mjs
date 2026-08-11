@@ -32,6 +32,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+// loft#851 — the page's filesystem, imported rather than restubbed so every
+// harness answers what a real page answers.  A stub returning 0 would mean "an
+// empty file that EXISTS" where the contract says absent, and a missing import
+// is a LinkError the moment a program under test touches a file.
+import { loftFSImports } from '../doc/loft-fs.js';
 
 const argv = process.argv.slice(2);
 if (argv.length < 1) {
@@ -133,6 +138,7 @@ const getMem = () => (instance ? instance.exports.memory : { buffer: new ArrayBu
 // GL, but the import section may still declare loft_gl entries).
 const imports = {
   loft_io: {
+    ...loftFSImports(getMem),
     // @PLN97: store_load_url_trusted's fetch import is now in every --html
     // wasm; a WS repro never fetches, so stub to the error sentinel so the
     // module links (an absent import would LinkError at instantiate).

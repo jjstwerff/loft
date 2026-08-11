@@ -26,6 +26,71 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A library adding a function no longer takes a word away from you
+
+If a library you use gained a `pub fn turn`, then `turn = 0` stopped compiling
+anywhere in your program — a break that arrived on someone else's release, that
+nothing announced, and that you could not prepare for. One package doing this took a
+consumer's whole test gate red across 109 rows, on a commit that consumer never made.
+Every short verb a library exports — `turn`, `step`, `run`, `wait`, `next`, `open`,
+`send` — was a word its users could not name a variable.
+
+A local may now carry a function's name, and the function is still there to call:
+
+```loft
+chr = 65;                  // a local, not an error
+println("{chr(chr)}");     // …and this still calls the function → "A"
+```
+
+The parentheses are what pick between the two. This was already true of a parameter, a
+`for` variable and a struct field — `fn go(chr: integer) { chr(chr + 1) }` has always
+compiled — so what changed is that plain assignment, the typed local `chr: integer = 65`
+and a tuple-destructuring element now agree with them instead of refusing.
+
+Shadowing a name you actually rely on is still worth avoiding. It is now your call
+rather than a library's.
+
+### A page can save its work
+
+A loft program exported with `--html` could draw, play audio, talk over a
+WebSocket — and could not write a file. Every file call compiled and every one of
+them quietly answered as if the file were not there, so a drawing editor in a page
+looked like it saved and stored nothing. Finding that out meant grepping the
+emitted page for `fs_`.
+
+A page now has a filesystem, and it answers exactly what the interpreter and
+`--native` answer for the same program:
+
+```loft
+fn main() {
+  w = file("world.hxw");
+  w += render_world();
+  println("saved {file("world.hxw")#size} bytes");
+}
+```
+
+`file(p)` with `#size` / `#next` / `#read(n)` / `+=`, `read_bytes` /
+`write_bytes`, `delete` / `move` / `mkdir` / `mkdir_all` / `list_dir` / `is_dir`
+/ `is_file` / `exists` — the whole surface.
+
+It is the *page's* filesystem, not the visitor's disk. A browser cannot read
+`/home/you/data.csv`, and nothing here pretends otherwise. What the page gets is
+an immutable **base tree** you supply, plus every write it makes, kept in
+`localStorage`:
+
+```html
+<script>
+  loftBaseFS = { "/data/parts/tree.obj": "...", "/data/parts/rock.obj": "..." };
+</script>
+```
+
+Reads take your writes first and fall back to the base tree, so closing the tab
+keeps the user's work and `resetToBase()` throws it away. Set
+`loftFSPersist = false` if you would rather it lasted only as long as the tab.
+
+A program that only stores still gets the small engine-less page — the
+filesystem does not drag a WebGL2 shim in with it.
+
 ### A vocabulary you ship, not one you download
 
 A `trie<T[k]>` can already be read a page at a time — `store_load_prefix(local,
@@ -246,6 +311,94 @@ was. `read_bytes(path)` reads it exactly and round-trips with `write_bytes`.
 Add `?? ""` where the distinction does not matter. The stderr warning that names
 both readers now appears under `--native` too; it used to be printed only by the
 interpreter, so the compiled build read binary in silence.
+
+### git, as a library you call rather than a command you run
+
+loft does not have `run(cmd, args)` and is not getting one: it hands back bytes
+and an exit status, and every caller then re-parses text loft already knows how
+to type. So the command lives inside a library instead:
+
+```loft
+use git;
+for c in log(20) { println("{c.sha} {c.date} {c.subject}"); }
+for f in changed("main") { println("{f.status} {f.path}"); }
+```
+
+`lib/git` answers `vector<Commit>`, `vector<Change>` and `vector<Stat>` — typed
+values, not lines to split. It runs in a worker process, so the one library in
+the tree that starts an external program is contained. And nothing composes a
+command line: the library names a question and loft builds the command, so a
+branch name or a path cannot turn into an option. Reading a repository needs the
+`git#read` capability, separately from reading files.
+
+The first thing it replaced is `tools/viewer/refresh.sh` — 135 lines of bash that
+existed only because loft could not call git, and the review dashboard's
+dependency on `jq` along with it. It also fixed a bug on the way: the bash split
+`git log` output on tabs, and a commit subject may contain one.
+
+The second was the tracker indexer, which used to walk a hard-coded list of
+source directories minus a hand-written list of names that mean "ignored"
+(`target`, `node_modules`, `pkg`…). It asks git now. That list had drifted both
+ways: four tracked source trees were never indexed at all, and a leftover test
+scratch directory was.
+
+### A library can run in its own process, and you cannot tell from the code
+
+A library adds one line to its own `loft.toml`:
+
+```toml
+[library]
+placement = "process"
+```
+
+and its consumers do not change — the same `use`, the same typed calls, the same
+values back. What changes is containment: a crash inside the library ends the
+call as a loft error instead of taking the program's data with it.
+
+Structs and vectors cross too, in both directions and at any depth — a `text`
+field, a struct inside a struct, `vector<text>`, `vector<vector<T>>`. They are
+not encoded into some second format on the way; they cross as themselves, in a
+store both processes map. That is why a bigger value is not proportionally more
+expensive to pass: a sixteen-element vector costs a fifth of a microsecond more
+than a two-field struct, and a four-thousand-element one adds nothing you can
+measure.
+
+Passing by reference keeps meaning what it means. A library function that writes
+to a struct parameter, or appends to a vector one, changes the caller's
+value — placed or not. Passing the same value twice stays one value. And where
+you have written `const` on a parameter, the crossing knows the library cannot
+have changed it and skips carrying it home — about a tenth off a call taking a
+twenty-thousand-element vector, for a word you were probably writing anyway.
+
+If the library crashes, the call ends as an ordinary loft error naming the
+library, and your own data is checked before you are told — not left to the
+argument that it must be fine.
+
+Or on another machine — `placement = "remote"`, with
+`loft --lib-server <host:port> <library>` where it should run and
+`LOFT_REMOTE_<NAME>=<host:port>` where it is called from. Still the same source,
+still the same values; a `vector<Order>` goes on the socket as its own bytes
+rather than as an encoding of itself. A library with nowhere to run refuses and
+says which variable to set, rather than quietly running here on the wrong data.
+
+A call that leaves the process costs around a microsecond, and one that leaves
+the machine around 25 — almost all of it the round trip, not what you passed. So
+this is for libraries you call to do real work, not for a getter inside a loop.
+It is Linux only, and it does not apply under `--native`, which compiles the
+library into your binary; in both cases the library simply runs in-process, which
+is the same program without the isolation. Set `LOFT_REQUIRE_PLACEMENT=1` if you
+would rather be told than quietly lose it.
+
+`--lib-server` serves exactly the library you name and nothing else, but it is
+not authenticated and not a sandbox — bind it where only what should reach it
+can.
+
+The engine host went through this first: its sockets, clients and event queue now
+run in a worker if you ask them to, and a browser on the other end cannot tell.
+Two things came out of doing it that apply to any library you want to place —
+make the native private and let the public name be a wrapper over it, and give
+the surface a call that answers a whole value instead of a cursor you step. Both
+are better in-process too, which is usually how you know.
 
 ### A library whose native build cannot be used runs interpreted
 

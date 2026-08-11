@@ -1,0 +1,156 @@
+#cwd
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN119 arc F — dump git state for loft-view to consume.
+//
+// This replaces `tools/viewer/refresh.sh`, which existed for one reason: loft
+// could not call `git`.  It can now, through `lib/git` — a typed library rather
+// than a subprocess primitive — so the viewer's state is produced by the same
+// language the viewer is written in, and `jq` is no longer a build dependency.
+//
+// Re-run on demand:
+//   make view-refresh           dump state without restarting the server
+//   make view                   dump state + start the server
+//
+// `#cwd` because this is a tool for the repository it is RUN in, not for the
+// directory it happens to live in.
+
+use git;
+
+STATE = "tools/viewer/state";
+
+// How many per-file diffs to write.  The bash capped this too; the reason is the
+// same, and it is worth keeping visible rather than tucking into a constant with
+// no story: a branch far from main touches hundreds of files, and the dashboard
+// shows a page of them.
+DIFF_CAP = 100;
+
+// How many commits the activity feed carries.
+RECENT = 20;
+
+fn main() {
+  mkdir_all(STATE);
+
+  base = if has_ref("main") { "main" } else { "" };
+
+  write_json("{STATE}/branch.json", branch_state(base));
+  write_json("{STATE}/changed.json", changed_state(base));
+  write_json("{STATE}/commits.json", commits_state());
+  write_json("{STATE}/uncommitted.json", uncommitted_state());
+  n_diffs = write_file_diffs(base);
+  n_commits = write_commit_diffs();
+
+  println("loft-view state refreshed: {n_diffs} file diff(s), {n_commits} commit(s)");
+}
+
+// The branch header — name, HEAD, and how far it is from main.
+fn branch_state(base: text) -> JsonValue {
+  h = head();
+  ab = if len(base) > 0 { ahead_behind(base) } else { Counts { ahead: 0, behind: 0 } };
+  json_object([
+    JsonField { name: "branch",   value: json_string(branch()) },
+    JsonField { name: "head_sha", value: json_string(h.sha) },
+    JsonField { name: "head_msg", value: json_string(h.subject) },
+    JsonField { name: "ahead",    value: json_number(ab.ahead as float) },
+    JsonField { name: "behind",   value: json_number(ab.behind as float) },
+  ])
+}
+
+// The files that differ from main.  Empty on a repository that has no main yet —
+// which is a state the dashboard has to render, not an error.
+fn changed_state(base: text) -> JsonValue {
+  items: vector<JsonValue> = [];
+  if len(base) > 0 {
+    for c in changed(base) { items += [status_path(c)]; }
+  }
+  json_array(items)
+}
+
+fn uncommitted_state() -> JsonValue {
+  items: vector<JsonValue> = [];
+  for c in uncommitted() { items += [status_path(c)]; }
+  json_array(items)
+}
+
+fn status_path(c: Change) -> JsonValue {
+  json_object([
+    JsonField { name: "status", value: json_string(c.status) },
+    JsonField { name: "path",   value: json_string(c.path) },
+  ])
+}
+
+fn commits_state() -> JsonValue {
+  items: vector<JsonValue> = [];
+  for c in log(RECENT) {
+    items += [json_object([
+      JsonField { name: "sha",  value: json_string(c.sha) },
+      JsonField { name: "date", value: json_string(c.date) },
+      JsonField { name: "msg",  value: json_string(c.subject) },
+    ])];
+  }
+  json_array(items)
+}
+
+// Per-file diffs against main, one file per document.
+//
+// `/` becomes `__` so the name is a single filesystem-safe component — the same
+// mapping the viewer undoes when it looks one up.
+fn write_file_diffs(base: text) -> integer {
+  dir = "{STATE}/diffs";
+  clear_dir(dir);
+  if len(base) == 0 { return 0; }
+  n = 0;
+  for path in changed_names(base) {
+    if n >= DIFF_CAP { break; }
+    safe = path.replace("/", "__");
+    write_text("{dir}/{safe}.diff", diff_file(base, path));
+    n += 1;
+  }
+  n
+}
+
+// Per-commit diffs plus the per-file line counts the activity cards show.
+fn write_commit_diffs() -> integer {
+  dir = "{STATE}/commits";
+  clear_dir(dir);
+  n = 0;
+  for sha in log_shas(RECENT) {
+    write_text("{dir}/{sha}.diff", show(sha));
+    items: vector<JsonValue> = [];
+    for s in numstat(sha) {
+      // Counts are TEXT in this document, and that is not an accident: git
+      // reports `-` for a binary file, which is not a number, and the viewer
+      // renders the field as it finds it.
+      items += [json_object([
+        JsonField { name: "adds", value: json_string(count_text(s.adds)) },
+        JsonField { name: "dels", value: json_string(count_text(s.dels)) },
+        JsonField { name: "path", value: json_string(s.path) },
+      ])];
+    }
+    write_json("{dir}/{sha}.files.json", json_array(items));
+    n += 1;
+  }
+  n
+}
+
+// `-1` is how `lib/git` reports git's `-`, the count of a binary file's lines.
+fn count_text(n: integer) -> text {
+  if n < 0 { "-" } else { "{n}" }
+}
+
+fn write_json(path: text, v: JsonValue) {
+  write_text(path, v.to_json_pretty());
+}
+
+fn write_text(path: text, body: text) {
+  f = file(path);
+  f.write(body);
+}
+
+// Empty a directory by removing and remaking it, so a file that is no longer
+// reachable does not linger from a previous run and get served as current.
+fn clear_dir(path: text) {
+  delete(path);
+  mkdir_all(path);
+}

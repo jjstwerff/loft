@@ -374,7 +374,7 @@ than it gets credit for. Measured on the current tree, not recalled:
 | **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124). A hole may be a scalar OR a value of a named type, whose kind is its own name in method case (`SqlIdent` → `hole_sql_ident`) |
 | **associated types** | **yes** | `type Rows: Cursor` in an interface body; `Self.Rows` in its signatures (@PLN125 arc A) |
 | **`x[i]` indexing** | **yes** | `fn OpIndex(self: T, i: τ) -> υ`; an interface requires it with `op []` (@PLN125 arc C) |
-| **run at scope end** | **yes** | `fn OpDrop(self: T)` — runs where the value's own free runs (@PLN125 arc B) |
+| **run at scope end** | **yes** | `fn OpDrop(self: T)` — runs when the value's OWNER dies (@PLN125 arc B, @PLN139) |
 
 No gaps are left in the measured set. Each arc landed **inert first** — the
 contract declared, every existing program proved byte-identical in IR and native
@@ -402,20 +402,62 @@ fn work() {
 }                         // <- rollback runs here
 ```
 
-**The rule, and the reason the feature is small:**
+**The rule:**
 
-> A drop runs exactly where the value's own `OpFree*` runs — the same binding,
-> the same scope exit, the same early-exit paths — and never anywhere else.
+> A drop runs when the value's OWNER dies. Taking a value back out of its owner
+> does not run one.
 
-loft already computes that. The ownership model decides, per binding, whether
-this scope owns a value and whether it dies here, which is what emits
-`OpFreeRef`; a returned or borrowed value is already excluded, and the early
-`return` / `break` / return-out-of-a-loop cases are already handled there
+For a value held in a plain binding, the owner is that binding, and the drop runs
+exactly where the binding's own `OpFree*` runs — the same scope exit, the same
+early-exit paths. loft already computes that. The ownership model decides, per
+binding, whether this scope owns a value and whether it dies here, which is what
+emits `OpFreeRef`; a returned or borrowed value is already excluded, and the
+early `return` / `break` / return-out-of-a-loop cases are already handled there
 (loft#731 exists because a hand-rolled version of exactly those went wrong). So
 the hook DERIVES from the borrow model rather than sitting beside it, and there
 is one answer to "when does this run", not two that can drift.
 
-What follows from that, and is worth knowing before you reach for it:
+### Putting one in a container
+
+Copying a droppable into a struct field, an enum payload or a collection element
+is a **move**: the container becomes the owner. The value you copied FROM no
+longer drops, and the container's death releases what it holds.
+
+```loft
+struct Handle { id: integer }
+fn OpDrop(self: Handle) { close(self.id); }
+
+struct Session { h: Handle }
+
+fn open_session() -> Session {
+  h = acquire();
+  return Session { h: h };   // `h` no longer drops — the Session owns it now
+}
+
+fn work() {
+  s = open_session();
+  …
+}                            // <- close() runs here, once
+```
+
+The data is still copied — `s.h` is a copy of `h`, and reading `h` afterwards
+still works. What moves is the RESPONSIBILITY to release it. Without that move
+the resource was released twice over: once by the source at its own scope end,
+and never by the container. That is invisible while both die in the same scope,
+and it is a use-after-free the moment the container outlives the source, which is
+what `open_session` above does.
+
+A container releases in this order:
+
+1. its own `OpDrop`, if it has one — a wrapper may still need what it wraps, the
+   way a connection says goodbye over the socket it is about to close;
+2. then its fields, in reverse declaration order, each through its own type;
+3. a collection field element by element, in element order.
+
+Nesting needs no special case: each type releases its own members, so a struct
+inside a struct inside a vector releases once, at the outermost owner's death.
+
+What follows from all of this, and is worth knowing before you reach for it:
 
 - **A drop cannot fail.** loft has no runtime errors (C80) and a rollback at
   scope end can fail for real — the connection dropped, the server went away —
@@ -424,10 +466,10 @@ What follows from that, and is worth knowing before you reach for it:
   call**: `tx.commit()` answers, the closing brace does not. That asymmetry is
   the design.
 - **A drop reaches the world, not its caller's data.** It receives only `self`,
-  and a struct field COPIES at construction — `Tx { journal: j }` holds a copy of
-  `j` — so a drop cannot write back into a caller's loft-side collection. Its
-  effect is I/O, or a resource it owns (a `#c` handle). That is exactly the
-  intended use: libpq's `PQexec("ROLLBACK")` at a closing brace.
+  and construction COPIES the data — `Tx { journal: j }` holds a copy of `j` — so
+  a drop cannot write back into a caller's loft-side collection. Its effect is
+  I/O, or a resource it owns (a `#c` handle). That is exactly the intended use:
+  libpq's `PQexec("ROLLBACK")` at a closing brace.
 - **Order within a scope is reverse-declaration**, matching the existing free
   order, or a statement would outlive the transaction it belongs to.
 - **A binding written inside an `if` block is hoisted to the function scope** —
@@ -436,11 +478,46 @@ What follows from that, and is worth knowing before you reach for it:
 - **A value that was never created never drops.** The free is null-tolerant and
   a drop is not, so the call is guarded by the same liveness test the free
   performs internally.
+- **In a library, the hook may be private** — and usually should be. Nothing
+  calls `OpDrop` by name, so `pub` only widens the surface. The hook is looked up
+  through the source that declares the TYPE, which is what makes a private one
+  reachable: a library's symbols are module-scoped (@PLN102 C97), and both askers
+  run after parsing, when the current source is the main program.
 
-Shipped as @PLN125 arc B; `tests/scripts/pln125-b-drop.loft` is the behaviour
+**Three things a drop does NOT do.** Each is a deliberate boundary, not an
+omission:
+
+- **Taking a value OUT of its owner does not release it.** `v.remove(i)` and
+  `v[i] = other` do not release the element that goes away: it leaks, and the
+  program is otherwise correct. Releasing there would mean the runtime's free
+  cascade calling back into your loft code, inside the one operation the heap
+  invariant rests on, for a hook that by contract can neither fail nor answer. If
+  you churn a collection of live resources, release the old element yourself
+  before you replace it. The reasoning is
+  [DESIGN_DECISIONS.md § C111](DESIGN_DECISIONS.md).
+- **A keyed collection does not release its records.** A `hash` / `sorted` /
+  `index` shares its records with the collection it is indexed from, so releasing
+  through one would release somebody else's element. Keep droppables in a plain
+  `vector`, or release them explicitly.
+- **Moving one droppable into TWO containers releases it twice.** loft has no
+  move checker, so `a = C { h: h }; b = C { h: h }` compiles and both containers
+  release `h`'s resource. Build the second container from its own value.
+
+**When to reach for it.** A drop pays for itself when the value owns something
+the program cannot see — a `#c` handle, a lock, a file — and the release is
+unconditional. It does not pay for loft-side data, which the ownership model
+already frees. And it is a poor fit for anything whose release ORDER matters
+against an explicit call: a scope end runs after the function body, so a cursor
+whose connection is shut inside that body is still live when the shut happens.
+@PLN138's `lazy_fetch` closes its cursor explicitly for exactly that reason.
+
+Shipped as @PLN125 arc B, with the owner rule and the container cascade added by
+@PLN139 (loft#849). `tests/scripts/pln125-b-drop.loft` is the hook's behaviour
 matrix, with two unrelated consumers (a transaction and a lease) because a hook
-with one user is a hook whose invariant is untested. The design reasoning is
-[plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md).
+with one user is a hook whose invariant is untested;
+`tests/scripts/139-drop-cascade.loft` is the container half. The design reasoning
+is [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md)
+and [plans/139-drop-cascade.md](plans/139-drop-cascade.md).
 
 ## Indexing — `x[i]` on a library type
 
@@ -501,6 +578,11 @@ methods. A `sql` connection and the cursor it produces are one contract, and
 without this the cursor has to become state ON the connection — which means a
 connection can hold only one, and the type system cannot say so.
 
+That example is not hypothetical: it is what `tests/fixtures/sqldb` did, across
+four real drivers, and @PLN138 has since moved it onto this feature.
+`tests/fixtures/sqldb/two_cursors.loft` is the worked consumer — two cursors from
+one connection, interleaved and nested, over a contract that names no backend.
+
 ```loft
 interface Cursor {
   fn width(self: Self) -> integer
@@ -547,6 +629,12 @@ Three consequences worth stating:
   implementor writes a concrete type. Return and parameter positions are both
   read, and they must AGREE — an implementor whose `open` yields one type while
   its `feed` takes another is refused rather than resolved by declaration order.
+  What is read is the SHAPE and not the lifetime: the implementor's return type
+  carries a dep list indexed in its own frame, non-empty exactly when its producer
+  returns a record from a nested call rather than constructing one inline, and
+  those indices name unrelated caller locals once substituted into a monomorph.
+  So the binding is recorded with its deps stripped — the same answer loft#666
+  needed for a type used as a hint.
 - **The bound is checked per monomorph**, because the companion is per
   implementor. A companion missing one of the bound's methods is a compile error
   naming the implementor, the associated type, the companion, the bound and the
@@ -634,11 +722,16 @@ the target off the one expected-type channel that already carries `lambda_hint` 
 `enum_hint` / `vector_hint`, so it is a fifth shape on that channel rather than a
 sixth side-channel.
 
-The per-kind `hole_*` form is deliberately expandable: a **generic method**
-(`fn hole<T>(self: Self, v: T)`, @PLN137) would collapse it into one without
-changing what an author writes.  Recorded here as @PLN125 arc A until that arc
-shipped and showed the two are NOT the same gap — an associated type names a
-COMPANION, while collapsing `hole_*` needs a type variable in a later PARAMETER. Catalogued as
+The per-kind `hole_*` form is **deliberate and stays**.  Collapsing it into one
+generic `hole<T>` was evaluated and DECLINED ([C110](DESIGN_DECISIONS.md)): a
+generic method accepts every type by construction, which would delete exactly the
+per-kind opt-in that makes the refusal above auditable.  The cost is paid once per
+target type by a library author and never by a consumer, and it buys a compile
+error where a generic method would silently accept.
+
+(It was recorded as @PLN125 arc A's A4 until that arc shipped and showed the two
+are not the same gap — an associated type names a COMPANION, while collapsing
+`hole_*` needs a type variable in a later PARAMETER.) Catalogued as
 [`@F94`](https://github.com/loft-lang/features/issues/94); the design reasoning is
 [plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md).
 

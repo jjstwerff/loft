@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// Regression for loft#850 — a bare call must reach the function that accepts the
+// receiver it was GIVEN, not the one filed under the receiver's NAME.
+//
+// `dupmethod_a`, `_b` and `_c` each declare a `struct Thing`. A method is stored
+// under the mangled key `t_5Thing_go`, which spells the type's name and nothing
+// about which package declared it, so all three competed for one key in the
+// caller's name table and the first import won it. The effects, all fixed here:
+//
+//   * `go(a_thing, 5)` reached B's method and reported `expected Thing, got Thing`
+//     — the hardest message in this family to act on, because nothing in it says
+//     two packages are involved — while A's free `go` was the only `go` that
+//     could accept the argument and was in scope the whole time.
+//   * at a mismatched arity the same call said `Too many parameters for
+//     t_5Thing_go`, naming an internal symbol that appears in no source file.
+//   * between two METHODS it was silent: `x.go(5)` dispatched on the receiver and
+//     answered correctly, `go(x, 5)` dispatched on the name and answered from
+//     another package. Two spellings of one call disagreeing is the sharpest
+//     statement of the defect, so both are asserted on every receiver below.
+//
+// The swapped-`use` twin is `850b-…`: import order must not change an answer.
+use dupmethod_a;
+use dupmethod_b;
+use dupmethod_c;
+
+fn main() {
+  a = make_a(1);
+  b = make_b(1);
+  c = make_c(1);
+
+  // A's `Thing` has no method `go` anywhere — only A's FREE function accepts it.
+  assert(go(a, 5) == 106, "free fn for A's Thing: {go(a, 5)}");
+  // B and C each declare a method on their OWN `Thing`; the receiver decides.
+  assert(go(b, 5) == 206, "B's method for B's Thing: {go(b, 5)}");
+  assert(go(c, 5) == 306, "C's method for C's Thing: {go(c, 5)}");
+
+  // The method spelling already dispatched on the receiver before the fix. It is
+  // asserted beside the bare spelling because the two must agree — that agreement
+  // is the invariant, and either one alone can pass while the pair is broken.
+  assert(b.go(5) == 206, "method spelling on B: {b.go(5)}");
+  assert(c.go(5) == 306, "method spelling on C: {c.go(5)}");
+
+  // Qualification was the documented workaround; it must keep resolving.
+  assert(dupmethod_a::go(a, 5) == 106, "qualified A: {dupmethod_a::go(a, 5)}");
+  assert(dupmethod_b::go(b, 5) == 206, "qualified B: {dupmethod_b::go(b, 5)}");
+
+  // Differing ARITY: A's `stretch` takes three parameters, B's method two. The
+  // call below fits only A's, and used to be refused by B's under its mangled name.
+  assert(stretch(a, 5, 6) == 112, "3-arg free fn: {stretch(a, 5, 6)}");
+  assert(stretch(b, 5) == 206, "2-arg method: {stretch(b, 5)}");
+
+  print("850 cross-package method dispatch: ok\n");
+}

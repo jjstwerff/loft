@@ -71,7 +71,14 @@ pub fn wait(self: ProcessHandle) -> integer;    // exit code
   process-execution attack surface and what's deliberately
   out of scope (no setuid, no env clearing, no chroot).
 
-## Consumer changes once shipped
+## Consumer changes once shipped — ALL DONE (2026-08-11, @PLN119 arc F)
+
+This plan is superseded, and every consumer it named has been served by the
+typed-library route rather than by `run()`: `tools/viewer/refresh.sh` is deleted,
+and the indexer asks `git::tracked_files()` instead of mirroring `.gitignore` in
+a skip list.  See `doc/claude/plans/119-out-of-process-libraries/`.
+
+The original list:
 
 - `tools/viewer/refresh.sh` deletes; `tools/viewer/src/main.loft`
   reads git state directly via `process::run("git", [...])`.

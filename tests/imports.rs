@@ -298,3 +298,93 @@ fn an_unused_collision_still_compiles() {
         errors_of(&p)
     );
 }
+
+// ── loft#850: a method and a free function of one name, across packages ───────
+
+/// loft#850 — a bare call reaches the function that accepts the receiver it was
+/// GIVEN, whichever package declared it.
+///
+/// Three packages here each declare a `struct Thing`, and a method is filed under
+/// the mangled key `t_5Thing_go`, which spells the type's NAME and nothing about
+/// its package — so all three competed for one key and the first import won it.
+/// The runtime half (which package's body actually ran) is pinned across all
+/// three backends by `tests/scripts/850-cross-package-method-name-collision.loft`
+/// and its swapped-order twin; this asserts the compile-time half, that nothing
+/// is refused.
+#[test]
+fn a_method_and_a_free_function_of_one_name_resolve_by_receiver() {
+    for file in ["dupmethod_ab_main.loft", "dupmethod_ba_main.loft"] {
+        let p = parse_lib_main(file);
+        assert!(
+            p.diagnostics.level() < Level::Error,
+            "{file}: the receiver says which `go` is meant: {}",
+            errors_of(&p)
+        );
+    }
+}
+
+/// loft#850 — when the call genuinely cannot resolve, the hint names the
+/// receiver in a form the reader can type, and does not blame the stdlib for a
+/// package's choice.
+///
+/// The bare receiver name is the one spelling that identifies nothing in this
+/// situation, since several packages declare it; and "stdlib declared `go` as a
+/// method" pointed at a file that never mentions `go`. Both halves are asserted
+/// because fixing either alone still leaves the reader without a next step.
+#[test]
+fn an_unresolvable_call_names_the_package_that_declares_the_method() {
+    let p = parse_lib_main("dupmethod_hint_main.loft");
+    let msgs = errors_of(&p);
+    assert!(
+        msgs.contains("dupmethod_b::Thing"),
+        "the hint must name the receiver's package: {msgs}"
+    );
+    assert!(
+        !msgs.contains("stdlib declared"),
+        "the stdlib declared nothing here: {msgs}"
+    );
+}
+
+/// @PLN102 C98 / loft#852 — a library's public function must not claim the
+/// CONSUMER's variable namespace.
+///
+/// `use lib;` beside a local named after one of the library's `pub fn`s has to
+/// compile, or every short verb a library exports (`turn`, `step`, `run`,
+/// `wait`, `next`, `open`, `send`) becomes a word no consumer of that library
+/// may use as a local — a break that arrives on someone else's release, that
+/// nothing announces, and that no consumer can prepare for.
+///
+/// Values and functions live in separate namespaces, so all three facts hold at
+/// once and all three are asserted: the local keeps its own value, an
+/// unqualified call reaches the library function from a scope with no such
+/// local, and a call reaches it from the scope that has one. Asserting only
+/// "it compiles" would pass a fix that bound the name to the wrong thing.
+///
+/// Run on BOTH backends through the binary rather than parsed in-process: the
+/// resolution is the parser's, but the values are what a consumer sees, and
+/// only running proves the call did not silently answer the local.
+#[test]
+fn pln102_c98_a_local_may_shadow_a_library_function() {
+    let s = sep_str();
+    let main = format!("tests{s}lib{s}issue852_main.loft");
+    let libs = format!("tests{s}lib");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("turn=42 call=200 other=300"),
+            "{backend}: a local named after a library's `pub fn` must bind (42), \
+             and the function stay callable from both a scope with the local (200) \
+             and one without (300); got stdout {stdout:?} stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLN119 arc F — git as a TYPED library rather than a subprocess primitive.
+# The native lives INSIDE the loft binary (src/git_query.rs, registered in
+# native.rs) — no cdylib; this package declares it and carries the meaning.
+
+[package]
+name    = "git"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/git.loft"
+
+# @PLN119 — run it in a worker process.  This library is the plan's first real
+# consumer, and the reason it is placed is not decoration: it is the one library
+# in the tree that starts an external process, so containing that is worth a
+# crossing.  Its answers are `vector<Commit>` and `vector<Change>` — a vector of
+# structs with text fields — which is exactly the shape arc B's arena carries.
+placement = "process"
+
+# The query native is registered inside the loft binary — there is no cdylib to
+# build.  Readers of this mark: the auto-native driver (skips the doomed compile
+# and its warning) and the extraction-hygiene gate.
+[native]
+in_binary = true

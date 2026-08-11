@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 fixture — A first. The three packages each declare a `struct Thing`;
+// `dupmethod_a` declares `go` as a FREE function, `_b` and `_c` as METHODS on
+// their own `Thing`. Every call below is bare, so each one is the question the
+// mangled key `t_5Thing_go` could not answer: which package's `go` accepts THIS
+// receiver? The swapped-order twin is `dupmethod_ba_main.loft`.
+use dupmethod_a;
+use dupmethod_b;
+use dupmethod_c;
+
+fn main() {
+  a = make_a(1);
+  b = make_b(1);
+  c = make_c(1);
+  print("{go(a, 5)} {go(b, 5)} {go(c, 5)} {stretch(a, 5, 6)} {stretch(b, 5)}")
+}

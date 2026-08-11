@@ -1,0 +1,223 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN119 arc F — git, as the typed interface loft already has rather than as a
+// second one.
+//
+// loft declines a general `run(cmd, args)` (DESIGN_DECISIONS C101): it hands
+// back bytes and an exit status, and every caller then re-parses text loft
+// already knows how to type.  So the external command lives in here, behind
+// `log()` and `changed()`, and the `execve` is an implementation detail.  The
+// mechanics are in the loft binary (`src/git_query.rs`); this file is the
+// meaning.
+//
+//   use git;
+//   for c in git::log(20) { println("{c.sha} {c.date} {c.subject}"); }
+//
+// The library declares its own capability group, so a sandboxed script that may
+// read files still cannot read a repository's history unless it is granted
+// `git#read` as well.
+
+capability git
+
+// One commit, as the log reports it.
+pub struct Commit {
+  const sha: text,
+  const date: text,
+  const subject: text,
+}
+
+// One file's state — a path plus git's own status letter(s).  `status` is what
+// git printed: `M`, `A`, `D`, `??`, `R100`, and so on.
+pub struct Change {
+  const status: text,
+  const path: text,
+}
+
+// How far apart two refs are.
+pub struct Counts {
+  const ahead: integer,
+  const behind: integer,
+}
+
+// One file's contribution to a commit.  `adds` and `dels` are -1 for a binary
+// file, which is what git reports as `-`.
+pub struct Stat {
+  const adds: integer,
+  const dels: integer,
+  const path: text,
+}
+
+// The mechanics.  `kind` selects a question whose argv is built in Rust — this
+// is deliberately NOT "run git with these arguments", so nothing here composes a
+// command line.  Answers the exit status; -1 means git could not be run at all,
+// and `out` then carries the reason rather than output.
+fn git_query(kind: integer, a: text, b: text, n: integer, dir: text, out: &text) -> integer git#read;
+#native
+
+// The one place a query's output is turned into text, so a caller never sees an
+// exit code.  A failed query answers "" — every reader below treats that as
+// "nothing to report", which is what an empty repository, an absent ref and an
+// absent git all mean to a caller that wanted a list.
+// The repository read is the one the program is running in — every consumer in
+// this tree is a tool for THIS repository.  The native takes a directory (see
+// `git -C`) so a consumer that needs another one can be given a call of its own
+// rather than a mutable setting, which would make every other call's answer
+// depend on what ran before it.
+fn ask(kind: integer, a: text, b: text, n: integer) -> text {
+  out = "";
+  code = git_query(kind, a, b, n, "", out);
+  if code != 0 { out = ""; }
+  out
+}
+
+// Trim the single trailing newline git puts after a one-line answer.
+fn one_line(s: text) -> text {
+  if size(s) > 0 && s[size(s) - 1 .. size(s)] == "\n" { s[0 .. size(s) - 1] } else { s }
+}
+
+// The current branch, or "HEAD" when detached.  Empty when this is not a
+// repository.
+pub fn branch() -> text {
+  one_line(ask(0, "", "", 0))
+}
+
+// `HEAD` itself — its abbreviated sha and its subject.  `date` is empty here;
+// `log(1)` is the call that carries it.
+pub fn head() -> Commit {
+  Commit {
+    sha: one_line(ask(1, "", "", 0)),
+    date: "",
+    subject: one_line(ask(2, "", "", 0)),
+  }
+}
+
+// Does this ref resolve?  The question `git rev-parse --verify` answers, and the
+// reason a consumer can ask about `main` in a repository that has no `main` yet
+// without treating the failure as an error.
+pub fn has_ref(name: text) -> boolean {
+  len(ask(3, name, "", 0)) > 0
+}
+
+// How far `HEAD` is from `base`.  Both zero when `base` does not resolve.
+pub fn ahead_behind(base: text) -> Counts {
+  line = one_line(ask(4, base, "", 0));
+  // `--left-right --count` prints "<left>\t<right>": commits only in BASE
+  // first, only in HEAD second.  Reading them the other way round is the
+  // classic mistake here, and it is silent — the dashboard just says the wrong
+  // thing about your branch.
+  parts = line.split('\t');
+  if len(parts) < 2 { return Counts { ahead: 0, behind: 0 }; }
+  Counts { ahead: to_int(parts[1]), behind: to_int(parts[0]) }
+}
+
+fn to_int(s: text) -> integer {
+  n = 0;
+  for c in s {
+    if c >= '0' && c <= '9' { n = n * 10 + (c as integer) - 48; }
+  }
+  n
+}
+
+// The files that differ from `base`.
+//
+// A rename arrives as three tab-separated fields (`R100  <old>  <new>`) and the
+// path a reader wants is the NEW one — a consumer that takes field two links at
+// a path that no longer exists.
+pub fn changed(base: text) -> vector<Change> {
+  out: vector<Change> = [];
+  for line in ask(5, base, "", 0).split('\n') {
+    if len(line) == 0 { continue; }
+    f = line.split('\t');
+    if len(f) < 2 { continue; }
+    path = if len(f) > 2 { f[2] } else { f[1] };
+    out += [Change { status: f[0], path: path }];
+  }
+  out
+}
+
+// The paths that differ from `base`, without their status.
+pub fn changed_names(base: text) -> vector<text> {
+  out: vector<text> = [];
+  for line in ask(12, base, "", 0).split('\n') {
+    if len(line) > 0 { out += [line]; }
+  }
+  out
+}
+
+// The last `n` commits, newest first.
+//
+// The fields are separated by `\x1f`, not by a tab: a commit SUBJECT may contain
+// a tab, and then a tab-separated reader silently shifts every field after it.
+pub fn log(n: integer) -> vector<Commit> {
+  out: vector<Commit> = [];
+  for line in ask(6, "", "", n).split('\n') {
+    if len(line) == 0 { continue; }
+    f = line.split('\x1f');
+    if len(f) < 3 { continue; }
+    out += [Commit { sha: f[0], date: f[1], subject: f[2] }];
+  }
+  out
+}
+
+// The abbreviated shas of the last `n` commits, newest first.
+pub fn log_shas(n: integer) -> vector<text> {
+  out: vector<text> = [];
+  for line in ask(11, "", "", n).split('\n') {
+    if len(line) > 0 { out += [line]; }
+  }
+  out
+}
+
+// What is not committed — porcelain v1, so `status` is the two-letter code with
+// its spaces removed and `path` is the rest.
+pub fn uncommitted() -> vector<Change> {
+  out: vector<Change> = [];
+  for line in ask(7, "", "", 0).split('\n') {
+    if size(line) < 4 { continue; }
+    st = line[0 .. 2].replace(" ", "");
+    out += [Change { status: st, path: line[3 ..] }];
+  }
+  out
+}
+
+// One path's diff against `base`.
+pub fn diff_file(base: text, path: text) -> text {
+  ask(8, base, path, 0)
+}
+
+// Every file in the working tree git would carry — tracked, plus untracked that
+// is not ignored — as repository-relative paths.
+//
+// The question a tool that walks the repository actually wants.  Walking the
+// filesystem instead means keeping a list of directory names that mean
+// "ignored" (`target`, `node_modules`, `pkg`, a worktree, whatever the next
+// build tool adds), and that list is a copy of `.gitignore` maintained by hand
+// and out of date the moment someone edits the real one.
+pub fn tracked_files() -> vector<text> {
+  out: vector<text> = [];
+  for line in ask(13, "", "", 0).split('\n') {
+    if len(line) > 0 { out += [line]; }
+  }
+  out
+}
+
+// One commit in full, as `git show` prints it.
+pub fn show(sha: text) -> text {
+  ask(9, sha, "", 0)
+}
+
+// One commit's per-file line counts.  A binary file reports -1 for both, which
+// is what git's `-` means.
+pub fn numstat(sha: text) -> vector<Stat> {
+  out: vector<Stat> = [];
+  for line in ask(10, sha, "", 0).split('\n') {
+    if len(line) == 0 { continue; }
+    f = line.split('\t');
+    if len(f) < 3 { continue; }
+    adds = if f[0] == "-" { -1 } else { to_int(f[0]) };
+    dels = if f[1] == "-" { -1 } else { to_int(f[1]) };
+    out += [Stat { adds: adds, dels: dels, path: f[2] }];
+  }
+  out
+}

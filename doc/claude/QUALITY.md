@@ -2446,24 +2446,34 @@ session-of-the-week background bite.
    `tests/doc_hygiene.rs::quality_const_store_mmap_matches_const_store_md`
    asserts the two docs don't silently drift back out of sync.
 
-9. **~~WASM FS bridge.~~**  Landed 2026-04-14.  `src/state/io.rs::get_file_text`
-   and `src/database/io.rs::get_file` now carry explicit
-   `#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]`
-   branches that short-circuit to the "file not found" path instead
-   of calling `std::fs`.  On the `--html` browser build target
-   `std::fs` operations compile but fail at runtime in ways that
-   depend on the JS embedding's panic hook; the stubs make
-   `file("x").content()` return a reliable empty String and
-   `file("x").exists()` return false no matter the host.  Tests:
+9. **~~WASM FS bridge.~~**  Landed 2026-04-14 as STUBS, and superseded
+   2026-08-11 by a real one (loft#851).  The stubs were the right answer
+   while `--html` had no reachable filesystem: they made `file("x")`
+   answer "absent" reliably instead of depending on what `std::fs` does
+   in a given JS embedding.  `--html` now binds an actual filesystem over
+   raw `loft_io` imports, so the stubs are gone and the file operations
+   ask one question — the `host_fs` cfg (`build.rs`) — instead of a
+   hand-written `feature = "wasm"` per site.  See
+   [WASM.md § The page filesystem](WASM.md).  Tests:
+   - `tests/html_wasm.rs::html_page_has_a_filesystem` and
+     `::html_page_filesystem_cursor_matches_the_other_backends`
+     — end-to-end over a real `--html` page, with every expected value
+     taken from what `--interpret` and `--native` print for the same
+     program, so it fails both on losing the filesystem and on growing
+     one that answers differently.
    - `tests/html_wasm.rs::q9_html_file_content_returns_empty_on_wasm`
-     — end-to-end: builds a `--html` bundle that calls
-     `file("/missing").content()`, runs it under the Node repro
-     harness, asserts `len=0` output and no trap.
-   - `tests/doc_hygiene.rs::wasm32_file_operations_have_explicit_stubs`
-     — static guard: both `src/state/io.rs` and `src/database/io.rs`
-     must contain a `target_arch = "wasm32"` cfg, so a refactor
-     that collapses the feature-flag arms can't silently revert
-     the ratchet.
+     — the half most easily broken by binding a filesystem: a path
+     nobody wrote must still read as null, and "absent" and "an empty
+     file" cross the bridge as one import.
+   - `tests/html_wasm.rs::html_page_filesystem_unit_checks`
+     (`tools/loft_fs_unit.mjs`) — the base tree and the reload, which a
+     node-hosted page cannot reach.
+   - `tests/doc_hygiene.rs::file_operations_gate_on_host_fs_not_the_wasm_feature`
+     — static guard, and the reason the old one existed: these arms
+     drift.  They already had, for a year — the interpreter's browser
+     branches were real bridges while `codegen_runtime.rs`'s were stubs,
+     so `--html` (which runs the generated code) had the empty
+     filesystem and nothing said so.
    Separately, the native-only `file_content_nonexistent_trace`
    SIGSEGV under `execute_log` (called out in the test's own
    comment) is a misaligned-slot codegen issue in the stack

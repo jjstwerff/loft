@@ -11,6 +11,11 @@
 // frames the agent received (the client's relayed replies + the server's forward
 // acks).
 import fs from 'node:fs';
+// loft#851 — the page's filesystem, imported rather than restubbed so every
+// harness answers what a real page answers.  A stub returning 0 would mean "an
+// empty file that EXISTS" where the contract says absent, and a missing import
+// is a LinkError the moment a program under test touches a file.
+import { loftFSImports } from '../doc/loft-fs.js';
 const arg = process.argv[2];
 let wasm;
 if (arg.endsWith('.html')) {
@@ -34,6 +39,7 @@ client.onmessage = (e) => {
   if (msg.startsWith('D!:')) inQ.push(enc.encode(msg));
 };
 const io = {
+  ...loftFSImports(() => mem),
   loft_host_print: (p, l) => {
     for (const line of dec.decode(new Uint8Array(mem.buffer, p, l)).split('\n'))
       if (line.startsWith('D:')) client.send('D!:reply ' + line);

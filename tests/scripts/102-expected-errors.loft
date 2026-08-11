@@ -413,3 +413,4 @@ fn pe_default_reading_the_record_and_needing_a_temporary() {
   p = Pe698 { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }
+

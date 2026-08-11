@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 regression fixture — package C, a METHOD `go` like `dupmethod_b`.
+//
+// B-against-C is the method/METHOD half of the collision, and it is the half the
+// filed report ruled out: it reasoned that two same-named structs never merge, so
+// the family "is always a compile error and never a silent wrong result". Both
+// spellings compiled — `dupmethod_c::make_c(1).go(5)` answered 306 while the bare
+// `go(make_c(1), 5)` answered 106-style from whichever package imported first.
+// One spelling of one call cannot be right and the other wrong, so the pair is
+// the test.
+pub struct Thing { tx: integer }
+
+pub fn make_c(v: integer) -> Thing { Thing { tx: v } }
+
+pub fn go(self: Thing, k: integer) -> integer { self.tx + k + 300 }

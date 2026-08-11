@@ -210,6 +210,10 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
 
   return {
     loft_io: coerceArgs({
+      // loft#851 — the page's filesystem, from the loft-fs.js blob the HTML
+      // template inlines just above this one.  Spread FIRST so a handler below
+      // could deliberately override one; nothing does today.
+      ...(typeof loftFSImports === 'function' ? loftFSImports(getMem) : {}),
       loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); },
       // #620: the browser CLOCK bridge.  wasm32-unknown-unknown has no std
       // clock, so without these now()/ticks() returned a hardcoded 0 and every

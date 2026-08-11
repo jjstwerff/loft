@@ -284,6 +284,16 @@ pub struct State {
     /// unwrapped pc inherits the nearest preceding span (mirrors the
     /// `line_numbers` map's behaviour).
     pub(crate) source_spans: BTreeMap<u32, Position>,
+    /// The shared snapshot of `source_spans` handed to the crash hook, built
+    /// once and then handed out as a refcount bump.
+    ///
+    /// Publishing used to deep-clone the whole map per entry, which is invisible
+    /// for a program that is entered once and ruinous for one entered in a loop:
+    /// a `loft::host` call — and so every call to a process-placed library, which
+    /// travels the same path — cost **4.7 µs, of which 4.4 µs was this clone**.
+    /// Cleared by the one place that writes `source_spans`, so a stale snapshot
+    /// cannot be published.
+    published_spans: Option<Arc<BTreeMap<u32, Position>>>,
     /// Function coverage — `Some(bitmap)` records which definitions this run actually
     /// entered, indexed by `d_nr`.  `None` on a normal run, so the hook in
     /// [`State::fn_call`] costs one branch and nothing else.  The test runner turns it
@@ -505,8 +515,7 @@ pub enum WorkerArg {
 
 /// What a host call expects the target function to return — selects how the
 /// return value is read off the stack after the call.  Used by `execute_host`
-/// (the `loft::host` Rust→loft entry).  Struct / vector / enum returns are NOT
-/// here yet (they travel through hidden destination params + store adoption).
+/// (the `loft::host` Rust→loft entry).
 #[derive(Clone, Copy)]
 pub enum HostRetKind {
     /// No return value read.
@@ -515,6 +524,11 @@ pub enum HostRetKind {
     Prim(u32),
     /// A 16-byte `Str`, materialised into an owned `String`.
     Text,
+    /// @PLN119 arc B — a struct / vector: the 12-byte `DbRef` naming the record
+    /// the answer was built in.  Which store that is, is the CALLEE's answer, not
+    /// the caller's guess: it may be the hidden destination the caller offered,
+    /// or a store the callee minted when it ignored one.
+    Ref,
 }
 
 /// The value a host call read back from a loft function.
@@ -523,6 +537,10 @@ pub enum HostReturn {
     /// A primitive zero-extended into a `u64`; the host re-narrows by the return type.
     Prim(u64),
     Text(String),
+    /// A struct / vector, named by the record holding it.  Nothing is copied —
+    /// the record lives wherever the callee built it, and it is the caller's job
+    /// to read it before that store is reset or freed.
+    Ref(DbRef),
 }
 
 impl State {
@@ -567,6 +585,7 @@ impl State {
             scope_spans: Vec::new(),
             store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
+            published_spans: None,
             entered_fns: None,
             fn_positions: Vec::new(),
             debug: None,
@@ -2485,6 +2504,19 @@ impl State {
     #[must_use]
     pub fn source_loc_for(&self, pc: u32) -> Option<&Position> {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
+    }
+
+    /// Hand the fault-site span table to the crash hook, so a Rust panic inside
+    /// any opcode dispatch can print `at file:line:col` for the offending pc.
+    ///
+    /// The snapshot is built on first use and then shared, because this runs on
+    /// every ENTRY into loft — including each `loft::host` call and each call to
+    /// a process-placed library. See [`State::published_spans`].
+    pub(crate) fn publish_source_spans(&mut self) {
+        if self.published_spans.is_none() {
+            self.published_spans = Some(Arc::new(self.source_spans.clone()));
+        }
+        crate::crash_report::set_source_spans(self.published_spans.clone());
     }
 
     // ── @PLN16 debugger ──────────────────────────────────────────────────────
@@ -4796,7 +4828,7 @@ impl State {
         // to the panic hook so a Rust panic inside any opcode dispatch
         // (e.g. arithmetic overflow in `checked_long!`, the `panic`
         // builtin) can print `at file:line:col` for the offending pc.
-        crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
+        self.publish_source_spans();
         // loft#806 — and the opcode NAMES, so a crash report says which op was
         // dispatching instead of a bare `op=249`.  Leaked once per process: a
         // signal handler cannot borrow the definitions table (the crashing thread
@@ -5596,6 +5628,7 @@ impl State {
             scope_spans: Vec::new(),
             store_spans: Vec::new(),
             source_spans: BTreeMap::new(),
+            published_spans: None,
             entered_fns: None,
             fn_positions: Vec::new(),
             debug: None,
@@ -6423,7 +6456,7 @@ impl State {
         if self.fn_positions.is_empty() {
             self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         }
-        crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
+        self.publish_source_spans();
 
         let d_nr = self
             .fn_positions
@@ -6500,6 +6533,7 @@ impl State {
                 let s = *self.get_stack::<Str>();
                 HostReturn::Text(s.str().to_owned())
             }
+            HostRetKind::Ref => HostReturn::Ref(*self.get_stack::<DbRef>()),
         };
         // Drop the hidden text buffers to free their heap allocations.
         for cr in work_crs.iter().rev() {
