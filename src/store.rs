@@ -65,6 +65,18 @@ pub const MAX_STORE_WORDS: u32 = i32::MAX as u32;
 /// Two 8-byte words (16 bytes) comfortably hold these fields.
 const MIN_FREE_TREE: i32 = 2;
 
+/// The kernel's page — the granularity `madvise` drops at, asked of the host rather
+/// than assumed to be 4 KB (it is 16 KB on aarch64 macOS and configurable on ppc64).
+/// A hard-coded 4096 would mean [`Store::release_resident`] handing `madvise` a length
+/// that is not a whole number of pages, which it rounds DOWN — silently dropping less
+/// than the caller was told.
+#[cfg(all(feature = "mmap", unix))]
+fn page_bytes() -> u64 {
+    static PAGE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    #[allow(clippy::cast_sign_loss)]
+    *PAGE.get_or_init(|| unsafe { libc::sysconf(libc::_SC_PAGESIZE).max(4096) as u64 })
+}
+
 /// Smallest size a FILE-BACKED arena is kept at, in words.  [`Store::open`]
 /// lifts anything under it back up to 8192 bytes, so an image written below the
 /// floor — or a shrink past it ([`Store::shrink_to`]) — only buys an immediate
@@ -195,6 +207,33 @@ pub struct Store {
     size: u32,
     #[cfg(feature = "mmap")]
     file: Option<MmapStorage>,
+    /// @PLN126 — how far [`Store::release_resident`] has already flushed and dropped,
+    /// in BYTES from the mapping's base.  Residency bookkeeping, not content: it never
+    /// reaches an image, and a clone starts at zero because its pages are its own.
+    ///
+    /// Read only where [`Store::release_resident`] has a body to be — without `mmap`
+    /// there is no file to flush to, and off unix there is no `madvise`.
+    #[cfg_attr(not(all(feature = "mmap", unix)), allow(dead_code))]
+    released_bytes: u64,
+    /// @PLN126 — the word past the highest block ever claimed, carried forward by
+    /// [`Store::claim_block`].
+    ///
+    /// A monotone UPPER bound on [`StoreUsage::live_end_words`], not a replacement for
+    /// it: freeing the top block lowers the real mark and never lowers this.  That is
+    /// the safe direction for its one consumer — flushing and dropping a few free
+    /// pages above the live end costs a page fault if the allocator comes back for
+    /// them, where a mark that is too LOW would drop nothing and silently buy nothing.
+    /// Anything that needs the exact mark (`shrink_to`, `reclaim_tail`, `bind_path`)
+    /// still reads the chain, because truncating to an upper bound would cut live data.
+    ///
+    /// `0` means "not established yet" — a store adopted from an image has claims this
+    /// process never made, so the first reader seeds it from one chain walk.
+    ///
+    /// Maintained on every target and read only where [`Store::release_resident`] has a
+    /// body to be: the cost is one `max` per claim, and making the bookkeeping itself
+    /// conditional would mean a store whose mark depends on how loft was compiled.
+    #[cfg_attr(not(all(feature = "mmap", unix)), allow(dead_code))]
+    claimed_end: u32,
     pub(crate) free: bool,
     /// HARD lock: when `true`, the store is immutable.  All `addr_mut`,
     /// `claim`, and `delete` calls panic.  Set by CONST_STORE init
@@ -418,6 +457,8 @@ impl Store {
             last_op_at: 0,
             free_root: 0,
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: 0,
             recording: None,
             tag: 0,
@@ -510,6 +551,8 @@ impl Store {
             free_protected: false,
             free_root: 0,
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: 0,
             recording: None,
             tag: 0,
@@ -586,6 +629,8 @@ impl Store {
             last_op_at: 0,
             free_root: 0,
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: 0,
             recording: None,
             tag: 0,
@@ -679,6 +724,8 @@ impl Store {
             last_op_at: 0,
             free_root: 0,
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: 0,
             recording: None,
             tag: 0,
@@ -817,6 +864,15 @@ impl Store {
             *self.addr_mut(pos, 0) = block_size; // positive = claimed
         }
         self.claims.insert(pos);
+        // @PLN126 — carry the high-water mark forward here, where the block becomes
+        // claimed, rather than deriving it from a chain walk when someone asks.
+        // `Store::usage` reads the header of EVERY block, which touches every page of
+        // the arena; a release call that asked it for the frontier faulted the whole
+        // store back in to decide what to drop, and measured a peak RSS of the entire
+        // file where the same build without the call held half of it.
+        self.claimed_end = self
+            .claimed_end
+            .max(pos + (*self.addr::<i32>(pos, 0)) as u32);
         // @PLN16.J: record the claim while edit-recording is on.  Read the *actual*
         // claimed size from the header (claim_block may take the whole block without
         // splitting), so replay's `claim_at` reproduces the exact extent.
@@ -1558,6 +1614,8 @@ impl Store {
             free_protected: false,
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: self.generation,
             recording: None,
             tag: self.tag,
@@ -1600,6 +1658,8 @@ impl Store {
             last_op_at: self.last_op_at,
             free_root: self.free_root,
             needs_coalesce: self.needs_coalesce,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: self.generation,
             recording: None,
             tag: self.tag,
@@ -1631,6 +1691,8 @@ impl Store {
             free_protected: false,
             free_root: self.free_root,
             needs_coalesce: false,
+            released_bytes: 0,
+            claimed_end: 0,
             generation: self.generation,
             recording: None,
             tag: self.tag,
@@ -2067,6 +2129,119 @@ impl Store {
         } else {
             0
         }
+    }
+
+    /// The word past everything this arena has written — [`Store::claimed_end`],
+    /// seeded from the block chain the first time it is asked of a store whose claims
+    /// this process did not make.
+    ///
+    /// Clamped to the capacity, because the seed is the only place a stale value could
+    /// come from and its one consumer hands the result to `madvise`.
+    #[cfg(all(feature = "mmap", unix))]
+    fn write_frontier(&mut self) -> u32 {
+        // Once per store, on the FIRST release only: a store bound to an existing
+        // image holds claims this process never made, so `claimed_end` has seen none
+        // of them and would name a mark far below the content. The walk that reads
+        // them costs a touch of every page — which is the whole thing this call
+        // avoids — so it happens once, at a moment when a bind-first generator's
+        // arena is still nearly empty, and never again.
+        //
+        // An incomplete walk makes the mark a LOWER bound, which is the safe
+        // direction here (fewer pages flushed) and is used rather than refused.
+        // `shrink_to` refuses on the same fact, because truncating to a lower bound
+        // cuts live data where dropping fewer pages only buys less.
+        if self.released_bytes == 0 {
+            self.claimed_end = self.claimed_end.max(self.usage().live_end_words);
+        }
+        self.claimed_end.min(self.size)
+    }
+
+    /// @PLN126 — write everything below the arena's high-water mark out to the file
+    /// and drop it from this process's resident set.  Answers the BYTES dropped; 0
+    /// when there was nothing to drop or this store is not file-backed.
+    ///
+    /// The whole of the plan behind one call, and the reason it can be one call is a
+    /// measurement.  A *per-record* release is impossible — `MADV_DONTNEED` works on
+    /// pages, and `database::spans` measured that 0.0% of the pages one record of a
+    /// real generator's shape touches hold only that record.  A *frontier* release
+    /// needs no per-record contiguity at all: it needs the region below the mark not
+    /// to be written again, and 87–99% of its pages are not.
+    ///
+    /// **Content is unaffected, and so is every reference into it.**  The mapping is
+    /// `MAP_SHARED`, so the pages stay in the page cache and an access after this
+    /// re-faults them from the file — the same bytes, one page fault later.  Nothing
+    /// moves, nothing is freed, and the arena's own bookkeeping is untouched: this
+    /// changes where the bytes are RESIDENT, not what they are.
+    ///
+    /// Two calls in one because either alone is a trap.  `msync` without the drop
+    /// leaves the pages dirty-clean in RSS and gives back nothing; the drop without
+    /// `msync` hands the kernel a writeback it must do under pressure, at the moment
+    /// it is least able to.  Flushing first is what turns unreclaimable dirty page
+    /// cache into reclaimable clean page cache, which is the whole mechanism.
+    ///
+    /// Only WHOLE pages strictly below the mark are dropped, so the page the next
+    /// claim writes into is never among them.
+    #[cfg(all(feature = "mmap", unix))]
+    pub fn release_resident(&mut self) -> u64 {
+        if self.file.is_none() || self.read_only {
+            return 0;
+        }
+        let mark = self.write_frontier();
+        let page = page_bytes();
+        let till = (u64::from(mark) * 8) / page * page;
+        // Only the region since the LAST release, and that is not an optimisation —
+        // it is what makes the call affordable at all.  Flushing "everything below the
+        // frontier" each time re-syncs a region that grows with the run, so a
+        // generator that calls this per record pays O(n²) in writeback: measured at
+        // 217x and 359x the wall clock of the same build without it, on a call that
+        // exists to make a build FASTER under memory pressure.  Bounded to the new
+        // bytes it is O(file), which is the writeback the run owed anyway.
+        //
+        // A page below the mark that is written again afterwards is therefore not
+        // re-flushed here.  That is the 1–13% `database::spans` measured, and the
+        // kernel's ordinary writeback is exactly the right owner for it: the whole
+        // claim of this call is that it knows about the OTHER 87–99%.
+        let from = self.released_bytes.min(till);
+        let len = till - from;
+        if len == 0 {
+            return 0;
+        }
+        // SAFETY: `ptr` is the mmap base (page-aligned by construction), `from` is a
+        // whole number of pages, and `from + len` is `till`, which is inside the
+        // mapping — `live_end_words` never exceeds the store's capacity, which
+        // `usage` itself asserts.
+        let at = unsafe { self.ptr.add(from as usize) };
+        // `MS_ASYNC`, not `MS_SYNC`, and the gap is the difference between a call a
+        // generator can make per record and one it cannot make at all. Both reach the
+        // same resident set — 44.3 MB down to 2.2 MB on an 89 MB build — but waiting
+        // for the writeback costs ~1.5 ms per call, which is 208x the wall clock of
+        // the same build at one call per record. Asynchronous, the identical drop is
+        // FREE: 0.8x, slightly faster than not calling it, because the writeback
+        // starts early instead of arriving all at once at the end.
+        //
+        // Nothing is at risk in the difference. The mapping is `MAP_SHARED`, so
+        // `MADV_DONTNEED` unmaps the pages and leaves them in the page cache for the
+        // kernel to write back; the `msync` only asks for that writeback to START, so
+        // the region becomes reclaimable sooner. This call is a residency hint and
+        // makes no durability promise — `store_durable_seal` is what does.
+        let ok = unsafe {
+            libc::msync(at.cast(), len as usize, libc::MS_ASYNC) == 0
+                && libc::madvise(at.cast(), len as usize, libc::MADV_DONTNEED) == 0
+        };
+        if ok {
+            self.released_bytes = till;
+            len
+        } else {
+            0
+        }
+    }
+
+    /// Not compiled without `mmap` (no file to flush to) or off unix (no `madvise`).
+    /// A no-op rather than an error: the call is a HINT about residency, and a program
+    /// that runs on a target which cannot honour it is not a program that is wrong.
+    #[cfg(not(all(feature = "mmap", unix)))]
+    pub fn release_resident(&mut self) -> u64 {
+        0
     }
 
     /// Debug-only: walk the LLRB tree and verify its invariants.

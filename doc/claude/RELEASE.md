@@ -102,10 +102,14 @@ plan.  Closing is explicit and cross-repo:
   secret: Issues:write on the plans repo; without it the job no-ops.)
 - **Drift safety net (runs daily):** the nightly checks
   ([`miri.yml`](../../.github/workflows/miri.yml) → `stale-plans-audit`
-  job) run `scripts/audit-stale-plans.sh` every day, warning when a
+  job) run `scripts/audit-stale-plans.sh` every day.  It *warns* when a
   `status:active` plan's close directive is already on `main` — so a missed
   close surfaces within a day, not at the next audit-by-hand (the drift this
-  caught manually in `2026-06`: @PLN1/5/10/16/21).
+  caught manually in `2026-06`: @PLN1/5/10/16/21) — and it **fails the nightly**
+  when a CLOSED plan still carries a live status label, which is a contradiction
+  rather than a judgement and takes one command to fix.  A closed plan wearing
+  `status:next` stays in everyone's next-up queue; @PLN48 and @PLN102 did for a
+  month.
 - **Manual fallback:** run `scripts/close-shipped-plans.sh --range
   <prev-release>..main` once after the merge if the on-merge workflow didn't fire.
 

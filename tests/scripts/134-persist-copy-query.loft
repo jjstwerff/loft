@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN134 — the paged prefix query, run against ONE image so the driver can read
+// what it fetched off `LOFT_LOADER_STATS`. Companion to
+// `134-persist-copy-key-order.loft`; the driver
+// (`tests/store_persist_loft.rs::a_trie_survives_the_rebuild_and_comes_out_in_key_order`)
+// runs it once per image and compares.
+//
+// Each prefix gets its OWN local, so no reader cache carries between them and
+// every line is the cold cost of a first keystroke — which is what a search box
+// actually pays.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_IMG   the image to query
+
+struct PWord {
+  w: text,
+  n: integer,
+}
+
+fn main() {
+  img = env_variable("LOFT_PERSIST_TEST_IMG");
+  if img == "" { return }
+
+  for pre in ["aa", "cr", "gi", "mo", "pu", "st", "wa", "zu"] {
+    local: trie<PWord[w]> = [];
+    got = store_load_prefix(local, img, pre, 20);
+    if got == 0 { println("FAIL no-records-for {pre}"); return }
+    println("pre={pre} got={got}");
+  }
+}

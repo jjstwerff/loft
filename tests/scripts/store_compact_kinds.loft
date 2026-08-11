@@ -7,7 +7,7 @@
 // `copy_claims`, which accepts far more shapes than a `hash` root:
 // `Sorted`, `Array`/`Ordered`, `Index` and `ChildRec` are all waved through by
 // `type_is_compactable`.  Only `Radix` (spatial) and a cross-store `DbRef` are
-// refused.  Every earlier test built a `hash<Rec[id]>`, so the rest of that
+// refused — `Trie` joined the accepted set with @PLN134.  Every earlier test built a `hash<Rec[id]>`, so the rest of that
 // surface shipped by default with no coverage — and the array/ordered
 // destination builder carries a documented history of exactly the failure a
 // digest catches (@P309: copied collections "read back as length 0", silent
@@ -19,7 +19,7 @@
 //
 // Env in:
 //   LOFT_PERSIST_TEST_PATH   the store file
-//   KIND                     hash | sorted | index | spatial | nested
+//   KIND                     hash | sorted | index | trie | spatial | nested
 //   MODE                     "" (write) | reload
 
 struct Rec { const id: integer, const n: integer, const label: text }
@@ -104,6 +104,25 @@ fn main() {
     s = 0; c = 0;
     for xr in ci { s = (s + h_rec(xr.id, xr.n, xr.label)) % 1000000007; c += 1 }
     println("kind index count {c} sum {s} bytes {file(path).size} sound {store_verify(ci)}");
+    return
+  }
+
+  // --- trie: accepted since @PLN134, and the rebuild is the POINT ------
+  //
+  // A trie rebuilds through `copy_claims_trie_body`, which re-inserts every
+  // element in KEY order — the placement `store_persist_copy` writes an image
+  // for. It was refused here when the kind landed (#804), appended to Radix's
+  // refusal rather than reasoned about; the digest below is what says the
+  // rebuild carries the data rather than merely surviving.
+  if kind == "trie" {
+    ct: trie<Rec[label]> = [];
+    if !reload {
+      for ti in 0..n { ct += [Rec { id: ti, n: ti % 97, label: "label-{ti}-xxxxxxxx" }] }
+      if !store_persist_bind(ct, path) { println("FAIL bind"); return }
+    } else if !store_load(ct, path) { println("FAIL load"); return }
+    s = 0; c = 0;
+    for tr in ct { s = (s + h_rec(tr.id, tr.n, tr.label)) % 1000000007; c += 1 }
+    println("kind trie count {c} sum {s} bytes {file(path).size} sound {store_verify(ct)}");
     return
   }
 

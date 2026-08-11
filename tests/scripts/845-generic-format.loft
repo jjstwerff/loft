@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#845 — a format string that interpolates a value whose type came from a
+// generic must agree with what that value actually IS.
+//
+// `"{v}"` chooses its op from the value's TYPE, and inside a template the only
+// type available is the parameter's. Substitution then replaces types, not the
+// ops and constants already chosen from them, so a monomorph shipped the
+// template's choice against a concrete value. Two faces, both silent or worse:
+//
+//   fn show<T>(v: T) -> text { "{v}" }
+//       the RECORD formatter, against an `i64` — SIGSEGV on `--interpret`,
+//       `E0308` on `--native`. Measured over every argument kind, NOT ONE
+//       produced a right answer: scalars crashed, `text` and a struct rendered
+//       the literal `{}`.
+//
+//   fn showv<T>(v: vector<T>) -> text { "{v}" }
+//       the right OP with the wrong ROW — a collection dumps through the
+//       schema, and the row was a vector over the type variable's own storage,
+//       so a `vector<integer>` printed `{}` on both backends. A bound did not
+//       help: `Printable` gives the ELEMENT a `to_text`, while the dump needs
+//       the element's ROW.
+//
+// The two have different answers, and that is the point:
+//
+//   * A bare `T` is REFUSED. Inside a generic only the bounds may be relied on
+//     — a method call, a subscript and an operator all already say so, and
+//     formatting is not an exception. `Printable` is the bound, every built-in
+//     satisfies it, and the bounded path renders correctly for every kind. (The
+//     refusal is in tests/errors; nothing that worked is refused, because
+//     nothing worked.)
+//   * A `vector<T>` is FIXED, because there is a right answer to compute: the
+//     row is re-derived per monomorph from the VALUE's own substituted type.
+//     Deriving it from `T`'s binding instead was the first attempt and it was
+//     wrong — an integer literal's inferred range picks the NARROW element row,
+//     so "the row for T = integer" and "the row this variable has" were two
+//     different numbers.
+//
+// Every case below is checked against the same body written out by hand, so the
+// test asserts the VALUE and not merely the absence of a crash.
+
+struct P {
+  a: integer,
+  b: text,
+}
+
+fn to_text(self: P) -> text { return "P({self.a},{self.b})"; }
+
+// ── a bare T, with the bound that makes it renderable ────────────────────────
+
+fn show<T: Printable>(v: T) -> text { return "{v}"; }
+
+// ── a vector<T>: no bound needed, the schema walker renders the elements ─────
+
+fn showv<T>(v: vector<T>) -> text { return "{v}"; }
+
+// The hand-monomorphised references.
+fn hand_int(v: integer) -> text { return "{v}"; }
+fn hand_text(v: text) -> text { return "{v}"; }
+fn hand_struct(v: P) -> text { return "{v}"; }
+fn hand_vec_int(v: vector<integer>) -> text { return "{v}"; }
+fn hand_vec_text(v: vector<text>) -> text { return "{v}"; }
+fn hand_vec_struct(v: vector<P>) -> text { return "{v}"; }
+
+fn main() {
+  p = P { a: 1, b: "z" };
+
+  // A bare `T`, one monomorph per kind — value-checked, not crash-checked.
+  assert(show(7) == "7", "integer: {show(7)}");
+  assert(show(2.5) == "2.5", "float: {show(2.5)}");
+  assert(show("x") == "x", "text: {show("x")}");
+  assert(show(true) == "true", "boolean: {show(true)}");
+  assert(show('q') == "q", "character: {show('q')}");
+  assert(show(p) == "P(1,z)", "a struct renders through its own to_text: {show(p)}");
+
+  // …and each agrees with the hand-written form.
+  assert(show(7) == hand_int(7), "integer matches the hand form");
+  assert(show("x") == hand_text("x"), "text matches the hand form");
+
+  // A `vector<T>` — the row must be the CONCRETE element's.
+  vi: vector<integer> = [1, 2, 3];
+  vt: vector<text> = ["a", "b"];
+  vp: vector<P> = [P { a: 4, b: "y" }];
+
+  assert(showv(vi) == hand_vec_int(vi),
+         "vector<integer> dumps through the concrete row: {showv(vi)} vs {hand_vec_int(vi)}");
+  assert(showv(vt) == hand_vec_text(vt),
+         "vector<text>: {showv(vt)} vs {hand_vec_text(vt)}");
+  assert(showv(vp) == hand_vec_struct(vp),
+         "vector<P>: {showv(vp)} vs {hand_vec_struct(vp)}");
+
+  // The values themselves, so a change to BOTH sides cannot pass unnoticed.
+  assert(showv(vi) == "[1,2,3]", "vector<integer> renders its elements: {showv(vi)}");
+
+  // Two monomorphs of one template must not share a row.
+  assert(showv(vi) != showv(vt), "distinct element types render distinctly");
+
+  println("845 generic format ok");
+}

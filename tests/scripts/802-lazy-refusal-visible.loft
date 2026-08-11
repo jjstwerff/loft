@@ -10,10 +10,10 @@
 // it cannot page shows "no results" forever, in perfect health.
 //
 // @PLN134 MOVED the trie out of the refused set — a paged image can serve one now
-// — so the reported KIND is here as a control that it stays quiet, and the refusal
-// cells run on the kinds that remain unserved (`index`, `sorted`). That split is
-// the point of the file: the refusal must narrow when a capability lands, and the
-// channel must survive the narrowing.
+// — and @PLN136 the `spatial`, so both are here as controls that they stay quiet,
+// and the refusal cells run on the kinds that remain unserved (`index`, `sorted`).
+// That split is the point of the file: the refusal must narrow when a capability
+// lands, and the channel must survive the narrowing.
 //
 // The CONTROLS are what make this a test rather than a description. `hash_ok`
 // must stay silent — a fix that reported every null as a refusal would pass the
@@ -26,6 +26,7 @@
 // not write beside itself. No path, nothing to do.
 
 struct RfWord { const w: text, hits: integer }
+struct RfPt { const x: integer, const y: integer, v: integer }
 struct RfRow { const id: integer, v: integer }
 struct RfBig { const id: integer, tags: vector<text> }
 
@@ -39,6 +40,7 @@ fn main() {
   big_img = "{base}.big";
   sort_img = "{base}.sorted";
   idx_img = "{base}.index";
+  pt_img = "{base}.spatial";
 
   if mode == "write" {
     t: trie<RfWord[w]> = [];
@@ -66,7 +68,12 @@ fn main() {
     if !store_persist_bind(s, sort_img) { println("FAIL write-sorted"); return }
     s += [RfRow { id: 1, v: 10 }];
 
-    println("seeded={t.len()},{h.len()},{b.len()},{s.len()},{len(x)}");
+    sp: spatial<RfPt[x, y]> = [];
+    if !store_persist_bind(sp, pt_img) { println("FAIL write-spatial"); return }
+    sp += [RfPt { x: 10, y: 20, v: 1020 }];
+    sp += [RfPt { x: 11, y: 21, v: 1121 }];
+
+    println("seeded={t.len()},{h.len()},{b.len()},{s.len()},{len(x)},{sp.len()}");
     return
   }
 
@@ -96,6 +103,16 @@ fn main() {
   println("trie_hits={(tr["kerkstraat"] ?? RfWord { w: "?", hits: 0 }).hits}");
   println("trie_quiet={store_lazy_error(tr) == ""} trie_faults={store_lazy_faults(tr)}");
   println("trie_absent={tr["nosuchword"] == null} trie_still_quiet={store_lazy_error(tr) == ""}");
+
+  // CONTROL 0b — @PLN136: a `spatial` is served now too, and its key is TWO values.
+  // A fetch routed by the key's SHAPE rather than the collection's kind would send
+  // this to the hash loader and refuse a binding that works — so the cell asserts
+  // the fault happened, not merely that nothing crashed.
+  pt: spatial<RfPt[x, y]> = [];
+  println("spatial_bound={store_bind_lazy(pt, pt_img)}");
+  println("spatial_v={(pt[10, 20] ?? RfPt { x: 0, y: 0, v: -1 }).v}");
+  println("spatial_quiet={store_lazy_error(pt) == ""} spatial_faults={store_lazy_faults(pt)}");
+  println("spatial_absent={pt[99, 99] == null} spatial_still_quiet={store_lazy_error(pt) == ""}");
 
   // D — a refusal only a FETCH can decide: the local is a `hash`, so the bind is
   // accepted, and the IMAGE is a foreign layout.

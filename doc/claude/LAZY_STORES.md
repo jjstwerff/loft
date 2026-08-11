@@ -362,12 +362,15 @@ loader's, turned into a fault by `fetch_from_file`) and `Stores::bind_lazy` (the
 static ones, answered at the bind).
 
 - **A collection kind an IMAGE cannot page — at the BIND.** `store_bind_lazy`
-  answers `false` for a `sorted` / `index` / `spatial` bound to a `.store` file or
-  URL: the paged reader serves a `hash` and a `trie` (@PLN134), that is a static
-  property of the pair, and refusing at the call that is wrong beats refusing at
-  an arbitrary later lookup. The refused kinds load WHOLE (`store_load`,
-  `store_load_url_trusted`), which carries every kind. A DATABASE source is not
-  judged here — a `trie` gets `sorted`'s SQL shape and is served.
+  answers `false` for a `sorted` / `index` bound to a `.store` file or URL: the
+  paged reader serves a `hash`, a `trie` (@PLN134) and a `spatial` (@PLN136), that
+  is a static property of the pair, and refusing at the call that is wrong beats
+  refusing at an arbitrary later lookup. The refused kinds load WHOLE
+  (`store_load`, `store_load_url_trusted`), which carries every kind. A DATABASE
+  source is not judged here — a `trie` gets `sorted`'s SQL shape and is served.
+  A `spatial` faults a POINT as the degenerate bounding box, and the fetch routes on
+  the collection's KIND rather than the key's shape: a spatial key arrives as one
+  value per axis, and a one-axis one is indistinguishable from a hash's integer key.
 - **Writes.** Read-only. A write to a lazily-backed record is refused loudly;
   silently diverging from the source of truth is the failure this design exists to
   avoid.
@@ -471,7 +474,7 @@ below are the state as BUILT here, in core's own read path.
 |---|---|
 | **A composite range** | `store_lazy_range(c, lo, hi)` cannot say which value pins a composite key's leading column. `store_lazy_query` covers it verbatim until there is a call shape that carries the pinned prefix. |
 | **A DECLARED collection-valued field** | `store_lazy_query(firm.people, "company_id = {firm.id}")` already IS the owner-parameterised query, per collection. What is open is the field knowing its own foreign key so no call is written at all — and that needs a way to declare it. |
-| **The `T: DbKeyed` bound** | An interface bound would make "this type has a key" a compile error rather than a runtime refusal, and the accessor would also name WHICH field is the key (a struct with `id`, `company_id` and `year` has three integer fields and no way to tell). Single-column keys work with today's generics; composite keys need associated types ([@PLN125](https://github.com/loft-lang/plans/issues/125)). |
+| **The `T: DbKeyed` bound** | An interface bound would make "this type has a key" a compile error rather than a runtime refusal, and the accessor would also name WHICH field is the key (a struct with `id`, `company_id` and `year` has three integer fields and no way to tell). Single-column keys work with today's generics; composite keys need associated types, which [@PLN125](https://github.com/loft-lang/plans/issues/125) arc A SHIPPED — `type Key: …` on the interface is now writable, so this is buildable rather than blocked. |
 | **The mapping's loft-source spelling** | The mapping VALUE exists and feeds the one builder. How an author WRITES it is a surface question, and its answer depends on the bound above. |
 | **A bounded working set** | Selective eviction (keep N, drop least-recently-used) needs a policy owner: loft has no notion of "recently used" on a collection, and adding one is a per-record cost paid by every collection. The blunt form is enough for a working set dropped at a known boundary. |
 

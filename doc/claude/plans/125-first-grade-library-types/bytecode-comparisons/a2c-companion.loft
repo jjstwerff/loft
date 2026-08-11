@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN125 A2c — the working-vs-broken pair for binding an associated type.
+//
+// `hand_width` is the shape the monomorph of `bound_width` must have: the
+// companion is CONCRETE, so `.width()` resolves to `t_8FileRows_width` and the
+// local holds a `FileRows`.  `bound_width` is the same body written against the
+// interface; before A2c it does not parse at all.  The diff between the two IRs
+// is the whole specification of the step.
+
+interface Cursor {
+  fn width(self: Self) -> integer
+}
+
+interface Source {
+  type Rows: Cursor
+  fn open(self: Self) -> Self.Rows
+  fn label(self: Self) -> text
+}
+
+struct FileRows { w: integer }
+struct FileSource { tag: text }
+
+fn width(self: FileRows) -> integer { return self.w; }
+fn open(self: FileSource) -> FileRows { return FileRows { w: len(self.tag) }; }
+fn label(self: FileSource) -> text { return self.tag; }
+
+// The hand-monomorphised reference.
+fn hand_width(s: FileSource) -> integer {
+  r = s.open();
+  return r.width();
+}
+
+fn main() {
+  f = FileSource { tag: "abcd" };
+  assert(hand_width(f) == 4, "hand-monomorphised companion call");
+  println("a2c reference ok");
+}

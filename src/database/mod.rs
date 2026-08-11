@@ -12,6 +12,10 @@ pub mod journal;
 pub mod lazy;
 mod search;
 pub mod snapshot;
+/// @PLN126 step 1 — does ordered insertion leave a finished record contiguous?
+/// A measurement, not a gate: see the module header for how to run it.
+#[cfg(test)]
+mod spans;
 pub mod sql_query;
 pub mod sql_source;
 mod structures;

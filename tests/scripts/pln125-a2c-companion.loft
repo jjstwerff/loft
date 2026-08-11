@@ -1,0 +1,150 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN125 arc A step A2c — an associated type BINDS to the implementor's
+// companion, and a generic may use it.
+//
+// A1 reserved `type X`, A2a made an implementor's return type part of
+// satisfaction, and A2b let a signature spell `Self.X`. Up to there the
+// placeholder was a name with nothing behind it: a generic that called a method
+// on a value of that type met *"generic type Source.Rows: field access requires
+// a concrete type"*, so the contract was writable and useless.
+//
+// The invariant A2c adds:
+//
+//   An associated type is a type variable owned by the INTERFACE. Inside a
+//   generic it dispatches through its declared bounds exactly as `<T: I>` does,
+//   and at instantiation it binds to the one concrete type the implementor's
+//   methods agree on — which must satisfy those bounds.
+//
+// So a monomorph substitutes a LIST of holders rather than one, and the result
+// is byte-identical to the same body written against the concrete types by
+// hand — which is the gate this step was built against
+// (`doc/claude/plans/125-first-grade-library-types/bytecode-comparisons/`).
+//
+// The two refusals — a companion that misses a bound method, and an implementor
+// whose methods disagree about what the companion is — are in tests/errors.
+
+interface Cursor {
+  fn width(self: Self) -> integer
+  fn tag(self: Self) -> text
+}
+
+interface Source {
+  type Rows: Cursor
+  fn open(self: Self) -> Self.Rows
+  fn label(self: Self) -> text
+}
+
+// An associated type with NO bound: it still binds, it just authorises no
+// methods. Declared on its own interface so the bound and the un-bound case
+// cannot mask each other.
+interface Holder {
+  type Held
+  fn hold(self: Self) -> Self.Held
+  fn keep(self: Self, h: Self.Held) -> integer
+  fn size(self: Self) -> integer
+}
+
+// The companion may also arrive as a PARAMETER. The interface names `Self.Rows`
+// on the way in, and the implementor's own signature is what says which type
+// that is — the same inference read off the other side.
+interface Sink {
+  type Item: Cursor
+  fn make(self: Self) -> Self.Item
+  fn take(self: Self, it: Self.Item) -> integer
+}
+
+struct FileRows { w: integer, name: text }
+struct DbRows { cols: integer, label_: text }
+struct Small { v: integer }
+
+fn width(self: FileRows) -> integer { return self.w; }
+fn tag(self: FileRows) -> text { return self.name; }
+fn width(self: DbRows) -> integer { return self.cols; }
+fn tag(self: DbRows) -> text { return self.label_; }
+
+struct FileSource { path: text }
+struct DbSource { dsn: text, cols: integer }
+
+fn open(self: FileSource) -> FileRows { return FileRows { w: len(self.path), name: self.path }; }
+fn label(self: FileSource) -> text { return "file:{len(self.path)}"; }
+fn open(self: DbSource) -> DbRows { return DbRows { cols: self.cols, label_: self.dsn }; }
+fn label(self: DbSource) -> text { return "db:{self.cols}"; }
+
+fn hold(self: FileSource) -> Small { return Small { v: len(self.path) }; }
+fn keep(self: FileSource, h: Small) -> integer { return h.v + len(self.path); }
+fn size(self: FileSource) -> integer { return len(self.path); }
+
+fn make(self: DbSource) -> DbRows { return DbRows { cols: self.cols, label_: self.dsn }; }
+fn take(self: DbSource, it: DbRows) -> integer { return it.cols + self.cols; }
+
+// (1) The shape that did not parse before A2c: bind the companion, then call a
+// method the BOUND declares on it.
+fn first_width<S: Source>(s: S) -> integer {
+  r = s.open();
+  return r.width();
+}
+
+// (2) The companion's other bound method, read inline rather than bound.
+fn first_tag<S: Source>(s: S) -> text {
+  return s.open().tag();
+}
+
+// (3) The generic may hold TWO cursors at once — the limitation that made
+// @PLN23's cursor state ON the connection instead of a type of its own.
+fn two_cursors<S: Source>(s: S) -> integer {
+  a = s.open();
+  b = s.open();
+  return a.width() + b.width();
+}
+
+// (4) An un-bounded associated type still binds; nothing is callable on it, so
+// the generic can only pass it along.
+fn hold_and_size<H: Holder>(h: H) -> integer {
+  kept = h.hold();
+  // Nothing of the companion's OWN is callable — an un-bounded associated type
+  // authorises no methods — but the interface that named it can take it back,
+  // and that round trip is the whole use of an un-bounded companion.
+  return h.size() + h.keep(kept);
+}
+
+// (5) The companion in parameter position, produced and consumed inside the
+// generic.
+fn round_trip<K: Sink>(k: K) -> integer {
+  it = k.make();
+  return k.take(it);
+}
+
+// (6) A method of the interface that has nothing to do with the associated type
+// keeps working beside one that does.
+fn label_of<S: Source>(s: S) -> text { return s.label(); }
+
+fn main() {
+  f = FileSource { path: "abcd" };
+  d = DbSource { dsn: "pg", cols: 7 };
+
+  // ONE generic, TWO implementors, TWO different companions — the binding is
+  // per monomorph, so `first_width` is `FileRows.width` for one and
+  // `DbRows.width` for the other.
+  assert(first_width(f) == 4, "companion bound per monomorph (file): {first_width(f)}");
+  assert(first_width(d) == 7, "companion bound per monomorph (db): {first_width(d)}");
+  assert(first_tag(f) == "abcd", "the companion's second bound method: {first_tag(f)}");
+  assert(first_tag(d) == "pg", "and for the other companion: {first_tag(d)}");
+
+  assert(two_cursors(f) == 8, "two companions live at once: {two_cursors(f)}");
+  assert(two_cursors(d) == 14, "two companions live at once (db): {two_cursors(d)}");
+
+  assert(hold_and_size(f) == 12, "an un-bounded associated type binds: {hold_and_size(f)}");
+  assert(round_trip(d) == 14, "the companion in parameter position: {round_trip(d)}");
+
+  assert(label_of(f) == "file:4", "a method unrelated to the associated type");
+  assert(label_of(d) == "db:7", "and for the second implementor");
+
+  // The direct call is unchanged — the companion is an ordinary type outside a
+  // generic.
+  r = d.open();
+  assert(r.width() == 7, "the companion outside a generic: {r.width()}");
+
+  println("pln125 a2c companion ok");
+}

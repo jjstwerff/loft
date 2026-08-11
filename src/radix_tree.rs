@@ -916,6 +916,17 @@ pub(crate) struct StoreNodes<'a> {
     tree: u32,
 }
 
+impl<'a> StoreNodes<'a> {
+    /// A resident source over `tree` in `store`.
+    ///
+    /// The seek path builds one for itself; this is for a traversal that lives
+    /// OUTSIDE this module and is written against [`TreeNodes`] so the paged
+    /// reader can drive it too — `radix_db`'s bounding-box walk (@PLN136).
+    pub(crate) fn new(store: &'a Store, tree: u32) -> Self {
+        StoreNodes { store, tree }
+    }
+}
+
 impl TreeNodes for StoreNodes<'_> {
     fn top(&mut self) -> Child {
         top(self.store, self.tree)

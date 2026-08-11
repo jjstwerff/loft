@@ -548,11 +548,32 @@ impl Parser {
             }
             _ => {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Cannot assign to attribute on type '{name}'"
-                    );
+                    // @PLN125 arc C — `x[i]` on a library type lowers to that type's
+                    // `OpIndex`, so a WRITE lands here with the read's method name and no
+                    // way to reach a setter.  Reading it back as an attribute assignment
+                    // names an internal symbol the author never wrote; say what actually
+                    // happened and what to write instead.  A writing counterpart is a
+                    // separate decision (it needs its own method, and a decision about
+                    // whether `x[i] += 1` may then read-modify-write), so this is a
+                    // refusal, not a gap left silent.
+                    if let Some(tp) = name.strip_suffix("_OpIndex").and_then(|n| {
+                        n.strip_prefix("t_")
+                            .map(|r| r.trim_start_matches(|c: char| c.is_ascii_digit()))
+                    }) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`{tp}` defines `OpIndex`, which READS — `x[i] = …` has nothing \
+                             to write through; give the type a method that sets \
+                             (`x.set(i, …)`)"
+                        );
+                    } else {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Cannot assign to attribute on type '{name}'"
+                        );
+                    }
                 }
                 Value::Null
             }

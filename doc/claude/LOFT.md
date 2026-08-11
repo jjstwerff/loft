@@ -1907,6 +1907,18 @@ rather than a bag of functions.  Mark the type and these functions `pub` to use 
   *second* operand's type (e.g. one `OpMin(T, T)` and one `OpMin(T, U)` collide); give the second
   form a named method instead.  A type with no such op errors as before (`dt + 5` stays a compile
   error — distinct-type safety is free).
+- **Scope end** — define `fn OpDrop(self: T)` and it runs where the value's own free runs: the
+  same binding, the same scope exit, the same early-`return`/`break` paths (@PLN125 arc B).
+  Reverse-declaration order within a scope.  A drop **cannot fail** (C80 — no caller is left to
+  tell), so it may not return and anything whose failure matters stays an explicit call
+  (`tx.commit()` answers, the closing brace does not).  It receives only `self`, whose struct
+  fields are COPIES made at construction, so its effect reaches the world (I/O, a `#c` handle it
+  owns) rather than a caller's collection.
+- **Indexing** — define `fn OpIndex(self: T, i: τ) -> υ` and `x[i]` dispatches it, so a matrix, a
+  bitset, a row or a ring buffer reads as `x[i]` rather than `x.at(i)` (@PLN125 arc C).  The index
+  type is whatever the method declares — a row addressed by column NAME takes a `text`.  An
+  interface requires it as `op [] (self: Self, i: τ) -> υ`.  `OpIndex` READS: `x[i] = …` is refused
+  (a type that must be written through offers a setter, `x.set(i, v)`).
 - **Formatting** — define `fn to_text(self: T, spec: text) -> text`.  Then `"{x}"` calls it with
   `spec == ""` and `"{x:anything}"` passes `"anything"` raw — the type owns its whole spec
   vocabulary (the Python `__format__` model; core learns no date/money tokens).  *Known issue
@@ -2358,6 +2370,20 @@ Multiple bounds: `<T: Ordered + Printable>`.
 
 Bounded generics work with for-loops, method calls, and operator dispatch
 on all types including structs.
+
+**Interpolating a type variable needs `Printable`.** Inside a generic only the
+BOUNDS may be relied on — that is already true of a method call, a subscript and
+an operator, and formatting is not an exception, because `"{v}"` picks its op
+from the value's type and a template has no concrete one to pick from:
+
+```loft
+fn show<T>(v: T) -> text { "{v}" }             // refused, and says why
+fn show<T: Printable>(v: T) -> text { "{v}" }  // renders every kind
+```
+
+A **collection** of a type variable needs no bound — `"{v}"` on a `vector<T>`
+dumps through the schema, which renders elements from their storage, so
+`fn showv<T>(v: vector<T>)` formats fine (loft#845).
 
 ---
 

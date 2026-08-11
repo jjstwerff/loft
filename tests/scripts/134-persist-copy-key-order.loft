@@ -1,0 +1,122 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN134 — `store_persist_copy` writes an image laid out for PAGING, and the
+// live collection does not move.
+//
+// The two halves are inseparable. A rebuilt image is only useful if it answers
+// exactly what the bound one answers, and it is only LEGAL if the collection the
+// caller still holds keeps every reference it handed out — which is the one
+// thing `store_persist_bind` promises and the reason record placement could not
+// simply be fixed there.
+//
+// So this asserts, on both backends:
+//   * a reference taken BEFORE the call still reads correctly after it,
+//   * the collection still answers every key and prefix afterwards,
+//   * the image is a faithful copy — same length, same keys, same prefix runs.
+// The PAGE-COUNT half is the driver's (`tests/store_persist_loft.rs`), because
+// what a query fetches is not visible from inside the program.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_PATH   the bound image (as built)
+//   LOFT_PERSIST_TEST_COPY   the rebuilt image (key order)
+//   LOFT_PERSIST_TEST_MODE   "write" | "read"
+
+struct PWord {
+  w: text,
+  n: integer,
+}
+
+// A vocabulary with real prefix SHARING and a wide key space: every two-letter
+// stem carries the same suffixes, so a prefix run is long enough that scattering
+// its records across pages COSTS something — which is the property under test.
+fn vocabulary() -> vector<text> {
+  out: vector<text> = [];
+  for a in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"] {
+    for b in ["a", "e", "i", "o", "u", "r", "s", "t"] {
+      for sf in ["and", "berg", "dijk", "ford", "gate", "hof", "kerk", "laan",
+                 "mere", "nes", "oord", "pad", "quay", "rade", "sloot", "toren",
+                 "veld", "weg", "xing", "zand"] {
+        out += ["{a}{b}{sf}"];
+      }
+    }
+  }
+  out
+}
+
+// Insertion order is the variable the whole plan turns on: inserting in sorted
+// order would hand the record array key order for free and this test would pass
+// against an implementation that does nothing.
+fn shuffled(src: vector<text>) -> vector<text> {
+  out: vector<text> = [];
+  n = src.len();
+  i = 0;
+  at = 0;
+  while i < n {
+    out += [src[at]];
+    at = ((at + 7919) % n) ?? 0;
+    i += 1;
+  }
+  out
+}
+
+fn prefix_of(t: trie<PWord[w]>, pre: text) -> text {
+  result = "";
+  for e in t[pre..] {
+    if result == "" { result = e.w } else { result = "{result},{e.w}" }
+  }
+  result
+}
+
+fn digest(t: trie<PWord[w]>, tag: text) {
+  sum = 0;
+  count = 0;
+  for e in t { sum += e.n; count += 1; }
+  println("{tag} count={count} sum={sum}");
+  println("{tag} aa={prefix_of(t, \"aa\")}");
+  println("{tag} zusloot={prefix_of(t, \"zusloot\")}");
+  m = t["arkerk"];
+  if m == null { println("{tag} arkerk=null") } else { println("{tag} arkerk={m.n}") }
+  a = t["nope"];
+  if a == null { println("{tag} absent=null") } else { println("{tag} absent={a.n}") }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  copy = env_variable("LOFT_PERSIST_TEST_COPY");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+  // The suite runs every script in this directory with no environment; this one
+  // is driven by `tests/store_persist_loft.rs` and has nothing to say without a
+  // path. Silence, not a FAIL line that reads like a real one.
+  if path == "" || copy == "" { return }
+
+  t: trie<PWord[w]> = [];
+
+  if mode == "write" {
+    n = 0;
+    for w in shuffled(vocabulary()) {
+      n += 1;
+      t += [PWord { w: w, n: n }];
+    }
+    if !store_persist_bind(t, path) { println("FAIL bind"); return }
+
+    // The reference the guarantee is ABOUT, taken before the call. A rebuild
+    // that moved these records would leave this naming someone else's bytes —
+    // and it would still print a number, which is why the value is checked
+    // rather than the absence of a crash.
+    held = t["arkerk"];
+    if held == null { println("FAIL held-missing"); return }
+    before = held.n;
+
+    if !store_persist_copy(t, copy) { println("FAIL copy"); return }
+
+    if held.n != before { println("FAIL held-moved {before} -> {held.n}"); return }
+    println("held ok={before}");
+    digest(t, "live");
+  } else {
+    // The COPY, read back whole: it must be the same collection.
+    if !store_load(t, copy) { println("FAIL load-copy"); return }
+    digest(t, "copy");
+  }
+}

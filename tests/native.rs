@@ -1295,21 +1295,57 @@ fn the_c_arity_ceiling_is_the_same_on_both_backends() -> std::io::Result<()> {
         csrc.push_str(&format!("long long ar{n}({params}) {{ return {body}; }}\n"));
     }
     std::fs::write(dir.join("arity.c"), &csrc)?;
+    // The manifest keeps the LINUX spelling on every host: `platform::lib_variants`
+    // translates `libarity.so` to `arity.dll` for Windows and `libarity.dylib` for
+    // macOS, and both backends resolve it through that one home.  Only what gets
+    // BUILT is host-specific.
     let libname = if cfg!(target_os = "macos") {
         "libarity.dylib"
     } else {
         "libarity.so"
     };
-    let cc = std::process::Command::new("cc")
-        .args(["-O1", "-fPIC", "-shared", "-o"])
-        .arg(dir.join(libname))
-        .arg(dir.join("arity.c"))
-        .output()?;
-    assert!(
-        cc.status.success(),
-        "the arity fixture must build: {}",
-        String::from_utf8_lossy(&cc.stderr)
-    );
+    if cfg!(windows) {
+        // TWO artifacts, because on Windows the two backends need different files
+        // and Unix gets away with one.  `--interpret` LoadLibrary's the fixture at
+        // run time, which only a DLL can satisfy; `--native` links it, and a DLL is
+        // not linkable on its own — MSVC wants the import library beside it, named
+        // exactly `<stem>.lib` because `add_c_library_flags` passes `-l arity`.
+        // That is `platform::shim_implib_args`' rule, called here rather than
+        // respelled, so the fixture cannot drift from what loft actually asks for.
+        let dll = dir.join("arity.dll");
+        let implib = dir.join("arity.lib");
+        let cc = std::process::Command::new("cc")
+            .args(["-O1", "-shared", "-o"])
+            .arg(&dll)
+            .arg(dir.join("arity.c"))
+            .args(loft::platform::shim_implib_args(
+                &implib.to_string_lossy(),
+                loft::platform::host_lib_os(),
+            ))
+            .output()?;
+        assert!(
+            cc.status.success(),
+            "the arity fixture must build: {}",
+            String::from_utf8_lossy(&cc.stderr)
+        );
+        assert!(
+            implib.exists(),
+            "`cc -shared` must also write the import library {} — without it the \
+             --native link cannot resolve `-l arity`",
+            implib.display()
+        );
+    } else {
+        let cc = std::process::Command::new("cc")
+            .args(["-O1", "-fPIC", "-shared", "-o"])
+            .arg(dir.join(libname))
+            .arg(dir.join("arity.c"))
+            .output()?;
+        assert!(
+            cc.status.success(),
+            "the arity fixture must build: {}",
+            String::from_utf8_lossy(&cc.stderr)
+        );
+    }
     std::fs::write(
         dir.join("pkg/arity/loft.toml"),
         format!(

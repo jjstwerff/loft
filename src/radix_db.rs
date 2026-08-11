@@ -33,7 +33,7 @@ use crate::store::Store;
 
 /// Element payload base: an element record holds its back-pointer at offset 4 and its
 /// struct payload from offset 8 (the shared keyed-collection convention).
-const PAYLOAD: u32 = 8;
+pub(crate) const PAYLOAD: u32 = 8;
 /// Bits given to each axis.  Uniform so the interleave is a plain Morton code.
 const AXIS_BITS: u32 = 64;
 /// The most axes a spatial key interleaves (`spatial<T[x,y,z]>`).  The parser
@@ -41,8 +41,17 @@ const AXIS_BITS: u32 = 64;
 /// interleave indexes past the `[u64; MAX_AXES]` code array — a runtime panic).
 pub const MAX_AXES: usize = 3;
 
-/// A key field's value, mapped to an order-preserving 64-bit code (offset-binary).
-/// A key field's signed coordinate value (for distance arithmetic).
+/// A key field's signed coordinate value, read out of a resident store.
+///
+/// The widths are the schema's, and there is a SECOND reader of them: a paged
+/// spatial query reads the same field out of an image
+/// (`paged_reader::PagedSpatial::axis_value`). The two disagreeing on one width
+/// makes a record's Morton code differ between the storages, which presents as a
+/// box query that misses a point inside it — so
+/// `paged::a_paged_box_agrees_with_the_resident_one` drives every width through both,
+/// and `paged::every_axis_width_decodes_to_what_was_written` fixes each side to the
+/// value that was WRITTEN rather than to the other side. Those are the contract; this
+/// is one half of it.
 fn axis_i64(store: &Store, rec: u32, key: &Key) -> i64 {
     let p = PAYLOAD + u32::from(key.position);
     match key.type_nr.unsigned_abs() {
@@ -62,7 +71,7 @@ fn axis_i64(store: &Store, rec: u32, key: &Key) -> i64 {
 /// The order-preserving (offset-binary) code of a signed coordinate — the axis's
 /// contribution to the Morton key.  Flipping the sign bit makes an unsigned compare
 /// agree with the signed value compare.
-fn coord_code(v: i64) -> u64 {
+pub(crate) fn coord_code(v: i64) -> u64 {
     (v as u64) ^ (1u64 << 63)
 }
 
@@ -84,7 +93,7 @@ fn probe_code(c: &Content) -> u64 {
 /// The `word`-th 64-bit chunk of the Z-order interleave of `n` axes.  Composite bit
 /// `b` (most-significant first) is axis `b % n`'s bit `b / n` — so the axes' most
 /// significant bits lead, which is what makes the interleave order-preserving.
-fn interleave(word: u32, n: usize, code: impl Fn(usize) -> u64) -> u64 {
+pub(crate) fn interleave(word: u32, n: usize, code: impl Fn(usize) -> u64) -> u64 {
     let mut codes = [0u64; MAX_AXES];
     for (a, slot) in codes.iter_mut().enumerate().take(n) {
         *slot = code(a);
@@ -120,7 +129,7 @@ impl KeyOracle for RadixOracle<'_> {
     }
 }
 
-fn key_bits(keys: &[Key]) -> u32 {
+pub(crate) fn key_bits(keys: &[Key]) -> u32 {
     AXIS_BITS * keys.len() as u32
 }
 
@@ -229,25 +238,21 @@ fn code_gt(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> bool {
     false
 }
 
-/// The records whose Morton code lies in `[from, till]` (or `[from, ∞)` when `till`
-/// is `None`), in natural Morton order, capped at `limit` records (`None` = all).
-///
-/// This is the primitive behind `spatial` range slicing: `xs[(x,y)..]`,
-/// `xs[(x,y)..:n]`, and the bounding box `xs[(x1,y1)..(x2,y2)]`.  It is the raw code
-/// interval — for a bounding box that is a *superset* of the geometric box (Z-order
-/// threads through codes outside it), exactly as a keyed range slice is the raw key
-/// range; the caller filters or `break`s as needed.
 /// Is `rec` inside the closed box `[from, till]` on EVERY axis?
 ///
-/// The geometric test [`range`] deliberately does not do: its result is the Morton
-/// code interval, which for any non-degenerate box is a strict superset — Z-order
-/// threads out of the box and back. A caller that promised a BOX (the
-/// `xs[(x1,y1)..(x2,y2)]` surface) filters with this; a caller that wants Z-order
-/// nearness (`xs[(x,y)..]`, `xs[(x,y)..:n]`) must not.
+/// The geometric test [`range`] does not do: its result is the Morton code interval,
+/// which for any non-degenerate box is a strict superset — Z-order threads out of
+/// the box and back.
 ///
-/// Lives here rather than in the caller because the axis decoding does: `axis_i64`
-/// is what knows how each integer width is stored, and a second reader of that
-/// layout is how the two drift apart.
+/// The BOX surface no longer composes the two ([`box_walk`] walks the box itself,
+/// @PLN136), so what this pair is for now is the ORACLE that says the walk did not
+/// change the answer: `d5_box_walk_is_exactly_the_box` runs the old composition
+/// beside the new walk on every probe. Removing the composition would remove the
+/// proof of its own replacement.
+///
+/// The axis decoding lives here rather than in a caller because `axis_i64` is what
+/// knows how each integer width is stored, and a second reader of that layout is how
+/// the two drift apart.
 #[must_use]
 pub(crate) fn in_box(store: &Store, rec: u32, keys: &[Key], from: &[i64], till: &[i64]) -> bool {
     keys.iter().enumerate().all(|(a, key)| {
@@ -262,6 +267,15 @@ pub(crate) fn in_box(store: &Store, rec: u32, keys: &[Key], from: &[i64], till: 
     })
 }
 
+/// The records whose Morton code lies in `[from, till]` (or `[from, ∞)` when `till`
+/// is `None`), in natural Morton order, capped at `limit` records (`None` = all).
+///
+/// The primitive behind the OPEN `spatial` slices, `xs[(x,y)..]` and `xs[(x,y)..:n]`
+/// — the Z-order walk onward from a corner, which is what makes `..:n` a proximity
+/// query and what filtering it would destroy. The bounding box is [`box_range`]'s;
+/// it used to be this call plus [`in_box`], and the `till` form is what that pairing
+/// left behind — kept because `d5_box_walk_is_exactly_the_box` measures the new walk
+/// against it.
 #[must_use]
 pub fn range(
     coll: &DbRef,
@@ -297,6 +311,421 @@ pub fn range(
     }
     out
 }
+
+// ---------------------------------------------------------------------------
+// The bounding-box WALK — @PLN136
+// ---------------------------------------------------------------------------
+
+/// A [`TreeKeys`](rt::TreeKeys) source that can also answer a record's per-axis
+/// codes — what a bounding-box walk needs and a seek does not.
+///
+/// The two answer different questions about the same record. `TreeKeys` yields the
+/// COMPOSITE key a descent compares bit by bit; a box test wants each axis on its
+/// own, and de-interleaving a composite to get there would decode 128 bits to
+/// recover two coordinates the record stores side by side. The codes are
+/// order-preserving ([`coord_code`]), so a box test is an unsigned compare per axis.
+pub(crate) trait BoxNodes: rt::TreeKeys {
+    /// Record `rec`'s `n` axis codes, offset-binary, axis 0 first.
+    fn rec_axes(&mut self, rec: u32, n: usize) -> [u64; MAX_AXES];
+}
+
+/// [`BoxNodes`] over a resident tree — the counterpart of `rt::StoreKeys` for the
+/// box walk.
+pub(crate) struct StoreBox<'a> {
+    nodes: rt::StoreNodes<'a>,
+    store: &'a Store,
+    keys: &'a [Key],
+}
+
+impl<'a> StoreBox<'a> {
+    pub(crate) fn new(store: &'a Store, tree: u32, keys: &'a [Key]) -> Self {
+        StoreBox {
+            nodes: rt::StoreNodes::new(store, tree),
+            store,
+            keys,
+        }
+    }
+}
+
+impl rt::TreeNodes for StoreBox<'_> {
+    fn top(&mut self) -> rt::Child {
+        self.nodes.top()
+    }
+    fn len(&mut self) -> u32 {
+        self.nodes.len()
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        self.nodes.node_bit(n)
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        self.nodes.node_parent(n)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> rt::Child {
+        self.nodes.child(n, dir)
+    }
+}
+
+impl rt::TreeKeys for StoreBox<'_> {
+    fn rec_bits(&mut self, _rec: u32) -> u32 {
+        key_bits(self.keys)
+    }
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64 {
+        interleave(word, self.keys.len(), |a| {
+            axis_code(self.store, rec, &self.keys[a])
+        })
+    }
+}
+
+impl BoxNodes for StoreBox<'_> {
+    fn rec_axes(&mut self, rec: u32, n: usize) -> [u64; MAX_AXES] {
+        let mut out = [0u64; MAX_AXES];
+        for (a, slot) in out.iter_mut().enumerate().take(n) {
+            *slot = axis_code(self.store, rec, &self.keys[a]);
+        }
+        out
+    }
+}
+
+/// `v` with bit `p` set and every lower bit cleared — the smallest value agreeing
+/// with `v` above `p` and having a `1` at `p`.
+fn set_one_below_zero(v: u64, p: u32) -> u64 {
+    let mask = if p == 63 {
+        u64::MAX
+    } else {
+        (1 << (p + 1)) - 1
+    };
+    (v & !mask) | (1 << p)
+}
+
+/// `v` with bit `p` cleared and every lower bit set — the largest value agreeing
+/// with `v` above `p` and having a `0` at `p`.
+fn set_zero_below_one(v: u64, p: u32) -> u64 {
+    let mask = if p == 63 {
+        u64::MAX
+    } else {
+        (1 << (p + 1)) - 1
+    };
+    (v & !mask) | (mask >> 1)
+}
+
+/// The smallest code `>= cur` that is INSIDE the box, per axis — `None` when the
+/// box holds nothing above `cur`.
+///
+/// The reason a box query is not a range query. Z-order visits a box's cells in
+/// several disjoint runs, so a walk that reaches a record outside the box must know
+/// where the next run STARTS; stepping to it costs the whole gap, and this computes
+/// it instead. Tropf & Herzog's BIGMIN, 1981: read the composite bits from the most
+/// significant, keeping each axis's live search bounds, and the last point at which
+/// the box could still be re-entered from above is the answer.
+///
+/// Composite bit `b` is axis `b % n`'s bit at level `b / n`, which is the
+/// interleave [`interleave`] writes; the terminator and id bits the tree appends
+/// lie beyond `n * AXIS_BITS` and name no coordinate, so they end the scan.
+///
+/// **Why not prune on the path instead.** A subtree's records agree on every bit
+/// its path SKIPPED as well as every bit the path tested, but the path does not say
+/// what the skipped ones are — and near the root a PATRICIA tree skips exactly the
+/// high-order bits every record shares. Bounds built from the tested bits alone
+/// therefore stay the whole plane, reject nothing, and the walk degrades to a full
+/// traversal that answers correctly. This reads its bounds off a RECORD, which
+/// carries the skipped bits with it.
+fn bigmin(
+    cur: &[u64; MAX_AXES],
+    n: usize,
+    qlo: &[u64; MAX_AXES],
+    qhi: &[u64; MAX_AXES],
+) -> Option<[u64; MAX_AXES]> {
+    let (mut lo, mut hi) = (*qlo, *qhi);
+    let mut best: Option<[u64; MAX_AXES]> = None;
+    for b in 0..AXIS_BITS * n as u32 {
+        let a = (b as usize) % n;
+        let p = AXIS_BITS - 1 - b / n as u32;
+        let bit = |v: u64| (v >> p) & 1;
+        match (bit(cur[a]), bit(lo[a]), bit(hi[a])) {
+            // The box's bounds straddle this bit and the point is below it: the box
+            // is re-enterable here, at the bottom of its upper half.
+            (0, 0, 1) => {
+                let mut cand = lo;
+                cand[a] = set_one_below_zero(lo[a], p);
+                best = Some(cand);
+                hi[a] = set_zero_below_one(hi[a], p);
+            }
+            // The point is below the box on this axis and cannot climb back into it
+            // any lower down: the box's own minimum is the answer.
+            (0, 1, 1) => return Some(lo),
+            // The point is above the box on this axis; nothing deeper re-enters, so
+            // the last re-entry seen from above is all there is.
+            (1, 0, 0) => return best,
+            // Still inside the bounds — keep reading.
+            (1, 0, 1) => lo[a] = set_one_below_zero(lo[a], p),
+            _ => {}
+        }
+    }
+    best
+}
+
+/// Every record inside the closed box `[qlo, qhi]` (per-axis codes), in Morton
+/// order, capped at `cap`.
+///
+/// **The box decides the walk, not a filter after it.** The Morton code interval
+/// between two corners is a strict superset of the box — Z-order threads out and
+/// back — so seeking to one corner and walking to the other reads every record in
+/// between and throws most of them away. Here a record outside the box does not
+/// advance the walk by one step: [`bigmin`] says where the box resumes and the walk
+/// SEEKS there, so the records in the gap are never read and neither are their
+/// pages. That is the difference between a query that reads what it returns and one
+/// that reads the whole index (@PLN136).
+///
+/// **The cap bounds the WALK.** The records come out in Morton order and the
+/// `cap`-th is the last one anything is read for — the lesson @PLN134 pinned for the
+/// paged prefix query, and the one place a paged spatial query could quietly become
+/// a whole-image read.
+///
+/// The descent is `radix_tree`'s own ([`seek_gen`](rt::seek_gen)), so a query over
+/// a paged image and one over resident memory cannot drift apart, and the source's
+/// per-walk fuel is what bounds a hostile image. `steps` bounds the outer loop for
+/// the same reason: every iteration either yields a record or seeks strictly
+/// higher, so a healthy query never reaches it.
+pub(crate) fn box_walk<S: BoxNodes>(
+    src: &mut S,
+    n: usize,
+    qlo: &[u64; MAX_AXES],
+    qhi: &[u64; MAX_AXES],
+    cap: usize,
+) -> Vec<u32> {
+    let mut out = Vec::new();
+    if cap == 0 || n == 0 || n > MAX_AXES {
+        return out;
+    }
+    let bits = AXIS_BITS * n as u32;
+    // A record's code compares against the box's far corner as a whole number, so
+    // both sides are the interleave of the per-axis bounds.
+    let hi_code = morton_words(n, |a| qhi[a]);
+    // Where the current run starts: the box's own minimum first, then wherever
+    // `bigmin` says the box resumes.
+    let mut at = *qlo;
+    let mut steps = src.len().saturating_add(4);
+    'runs: loop {
+        let probe = |w: u32| interleave(w, n, |a| at[a]);
+        let (mut it, _) = rt::seek_gen(src, &probe, bits);
+        let mut rec = it.rec();
+        while rec != 0 {
+            if out.len() >= cap || steps == 0 {
+                return out;
+            }
+            steps -= 1;
+            let axes = src.rec_axes(rec, n);
+            if (0..n).all(|a| axes[a] >= qlo[a] && axes[a] <= qhi[a]) {
+                out.push(rec);
+                rec = it.step_gen(src, true).unwrap_or(0);
+                continue;
+            }
+            // Outside the box. Past its far corner there is nothing left; otherwise
+            // skip the gap rather than step through it.
+            if code_gt(&morton_words(n, |a| axes[a]), &hi_code, n) {
+                return out;
+            }
+            let Some(next) = bigmin(&axes, n, qlo, qhi) else {
+                return out;
+            };
+            at = next;
+            continue 'runs;
+        }
+        // The walk ran off the end of the tree.
+        return out;
+    }
+}
+
+/// A [`BoxNodes`] that remembers which RECORDS a walk read.
+///
+/// The node reads are already recorded, by `radix_tree`'s own touch window; a
+/// record read is not, because nothing in the tree performs it. Counting them here
+/// keeps both halves of a walk's cost coming out of ONE run, which is what makes
+/// the node/record split a comparison rather than two measurements — and what lets
+/// `d5_box_walk_skips_the_gaps` assert that the walk SKIPS, not merely that it
+/// answers.
+///
+/// `keep` is what makes an UNCAPPED walk affordable: a province-wide box touches a
+/// large slice of the index, and holding the ids of every record for every probe is
+/// how a measurement of paging ends up as the memory event CLAUDE.md warns about.
+#[cfg(test)]
+pub(crate) struct Counting<'a> {
+    inner: StoreBox<'a>,
+    reads: Vec<u32>,
+    read_count: usize,
+    /// The record the last read landed on. A seek compares one candidate's key word
+    /// after word and the box test then reads the same record's axes; a reader pays
+    /// ONE page for all of it, so consecutive reads of one record are one read.
+    last: u32,
+    keep: bool,
+}
+
+#[cfg(test)]
+impl<'a> Counting<'a> {
+    pub(crate) fn new(inner: StoreBox<'a>, keep: bool) -> Self {
+        Counting {
+            inner,
+            reads: Vec::new(),
+            read_count: 0,
+            last: 0,
+            keep,
+        }
+    }
+
+    /// How many distinct records the walk read.
+    pub(crate) fn read_count(&self) -> usize {
+        self.read_count
+    }
+
+    /// Which ones, when the walk was opened with `keep`.
+    pub(crate) fn into_reads(self) -> Vec<u32> {
+        self.reads
+    }
+
+    fn note(&mut self, rec: u32) {
+        if rec == self.last {
+            return;
+        }
+        self.last = rec;
+        self.read_count += 1;
+        if self.keep {
+            self.reads.push(rec);
+        }
+    }
+}
+
+#[cfg(test)]
+impl rt::TreeNodes for Counting<'_> {
+    fn walk_begin(&mut self) {
+        self.inner.walk_begin();
+    }
+    fn top(&mut self) -> rt::Child {
+        self.inner.top()
+    }
+    fn len(&mut self) -> u32 {
+        self.inner.len()
+    }
+    fn node_bit(&mut self, n: u32) -> u32 {
+        self.inner.node_bit(n)
+    }
+    fn node_parent(&mut self, n: u32) -> u32 {
+        self.inner.node_parent(n)
+    }
+    fn child(&mut self, n: u32, dir: bool) -> rt::Child {
+        self.inner.child(n, dir)
+    }
+}
+
+#[cfg(test)]
+impl rt::TreeKeys for Counting<'_> {
+    fn rec_bits(&mut self, rec: u32) -> u32 {
+        self.inner.rec_bits(rec)
+    }
+    fn rec_word(&mut self, rec: u32, word: u32) -> u64 {
+        // A seek's own key reads land on the same records a box test does, and a
+        // reader pays a page for either — so they count the same.
+        self.note(rec);
+        self.inner.rec_word(rec, word)
+    }
+}
+
+#[cfg(test)]
+impl BoxNodes for Counting<'_> {
+    fn rec_axes(&mut self, rec: u32, n: usize) -> [u64; MAX_AXES] {
+        self.note(rec);
+        self.inner.rec_axes(rec, n)
+    }
+}
+
+/// The records inside the closed box with corners `from` and `till`, in Morton
+/// order, capped at `limit` — the collection-level [`box_walk`].
+///
+/// A corner-swapped axis names the same interval, exactly as [`in_box`] reads it:
+/// the box is what the caller asked for, and which corner they wrote first is not
+/// part of it.
+#[must_use]
+pub fn box_range(
+    coll: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[i64],
+    till: &[i64],
+    limit: Option<usize>,
+) -> Vec<u32> {
+    let store = keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return Vec::new();
+    }
+    let n = keys.len();
+    let (mut qlo, mut qhi) = ([0u64; MAX_AXES], [0u64; MAX_AXES]);
+    for a in 0..n.min(MAX_AXES) {
+        let (lo, hi) = if from[a] <= till[a] {
+            (from[a], till[a])
+        } else {
+            (till[a], from[a])
+        };
+        qlo[a] = coord_code(lo);
+        qhi[a] = coord_code(hi);
+    }
+    let mut src = StoreBox::new(store, tree, keys);
+    box_walk(&mut src, n, &qlo, &qhi, limit.unwrap_or(usize::MAX))
+}
+
+/// @PLN136 step 1 — what a bounding-box query READS, counted in PAGES, before
+/// anything is built on the answer.
+///
+/// @PLN134 measured the same thing for a prefix query and the numbers decided the
+/// plan: 27 pages of node reads as built, 2.8 renumbered van Emde Boas. Its
+/// motivation named `spatial` as the next consumer of the same geometry — and
+/// @PLN136 exists because that is only half true. A prefix is a seek followed by
+/// one contiguous run; a box over a Morton code is not one run, so the walk is a
+/// different walk and its page count is a different number. This module takes it.
+///
+/// Four questions, one fixture:
+///
+/// * [`box_query_page_span`] — the node array, under five numberings, per box shape.
+/// * [`interval_versus_box`] — what the code-interval walk reads that the box does
+///   not, which is the question of whether pruning is needed at all.
+/// * [`record_placement`] — the records a query reads, which live elsewhere.
+/// * [`pan_session`] — what the second viewport costs, cache still warm.
+///
+/// The corpus is REAL: 3.2 M tagged OpenStreetMap nodes over the Benelux, since
+/// clustering is the whole subject and a generated point set has whatever
+/// clustering its generator produced. Point it at your own with
+/// `LOFT_SPATIAL_POINTS`; the file is `x<TAB>y<TAB>name` with coordinates in units
+/// of 1e-7 degrees, and the default path is `~/.cache/loft-spatial/points.tsv`.
+/// To rebuild it from an OSM extract:
+///
+/// ```text
+/// osmium tags-filter benelux-latest.osm.pbf \
+///     n/amenity n/shop n/tourism n/leisure n/historic n/office n/craft \
+///     n/natural n/man_made n/highway -o poi.osm.pbf
+/// osmium cat -f opl poi.osm.pbf | scripts/opl_points.py > ~/.cache/loft-spatial/points.tsv
+/// ```
+///
+/// `#[ignore]` because they read a host corpus and PRINT rather than assert — they
+/// answer a design question, they do not defend an invariant. What defends the walk
+/// is `d5_box_walk_is_exactly_the_box`.
+///
+/// ```text
+/// cargo test --release --lib radix_db::pages -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod pages;
+
+/// @PLN136 — the paged box query answers what the resident one answers, and reads a
+/// small part of the image doing it.
+///
+/// The whole point of sharing `radix_tree`'s geometry is that there is ONE walk with
+/// two byte sources. What the sources do not share is how a record's COORDINATES are
+/// read: a resident query goes through `Store`'s checked accessors, a paged one
+/// decodes the same bytes out of an image. Six integer widths, each with its own null
+/// sentinel, and a disagreement on any one of them makes a record's Morton code
+/// differ between the storages — which presents not as an error but as a box query
+/// missing a point that is inside it. So every width is driven through both.
+#[cfg(all(test, paged_store))]
+mod paged;
 
 #[cfg(test)]
 mod tests {
@@ -479,6 +908,144 @@ mod tests {
             capped,
             all[..capped.len()].to_vec(),
             "limit is a prefix of the full walk"
+        );
+    }
+
+    /// D5 — @PLN136: the PRUNING box walk answers exactly the box, in exactly the
+    /// order the code-interval walk plus a filter answers it.
+    ///
+    /// Two oracles, because they fail differently. Brute force over every record
+    /// says the ANSWER is right and cannot be fooled by a shared bug in the tree;
+    /// the `range` + [`in_box`] composition is the surface's behaviour TODAY, so
+    /// agreement is what makes the pruning walk a replacement rather than a second
+    /// answer. Boxes are drawn to straddle, contain and miss the point cloud, since
+    /// a walk that pruned nothing would also pass a test where nothing is pruned.
+    #[test]
+    fn d5_box_walk_is_exactly_the_box() {
+        let mut store = Store::new_in_use(1 << 15);
+        let keys = xy_keys();
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        let code_of = |store: &Store, rec: u32| -> [u64; MAX_AXES] {
+            morton_words(2, |a| axis_code(store, rec, &keys[a]))
+        };
+        let mut seed = 0x51ee_2c40_9a17_0031;
+        let mut pts = Vec::new();
+        for _ in 0..500 {
+            let (x, y) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
+            pts.push((x, y, add_point(&mut store, &coll, &keys, x, y)));
+        }
+        let stores = std::slice::from_ref(&store);
+        let mut nonempty = 0;
+        for _ in 0..300 {
+            let (cx, cy) = (lcg(&mut seed) % 500 - 250, lcg(&mut seed) % 500 - 250);
+            let (rx, ry) = (lcg(&mut seed) % 90, lcg(&mut seed) % 90);
+            let (from, till) = ([cx - rx, cy - ry], [cx + rx, cy + ry]);
+            let got = box_range(&coll, stores, &keys, &from, &till, None);
+
+            // Brute force: every record in the box, in (code, rec) order — which is
+            // the order the tree walks, so the comparison is on the set AND the order.
+            let mut want: Vec<([u64; MAX_AXES], u32)> = pts
+                .iter()
+                .filter(|&&(x, y, _)| x >= from[0] && x <= till[0] && y >= from[1] && y <= till[1])
+                .map(|&(_, _, rec)| (code_of(&store, rec), rec))
+                .collect();
+            want.sort_unstable();
+            let want: Vec<u32> = want.into_iter().map(|(_, r)| r).collect();
+            assert_eq!(got, want, "box {from:?}..{till:?} must be exactly the box");
+            nonempty += usize::from(!want.is_empty());
+
+            // And the composition the surface uses today.
+            let today: Vec<u32> = range(&coll, stores, &keys, &from, Some(&till), None)
+                .into_iter()
+                .filter(|&r| in_box(&store, r, &keys, &from, &till))
+                .collect();
+            assert_eq!(got, today, "pruning must not change the answer");
+
+            // The cap is a prefix of the full answer, so it bounds the walk without
+            // choosing different records.
+            let cap = box_range(&coll, stores, &keys, &from, &till, Some(3));
+            assert_eq!(cap, want[..want.len().min(3)].to_vec());
+        }
+        assert!(
+            nonempty > 200,
+            "only {nonempty} of 300 boxes held a record — the fixture is not exercising the walk"
+        );
+
+        // A corner-swapped axis names the same interval, as `in_box` reads it.
+        let a = box_range(&coll, stores, &keys, &[-50, -50], &[50, 50], None);
+        let b = box_range(&coll, stores, &keys, &[50, -50], &[-50, 50], None);
+        assert_eq!(a, b, "which corner is written first is not part of the box");
+        assert!(!a.is_empty(), "the fixture must have points in the middle");
+    }
+
+    /// D6 — @PLN136: the box walk SKIPS the gaps, rather than reading them and
+    /// discarding what it read.
+    ///
+    /// `d5_box_walk_is_exactly_the_box` says the answer is right, and a walk that
+    /// read every record in the index and filtered would pass it — which is the
+    /// version this plan exists to replace. What has to be true is that the records
+    /// READ are close to the records RETURNED, and far below the code interval the
+    /// two corners span. A small box over a wide, clustered point set is where
+    /// those three numbers separate.
+    #[test]
+    fn d6_box_walk_skips_the_gaps() {
+        let mut store = Store::new_in_use(1 << 18);
+        let keys = xy_keys();
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        // Clustered, like a real point set: 24 towns on a grid, 400 points each,
+        // over a plane fifty times wider than one town.
+        let mut seed = 0x0bad_c0de_1234_5678;
+        for i in 0..3i64 {
+            for j in 0..8i64 {
+                let (cx, cy) = (i * 10_000 + 500, j * 10_000 + 500);
+                for _ in 0..400 {
+                    let (x, y) = (cx + lcg(&mut seed) % 200, cy + lcg(&mut seed) % 200);
+                    add_point(&mut store, &coll, &keys, x, y);
+                }
+            }
+        }
+        let stores = std::slice::from_ref(&store);
+        let tree = store.get_u32_raw(coll.rec, coll.pos);
+
+        // A strip across the bottom row of towns — the degenerate shape, where the
+        // interval between the corners threads through nearly the whole plane and
+        // the box holds three towns' worth.
+        let (from, till) = ([0i64, 400], [30_000i64, 750]);
+        let hits = box_range(&coll, stores, &keys, &from, &till, None);
+        let interval = range(&coll, stores, &keys, &from, Some(&till), None).len();
+
+        let (mut qlo, mut qhi) = ([0u64; MAX_AXES], [0u64; MAX_AXES]);
+        for a in 0..2 {
+            qlo[a] = coord_code(from[a]);
+            qhi[a] = coord_code(till[a]);
+        }
+        let mut src = Counting::new(StoreBox::new(&store, tree, &keys), false);
+        let walked = box_walk(&mut src, 2, &qlo, &qhi, usize::MAX);
+        assert_eq!(walked, hits, "the counted walk is the same walk");
+        let read = src.read_count();
+
+        let found = hits.len();
+        assert!(
+            interval > 3 * found.max(1),
+            "the fixture must have a code interval much wider than the box \
+             (interval {interval}, box {found}) — it is not exercising the skip"
+        );
+        // The floor is the answer itself; what is under test is the GAP, and more
+        // than half of it must go unread.
+        assert!(
+            read < found + (interval - found) / 2,
+            "the walk read {read} records for a box of {found} inside an interval \
+             of {interval} — it is stepping through the gaps, not skipping them"
         );
     }
 

@@ -1978,6 +1978,23 @@ impl Function {
             if matches!(var.type_def, Type::Unknown(_)) {
                 continue;
             }
+            // @PLN125 arc B — a value held ONLY for its scope-end hook is never read by
+            // construction, and that is the idiom the hook exists for:
+            //
+            //   t = begin(conn);      // nothing reads `t`; the closing brace rolls back
+            //
+            // So the lint contradicted the feature: the one shape it fires on hardest is
+            // the correct one.  A type that declares `OpDrop` says the BINDING is the
+            // point, so holding it unread is a use.
+            if !var.argument
+                && let Type::Reference(d, _) = var.type_def.base()
+                && *d < data.definitions()
+            {
+                let tn = data.def(*d).name();
+                if data.def_nr(&format!("t_{}{}_OpDrop", tn.len(), tn)) != u32::MAX {
+                    continue;
+                }
+            }
             if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);
                 diagnostic!(

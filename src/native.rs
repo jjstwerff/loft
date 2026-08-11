@@ -167,9 +167,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
+    #[cfg(feature = "mmap")]
+    ("n_store_persist_copy", n_store_persist_copy),
     ("n_store_load", n_store_load),
     ("n_store_verify", n_store_verify),
     ("n_store_reclaim", n_store_reclaim),
+    ("n_store_release", n_store_release),
     #[cfg(paged_store)]
     ("n_store_bind_lazy", n_store_bind_lazy),
     #[cfg(feature = "native-extensions")]
@@ -193,6 +196,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_keys", n_store_load_keys),
     #[cfg(paged_store)]
     ("n_store_load_prefix", n_store_load_prefix),
+    #[cfg(paged_store)]
+    ("n_store_load_box", n_store_load_box),
     #[cfg(paged_store)]
     ("n_store_load_range", n_store_load_range),
     // Whole-image URL loads, verified and trusted. BOTH are available on the browser
@@ -1275,6 +1280,20 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, ok);
 }
 
+/// @PLN134 — interpreter handler for `store_persist_copy`.  Pops a path (text)
+/// and a reference (DbRef), then writes a REBUILT image of that slot, laid out so
+/// a paged reader touches few pages, without re-rooting the live slot.  Args pop
+/// in reverse, as everywhere: path, then the reference.  See
+/// `Stores::persist_copy` for why the rebuild is legal here and not in
+/// `bind_path`.
+#[cfg(feature = "mmap")]
+fn n_store_persist_copy(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.persist_copy(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
 /// Interpreter handler for `store_verify` — structural integrity check of a
 /// store-rooted collection's heap graph (every pointer targets a live record).
 /// @PLN97. Ungated — a general integrity tool.
@@ -1290,6 +1309,15 @@ fn n_store_verify(stores: &mut Stores, stack: &mut DbRef) {
 fn n_store_reclaim(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let bytes = stores.reclaim_store(v_ref.store_nr);
+    stores.put(stack, bytes);
+}
+
+/// Interpreter handler for `store_release` — flush what has been written to the
+/// bound file and drop it from the resident set, answering the bytes dropped.
+/// @PLN126; mirrors the `#rust` template in `default/02_files.loft`.
+fn n_store_release(stores: &mut Stores, stack: &mut DbRef) {
+    let v_ref = *stores.get::<DbRef>(stack);
+    let bytes = stores.release_store(v_ref.store_nr);
     stores.put(stack, bytes);
 }
 
@@ -1427,6 +1455,20 @@ fn n_store_load_prefix(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let n = stores.load_prefix(&v_ref, v_path.str(), v_pre.str(), v_limit);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_box` — load every entry inside a bounding
+/// box from a persisted SPATIAL image; returns the count.  Args pop in reverse:
+/// limit, till, from, path, local.  @PLN136.
+#[cfg(paged_store)]
+fn n_store_load_box(stores: &mut Stores, stack: &mut DbRef) {
+    let v_limit = *stores.get::<i64>(stack);
+    let v_till = *stores.get::<DbRef>(stack);
+    let v_from = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_box_vec(&v_ref, v_path.str(), &v_from, &v_till, v_limit);
     stores.put(stack, n);
 }
 

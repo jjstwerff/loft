@@ -224,11 +224,61 @@ paged out to 8 GB of swap. `MemorySwapMax=0` is what makes a cap a cap; without 
 the measurement is vacuous in the direction that looks like success.
 
 The cost of capping is that the kernel's LRU only learns the working set by evicting
-the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one. Letting
-a program say "this record is finished" would turn that cliff into a curve; that is
-**@PLN126**, and it opens on a measurement (does ordered insertion leave a finished
-record contiguous?) rather than on an API, because `MADV_DONTNEED` is per PAGE and a
-per-record hint cannot drop a record interleaved with live ones.
+the wrong pages first — ~2× wall at a modest cap, 271 s at an aggressive one.
+`store_release(collection)` lets the program say so instead, and turns that cliff
+into a curve.
+
+### `store_release` — the working set follows the program, not the eviction (@PLN126)
+
+`store_release(collection)` starts writing everything below the arena's high-water
+mark out to the bound file and drops it from the resident set, answering the bytes
+dropped. **Content is untouched and every reference stays valid**: nothing moves and
+nothing is freed, the mapping is `MAP_SHARED`, and reading a released record simply
+re-reads it from the file one page fault later. It is a HINT — calling it too often,
+or on a collection that is not bound, costs a little speed and can never cost an
+answer. Not `store_reclaim`, which changes the FILE's length; this never does. Not a
+durability barrier either — it asks for writeback to START, which is
+`store_durable_seal`'s job to promise.
+
+Measured on a 20 000-record generator, one call per record: **peak RSS 44.3 MB → 2.2
+MB (20×) at 1.0× wall clock.**
+
+**It pays for a build in KEY ORDER and does nothing for an interleaved one** (1.01× on
+the same data), and the reason is the allocator rather than the layout: a generator
+that keeps many records open at once relocates its growing vectors and leaves the
+arena scattered with free blocks — 3 691 against 10 for the same data written in
+order. The LLRB free-space tree's nodes live *inside* those freed blocks, so a
+scattered arena gives the allocator its own scattered working set, which is exactly
+the region the release just dropped. Stream in cell order and this is close to free.
+
+Three implementation facts, each of which cost 200× before it was found, and each
+recorded because the next residency feature meets all three again:
+
+* **Deriving the frontier costs the whole point.** `Store::usage` walks the block
+  chain, one header per block, touching every page of the arena — so asking it what to
+  drop faulted the entire store back in first (peak RSS became the whole file, 80.9 MB
+  against 44.3 MB for making no call at all). `Store::claimed_end` carries the mark
+  forward at `claim_block` instead. It is a monotone UPPER bound on `live_end_words`,
+  which is the safe direction here (flushing a few free pages costs a fault) and the
+  wrong one for `shrink_to` / `reclaim_tail` / `bind_path`, which still read the chain
+  because truncating to an upper bound cuts live data.
+* **Each call must be bounded to what is new.** Flushing from zero every time re-syncs
+  a region that grows with the run: 208× wall. `Store::released_bytes` is the
+  watermark.
+* **`MS_ASYNC`, never `MS_SYNC`.** Both reach the same resident set; waiting costs
+  ~1.5 ms a call, which is the difference between a call a generator can make per
+  record and one it cannot make at all.
+
+**Why there is no per-RECORD release, and it is not a matter of taste.** `MADV_DONTNEED`
+works on pages, and `database::spans` measured what one record of a real generator's
+shape (`hash<TTile[tkey]>` with two grown-by-append vectors) actually occupies:
+**0.0% of the pages a record touches hold only that record**, at every window and every
+scale tried. The span between a record's lowest and highest word is 356–1348× the bytes
+it owns, because the hash keeps its entries in a chunked arena claimed early while the
+record's vectors are claimed at the frontier much later — so a record's own bytes sit
+either side of the whole store. A frontier release needs none of that: it needs the
+region below the mark not to be written again, and 87–99% of its pages are not.
+Full workings: [plans/126-record-frontier.md](plans/126-record-frontier.md).
 
 **A BOUND store's file only ever grew, until `store_reclaim`.** The sizing above
 happens when the image is WRITTEN; after that `resize_store` returns early on any
@@ -957,10 +1007,13 @@ Supported operations, all working on both backends:
 - **Range slices** — the language surface for proximity queries (no
   `.near`/`.within`/`.nearest` methods; spatial reuses ordinary slicing):
   `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped
-  at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box). All three are the raw
-  Morton-code interval — a bounding box is a *superset* of the geometric box
-  (Z-order threads through codes outside it), so the caller filters or breaks
-  as needed, same as any other keyed range slice. Slices carry up to 3 axes.
+  at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box). Slices carry up to 3 axes.
+  The two OPEN forms are the raw Morton walk onward from a corner — that is what
+  makes `..:n` a proximity query, and filtering them would be wrong. The BOX form
+  is the geometric box exactly: it walks only the box, seeking over the runs
+  Z-order threads outside it (@PLN136, `radix_db::box_walk`), where it used to
+  read the whole code interval between the corners and filter afterwards
+  (loft#800). A corner-swapped axis names the same box.
 
 - **Point subscript** — `xs[x, y]` reads the record at exactly that point
   (`null` when empty), `xs[x, y] = mob` inserts-or-replaces, `xs[x, y] = null`
@@ -1012,9 +1065,10 @@ words, 23.4 MB raw and 5.9 MB gzipped, reloaded in 42 ms. That is a size cut, no
 a per-query read, and the two compose rather than compete: keep the vocabulary
 whole and page the postings behind it.
 
-`store_bind_lazy` REFUSES a trie (and a `sorted` / `index` / `spatial`) bound to
-an image, answering `false` — the kind cannot be paged, that is knowable with no
-I/O, and the alternative is `null` at every lookup forever (loft#802).
+`store_bind_lazy` accepts a `hash`, a `trie` (@PLN134) and a `spatial` (@PLN136)
+bound to an image, and REFUSES a `sorted` / `index`, answering `false` — that kind
+cannot be paged, it is knowable with no I/O, and the alternative is `null` at
+every lookup forever (loft#802).
 
 The gate is `tests/scripts/801-trie-text-keyed.loft` — hand-computed values on
 both backends with a `sorted` control alongside;
@@ -1042,20 +1096,41 @@ half, which is the cache-oblivious property doing what it is for — and it matt
 beyond elegance, because the page size is not ours to pick (a local file, an HTTP
 range read and a browser cache disagree, and one layout is near-optimal for all).
 
-So `store_persist_bind` runs `Stores::relayout_tries` before it writes the image
+So `store_persist_bind` runs `Stores::relayout_trees` before it writes the image
 — `radix_tree::rtree_relayout` renumbers each tree van Emde Boas and compacts the
 free list. **Node ids are internal**, so nothing observable moves: same records,
 same key order, same answer to every lookup, which is what `r11` holds it to. It
 is idempotent (the layout is a function of the tree, not of the current ids) and
 it REFUSES a tree whose walk does not account for `n-1` nodes over `n` records,
 leaving it exactly as it was. Stores whose SCHEMA holds no trie skip the data
-walk entirely (`type_has_trie`), so the cost falls only on the kind that has one.
+walk entirely (`type_has_tree`), so the cost falls only on the kinds that have one.
 
 The other half is where the RECORDS land, and it is the larger one: a query also
 reads what it returns, and 20 records claimed in insertion order sit on ~20
 distinct pages — one fetch per row. Written in trie key order they occupy **1**.
 A deep copy already claims them in key order (`copy_claims_trie_body` walks the
 tree), so a rebuilt store has this; a store persisted as built does not.
+
+**`store_persist_copy(r, path)` is where a rebuilt image comes from**, and it is
+a separate call rather than a fix to `store_persist_bind` because of a contract.
+Binding documents *"Caller's existing DbRefs into that slot remain valid"*, and a
+record number IS its word offset — so the guarantee and the placement are the
+same fact, and reordering is exactly what it forbids (@PLN123 B2 records the same
+constraint at the compaction call site: the fresh branch is a WRITE, where a
+program's interior references are live). So the copy is rebuilt into a scratch
+store nobody holds a reference into, `relayout_trees` runs on THAT, and the live
+collection keeps every number it handed out. Measured on 74,692 real words, one
+20-record prefix query, bytes off the wire:
+
+| | requests | fetched |
+|---|---|---|
+| bound image, as built | 19.9 | 1.28 MB |
+| `store_persist_copy` image | **4.9** | **0.32 MB** |
+| whole-image download | 1 | 5.17 MB |
+
+The file is not bound, so writes after it do not reach it — it is the artefact
+you ship, written when the data is final. `store_persist_bind` remains the call
+for a store you go on writing to.
 
 Together: ~2.8 + 1.0 = **3.8 pages, 250 KB** per cold query, against 27 + 20 = 47
 as built and a 5.9 MB gzipped whole image — and a second keystroke costs ONE page
@@ -1107,6 +1182,99 @@ Two things the layout pass deliberately does NOT do, so neither reads as a defec
   — that never happens; for a store written to over months it would, and the
   answer is to persist afresh rather than to relayout on every insert.
 
+### A bounding box is paged too, and it is a different walk (@PLN136)
+
+@PLN134's motivation named `spatial` as the next consumer of the same geometry.
+That was half true, and the false half is the whole of this section: **a bounding
+box is a different WALK.** A prefix is a seek to one point followed by an in-order
+run that stops at the first key not bearing it — one contiguous interval. A box
+over a Morton code is not one interval: the curve leaves the box and comes back,
+so the box's records are several disjoint runs and the query has to know where the
+next one starts. So the paged GEOMETRY is reusable and the query is not.
+
+Measured before anything was built, over 3.19 M real OpenStreetMap points across
+the Benelux (`radix_db::pages`, `#[ignore]`; a 158 MB image, 2532 pages of 64 KB).
+Records READ to answer one box, uncapped:
+
+| box | in the box | the walk reads | the code interval |
+|---|---|---|---|
+| ±220 m (a street) | 104 | 126 | 1 155 |
+| ±2.2 km (a viewport) | 4 875 | 4 985 | 47 327 |
+| ±22 km (a city) | 93 762 | 94 146 | 492 480 |
+| 222 km × 440 m (a wide strip) | 3 965 | 5 064 | **1 463 785** |
+| 440 m × 222 km (a tall strip) | 3 297 | 4 046 | **994 691** |
+
+The degenerate rows are the answer. Seek-to-one-corner-and-walk-to-the-other reads
+289× what the box holds on the wide, shallow viewport a map actually issues — so
+"read the pages the walk touches" is not a sentence about a spatial index until
+the walk stops reading the gaps.
+
+**`radix_db::box_walk` is what stops.** On a record outside the box it computes
+BIGMIN (Tropf & Herzog, 1981) — the smallest Morton code ≥ the current one that is
+back inside the box — and SEEKS there through `radix_tree`'s own `seek_gen`, so
+the gap's records are never read and neither are their pages. The bounds come off
+a RECORD rather than off the path, and that is not an implementation detail: a
+PATRICIA path skips exactly the high-order bits every record below it shares, so
+bounds built from the tested bits alone stay the whole plane, reject nothing, and
+the walk degrades into a correct full traversal. (It did, in the first draft here.)
+
+With the walk pruning, the layout question is the trie's again. One capped
+200-marker viewport query:
+
+| | as built | BFS | key order | DFS | **vEB** |
+|---|---|---|---|---|---|
+| node pages, 64 KB | 222.4 | 20.1 | 15.3 | 8.5 | **3.6** |
+| record pages, 64 KB | 203.4 | — | — | — | **1.7** (Morton order) |
+
+And panning that map, against a 64-page reader cache:
+
+| image | step 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| as built | 426.1 | 427.7 | 419.0 | 399.0 | 375.1 | 363.3 | 352.5 | 347.8 |
+| **vEB + Morton order** | **5.3** | **1.6** | **2.1** | **1.6** | **1.5** | **1.2** | **1.1** | **1.2** |
+
+Against 2532 pages for the whole image, downloaded once. So the same four changes
+the trie needed, made in ONE change because the last two are two halves of one
+fact:
+
+- **`type_is_compactable`'s `Radix` arm accepts**, so `store_persist_copy` writes a
+  spatial image with its records in Morton order (`copy_claims_radix_body` already
+  re-inserted in walk order; only the gate refused).
+- **`relayout_trees`** (named `relayout_tries` while a trie was the only kind it
+  found) finds `Parts::Radix` roots as well as `Parts::Trie` ones. Both kinds ARE the
+  tree, and one numbering decides what either costs.
+- **`store_load_box(local, path, from, till, limit)`** — the paged query.
+  `paged_reader::spatial_box_recs` drives `box_walk` over a `PagedSpatial` source;
+  the corners are `vector<integer>` so one call serves 1, 2 or 3 axes.
+- **`unservable_kind` and `collection_type_of_store` accept `Radix`** in the same
+  change, because a kind that becomes servable and is not removed from the refusal
+  list keeps refusing a binding that would now work — and `fetch_from_file` routes a
+  lazy fault by the COLLECTION's kind rather than the key's shape, since a spatial
+  lookup arrives as one `Content::Long` per axis and a one-axis one is
+  indistinguishable from a hash's integer key. A point faults as the degenerate box,
+  loading every record AT that coordinate (a spatial keeps duplicates, and taking the
+  first would leave the rest permanently unreachable). Narrowing the refusal without
+  that routing is the loft#802 shape exactly: binds `true`, answers `null` forever,
+  `store_lazy_error` empty. `802-lazy-refusal-visible.loft` carries the cell.
+
+**The cap bounds the WALK**, the lesson @PLN134 pinned: `limit` 200 means the 201st
+marker is never stepped to. That is a page COUNT to test, not an answer to test —
+a walk that materialised the box and truncated returns the same records.
+
+**Two readers of one coordinate.** The tree walk is shared, but reading a record's
+AXES is not: `radix_db::axis_i64` goes through `Store`'s checked accessors and
+`PagedSpatial::axis_value` decodes the same bytes out of an image, across six
+integer widths each with its own null sentinel. A disagreement on one width does
+not present as an error — it presents as a box query missing a point inside it —
+so `radix_db::paged` drives every width through both readers AND checks each
+against the value that was written.
+
+The gates: `radix_db::tests::d5`/`d6` (the walk is exactly the box, and skips the
+gaps), `radix_db::paged` (both storages agree, the query reads a small fraction of
+the image, the cap bounds the walk), and
+`store_persist_loft.rs::a_spatial_survives_the_rebuild_and_comes_out_in_morton_order`
+end to end on both backends.
+
 ### Adding or changing a collection kind — the per-kind lists
 
 A `Parts` collection variant is not implemented in one place. It has to be
@@ -1124,7 +1292,7 @@ later as a crash or as silent corruption. loft#720 was three such omissions of
 | The `is_radix` scratch selector (`parser/collections.rs`) | `for x in coll` takes the HASH builder — a bucket walk over a tree. `trie` hit this: the site names every keyed kind, so the sweep had counted it as mechanical and handled. |
 | `emit_field` (`generation/mod.rs`) | A keyed STRUCT FIELD's type id is never registered on `--native`, and its record reads as a struct with no fields (`field_type` indexes an empty list). Local-only vars still work, so it looks kind-specific rather than field-specific. |
 | `Iterated` (`database/descriptor.rs`) and its readers | The layout descriptor, `type_of(…).collection` and the lazy-store SQL deriver all match `Iterated` exhaustively, so these are compile errors — EXCEPT `ffi_deliver::collect_keyed`, which is `#[cfg(target_arch = "wasm32")]` and therefore dead on the host that compiles the audit, and `rewrite_iterated`, which closes with `_ => continue`. Check the wasm target explicitly. |
-| `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves a `hash` and a `trie`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. The list runs BOTH ways: a kind that becomes servable and is not removed keeps refusing a binding that would now work, which is why @PLN134 moved the trie out of it in the same change that made it pageable. |
+| `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves a `hash`, a `trie` and a `spatial`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. The list runs BOTH ways: a kind that becomes servable and is not removed keeps refusing a binding that would now work, which is why @PLN134 moved the trie out of it in the same change that made it pageable, and @PLN136 the spatial. |
 
 Two habits that make the class visible instead of latent:
 

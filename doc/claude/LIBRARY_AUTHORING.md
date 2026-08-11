@@ -18,6 +18,40 @@ in the loft binary — no extra tooling install needed.
 
 ---
 
+## Who a library belongs to — the standing rule
+
+**A library is used by MULTIPLE first projects, any of them may ADD to it at
+will, and the one obligation is to keep the library contract in place.**
+
+There is no single owning project and no gatekeeper to ask.  A consumer that
+needs something the library does not yet do adds it, in the library, and every
+other consumer gets it.  That is the normal way these libraries grow — not an
+exception to be justified.
+
+Three things follow, and they are the whole rule in practice:
+
+- **Adding is free; breaking is not.**  New functions, new types, new optional
+  parameters, wider accepted input — all additive, all fine without ceremony.
+  Changing what an existing call already promises is the one move that needs
+  the compatibility process ([COMPATIBILITY.md](COMPATIBILITY.md)), because
+  the other consumers did not ask for it and will not survive it.
+- **Whichever project gets there first is the author.**  `hex_grid` and
+  `hex_terrain` entered [`loft-libs-world`](https://github.com/loft-lang/loft-libs-world)
+  from **crawler**, not from the game the plan expected — that is the rule
+  working, not a process failure.  Do not read "another project wrote it" as
+  drift.
+- **A private copy IS the failure mode.**  A consumer keeping its own
+  version of shared behaviour is the thing to fix, because it splits the
+  contract in two and neither half gets the other's fixes.  Fold it in
+  instead of forking it.
+
+The corollary for planning: a plan that waits for "a second consumer to
+justify extraction" has the economics backwards.  The library exists so that
+several projects share one contract; the second consumer is the *point*, not
+the *permission*.
+
+---
+
 ## Quick reference
 
 ```

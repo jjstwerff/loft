@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN136 — `store_persist_copy` writes a SPATIAL image laid out for paging, and
+// the live collection does not move.
+//
+// The trie's twin (`134-persist-copy-key-order.loft`), and deliberately a twin: the
+// two kinds share the tree and nothing above it, so what a trie proved about a
+// PREFIX says nothing about a BOX. A prefix is one contiguous run of the key order;
+// a box over a Morton code is several disjoint ones, which is why this plan is not
+// that plan's tail.
+//
+// The two halves are inseparable. A rebuilt image is only useful if it answers
+// exactly what the bound one answers, and it is only LEGAL if the collection the
+// caller still holds keeps every reference it handed out.
+//
+// So this asserts, on both backends:
+//   * a reference taken BEFORE the call still reads correctly after it,
+//   * the collection still answers every box afterwards,
+//   * the image is a faithful copy — same length, same boxes, same order.
+// The PAGE-COUNT half is the driver's (`tests/store_persist_loft.rs`), because what
+// a query fetches is not visible from inside the program.
+//
+// Env in:
+//   LOFT_PERSIST_TEST_PATH   the bound image (as built)
+//   LOFT_PERSIST_TEST_COPY   the rebuilt image (Morton order)
+//   LOFT_PERSIST_TEST_MODE   "write" | "read"
+
+struct Pin {
+  x: integer,
+  y: integer,
+  n: integer,
+}
+
+// A CLUSTERED point set, not a grid: towns with gaps between them. Clustering is
+// what a Z-order walk is about — between two towns the curve leaves the box and
+// comes back, and a walk that stepped through the gap instead of seeking over it
+// answers the same and costs the whole plane.
+fn scene() -> vector<Pin> {
+  out: vector<Pin> = [];
+  n = 0;
+  for tx in [0, 1, 2, 3, 4, 5] {
+    for ty in [0, 1, 2, 3, 4, 5] {
+      cx = tx * 1000;
+      cy = ty * 1000;
+      for dx in [0, 3, 7, 11, 17, 23, 31, 41] {
+        for dy in [0, 5, 13, 19, 29, 37] {
+          n += 1;
+          out += [Pin { x: cx + dx, y: cy + dy, n: n }];
+        }
+      }
+    }
+  }
+  out
+}
+
+// Insertion order is the variable the whole plan turns on: inserting in Morton
+// order would hand the record array the placement for free, and this test would
+// pass against an implementation that does nothing.
+fn shuffled(src: vector<Pin>) -> vector<Pin> {
+  out: vector<Pin> = [];
+  n = src.len();
+  i = 0;
+  at = 0;
+  while i < n {
+    out += [src[at]];
+    at = ((at + 7919) % n) ?? 0;
+    i += 1;
+  }
+  out
+}
+
+fn box_sum(s: spatial<Pin[x, y]>, x1: integer, y1: integer, x2: integer, y2: integer) -> text {
+  sum = 0;
+  count = 0;
+  for p in s[(x1, y1)..(x2, y2)] {
+    sum += p.n;
+    count += 1;
+  }
+  "count={count} sum={sum}"
+}
+
+fn digest(s: spatial<Pin[x, y]>, tag: text) {
+  sum = 0;
+  count = 0;
+  for p in s { sum += p.n; count += 1; }
+  println("{tag} all count={count} sum={sum}");
+  // One town.
+  println("{tag} town={box_sum(s, 3000, 2000, 3050, 2050)}");
+  // A wide, shallow strip across six towns — the shape where the Morton interval
+  // between the corners is most of the plane and the box is a sliver of it.
+  println("{tag} strip={box_sum(s, 0, 1000, 5100, 1010)}");
+  // A box in the gap between towns holds nothing, and must say so rather than
+  // answer its nearest neighbour.
+  println("{tag} gap={box_sum(s, 500, 500, 900, 900)}");
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  copy = env_variable("LOFT_PERSIST_TEST_COPY");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+  // The suite runs every script in this directory with no environment; this one is
+  // driven by `tests/store_persist_loft.rs` and has nothing to say without a path.
+  // Silence, not a FAIL line that reads like a real one.
+  if path == "" || copy == "" { return }
+
+  s: spatial<Pin[x, y]> = [];
+
+  if mode == "write" {
+    for p in shuffled(scene()) { s += [p]; }
+    if !store_persist_bind(s, path) { println("FAIL bind"); return }
+
+    // The reference the guarantee is ABOUT, taken before the call. A rebuild that
+    // moved these records would leave this naming someone else's bytes — and it
+    // would still print a number, which is why the VALUE is checked rather than the
+    // absence of a crash.
+    held = s[3000, 2000];
+    if held == null { println("FAIL held-missing"); return }
+    before = held.n;
+
+    if !store_persist_copy(s, copy) { println("FAIL copy"); return }
+
+    if held.n != before { println("FAIL held-moved {before} -> {held.n}"); return }
+    println("held ok={before}");
+    digest(s, "live");
+  } else {
+    // The COPY, read back whole: it must be the same collection.
+    if !store_load(s, copy) { println("FAIL load-copy"); return }
+    digest(s, "copy");
+  }
+}

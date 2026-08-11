@@ -1325,138 +1325,8 @@ impl Parser {
             // I7/I8.1: Create T-parameterized stubs for each bound interface's methods so
             // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
             // `re_resolve_call` then substitutes these with the concrete type's implementation.
-            let tv_nr = self.data.def_nr(&type_var_name);
-            let self_nr = self.data.def_nr("Self");
-            if tv_nr != u32::MAX && self_nr != u32::MAX {
-                let self_prefix = format!("t_{}Self_", "Self".len());
-                let iface_nrs: Vec<u32> =
-                    self.data.definitions[self.context as usize].bounds.clone();
-                for iface_nr in iface_nrs {
-                    let children: Vec<u32> = self.data.children_of(iface_nr).collect();
-                    for child_nr in children {
-                        let child_name = self.data.def(child_nr).name().to_string();
-                        // Extract method name from interface-scoped stub names:
-                        // "__iface_{d_nr}_{method}" → "method"
-                        // Also handle legacy "t_4Self_{method}" format.
-                        let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_")
-                        {
-                            rest.split_once('_')
-                                .map_or(rest.to_string(), |(_, m)| m.to_string())
-                        } else if child_name.starts_with(&self_prefix) {
-                            child_name[self_prefix.len()..].to_string()
-                        } else {
-                            child_name.clone()
-                        };
-                        let t_stub_name = format!(
-                            "t_{}{}_{}",
-                            type_var_name.len(),
-                            type_var_name,
-                            method_suffix
-                        );
-                        if self.data.def_nr(&t_stub_name) != u32::MAX {
-                            continue; // already created (e.g. multiple bounds share a method)
-                        }
-                        let attrs_count = self.data.def(child_nr).attributes().len();
-                        let t_stub_nr =
-                            self.data
-                                .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
-                        for a_nr in 0..attrs_count {
-                            let a_name = self.data.attr_name(child_nr, a_nr);
-                            let a_type = self.data.attr_type(child_nr, a_nr);
-                            let new_type = Self::substitute_type(
-                                a_type,
-                                self_nr,
-                                &crate::data::Type::Reference(tv_nr, crate::data::Deps::none()),
-                            );
-                            self.data
-                                .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
-                        }
-                        let ret_type = self.data.def(child_nr).returned().clone();
-                        let t_ret_type = Self::substitute_type(
-                            ret_type,
-                            self_nr,
-                            &crate::data::Type::Reference(tv_nr, crate::data::Deps::none()),
-                        );
-                        self.data.set_returned(t_stub_nr, t_ret_type.clone());
-                        // I9-text: if the interface method returns text, add the hidden
-                        // __work_1 parameter that text_return would add for concrete
-                        // implementations.  Without this, the call-site argument count
-                        // won't match after re_resolve_call substitutes the concrete
-                        // text-returning method (which has the hidden param).
-                        //
-                        // loft#733 — `.base()` peels `Optional`: a `-> text?` method uses
-                        // the SAME buffered-text ABI as `-> text` (@PLN25 slice (c) — the
-                        // sentinel layout is shared, so `text_return` converts both), but
-                        // the bare `Type::Text(_)` match here saw only the unwrapped form.
-                        // The stub then carried one attribute fewer than the impl
-                        // `re_resolve_call` substitutes, and the result was read from a
-                        // slot nobody wrote: the call returned EMPTY on `--interpret` —
-                        // exit 0, no diagnostic — and did not compile on `--native`.
-                        if matches!(t_ret_type.base(), crate::data::Type::Text(_)) {
-                            self.data.add_attribute(
-                                &mut self.lexer,
-                                t_stub_nr,
-                                "__work_1",
-                                crate::data::Type::RefVar(Box::new(crate::data::Type::Text(
-                                    crate::data::Deps::none(),
-                                ))),
-                            );
-                        }
-                        // The @PLAN59 twin of the I9-text arm: a concrete method
-                        // returning Reference / Vector / struct-Enum carries the
-                        // hidden `__retbuf` attribute (the H1 heap-return ABI,
-                        // added at signature parse), so the stub must carry it
-                        // too — otherwise the template call site parses one
-                        // argument short of the concrete implementation that
-                        // `re_resolve_call` substitutes, and byte_code's arity
-                        // assert fires ("Too few parameters … got 2, need 3").
-                        // `add_defaults` fills the slot with a caller-side
-                        // work-ref exactly like a direct call; when T
-                        // instantiates to a primitive whose operator has no
-                        // `__retbuf` (a `#rust` op), the trailing-argument trim
-                        // in `substitute_type_in_value` drops it again.
-                        if matches!(
-                            t_ret_type,
-                            crate::data::Type::Reference(_, _)
-                                | crate::data::Type::Vector(_, _)
-                                | crate::data::Type::Enum(_, true, _)
-                        ) {
-                            let a = self.data.add_attribute(
-                                &mut self.lexer,
-                                t_stub_nr,
-                                "__retbuf",
-                                t_ret_type.clone(),
-                            );
-                            self.data.definitions[t_stub_nr as usize].attributes[a].hidden = true;
-                            // Mirror ref_return's finalisation on concrete
-                            // implementations ("returned = {__retbuf}"): the
-                            // stub RETURNS its retbuf, so the returned type's
-                            // deps must name the retbuf attribute.  The call
-                            // site then binds the result as a BORROW of the
-                            // caller-side buffer (one free at scope end).
-                            // Without it the bind was owned — the buffer's
-                            // store was freed twice-in-name and the second
-                            // local vector's store never freed (#482, one
-                            // main_vector leaked per call).  `returned` is a
-                            // set-once field, so write the dep directly.
-                            let dep = crate::data::Deps::attrs(vec![a as u16]);
-                            let dep_ret = match t_ret_type.clone() {
-                                crate::data::Type::Reference(d, _) => {
-                                    crate::data::Type::Reference(d, dep)
-                                }
-                                crate::data::Type::Vector(e, _) => {
-                                    crate::data::Type::Vector(e, dep)
-                                }
-                                crate::data::Type::Enum(d, m, _) => {
-                                    crate::data::Type::Enum(d, m, dep)
-                                }
-                                other => other,
-                            };
-                            self.data.definitions[t_stub_nr as usize].returned = dep_ret;
-                        }
-                    }
-                }
-            }
+            let iface_nrs: Vec<u32> = self.data.definitions[self.context as usize].bounds.clone();
+            self.create_bound_method_stubs(&type_var_name, &iface_nrs);
         }
         let mut returned_not_null = false;
         let mut result = if self.lexer.has_token("->") {
@@ -1797,6 +1667,7 @@ impl Parser {
         }
         self.lexer.has_token(";");
         self.parse_rust();
+        self.check_drop_signature();
         self.data.op_code(self.context);
         self.data.definitions[self.context as usize]
             .variables
@@ -2027,6 +1898,56 @@ impl Parser {
                 self.lexer.revert(link);
                 break;
             }
+        }
+    }
+
+    /// @PLN125 arc B — check a just-parsed `OpDrop`, the hook a type runs at scope end.
+    ///
+    /// `OpDrop` is a reserved name rather than an attribute, for the same reason `to_text`,
+    /// `OpAdd`, `next` and `OpIndex` are: every other first-grade surface keys behaviour to
+    /// a TYPE by the method's name, and the scope-end hook is one more of those.  (The
+    /// original sketch proposed a `#drop` attribute; attributes describe a function's
+    /// implementation — `#pure`, `#native` — and this describes a type's contract.)
+    ///
+    /// Two things are checked here because neither can be recovered from later:
+    ///
+    /// **It must not answer.** A drop runs at a closing brace with no caller left to tell,
+    /// and loft has no runtime errors (C80), so a result would go nowhere.  That is a real
+    /// semantic weakening and it is the design: anything whose failure MATTERS stays an
+    /// explicit call (`tx.commit()` answers; the scope end does not).  Better to say so at
+    /// the declaration than to let an author write a `-> boolean` nobody reads.
+    ///
+    /// **It must take exactly the receiver.** A drop is called by the compiler, so there is
+    /// nowhere for a second argument to come from.
+    fn check_drop_signature(&mut self) {
+        if self.context == u32::MAX || self.first_pass {
+            return;
+        }
+        let def = self.data.def(self.context);
+        if !def.name().ends_with("_OpDrop") {
+            return;
+        }
+        let declared = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+            .count();
+        let returns = !matches!(def.returned(), Type::Void);
+        if returns {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
+                 anything whose failure matters stays an explicit call"
+            );
+        }
+        if declared != 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`OpDrop` takes only `self` — the compiler calls it, so a second argument \
+                 has nowhere to come from"
+            );
         }
     }
 
@@ -3258,6 +3179,150 @@ impl Parser {
         }
     }
 
+    /// I7/I8.1: build the `t_<LEN><Holder>_<method>` stubs that let a body call a bound
+    /// interface's methods on a value whose type is not concrete yet.
+    ///
+    /// `holder_name` names the type standing in for the concrete one — a generic's type
+    /// variable (`<T: Printable>`), or an interface's associated type (`type Rows: Cursor`,
+    /// named `Source.Rows`).  Both are the same thing seen from two places: a name with
+    /// declared bounds and no definition yet, so a method call on it has to resolve against
+    /// the bounds.  The body parser emits `Value::Call(stub, …)` at the stub, and
+    /// `re_resolve_call` re-points it at the concrete implementation once the monomorph
+    /// knows what the holder is.
+    ///
+    /// A stub stands in for the method it will be replaced by, so **its ABI must equal that
+    /// method's ABI** — including the hidden parameters a `text` / heap return carries.
+    /// The pair `(stub, interface method)` is recorded as it is built, because on the FIRST
+    /// pass the interface method's return type can still be an unresolved forward
+    /// reference: [`Parser::refresh_bound_method_stubs`] re-derives the signature between
+    /// the passes, where every type IS resolved.
+    fn create_bound_method_stubs(&mut self, holder_name: &str, bounds: &[u32]) {
+        let holder_nr = self.data.def_nr(holder_name);
+        if holder_nr == u32::MAX || holder_name.is_empty() || self.data.def_nr("Self") == u32::MAX {
+            return;
+        }
+        for &iface_nr in bounds {
+            let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+            for child_nr in children {
+                // Only a METHOD becomes a callable stub. An interface's children are its
+                // method stubs AND its associated-type placeholders; without this the
+                // placeholder `type Rows` minted a bogus `t_1D_Source.Rows` that native
+                // emitted as a `todo!()`.
+                let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
+                    continue;
+                };
+                let t_stub_name =
+                    format!("t_{}{}_{}", holder_name.len(), holder_name, method_suffix);
+                if self.data.def_nr(&t_stub_name) != u32::MAX {
+                    continue; // already created (e.g. multiple bounds share a method)
+                }
+                let t_stub_nr =
+                    self.data
+                        .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
+                self.bound_method_stubs
+                    .push((t_stub_nr, child_nr, holder_nr));
+                self.set_bound_stub_signature(t_stub_nr, child_nr, holder_nr);
+            }
+        }
+    }
+
+    /// Give a bound-method stub the signature of the interface method it stands in for,
+    /// with `Self` replaced by the holder.  Split out of [`Self::create_bound_method_stubs`]
+    /// so the between-passes refresh can re-derive it against resolved types.
+    pub(crate) fn set_bound_stub_signature(
+        &mut self,
+        t_stub_nr: u32,
+        child_nr: u32,
+        holder_nr: u32,
+    ) {
+        let self_nr = self.data.def_nr("Self");
+        if self_nr == u32::MAX {
+            return;
+        }
+        let holder = crate::data::Type::Reference(holder_nr, crate::data::Deps::none());
+        // `add_attribute` appends, so a re-derivation starts from an empty list.
+        self.data.clear_attributes(t_stub_nr);
+        let attrs_count = self.data.def(child_nr).attributes().len();
+        for a_nr in 0..attrs_count {
+            let a_name = self.data.attr_name(child_nr, a_nr);
+            let a_type = self.data.attr_type(child_nr, a_nr);
+            let new_type = Self::substitute_type(a_type, self_nr, &holder);
+            self.data
+                .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
+        }
+        let ret_type = self.data.def(child_nr).returned().clone();
+        let t_ret_type = Self::substitute_type(ret_type, self_nr, &holder);
+        // `set_returned` asserts the slot is still unknown (it guards the signature-time
+        // write), so a re-derivation writes the field directly.
+        self.data.definitions[t_stub_nr as usize].returned = t_ret_type.clone();
+        // I9-text: if the interface method returns text, add the hidden
+        // __work_1 parameter that text_return would add for concrete
+        // implementations.  Without this, the call-site argument count
+        // won't match after re_resolve_call substitutes the concrete
+        // text-returning method (which has the hidden param).
+        //
+        // loft#733 — `.base()` peels `Optional`: a `-> text?` method uses
+        // the SAME buffered-text ABI as `-> text` (@PLN25 slice (c) — the
+        // sentinel layout is shared, so `text_return` converts both), but
+        // the bare `Type::Text(_)` match here saw only the unwrapped form.
+        // The stub then carried one attribute fewer than the impl
+        // `re_resolve_call` substitutes, and the result was read from a
+        // slot nobody wrote: the call returned EMPTY on `--interpret` —
+        // exit 0, no diagnostic — and did not compile on `--native`.
+        if matches!(t_ret_type.base(), crate::data::Type::Text(_)) {
+            self.data.add_attribute(
+                &mut self.lexer,
+                t_stub_nr,
+                "__work_1",
+                crate::data::Type::RefVar(Box::new(crate::data::Type::Text(
+                    crate::data::Deps::none(),
+                ))),
+            );
+        }
+        // The @PLAN59 twin of the I9-text arm: a concrete method
+        // returning Reference / Vector / struct-Enum carries the
+        // hidden `__retbuf` attribute (the H1 heap-return ABI,
+        // added at signature parse), so the stub must carry it
+        // too — otherwise the template call site parses one
+        // argument short of the concrete implementation that
+        // `re_resolve_call` substitutes, and byte_code's arity
+        // assert fires ("Too few parameters … got 2, need 3").
+        // `add_defaults` fills the slot with a caller-side
+        // work-ref exactly like a direct call; when T
+        // instantiates to a primitive whose operator has no
+        // `__retbuf` (a `#rust` op), the trailing-argument trim
+        // in `substitute_type_in_value` drops it again.
+        if matches!(
+            t_ret_type,
+            crate::data::Type::Reference(_, _)
+                | crate::data::Type::Vector(_, _)
+                | crate::data::Type::Enum(_, true, _)
+        ) {
+            let a =
+                self.data
+                    .add_attribute(&mut self.lexer, t_stub_nr, "__retbuf", t_ret_type.clone());
+            self.data.definitions[t_stub_nr as usize].attributes[a].hidden = true;
+            // Mirror ref_return's finalisation on concrete
+            // implementations ("returned = {__retbuf}"): the
+            // stub RETURNS its retbuf, so the returned type's
+            // deps must name the retbuf attribute.  The call
+            // site then binds the result as a BORROW of the
+            // caller-side buffer (one free at scope end).
+            // Without it the bind was owned — the buffer's
+            // store was freed twice-in-name and the second
+            // local vector's store never freed (#482, one
+            // main_vector leaked per call).
+            let dep = crate::data::Deps::attrs(vec![a as u16]);
+            let dep_ret = match t_ret_type.clone() {
+                crate::data::Type::Reference(d, _) => crate::data::Type::Reference(d, dep),
+                crate::data::Type::Vector(e, _) => crate::data::Type::Vector(e, dep),
+                crate::data::Type::Enum(d, m, _) => crate::data::Type::Enum(d, m, dep),
+                other => other,
+            };
+            self.data.definitions[t_stub_nr as usize].returned = dep_ret;
+        }
+    }
+
     /// I3: parse an `interface` declaration and register it as `DefType::Interface`.
     ///
     /// Syntax: `interface Name { fn method(params) -> type [;] ... }`
@@ -3316,24 +3381,20 @@ impl Parser {
             if self.lexer.peek().has == crate::lexer::LexItem::None {
                 break;
             }
-            // @PLN125 arc A step A1 — an ASSOCIATED TYPE declaration, accepted and
-            // ignored.
+            // @PLN125 arc A — an ASSOCIATED TYPE declaration: the interface names a
+            // COMPANION type rather than only a set of methods.
             //
             //   interface SqlDb {
             //     type Rows: SqlRows          // <- here
             //     fn select(self: Self, sql: text) -> Self.Rows
             //   }
             //
-            // Inert on purpose: A1's whole claim is that the contract can be
-            // WRITTEN before anything reads it, so every existing program stays
-            // byte-identical in IR and native Rust. A2 resolves `Self.Rows` to the
-            // concrete companion; until then this only reserves the syntax, and a
-            // program that declares one gets exactly the behaviour it has today.
+            // An associated type is a type variable owned by the INTERFACE. Inside a
+            // generic it dispatches through its declared bounds exactly as `<T: I>`
+            // does (the stubs built below), and at instantiation it binds to the one
+            // concrete type the implementor's methods agree on
+            // (`Parser::associated_bindings`), which must satisfy those bounds.
             //
-            // The bound is parsed and discarded rather than rejected: writing
-            // `type Rows: SqlRows` and having it mean less than it says is the
-            // point of an inert step, and refusing the bound would force the
-            // consumer to edit the line again at A2.
             // `type` is a reserved token (the typedef keyword), so it arrives as
             // `Token`, not `Identifier` — `has_token`, like `parse_typedef`.
             if self.lexer.has_token("type") {
@@ -3343,6 +3404,20 @@ impl Parser {
                         self.lexer,
                         Level::Error,
                         "Expect an associated type name after 'type' in interface body"
+                    );
+                }
+                // The name is a TYPE name and is enforced like every other one. It is
+                // also load-bearing: it becomes the `t_<LEN><Interface>.<Name>_<method>`
+                // stub whose LEN prefix `re_resolve_call` parses back to find the method,
+                // and an underscore in it would split that name in the wrong place.
+                if let Some(name) = &assoc_name
+                    && !is_camel(name)
+                    && !self.first_pass
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Associated type '{name}' must be CamelCase"
                     );
                 }
                 // `: Bound [+ Bound]*` — the same shape a bounded generic uses.
@@ -3367,10 +3442,8 @@ impl Parser {
                         }
                     }
                 }
-                // @PLN125 arc A step A2b — RECORD the declaration, so `Self.X` in a
-                // signature below has something to resolve against.  Still inert: the
-                // placeholder stands where the concrete companion will go, and A2c is
-                // what binds it per monomorph and checks `bounds`.
+                // RECORD the declaration, so `Self.X` in a signature below has something to
+                // resolve against, and so the monomorph has something to bind.
                 //
                 // Held as a CHILD definition rather than a new `Definition` field, because
                 // that is what an interface's methods already are: `children_of` enumerates
@@ -3387,26 +3460,60 @@ impl Parser {
                 // Its `returned` points at ITSELF, exactly as `Self` does — that is what
                 // makes it usable as a type before any concrete type is known.
                 if let Some(name) = assoc_name
-                    && self.first_pass
                     && d_nr != u32::MAX
                 {
                     let assoc_def = format!("{}.{name}", self.data.def(d_nr).name());
-                    if self.data.def_nr(&assoc_def) == u32::MAX {
-                        let a_nr = self
+                    let mut a_nr = self.data.def_nr(&assoc_def);
+                    if a_nr == u32::MAX && self.first_pass {
+                        a_nr = self
                             .data
                             .add_def(&assoc_def, self.lexer.pos(), DefType::Struct);
                         self.data
                             .set_returned(a_nr, Type::Reference(a_nr, crate::data::Deps::none()));
                         self.data.definitions[a_nr as usize].parent = d_nr;
+                    }
+                    if a_nr != u32::MAX {
                         // The declared bounds ride on the placeholder's own `bounds`, the
-                        // same list a bounded generic carries, so A2c can hand it straight
-                        // to `check_satisfaction` without a second representation.
+                        // same list a bounded generic carries, so `check_satisfaction` takes
+                        // them without a second representation.
+                        //
+                        // Re-resolved on BOTH passes, and REPLACED rather than appended: an
+                        // interface named here may itself be declared further down the file,
+                        // and the first pass then resolves nothing.  A bound that silently
+                        // stayed empty would be worse than no bound at all — it reads as a
+                        // promise in the source while letting every companion through.
+                        let mut resolved: Vec<u32> = Vec::new();
                         for b in &bounds {
                             let b_nr = self.data.def_nr(b);
-                            if b_nr != u32::MAX {
-                                self.data.definitions[a_nr as usize].bounds.push(b_nr);
+                            if b_nr == u32::MAX {
+                                if !self.first_pass {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "'{b}' is not a known interface"
+                                    );
+                                }
+                            } else if !matches!(self.data.def_type(b_nr), DefType::Interface) {
+                                if !self.first_pass {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "'{b}' is not an interface — an associated type's \
+                                         bounds must be interface names"
+                                    );
+                                }
+                            } else {
+                                resolved.push(b_nr);
                             }
                         }
+                        self.data.definitions[a_nr as usize]
+                            .bounds
+                            .clone_from(&resolved);
+                        // The bound is what lets a generic CALL those methods on a value of
+                        // the associated type, so it needs the same dispatch stubs a bounded
+                        // type variable gets.  This is the whole of "an associated type is a
+                        // type variable owned by the interface".
+                        self.create_bound_method_stubs(&assoc_def, &resolved);
                     }
                 }
                 self.lexer.has_token(";");
@@ -3416,7 +3523,16 @@ impl Parser {
             let method_name = if self.lexer.has_keyword("op") {
                 if let crate::lexer::LexItem::Token(tok) = self.lexer.peek().has.clone() {
                     self.lexer.cont();
-                    format!("Op{}", rename(&tok))
+                    // @PLN125 arc C — subscripting is spelled `op [] (self: Self, i: τ)`.
+                    // The lexer has no `[]` token (the two brackets are separate, as they
+                    // must be for `v[i]`), so the pair is recognised here, where an `op`
+                    // has just been read and a `[` can be nothing else.
+                    if tok == "[" {
+                        self.lexer.token("]");
+                        "OpIndex".to_string()
+                    } else {
+                        format!("Op{}", rename(&tok))
+                    }
                 } else {
                     if !self.first_pass {
                         diagnostic!(

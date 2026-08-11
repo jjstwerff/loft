@@ -136,9 +136,17 @@ finishes the plan — `Closes @PLN<n>` (cross-repo `Fixes #N` can't reach the
 plans repo) — and on merge to `main` the `close-plans` workflow runs
 `scripts/close-shipped-plans.sh`, doing the `status:finished` + close above for
 you.  So the manual `gh` here is the *fallback* (or for an out-of-band close);
-`scripts/audit-stale-plans.sh` is the drift sweep that catches any plan left
-`status:active` after its work shipped — it runs **daily** in the nightly checks
-(`miri.yml` → `stale-plans-audit`).  See
+`scripts/audit-stale-plans.sh` is the drift sweep — it runs **daily** in the
+nightly checks (`miri.yml` → `stale-plans-audit`) and makes two passes.  It
+*warns* about a plan left `status:active` after its work shipped, because that is
+a judgement (the work may have landed via a PR this repo's history cannot see).
+It **fails** on a CLOSED plan still carrying a live label, because that is not:
+the state and the label contradict each other outright.  That second pass exists
+because the warning form was not enough — @PLN48 (`status:future`) and @PLN102
+(`status:next`) sat wrong for a month, closed by the automation, which removed
+only `status:active` and reported success anyway.  `close-shipped-plans.sh` now
+strips every live label; the audit catches what it cannot reach — hand-closes,
+and PRs that used `Refs` instead of `Closes`.  See
 [RELEASE.md § Closing plans when the release merges](../RELEASE.md#closing-plans-when-the-release-merges).
 
 ### Step 6 — Repoint design links to the reference home

@@ -6569,6 +6569,17 @@ Wraps a field value in a type-discriminated enum for compile-time field iteratio
 pub struct StructField {
   name: text,
   value: FieldValue,
+  // Was the field DECLARED nullable (`text?` rather than `text`)?
+  //
+  // The payload variants above are typed non-null, and `τ?` shares `τ`'s
+  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // rather than a wrapper. So a null field's value arrives inside `FvText` /
+  // `FvInt` / … as that sentinel, and this flag is what says so; without it a
+  // reader would have to discover the possibility by being surprised.
+  //
+  // Mirrors `FieldInfo.nullable` from `type_of` (07_reflect.loft) on purpose:
+  // the two field lists describe the same declaration and must agree.
+  nullable: boolean,
 }
 ```
 
@@ -6774,6 +6785,15 @@ Typical dryopea-style pattern: pw = PaintedWorld { painted: \[\] }   // painted'
 It snapshots the whole STORE `r` lives in, which is not always a store of just `r` (loft\#757).  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash\<PaintedHex\[q, r\]\>`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.
 
 ```rust
+pub fn store_persist_copy(r: reference, path: text) -> boolean fs#update
+```
+
+Write an image of `r` laid out for PAGING, and keep the live collection as it is. Use this for a file another program (or a browser) will READ — a vocabulary, a map, any shipped dataset — where what matters is how few pages a query touches.
+`store\_persist\_bind` copies the live bytes, so every record keeps its place and your references stay valid. That place is the layout: records sit where they were INSERTED, so a `trie` prefix query returning 20 records reads 20 scattered pages. This writes a rebuilt copy instead, with each record placed in its collection's own order — key order for a `trie` — so one prefix is one run. Measured on a 74,692-word vocabulary, one 20-record prefix query: 22 requests and 1.25 MB from a bound image, 4 and 0.26 MB from this one.
+The live collection is untouched: nothing moves, so every reference you hold stays valid, and the file is NOT bound (writes after this do not reach it). Call it when the data is final. To keep writing, use `store\_persist\_bind`. words: trie\<Word\[w\]\> = \[\] for w in vocabulary() { words += \[Word { w: w }\] } store\_persist\_copy(words, "vocab.store")   // ship this file // a reader pages it: store\_load\_prefix(local, "vocab.store", "kerk", 20)
+Returns `false` on an I/O or format error, and for a collection whose shape the rebuild cannot carry. The image is sized to its content, with none of the growth slack a bound file keeps.
+
+```rust
 pub fn store_load(r: reference, path: text) -> boolean fs#read
 ```
 
@@ -6810,6 +6830,17 @@ pub fn store_reclaim(r: reference) -> integer fs#update
 Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store\_persist\_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.
 You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.
 You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
+
+```rust
+pub fn store_release(r: reference) -> integer fs#update
+```
+
+Say "everything I have written so far is finished": start writing it out to the file and stop holding it in memory. Returns the BYTES dropped from the resident set (0 when there was nothing to drop, or the collection is not bound to a file).
+For a GENERATOR streaming a large collection into a store bound with `store\_persist\_bind`. Without it the resident set grows with everything written so far, and the kernel only learns which pages are finished by evicting the wrong ones first. Measured on a 20 000-record build, one call per record: peak memory 44.3 MB -\> 2.2 MB (20x), at no cost in wall clock.
+tiles: hash\<TTile\[tkey\]\> = \[\] store\_persist\_bind(tiles, "tiles.store")   // bind FIRST — the file IS the arena for cell in cells { …fill the tile… store\_release(tiles)                     // this cell is done }
+Content is untouched and every reference into the collection stays valid: nothing moves and nothing is freed. Reading a released record simply re-reads it from the file, at the cost of one page fault. So this is a HINT — calling it too often, or on the wrong collection, costs a little speed and can never cost an answer.
+It pays when records are written IN KEY ORDER and not returned to. A generator that keeps many records open at once leaves the store scattered with free blocks (measured: 3 691 against 10 for the same data written in order) and the allocator then keeps re-reading them, so the same call gives back 1.0x instead of 20x. If your build streams in cell order, this is close to free; if it does not, sort it first and this is the reason to.
+Not `store\_reclaim`, which gives back the FILE's unused TAIL and changes its size. This changes only what is resident, and never the file's length. Not a durability barrier either — it asks for writeback to START; `store\_durable\_seal` is what promises the bytes have landed.
 
 ```rust
 pub fn store_bind_lazy(local: reference, source: text) -> boolean
@@ -6890,6 +6921,13 @@ pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer
 
 Prefix form: fetch every entry whose text key begins with `pre` from a persisted `trie\<T\[k\]\>` into `local`, reading only the pages the prefix walk touches — what a search box needs, and what a `sorted` range cannot express without a hand-built successor string. Returns the count loaded.
 `limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. \@PLN134. words: trie\<Word\[w\]\> = \[\] store\_load\_prefix(words, "vocab.store", "kerk", 20)
+
+```rust
+pub fn store_load_box(local: reference, path: text, from: vector<integer>, till: vector<integer>, limit: integer) -> integer fs#read
+```
+
+Box form: fetch every entry inside the closed bounding box `from`..`till` from a persisted `spatial\<T\[x, y\]\>` into `local`, reading only the pages the box walk touches — what a map viewport needs. Returns the count loaded. The corners are vectors so the same call serves 1, 2 or 3 axes, and writing them the other way round names the same box.
+TWO bounds, and a map needs both. `limit` caps the WALK, not just the answer: with `limit` 200 the 201st marker is never stepped to, so its pages are never fetched (a negative `limit` means no cap). And the BOX bounds it — the Morton interval between two corners is a superset the Z-order curve threads in and out of, so a wide, shallow viewport would otherwise read 1.46 M records to return 4 k. Measured on a 3.2 M-point map index: 5.3 pages of 64 KB for the first viewport, ~1.5 for each pan after it, against a 158 MB whole-image download. \@PLN136. pins: spatial\<Pin\[x, y\]\> = \[\] store\_load\_box(pins, "map.store", \[x1, y1\], \[x2, y2\], 200)
 
 ```rust
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read

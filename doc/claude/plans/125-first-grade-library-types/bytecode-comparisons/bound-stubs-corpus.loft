@@ -1,0 +1,81 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN125 A2c — the before/after corpus for extracting the bound-method stub
+// builder (I7/I8.1) out of `parse_function`.
+//
+// One generic per stub-ABI branch, because those branches are what the
+// extraction moves: a plain scalar return, a `text` return (the hidden
+// `__work_1` buffer), a struct return (the hidden `__retbuf` + its dep
+// rewrite), a vector return (the same arm, other type), an OPERATOR stub, and
+// a two-bound generic where the two interfaces share a method name (the
+// already-created `continue`).  `main` runs them all, so the file is also an
+// end-to-end check rather than a parse-only one.
+
+// The structs come FIRST: an interface method returning a struct declared
+// LATER built its stub from an unresolved forward reference and crashed the
+// compiler.  That shape is the regression test
+// (`tests/scripts/pln125-a-forward-return.loft`); this corpus is the
+// before/after instrument for the extraction, so it stays on the shapes that
+// already work.
+struct Crate {
+  n: integer,
+}
+
+struct Item {
+  w: integer,
+  tag: text,
+}
+
+interface Widthy {
+  fn width(self: Self) -> integer
+}
+
+interface Named {
+  fn label(self: Self) -> text
+}
+
+interface Boxy {
+  fn boxed(self: Self) -> Crate
+}
+
+interface Listy {
+  fn parts(self: Self) -> vector<integer>
+}
+
+interface Addy {
+  op + (self: Self, other: Self) -> Self
+}
+
+// Two bounds that declare the SAME method — the second must hit the
+// already-created `continue` rather than register a duplicate stub.
+interface AlsoWidthy {
+  fn width(self: Self) -> integer
+}
+
+fn width(self: Item) -> integer { return self.w; }
+fn label(self: Item) -> text { return self.tag; }
+fn boxed(self: Item) -> Crate { return Crate { n: self.w }; }
+fn parts(self: Item) -> vector<integer> { return [self.w, self.w + 1]; }
+fn OpAdd(self: Item, other: Item) -> Item {
+  return Item { w: self.w + other.w, tag: self.tag };
+}
+
+fn scalar_of<A: Widthy>(a: A) -> integer { return a.width(); }
+fn text_of<B: Named>(b: B) -> text { return b.label(); }
+fn struct_of<C: Boxy>(c: C) -> integer { return c.boxed().n; }
+fn vector_of<D: Listy>(d: D) -> integer { return len(d.parts()); }
+fn op_of<Sum: Addy>(x: Sum, y: Sum) -> Sum { return x + y; }
+fn shared_of<F: Widthy + AlsoWidthy>(f: F) -> integer { return f.width(); }
+
+fn main() {
+  i = Item { w: 4, tag: "crate" };
+  j = Item { w: 6, tag: "other" };
+  assert(scalar_of(i) == 4, "scalar-returning bound method");
+  assert(text_of(i) == "crate", "text-returning bound method");
+  assert(struct_of(i) == 4, "struct-returning bound method");
+  assert(vector_of(i) == 2, "vector-returning bound method");
+  assert(op_of(i, j).w == 10, "operator bound method");
+  assert(shared_of(i) == 4, "two bounds sharing one method name");
+  println("bound stubs ok");
+}

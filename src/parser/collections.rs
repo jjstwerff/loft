@@ -1397,6 +1397,48 @@ use #count instead"
         Some(Value::Call(stub_nr, args))
     }
 
+    /// The storage row `"{v}"` dumps a `vector<cont>` through — `0` when there is none.
+    ///
+    /// One home, because the answer is needed TWICE: here, where the format op is emitted,
+    /// and again per monomorph, where a template's `vector<T>` finally learns what `T` is
+    /// (`Parser::retarget_parametric_vector_format`, loft#845). Two derivations of one row
+    /// is how a monomorph came to dump a `vector<integer>` through the type variable's row
+    /// and print `{}`.
+    ///
+    /// #250's recursive resolution, the FORMAT twin of `db_type`'s Vector arm, for NESTED
+    /// content only: `vector<vector<X>>` content must resolve recursively — the def-level
+    /// `known_type()` fallback returns whichever vector row registered first, a
+    /// layout-coincident id that broke (#483 SIGSEGV in `ShowDb::write_list`) as soon as new
+    /// stdlib content shifted the type table. Non-vector content keeps `known_type()`: an
+    /// enum's row carries the VARIANT NAMES the format needs, where `db_type` returns the
+    /// generic byte storage row.
+    ///
+    /// #624 — a NARROW element (`u8` / `u16` / a 4-byte `integer` subtype) is stored packed
+    /// at 1/2/4 bytes, but the def-level `known_type()` resolves the WIDE integer row.
+    /// Dumping through that row strides 8 bytes over packed data: `{v}` on a `vector<u8>`
+    /// printed the first eight elements packed into one i64 followed by zeros. Resolve the
+    /// narrow storage row the way the element READ and the `+=` append already do, and skip
+    /// `check_vector` — that registers `vector<integer>`'s own row, which a narrow element
+    /// does not own and must not overwrite.
+    pub(crate) fn format_vector_row(&mut self, cont: &Type) -> u16 {
+        if let Some(narrow) = self.data.narrow_vector_content(cont, &mut self.database) {
+            return self.database.vector(narrow);
+        }
+        let db_tp = if matches!(cont, Type::Vector(_, _)) {
+            self.database.db_type(cont, &self.data)
+        } else {
+            let d_nr = self.data.type_def_nr(cont);
+            self.data.def(d_nr).known_type()
+        };
+        if db_tp == u16::MAX {
+            return 0;
+        }
+        let v = self.database.vector(db_tp);
+        self.data
+            .check_vector(self.data.type_def_nr(cont), v, self.lexer.pos());
+        v
+    }
+
     pub(crate) fn append_data(
         &mut self,
         tp: Type,
@@ -1472,44 +1514,7 @@ use #count instead"
             }
             Type::Vector(cont, _) => {
                 let fmt = format.clone();
-                let d_nr = self.data.type_def_nr(&cont);
-                // #250's recursive resolution, the FORMAT twin of `db_type`'s
-                // Vector arm, for NESTED content only: `vector<vector<X>>`
-                // content must resolve recursively — the def-level
-                // `known_type()` fallback returns whichever vector row
-                // registered first, a layout-coincident id that broke (#483
-                // SIGSEGV in `ShowDb::write_list`) as soon as new stdlib
-                // content shifted the type table.  Non-vector content keeps
-                // `known_type()`: an enum's row carries the VARIANT NAMES the
-                // format needs, where `db_type` returns the generic byte
-                // storage row.
-                // #624 — a NARROW element (`u8` / `u16` / a 4-byte `integer`
-                // subtype) is stored packed at 1/2/4 bytes, but the def-level
-                // `known_type()` below resolves the WIDE integer row.  Dumping
-                // through that row strides 8 bytes over packed data: `{v}` on a
-                // `vector<u8>` printed the first eight elements packed into one
-                // i64 followed by zeros.  Resolve the narrow storage row the way
-                // the element READ and the `+=` append already do, and skip
-                // `check_vector` — that registers `vector<integer>`'s own row,
-                // which a narrow element does not own and must not overwrite.
-                let vec_tp = if let Some(narrow) =
-                    self.data.narrow_vector_content(&cont, &mut self.database)
-                {
-                    self.database.vector(narrow)
-                } else {
-                    let db_tp = if matches!(*cont, Type::Vector(_, _)) {
-                        self.database.db_type(&cont, &self.data)
-                    } else {
-                        self.data.def(d_nr).known_type()
-                    };
-                    if db_tp == u16::MAX {
-                        0
-                    } else {
-                        let v = self.database.vector(db_tp);
-                        self.data.check_vector(d_nr, v, self.lexer.pos());
-                        v
-                    }
-                };
+                let vec_tp = self.format_vector_row(&cont);
                 list.push(self.cl(
                     &(start.to_owned() + "Database"),
                     &[
@@ -1538,6 +1543,36 @@ use #count instead"
                 // concrete type's impl at instantiation time.
                 if let Some(text_call) = self.try_bound_to_text_call(d_nr, format, state.spec) {
                     self.append_data_text(list, start, var, text_call, state);
+                } else if self.data.is_type_var_placeholder(d_nr) {
+                    // loft#845 — the same fault P242 fixed for a BOUND type variable, for
+                    // an unbounded one, where there is no `to_text` to route through.
+                    //
+                    // Falling through to the record formatter below picked the op from the
+                    // TEMPLATE's view of the type variable — an attribute-less struct, so a
+                    // reference — and the monomorph replaces the TYPE without re-choosing
+                    // the OP.  Measured over every argument kind, NOT ONE produced a right
+                    // answer: `OpFormatDatabase` on an `i64`/`f64`/`boolean`/`character`
+                    // SIGSEGVs on `--interpret` and is `E0308` on `--native`, and a `text`
+                    // or struct argument rendered the literal `{}` on both.  So this
+                    // refuses nothing that worked.
+                    //
+                    // Refusing is also the rule the rest of the language already applies:
+                    // inside a generic ONLY the bounds may be relied on — a method call, a
+                    // subscript (@PLN125 arc C) and an operator all say so — and formatting
+                    // is not an exception to it.  `Printable` is the bound, it is satisfied
+                    // by every built-in, and the bounded path renders correctly on both
+                    // backends for every kind.
+                    if !self.first_pass {
+                        let name = self.data.def(d_nr).name().to_string();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "generic type {name} cannot be formatted — `\"{{…}}\"` needs a \
+                             bound that renders it; write `<{name}: Printable>` (every \
+                             built-in satisfies it, and a user type does by defining \
+                             `fn to_text(self: {name}) -> text`)"
+                        );
+                    }
                 } else {
                     let fmt = format.clone();
                     let db_tp = self.data.def(d_nr).known_type();

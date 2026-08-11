@@ -384,7 +384,7 @@ fn trie_persist_lays_out_and_keeps_every_answer() {
     let stats = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code().unwrap_or(-1), 0, "fresh exit: {fresh:?}");
     assert!(
-        stats.contains("laid out 1 trie(s) for paging"),
+        stats.contains("laid out 1 tree(s) for paging"),
         "the layout pass must run on the image being written: {stats:?}"
     );
     assert!(fresh.contains("fresh len=72"), "fresh: {fresh:?}");
@@ -1787,6 +1787,90 @@ fn store_reclaim_shrinks_a_bound_file_both_backends() {
     }
 }
 
+/// @PLN126 — `store_release(collection)` drops what has been written from the
+/// resident set and leaves the collection, its references and the file alone.
+///
+/// The memory half is not testable from inside a loft program and is not tested
+/// here: `database::spans::a_frontier_release_moves_the_resident_set` owns it
+/// (peak RSS 44.3 MB → 2.2 MB on a 20 000-record build, at no cost in wall clock).
+/// What a driver can own is the half that would fail SILENTLY — that dropping a
+/// record's pages does not change what the record says.
+///
+/// Both backends, because the call reaches the runtime through the interpreter's
+/// registry entry on one and the `#rust` template on the other, and a residency
+/// hint that is a no-op on one of them would look identical to one that works.
+#[test]
+fn store_release_keeps_every_record_and_reference_both_backends() {
+    let script = workspace_root().join("tests/scripts/126-store-release-keeps-everything.loft");
+    let line = |out: &str, key: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("no `{key}` line in:\n{out}"))
+            .to_string()
+    };
+
+    let mut digests = Vec::new();
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("release126_{}", backend.trim_start_matches('-')));
+        let path = dir.join("rows.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+
+        // A collection that is not bound to a file has nothing to flush, and must
+        // survive being asked. A hint that raised here could not be called from a
+        // library, which never knows how its caller's collection was built.
+        assert_eq!(
+            line(&out, "unbound"),
+            "unbound 0 live 1",
+            "{backend}: releasing a heap collection is a no-op, not a fault: {out}"
+        );
+        assert_eq!(
+            line(&out, "released_positive"),
+            "released_positive true",
+            "{backend}: a bound store built to 400 records had pages to drop — 0 here \
+             means the call ships and buys nothing: {out}"
+        );
+
+        // The claim that matters. `held` was taken before a release and read after
+        // one, and it is checked by VALUE: a re-faulted page hands back a plausible
+        // number whether or not it is the right one, so "it did not crash" proves
+        // nothing at all here.
+        assert_eq!(
+            line(&out, "held"),
+            "held id 7 label row 7 last 711 len 12",
+            "{backend}: a reference held across a release must still read its own \
+             record — 711 is 7*100+11, the last of record 7's twelve: {out}"
+        );
+        assert_eq!(
+            line(&out, "idempotent"),
+            "idempotent 0",
+            "{backend}: nothing written since the last call means nothing to drop, \
+             and re-flushing a region already flushed is what made this quadratic: {out}"
+        );
+        assert_eq!(
+            line(&out, "size_stable"),
+            "size_stable true",
+            "{backend}: this changes residency, never the file's length — that is \
+             `store_reclaim`: {out}"
+        );
+        assert_eq!(
+            line(&out, "live"),
+            "live 400 digest 319650265",
+            "{backend}: every record survives, unchanged: {out}"
+        );
+        assert_eq!(
+            line(&out, "hit"),
+            "hit row 399 miss true",
+            "{backend}: the collection still answers a hit and a miss: {out}"
+        );
+        digests.push(line(&out, "live"));
+    }
+    assert_eq!(
+        digests[0], digests[1],
+        "the two backends must agree on the content, not merely each with itself"
+    );
+}
+
 /// One `count/sum/xor/sound` line from `store_digest_b0.loft`.
 #[derive(PartialEq, Eq, Debug, Clone)]
 struct B0 {
@@ -2593,9 +2677,10 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
 /// @PLN123 — compaction across COLLECTION KINDS.
 ///
 /// Compaction at load is default-on and rebuilds through `copy_claims`, which
-/// `type_is_compactable` waves through for `Sorted`, `Array`/`Ordered`, `Index`
-/// and `ChildRec` as well as `Hash` — only `Radix` (spatial) and a cross-store
-/// `DbRef` are refused. Every other compaction test builds a `hash<Rec[id]>`, so
+/// `type_is_compactable` waves through for every collection kind — only a
+/// cross-store `DbRef` is refused, because this rebuild moves records within ONE
+/// store and nothing would rewrite a foreign pointer at the far end. Every other
+/// compaction test builds a `hash<Rec[id]>`, so
 /// the rest of that surface shipped by default with no coverage, and the
 /// array/ordered destination builder carries a documented history of exactly the
 /// failure a digest catches (@P309: copied collections "read back as length 0").
@@ -2619,14 +2704,19 @@ fn reclaim_and_compaction_refuse_a_sealed_store_and_a_floor_sized_one() {
 fn compaction_is_correct_for_every_collection_kind_it_accepts() {
     let script = workspace_root().join("tests/scripts/store_compact_kinds.loft");
     // kind, and the verdict the loader must reach for it.
-    let kinds: [(&str, &str); 5] = [
+    let kinds: [(&str, &str); 6] = [
         ("hash", "compacted"),
         ("sorted", "compacted"),
         ("index", "compacted"),
         ("nested", "compacted"),
-        // The one refusal in the accept-list: a spatial collection is a `Radix`,
-        // which `copy_claims` panics on and the keystone walks as empty.
-        ("spatial", "cannot carry"),
+        // @PLN134 — a trie became compactable when its records had a reason to
+        // move: the rebuild places them in key order, which is what a paged
+        // prefix query is cheap on.
+        ("trie", "compacted"),
+        // @PLN136 — and a spatial did, for the same reason one step over: the
+        // rebuild places its records in MORTON order, which is what a paged
+        // bounding-box query is cheap on. It was the last refusal in this list.
+        ("spatial", "compacted"),
     ];
     let run = |backend: &str, dir: &Path, kind: &str, reload: bool| -> String {
         let out = Command::new(loft_bin())
@@ -3103,7 +3193,7 @@ fn a_refused_lazy_binding_is_visible_to_the_program_both_backends() {
 
     let (out_w, code_w) = run_lazy("--interpret", &script, &path, "write");
     assert_eq!(code_w, 0, "write exit: {out_w:?}");
-    assert!(out_w.contains("seeded=2,1,1,1,1"), "write: {out_w:?}");
+    assert!(out_w.contains("seeded=2,1,1,1,1,2"), "write: {out_w:?}");
 
     for backend in ["--interpret", "--native"] {
         let (out, code) = run_lazy(backend, &script, &path, "read");
@@ -3135,6 +3225,26 @@ fn a_refused_lazy_binding_is_visible_to_the_program_both_backends() {
             out.contains("idx_names_kind=true") && out.contains("idx_names_cure=true"),
             "{backend}: the refusal must name the KIND that was refused and the \
              call that does work: {out:?}"
+        );
+        // @PLN136 — the narrowing's second half. A `spatial` binds, FAULTS and
+        // stays quiet. The fault count is the load-bearing part: a fetch routed by
+        // the key's shape rather than the collection's kind would send a
+        // two-coordinate lookup nowhere, and `spatial_v` alone cannot tell a fault
+        // from a record that was already resident (none is).
+        assert!(
+            out.contains("spatial_bound=true") && out.contains("spatial_v=1020"),
+            "{backend}: a spatial image is pageable since @PLN136, so the binding \
+             must be accepted and the point must fault in: {out:?}"
+        );
+        assert!(
+            out.contains("spatial_quiet=true") && out.contains("spatial_faults=0"),
+            "{backend}: a binding that serves its lookups has nothing to report, \
+             and a non-zero fault count would read as an incomplete one: {out:?}"
+        );
+        assert!(
+            out.contains("spatial_absent=true") && out.contains("spatial_still_quiet=true"),
+            "{backend}: a point the image does not hold is a genuine absence — the \
+             refusal channel must not start speaking for it: {out:?}"
         );
         // The rule is the kind SET, not one kind — a fix keyed on one would leave
         // `sorted` exactly as silent.
@@ -3690,6 +3800,231 @@ fn store_verify_reads_a_field_collection_as_itself_both_backends() {
         assert!(
             !stderr.contains("cr-check"),
             "{backend}: no structural complaint may be printed: {stderr}"
+        );
+    }
+}
+
+/// @PLN136 — a SPATIAL image, written laid out and read a BOX at a time.
+///
+/// The trie's twin, and deliberately a separate cell: the two kinds share the tree
+/// and nothing above it. A prefix is one contiguous run of the key order and a box
+/// over a Morton code is several disjoint ones, so what @PLN134 proved about
+/// `store_load_prefix` says nothing about a viewport — and this is the query that
+/// motivated flipping `type_is_compactable`'s `Radix` arm.
+///
+/// Calibrated the same way, against the same trap: the bound image's own request
+/// count is the baseline, so the cell survives a different corpus, page size or
+/// machine, and it FAILS on the implementation most likely to be written by
+/// accident — one that writes a faithful byte copy and calls it laid out, which
+/// would answer every box correctly and fetch exactly as much.
+///
+/// The containment half is the query script's: it checks every record it got back
+/// is inside the viewport, because a walk that read the Morton interval and forgot
+/// to filter returns MORE records, not fewer, and a count would not notice.
+#[test]
+fn a_spatial_survives_the_rebuild_and_comes_out_in_morton_order() {
+    let script = workspace_root().join("tests/scripts/136-persist-copy-morton-order.loft");
+    let query = workspace_root().join("tests/scripts/136-persist-copy-box-query.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("persist_copy_spatial_{tag}"));
+        let bound = dir.join("bound.store");
+        let copied = dir.join("copied.store");
+
+        let run = |s: &Path, mode: &str, img: &Path| -> String {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(s)
+                .env("LOFT_PERSIST_TEST_PATH", &bound)
+                .env("LOFT_PERSIST_TEST_COPY", &copied)
+                .env("LOFT_PERSIST_TEST_MODE", mode)
+                .env("LOFT_PERSIST_TEST_IMG", img)
+                .env("LOFT_LOADER_STATS", "1")
+                // 512-byte pages, as the trie's paged tests use: at 64 KB this
+                // corpus is a handful of pages whole, so every layout reads the
+                // same few and the cell could not tell a walk from a scan. The
+                // effect under test is scatter, and scatter needs pages to
+                // scatter ACROSS.
+                .env("LOFT_PAGE_BYTES", "512")
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success() && !stdout.contains("FAIL"),
+                "{backend} mode={mode}: {stdout}\n{stderr}"
+            );
+            format!("{stdout}{stderr}")
+        };
+
+        let wrote = run(&script, "write", &bound);
+        assert!(
+            wrote.contains("held ok="),
+            "{backend}: the reference held across the copy must still read its own \
+             value — that guarantee is why the rebuild is not done in the bind \
+             path:\n{wrote}"
+        );
+
+        // The copy must be the same collection, read back in a separate process.
+        let read = run(&script, "read", &copied);
+        for key in ["all count=", "town=", "strip=", "gap="] {
+            let of = |out: &str| -> String {
+                out.lines()
+                    .find(|l| l.contains(key))
+                    .unwrap_or_else(|| panic!("no `{key}` in:\n{out}"))
+                    .split_once(' ')
+                    .map(|(_, r)| r.to_string())
+                    .unwrap_or_default()
+            };
+            assert_eq!(
+                of(&wrote),
+                of(&read),
+                "{backend}: `{key}` differs between the live collection and its \
+                 copy — a rebuild that dropped or reordered records would still \
+                 satisfy any assertion about SIZE:\n{wrote}{read}"
+            );
+        }
+
+        // The layout half. `requests` is what the reader actually fetched.
+        let requests = |out: &str| -> u32 {
+            out.lines()
+                .filter(|l| l.contains("store_load_box:"))
+                .filter_map(|l| {
+                    l.split_whitespace()
+                        .find_map(|t| t.strip_prefix("requests="))
+                        .and_then(|n| n.parse::<u32>().ok())
+                })
+                .sum()
+        };
+        let as_built = requests(&run(&query, "query", &bound));
+        let morton = requests(&run(&query, "query", &copied));
+        assert!(
+            as_built > 0 && morton > 0,
+            "{backend}: both images must actually be queried — a run that fetched \
+             nothing would pass the ratio below vacuously ({as_built} vs {morton})"
+        );
+        assert!(
+            morton * 2 <= as_built,
+            "{backend}: a Morton-ordered image must fetch substantially less than \
+             the image built by insertion. On 3.2 M real map points the gap is \
+             204 pages against 1.7 for the records alone; the cell asserts only 2x \
+             so it survives a smaller corpus or a changed page size without going \
+             quiet about a regression. as-built={as_built} morton={morton}"
+        );
+    }
+}
+
+/// @PLN134 — `store_persist_copy` writes an image a prefix query can PAGE, and
+/// leaves every reference into the live collection valid.
+///
+/// The layout half cannot be asserted from inside the program: what a query
+/// fetches is a property of the FILE, so this compares the same 20-record prefix
+/// against two images built from the same collection in the same run — one bound
+/// (records where they were inserted), one copied (records in key order).
+///
+/// The comparison is calibrated, not a constant: the bound image's own request
+/// count is the baseline, so the cell survives a different corpus, page size or
+/// machine, and it FAILS on the implementation most likely to be written by
+/// accident — one that writes a faithful byte copy and calls it laid out, which
+/// would answer every key correctly and fetch exactly as much.
+///
+/// The reference half is the script's (`held ok=`): a rebuild that moved the
+/// records the caller still holds would print a plausible number, so the script
+/// checks the VALUE, not the absence of a crash.
+#[test]
+fn a_trie_survives_the_rebuild_and_comes_out_in_key_order() {
+    let script = workspace_root().join("tests/scripts/134-persist-copy-key-order.loft");
+    let query = workspace_root().join("tests/scripts/134-persist-copy-query.loft");
+
+    for backend in ["--interpret", "--native"] {
+        let tag = backend.trim_start_matches('-');
+        let dir = scratch(&format!("persist_copy_{tag}"));
+        let bound = dir.join("bound.store");
+        let copied = dir.join("copied.store");
+
+        let run = |s: &Path, mode: &str, img: &Path| -> String {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(s)
+                .env("LOFT_PERSIST_TEST_PATH", &bound)
+                .env("LOFT_PERSIST_TEST_COPY", &copied)
+                .env("LOFT_PERSIST_TEST_MODE", mode)
+                .env("LOFT_PERSIST_TEST_IMG", img)
+                .env("LOFT_LOADER_STATS", "1")
+                // 512-byte pages, as the trie's other paged tests use: at 64 KB
+                // this corpus is ~5 pages whole, so every layout reads the same
+                // handful and the cell could not tell a descent from a scan.
+                // The effect under test is scatter, and scatter needs pages to
+                // scatter ACROSS.
+                .env("LOFT_PAGE_BYTES", "512")
+                .current_dir(workspace_root())
+                .output()
+                .expect("failed to invoke loft binary");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success() && !stdout.contains("FAIL"),
+                "{backend} mode={mode}: {stdout}\n{stderr}"
+            );
+            format!("{stdout}{stderr}")
+        };
+
+        let wrote = run(&script, "write", &bound);
+        assert!(
+            wrote.contains("held ok="),
+            "{backend}: the reference held across the copy must still read its own \
+             value — that guarantee is why the rebuild is not done in the bind \
+             path:\n{wrote}"
+        );
+
+        // The copy must be the same collection, read back in a separate process.
+        let read = run(&script, "read", &copied);
+        for key in ["count=", "aa=", "zusloot=", "arkerk=", "absent="] {
+            let of = |out: &str| -> String {
+                out.lines()
+                    .find(|l| l.contains(key))
+                    .unwrap_or_else(|| panic!("no `{key}` in:\n{out}"))
+                    .split_once(' ')
+                    .map(|(_, r)| r.to_string())
+                    .unwrap_or_default()
+            };
+            assert_eq!(
+                of(&wrote),
+                of(&read),
+                "{backend}: `{key}` differs between the live collection and its \
+                 copy — a rebuild that dropped or reordered records would still \
+                 satisfy any assertion about SIZE:\n{wrote}{read}"
+            );
+        }
+
+        // The layout half. `requests` is what the reader actually fetched.
+        let requests = |out: &str| -> u32 {
+            out.lines()
+                .filter(|l| l.contains("store_load_prefix:"))
+                .filter_map(|l| {
+                    l.split_whitespace()
+                        .find_map(|t| t.strip_prefix("requests="))
+                        .and_then(|n| n.parse::<u32>().ok())
+                })
+                .sum()
+        };
+        let as_built = requests(&run(&query, "query", &bound));
+        let key_order = requests(&run(&query, "query", &copied));
+        assert!(
+            as_built > 0 && key_order > 0,
+            "{backend}: both images must actually be queried — a run that fetched \
+             nothing would pass the ratio below vacuously ({as_built} vs {key_order})"
+        );
+        assert!(
+            key_order * 2 <= as_built,
+            "{backend}: a key-ordered image must fetch substantially less than the \
+             image built by insertion. This corpus measures 216 against 58 (3.7x), \
+             and ~4x on a real 74k-word vocabulary at 64 KB pages; the cell asserts \
+             only 2x so it survives a smaller corpus or a changed page size without \
+             going quiet about a regression. \
+             as-built={as_built} key-order={key_order}"
         );
     }
 }

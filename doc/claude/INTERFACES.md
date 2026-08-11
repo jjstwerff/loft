@@ -372,40 +372,203 @@ than it gets credit for. Measured on the current tree, not recalled:
 | `for x in <value>` | **yes** | a `next(self) -> τ?` on the type — a struct iterates like a collection |
 | bounded generics | **yes** | structural satisfaction, no `impl` block |
 | **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124). A hole may be a scalar OR a value of a named type, whose kind is its own name in method case (`SqlIdent` → `hole_sql_ident`) |
-| **`x[i]` indexing** | **no** | `OpIndex` is not dispatched: *"Indexing a non vector"* |
-| **run at scope end** | **no** | no destructor / `#drop` hook |
-| **associated types** | **no** | an interface cannot say "and a cursor type that goes with it" |
+| **associated types** | **yes** | `type Rows: Cursor` in an interface body; `Self.Rows` in its signatures (@PLN125 arc A) |
+| **`x[i]` indexing** | **yes** | `fn OpIndex(self: T, i: τ) -> υ`; an interface requires it with `op []` (@PLN125 arc C) |
+| **run at scope end** | **yes** | `fn OpDrop(self: T)` — runs where the value's own free runs (@PLN125 arc B) |
 
-Three gaps are left. They are listed in the order the evidence supports, which is
-not the order of apparent size:
-
-1. **Associated types.** This one bit twice while building one library. A `sql`
-   interface cannot say "a connection, and the cursor type it produces", so the
-   cursor became state ON the connection; and an interpolation `hole` cannot be
-   generic over the value, so it needs one method per scalar kind. Both are
-   liveable and both are the same missing feature. **@PLN125 arc A.**
-
-2. **A hook at scope end.** loft already computes the fact — the ownership model
-   decides per binding whether this scope owns a value and whether it dies here,
-   which is what emits `OpFreeRef` today. So a drop is a call at an existing
-   point, not new analysis, and it inherits the early-`return` and loop-epilogue
-   cases that are easy to get wrong (loft#731 exists because of exactly those).
-   The cost to state up front: a drop **cannot fail** under C80, so anything
-   whose failure matters stays an explicit call. Designed in
-   [plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
-   **@PLN125 arc B** — which requires a second, unrelated consumer before it
-   lands, because a hook with one user is a hook whose invariant is untested.
-
-3. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
-   bitset, a row or a ring buffer read as `x[i]` instead of `x.at(i)`. Nothing is
-   impossible without it; it is the one remaining place where a library type is
-   visibly not a built-in one. **@PLN125 arc C.**
-
-Each is independently landable, and each should land **inert first** — the
+No gaps are left in the measured set. Each arc landed **inert first** — the
 contract declared, every existing program proved byte-identical in IR and native
-Rust, before any new behaviour is routed through it. That ordering is what keeps
-a language change from being a rewrite: the proof that nothing changed is a
+Rust, before any new behaviour was routed through it. That ordering is what kept
+each language change from being a rewrite: the proof that nothing changed is a
 smaller and much earlier step than the feature.
+
+## Running at scope end — `OpDrop`
+
+A type that defines `OpDrop` runs it when a scope that OWNS one lets it die —
+the shape RAII gives a transaction, a file handle or a C resource:
+
+```loft
+struct Tx { tag: text, done: boolean }
+
+fn commit(self: Tx) -> boolean { …; self.done = true; return true; }
+
+fn OpDrop(self: Tx) {
+  if !self.done { rollback(self.tag); }
+}
+
+fn work() {
+  t = begin("orders");
+  …                       // no commit on this path
+}                         // <- rollback runs here
+```
+
+**The rule, and the reason the feature is small:**
+
+> A drop runs exactly where the value's own `OpFree*` runs — the same binding,
+> the same scope exit, the same early-exit paths — and never anywhere else.
+
+loft already computes that. The ownership model decides, per binding, whether
+this scope owns a value and whether it dies here, which is what emits
+`OpFreeRef`; a returned or borrowed value is already excluded, and the early
+`return` / `break` / return-out-of-a-loop cases are already handled there
+(loft#731 exists because a hand-rolled version of exactly those went wrong). So
+the hook DERIVES from the borrow model rather than sitting beside it, and there
+is one answer to "when does this run", not two that can drift.
+
+What follows from that, and is worth knowing before you reach for it:
+
+- **A drop cannot fail.** loft has no runtime errors (C80) and a rollback at
+  scope end can fail for real — the connection dropped, the server went away —
+  with no caller left to tell. So `OpDrop` may not return, and the compiler
+  refuses one that tries. **Anything whose failure matters stays an explicit
+  call**: `tx.commit()` answers, the closing brace does not. That asymmetry is
+  the design.
+- **A drop reaches the world, not its caller's data.** It receives only `self`,
+  and a struct field COPIES at construction — `Tx { journal: j }` holds a copy of
+  `j` — so a drop cannot write back into a caller's loft-side collection. Its
+  effect is I/O, or a resource it owns (a `#c` handle). That is exactly the
+  intended use: libpq's `PQexec("ROLLBACK")` at a closing brace.
+- **Order within a scope is reverse-declaration**, matching the existing free
+  order, or a statement would outlive the transaction it belongs to.
+- **A binding written inside an `if` block is hoisted to the function scope** —
+  that is where loft frees it, so that is where it drops. A `for` body is a scope
+  of its own, so a droppable made per iteration drops per iteration.
+- **A value that was never created never drops.** The free is null-tolerant and
+  a drop is not, so the call is guarded by the same liveness test the free
+  performs internally.
+
+Shipped as @PLN125 arc B; `tests/scripts/pln125-b-drop.loft` is the behaviour
+matrix, with two unrelated consumers (a transaction and a lease) because a hook
+with one user is a hook whose invariant is untested. The design reasoning is
+[plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md).
+
+## Indexing — `x[i]` on a library type
+
+A type that defines `OpIndex` is subscripted like a built-in collection:
+
+```loft
+struct Ring { data: vector<integer>, start: integer }
+
+fn OpIndex(self: Ring, i: integer) -> integer {
+  n = len(self.data);
+  if n == 0 { return 0; }
+  return self.data[(self.start + i) % n] ?? 0;
+}
+
+r = Ring { data: [10, 20, 30], start: 1 };
+r[0]        // 20 — the ring's own offset, not `data[0]`
+```
+
+This is the `OpAdd` / `OpEq` precedent and nothing more: `x[i]` lowers to the
+two-argument method call `OpIndex(x, i)`, so argument conversion, the heap-return
+buffer and the ownership deps all apply because it IS a method call.
+
+- **The index type is whatever the method declares.** `fn OpIndex(self: Row, name:
+  text) -> integer` gives a row addressed by column name. There is no requirement
+  that a subscript be an integer.
+- **Out of range is the TYPE's answer**, not the language's — `OpIndex` is an
+  ordinary method, so it decides what a miss means.
+- **An interface can require it**, with the operator sugar spelled `op []`:
+
+  ```loft
+  interface Indexable {
+    op [] (self: Self, i: integer) -> integer
+    fn count(self: Self) -> integer
+  }
+
+  fn total<I: Indexable>(x: I) -> integer {
+    s = 0;
+    for i in 0..x.count() { s += x[i]; }
+    return s;
+  }
+  ```
+
+  Inside a generic ONLY the bounds may be relied on, so an unbounded `<I>` cannot
+  be subscripted even when every type it is used with defines `OpIndex`.
+
+**`OpIndex` reads.** `x[i] = …` is refused, and the message says so: a writing
+counterpart is a separate decision — it needs its own method, and a decision about
+whether `x[i] += 1` may then read-modify-write — so a type that must be written
+through offers a setter (`x.set(i, v)`).
+
+Shipped as @PLN125 arc C; `tests/scripts/pln125-c-index.loft` is the behaviour
+matrix.
+
+## Associated types — an interface that names a companion type
+
+An interface can name a **type that goes with** the implementor, not only a set of
+methods. A `sql` connection and the cursor it produces are one contract, and
+without this the cursor has to become state ON the connection — which means a
+connection can hold only one, and the type system cannot say so.
+
+```loft
+interface Cursor {
+  fn width(self: Self) -> integer
+}
+
+interface Source {
+  type Rows: Cursor                     // the companion, and what it must satisfy
+  fn open(self: Self) -> Self.Rows      // named in a signature as `Self.<Name>`
+  fn label(self: Self) -> text
+}
+```
+
+An implementor declares the methods, as always — there is no `impl` block, so
+there is nowhere to write the companion down, and nowhere is needed:
+
+```loft
+struct FileRows  { w: integer }
+struct FileSource { path: text }
+
+fn width(self: FileRows) -> integer { return self.w; }
+fn open(self: FileSource) -> FileRows { return FileRows { w: len(self.path) }; }
+fn label(self: FileSource) -> text { return "file"; }
+```
+
+**The rule in one sentence:** an associated type is a type variable owned by the
+interface — inside a generic it dispatches through its declared bounds exactly as
+`<T: I>` does, and at instantiation it binds to the one concrete type the
+implementor's methods agree on, which must satisfy those bounds.
+
+So a generic may hold the companion and call the bound's methods on it, and it
+binds per implementor:
+
+```loft
+fn first_width<S: Source>(s: S) -> integer {
+  r = s.open();        // r is S's own companion — FileRows here
+  return r.width();    // authorised by `type Rows: Cursor`
+}
+```
+
+Three consequences worth stating:
+
+- **The companion is INFERRED from the implementor's signature**, read back
+  through the interface's: where the interface writes `Self.Rows`, the
+  implementor writes a concrete type. Return and parameter positions are both
+  read, and they must AGREE — an implementor whose `open` yields one type while
+  its `feed` takes another is refused rather than resolved by declaration order.
+- **The bound is checked per monomorph**, because the companion is per
+  implementor. A companion missing one of the bound's methods is a compile error
+  naming the implementor, the associated type, the companion, the bound and the
+  method — three of those are invisible at the call site, where the reader only
+  wrote `first_width(s)`.
+- **A bound-less `type Held` still binds.** Nothing of the companion's own is
+  callable — no bound, no methods — but the interface that named it can take it
+  back (`fn keep(self: Self, h: Self.Held)`), and that round trip is what an
+  un-bounded companion is for.
+
+There is **no runtime cost**: generics are static-dispatch and specialise per
+concrete type, so an associated type is a compile-time name and the monomorph is
+byte-identical to the same body written against the concrete types by hand. It is
+not dynamic dispatch and not a trait-object system — it names a type in a
+contract, it does not choose an implementation at run time.
+
+Two rules on the syntax: the name is a type name and is enforced **CamelCase**,
+and `Self.<Name>` is only spellable inside the declaring interface's body —
+elsewhere a `.` after a type is not this construct.
+
+Shipped as @PLN125 arc A; `tests/scripts/pln125-a2c-companion.loft` is the
+behaviour matrix.
 
 ## Interpolation targets — receiving the parts of `"{…}"`
 
@@ -471,9 +634,11 @@ the target off the one expected-type channel that already carries `lambda_hint` 
 `enum_hint` / `vector_hint`, so it is a fifth shape on that channel rather than a
 sixth side-channel.
 
-The per-kind `hole_*` form is deliberately expandable: **associated types**
-(@PLN125 arc A) would collapse it into one generic method without changing what an
-author writes. Catalogued as
+The per-kind `hole_*` form is deliberately expandable: a **generic method**
+(`fn hole<T>(self: Self, v: T)`, @PLN137) would collapse it into one without
+changing what an author writes.  Recorded here as @PLN125 arc A until that arc
+shipped and showed the two are NOT the same gap — an associated type names a
+COMPANION, while collapsing `hole_*` needs a type variable in a later PARAMETER. Catalogued as
 [`@F94`](https://github.com/loft-lang/features/issues/94); the design reasoning is
 [plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md).
 

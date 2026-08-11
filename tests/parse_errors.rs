@@ -1337,6 +1337,214 @@ fn satisfaction_accepts_self_as_the_return_type() {
     );
 }
 
+/// @PLN125 A2c: the bound on an associated type is a promise about the COMPANION,
+/// and the only place it can be kept is the monomorph — the companion is per
+/// implementor, so `type Rows: Cursor` cannot be checked until one is chosen.
+///
+/// The message names all four parties because three of them are invisible at the
+/// call site: the reader wrote `use_it(s)` and is being told about a type they
+/// never mentioned, so it has to say how that type was reached.
+#[test]
+fn associated_type_companion_must_satisfy_its_bound() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type Rows: Cursor
+                            fn open(self: Self) -> Self.Rows }
+         struct Bad { z: integer }
+         struct S1 { t: text }
+         fn open(self: S1) -> Bad { Bad { z: len(self.t) } }
+         fn use_it<S: Source>(s: S) -> integer { r = s.open(); r.width() }
+         fn test() { use_it(S1{t:\"x\"}) }"
+    )
+    .error(
+        "'S1' binds 'Source.Rows' to 'Bad', which does not satisfy the declared bound \
+         'Cursor': missing width at associated_type_companion_must_satisfy_its_bound:8:40",
+    );
+}
+
+/// @PLN125 A2c: an implementor's methods must AGREE about what the companion is.
+///
+/// The companion is inferred from every position where the interface named the
+/// placeholder — the return of `open`, the parameter of `feed`. An implementor
+/// that answers two different types there does not have one companion, and
+/// binding to whichever the walk reached first would make the monomorph depend on
+/// declaration order rather than on what the author wrote.
+#[test]
+fn associated_type_companion_must_be_one_type() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type Rows: Cursor
+                            fn open(self: Self) -> Self.Rows
+                            fn feed(self: Self, r: Self.Rows) -> integer }
+         struct RowsA { a: integer }
+         struct RowsB { b: integer }
+         fn width(self: RowsA) -> integer { self.a }
+         fn width(self: RowsB) -> integer { self.b }
+         struct S2 { t: text }
+         fn open(self: S2) -> RowsA { RowsA { a: len(self.t) } }
+         fn feed(self: S2, r: RowsB) -> integer { r.b + len(self.t) }
+         fn use_it<S: Source>(s: S) -> integer { r = s.open(); r.width() }
+         fn test() { use_it(S2{t:\"x\"}) }"
+    )
+    .error(
+        "'S2' does not agree with itself about 'Source.Rows': 'open' and 'feed' name \
+         different types for it at associated_type_companion_must_be_one_type:13:40",
+    );
+}
+
+/// @PLN125 A2c: an associated type's name is a TYPE name and follows the same
+/// rule as every other one.
+///
+/// It is also load-bearing rather than cosmetic: it becomes the
+/// `t_<LEN><Interface>.<Name>_<method>` dispatch stub, whose LEN prefix is parsed
+/// back to recover the method name — an underscore in it would split that name in
+/// the wrong place and silently leave the call on the template stub.
+#[test]
+fn associated_type_name_must_be_camel_case() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type row_set: Cursor
+                            fn open(self: Self) -> Self.row_set }
+         fn test() {}"
+    )
+    .error(
+        "Associated type 'row_set' must be CamelCase at \
+         associated_type_name_must_be_camel_case:2:42",
+    );
+}
+
+/// @PLN125 arc C: a type that has not defined `OpIndex` names the line to add.
+///
+/// The old answer was the keyed-collection message, which sent a reader chasing
+/// a `hash<Row[id]>` constructor that has nothing to do with subscripting their
+/// struct. Now that a library type CAN be indexed, "it did not define `OpIndex`"
+/// is the actual cause and the fix is one signature.
+#[test]
+fn indexing_a_type_without_op_index_names_the_method() {
+    code!(
+        "struct Plain { v: integer }
+         fn test() { p = Plain { v: 1 }; p[0] }"
+    )
+    .error(
+        "`Plain` cannot be indexed — define `fn OpIndex(self: Plain, i: integer) -> \u{3c4}` \
+         to give it `x[i]` at indexing_a_type_without_op_index_names_the_method:2:45",
+    );
+}
+
+/// @PLN125 arc C: inside a generic, only the BOUNDS may be relied on — so an
+/// unbounded type variable cannot be subscripted even when every type it is ever
+/// instantiated with defines `OpIndex`.
+///
+/// This is a refusal that has to be enforced rather than fall out: a bound stub
+/// is named for the HOLDER (`t_1I_OpIndex`), and holder names are shared across
+/// generics, so a sibling `fn a<I: Indexable>` in the same program mints exactly
+/// the name an unbounded `fn b<I>` would find. Without the check `b` compiled and
+/// worked, promising nothing and delivering it.
+#[test]
+fn indexing_an_unbounded_type_variable_is_refused() {
+    code!(
+        "interface Indexable { op [] (self: Self, i: integer) -> integer }
+         struct Bits { words: vector<integer> }
+         fn OpIndex(self: Bits, i: integer) -> integer { self.words[i] ?? 0 }
+         fn good<I: Indexable>(x: I) -> integer { x[0] }
+         fn bad<I>(x: I) -> integer { x[0] }
+         fn test() { good(Bits{words:[7]}) + bad(Bits{words:[7]}) }"
+    )
+    .error(
+        "generic type I: `[\u{2026}]` needs a bound that declares it — add \
+         `op [] (self: Self, i: integer) -> \u{3c4}` to an interface and bound `I` by it \
+         at indexing_an_unbounded_type_variable_is_refused:5:42",
+    );
+}
+
+/// @PLN125 arc C: `OpIndex` READS. `x[i] = …` is refused, and the message says so
+/// in the author's terms.
+///
+/// A writing counterpart is a separate decision — it needs its own method, and a
+/// decision about whether `x[i] += 1` may then read-modify-write — so this is a
+/// refusal rather than a gap left silent. Before it, the assignment path reported
+/// "Cannot assign to attribute on type 't_4Bits_OpIndex'", naming an internal
+/// symbol the author never wrote.
+#[test]
+fn assigning_through_op_index_is_refused() {
+    code!(
+        "struct Bits { words: vector<integer> }
+         fn OpIndex(self: Bits, i: integer) -> integer { self.words[i] ?? 0 }
+         fn test() { b = Bits { words: [1,2] }; b[0] = 9; }"
+    )
+    .error(
+        "`Bits` defines `OpIndex`, which READS — `x[i] = \u{2026}` has nothing to write \
+         through; give the type a method that sets (`x.set(i, \u{2026})`) at \
+         assigning_through_op_index_is_refused:3:58",
+    );
+}
+
+/// @PLN125 arc B: `OpDrop` cannot return.
+///
+/// It runs at a closing brace with no caller left to tell, and loft has no
+/// runtime errors (C80), so a result would go nowhere. That is a real semantic
+/// weakening and it is the design: anything whose failure MATTERS stays an
+/// explicit call — `tx.commit()` answers, the scope end does not. Saying so at
+/// the declaration beats letting an author write a `-> boolean` nobody reads.
+#[test]
+fn op_drop_cannot_return() {
+    code!(
+        "struct Tx { t: text }
+         fn OpDrop(self: Tx) -> boolean { self.t != \"\" }
+         fn test() { x = Tx { t: \"a\" }; }"
+    )
+    .error(
+        "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
+         anything whose failure matters stays an explicit call at op_drop_cannot_return:3:12",
+    );
+}
+
+/// @PLN125 arc B: `OpDrop` takes only the receiver — the compiler calls it, so a
+/// second argument has nowhere to come from.
+#[test]
+fn op_drop_takes_only_self() {
+    code!(
+        "struct Tx { t: text }
+         fn OpDrop(self: Tx, extra: integer) { assert(extra > 0, self.t) }
+         fn test() { x = Tx { t: \"a\" }; }"
+    )
+    .error(
+        "`OpDrop` takes only `self` — the compiler calls it, so a second argument has \
+         nowhere to come from at op_drop_takes_only_self:3:12",
+    );
+}
+
+/// loft#845: `"{v}"` on an UNBOUNDED type variable is refused, and the message
+/// names the bound that renders it.
+///
+/// A format string picks its op from the value's TYPE, and in a template the only
+/// type available is the parameter's — an attribute-less struct, so a reference.
+/// Substitution replaces types, not the ops chosen from them, so the monomorph
+/// ran the RECORD formatter against a concrete value. Measured over every
+/// argument kind, not one produced a right answer: `integer` / `float` /
+/// `boolean` / `character` / an enum SIGSEGV'd on `--interpret` and were `E0308`
+/// on `--native`; `text` and a struct rendered the literal `{}` on both. So this
+/// refuses nothing that worked.
+///
+/// It is also the rule the rest of the language already applies — inside a
+/// generic only the BOUNDS may be relied on, as a method call, a subscript
+/// (@PLN125 arc C) and an operator all say. `Printable` is that bound, and the
+/// bounded path renders correctly on both backends for every kind
+/// (`tests/scripts/845-generic-format.loft`).
+#[test]
+fn formatting_an_unbounded_type_variable_is_refused() {
+    code!(
+        "fn show<T>(v: T) -> text { \"{v}\" }
+         fn test() { assert(show(7) == \"7\", \"never reached\") }"
+    )
+    .error(
+        "generic type T cannot be formatted — `\"{\u{2026}}\"` needs a bound that renders \
+         it; write `<T: Printable>` (every built-in satisfies it, and a user type does by \
+         defining `fn to_text(self: T) -> text`) at \
+         formatting_an_unbounded_type_variable_is_refused:1:33",
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable

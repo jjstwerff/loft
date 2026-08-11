@@ -87,7 +87,7 @@ env:
 
 jobs:
   stale-plans-audit:
-    name: Stale-plan drift audit (informational)
+    name: Stale-plan audit (drift advisory + mislabel gate)
     # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -96,18 +96,37 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # full main history for the close-directive grep
-      - name: Audit open status:active plans vs main
-        # Read-only: lists status:active plans + flags any whose close directive
-        # already landed on main (the drift the close-plans workflow would have
-        # caught).  PLANS_TOKEN if the plans repo is private; else the default
-        # token reads the public repo.  Never fails the run — surfaces a warning.
+      - name: Audit plan status labels against plan state
+        # Read-only.  Two sweeps with two different severities, because they are
+        # two different kinds of finding:
+        #   DRIFT    (open plan, close directive already on main) — a JUDGEMENT.
+        #            The work may have shipped via a loft-libs PR this history
+        #            cannot see, so it warns and a human decides.
+        #   MISLABEL (closed plan still carrying a live status label) — not a
+        #            judgement: the state and the label contradict each other and
+        #            the fix is one command.  It FAILS, because the warning form
+        #            is what let @PLN48 and @PLN102 sit wrong for a month.
+        # PLANS_TOKEN if the plans repo is private; else the default token reads
+        # the public repo.
         env:
           GH_TOKEN: ${{ secrets.PLANS_TOKEN || github.token }}
         run: |
-          out=$(scripts/audit-stale-plans.sh 2>&1 || true)
+          set +e
+          out=$(scripts/audit-stale-plans.sh 2>&1); rc=$?
+          set -e
           echo "$out"
-          echo "$out" | grep -q DRIFT && \
-            echo "::warning::stale plans found — close directive on main but issue still status:active; run scripts/close-shipped-plans.sh" || true
+          if echo "$out" | grep -q DRIFT; then
+            echo "::warning::stale plans found — close directive on main but issue still status:active; run scripts/close-shipped-plans.sh"
+          fi
+          case "$rc" in
+            0) ;;
+            2) echo "::error::a CLOSED plan still carries a live status label — it stays in the next/future queues after shipping; fix with the gh command in the log"
+               exit 1 ;;
+            # Anything else is the audit itself failing to run (auth, network).
+            # Not a plan problem, so it does not fail the nightly — but it must
+            # not read as a pass either.
+            *) echo "::warning::the plan audit could not complete (exit $rc); its result is UNKNOWN, not clean" ;;
+          esac
 
   miri:
     name: Miri hard-UB gate (${{ matrix.os }})

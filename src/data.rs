@@ -4322,6 +4322,23 @@ impl Data {
         self.use_names.insert(alias.to_string(), source);
     }
 
+    /// Drop every attribute of a definition, so `add_attribute` can rebuild the list from
+    /// scratch.
+    ///
+    /// An attribute list has TWO representations — the ordered `attributes` and the
+    /// `attr_names` index into it — and they have to be emptied together: clearing only the
+    /// vector leaves `attr_names` claiming a position that no longer exists, and the next
+    /// `add_attribute` of the same name indexes an empty list.
+    ///
+    /// Used where a signature is rebuilt rather than declared once: the second pass
+    /// refreshes a bound-method stub whose first-pass return type was still an unresolved
+    /// forward reference (`create_bound_method_stubs`).
+    pub fn clear_attributes(&mut self, on_def: u32) {
+        let def = &mut self.definitions[on_def as usize];
+        def.attributes.clear();
+        def.attr_names.clear();
+    }
+
     /// Allow a new attribute on a definition with a specified type.
     pub fn add_attribute(
         &mut self,

@@ -319,9 +319,10 @@ than finished, because that reasoning is about the sequence:
   It reproduces with ordinary inserts and no laziness anywhere, on both backends and on the
   installed build — and the control that proved that is what kept it from being read as this
   arc's bug.
-- **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling — is
-  a stated dependency, not a shortcut: BINDING.md's answer needs @PLN125's associated types for
-  composite keys. The mapping VALUE is built and feeds the one builder.
+- **B3's compile-time half** — the `T: DbKeyed` bound and the mapping's loft-source spelling — was
+  a stated dependency on @PLN125's associated types for composite keys. Arc A has since shipped
+  them, so the dependency is discharged and the work is unblocked. The mapping VALUE is built and
+  feeds the one builder.
 
 ### What is deliberately refused, and why that is not a gap in the invariant
 
