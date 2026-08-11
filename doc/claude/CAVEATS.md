@@ -39,12 +39,18 @@ tables.
   a scope end runs AFTER the function body, so a resource whose owner is closed inside
   that body must be released explicitly first; and the release must be idempotent,
   because exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
-- **A match arm whose value is a typed local answers null for the FIRST arm**
-  (loft#848, open). Reached by following the compiler's own two messages — a variant
-  constructor is typed as its VARIANT so arms building different ones do not unify, and
-  a qualified `E.V` takes no payload. Assign into a pre-typed local from inside the arms
-  instead (`out: E = ENone; match k { 0 => { out = … } }`), which is correct on both
-  backends.
+- **A value-block whose value is a local it declared reads null when returned**
+  (loft#848, open). The filed shape was narrower than the defect: it needs no `match`
+  (an `if` does it), no branch at all (one arm, constant scrutinee), no enum (a plain
+  struct does it) and no name reuse — only a REFERENCE type, the block's own local as
+  the block's value, and the binding returned as a WHOLE (a field read off it is fine).
+  @PLN85's move-on-block-return copies that tail into a work-ref, which is then
+  NRVO-promoted onto the function's one return buffer; the real return re-mints that
+  buffer and destroys the store the binding holds. Only ONE candidate can win the
+  buffer, so it is the FIRST such block in a function that breaks and any later one is
+  correct — a two-block test passes where a one-block test fails. Assign into a
+  pre-declared local from inside the arms instead
+  (`out: E = ENone; match k { 0 => { out = … } }`), which is correct on both backends.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.
