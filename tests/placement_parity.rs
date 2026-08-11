@@ -803,6 +803,86 @@ fn native_does_not_place_and_says_so_when_asked_to_insist() {
     );
 }
 
+/// @PLN119 arc C — the @PLN94 ownership oracle over a placed program.
+///
+/// **Read what this proves carefully, because the obvious reading is wrong.**
+/// The oracle runs inside `scopes::check`, which happens BEFORE placement marks
+/// anything, so it sees byte-identical IR under both placements. Requiring the
+/// two to agree would therefore be an oracle agreeing with itself — the shape
+/// the plan's own method warns about. That is why arc C's ownership content is
+/// the delivery-lens cross-check (`a_return_that_borrows_its_argument_is_not_placed`)
+/// and not this.
+///
+/// What this DOES pin is worth having anyway, and it is two things:
+///
+/// * the oracle is clean over a program that uses a placed library at all — a
+///   future change to marking that left the consumer's IR ownership-inconsistent
+///   would fire here;
+/// * under `process` the oracle runs in TWO processes over two programs, because
+///   the worker parses and checks the library itself. Placement therefore gets
+///   MORE ownership checking than in-process, not less, and both have to be
+///   clean.
+#[test]
+fn the_ownership_oracle_is_clean_over_a_placed_program() {
+    let library = "pub struct P { x: integer, label: text }\n\
+                   pub fn make_v(n: integer) -> vector<P> {\n\
+                   \x20   out: vector<P> = [];\n\
+                   \x20   for i in 0..n { out += [P { x: i, label: \"e{i}\" }]; }\n\
+                   \x20   out\n\
+                   }\n\
+                   pub fn make_p(x: integer) -> P { P { x: x, label: \"m{x}\" } }\n\
+                   pub fn bump(p: P) -> integer {\n\
+                   \x20   p.x = p.x + 1;\n\
+                   \x20   p.x\n\
+                   }\n\
+                   pub fn sum_v(v: const vector<P>) -> integer {\n\
+                   \x20   t = 0;\n\
+                   \x20   for e in v { t += e.x; }\n\
+                   \x20   t\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   v = make_v(5);\n\
+                    \x20   p = make_p(3);\n\
+                    \x20   println(\"o {sum_v(v)} {bump(p)} {p.x}\");\n\
+                    }\n";
+    let root = scratch("oracle");
+    let consumer_path = root.join("consumer.loft");
+    std::fs::write(&consumer_path, consumer).expect("write consumer");
+    for mode in ["inproc", "process"] {
+        write_library(&root, mode, library);
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(root.join("libs"))
+            .arg(&consumer_path)
+            .env("LOFT_TIMEOUT", "60")
+            .env("LOFT_NO_NATIVE_LIBS", "1")
+            .env("LOFT_OWN_ORACLE", "check")
+            .output()
+            .expect("failed to invoke loft");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("OWN-CHECK"),
+            "the oracle did not run under {mode} — this test would pass on \
+             silence: {stderr}"
+        );
+        let red: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.contains("OWN-CHECK") && !l.contains(" 0 RED") && !l.contains("clean"))
+            .collect();
+        assert!(
+            red.is_empty(),
+            "the ownership oracle reported findings under {mode}: {red:?}"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "the run itself failed under {mode}: {stderr}"
+        );
+    }
+}
+
 /// @PLN119 arc C — a heap return is delivered one of THREE ways, and only two of
 /// them leave the caller owning what it gets.
 ///

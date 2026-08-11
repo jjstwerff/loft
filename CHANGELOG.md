@@ -270,7 +270,14 @@ measure.
 
 Passing by reference keeps meaning what it means. A library function that writes
 to a struct parameter, or appends to a vector one, changes the caller's
-value — placed or not. Passing the same value twice stays one value.
+value — placed or not. Passing the same value twice stays one value. And where
+you have written `const` on a parameter, the crossing knows the library cannot
+have changed it and skips carrying it home — about a tenth off a call taking a
+twenty-thousand-element vector, for a word you were probably writing anyway.
+
+If the library crashes, the call ends as an ordinary loft error naming the
+library, and your own data is checked before you are told — not left to the
+argument that it must be fine.
 
 A call that leaves the process costs around a microsecond, so this is for
 libraries you call to do real work, not for a getter inside a loop. It is Linux

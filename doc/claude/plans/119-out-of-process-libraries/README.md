@@ -176,7 +176,7 @@ Guards: `tests/placement_parity.rs`.
 |---|---|---|
 | **A** — placement declaration + attach handshake (`store_nr` translation, epoch check) | this README | **Done 2026-08-11** (scalars + text arguments; see below) |
 | **B** — boundary marshal: arena residency for every value reachable from an argument or return | this README + Q1 | **Done 2026-08-11** — scalars ([first half](#arc-b-first-half-as-built-2026-08-11)), then structs and vectors through a shared store ([second half](#arc-b-second-half-as-built-2026-08-11)). Polymorphic enums and keyed collections are deliberately still outside |
-| **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | Open — and no longer vacuous: values now carry ownership across, and a compound ARGUMENT is written by the callee and read back |
+| **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
 | **E** — `placement = "remote"` over the existing paged / Range reader | @PLN97 arc G | Open — blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632): the paged loaders silently refuse a **field-declared** collection (the store's `known_type` is the wrapper struct), and the refusal is indistinguishable from "key absent" |
 | **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | Open |
@@ -449,6 +449,88 @@ Borrowing a slot per CALL, rather than once, is new — and it found two things 
 which is the instrument that found (3) and (4) above in minutes — and, with the
 process id on each line, which of the two sides was walking the table.
 
+## Arc C as built (2026-08-11)
+
+### The instrument arc C actually needed was not the one the plan named
+
+The plan said "ownership, with the @PLN94 oracle run on both placements".  Run
+that and it is **vacuous**, for a reason worth writing down: the oracle runs
+inside `scopes::check`, which happens BEFORE placement marks anything, so it sees
+byte-identical IR under both placements and agrees by having nothing to disagree
+about — the shape this plan's own method warns against.
+
+The question that CAN fail is a different one: **does the runtime marshal obey
+the ownership the static analysis already assigns?**  That is a cross-check
+between two things that can drift, and it found a bug on the first try.
+
+The oracle is still run and still pinned
+(`the_ownership_oracle_is_clean_over_a_placed_program`), because under `process`
+it runs in TWO processes over two programs — the worker parses and checks the
+library itself — so placement gets MORE ownership checking than in-process, not
+less.  But its agreement is not evidence about the crossing, and the test says so.
+
+### A heap return is delivered three ways, and arc B's rule was a two-way
+
+`fn head(v: vector<P>) -> P { v[0] }` hands back a **view** of the caller's own
+argument.  In-process that is right and costs nothing: there is no new store, so
+the caller's emitted code frees none.  Placed, the answer has to be copied into
+the caller's address space, and a copy nobody frees is **a leak per call**.
+
+The three deliveries, which @PLN103's overlay already distinguished in prose and
+which are now one function (`use_analysis::heap_return_delivery`):
+
+| delivery | who frees | placeable |
+|---|---|---|
+| `Owned` — a fresh store the callee minted | the caller | yes: mint here, hand it over |
+| `RetBuf` — materialised into the caller's hidden buffer | the caller already owns it | yes: write into it |
+| `View` — a borrow of an argument or of the callee's own state | nobody | **no** |
+
+A `View` return is not placed.  It runs in-process, where the borrow means what
+it says — and a view across a process boundary is not a view anyway, because the
+thing it views is in the other process.
+
+Three consumers, one home: the `--show-ownership` overlay renders it, marking
+decides placement from it, and the worker's "free the callee's own store" gate
+reads it instead of the re-derivation from return-type deps arc B had written.
+That re-derivation happened to agree today; the point is that it could stop.
+
+### `const` is a compile-time no-write, so the copy-back can be skipped
+
+Arc B made every compound argument cross twice, because loft passes one by
+reference and a callee's write is the caller's to see.  But loft REJECTS every
+mutation through a `const` parameter at compile time, so for those there is
+provably nothing to bring home — and the copy-back is the expensive half.
+Measured: ~12% off a call carrying a 20 000-element vector.
+
+Acting on a compile-time promise needs a control, because the failure mode is
+silent: skip where the callee COULD have written and the caller keeps a stale
+value.  Forcing the skip on for every parameter makes
+`a_callee_writing_to_a_compound_parameter_is_seen_by_the_caller` fail, which is
+what says the guard is the `const` and not the skip.
+
+### A failed crossing maps neither arena
+
+This closes **arc D's second half**, which rested on a structural argument —
+"the worker has its own address space and only values are copied in and out".
+Arc B weakened that argument, and it is worth being explicit about how: a
+compound value does NOT cross by being copied through a frame.  It crosses in a
+store both processes map, and the worker WRITES to the one carrying the
+arguments.  A worker killed mid-write leaves that store in whatever state it
+reached, and may have resized the file out from under this side's mapping.
+
+So the failure path now binds neither arena and reads nothing from them, and the
+dispatcher walks every compound argument the caller passed with loft's own
+guard-before-dereference check (`verify_graph_ok`, which NAMES a broken edge
+rather than faulting on it) before it reports the error.  "The caller's stores
+are provably intact" is now a reading taken at the one moment it could be false,
+and it is in the error message when it is not.
+
+Guard: `a_worker_killed_with_a_compound_in_flight_leaves_the_caller_intact` —
+2000 records with a text field each in flight, `SIGKILL` to the worker, and the
+program required to end as a loft ERROR naming the library, under
+`LOFT_STRICT_STORES` so a read of a freed store during the teardown is its own
+non-zero exit.
+
 ## Arc D as built (2026-08-11)
 
 A worker that dies is now the caller's error rather than its hang.
@@ -587,25 +669,41 @@ the generated Rust would have to call the dispatcher rather than the body.
    makes a placed `bump(p)` mean what an in-process one means.  Measured, the
    pair costs ~0.5 µs on top of a scalar crossing and does not grow with the
    value.
-2. **Ownership of a returned graph.**  Hypothesis: the callee allocates in the
-   arena the caller owns, and the existing `OpFreeRef` path frees it — the same
-   rules, one store number.  **Half of this is now built and the other half is
-   sharper than it was.**  What is built: the answer is BUILT in the return
-   arena (the worker offers a record there as the callee's hidden `__retbuf`),
-   and the caller then copies it into whatever its own emitted code offered — a
-   materialised destination it will free, or a store minted here exactly as
-   `OpDatabase` would, which its `OpFreeRef` frees.  A callee that ignored the
-   offer and minted its own store has that store freed on the worker side, gated
-   on the return type carrying no deps (a return that BORROWS is not the
-   caller's to free).  That gate is the unproven part, and it is arc C's: it
-   reads the deps the same way codegen does, but nothing yet checks the two
-   agree.  Second unproven part: for the duration of a call a compound ARGUMENT
-   exists as one value in two stores in two processes, and the oracle should say
-   who owns it and when.
-3. **Effect classification.**  Which `ImpureCategory` (`src/data.rs:2638` — HostIo /
-   Prng / Io / ParentWrite / ParCall) does a cross-placement call carry, and is a
-   `process`-placed library callable from a `par` worker?  Reusing `Io` is the
-   cheap answer; par-safety may force a sixth category.
+2. **~~Ownership of a returned graph~~ — ANSWERED 2026-08-11, and the answer was
+   not the hypothesis.**  The hypothesis was "the callee allocates in the arena
+   the caller owns, and the existing `OpFreeRef` path frees it — the same rules,
+   one store number".  The arena is NOT a store the caller owns: it is a third
+   store both processes map, reset per call, and a value that crossed has been
+   copied out of it before the caller sees it.  So the rule is instead **the
+   caller's own emitted code decides, and the crossing must match what it
+   decided** — which is @PLN103's delivery three-way (`Owned` / `RetBuf` /
+   `View`), now the one home both marking and the worker's free consult.  A
+   `View` return is refused rather than placed.  See
+   [Arc C as built](#arc-c-as-built-2026-08-11).
+
+   The compound-ARGUMENT half is answered too, and by the language rather than by
+   this plan: for the duration of a call one value exists in two stores in two
+   processes, and it is the CALLER's throughout — the callee has a borrow, which
+   in loft cannot outlive the call.  That is why the arena can be reset per call
+   and why the callee's writes are copied home.  Where the language says the
+   callee cannot write at all (`const`), the copy home is skipped.
+3. **~~Effect classification~~ — ANSWERED 2026-08-11: no new category, and the
+   reason is structural.**  A placed call carries exactly the effects the
+   in-process one does, because marking happens AFTER `scopes::check`: the
+   effects were computed from the library's own body, and placement does not
+   touch the body.  There was never a cross-placement effect to classify.
+
+   Par-safety is therefore a runtime question rather than a typing one, and it
+   is green: a placed library called from a `par` arm answers correctly under
+   both parent-sharing modes, including `LOFT_PAR_SHARE=1`, where the parent's
+   stores are borrowed READ-ONLY and a copy-back aimed at one would be a write
+   to a read-only store rather than a wrong value.  The workers serialise (one
+   request slot, one lock across the crossing) and do not deadlock.  Guard:
+   `a_placed_call_from_a_par_arm_is_the_same_call`.
+
+   What remains is a PERFORMANCE property, not a correctness one, and it is
+   already stated as a limit: a placed library is a poor fit for a hot `par` arm
+   because its calls serialise.
 4. **~~Crossing cost~~ — ANSWERED 2026-08-11, premise SURVIVES, but it dictates
    the handshake.**  Measured on x86_64 Linux (24 cores): two processes sharing
    one mmap page, bouncing a `ping()` with no body, against the same trivial

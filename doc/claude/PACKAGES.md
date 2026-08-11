@@ -210,6 +210,21 @@ boundary too — a placed library that writes to a parameter is not quietly
 writing to a copy. Passing the same value twice (`f(p, p)`) also stays one
 value, as it is in-process.
 
+**Mark what you only read `const`, and a placed call gets cheaper.** Carrying a
+compound argument home again afterwards is the expensive half of a crossing, and
+`const` is a compile-time promise that there is nothing to carry — loft already
+rejects every mutation through such a parameter, so the crossing skips it. On a
+call taking a 20 000-element vector that is about a tenth of its cost. It changes
+nothing about what the program does, in-process or placed.
+
+**One shape is quietly not placed**, and it is worth knowing which: a function
+that returns a *view* of something it did not create — `fn head(v: vector<P>) ->
+P { v[0] }`, or a reference into the library's own long-lived state. In-process
+the caller gets a borrow and frees nothing, which is right; across a process
+boundary there is nothing to have a view OF, since the thing lives in the other
+process. Such a function runs in-process. Returning a fresh value instead (`P {
+x: v[0].x, … }`) makes it placeable.
+
 One text return is worth knowing about because the rule is invisible: a function
 whose text return is a **constant**, `fn version() -> text { "1.0" }`, is not
 placed. The compiler gives such a function no result buffer, so there is nowhere
