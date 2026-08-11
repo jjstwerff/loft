@@ -2054,6 +2054,23 @@ impl Store {
         }
     }
 
+    /// @PLN119 arc B — re-derive the allocator's cached state from the store's
+    /// own bytes.
+    ///
+    /// The free tree and the claim set live in the block chain; the `Store`
+    /// struct only caches them, and a cache is only ever right for the process
+    /// that made the claims. A store shared through a mapping therefore has a
+    /// second reader whose cache says nothing happened — and allocating against
+    /// that stale cache hands out a block that is already in use.
+    ///
+    /// This is the same walk `open` does, made callable at the moment the other
+    /// side hands the store over. It is not a repair: nothing about the bytes
+    /// changes, only this side's opinion of them.
+    pub fn resync_allocator(&mut self) {
+        self.fl_rebuild();
+        self.claims_rebuild();
+    }
+
     /// P6: merge every run of adjacent free blocks in place, then rebuild
     /// the free tree from the coalesced chain.  `delete` only coalesces
     /// FORWARD (it cannot find a freed block's predecessor in the

@@ -4,8 +4,19 @@
 //! See the parent module for why the handshake spins before it sleeps and what
 //! arc A does and does not carry across the boundary.
 
+use super::arena::Arena;
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// The two arena files that sit beside a wire, derived from its path rather than
+/// passed separately: three paths that must agree are three chances to disagree.
+fn arena_paths(wire: &Path) -> (PathBuf, PathBuf) {
+    let mut arg = wire.as_os_str().to_os_string();
+    arg.push(".arg");
+    let mut ret = wire.as_os_str().to_os_string();
+    ret.push(".ret");
+    (PathBuf::from(arg), PathBuf::from(ret))
+}
 
 /// `"LOFW"` — the first word of the mapping, so a stale or foreign file is
 /// rejected rather than read as a call frame.
@@ -14,7 +25,7 @@ const MAGIC: u32 = 0x4C4F_4657;
 /// Bumped whenever the frame encoding below changes. Caller and worker are
 /// normally the same binary, but a stale worker executable is exactly the case
 /// this catches.
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 
 /// Total mapping size. Arc A's frames are scalars and text, so this is
 /// generous; arc B sizes it from the argument graph instead.
@@ -52,6 +63,9 @@ const LIVENESS_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 /// A request kind, the first word of every request frame.
 const REQ_CALL: u32 = 0;
 const REQ_SHUTDOWN: u32 = 1;
+/// Ask the worker how IT lays out a named function's compound types (@PLN119
+/// arc B's layout gate). Answered once per function at install, never on a call.
+const REQ_LAYOUT: u32 = 2;
 
 /// Response status, the first word of every response frame.
 const RESP_OK: u32 = 0;
@@ -64,6 +78,17 @@ const TAG_BOOL: u32 = 1;
 const TAG_INT: u32 = 2;
 const TAG_FLOAT: u32 = 3;
 const TAG_TEXT: u32 = 4;
+/// A struct / vector: the `(rec, pos)` of its record in the call arena.
+///
+/// The store NUMBER is deliberately not on the wire. Each side registers the
+/// arena at whatever slot its own `Stores` had free, and nothing inside a record
+/// graph names a store (interior pointers are plain `u32` record ids), so the
+/// receiver fills in its own — see [`super::arena`].
+const TAG_REF: u32 = 5;
+/// An absent struct / vector (`DbRef::NULL`).  A separate tag rather than a
+/// reserved `rec`: record 0 is a real address, and an absent value that decoded
+/// to one would read the arena's own header as a struct.
+const TAG_NULLREF: u32 = 6;
 
 /// The shared mapping both processes address the call through.
 ///
@@ -450,10 +475,14 @@ impl Frame {
             Value::Int(i) => self.put_u32(TAG_INT) && self.put_i64(*i),
             Value::Float(f) => self.put_u32(TAG_FLOAT) && self.put_i64(f.to_bits() as i64),
             Value::Text(s) => self.put_u32(TAG_TEXT) && self.put_str(s),
+            Value::Ref(r) if r.is_null() => self.put_u32(TAG_NULLREF),
+            Value::Ref(r) => self.put_u32(TAG_REF) && self.put_u32(r.rec) && self.put_u32(r.pos),
         }
     }
 
-    fn get_value(&mut self) -> Option<crate::host::Value> {
+    /// Decode one value.  `arena_nr` is the store number THIS side registered the
+    /// call arena under, and is what a `TAG_REF` is completed with.
+    fn get_value(&mut self, arena_nr: u16) -> Option<crate::host::Value> {
         use crate::host::Value;
         match self.get_u32()? {
             TAG_VOID => Some(Value::Void),
@@ -461,6 +490,16 @@ impl Frame {
             TAG_INT => Some(Value::Int(self.get_i64()?)),
             TAG_FLOAT => Some(Value::Float(f64::from_bits(self.get_i64()? as u64))),
             TAG_TEXT => Some(Value::Text(self.get_str()?)),
+            TAG_NULLREF => Some(Value::Ref(crate::keys::DbRef::NULL)),
+            TAG_REF => {
+                let rec = self.get_u32()?;
+                let pos = self.get_u32()?;
+                Some(Value::Ref(crate::keys::DbRef {
+                    store_nr: arena_nr,
+                    rec,
+                    pos,
+                }))
+            }
             _ => None,
         }
     }
@@ -475,6 +514,13 @@ impl Frame {
 /// library keep state exactly as an in-process one does.
 pub struct Worker {
     wire: Wire,
+    /// The call arena, one store per direction (@PLN119 arc B).
+    ///
+    /// `arg` is written by the caller and `ret` by the worker — one writer each,
+    /// because a `Store` caches its free list on the Rust side and two
+    /// processes allocating out of one would hand out the same block twice.
+    arg: Arena,
+    ret: Arena,
     /// Behind a `RefCell` so a call — which holds `&self` — can ask whether the
     /// child is still running. `try_wait` reaps, which needs `&mut Child`.
     child: std::cell::RefCell<std::process::Child>,
@@ -518,6 +564,11 @@ impl Worker {
             name.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
         ));
         let wire = Wire::create(&path)?;
+        // Both arenas exist and are initialised before the worker starts, so
+        // there is no window in which it can attach a half-built store.
+        let (arg_path, ret_path) = arena_paths(&path);
+        let arg = Arena::create(&arg_path)?;
+        let ret = Arena::create(&ret_path)?;
         // Normally the worker is this same binary. `LOFT_WORKER_EXE` names a
         // different one, which is what lets a test drive a real worker without
         // being the `loft` executable itself — and what lets an embedder whose
@@ -534,8 +585,10 @@ impl Worker {
             .arg(stdlib_dir)
             .spawn()?;
 
-        let w = Worker {
+        let mut w = Worker {
             wire,
+            arg,
+            ret,
             child: std::cell::RefCell::new(child),
             seq: std::cell::Cell::new(0),
             dead: std::cell::Cell::new(false),
@@ -584,13 +637,49 @@ impl Worker {
         }
     }
 
+    /// The arena a compound ARGUMENT is marshalled into. Written by this side.
+    pub fn arg_arena(&mut self) -> &mut Arena {
+        &mut self.arg
+    }
+
+    /// The arena a compound RETURN comes back in. Written by the worker; this
+    /// side only reads it, and only until the next call resets it.
+    pub fn ret_arena(&mut self) -> &mut Arena {
+        &mut self.ret
+    }
+
+    /// How the WORKER lays out `func`'s compound parameters and return.
+    ///
+    /// The caller compares this against its own answer and refuses to place a
+    /// function the two disagree about. See [`super::dispatch`]'s layout gate.
+    ///
+    /// # Errors
+    /// A transport failure, or the worker not knowing the function.
+    pub fn layout(&mut self, func: &str) -> Result<String, String> {
+        let mut f = Frame::new(self.wire.payload());
+        if !(f.put_u32(REQ_LAYOUT) && f.put_str(func)) {
+            return Err("layout request does not fit the wire".to_string());
+        }
+        match self.exchange(func)? {
+            crate::host::Value::Text(s) => Ok(s),
+            other => Err(format!("layout answer was {other:?}")),
+        }
+    }
+
     /// Call `func` in the worker.
+    ///
+    /// A COMPOUND answer comes back as a reference this side cannot complete
+    /// yet — the return arena has no store number until it is bound, and it
+    /// cannot be bound until it has been re-mapped, which this call is what
+    /// decides. So the reference is left arena-relative here and
+    /// [`reread_answer`](Worker::reread_answer) completes it once the caller has
+    /// bound the arena.
     ///
     /// # Errors
     /// The worker's own error text for a fault inside the library, or a
     /// transport failure (a dead worker, an oversized frame).
     pub fn call(
-        &self,
+        &mut self,
         func: &str,
         args: &[crate::host::Value],
     ) -> Result<crate::host::Value, String> {
@@ -603,15 +692,17 @@ impl Worker {
     /// The handshake and every later call take the same path; `func == ""` is
     /// the handshake, which the worker answers with void once it is loaded.
     fn call_raw(
-        &self,
+        &mut self,
         func: &str,
         args: &[crate::host::Value],
     ) -> Result<crate::host::Value, String> {
-        if self.dead.get() {
-            return Err(format!("library '{}' worker is gone", self.name));
-        }
+        // The arg arena's size travels ahead of the arguments: marshalling may
+        // have grown the file, and the worker has to map the new length before
+        // it can read a record that lives past the old end.
+        let arg_words = self.arg.words();
         let mut f = Frame::new(self.wire.payload());
         let built = f.put_u32(REQ_CALL)
+            && f.put_u32(arg_words)
             && f.put_str(func)
             && f.put_u32(args.len() as u32)
             && args.iter().all(|a| f.put_value(a));
@@ -621,6 +712,16 @@ impl Worker {
                  arc B sizes the arena from the argument graph",
                 WIRE_BYTES / 1024
             ));
+        }
+        self.exchange(func)
+    }
+
+    /// Send the request already built into the payload, wait for the answer,
+    /// re-map whatever grew, and decode. Split out because the layout request
+    /// and a call share every step but the frame they wrote.
+    fn exchange(&mut self, func: &str) -> Result<crate::host::Value, String> {
+        if self.dead.get() {
+            return Err(format!("library '{}' worker is gone", self.name));
         }
         let seq = self.seq.get() + 1;
         self.seq.set(seq);
@@ -641,17 +742,46 @@ impl Worker {
                 if func.is_empty() { "<load>" } else { func }
             ));
         }
-
+        // Both arena sizes come back on EVERY answer, before the value. The ret
+        // arena may have grown because the answer is large; the ARG arena may
+        // have grown because the callee appended to a vector parameter — loft
+        // passes a compound by reference, so that write is the caller's to see.
         let mut f = Frame::new(self.wire.payload());
-        match f.get_u32() {
-            Some(RESP_OK) => f
-                .get_value()
-                .ok_or_else(|| format!("malformed response frame from '{}'", self.name)),
-            Some(RESP_ERR) => Err(f
-                .get_str()
-                .unwrap_or_else(|| "malformed error frame".to_string())),
-            _ => Err(format!("malformed response frame from '{}'", self.name)),
+        let status = f.get_u32();
+        let ret_words = f.get_u32().unwrap_or(0);
+        let arg_words = f.get_u32().unwrap_or(0);
+        match status {
+            Some(RESP_OK) => {}
+            Some(RESP_ERR) => {
+                return Err(f
+                    .get_str()
+                    .unwrap_or_else(|| "malformed error frame".to_string()));
+            }
+            _ => return Err(format!("malformed response frame from '{}'", self.name)),
         }
+        self.arg
+            .remap_if_grown(arg_words)
+            .map_err(|e| format!("call arena (arguments) of '{}': {e}", self.name))?;
+        self.ret
+            .remap_if_grown(ret_words)
+            .map_err(|e| format!("call arena (return) of '{}': {e}", self.name))?;
+        f.get_value(u16::MAX)
+            .ok_or_else(|| format!("malformed response frame from '{}'", self.name))
+    }
+
+    /// Re-read the answer that is still sitting in the payload, now that the
+    /// caller knows which store number to complete a compound reference with.
+    ///
+    /// Only meaningful immediately after a successful [`call`](Worker::call) that
+    /// asked for `u16::MAX`, and before the next request overwrites the frame.
+    pub fn reread_answer(&self, arena_nr: u16) -> Option<crate::host::Value> {
+        let mut f = Frame::new(self.wire.payload());
+        if f.get_u32() != Some(RESP_OK) {
+            return None;
+        }
+        f.get_u32()?; // ret words
+        f.get_u32()?; // arg words
+        f.get_value(arena_nr)
     }
 }
 
@@ -711,6 +841,24 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
         }
     };
 
+    // The arenas the caller created before starting us. A worker that cannot map
+    // them answers the handshake with the reason, exactly as a library that
+    // cannot parse does — a worker that came up half-attached would fail at
+    // whichever call first carried a struct.
+    let (arg_path, ret_path) = arena_paths(wire_path);
+    let mut arenas = match (Arena::attach(&arg_path), Arena::attach(&ret_path)) {
+        (Ok(a), Ok(r)) => (a, r),
+        (Err(e), _) | (_, Err(e)) => {
+            let mut f = Frame::new(wire.payload());
+            let _ = f.put_u32(RESP_ERR)
+                && f.put_u32(0)
+                && f.put_u32(0)
+                && f.put_str(&format!("cannot map the call arena: {e}"));
+            wire.send_response(1);
+            std::process::exit(0);
+        }
+    };
+
     let mut last = 0u32;
     loop {
         last = wire.await_request(last);
@@ -719,46 +867,157 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
         if kind == Some(REQ_SHUTDOWN) || kind.is_none() {
             std::process::exit(0);
         }
-        let reply = read_and_run(&mut f, program.as_mut());
+        let reply = if kind == Some(REQ_LAYOUT) {
+            answer_layout(&mut f, program.as_mut())
+        } else {
+            serve_one(&mut f, program.as_mut(), &mut arenas)
+        };
+        let (arg_words, ret_words) = (arenas.0.words(), arenas.1.words());
         let mut out = Frame::new(wire.payload());
+        // The sizes go out on the error path too: the callee may have grown the
+        // ARGUMENT arena before it faulted, and a caller that read the old size
+        // would then map short and read a hole where its own value was.
         match reply {
             Ok(v) => {
-                if !(out.put_u32(RESP_OK) && out.put_value(&v)) {
+                if !(out.put_u32(RESP_OK)
+                    && out.put_u32(ret_words)
+                    && out.put_u32(arg_words)
+                    && out.put_value(&v))
+                {
                     let mut out = Frame::new(wire.payload());
                     let _ = out.put_u32(RESP_ERR)
+                        && out.put_u32(ret_words)
+                        && out.put_u32(arg_words)
                         && out.put_str("return value does not fit the placement wire");
                 }
             }
             Err(e) => {
                 let mut out = Frame::new(wire.payload());
-                let _ = out.put_u32(RESP_ERR) && out.put_str(&e);
+                let _ = out.put_u32(RESP_ERR)
+                    && out.put_u32(ret_words)
+                    && out.put_u32(arg_words)
+                    && out.put_str(&e);
             }
         }
         wire.send_response(last);
     }
 }
 
-/// Decode one request frame and run it against the loaded library.
-fn read_and_run(
+/// Report how THIS program lays out a function's compound types, for the
+/// caller's layout gate.
+fn answer_layout(
     f: &mut Frame,
     program: Option<&mut crate::host::Program>,
+) -> Result<crate::host::Value, String> {
+    let func = f.get_str().ok_or("malformed layout request")?;
+    let program = program.ok_or("library failed to load")?;
+    Ok(crate::host::Value::Text(
+        crate::lib_placement::dispatch::signature_layout(program, &func)
+            .ok_or_else(|| format!("no function '{func}'"))?,
+    ))
+}
+
+/// Decode one call frame and run it against the loaded library, with the arenas
+/// bound for the duration.
+///
+/// The order here is the contract, and each step is load-bearing:
+///
+/// 1. **Re-map** the argument arena if the caller's marshal grew the file — its
+///    records may live past the length this process mapped.
+/// 2. **Resync** it. loft passes a compound BY REFERENCE, so the callee may
+///    append to a vector parameter and allocate in this arena; allocating
+///    against a free list cached before the caller's claims would hand out a
+///    block that is already in use.
+/// 3. **Reset** the return arena. This side owns it, and last call's answer is
+///    dead the moment this one starts.
+fn serve_one(
+    f: &mut Frame,
+    program: Option<&mut crate::host::Program>,
+    arenas: &mut (Arena, Arena),
+) -> Result<crate::host::Value, String> {
+    let arg_words = f.get_u32().ok_or("malformed request frame")?;
+    let program = program.ok_or("library failed to load")?;
+    arenas
+        .0
+        .remap_if_grown(arg_words)
+        .map_err(|e| format!("cannot map the argument arena: {e}"))?;
+    arenas.0.resync();
+    arenas.1.reset();
+
+    let arg_nr = arenas.0.bind(program.stores());
+    let ret_nr = arenas.1.bind(program.stores());
+    let out = run_bound(f, program, ret_nr, arg_nr);
+    arenas.0.unbind(program.stores(), arg_nr);
+    arenas.1.unbind(program.stores(), ret_nr);
+    out
+}
+
+/// The part of a call that runs while both arenas are registered.
+fn run_bound(
+    f: &mut Frame,
+    program: &mut crate::host::Program,
+    ret_nr: u16,
+    arg_nr: u16,
 ) -> Result<crate::host::Value, String> {
     let func = f.get_str().ok_or("malformed request frame")?;
     let n_args = f.get_u32().ok_or("malformed request frame")? as usize;
     let mut args = Vec::with_capacity(n_args);
     for _ in 0..n_args {
-        args.push(f.get_value().ok_or("malformed argument in request frame")?);
+        args.push(
+            f.get_value(arg_nr)
+                .ok_or("malformed argument in request frame")?,
+        );
     }
-    let program = program.ok_or("library failed to load")?;
     // The handshake: the caller only needs to know we got here.
     if func.is_empty() {
         return Ok(crate::host::Value::Void);
     }
+    for a in &args {
+        if let crate::host::Value::Ref(r) = a {
+            super::arena::trace(program.stores(), "worker-arg", r, u16::MAX);
+        }
+    }
+    // A compound answer is BUILT in the return arena rather than copied into it:
+    // the destination a loft function's hidden `__retbuf` parameter names is
+    // simply a record over there. A callee that ignores the offer and mints its
+    // own store is the other half of the same protocol, handled below.
+    let ret_ty = program
+        .signature(&func)
+        .ok_or_else(|| format!("no function '{func}'"))?
+        .1;
+    let retbuf = if crate::host::is_compound(&ret_ty) {
+        let (tp, _) = program.layout_of(&ret_ty);
+        super::arena::alloc_value(program.stores(), ret_nr, tp)
+    } else {
+        crate::keys::DbRef::NULL
+    };
+
     // A fault inside the library is the caller's error, not the worker's death
     // — arc D extends this to a worker that dies outright.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| program.call(&func, &args))) {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err(format!("library panicked in '{func}'")),
+    let out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        program.call_into(&func, &args, retbuf)
+    })) {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => return Err(format!("library panicked in '{func}'")),
+    };
+
+    let crate::host::Value::Ref(answer) = out else {
+        return Ok(out);
+    };
+    if answer.is_null() || answer.store_nr == ret_nr {
+        return Ok(crate::host::Value::Ref(answer));
     }
+    // The callee ignored the offered destination and built its answer in a store
+    // of its own — the ordinary shape for `Point { … }`, where the constructor
+    // mints a store and hands ownership to its caller. Copy it into the arena,
+    // then free it exactly as an in-process caller's `OpFreeRef` would: this
+    // process IS that caller, and nothing else will ever free it.
+    let (tp, _) = program.layout_of(&ret_ty);
+    let landed = super::arena::alloc_value(program.stores(), ret_nr, tp);
+    super::arena::copy_value(program.stores(), &landed, &answer, tp);
+    if ret_ty.depend().is_empty() {
+        program.stores().free_named(&answer, "<placed return>");
+    }
+    Ok(crate::host::Value::Ref(landed))
 }

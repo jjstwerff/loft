@@ -101,6 +101,11 @@ impl Placement {
     }
 }
 
+/// The call arena — the shared store a struct or a vector crosses in, rather
+/// than being re-encoded into a second wire vocabulary (@PLN119 arc B).
+#[cfg(target_os = "linux")]
+pub mod arena;
+
 /// The Linux transport: the shared mapping, the spin-then-sleep handshake, the
 /// frame codec, and the two ends of a call.  Gated because the handshake is
 /// built on `futex`; see the Platform note above.

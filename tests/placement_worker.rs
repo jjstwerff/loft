@@ -64,7 +64,7 @@ fn ping_crosses_the_boundary() {
         "pinglib",
         "pub fn ping(x: integer) -> integer {\n    x + 1\n}\n",
     );
-    let w = worker("pinglib", &pkg);
+    let mut w = worker("pinglib", &pkg);
     assert_eq!(w.call("ping", &[Value::Int(41)]), Ok(Value::Int(42)));
     // Reusable: the worker holds the library across calls, which is what lets a
     // placed library keep state exactly as an in-process one does.
@@ -83,7 +83,7 @@ fn every_scalar_shape_survives_the_crossing() {
          pub fn echo_text(v: text) -> text { v }\n\
          pub fn joined(a: text, b: text) -> text { \"{a}/{b}\" }\n",
     );
-    let w = worker("scalarlib", &pkg);
+    let mut w = worker("scalarlib", &pkg);
 
     // Distinctive values, and the EDGES: a negative integer catches a narrow or
     // unsigned misread on the wire, which is exactly the class of bug the
@@ -135,7 +135,7 @@ fn the_probe_can_fail() {
         "canarylib",
         "pub fn ping(x: integer) -> integer { x + 1 }\n",
     );
-    let w = worker("canarylib", &pkg);
+    let mut w = worker("canarylib", &pkg);
     assert_ne!(
         w.call("ping", &[Value::Int(41)]),
         Ok(Value::Int(41)),
@@ -155,7 +155,7 @@ fn a_fault_in_the_library_is_the_callers_error_not_a_dead_worker() {
         "faultlib",
         "pub fn ping(x: integer) -> integer { x + 1 }\n",
     );
-    let w = worker("faultlib", &pkg);
+    let mut w = worker("faultlib", &pkg);
 
     let missing = w.call("no_such_function", &[Value::Int(1)]);
     assert!(
@@ -202,7 +202,7 @@ fn a_worker_killed_mid_call_is_an_error_not_a_hang() {
          }\n\
          pub fn ping(x: integer) -> integer { x + 1 }\n",
     );
-    let w = worker("deathlib", &pkg);
+    let mut w = worker("deathlib", &pkg);
     // Prove the worker is really serving before killing it, or a pass could
     // just be reporting a worker that never came up at all.
     assert_eq!(w.call("ping", &[Value::Int(1)]), Ok(Value::Int(2)));

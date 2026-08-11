@@ -515,8 +515,7 @@ pub enum WorkerArg {
 
 /// What a host call expects the target function to return — selects how the
 /// return value is read off the stack after the call.  Used by `execute_host`
-/// (the `loft::host` Rust→loft entry).  Struct / vector / enum returns are NOT
-/// here yet (they travel through hidden destination params + store adoption).
+/// (the `loft::host` Rust→loft entry).
 #[derive(Clone, Copy)]
 pub enum HostRetKind {
     /// No return value read.
@@ -525,6 +524,11 @@ pub enum HostRetKind {
     Prim(u32),
     /// A 16-byte `Str`, materialised into an owned `String`.
     Text,
+    /// @PLN119 arc B — a struct / vector: the 12-byte `DbRef` naming the record
+    /// the answer was built in.  Which store that is, is the CALLEE's answer, not
+    /// the caller's guess: it may be the hidden destination the caller offered,
+    /// or a store the callee minted when it ignored one.
+    Ref,
 }
 
 /// The value a host call read back from a loft function.
@@ -533,6 +537,10 @@ pub enum HostReturn {
     /// A primitive zero-extended into a `u64`; the host re-narrows by the return type.
     Prim(u64),
     Text(String),
+    /// A struct / vector, named by the record holding it.  Nothing is copied —
+    /// the record lives wherever the callee built it, and it is the caller's job
+    /// to read it before that store is reset or freed.
+    Ref(DbRef),
 }
 
 impl State {
@@ -6525,6 +6533,7 @@ impl State {
                 let s = *self.get_stack::<Str>();
                 HostReturn::Text(s.str().to_owned())
             }
+            HostRetKind::Ref => HostReturn::Ref(*self.get_stack::<DbRef>()),
         };
         // Drop the hidden text buffers to free their heap allocations.
         for cr in work_crs.iter().rev() {

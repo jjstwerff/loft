@@ -15,11 +15,31 @@
 //!
 //! # What this routes
 //!
-//! Parameters and returns may be integer-family, boolean, `single` or text, plus
-//! a void return. A function outside that is simply **not marked**, so it runs
-//! in-process — byte-identically, which is the same fallback a library that
-//! cannot compile native already takes. Nothing becomes a call that fails later.
-//! Structs, vectors and references need the arena and are still outside.
+//! Parameters and returns may be integer-family, boolean, `single`, text, or —
+//! @PLN119 arc B — a **struct or vector**, plus a void return. A function
+//! outside that is simply **not marked**, so it runs in-process —
+//! byte-identically, which is the same fallback a library that cannot compile
+//! native already takes. Nothing becomes a call that fails later.
+//!
+//! # A compound argument is passed BY REFERENCE, so it crosses twice
+//!
+//! `f(p)` where `p` is a struct hands the callee the caller's own record: a
+//! `pub fn bump(p: Point)` that assigns `p.x` changes the CALLER's `p`. That is
+//! loft's semantics, not an accident, so a crossing that only copied the
+//! argument over would silently diverge the moment a library wrote to one.
+//!
+//! Every compound argument is therefore copied into the [arena](super::arena)
+//! before the call and copied back out after it. The callee reads and writes the
+//! arena record in place — it never learns that its parameter is not the
+//! caller's own — and what the caller sees afterwards is what the callee left.
+//!
+//! # The layout gate
+//!
+//! The two sides are different programs. A record graph in the arena is read as
+//! the RECEIVING program's own type, so the two must lay that type out
+//! identically or the worker reads foreign bytes as a `Point`. At install, one
+//! round trip per placed function compares [`signature_layout`] computed on each
+//! side, and a function the two disagree about is not placed.
 //!
 //! # A text return rides the protocol it already has
 //!
@@ -61,6 +81,17 @@ enum Kind {
     /// other argument: a dispatcher that skipped it would leave it on the stack
     /// and every later frame would read one cell off.
     WorkBuf,
+    /// A struct or vector: a 12-byte `DbRef` on the stack, crossing through the
+    /// [arena](super::arena).
+    ///
+    /// The payload is THIS program's store type id for it, which only
+    /// [`install`] can resolve (it needs the live `Stores`); [`frame_kinds`]
+    /// leaves it `u16::MAX`.
+    Compound(u16),
+    /// The hidden destination a compound-returning loft function carries — the
+    /// `__retbuf` parameter. Like [`Kind::WorkBuf`], it is pushed by the emitted
+    /// code and is not a value the worker is sent.
+    RetBuf(u16),
 }
 
 /// Classify a loft type for the wire, or refuse it.
@@ -71,8 +102,80 @@ fn kind_of(ty: &Type, returning: bool) -> Option<Kind> {
         Type::Boolean => Some(Kind::Bool),
         Type::Single => Some(Kind::Single),
         Type::Text(_) => Some(Kind::Text),
+        _ if crate::host::is_compound(ty) => Some(Kind::Compound(u16::MAX)),
         _ => None,
     }
+}
+
+/// This program's store type id for `ty` — the id `copy_claims` dispatches on.
+fn type_id(stores: &mut Stores, data: &Data, ty: &Type) -> u16 {
+    stores.db_type(ty, data)
+}
+
+/// How this program lays out `func`'s compound parameters and return.
+///
+/// Both sides compute it from their OWN type table and the strings must match,
+/// or the value one side writes into the arena is not the value the other reads
+/// out. Scalars contribute only their arity: their ABI is already pinned by
+/// [`Kind`], and a mismatch there is refused at marking rather than here.
+///
+/// Reuses @PLN97's `layout_algo_hash`, which is the single home of "do these two
+/// programs lay this type out the same way" — including everything the type
+/// references and the host's endianness.
+#[must_use]
+pub fn signature_layout(program: &mut crate::host::Program, func: &str) -> Option<String> {
+    use std::fmt::Write as _;
+    let (params, ret) = program.signature(func)?;
+    let mut out = String::new();
+    for (i, ty) in params.iter().chain(std::iter::once(&ret)).enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        if crate::host::is_compound(ty) {
+            let (_, hash) = program.layout_of(ty);
+            let _ = write!(out, "{hash:016x}");
+        } else {
+            out.push('.');
+        }
+    }
+    Some(out)
+}
+
+/// [`signature_layout`], computed against a `Stores` + `Data` directly — the
+/// caller has those rather than a `host::Program`.
+///
+/// The two must produce the same string for the same types or the gate would
+/// refuse every placement, so they are deliberately one shape written twice
+/// against two different holders of the same tables rather than two rules.
+fn signature_layout_here(
+    stores: &mut Stores,
+    data: &Data,
+    def: &crate::data::Definition,
+) -> String {
+    use std::fmt::Write as _;
+    let params: Vec<Type> = def
+        .attributes()
+        .iter()
+        .filter(|a| !a.hidden)
+        .map(|a| a.typedef.clone())
+        .collect();
+    let mut out = String::new();
+    for (i, ty) in params
+        .iter()
+        .chain(std::iter::once(&def.returned))
+        .enumerate()
+    {
+        if i > 0 {
+            out.push(',');
+        }
+        if crate::host::is_compound(ty) {
+            let tp = type_id(stores, data, ty);
+            let _ = write!(out, "{:016x}", stores.layout_algo_hash(&[tp]));
+        } else {
+            out.push('.');
+        }
+    }
+    out
 }
 
 /// The frame shape of one call: every attribute the emitted code pushes, in
@@ -87,6 +190,8 @@ fn frame_kinds(def: &crate::data::Definition) -> Option<Vec<Kind>> {
         .map(|a| {
             if crate::native_lib::is_text_work_buffer(&a.typedef) {
                 Some(Kind::WorkBuf)
+            } else if a.hidden && crate::host::is_compound(&a.typedef) {
+                Some(Kind::RetBuf(u16::MAX))
             } else if a.hidden {
                 // Some other compiler-inserted parameter. Its layout is not
                 // known here, so refuse the function rather than pop a frame
@@ -97,6 +202,25 @@ fn frame_kinds(def: &crate::data::Definition) -> Option<Vec<Kind>> {
             }
         })
         .collect()
+}
+
+/// Fill in this program's store type ids, which `frame_kinds` cannot know.
+fn resolve_ids(
+    kinds: &mut [Kind],
+    ret: &mut Kind,
+    def: &crate::data::Definition,
+    stores: &mut Stores,
+    data: &Data,
+) {
+    for (k, a) in kinds.iter_mut().zip(def.attributes().iter()) {
+        match k {
+            Kind::Compound(id) | Kind::RetBuf(id) => *id = type_id(stores, data, &a.typedef),
+            _ => {}
+        }
+    }
+    if let Kind::Compound(id) = ret {
+        *id = type_id(stores, data, &def.returned);
+    }
 }
 
 /// One placed function: which worker serves it, what it is called there, and
@@ -170,6 +294,14 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
         if ret == Kind::Text && !frame.contains(&Kind::WorkBuf) {
             continue;
         }
+        // The same question for a compound answer, and the same reason: it is
+        // built in the worker's arena, and the caller has to have offered
+        // somewhere in ITS OWN memory for the copy to land. That offer is the
+        // hidden `__retbuf` the emitted code pushes; without one there is
+        // nowhere, and the function runs in-process instead.
+        if matches!(ret, Kind::Compound(_)) && !frame.iter().any(|k| matches!(k, Kind::RetBuf(_))) {
+            continue;
+        }
         let sym = format!(
             "loft_placed_{}",
             crate::generation::disambiguated_fn_ident(&dups, data.def(d))
@@ -222,14 +354,50 @@ pub fn install(
             let Some(&lib_idx) = state.library_names.get(&sym) else {
                 continue;
             };
-            let (Some(params), Some(ret)) = (frame_kinds(def), kind_of(&def.returned, true)) else {
+            let (Some(mut params), Some(mut ret)) =
+                (frame_kinds(def), kind_of(&def.returned, true))
+            else {
                 continue;
             };
+            resolve_ids(&mut params, &mut ret, def, &mut state.database, data);
+            let func = def.original_name().clone();
+            // The layout gate. Only a signature with something compound in it
+            // has anything to disagree about, so the round trip is skipped
+            // where it could only ever agree.
+            let carries_compound = matches!(ret, Kind::Compound(_))
+                || params
+                    .iter()
+                    .any(|k| matches!(k, Kind::Compound(_) | Kind::RetBuf(_)));
+            if carries_compound {
+                let here = signature_layout_here(&mut state.database, data, def);
+                match reg.workers[w_idx].layout(&func) {
+                    Ok(there) if there == here => {}
+                    // Not an error, a refusal: the function runs in-process,
+                    // which by the invariant is the same program. Saying so is
+                    // the point — a silent skip would look like the library
+                    // simply not being placed.
+                    Ok(there) => {
+                        eprintln!(
+                            "Warning: '{name}::{func}' is not placed — this program and its \
+                             worker lay its struct/vector types out differently ({here} vs \
+                             {there}); the call runs in-process"
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: '{name}::{func}' is not placed — its worker could not \
+                             report a layout ({e}); the call runs in-process"
+                        );
+                        continue;
+                    }
+                }
+            }
             reg.calls.insert(
                 lib_idx,
                 Placed {
                     worker: w_idx,
-                    func: def.original_name().clone(),
+                    func,
                     params,
                     ret,
                 },
@@ -252,6 +420,16 @@ pub fn shutdown() {
     }
 }
 
+/// Do two references name the same record?
+///
+/// Aliasing is not a corner case here: `f(p, p)` hands the callee ONE record
+/// in-process, so the crossing has to hand it one arena record too. Two copies
+/// would give the callee two independent values, and copying both back would
+/// then be a race between them decided by argument order.
+fn same_record(a: &DbRef, b: &DbRef) -> bool {
+    a.store_nr == b.store_nr && a.rec == b.rec && a.pos == b.pos
+}
+
 /// The interpreter's entry into a placed call: read the frame off the stack,
 /// cross, write the answer back.
 fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
@@ -262,15 +440,21 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     let Some(reg) = guard.as_mut() else {
         panic!("placed call with no placement registry — install() did not run");
     };
-    let Some(placed) = reg.calls.get(&lib_idx) else {
+    let Registry { workers, calls } = reg;
+    let Some(placed) = calls.get(&lib_idx) else {
         panic!("no placed signature for library index {lib_idx}");
     };
+    let worker = &mut workers[placed.worker];
 
     // Pop in reverse (the stack is LIFO), then restore declaration order. Every
     // cell the emitted code pushed is popped here, hidden ones included — a cell
     // left behind does not fail here, it shifts every later frame by one.
     let mut args: Vec<Value> = Vec::with_capacity(placed.params.len());
     let mut work_buf: Option<DbRef> = None;
+    let mut ret_buf: Option<DbRef> = None;
+    // Which argument slots hold a compound, and where the caller keeps each —
+    // needed twice: to marshal it in, and to copy the callee's writes back out.
+    let mut compound: Vec<(usize, DbRef, u16)> = Vec::new();
     for k in placed.params.iter().rev() {
         match k {
             // The whole cell, unnarrowed: the callee's declared width is what
@@ -288,9 +472,22 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
             Kind::Void => args.push(Value::Void),
             // Popped, never sent: it is the caller's answer slot, not an input.
             Kind::WorkBuf => work_buf = Some(*stores.get::<DbRef>(stack)),
+            Kind::RetBuf(_) => ret_buf = Some(*stores.get::<DbRef>(stack)),
+            // A placeholder now; the real value is a record in the arena, and
+            // the arena is not bound until the frame has been popped clean.
+            Kind::Compound(tp) => {
+                compound.push((args.len(), *stores.get::<DbRef>(stack), *tp));
+                args.push(Value::Ref(DbRef::NULL));
+            }
         }
     }
     args.reverse();
+    // `args` was built back-to-front, so every recorded slot is counted from the
+    // wrong end. Turn them round together rather than searching for them again.
+    let last = args.len().saturating_sub(1);
+    for c in &mut compound {
+        c.0 = last - c.0;
+    }
 
     let ret = placed.ret;
     // Claimed before the crossing, so it is claimed on EVERY exit below —
@@ -310,11 +507,102 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
          destination nor a work buffer reached the dispatcher",
         placed.func
     );
-    let out = reg.workers[placed.worker].call(&placed.func, &args);
+    // Build every compound argument in the arena. The `seen` map is not an
+    // optimisation: `f(p, p)` passes ONE record twice in-process, so two arena
+    // copies would give the callee two independent values and the copy-back
+    // would then have to pick which one won.
+    if !compound.is_empty() {
+        worker.arg_arena().reset();
+        let arena_nr = worker.arg_arena().bind(stores);
+        // A list rather than a map: a signature has a handful of parameters, and
+        // `DbRef` is a plain triple with no hash to spend.
+        let mut seen: Vec<(DbRef, DbRef)> = Vec::new();
+        for &(slot, src, tp) in &compound {
+            if src.is_null() {
+                continue;
+            }
+            let dst = if let Some(&(_, d)) = seen.iter().find(|(s, _)| same_record(s, &src)) {
+                d
+            } else {
+                {
+                    // A fresh arena record, default-initialised. An argument
+                    // that names no record — an untouched placeholder, or a
+                    // vector that is validly empty — is exactly that default,
+                    // so the copy is skipped rather than reading the source
+                    // store's header as if it were the value.
+                    let d = super::arena::alloc_value(stores, arena_nr, tp);
+                    if super::arena::names_a_record(&src) {
+                        super::arena::trace(stores, "arg-src", &src, tp);
+                        super::arena::copy_value(stores, &d, &src, tp);
+                        super::arena::trace(stores, "arg-dst", &d, tp);
+                    }
+                    seen.push((src, d));
+                    d
+                }
+            };
+            args[slot] = Value::Ref(dst);
+        }
+        worker.arg_arena().unbind(stores, arena_nr);
+    }
+
+    let out = worker.call(&placed.func, &args);
+
+    // Bind both arenas for the way back: the answer lives in one and the
+    // callee's writes to the arguments in the other.
+    let arg_nr = worker.arg_arena().bind(stores);
+    let ret_nr = worker.ret_arena().bind(stores);
+    // Re-read the answer now that the return arena has a store number on this
+    // side — a compound reference could not be completed before it had one.
+    let out = match out {
+        Ok(Value::Ref(_)) => worker
+            .reread_answer(ret_nr)
+            .ok_or_else(|| "malformed compound answer".to_string()),
+        other => other,
+    };
+
+    // loft passes a compound BY REFERENCE, so whatever the callee wrote into its
+    // parameter is the caller's to see. Copying back is what makes that true
+    // across the boundary; skipping it would make `bump(p)` a no-op under
+    // `placement = "process"` and not in-process.
+    if out.is_ok() {
+        let mut done: Vec<DbRef> = Vec::new();
+        for &(slot, dst, tp) in &compound {
+            if !super::arena::names_a_record(&dst) || done.iter().any(|d| same_record(d, &dst)) {
+                continue;
+            }
+            if let Some(Value::Ref(src)) = args.get(slot)
+                && !src.is_null()
+            {
+                let src = DbRef {
+                    store_nr: arg_nr,
+                    ..*src
+                };
+                super::arena::copy_value(stores, &dst, &src, tp);
+                done.push(dst);
+            }
+        }
+    }
+
+    finish_call(stores, stack, ret, out, text_dest, work_buf, ret_buf);
+    worker.arg_arena().unbind(stores, arg_nr);
+    worker.ret_arena().unbind(stores, ret_nr);
     // The lock is held across the crossing on purpose (see `PLACEMENT`), but a
     // fault must not poison it while a guard is live.
     drop(guard);
+}
 
+/// Write the answer back where the emitted code expects it — the half of a
+/// placed call that is about the CALLER's frame rather than the crossing.
+#[allow(clippy::too_many_arguments)]
+fn finish_call(
+    stores: &mut Stores,
+    stack: &mut DbRef,
+    ret: Kind,
+    out: Result<Value, String>,
+    text_dest: Option<DbRef>,
+    work_buf: Option<DbRef>,
+    ret_buf: Option<DbRef>,
+) {
     match out {
         Ok(v) => match (ret, v) {
             (Kind::Void, _) => {}
@@ -345,6 +633,27 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
                     let result = crate::keys::Str::new(buf.as_str());
                     stores.put(stack, result);
                 }
+            }
+            // A compound answer was built in the return arena. Where it lands is
+            // whatever the caller offered — and the caller offers one of exactly
+            // two things, the same pair an in-process call sees:
+            //
+            //   * a live destination (`v = range_vec(4)` materialises `__ref_2`
+            //     at function entry, and `v` BORROWS it) — fill it, hand it back;
+            //   * nothing, a null placeholder (`p = make_point(3,4)`) — in-process
+            //     the callee mints its own store and hands ownership over, so mint
+            //     one here and hand that over. The caller's `OpFreeRef` frees it.
+            (Kind::Compound(tp), Value::Ref(src)) => {
+                let dest = match ret_buf {
+                    Some(d) if super::arena::names_a_record(&d) => d,
+                    _ => super::arena::mint_value(stores, tp),
+                };
+                if !src.is_null() {
+                    super::arena::copy_value(stores, &dest, &src, tp);
+                }
+                super::arena::trace(stores, "ret-src", &src, tp);
+                super::arena::trace(stores, "ret-dst", &dest, tp);
+                stores.put(stack, dest);
             }
             (k, v) => panic!("placed call returned {v:?} where the signature declares {k:?}"),
         },
