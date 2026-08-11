@@ -634,11 +634,16 @@ the target off the one expected-type channel that already carries `lambda_hint` 
 `enum_hint` / `vector_hint`, so it is a fifth shape on that channel rather than a
 sixth side-channel.
 
-The per-kind `hole_*` form is deliberately expandable: a **generic method**
-(`fn hole<T>(self: Self, v: T)`, @PLN137) would collapse it into one without
-changing what an author writes.  Recorded here as @PLN125 arc A until that arc
-shipped and showed the two are NOT the same gap — an associated type names a
-COMPANION, while collapsing `hole_*` needs a type variable in a later PARAMETER. Catalogued as
+The per-kind `hole_*` form is **deliberate and stays**.  Collapsing it into one
+generic `hole<T>` was evaluated and DECLINED ([C110](DESIGN_DECISIONS.md)): a
+generic method accepts every type by construction, which would delete exactly the
+per-kind opt-in that makes the refusal above auditable.  The cost is paid once per
+target type by a library author and never by a consumer, and it buys a compile
+error where a generic method would silently accept.
+
+(It was recorded as @PLN125 arc A's A4 until that arc shipped and showed the two
+are not the same gap — an associated type names a COMPANION, while collapsing
+`hole_*` needs a type variable in a later PARAMETER.) Catalogued as
 [`@F94`](https://github.com/loft-lang/features/issues/94); the design reasoning is
 [plans/23-db-clients/INTERPOLATION_HOOK.md](plans/23-db-clients/INTERPOLATION_HOOK.md).
 

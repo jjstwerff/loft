@@ -3065,3 +3065,76 @@ can just be correct.  That is the trade C107 had already declined for arguments.
   function type and index list disagree transmutes to the wrong arity with nothing to catch it.
 - **Revisit when** someone needs a float argument badly enough to pay for an SSE-aware ladder;
   it moves for both backends at once, as C106 requires.
+
+---
+
+## C110 — a generic's type variable stays in the FIRST parameter, and a keyed collection stays a record set
+
+**Catalogue:** @F26 (interfaces & bounded generics) · @F94 (type-directed interpolation)
+
+### Context
+
+Two proposals arrived together and were evaluated together, because they had been filed as one
+plan (@PLN137). They are not one feature, and separating them is most of the answer.
+
+**(a) A type variable outside the first parameter.** `fn hole<T>(self: Acc, v: T)` — a generic
+METHOD, whose receiver is concrete and whose type variable is an argument — is refused today:
+
+```
+Type variable T must appear in the first parameter — move T to the first parameter position
+```
+
+**(b) Multiple type variables**, for a freer keyed type such as `hash<K, V>` or `sorted<K, V>`.
+loft does not parse `<A, B>` at all.
+
+Filing them together implied that lifting (a) moves toward (b). It does not: (a) is about which
+POSITION a single type variable may occupy, (b) is about how MANY there may be.
+
+### Evaluation
+
+**The first-parameter rule is the monomorph's identity, not a parser convenience.** A monomorph
+is named `t_<LEN><Type>_<fn>` from the FIRST argument's type, and that name is load-bearing in
+four places: `find_fn` locates a method by it, native emits it as the symbol, `original_name`
+parses it back, and the H5 two-pass guard recognises a legal lazy bound stub by it. Lifting the
+rule means the name must encode a second type and every back-parsing site follows. C95 already
+anticipated this ("when mangling extends beyond the first parameter, this predicate follows it
+automatically"), so the cost is understood — it has simply never been worth paying.
+
+**The sole named consumer would be HARMED by (a).** @PLN125's A4 wanted the generic `hole<T>` to
+collapse @PLN124's `hole_text` / `hole_int` / `hole_sql_ident` / … family. But the per-kind form
+is a safety REFUSAL rather than an accident: *"a kind the target does not define is a compile
+error naming the method to add — never a quiet fall back to text, which would put a value back on
+the path this exists to close"*. A generic `hole<T>` accepts every type by construction, which
+deletes the per-kind opt-in that makes "nothing but `lit` reaches SQL syntax" auditable. The
+feature's only justification is a regression in the property @PLN124 was built to guarantee.
+
+**(b) is a missing SPELLING, not a missing capability, and the existing spelling is better.** A
+keyed collection is already a dictionary — `hash<Count[word]>` over `struct Count { word: text, n:
+integer }` IS `hash<text, integer>`, measured. And the record-set model beats `hash<K, V>` on
+three counts:
+
+- the value CARRIES its own key, so the two cannot desync — `hash<K, V>` permits
+  `h["a"] = Count { word: "b", … }` and nothing objects;
+- a compound key is `[c, t]` by field NAME, not a tuple whose element order must be remembered;
+- it is the SAME model across `hash` / `sorted` / `index` / `trie` / `spatial` — one concept
+  behind five collections, per C99's uniform key-addressing.
+
+Adding `hash<K, V>` would give one idea two spellings, which is the shape C103 already
+refused for type names. The dominant real use — a keyed collection as an INDEX
+into a store, pointing at records that hold their own key — is exactly what the record set is for.
+
+### Decision
+
+- **Closed 2026-08-11.** A generic's type variable stays in the first parameter, and keyed
+  collections stay record sets keyed on a named field. @PLN137 is closed as declined.
+- **The two halves are separable and stay separate.** A future case for multi-parameter generics
+  must argue for itself; it does not ride in on generic methods, and neither rides in on
+  associated types (@PLN125 arc A shipped those and moved neither, which is what this entry
+  records so the conflation does not recur).
+- **The `hole_*` family stays per-kind**, and the ugliness is priced correctly: it is paid ONCE
+  per target type by a library author, never by a consumer, and it buys a compile error where a
+  generic method would silently accept.
+- **Revisit when** a consumer wants a generic method AND is not a safety-refusal surface — a
+  builder or accumulator that legitimately takes any renderable value — or when a
+  multi-parameter generic type has a use that a record set genuinely cannot express. New
+  evidence means a real consumer, not a shape that reads more familiar from another language.
