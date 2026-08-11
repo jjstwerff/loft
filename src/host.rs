@@ -177,6 +177,64 @@ impl Program {
         Ok(Program { data, state })
     }
 
+    /// Load every `.loft` file of the library package rooted at `pkg_dir`
+    /// (its `src/` directory), plus the stdlib.
+    ///
+    /// The whole-directory form exists for @PLN119's out-of-process worker,
+    /// which holds a library rather than a snippet: a library is several files
+    /// and its `use` declarations resolve against its own package root, neither
+    /// of which survives being flattened into one source string.
+    ///
+    /// # Errors
+    /// [`LoftError::Parse`] if either directory cannot be read, or the library
+    /// fails to parse / compile.
+    pub fn from_library_dir(
+        pkg_dir: &std::path::Path,
+        stdlib_dir: &std::path::Path,
+    ) -> Result<Program, LoftError> {
+        let mut p = parser::Parser::new();
+        p.parse_dir(&stdlib_dir.to_string_lossy(), true, false)
+            .map_err(|e| {
+                LoftError::Parse(format!("cannot read stdlib at {}: {e}", stdlib_dir.display()))
+            })?;
+        let src = pkg_dir.join("src");
+        let dir = if src.is_dir() { src } else { pkg_dir.to_path_buf() };
+        p.parse_dir(&dir.to_string_lossy(), false, false)
+            .map_err(|e| LoftError::Parse(format!("cannot read library at {}: {e}", dir.display())))?;
+        scopes::check(&mut p.data);
+        let mut data = p.data;
+        let mut state = State::new(p.database);
+        compile::byte_code(&mut state, &mut data);
+        Ok(Program { data, state })
+    }
+
+    /// How many stores this program holds — the base a caller translates a
+    /// `DbRef` against when references start crossing a placement boundary
+    /// (@PLN119 arc B).
+    #[must_use]
+    pub fn store_count(&self) -> u32 {
+        self.state.database.allocations.len() as u32
+    }
+
+    /// The mutation counter of this program's first store (CO1.9/S28), which a
+    /// cross-process reader compares to detect a mapping made stale by a
+    /// structural change.
+    #[must_use]
+    pub fn store_epoch(&self) -> u32 {
+        self.state
+            .database
+            .allocations
+            .first()
+            .map_or(0, |s| s.generation)
+    }
+
+    /// Does this program define a `pub fn` of this name that a placed library
+    /// can serve? Used to refuse a bad call at load rather than at first use.
+    #[must_use]
+    pub fn has_fn(&self, func: &str) -> bool {
+        self.data.def_nr(&format!("n_{func}")) != u32::MAX
+    }
+
     /// Call `func` with `args`, returning its value. Reusable — call as many
     /// times as needed; each call runs on a fresh stack frame.
     ///

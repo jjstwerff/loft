@@ -334,6 +334,13 @@ pub struct Parser {
     /// `byte_code`) and builds + loads the cdylib (after `byte_code`).  A library's
     /// functions are identified by `def.position().file.starts_with(pkg_dir)`.
     pub pending_native_compile: Vec<String>,
+    /// @PLN119 arc A — libraries that declared `[library] placement = "process"`,
+    /// as (library name, package dir).  Recorded during `use` processing; the
+    /// driver (`main.rs`) starts one worker per entry after `scopes::check` and
+    /// routes the library's public functions to it.  A library's functions are
+    /// identified by `def.position().file.starts_with(pkg_dir)`, the same
+    /// ownership guard the native path uses.
+    pub pending_placed_libs: Vec<(String, String)>,
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir, queued-from file) — sibling packages are
     /// searched in `dir`, and the dep is only pulled in while the lexer is back
@@ -881,6 +888,7 @@ impl Parser {
             pending_native_libs: Vec::new(),
             native_lib_regs: Vec::new(),
             pending_native_compile: Vec::new(),
+            pending_placed_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
@@ -10617,6 +10625,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
             self.pending_native_compile.push(pkg_dir.clone());
         }
+        self.record_placement(&m, &pkg_dir);
         self.register_c_libraries(&m, &pkg_dir);
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
@@ -10892,6 +10901,34 @@ impl Parser {
     /// **A built shim is registered as an ordinary library**, so the
     /// interpreter's `dlopen`, the `--native` link line and the symbol resolver
     /// stay one code path and cannot disagree about what a shim is.
+    /// @PLN119 arc A — note a library that asked to run out of process.
+    ///
+    /// An unreadable `placement` value is an ERROR rather than a fallback to
+    /// in-process: the two placements are meant to be indistinguishable in
+    /// behaviour, so a typo would produce a program that runs correctly and
+    /// isolates nothing, and no output would ever show the difference.
+    fn record_placement(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
+        let Some(ref spelled) = m.placement else {
+            return;
+        };
+        match crate::lib_placement::Placement::parse(spelled) {
+            Ok(p) if p.is_out_of_process() => {
+                let name = m
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| pkg_dir.rsplit('/').next().unwrap_or(pkg_dir).to_string());
+                if !self.pending_placed_libs.iter().any(|(_, d)| d == pkg_dir) {
+                    self.pending_placed_libs.push((name, pkg_dir.to_string()));
+                }
+            }
+            Ok(_) => {}
+            Err(why) => self.lexer.diagnostic(
+                Level::Error,
+                &format!("`[library] placement` for `{pkg_dir}`: {why}"),
+            ),
+        }
+    }
+
     fn register_c_libraries(&mut self, m: &manifest::Manifest, pkg_dir: &str) {
         let mut entries: Vec<String> = m.c_libs.clone();
         if !m.c_shim.is_empty() {
@@ -10958,6 +10995,7 @@ impl Parser {
         if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == pkg_dir) {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
+        self.record_placement(m, pkg_dir);
         // PKG.4: register native function symbols and package crate info.
         self.register_c_libraries(m, pkg_dir);
         if let Some(ref crate_name) = m.native_crate {

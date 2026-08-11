@@ -5974,6 +5974,30 @@ fn main() {
         .skip(1)
         .map(|a| a.to_str().unwrap_or("").to_string())
         .collect();
+    // @PLN119 arc A — this process is the worker holding one process-placed
+    // library. Internal: spawned by `lib_placement::Worker::spawn`, never typed
+    // by a user, so it is deliberately absent from `--help`. It takes over the
+    // process and never returns.
+    #[cfg(target_os = "linux")]
+    if argv.first().is_some_and(|a| a == "--lib-worker") {
+        let wire = argv.get(1).map(std::path::PathBuf::from);
+        let pkg = argv.get(2).map(std::path::PathBuf::from);
+        let stdlib = argv
+            .iter()
+            .position(|a| a == "--default")
+            .and_then(|p| argv.get(p + 1))
+            .map(std::path::PathBuf::from);
+        match (wire, pkg, stdlib) {
+            (Some(w), Some(p), Some(s)) => loft::lib_placement::serve(&w, &p, &s),
+            _ => {
+                eprintln!(
+                    "loft: --lib-worker is internal; usage: \
+                     --lib-worker <wire> <pkg_dir> --default <stdlib_dir>"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
     let mut i = 0;
     let mut file_name = String::new();
     let mut dir = project_dir();

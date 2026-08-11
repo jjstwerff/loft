@@ -158,6 +158,19 @@ pub struct Manifest {
     /// interprets).  `None`/absent → the library is interpreted as before.  (B-phase
     /// makes this automatic; today it is the explicit opt-in.)
     pub compile: Option<String>,
+    /// @PLN119 arc A — `[library] placement = "inproc" | "process"`: where this
+    /// library's functions RUN.  `process` puts them in a worker process that
+    /// calls reach over a shared memory-mapped file, so a crash in the library
+    /// cannot corrupt its consumer's stores.
+    ///
+    /// The library declares it, not the consumer, because the library is what
+    /// knows whether isolating it is safe and worth the crossing.  Consumers
+    /// call the same typed `pub fn` surface either way — that indistinguishability
+    /// is the plan's one invariant.
+    ///
+    /// `None`/absent → in-process, which is what every existing library gets.
+    /// Parsed and validated by `lib_placement::Placement::parse`.
+    pub placement: Option<String>,
     /// PKG.3: package dependencies from `[dependencies]` section.
     /// Key = package name, value = version requirement or path.
     pub dependencies: Vec<(String, String)>,
@@ -555,6 +568,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("library", "entry") => m.entry = Some(value.scalar()),
         ("library", "native") => m.native = Some(value.scalar()),
         ("library", "compile") => m.compile = Some(value.scalar()),
+        ("library", "placement") => m.placement = Some(value.scalar()),
         ("dependencies", _) => m.dependencies.push((key.to_string(), value.scalar())),
         ("native", "crate") => m.native_crate = Some(value.scalar()),
         ("native", "in_binary") => m.native_in_binary = value.is_true(),
