@@ -15462,6 +15462,49 @@ fn a_private_scope_end_hook_in_a_library_runs() -> std::io::Result<()> {
     Ok(())
 }
 
+// ── loft#847 — an associated type binds as a TYPE, not as a place ───────────
+//
+// An implementor's return type carries a dep list indexed in its OWN frame, and
+// it is non-empty exactly when the returned record comes from a NESTED CALL
+// rather than an inline construction.  The companion binding recorded that type
+// verbatim, so a monomorph substituted those indices into the CALLER, where the
+// same numbers name unrelated locals: the caller's binding became a view of
+// whatever variable 1 happened to be, and the free landed on a stack record.
+//
+// **The value stays right, which is why this needs its own reader.**  The `#306`
+// guard REFUSES the wrong free rather than performing it, so every assertion in
+// the script passed while the ownership underneath was broken — and `#306` is an
+// `eprintln`, which the in-process script harness never looks at.  A subprocess
+// is the only thing that can see it.
+//
+// Both axes are in the fixture: the delegating producer AND the associated-type
+// bound.  Its concrete-bound control delegates identically and was always clean.
+#[test]
+fn a_delegating_producer_binds_its_companion_cleanly() -> std::io::Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg(backend)
+            .arg("--no-warnings")
+            .arg(root.join("tests/scripts/pln125-a2c-companion.loft"))
+            .current_dir(root)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success() && stdout.contains("pln125 a2c companion ok"),
+            "{backend} exited {}: stdout={stdout:?} stderr={stderr:?}",
+            out.status,
+        );
+        assert!(
+            !stderr.contains("BUG (#"),
+            "{backend}: a companion must not carry the implementor's deps into the \
+             monomorph:\n{stderr}"
+        );
+    }
+    Ok(())
+}
+
 // ── @PLAN53 clusters 3-5 — Miri-found UB regression guards ──────────────────
 //
 // These three tests guard the soundness fixes landed in commit batch on

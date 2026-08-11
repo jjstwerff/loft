@@ -27,6 +27,24 @@ tables.
   catches an over-range index but NOT a `-1` sentinel / underflow — that reads a real
   element from the end.  Was documented only for slices; now in LOFT.md § indexing +
   loft-write.  Guard a possibly-negative index with `if i >= 0` first.
+- **A type with `OpDrop` does not survive being put in a container** (loft#849, open).
+  A struct field COPIES at construction, so wrapping one leaves two records holding one
+  resource — and it is the **source** that drops, while the container's copy is never
+  dropped at all (a field is released by its owner's cascade, and a cascade is a free,
+  not a drop). For a plain value that is harmless; for a type that owns a `#c` handle
+  the copy is born dead. @PLN138's registry hit it as a use-after-free inside
+  `sqlite3_step`. Until it is settled, spell the transfer out: a method that zeroes the
+  handles WITHOUT releasing them, called after constructing the container
+  (`disown` in `tests/fixtures/sqldb/*/src/*.loft`). Two ordering rules go with it —
+  a scope end runs AFTER the function body, so a resource whose owner is closed inside
+  that body must be released explicitly first; and the release must be idempotent,
+  because exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
+- **A match arm whose value is a typed local answers null for the FIRST arm**
+  (loft#848, open). Reached by following the compiler's own two messages — a variant
+  constructor is typed as its VARIANT so arms building different ones do not unify, and
+  a qualified `E.V` takes no payload. Assign into a pre-typed local from inside the arms
+  instead (`out: E = ENone; match k { 0 => { out = … } }`), which is correct on both
+  backends.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.

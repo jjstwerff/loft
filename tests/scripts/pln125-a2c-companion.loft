@@ -120,6 +120,44 @@ fn round_trip<K: Sink>(k: K) -> integer {
 // keeps working beside one that does.
 fn label_of<S: Source>(s: S) -> text { return s.label(); }
 
+// (7) The implementor's producer DELEGATES — `return self.make_rows()` rather
+// than constructing the companion inline (loft#847).
+//
+// This is the shape that says the companion binds as a TYPE and not as a place.
+// An implementor's return type carries a dep list indexed in its OWN frame, and
+// it is non-empty exactly when the returned record comes from a nested call. The
+// binding used to be recorded verbatim, deps and all, so the monomorph
+// substituted those indices into the CALLER — where the same numbers name
+// unrelated locals. The caller's binding turned into a view of whatever variable
+// 1 happened to be, and the free landed on a stack record: `BUG (#306)` on
+// stdout, then a fault once anything downstream held the value.
+//
+// Both axes are needed to see it. `plain_open` below is the control: the same
+// delegation reached through a bound that names a CONCRETE type never bound a
+// companion, so it never carried the deps across.
+interface Relay {
+  type Out: Cursor
+  fn relay(self: Self) -> Self.Out
+}
+
+interface PlainRelay {
+  fn plain_relay(self: Self) -> DbRows
+}
+
+fn make_rows(self: DbSource) -> DbRows { return DbRows { cols: self.cols, label_: self.dsn }; }
+fn relay(self: DbSource) -> DbRows { return self.make_rows(); }
+fn plain_relay(self: DbSource) -> DbRows { return self.make_rows(); }
+
+fn relayed_width<R: Relay>(r: R) -> integer {
+  c = r.relay();
+  return c.width();
+}
+
+fn plain_relayed_width<R: PlainRelay>(r: R) -> integer {
+  c = r.plain_relay();
+  return c.width();
+}
+
 fn main() {
   f = FileSource { path: "abcd" };
   d = DbSource { dsn: "pg", cols: 7 };
@@ -145,6 +183,17 @@ fn main() {
   // generic.
   r = d.open();
   assert(r.width() == 7, "the companion outside a generic: {r.width()}");
+
+  // (7) A companion produced by a DELEGATING method. The value is the easy half
+  // — the wrong free was REFUSED rather than performed, so this answered 7 even
+  // while it was broken. The claim that the run is CLEAN is therefore a separate
+  // one, and it needs a separate reader: `#306` goes to STDERR, which the
+  // in-process script harness never sees. `a_delegating_producer_binds_its_companion_cleanly`
+  // in tests/issues.rs runs this file as a subprocess on both backends and
+  // asserts the stderr.
+  assert(relayed_width(d) == 7, "a delegating producer's companion: {relayed_width(d)}");
+  assert(plain_relayed_width(d) == 7,
+         "and the concrete-bound control: {plain_relayed_width(d)}");
 
   println("pln125 a2c companion ok");
 }
