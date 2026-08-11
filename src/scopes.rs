@@ -1024,19 +1024,48 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
         return out;
     }
     code.walk(&mut |n| {
-        let Value::Call(d, args) = n else { return };
-        if *d != copy_d || args.len() < 3 {
-            return;
-        }
-        let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
-        if !moved && !copy_hands_off(&args[1], function, data) {
-            return;
-        }
-        if let Some(src) = drop_bearing_source(&args[0]) {
-            out.insert(src);
+        match n {
+            Value::Call(d, args) if *d == copy_d && args.len() >= 3 => {
+                let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
+                if !moved && !copy_hands_off(&args[1], function, data) {
+                    return;
+                }
+                if let Some(src) = drop_bearing_source(&args[0]) {
+                    out.insert(src);
+                }
+            }
+            // A CONSTRUCTION block delivers its work-ref's record to the binding rather than
+            // copying it, so the two then name ONE record and only the binding owns it.
+            // Without this both released it: a struct-enum literal always takes the work-ref
+            // path (its declared type is the enum, the constructed one the variant, so the
+            // record cannot be built in place) and `w: W = WH { h: c }` cascaded twice.
+            Value::Set(v, rhs) => {
+                if let Some(w) = construction_work_ref(rhs, function)
+                    && w != *v
+                {
+                    out.insert(w);
+                }
+            }
+            _ => {}
         }
     });
     out
+}
+
+/// The work-ref a CONSTRUCTION block hands to its target, if that is what `rhs` is.
+///
+/// Deliberately not a bare `Var`: `x = y` between two locals deep-copies, so both keep their
+/// own store and both must release. Only a block/insert whose tail is a work-ref delivers
+/// the record itself.
+fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
+    match rhs.unspan() {
+        Value::Block(_) | Value::Insert(_) => {
+            let v = drop_bearing_source(rhs)?;
+            let n = function.name(v);
+            (n.starts_with("__ref_") || n.starts_with("__rref_")).then_some(v)
+        }
+        _ => None,
+    }
 }
 
 /// Does a copy into `dest` hand the source's OWNERSHIP over — i.e. will something else
@@ -6299,7 +6328,11 @@ fn call(to: &'static str, v: u16, data: &Data) -> Value {
 /// null here and correctly does not fire, while one that WAS adopted never reaches this
 /// branch at all (it takes the `OpFreeRefIfDistinct` pairing above).
 fn drop_hook(function: &Function, v: u16, data: &Data) -> Option<Value> {
-    let Type::Reference(d, _) = function.tp(v).base() else {
+    // A struct-enum binding is a heap record exactly as a `Reference` one is — it just
+    // carries a discriminator at its head — so it drops the same way. Reading only
+    // `Reference` here is why an enum's cascade was synthesized and then never called
+    // (@PLN139 stage D).
+    let (Type::Reference(d, _) | Type::Enum(d, true, _)) = function.tp(v).base() else {
         return None;
     };
     // @PLN139 — the CASCADE, not the bare hook: for a type that owns droppable members it

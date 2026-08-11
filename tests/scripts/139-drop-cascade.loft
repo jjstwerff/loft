@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN139 stages B+C — a container's death releases what it OWNS, and the value it took
-// ownership of stops releasing itself.
+// @PLN139 stages B, C and D — a container's death releases what it OWNS, and the value it
+// took ownership of stops releasing itself. Struct fields and enum payloads; collection
+// elements are stage E.
 //
 // Before this, a droppable copied into a struct field was released TWICE over: once by the
 // source at its own scope end, and never by the container. Whether that read as a bug
@@ -19,13 +20,20 @@
 // type that owns a droppable field a synthesized cascade (`t_<LEN><Type>_OpDropAll`) that
 // runs the type's OWN hook first and then releases its fields in reverse declaration order.
 // Stage C stops the source dropping — but only when something has taken over, which is what
-// keeps the staging honest: a copy into an enum payload or a collection element is NOT yet
-// cascaded (stages D/E), so it is NOT treated as a transfer and its source keeps dropping
-// exactly as before. Suppressing there would turn today's early release into a silent leak.
+// keeps the staging honest: a copy into a COLLECTION element is not cascaded yet (stage E),
+// so it is not treated as a transfer and its source keeps dropping exactly as before.
+// Suppressing there would turn today's early release into a silent leak.
+//
+// Stage D adds the enum: the value is a record of the VARIANT with a discriminator at its
+// head, so the enum's cascade reads it once and dispatches to the variant that is present.
+// A variant with nothing to release gets no arm, so a unit-only enum synthesizes nothing.
+// It also needed the drop SITE widened — a struct-enum binding is a heap record exactly as a
+// `Reference` one is, and reading only `Reference` there is why the cascade was synthesized
+// and then never called.
 //
 // Container-before-fields is the RAII order and not an accident: a wrapper's own release may
 // still need the resource it wraps — a connection says goodbye over the socket it is about
-// to close. Cell 6 is the one that pins it.
+// to close. Cell 5 is the one that pins it.
 //
 // The trace is a FILE for @PLN125 arc B's reason: a drop receives only `self` and a struct
 // field copies at construction, so a drop cannot write into a loft-side collection.
@@ -60,6 +68,8 @@ struct Two { a: H, b: H }
 struct WithHook { h: H, tag: integer }
 fn OpDrop(self: WithHook) { note("outer{self.tag}"); }
 struct Plain { n: integer }
+enum W { WH { h: H }, WTwo { a: H, b: H }, WNone }
+enum Units { UA, UB }
 
 // 1 — a struct field, source a named local. One release, at the CONTAINER's death.
 fn c1() { c = mk(1); s = S { h: c }; note("alive{s.h.id}"); }
@@ -88,11 +98,29 @@ fn c6() { s = c6m(); note("alive{s.h.id}"); }
 // 7 — per iteration, not once at the end: a `for` body is a scope of its own.
 fn c7() { for i in 9..11 { s = S { h: mk(i) }; note("alive{s.h.id}"); } }
 
-// 8 — CONTROL: a droppable that never enters a container. Untouched by all of this.
-fn c8() { a = mk(20); b = mk(21); note("alive{a.id}{b.id}"); }
+// 8 — an ENUM payload (stage D). The value is a record of the VARIANT with a discriminator
+//     at its head, so the cascade reads the discriminator once and releases through whichever
+//     variant is present. This is @PLN138's registry shape.
+fn c8(k: integer) {
+  w: W = if k == 0 { a: W = WH { h: mk(30) }; a } else { b: W = WNone; b };
+  note("alive");
+}
 
-// 9 — CONTROL: no droppable anywhere. No cascade may be synthesized, and nothing may run.
-fn c9() { p = Plain { n: 1 }; note("alive{p.n}"); }
+// 9 — a variant with TWO droppable fields: reverse declaration order inside the arm, and
+//     proof the arm releases the whole payload rather than its first field.
+fn c9() { w: W = WTwo { a: mk(31), b: mk(32) }; note("alive"); }
+
+// 10 — CONTROL: the OTHER variant of the same enum owns nothing, so its arm must not run.
+fn c10() { w: W = WNone; note("alive"); }
+
+// 11 — CONTROL: a unit-only enum synthesizes no cascade at all.
+fn c11() { u: Units = UA; note("alive{u == UA}"); }
+
+// 12 — CONTROL: a droppable that never enters a container. Untouched by all of this.
+fn c12() { a = mk(20); b = mk(21); note("alive{a.id}{b.id}"); }
+
+// 13 — CONTROL: no droppable anywhere. No cascade may be synthesized, and nothing may run.
+fn c13() { p = Plain { n: 1 }; note("alive{p.n}"); }
 
 fn main() {
   empty: vector<u8> = [];
@@ -119,12 +147,27 @@ fn main() {
   c7(); got = drain();
   assert(got == "alive9,9,alive10,10", "c7 per iteration, not once at the end: {got}");
 
-  c8(); got = drain();
-  assert(got == "alive2021,21,20", "c8 uncontainered droppables are unchanged: {got}");
+  c8(0); got = drain();
+  assert(got == "alive,30", "c8 an enum payload releases through its variant: {got}");
+
+  c8(1); got = drain();
+  assert(got == "alive", "c8 the payload-free variant releases nothing: {got}");
 
   c9(); got = drain();
-  assert(got == "alive1", "c9 a program with no droppable runs nothing: {got}");
+  assert(got == "alive,32,31", "c9 a two-field variant, reverse declaration: {got}");
+
+  c10(); got = drain();
+  assert(got == "alive", "c10 a unit variant of a droppable enum runs nothing: {got}");
+
+  c11(); got = drain();
+  assert(got == "alivetrue", "c11 a unit-only enum has no cascade: {got}");
+
+  c12(); got = drain();
+  assert(got == "alive2021,21,20", "c12 uncontainered droppables are unchanged: {got}");
+
+  c13(); got = drain();
+  assert(got == "alive1", "c13 a program with no droppable runs nothing: {got}");
 
   delete(trace_path());
-  println("139 fields ok");
+  println("139 cascade ok");
 }

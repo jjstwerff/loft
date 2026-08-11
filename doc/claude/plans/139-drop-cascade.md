@@ -92,9 +92,17 @@ Each stage lands against the matrix below, on BOTH backends, with the full gate 
   a silent leak. The source also peels through a BLOCK tail, since an `Object` construction
   reaches the copy as the block that builds it (`Nest { s: S { … } }` double-released without it).
   Cells c1/c2/c4/c5/c6/c9 now match; guard: `tests/scripts/139-drop-cascade-fields.loft`.
-- **D — enum payloads.** Variant dispatch on the discriminator; only variants with a droppable
-  payload get an arm. Cell c3. **This is @PLN138's shape** — the registry wraps its cursor in an
-  enum — so it is the stage the consumer is actually waiting on.
+- **D — enum payloads. SHIPPED.** The value is a record of the VARIANT with the discriminator
+  at its head, so the enum's cascade reads it once and dispatches to the variant present; each
+  variant gets its own field cascade (a variant is a record whose attributes are its payload).
+  A variant with nothing to release gets no arm, so a unit-only enum synthesizes nothing. Two
+  things it needed beyond the dispatch: the drop SITE widened to `Type::Enum(_, true, _)` — a
+  struct-enum binding is a heap record exactly as a `Reference` one is, and reading only
+  `Reference` is why the cascade was synthesized and then never called — and the CONSTRUCTION
+  work-ref marked as having handed its record to the binding, since a struct-enum literal
+  always takes the work-ref path (declared type is the enum, constructed type the variant, so
+  it cannot be built in place) and `w: W = WH { h: c }` otherwise cascaded twice. Cell c3.
+  **This is @PLN138's shape.**
 - **E — collection elements.** The hand-built loop. Cells c7/c8. **Both LEAK until this
   lands** — c7 since `fc3fb2c3` (the double-close fix), c8 since stage C moved its `S` temp's
   ownership into the element. Leak, not corruption, and `LOFT_STRICT_STORES` is clean on the

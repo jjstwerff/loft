@@ -4186,36 +4186,145 @@ impl Parser {
         }
         let mut targets: Vec<u32> = Vec::new();
         for d_nr in 0..self.data.definitions() {
-            if !matches!(self.data.def_type(d_nr), DefType::Struct) {
-                continue;
+            if self.data.def_nr(&Self::drop_cascade_name(&self.data, d_nr)) != u32::MAX {
+                continue; // already synthesized — the several parse tails share this pass
             }
-            if self.data.def(d_nr).known_type() == u16::MAX {
-                continue; // never laid out — no offsets to read
-            }
-            if !self.cascade_fields(d_nr).is_empty()
-                && self.data.def_nr(&Self::drop_cascade_name(&self.data, d_nr)) == u32::MAX
-            {
+            let wanted = match self.data.def_type(d_nr) {
+                // A STRUCT, and an enum VARIANT, both release their own droppable fields —
+                // a variant is a record whose attributes are its payload.
+                DefType::Struct | DefType::EnumValue => {
+                    self.data.def(d_nr).known_type() != u16::MAX
+                        && !self.cascade_fields(d_nr).is_empty()
+                }
+                // An ENUM releases through whichever variant it currently holds.
+                DefType::Enum => !self.cascade_variants(d_nr).is_empty(),
+                _ => false,
+            };
+            if wanted {
                 targets.push(d_nr);
             }
         }
-        // Two phases, because a cascade body CALLS the cascade of each droppable field and a
-        // nested chain would otherwise depend on definition order: declare them all, then
-        // fill the bodies once every name resolves.
+        // Two phases, because a cascade body CALLS the cascade of each droppable field and
+        // each droppable variant, and a nested chain would otherwise depend on definition
+        // order: declare them all, then fill the bodies once every name resolves.
         let mut made: Vec<(u32, u32)> = Vec::new();
         for &t in &targets {
             let name = Self::drop_cascade_name(&self.data, t);
             let pos = self.data.def(t).position().clone();
             let c_nr = self.data.add_def(&name, &pos, DefType::Function);
             self.data.set_returned(c_nr, Type::Void);
-            let self_tp = Type::Reference(t, crate::data::Deps::none());
+            let self_tp = self.cascade_self_type(t);
             let _ = self
                 .data
                 .add_attribute(&mut self.lexer, c_nr, "self", self_tp);
             made.push((t, c_nr));
         }
         for (t, c_nr) in made {
-            self.fill_drop_cascade(t, c_nr);
+            if self.data.def_type(t) == DefType::Enum {
+                self.fill_enum_drop_cascade(t, c_nr);
+            } else {
+                self.fill_drop_cascade(t, c_nr);
+            }
         }
+    }
+
+    /// The `self` parameter type of a type's cascade — a struct-enum carries its
+    /// discriminator, so its cascade must be typed as the ENUM and not as a bare record.
+    fn cascade_self_type(&self, t: u32) -> Type {
+        if self.data.def_type(t) == DefType::Enum {
+            Type::Enum(t, true, crate::data::Deps::none())
+        } else {
+            Type::Reference(t, crate::data::Deps::none())
+        }
+    }
+
+    /// @PLN139 stage D — the variants of `e_nr` that own a droppable, each with the
+    /// DISCRIMINATOR value that selects it: the 1-based position of the variant's name in
+    /// the enum's attribute list, the same numbering `fill_database` writes at construction.
+    ///
+    /// A variant with nothing to release gets no arm at all, so a unit-only enum synthesizes
+    /// no cascade and an enum with one droppable variant tests once rather than per variant.
+    fn cascade_variants(&self, e_nr: u32) -> Vec<(u32, i32)> {
+        let mut out = Vec::new();
+        for v in self.data.children_of(e_nr) {
+            if self.data.def_type(v) != DefType::EnumValue
+                || self.data.def(v).known_type() == u16::MAX
+            {
+                continue;
+            }
+            if self.cascade_fields(v).is_empty() {
+                continue;
+            }
+            let vname = self.data.def(v).name().to_string();
+            let Some(idx) = self
+                .data
+                .def(e_nr)
+                .attributes()
+                .iter()
+                .position(|a| a.name == vname)
+            else {
+                continue;
+            };
+            out.push((v, i32::try_from(idx).unwrap_or(0) + 1));
+        }
+        out
+    }
+
+    /// Build the body of an ENUM's cascade: read the discriminator once, then release
+    /// through the variant that is actually present.
+    ///
+    /// The variant's own cascade does the releasing, so this function is pure dispatch and a
+    /// payload's nesting needs no special case here. `self` is a reference to the variant
+    /// RECORD (the discriminator sits at its head), which is why the arm can hand `self`
+    /// straight to a cascade whose parameter is typed as that variant.
+    fn fill_enum_drop_cascade(&mut self, t: u32, c_nr: u32) {
+        let variants = self.cascade_variants(t);
+        let Some(&(first, _)) = variants.first() else {
+            return;
+        };
+        let disc_pos = self
+            .database
+            .position(self.data.def(first).known_type(), "enum");
+        let name = Self::drop_cascade_name(&self.data, t);
+        let file = self.data.def(t).position().file.clone();
+        let mut vars = Function::new(&name, &file);
+        let self_tp = self.cascade_self_type(t);
+        let self_var = vars.add_variable("self", &self_tp, &mut self.lexer);
+        vars.become_argument(self_var);
+        vars.defined(self_var);
+        let outer_vars = std::mem::replace(&mut self.vars, vars);
+        let outer_context = self.context;
+        self.context = c_nr;
+
+        let mut ops: Vec<Value> = Vec::new();
+        let own = self.data.drop_hook_nr(t);
+        if own != u32::MAX {
+            ops.push(Value::Call(own, vec![Value::Var(self_var)]));
+        }
+        let get_enum = self.cl(
+            "OpGetEnum",
+            &[Value::Var(self_var), Value::Int(i32::from(disc_pos))],
+        );
+        let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+        for (v, number) in variants {
+            let target = self.data.drop_cascade_nr(v);
+            if target == u32::MAX {
+                continue;
+            }
+            let test = self.cl("OpEqInt", &[disc.clone(), Value::Int(number)]);
+            ops.push(v_if(
+                test,
+                Value::Call(target, vec![Value::Var(self_var)]),
+                Value::Null,
+            ));
+        }
+
+        let body = v_block(ops, Type::Void, "drop_cascade_enum");
+        let built = std::mem::replace(&mut self.vars, outer_vars);
+        self.context = outer_context;
+        self.data.definitions[c_nr as usize].code = body;
+        self.data.definitions[c_nr as usize].variables = built;
+        self.data.def_used(c_nr);
     }
 
     /// The DIRECT struct fields a stage-B cascade releases: `(byte offset, field type, field
