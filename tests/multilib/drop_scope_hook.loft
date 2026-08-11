@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN125 arc B — a scope-end hook declared inside a library RUNS.
+//
+// The hook is looked up by the type it belongs to, and a library's symbols are
+// module-scoped (@PLN102 C97). Both askers run after parsing, when the current
+// source is the main program, so a `def_nr` there resolved only the hooks
+// @PLN102 C97 had also put in the global namespace — the `pub` ones. A private
+// `OpDrop` was accepted by `check_drop_signature` and then never called
+// anywhere, including inside its own package.
+//
+// That is a SILENT resource leak, which is why it is guarded: a library hands
+// out a handle and writes the release at the closing brace, the compiler
+// validates the declaration, and the release never happens. @PLN138 gives every
+// SQL backend exactly this shape — a cursor owning a `sqlite3_stmt *` — so the
+// hook has to hold across a package boundary, out of a method, and through a
+// monomorph.
+//
+// Every cell asserts the WHOLE trace rather than "contains", because the two
+// ways this fails are opposite: a hook that never runs leaves it short, and one
+// that runs from a second mechanism leaves it long.
+
+use dropscope;
+
+fn check(what: text, got: text, want: text) {
+  assert(got == want, "{what}: expected [{want}], got [{got}]");
+}
+
+// (1) The consumer holds the handle and never releases it. The library's private
+// drop is the only thing that can.
+fn abandoned() {
+  s = source();
+  h = s.take();
+}
+
+// (2) An explicit release, then the closing brace. The drop must be a no-op —
+// releasing a handle twice is worse than not releasing it.
+fn released() {
+  s = source();
+  h = s.take();
+  h.close();
+}
+
+// (3) Two handles in one scope. Reverse-declaration order, so a resource is
+// never outlived by one taken after it.
+fn two() {
+  s = source();
+  a = s.take();
+  b = s.take();
+}
+
+// (4) An early return still drops — the hook rides the free, and the free
+// already handles this path.
+fn early(bail: boolean) {
+  s = source();
+  h = s.take();
+  if bail { return }
+  h.close();
+}
+
+// (5) Through a generic, where the handle is an ASSOCIATED type. The monomorph
+// substitutes the companion, and the drop has to survive that substitution.
+fn borrow <P: Pool> (p: P) -> integer {
+  it = p.grab();
+  return it.h_id();
+}
+
+// (6) A `for` body is a scope of its own, so a handle taken per iteration is
+// released per iteration rather than all at the end.
+fn per_iteration() {
+  s = source();
+  for _i in 0..3 {
+    h = s.take();
+  }
+}
+
+fn main() {
+  _ = ds_drain();
+
+  abandoned();
+  check("a handle the consumer abandons", ds_drain(), "take:1,drop:1");
+
+  released();
+  check("an explicit release makes the drop a no-op", ds_drain(), "take:1,close:1");
+
+  two();
+  check("two handles drop in reverse-declaration order", ds_drain(),
+        "take:1,take:2,drop:2,drop:1");
+
+  early(true);
+  check("an early return still drops", ds_drain(), "take:1,drop:1");
+  early(false);
+  check("and the released path still does not", ds_drain(), "take:1,close:1");
+
+  // The value that lives and dies entirely inside the library. It failed too,
+  // which is what said the defect was the LOOKUP and not the export.
+  inside(9);
+  check("a handle that never leaves the library", ds_drain(),
+        "take:1,inside:9,drop:1");
+
+  p = source();
+  id = borrow(p);
+  assert(id == 1, "the companion came back: {id}");
+  check("an associated-type companion drops inside the monomorph", ds_drain(),
+        "take:1,drop:1");
+
+  per_iteration();
+  check("a handle taken per iteration is released per iteration", ds_drain(),
+        "take:1,drop:1,take:2,drop:2,take:3,drop:3");
+
+  println("drop scope hook ok");
+}

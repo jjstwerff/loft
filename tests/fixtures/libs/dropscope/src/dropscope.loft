@@ -1,0 +1,117 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN125 arc B — a scope-end hook declared inside a LIBRARY.
+//
+// The hook belongs to its type, and a library's symbols are module-scoped
+// (@PLN102 C97), so a private `OpDrop` is reachable only through the source that
+// declares it. Both askers — the emitter that puts the call in, and the
+// never-read lint that stays quiet for a binding held only for its drop — run
+// after parsing, when the current source is the main program. Looking the hook
+// up there found a `pub` one, because that is the one @PLN102 C97 also injects
+// into the global namespace, and found nothing otherwise.
+//
+// So this package declares its drops **private**, which is the shape that was
+// silently dead: accepted by `check_drop_signature`, never called, anywhere. It
+// is also the shape a real library wants — nothing calls `OpDrop` by name, so
+// exporting it only widens the surface.
+
+// Where a drop's effect goes. A drop receives only `self` and a struct field
+// COPIES at construction, so it cannot write back into a caller's collection —
+// a file is the observable it does have.
+//
+// The path is the harness's to choose, because each backend leg needs its OWN:
+// two legs sharing one file interleave their appends and the trace then reads as
+// a third program neither of them ran. `env_variable` answers "" for an unset
+// variable rather than null, so the fallback tests for "" (loft's `??` never
+// fires on it).
+pub fn ds_trace() -> text {
+  v = env_variable("LOFT_DROPSCOPE_TRACE") ?? "";
+  if v == "" { return "dropscope_trace.tmp" }
+  return v;
+}
+
+pub fn ds_note(s: text) {
+  f = file(ds_trace());
+  cur = f.content() ?? "";
+  if cur != "" { cur += "," }
+  cur += s;
+  bytes: vector<u8> = [];
+  for c in cur { bytes += [c as u8 ?? 0] }
+  if !write_bytes(ds_trace(), bytes) { println("dropscope: trace write failed") }
+}
+
+pub fn ds_drain() -> text {
+  f = file(ds_trace());
+  cur = f.content() ?? "";
+  empty: vector<u8> = [];
+  if !write_bytes(ds_trace(), empty) { println("dropscope: trace clear failed") }
+  return cur;
+}
+
+// --- a resource the library hands out, and takes back at scope end ----------
+//
+// The cursor shape @PLN138 gives every SQL backend: an opaque handle a caller
+// holds, released when the binding dies. `h` stands in for the `sqlite3_stmt *`
+// a real one carries — the point is that nothing in the consumer releases it.
+pub struct Held { h: integer, closed: boolean }
+
+pub struct Source { seq: integer }
+
+pub fn source() -> Source { return Source { seq: 0 }; }
+
+// Produced by a METHOD, which is how a cursor arrives: the consumer never
+// writes the constructor, so the drop is the only thing that can release it.
+pub fn take(self: Source) -> Held {
+  self.seq += 1;
+  ds_note("take:{self.seq}");
+  return Held { h: self.seq, closed: false };
+}
+
+// The explicit release, for a caller who wants it before the closing brace.
+// Idempotent, so the drop after it is a no-op — a resource must not be released
+// twice.
+pub fn close(self: Held) {
+  if self.closed { return }
+  self.closed = true;
+  ds_note("close:{self.h}");
+}
+
+// PRIVATE deliberately: this is the declaration that never ran.
+fn OpDrop(self: Held) {
+  if !self.closed { ds_note("drop:{self.h}") }
+}
+
+// A value that lives and dies entirely INSIDE the library. It failed too, which
+// is what said the defect was the lookup rather than the export: a package's own
+// code could not reach its own hook either.
+pub fn inside(tag: integer) {
+  s = source();
+  h = s.take();
+  ds_note("inside:{tag}");
+}
+
+// --- the interface a consumer's generic goes through ------------------------
+//
+// @PLN138's shape: the cursor is an associated type, so the generic below binds
+// it per implementor and the drop has to survive the monomorph.
+pub interface Resource {
+  fn h_id(self: Self) -> integer
+}
+
+pub fn h_id(self: Held) -> integer { return self.h; }
+
+pub interface Pool {
+  type Item: Resource
+  fn grab(self: Self) -> Self.Item
+}
+
+// Constructed INLINE rather than delegating to `take`. An associated-type
+// monomorph frees a stack record when the implementor's producer delegates
+// (loft#847), and this guard is about the scope-end hook — routing it around a
+// second, unrelated defect keeps a failure here readable as one thing.
+pub fn grab(self: Source) -> Held {
+  self.seq += 1;
+  ds_note("take:{self.seq}");
+  return Held { h: self.seq, closed: false };
+}

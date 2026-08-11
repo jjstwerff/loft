@@ -1989,11 +1989,9 @@ impl Function {
             if !var.argument
                 && let Type::Reference(d, _) = var.type_def.base()
                 && *d < data.definitions()
+                && data.drop_hook_nr(*d) != u32::MAX
             {
-                let tn = data.def(*d).name();
-                if data.def_nr(&format!("t_{}{}_OpDrop", tn.len(), tn)) != u32::MAX {
-                    continue;
-                }
+                continue;
             }
             if var.uses == 0 && !var.captured && data.def_nr(&var.name) == u32::MAX {
                 lexer.to(var.source);

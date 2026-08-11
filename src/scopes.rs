@@ -6176,8 +6176,7 @@ fn drop_hook(function: &Function, v: u16, data: &Data) -> Option<Value> {
     let Type::Reference(d, _) = function.tp(v).base() else {
         return None;
     };
-    let name = data.def(*d).name();
-    let nr = data.def_nr(&format!("t_{}{}_OpDrop", name.len(), name));
+    let nr = data.drop_hook_nr(*d);
     if nr == u32::MAX {
         return None;
     }

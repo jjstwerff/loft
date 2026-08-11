@@ -5485,6 +5485,36 @@ impl Data {
         }
     }
 
+    /// @PLN125 arc B — the scope-end hook declared for a type, or `u32::MAX` when it has
+    /// none.
+    ///
+    /// The lookup is keyed to the source that defines the TYPE, not to whichever source is
+    /// current. `def_nr` searches `self.source` and the stdlib, and both askers run AFTER
+    /// parsing — by then the current source is the main program — so a hook declared in a
+    /// library was reachable only when @PLN102 C97 had also injected it into the global
+    /// namespace, which happens for a `pub` function and not for a private one. The effect
+    /// was a hook the compiler VALIDATED (`check_drop_signature` accepts it) and then never
+    /// called anywhere, including inside its own package: a `#c` handle a cursor was written
+    /// to release stayed open, silently. A drop belongs to its type, so the type's source is
+    /// the one place to ask.
+    ///
+    /// One home for the fact, because the two askers must agree: the emitter puts the call
+    /// in, and the never-read lint stays quiet for a binding held only for its drop. If they
+    /// disagreed, one of the two would be wrong about the same declaration.
+    #[must_use]
+    pub fn drop_hook_nr(&self, type_def: u32) -> u32 {
+        if type_def == u32::MAX || type_def as usize >= self.definitions.len() {
+            return u32::MAX;
+        }
+        let def = self.def(type_def);
+        let key = format!("t_{}{}_OpDrop", def.name.len(), def.name);
+        let nr = self.source_nr(def.source, &key);
+        if nr != u32::MAX {
+            return nr;
+        }
+        self.def_nr(&key)
+    }
+
     /// Could this definition be a lazy driver, and must it therefore be checked?
     ///
     /// Two rules, because the two names mean different things:

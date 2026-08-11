@@ -436,6 +436,11 @@ What follows from that, and is worth knowing before you reach for it:
 - **A value that was never created never drops.** The free is null-tolerant and
   a drop is not, so the call is guarded by the same liveness test the free
   performs internally.
+- **In a library, the hook may be private** — and usually should be. Nothing
+  calls `OpDrop` by name, so `pub` only widens the surface. The hook is looked up
+  through the source that declares the TYPE, which is what makes a private one
+  reachable: a library's symbols are module-scoped (@PLN102 C97), and both askers
+  run after parsing, when the current source is the main program.
 
 Shipped as @PLN125 arc B; `tests/scripts/pln125-b-drop.loft` is the behaviour
 matrix, with two unrelated consumers (a transaction and a lease) because a hook
