@@ -85,6 +85,11 @@ placements consult, so the off-diagonal cells cannot disagree.
 
 ## Why not a subprocess primitive
 
+**Built and shipped 2026-08-11** as `lib/git` — see
+[Arc F as built](#arc-f-as-built-2026-08-11). What follows is the argument; the
+one thing experience added to it is that "sealed behind the contract" has to be
+taken literally, or it degrades into the argv rule this section says it beats.
+
 `run(cmd, args)` is a *second, weaker interface* beside the one we already have.
 The library interface carries typed signatures, structs/enums/vectors/tuples,
 methods, coroutines, effects, and capability admission; a `{stdout, stderr, code}`
@@ -179,7 +184,7 @@ Guards: `tests/placement_parity.rs`.
 | **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
 | **E** — `placement = "remote"` over the existing paged / Range reader | @PLN97 arc G | Open — blocked-ish on [#632](https://github.com/loft-lang/loft/issues/632): the paged loaders silently refuse a **field-declared** collection (the store's `known_type` is the wrapper struct), and the refusal is indistinguishable from "key absent" |
-| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | Open |
+| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **`lib/git` done 2026-08-11** ([Arc F as built](#arc-f-as-built-2026-08-11)) — the viewer's bash is deleted. The engine_host wire is the remaining half |
 
 ## Arc A as built (2026-08-11)
 
@@ -449,6 +454,90 @@ Borrowing a slot per CALL, rather than once, is new — and it found two things 
 which is the instrument that found (3) and (4) above in minutes — and, with the
 process id on each line, which of the two sides was walking the table.
 
+## Arc F as built (2026-08-11)
+
+`lib/git` ships, and `tools/viewer/refresh.sh` is deleted — 135 lines of bash
+that existed for exactly one reason, and the dashboard's dependency on `jq` with
+it.
+
+### The seal, taken literally
+
+This plan says the execve inside a vetted library "removes the injection surface
+**by construction**, rather than by the argument-vector-not-a-string rule
+`67-process` had to invent".  Taken literally that rules out an
+`args: vector<text>` entry point, because that IS the argv rule.
+
+So the native (`src/git_query.rs`) is a **closed query vocabulary**: one entry,
+`git_query(kind, a, b, n, dir, out)`, where `kind` names a question whose argv is
+built in Rust.  The caller supplies values — a ref, a path, a count — never a
+subcommand and never an option.  `git -c <key>=<value>` is unreachable, which
+matters because `core.pager`, `core.sshCommand` and `alias.*` all name a program
+git will RUN.
+
+The price is stated rather than hidden: a new question needs a new `Query` and a
+loft release.  That is why this is `lib/git` for loft's own tooling and not a
+general subprocess library.  It lives in `lib/` beside `engine_host` — same
+shape, `[native] in_binary = true` — because a privileged host capability is the
+binary's to grant, not a published package's.  The library declares
+`capability git`, so a sandboxed script that may read files still cannot read a
+repository's history.
+
+**The seal had a hole, and the test that stated the claim is what found it.**
+Interpolating a ref into a range (`{a}...HEAD`) does not keep it out of an option
+position: `--exec-path=/tmp` becomes `--exec-path=/tmp...HEAD`, which git still
+reads as `--exec-path`, because that is decided by the leading `-`.  A ref may not
+begin with `-` (`git check-ref-format`), so refusing one closes the position by
+construction and costs nothing real.  A PATH may begin with `-` and is not
+refused — it always follows `--`, which is what `--` is for.
+
+### What the dogfood found
+
+Two bugs, neither of them @PLN119's, both found by writing a real consumer rather
+than a probe:
+
+1. **An internal compiler error.**  A file-scope `NAME: text = …` is a CONSTANT,
+   inlined at every use, so `NAME = x` is an assignment to a literal.  The
+   text-assignment arm intercepts before the general operator dispatch that
+   refuses `5 = 6`, and handed codegen a target naming no variable — an
+   index-out-of-bounds on variable 65535 that took the whole compiler down.  It
+   is an easy thing to write: the same declaration for an `integer` has always
+   been refused with a message.  Now a diagnostic that says what to do instead.
+   Guard: `tests/scripts/pln119-assign-to-file-scope-text.loft`.
+2. **A placed library resolved a relative path somewhere else** — see the
+   [commit](#) and `a_placed_library_sees_the_same_working_directory`.  Two
+   anchors decide what `file("x")` means and a worker inherited neither.  This is
+   the cell the matrix was missing, and it is worth naming as a class: every
+   other cell passes a value ACROSS the boundary, and this one asks what the far
+   side already IS.  **A worker inherits an environment, not only a frame.**
+
+### The library, and why it is placed
+
+`git::log(20) -> vector<Commit>`, `changed(base) -> vector<Change>`,
+`numstat(sha) -> vector<Stat>`, plus `branch`, `head`, `has_ref`,
+`ahead_behind`, `uncommitted`, `show`, `diff_file`, `changed_names`, `log_shas`.
+
+`placement = "process"` is not decoration on this one: it is the only library in
+the tree that starts an external process, so containing that is worth a crossing
+— and its answers are vectors of structs with text fields, which is precisely
+the shape arc B's arena carries.  Every test runs under BOTH placements.
+
+One improvement over the bash it replaces, for free: `refresh.sh` split
+`git log` output on TAB, and a commit subject may CONTAIN a tab, at which point
+its fields silently shift.  The library asks git for `%x1f` separators, which a
+subject cannot contain.  The probe repository's first commit is
+`first<TAB>commit with a tab` for that reason.
+
+### The oracle is git
+
+`tests/lib_git.rs` runs the real command beside every library call and requires
+the two to agree.  A test that checked "the answer looks like a sha" would pass
+on a library reading the wrong repository — which is exactly the bug arc F found.
+
+The viewer port was proven against the script it replaced at the moment of the
+swap: four JSON documents semantically identical (normalised through `jq`), 37
+per-file diffs and 20 commit diffs byte-identical.  The script is gone now, so
+the durable oracle is git itself.
+
 ## Arc C as built (2026-08-11)
 
 ### The instrument arc C actually needed was not the one the plan named
@@ -595,8 +684,12 @@ the @PLN94 oracle, and that belongs with arc C.
    taken out of order because the hang it fixes was reachable from arc A: a
    killed worker hung the caller with no timeout and no output.  Still
    interpreter-only; `--native` is untried (see the gate note below).
-8. **Arc F** — `lib/git`, which deletes `tools/viewer/refresh.sh` (~140 lines of
-   bash) and removes `make index`'s "filter loft to bash-tracked files" workaround.
+8. ~~**Arc F** — `lib/git`~~ — **DONE 2026-08-11** ([Arc F as
+   built](#arc-f-as-built-2026-08-11)).  `tools/viewer/refresh.sh` is deleted
+   (135 lines of bash, and the dashboard's dependency on `jq` with it).  What
+   remains of arc F: `make index`'s "filter loft to bash-tracked files"
+   workaround (it wants a `ls-files` query, which is one more `Query`), and the
+   engine_host wire.
 9. **Arc E**, then the engine_host wire (F, second half).
 
 ## The gate

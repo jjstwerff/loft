@@ -247,6 +247,30 @@ Add `?? ""` where the distinction does not matter. The stderr warning that names
 both readers now appears under `--native` too; it used to be printed only by the
 interpreter, so the compiled build read binary in silence.
 
+### git, as a library you call rather than a command you run
+
+loft does not have `run(cmd, args)` and is not getting one: it hands back bytes
+and an exit status, and every caller then re-parses text loft already knows how
+to type. So the command lives inside a library instead:
+
+```loft
+use git;
+for c in log(20) { println("{c.sha} {c.date} {c.subject}"); }
+for f in changed("main") { println("{f.status} {f.path}"); }
+```
+
+`lib/git` answers `vector<Commit>`, `vector<Change>` and `vector<Stat>` — typed
+values, not lines to split. It runs in a worker process, so the one library in
+the tree that starts an external program is contained. And nothing composes a
+command line: the library names a question and loft builds the command, so a
+branch name or a path cannot turn into an option. Reading a repository needs the
+`git#read` capability, separately from reading files.
+
+The first thing it replaced is `tools/viewer/refresh.sh` — 135 lines of bash that
+existed only because loft could not call git, and the review dashboard's
+dependency on `jq` along with it. It also fixed a bug on the way: the bash split
+`git log` output on tabs, and a commit subject may contain one.
+
 ### A library can run in its own process, and you cannot tell from the code
 
 A library adds one line to its own `loft.toml`:

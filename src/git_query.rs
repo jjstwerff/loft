@@ -133,12 +133,34 @@ fn argv(query: Query, a: &str, b: &str, n: i64) -> Vec<String> {
     }
 }
 
+/// A ref the caller supplied, or nothing.
+///
+/// Interpolating a ref into a range (`{a}...HEAD`) does NOT keep it out of an
+/// option position, and believing it did was this module's one real hole — found
+/// by the test written to state the claim, not by review.
+/// `--exec-path=/tmp` becomes `--exec-path=/tmp...HEAD`, which git still reads as
+/// `--exec-path` because that is decided by the leading `-`.
+///
+/// A git ref cannot begin with `-` (`git check-ref-format` says so), so refusing
+/// one costs nothing real and closes the position by construction. A PATH may
+/// begin with `-` and is not checked here — it always follows `--`, which is
+/// exactly what `--` is for.
+fn ref_ok(a: &str) -> bool {
+    !a.starts_with('-')
+}
+
 /// Run one query and answer `(exit code, stdout)`.
 ///
 /// A failure to launch git at all answers `-1` with the reason as the output, so
 /// the loft side can tell "no git here" from "git said no" — the two want
 /// different things from a caller.
 fn run(query: Query, a: &str, b: &str, n: i64, dir: &str) -> (i64, String) {
+    if !ref_ok(a) {
+        return (
+            -1,
+            format!("'{a}' cannot be a git ref — a ref may not begin with '-'"),
+        );
+    }
     let mut cmd = std::process::Command::new("git");
     if !dir.is_empty() {
         cmd.arg("-C").arg(dir);
@@ -198,11 +220,24 @@ mod tests {
             v.iter().position(|x| x == "--upload-pack=evil").unwrap() > dashdash,
             "a path must follow `--`, or git reads it as an option: {v:?}"
         );
-        // A ref is interpolated into a range, so it cannot start the argument.
-        let v = argv(Query::Changed, "--exec-path=/tmp", "", 0);
+        // A ref is refused rather than interpolated. Interpolating it into a
+        // range is NOT enough — `--exec-path=/tmp` becomes
+        // `--exec-path=/tmp...HEAD`, which git still reads as an option, because
+        // that is decided by the leading `-`. This assertion is what found that;
+        // the version of this module it was written against had the hole.
+        assert!(!ref_ok("--exec-path=/tmp"), "a ref may not begin with '-'");
+        assert!(!ref_ok("-c"), "a ref may not begin with '-'");
         assert!(
-            v.iter().all(|x| !x.starts_with("--exec-path")),
-            "a ref reached an option position: {v:?}"
+            ref_ok("main") && ref_ok("HEAD~3") && ref_ok("v1.0") && ref_ok("feature/x"),
+            "an ordinary ref must still be usable"
+        );
+        // A PATH may legitimately begin with `-`, and does not need refusing —
+        // it always follows `--`.
+        let v = argv(Query::DiffFile, "main", "-weird-name", 0);
+        assert!(
+            v.iter().position(|x| x == "-weird-name").unwrap()
+                > v.iter().position(|x| x == "--").unwrap(),
+            "a path must stay behind `--`: {v:?}"
         );
     }
 
