@@ -1,34 +1,45 @@
 # @PLN125 — First-grade library types
 
-**Status:** ACTIVE · **Issue:** [loft-lang/plans#125](https://github.com/loft-lang/plans/issues/125)
+**Status: CLOSED 2026-08-11 — all three arcs shipped.** · **Issue:**
+[loft-lang/plans#125](https://github.com/loft-lang/plans/issues/125)
 
-The gaps that stop a library type being indistinguishable from a built-in one.
-The capability map this plan is measured against lives in
-[INTERFACES.md § How first-grade a library type is](../../INTERFACES.md); the
-issue carries the argument for each arc. This directory holds only what the
-issue cannot: the running record of what shipped, and the instruments.
+The gaps that stopped a library type being indistinguishable from a built-in one.
+**The reference is [INTERFACES.md](../../INTERFACES.md)** — the measured
+capability table there now has none left, and each arc has its own section beside
+it. This directory is the closure record: what shipped, what the instruments
+found, and the two pieces that turned out to belong elsewhere.
 
-| arc | what | state |
+| arc | what | shipped as |
 |---|---|---|
-| **A** | associated types — an interface names a companion type | **SHIPPED** (A1 / A2a / A2b / A2c). A3 open, **A4 blocked** — see below |
-| **B** | a hook at scope end (`OpDrop`) | **SHIPPED** |
-| **C** | `x[i]` dispatched to a library type | **SHIPPED** |
+| **A** | associated types — an interface names a companion type | `type Rows: Cursor` + `Self.Rows` |
+| **B** | a hook at scope end | `fn OpDrop(self: T)` |
+| **C** | `x[i]` dispatched to a library type | `fn OpIndex(self: T, i: τ)`, `op []` |
 
-Catalogue: [`@F113`](https://github.com/loft-lang/features/issues/113) (associated
-types) · [`@F114`](https://github.com/loft-lang/features/issues/114) (`OpIndex`) ·
-[`@F115`](https://github.com/loft-lang/features/issues/115) (`OpDrop`).
+Catalogue: [`@F113`](https://github.com/loft-lang/features/issues/113) ·
+[`@F114`](https://github.com/loft-lang/features/issues/114) ·
+[`@F115`](https://github.com/loft-lang/features/issues/115).
+Behaviour matrices: `tests/scripts/pln125-{a2c-companion,b-drop,c-index}.loft`.
 
-Each arc lands **inert first**: the contract declared, every existing program
-proved byte-identical in IR and native Rust, before any new behaviour routes
-through it. `bytecode-comparisons/` holds those instruments.
+**Two pieces left, and neither is this plan's:**
+
+- **A4** — collapsing @PLN124's `hole_*` family needs a GENERIC METHOD, not
+  associated types. Filed as **@PLN137**; the reasoning is below, because the
+  plan's own premise was that these were one feature.
+- **A3** — the SQL cursor split is a library migration, now unblocked. Filed as
+  **@PLN138**. The language claim it existed to prove ("two cursors coexist") is
+  proved in `pln125-a2c-companion.loft`.
+
+Each arc landed **inert first**: the contract declared, every existing program
+proved byte-identical in IR and native Rust, before any behaviour routed through
+it. `bytecode-comparisons/` holds those instruments.
 
 ---
 
-## Arc A — where it stands
+## Arc A — the record
 
-`type X: B` parses (A1), an implementor's return type is part of satisfaction
-(A2a), and `Self.X` in a signature resolves to a placeholder (A2b). What is
-missing is the step that makes the placeholder mean anything:
+`type X: B` parsed (A1), an implementor's return type became part of satisfaction
+(A2a), and `Self.X` in a signature resolved to a placeholder (A2b). What was
+missing was the step that makes the placeholder mean anything — before A2c:
 
 ```loft
 fn first_width<S: Source>(s: S) -> integer {
@@ -108,9 +119,12 @@ forward reference, and never revisited (the second pass sees the stub already
 exists and skips it). The monomorph then gained a `__ref_N` with no scope and no
 initialiser, so it never got a stack slot.
 
-The fix is at the one place that enforces that invariant: the second pass
-REFRESHES an existing stub's signature instead of skipping it. Everywhere the
-two passes already agree the refresh is idempotent, which is what
+The fix re-derives every stub's signature BETWEEN the passes, where all types
+resolve (`refresh_bound_method_stubs`). The first cut refreshed it in pass 2 and
+the **H5 two-pass guard rejected it** — growing an attribute there is exactly the
+cross-pass divergence H5 exists to prevent — which is how it ended up in the same
+place #675 already put the same question about a function's own return. Wherever
+the two passes already agreed the re-derivation is idempotent, which is what
 `bytecode-comparisons/bound-stubs-corpus.loft` proves.
 
 **#3 is a one-line sibling.** `check_satisfaction` already tells an interface's
@@ -122,13 +136,16 @@ first looked (a method-shaped return, a bound local, and the non-generic
 operator are all clean), and it is not what arc A needs. Recorded here rather
 than fixed inside another change.
 
-A fourth defect surfaced later, while probing A4, and is **filed rather than
-fixed** because it is a different subsystem: interpolating a bare type variable
-(`fn show<T>(v: T) -> text { "{v}" }`) picks the RECORD formatter from the
-template's view of `T` and keeps it after monomorphisation — SIGSEGV on
-`--interpret`, `E0308` on `--native`, and a wrong value (`{}`) for a `text`
-argument. [loft#845](https://github.com/loft-lang/loft/issues/845), reproduced on
-the installed `2026.8.0` so it predates this work.
+A fourth surfaced later, while probing A4, and is **fixed**
+([loft#845](https://github.com/loft-lang/loft/issues/845)): a format string picks
+its op from the value's TYPE, and a template has only the parameter's, so a
+monomorph ran the template's choice against a concrete value. A bare `T` took the
+RECORD formatter — SIGSEGV on `--interpret`, `E0308` on `--native`, and the
+literal `{}` for `text` and structs — and a `vector<T>` took the right op with the
+type variable's ROW. The two got different answers: a bare `T` is refused
+(`<T: Printable>` is the cure and renders every kind), and a `vector<T>` is fixed
+by re-deriving the row per monomorph from the VALUE's own substituted type.
+Reproduced on the installed `2026.8.0`, so it predated this work.
 
 ---
 

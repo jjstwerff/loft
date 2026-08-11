@@ -84,9 +84,10 @@ and no way to know which one the table is keyed by. The method is the mapping.
 
 - *Composite keys.* `fn db_key(self: Self) -> integer` cannot express `(person_id, from)`, which
   is exactly the shape a history table has. Tuples exist (@F11) and would carry it, but the bound
-  would then be per-arity. The clean answer is an **associated type** on the interface — which is
-  @PLN125's first item and is not built. So: single-column keys work with what exists today;
-  composite keys are a stated dependency on @PLN125, not a workaround to invent here.
+  would then be per-arity. The clean answer is an **associated type** on the interface — which
+  @PLN125 arc A has since SHIPPED (`type Key: …`, bound-checked per implementor). So: single-column
+  keys work with what already existed, and composite keys are now buildable here rather than
+  blocked on another plan.
 - *An interface requires METHODS, not fields.* So this enforces "there is a key accessor", never
   "there is an `id` column". That is a feature: the accessor may compute, and loft never needed
   the field to be called `id`.

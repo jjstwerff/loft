@@ -231,7 +231,9 @@ Design only — nothing here is built. It sits after the S1–S7 ladder in
 OBJECT_MAPPING.md, because both parts need a working `sql` interface underneath
 and the transaction wrapper is S-level work that the closure form already covers.
 
-Part 1 is a **language** feature and is tracked as **@PLN125 arc B** (B1–B5),
+Part 1 is a **language** feature; it SHIPPED as **@PLN125 arc B** — spelled
+`fn OpDrop(self: T)` rather than the `#drop fn` sketched above, and documented in
+[INTERFACES.md § Running at scope end](../../INTERFACES.md). It was tracked as B1–B5,
 alongside associated types (arc A) and indexing (arc C) — the remaining gaps
 between a library type and a built-in one. B5 requires a **second, unrelated
 consumer** before it lands: a transaction alone would leave the invariant tested

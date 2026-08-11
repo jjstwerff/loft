@@ -150,10 +150,13 @@ drift apart on what it means.
 Each is a decision rather than an unfinished step, which is why this plan closes
 with them standing:
 
-- **A boxed value type** collapsing the per-kind `hole_*` methods into one is
-  **@PLN125 arc A** (associated types) — a different plan's work. The per-kind
-  form was chosen first precisely because it can be collapsed later without
-  changing what the author writes.
+- **A boxed value type** collapsing the per-kind `hole_*` methods into one needs
+  a GENERIC METHOD (`fn hole<T>(self: Self, v: T)`), which is **@PLN137** — not
+  @PLN125 arc A as first recorded. Arc A shipped associated types and they turn
+  out not to reach this: a type variable must still appear in the first
+  parameter, so the collapse waits on that restriction lifting. The per-kind form
+  was chosen first precisely because it can be collapsed later without changing
+  what the author writes.
 - **Specs on holes** are refused rather than delivered; if a target ever wants
   them, they have to reach the hole as data, not as a rendering.
 - **A procedural body** on the two backends that could carry one — refused
