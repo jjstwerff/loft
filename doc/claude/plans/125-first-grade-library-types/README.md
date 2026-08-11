@@ -10,9 +10,13 @@ issue cannot: the running record of what shipped, and the instruments.
 
 | arc | what | state |
 |---|---|---|
-| **A** | associated types — an interface names a companion type | A1 / A2a / A2b / **A2c** shipped; A3–A4 here |
+| **A** | associated types — an interface names a companion type | **SHIPPED** (A1 / A2a / A2b / A2c). A3 open, **A4 blocked** — see below |
 | **B** | a hook at scope end (`OpDrop`) | **SHIPPED** |
 | **C** | `x[i]` dispatched to a library type | **SHIPPED** |
+
+Catalogue: [`@F113`](https://github.com/loft-lang/features/issues/113) (associated
+types) · [`@F114`](https://github.com/loft-lang/features/issues/114) (`OpIndex`) ·
+[`@F115`](https://github.com/loft-lang/features/issues/115) (`OpDrop`).
 
 Each arc lands **inert first**: the contract declared, every existing program
 proved byte-identical in IR and native Rust, before any new behaviour routes
@@ -118,6 +122,14 @@ first looked (a method-shaped return, a bound local, and the non-generic
 operator are all clean), and it is not what arc A needs. Recorded here rather
 than fixed inside another change.
 
+A fourth defect surfaced later, while probing A4, and is **filed rather than
+fixed** because it is a different subsystem: interpolating a bare type variable
+(`fn show<T>(v: T) -> text { "{v}" }`) picks the RECORD formatter from the
+template's view of `T` and keeps it after monomorphisation — SIGSEGV on
+`--interpret`, `E0308` on `--native`, and a wrong value (`{}`) for a `text`
+argument. [loft#845](https://github.com/loft-lang/loft/issues/845), reproduced on
+the installed `2026.8.0` so it predates this work.
+
 ---
 
 ## Arc C — shipped
@@ -147,6 +159,54 @@ message that names the alternative, rather than left to a confusing error.
 The `op []` spelling is handled where an `op` has just been read and a `[` can be
 nothing else: the lexer has no `[]` token, and it must not have one, because `[`
 and `]` are separate everywhere else.
+
+## A3 and A4 — the premise was wrong, and that is the finding
+
+The plan says:
+
+> A3 and A4 are the proof that this is one feature and not two — a companion type
+> and a generic method parameter are the same gap seen from two sides, and if
+> only one of them lands cleanly the invariant is wrong.
+
+**They are not the same gap.** Measured after building A2c, with the compiler's
+own words as the evidence:
+
+```loft
+struct Acc { n: integer }
+fn feed<T>(self: Acc, v: T) { … }
+```
+```
+Type variable T must appear in the first parameter —
+move T to the first parameter position
+```
+
+A4's `fn hole<T>(self: Self, v: T)` is refused by a deliberate, explicit rule, and
+lifting it is a change to how generics DISPATCH: `re_resolve_call`,
+`instantiate_generic` and the H5 bound-stub recogniser all key on
+`attributes()[0]`, and the monomorph's mangled name is built from the first
+argument's type. That is **generic methods**, a separate language feature that
+A2c neither needed nor provided — A2c reuses the existing single-holder
+substitution and adds holders to the list; nothing about it makes a type variable
+addressable in a later parameter.
+
+So the plan's stated test of the invariant cannot be run as written. The honest
+replacement: **arc A's invariant is proved by A3's claim, and A3's claim is
+proved** — `tests/scripts/pln125-a2c-companion.loft::two_cursors` shows two
+companions alive at once from one connection, which is exactly the limitation
+that put @PLN23's cursor ON the connection. What remains of A3 is the LIBRARY
+MIGRATION, not the language proof.
+
+**A3's remaining work, sized:** the cursor API (`db_select` / `db_next` /
+`db_col` / `db_width` / `db_rows`) has ~136 call sites across 14 files — the
+`sql` interface, five backends, the `schema` layer and the fixtures. Three of the
+four `#c` backends run on a developer box (sqlite / maria / postgres); **duckdb
+cannot be validated here** (`libduckdb.so not installed`), so a migration would
+change a working, tested API on a backend nobody can run. That is the reason it
+is left open rather than the size.
+
+**A4 is blocked** on generic methods and should be tracked as such rather than as
+part of this plan — the interpolation `hole_*` family stays per-kind until a type
+variable can be addressed outside the first parameter.
 
 ---
 

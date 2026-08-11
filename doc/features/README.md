@@ -92,6 +92,9 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F110](F110.md) | Diagnostic suggestions — what to write instead, checked by running it |
 | [@F111](F111.md) | `for f in s#fields` — a compile-time loop over a struct's scalar fields |
 | [@F112](F112.md) | `store_release()` — say a record is finished, and stop holding it in memory |
+| [@F113](F113.md) | Associated types — an interface names a companion type |
+| [@F114](F114.md) | `x[i]` on a library type — `OpIndex` dispatch |
+| [@F115](F115.md) | `OpDrop` — a type runs code when its scope lets it die |
 
 ## Infrastructure (`@I`)
 
