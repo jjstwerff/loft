@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 regression fixture — package A of the method/free-function pair.
+//
+// `Thing` is declared by all three `dupmethod_*` packages ON PURPOSE, and each
+// declares `go` differently: here a FREE function, in B and C a METHOD. The
+// mangled method key spells only the type's NAME (`t_5Thing_go`), so before the
+// fix whichever package imported first owned that key for everyone — and a bare
+// `go(t, 5)` on THIS package's `Thing` reached B's method instead of this
+// function, reported as the unactionable `expected Thing, got Thing`.
+//
+// The `+ 100` / `+ 200` / `+ 300` offsets are what tells the three apart in a
+// result: a test asserting only "it compiles" would pass on the wrong one.
+pub struct Thing { tx: integer }
+
+pub fn make_a(v: integer) -> Thing { Thing { tx: v } }
+
+pub fn go(t: Thing, k: integer) -> integer { t.tx + k + 100 }
+
+// Same collision at a different arity — the filed report reached this one as
+// `Too many parameters for t_5World_world_save`, a message naming an internal
+// mangled symbol that no source line contains.
+pub fn stretch(t: Thing, k: integer, j: integer) -> integer { t.tx + k + j + 100 }

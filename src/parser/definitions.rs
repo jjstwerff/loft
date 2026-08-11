@@ -188,6 +188,15 @@ impl Parser {
             });
         }
         let fn_nr = self.data.add_fn(&mut self.lexer, &name, &args);
+        // `add_fn` answers `u32::MAX` when it refused the definition, and it has already
+        // said why. Indexing the definition table with that sentinel panicked the compiler
+        // — an internal-compiler-error on a program whose only sin was a name two packages
+        // share (loft#850's family). The refusal itself is now unreachable from here, but a
+        // sentinel is never an index: a synthesised function that was not created has
+        // nothing left to fill in.
+        if fn_nr == u32::MAX {
+            return;
+        }
         self.data.mark_synthetic(fn_nr, "enum_dispatcher");
         self.context = fn_nr;
         self.vars = Function::new(&name, &self.data.def(from_nr).position().file);
@@ -251,6 +260,16 @@ impl Parser {
                     self.data.def(*e_tp).returned(),
                 ) == u32::MAX
                 && let Type::Enum(e_nr, true, _) = self.data.def(*e_tp).returned()
+                // loft#850 — whether an enum already HAS this dispatcher is a fact about
+                // the enum, so ask the enum. The `find_fn` test above searches the source
+                // being parsed, while the scan it guards runs over EVERY definition in the
+                // program: reaching a second package, it re-answered "no dispatcher" for
+                // the first package's enum — whose dispatcher was filed under the first
+                // package's source — and set out to synthesise a duplicate. `add_fn` then
+                // refused it, correctly, and returned the sentinel that crashed the
+                // compiler. A method lives in its type's own attribute table, which is
+                // shared and source-independent, so it answers the same from anywhere.
+                && self.data.attr(*e_nr, &d.original_name()) == usize::MAX
             {
                 todo.entry(*e_nr).or_insert(vec![]).push(d_nr);
             }

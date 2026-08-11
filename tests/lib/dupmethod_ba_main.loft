@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 fixture — C first: identical to `dupmethod_ab_main.loft` with the
+// three `use` lines reversed and
+// nothing else changed. The broken resolution was first-import-wins, so exactly
+// one order could look right by luck (loft#788's `dupname_ab`/`_ba` doctrine).
+use dupmethod_c;
+use dupmethod_b;
+use dupmethod_a;
+
+fn main() {
+  a = make_a(1);
+  b = make_b(1);
+  c = make_c(1);
+  print("{go(a, 5)} {go(b, 5)} {go(c, 5)} {stretch(a, 5, 6)} {stretch(b, 5)}")
+}

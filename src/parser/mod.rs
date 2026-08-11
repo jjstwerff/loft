@@ -4306,7 +4306,7 @@ impl Parser {
                 // field-access hint that covers the method→free direction.
                 // P07.5: when no method receiver is found EITHER, fall back to
                 // a similar-name suggestion across all user functions.
-                let method_types = self.find_method_receivers(name);
+                let (method_types, from_stdlib) = self.find_method_receivers(name);
                 if method_types.is_empty() {
                     // @PLN13 phase 6 (diagnostics slice): the name may simply be
                     // unimported rather than wrong.  An EXACT hit in a published
@@ -4359,11 +4359,19 @@ impl Parser {
                     }
                 } else {
                     let receivers = method_types.join(" / ");
+                    // loft#850 — say who declared it as a method, and only say "stdlib"
+                    // when that is true. A hint that blames the stdlib for a name a
+                    // `use`d package declared sends the reader to the wrong source file.
+                    let declared_by = if from_stdlib {
+                        format!("stdlib declared `{name}` as a method")
+                    } else {
+                        format!("`{name}` is declared as a method, not as a free function")
+                    };
                     diagnostic_at!(
                         self.lexer,
                         name_pos,
                         Level::Error,
-                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
+                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? ({declared_by}; see LOFT.md § Methods and function calls)"
                     );
                 }
             }
@@ -4646,11 +4654,19 @@ impl Parser {
     }
 
     /// Scan all definitions for methods named `name` (encoded as
-    /// `t_<LEN><TypeName>_<name>`) and return the list of receiver type
-    /// names in definition order, de-duplicated.  Powers the 6c
-    /// free→method hint in `call`.
-    fn find_method_receivers(&self, name: &str) -> Vec<String> {
+    /// `t_<LEN><TypeName>_<name>`) and return how to NAME each receiver, in
+    /// definition order and de-duplicated, plus whether every one of them was
+    /// declared by the stdlib.  Powers the 6c free→method hint in `call`.
+    ///
+    /// loft#850 — a receiver is named `pkg::Type` unless it is the stdlib's.
+    /// The bare name is what the mangled key already spells, and it stops
+    /// identifying anything once two packages declare it: a hint reading
+    /// "did you mean `x.go(…)` on Thing?" points at a `Thing` the author is
+    /// already holding one of. The qualified name says which package's, and
+    /// is also what they would have to type to reach it.
+    fn find_method_receivers(&self, name: &str) -> (Vec<String>, bool) {
         let suffix = format!("_{name}");
+        let mut all_stdlib = true;
         let mut receivers: Vec<String> = Vec::new();
         for d_nr in 0..self.data.definitions() {
             let def_name = self.data.def(d_nr).name();
@@ -4675,11 +4691,30 @@ impl Parser {
                 continue;
             }
             let type_name = &rest[type_start..type_end];
-            if !type_name.is_empty() && !receivers.iter().any(|t| t == type_name) {
-                receivers.push(type_name.to_string());
+            if type_name.is_empty() {
+                continue;
+            }
+            // The receiver the definition itself declares outranks the name parsed out
+            // of its key — that name is exactly what cannot tell two packages apart.
+            let receiver_nr = self
+                .data
+                .def(d_nr)
+                .attributes()
+                .first()
+                .map_or(u32::MAX, |a| self.data.type_def_nr(&a.typedef));
+            let display = if receiver_nr == u32::MAX {
+                type_name.to_string()
+            } else if self.data.def(receiver_nr).source == crate::data::STD_SOURCE {
+                self.data.def(receiver_nr).name.clone()
+            } else {
+                all_stdlib = false;
+                self.data.qualified_type_name(receiver_nr)
+            };
+            if !receivers.contains(&display) {
+                receivers.push(display);
             }
         }
-        receivers
+        (receivers, all_stdlib)
     }
 
     /// Plan-17 phase 01 (A) — predict the substituted return type of a

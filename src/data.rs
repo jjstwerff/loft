@@ -5041,6 +5041,30 @@ impl Data {
         }
     }
 
+    /// loft#850 — can `d_nr` be the method of `type_nr`, judged by the receiver it declares
+    /// rather than by the name it is filed under?
+    ///
+    /// The `t_<len><Name>_<fn>` key carries a type's NAME, so it stops telling one type from
+    /// another the moment two packages in one graph both declare that name. The definition
+    /// itself still knows: its first parameter is the `self`/`both` receiver.
+    ///
+    /// Answers "yes" whenever the candidate does not demonstrably belong to a DIFFERENT
+    /// type — a candidate with no parameters, or whose receiver names no def (a generic
+    /// still carrying its type variable, a forward-reference stub, a `Function` receiver),
+    /// makes no claim to contradict, and rejecting it would refuse dispatch that works
+    /// today. Only a receiver that resolves to some other def is a mismatch.
+    #[must_use]
+    fn method_receives(&self, d_nr: u32, type_nr: u32) -> bool {
+        if d_nr == u32::MAX {
+            return false;
+        }
+        let Some(receiver) = self.def(d_nr).attributes.first() else {
+            return true;
+        };
+        let declared = self.type_def_nr(&receiver.typedef);
+        declared == u32::MAX || declared == type_nr
+    }
+
     #[must_use]
     pub fn find_fn(&self, source: u16, fn_name: &str, tp: &Type) -> u32 {
         if matches!(tp, Type::Unknown(_)) {
@@ -5067,16 +5091,30 @@ impl Data {
         }
         let base = self.def(type_nr).name.clone();
         let sig = Self::sig_type_name(&base, tp);
-        let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
-        if d_nr != u32::MAX {
-            return d_nr;
-        }
-        // @PLN25 — a `τ?` receiver falls back to the base (non-null) overload (inert when
-        // sig == base, i.e. gate-OFF or a non-nullable receiver).
-        if sig != base {
-            let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", base.len(), base));
-            if d_nr != u32::MAX {
-                return d_nr;
+        // loft#850 — the mangled key spells the receiver's NAME, and a name is not a type.
+        // Two packages may each declare a `Thing`, and both then register their methods
+        // under `t_5Thing_go`; whichever import landed first owns that key in the caller's
+        // name table. Asking by name alone therefore answers with the OTHER package's
+        // method, whose `self` is a different def — reported downstream as the
+        // unactionable `expected Thing, got Thing`, or, when a free function of the same
+        // name was the right answer all along, by never reaching it.
+        //
+        // So each candidate is CHECKED against the receiver it must accept, and a
+        // rejected one is looked up again in the type's OWN source, which is where the
+        // right package's method lives. `method_receives` only rejects a demonstrably
+        // foreign receiver, so a generic or stub candidate resolves exactly as before.
+        // @PLN25 — a `τ?` receiver tries its own overload first and falls back to the base
+        // (non-null) one; the second spelling is the same string when sig == base (gate-OFF
+        // or a non-nullable receiver), and looking it up twice would only repeat the work.
+        let spellings: &[&String] = if sig == base { &[&sig] } else { &[&sig, &base] };
+        let own_source = self.definitions[type_nr as usize].source;
+        for spelling in spellings {
+            let key = format!("t_{}{}_{fn_name}", spelling.len(), spelling);
+            for from in [source, own_source] {
+                let d_nr = self.source_nr(from, &key);
+                if self.method_receives(d_nr, type_nr) {
+                    return d_nr;
+                }
             }
         }
         let d_nr = self.source_nr(source, &format!("n_{fn_name}"));

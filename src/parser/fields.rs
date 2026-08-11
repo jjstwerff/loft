@@ -415,10 +415,19 @@ impl Parser {
                         && !self.data.def(free_nr).attributes().is_empty()
                         && self.data.attr_type(free_nr, 0).is_equal(&t);
                     if has_free_hint {
+                        // loft#850 — only the stdlib can be blamed for the stdlib's
+                        // choices; a `use`d package that declares `{field}` free-only
+                        // is a different file to go and read.
+                        let declared_by =
+                            if self.data.def(free_nr).source == crate::data::STD_SOURCE {
+                                format!("stdlib declared `{field}` as free-only")
+                            } else {
+                                format!("`{field}` is declared as a free function, not as a method")
+                            };
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? (stdlib declared `{field}` as free-only; see LOFT.md § Methods and function calls)",
+                            "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? ({declared_by}; see LOFT.md § Methods and function calls)",
                             self.data.def(dnr).name()
                         );
                     } else if let Some(s) = self.suggest_field_name(dnr, &field) {

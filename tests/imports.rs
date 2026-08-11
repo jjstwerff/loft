@@ -298,3 +298,49 @@ fn an_unused_collision_still_compiles() {
         errors_of(&p)
     );
 }
+
+// ── loft#850: a method and a free function of one name, across packages ───────
+
+/// loft#850 — a bare call reaches the function that accepts the receiver it was
+/// GIVEN, whichever package declared it.
+///
+/// Three packages here each declare a `struct Thing`, and a method is filed under
+/// the mangled key `t_5Thing_go`, which spells the type's NAME and nothing about
+/// its package — so all three competed for one key and the first import won it.
+/// The runtime half (which package's body actually ran) is pinned across all
+/// three backends by `tests/scripts/850-cross-package-method-name-collision.loft`
+/// and its swapped-order twin; this asserts the compile-time half, that nothing
+/// is refused.
+#[test]
+fn a_method_and_a_free_function_of_one_name_resolve_by_receiver() {
+    for file in ["dupmethod_ab_main.loft", "dupmethod_ba_main.loft"] {
+        let p = parse_lib_main(file);
+        assert!(
+            p.diagnostics.level() < Level::Error,
+            "{file}: the receiver says which `go` is meant: {}",
+            errors_of(&p)
+        );
+    }
+}
+
+/// loft#850 — when the call genuinely cannot resolve, the hint names the
+/// receiver in a form the reader can type, and does not blame the stdlib for a
+/// package's choice.
+///
+/// The bare receiver name is the one spelling that identifies nothing in this
+/// situation, since several packages declare it; and "stdlib declared `go` as a
+/// method" pointed at a file that never mentions `go`. Both halves are asserted
+/// because fixing either alone still leaves the reader without a next step.
+#[test]
+fn an_unresolvable_call_names_the_package_that_declares_the_method() {
+    let p = parse_lib_main("dupmethod_hint_main.loft");
+    let msgs = errors_of(&p);
+    assert!(
+        msgs.contains("dupmethod_b::Thing"),
+        "the hint must name the receiver's package: {msgs}"
+    );
+    assert!(
+        !msgs.contains("stdlib declared"),
+        "the stdlib declared nothing here: {msgs}"
+    );
+}

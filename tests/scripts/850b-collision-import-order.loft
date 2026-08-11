@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// loft#850 — `850-cross-package-method-name-collision.loft` with the three `use`
+// lines in the opposite order and NOTHING else changed.
+//
+// The pair is the test, not either file alone. The broken resolution was
+// first-import-wins, so exactly one order could look right by luck; a fix
+// verified against one order has not been verified at all. This is the same
+// doctrine loft#788 established for bare names (`dupname_ab` / `dupname_ba`):
+// a source line's meaning must not depend on the order of the block above it.
+use dupmethod_c;
+use dupmethod_b;
+use dupmethod_a;
+
+fn main() {
+  a = make_a(1);
+  b = make_b(1);
+  c = make_c(1);
+
+  assert(go(a, 5) == 106, "free fn for A's Thing: {go(a, 5)}");
+  assert(go(b, 5) == 206, "B's method for B's Thing: {go(b, 5)}");
+  assert(go(c, 5) == 306, "C's method for C's Thing: {go(c, 5)}");
+
+  assert(b.go(5) == 206, "method spelling on B: {b.go(5)}");
+  assert(c.go(5) == 306, "method spelling on C: {c.go(5)}");
+
+  assert(stretch(a, 5, 6) == 112, "3-arg free fn: {stretch(a, 5, 6)}");
+  assert(stretch(b, 5) == 206, "2-arg method: {stretch(b, 5)}");
+
+  print("850 import order does not decide: ok\n");
+}

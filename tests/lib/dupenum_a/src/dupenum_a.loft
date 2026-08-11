@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 regression fixture — package A of the same-named ENUM pair.
+//
+// Two packages each declaring an enum used to CRASH the compiler outright
+// (`index out of bounds … [src/data.rs]`), before any call was written: the
+// synthesised variant dispatcher asked "does this enum already have one?" of the
+// source being parsed, so reaching the second package it re-answered "no" for the
+// FIRST package's enum, tried to synthesise a duplicate, and indexed the
+// definition table with the sentinel `add_fn` returns when it refuses.
+//
+// Both variants implement `area` so the dispatcher is complete and no
+// missing-variant warning muddies the run.
+pub enum Shape { Dot { d: integer }, Box { v: integer } }
+
+pub fn make_a(v: integer) -> Box { Box { v: v } }
+
+pub fn area(self: Box, k: integer) -> integer { self.v + k + 100 }
+pub fn area(self: Dot, k: integer) -> integer { self.d + k + 150 }

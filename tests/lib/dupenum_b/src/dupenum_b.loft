@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#850 regression fixture — package B, the twin of `dupenum_a`.
+//
+// The variant FIELD SETS differ (`w` sits before `v` here), so a call that
+// reached the wrong package's method would read the wrong offset and answer a
+// wrong number rather than merely the wrong sum. `Box.v` is still what `area`
+// reads, so the expected value is unchanged by the extra field.
+pub enum Shape { Dot { d: integer }, Box { w: text, v: integer } }
+
+pub fn make_b(v: integer) -> Box { Box { w: "b", v: v } }
+
+pub fn area(self: Box, k: integer) -> integer { self.v + k + 200 }
+pub fn area(self: Dot, k: integer) -> integer { self.d + k + 250 }
