@@ -307,13 +307,28 @@ fn def_return_type(data: &Data, d_nr: u32) -> Type {
     data.def(d_nr).returned.clone()
 }
 
+/// How many bytes this type occupies in a stack cell — the SAME answer the
+/// compiled callee uses, because it is the same function.
+///
+/// A host call writes an argument into a cell the callee then reads, so a second
+/// opinion about its width is a wrong value rather than a crash. That is not
+/// hypothetical: an integer's STORAGE width (`IntegerSpec::byte_width`, what a
+/// `u8` struct field occupies) is not its STACK width, which is 8 for every
+/// integer alias — `variables::size` narrows only in `Context::Constant`. And
+/// because the stack steps in 8-byte units (`aligned_stack_step`), writing a
+/// `u8` argument as one byte does not shorten the frame; it leaves the cell's
+/// other seven bytes holding whatever the PREVIOUS call left there, and the
+/// callee reads them as part of the number (@PLN119: `f(1)` answered
+/// `0x0F0F0F0F0F0F0F01` after a call that had put `0x0F..0F` in that cell).
+fn cell_width(ty: &Type) -> u32 {
+    u32::from(crate::variables::size(ty, &crate::data::Context::Argument))
+}
+
 /// Classify a parameter/return `Type` for the stack ABI, or reject it (Phase 1).
 fn ret_kind(func: &str, ty: &Type) -> Result<HostRetKind, LoftError> {
     match ty {
         Type::Void | Type::Null => Ok(HostRetKind::Void),
-        Type::Boolean => Ok(HostRetKind::Prim(1)),
-        Type::Single => Ok(HostRetKind::Prim(4)),
-        Type::Integer(spec) => Ok(HostRetKind::Prim(u32::from(spec.byte_width(false).max(1)))),
+        Type::Boolean | Type::Single | Type::Integer(_) => Ok(HostRetKind::Prim(cell_width(ty))),
         Type::Text(_) => Ok(HostRetKind::Text),
         other => Err(LoftError::Unsupported {
             func: func.to_string(),
@@ -338,30 +353,25 @@ fn marshal_arg(func: &str, i: usize, val: &Value, ty: &Type) -> Result<WorkerArg
         Type::Boolean => match val {
             Value::Bool(b) => Ok(WorkerArg::Primitive {
                 value: u64::from(*b),
-                size: 1,
+                size: cell_width(ty),
             }),
             _ => Err(mismatch("boolean")),
         },
         Type::Single => match val {
             Value::Float(x) => Ok(WorkerArg::Primitive {
                 value: u64::from((*x as f32).to_bits()),
-                size: 4,
+                size: cell_width(ty),
             }),
             _ => Err(mismatch("single")),
         },
-        Type::Integer(spec) => match val {
-            Value::Int(v) => {
-                let w = spec.byte_width(false).max(1);
-                let size = match w {
-                    1 => 1,
-                    2..=4 => 4,
-                    _ => 8,
-                };
-                Ok(WorkerArg::Primitive {
-                    value: *v as u64,
-                    size,
-                })
-            }
+        // The whole cell, sign included: a `u8` and an `integer` parameter are
+        // the same eight bytes here, and it is the callee's declared type that
+        // decides what the number means. See [`cell_width`].
+        Type::Integer(_) => match val {
+            Value::Int(v) => Ok(WorkerArg::Primitive {
+                value: *v as u64,
+                size: cell_width(ty),
+            }),
             _ => Err(mismatch("integer")),
         },
         other => Err(LoftError::Unsupported {
