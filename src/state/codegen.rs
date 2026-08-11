@@ -587,6 +587,8 @@ impl State {
                 // position so phase 3's runtime-error printer can surface
                 // `at file:line:col`, then lower the wrapped inner node.
                 self.source_spans.insert(self.code_pos, node.span_pos());
+                // The published snapshot is now behind the table it snapshots.
+                self.published_spans = None;
                 self.generate_inner(node.span_inner(), stack, top)
             }
             ValueType::Iter => {

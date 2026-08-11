@@ -290,3 +290,28 @@ fn formatter_width_counts_characters_not_bytes() {
         "args must not wrap — width is character count, not bytes: {out:?}"
     );
 }
+
+/// What one host call costs, as a REPORT — run it, read the number, never gate
+/// on it (`cargo test --release --test host_call measure_call_cost -- --ignored
+/// --nocapture`).
+///
+/// It exists because this cost is invisible in the tests above and used to be
+/// dominated by something none of them could see: publishing the fault-site span
+/// table deep-cloned the whole map on every entry, which costs nothing for a
+/// program entered once and 4.4 µs of every 4.7 µs call for a program entered in
+/// a loop.  A `loft::host` caller does exactly that, and so does every call to a
+/// process-placed library (@PLN119), which travels the same path.  Roughly 0.5 µs
+/// on this machine after the fix; an answer in microseconds means the snapshot is
+/// being rebuilt per call again.
+#[test]
+#[ignore = "a measurement, not a gate"]
+fn measure_call_cost() {
+    let mut p = prog();
+    let n = 100_000;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        let _ = p.call("add", &[Value::Int(2), Value::Int(3)]).unwrap();
+    }
+    let d = t.elapsed();
+    println!("host call: {d:?} total, {:?}/call", d / n);
+}
