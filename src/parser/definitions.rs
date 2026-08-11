@@ -1667,6 +1667,7 @@ impl Parser {
         }
         self.lexer.has_token(";");
         self.parse_rust();
+        self.check_drop_signature();
         self.data.op_code(self.context);
         self.data.definitions[self.context as usize]
             .variables
@@ -1897,6 +1898,56 @@ impl Parser {
                 self.lexer.revert(link);
                 break;
             }
+        }
+    }
+
+    /// @PLN125 arc B — check a just-parsed `OpDrop`, the hook a type runs at scope end.
+    ///
+    /// `OpDrop` is a reserved name rather than an attribute, for the same reason `to_text`,
+    /// `OpAdd`, `next` and `OpIndex` are: every other first-grade surface keys behaviour to
+    /// a TYPE by the method's name, and the scope-end hook is one more of those.  (The
+    /// original sketch proposed a `#drop` attribute; attributes describe a function's
+    /// implementation — `#pure`, `#native` — and this describes a type's contract.)
+    ///
+    /// Two things are checked here because neither can be recovered from later:
+    ///
+    /// **It must not answer.** A drop runs at a closing brace with no caller left to tell,
+    /// and loft has no runtime errors (C80), so a result would go nowhere.  That is a real
+    /// semantic weakening and it is the design: anything whose failure MATTERS stays an
+    /// explicit call (`tx.commit()` answers; the scope end does not).  Better to say so at
+    /// the declaration than to let an author write a `-> boolean` nobody reads.
+    ///
+    /// **It must take exactly the receiver.** A drop is called by the compiler, so there is
+    /// nowhere for a second argument to come from.
+    fn check_drop_signature(&mut self) {
+        if self.context == u32::MAX || self.first_pass {
+            return;
+        }
+        let def = self.data.def(self.context);
+        if !def.name().ends_with("_OpDrop") {
+            return;
+        }
+        let declared = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+            .count();
+        let returns = !matches!(def.returned(), Type::Void);
+        if returns {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
+                 anything whose failure matters stays an explicit call"
+            );
+        }
+        if declared != 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`OpDrop` takes only `self` — the compiler calls it, so a second argument \
+                 has nowhere to come from"
+            );
         }
     }
 

@@ -374,26 +374,73 @@ than it gets credit for. Measured on the current tree, not recalled:
 | **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124). A hole may be a scalar OR a value of a named type, whose kind is its own name in method case (`SqlIdent` → `hole_sql_ident`) |
 | **associated types** | **yes** | `type Rows: Cursor` in an interface body; `Self.Rows` in its signatures (@PLN125 arc A) |
 | **`x[i]` indexing** | **yes** | `fn OpIndex(self: T, i: τ) -> υ`; an interface requires it with `op []` (@PLN125 arc C) |
-| **run at scope end** | **no** | no destructor / `#drop` hook |
+| **run at scope end** | **yes** | `fn OpDrop(self: T)` — runs where the value's own free runs (@PLN125 arc B) |
 
-One gap is left:
-
-**A hook at scope end.** loft already computes the fact — the ownership model
-decides per binding whether this scope owns a value and whether it dies here,
-which is what emits `OpFreeRef` today. So a drop is a call at an existing
-point, not new analysis, and it inherits the early-`return` and loop-epilogue
-cases that are easy to get wrong (loft#731 exists because of exactly those).
-The cost to state up front: a drop **cannot fail** under C80, so anything
-whose failure matters stays an explicit call. Designed in
-[plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md),
-**@PLN125 arc B** — which requires a second, unrelated consumer before it
-lands, because a hook with one user is a hook whose invariant is untested.
-
-Each arc is independently landable, and each lands **inert first** — the
+No gaps are left in the measured set. Each arc landed **inert first** — the
 contract declared, every existing program proved byte-identical in IR and native
-Rust, before any new behaviour is routed through it. That ordering is what keeps
-a language change from being a rewrite: the proof that nothing changed is a
+Rust, before any new behaviour was routed through it. That ordering is what kept
+each language change from being a rewrite: the proof that nothing changed is a
 smaller and much earlier step than the feature.
+
+## Running at scope end — `OpDrop`
+
+A type that defines `OpDrop` runs it when a scope that OWNS one lets it die —
+the shape RAII gives a transaction, a file handle or a C resource:
+
+```loft
+struct Tx { tag: text, done: boolean }
+
+fn commit(self: Tx) -> boolean { …; self.done = true; return true; }
+
+fn OpDrop(self: Tx) {
+  if !self.done { rollback(self.tag); }
+}
+
+fn work() {
+  t = begin("orders");
+  …                       // no commit on this path
+}                         // <- rollback runs here
+```
+
+**The rule, and the reason the feature is small:**
+
+> A drop runs exactly where the value's own `OpFree*` runs — the same binding,
+> the same scope exit, the same early-exit paths — and never anywhere else.
+
+loft already computes that. The ownership model decides, per binding, whether
+this scope owns a value and whether it dies here, which is what emits
+`OpFreeRef`; a returned or borrowed value is already excluded, and the early
+`return` / `break` / return-out-of-a-loop cases are already handled there
+(loft#731 exists because a hand-rolled version of exactly those went wrong). So
+the hook DERIVES from the borrow model rather than sitting beside it, and there
+is one answer to "when does this run", not two that can drift.
+
+What follows from that, and is worth knowing before you reach for it:
+
+- **A drop cannot fail.** loft has no runtime errors (C80) and a rollback at
+  scope end can fail for real — the connection dropped, the server went away —
+  with no caller left to tell. So `OpDrop` may not return, and the compiler
+  refuses one that tries. **Anything whose failure matters stays an explicit
+  call**: `tx.commit()` answers, the closing brace does not. That asymmetry is
+  the design.
+- **A drop reaches the world, not its caller's data.** It receives only `self`,
+  and a struct field COPIES at construction — `Tx { journal: j }` holds a copy of
+  `j` — so a drop cannot write back into a caller's loft-side collection. Its
+  effect is I/O, or a resource it owns (a `#c` handle). That is exactly the
+  intended use: libpq's `PQexec("ROLLBACK")` at a closing brace.
+- **Order within a scope is reverse-declaration**, matching the existing free
+  order, or a statement would outlive the transaction it belongs to.
+- **A binding written inside an `if` block is hoisted to the function scope** —
+  that is where loft frees it, so that is where it drops. A `for` body is a scope
+  of its own, so a droppable made per iteration drops per iteration.
+- **A value that was never created never drops.** The free is null-tolerant and
+  a drop is not, so the call is guarded by the same liveness test the free
+  performs internally.
+
+Shipped as @PLN125 arc B; `tests/scripts/pln125-b-drop.loft` is the behaviour
+matrix, with two unrelated consumers (a transaction and a lease) because a hook
+with one user is a hook whose invariant is untested. The design reasoning is
+[plans/23-db-clients/LIFETIME_AND_PROCEDURES.md](plans/23-db-clients/LIFETIME_AND_PROCEDURES.md).
 
 ## Indexing — `x[i]` on a library type
 

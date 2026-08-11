@@ -1907,6 +1907,13 @@ rather than a bag of functions.  Mark the type and these functions `pub` to use 
   *second* operand's type (e.g. one `OpMin(T, T)` and one `OpMin(T, U)` collide); give the second
   form a named method instead.  A type with no such op errors as before (`dt + 5` stays a compile
   error — distinct-type safety is free).
+- **Scope end** — define `fn OpDrop(self: T)` and it runs where the value's own free runs: the
+  same binding, the same scope exit, the same early-`return`/`break` paths (@PLN125 arc B).
+  Reverse-declaration order within a scope.  A drop **cannot fail** (C80 — no caller is left to
+  tell), so it may not return and anything whose failure matters stays an explicit call
+  (`tx.commit()` answers, the closing brace does not).  It receives only `self`, whose struct
+  fields are COPIES made at construction, so its effect reaches the world (I/O, a `#c` handle it
+  owns) rather than a caller's collection.
 - **Indexing** — define `fn OpIndex(self: T, i: τ) -> υ` and `x[i]` dispatches it, so a matrix, a
   bitset, a row or a ring buffer reads as `x[i]` rather than `x.at(i)` (@PLN125 arc C).  The index
   type is whatever the method declares — a row addressed by column NAME takes a `text`.  An

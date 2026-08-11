@@ -1479,6 +1479,41 @@ fn assigning_through_op_index_is_refused() {
     );
 }
 
+/// @PLN125 arc B: `OpDrop` cannot return.
+///
+/// It runs at a closing brace with no caller left to tell, and loft has no
+/// runtime errors (C80), so a result would go nowhere. That is a real semantic
+/// weakening and it is the design: anything whose failure MATTERS stays an
+/// explicit call — `tx.commit()` answers, the scope end does not. Saying so at
+/// the declaration beats letting an author write a `-> boolean` nobody reads.
+#[test]
+fn op_drop_cannot_return() {
+    code!(
+        "struct Tx { t: text }
+         fn OpDrop(self: Tx) -> boolean { self.t != \"\" }
+         fn test() { x = Tx { t: \"a\" }; }"
+    )
+    .error(
+        "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
+         anything whose failure matters stays an explicit call at op_drop_cannot_return:3:12",
+    );
+}
+
+/// @PLN125 arc B: `OpDrop` takes only the receiver — the compiler calls it, so a
+/// second argument has nowhere to come from.
+#[test]
+fn op_drop_takes_only_self() {
+    code!(
+        "struct Tx { t: text }
+         fn OpDrop(self: Tx, extra: integer) { assert(extra > 0, self.t) }
+         fn test() { x = Tx { t: \"a\" }; }"
+    )
+    .error(
+        "`OpDrop` takes only `self` — the compiler calls it, so a second argument has \
+         nowhere to come from at op_drop_takes_only_self:3:12",
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable

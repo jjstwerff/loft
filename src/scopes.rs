@@ -5266,6 +5266,17 @@ impl Scopes {
                     // case (distinct stores, placeholder orphaned).
                     // Falls through to plain `OpFreeRef` when no pairing
                     // was recorded.
+                    // @PLN125 arc B — the scope-end hook fires where the BINDING's life
+                    // ends, which is not always where the STORE is released.  A value
+                    // delivered through a caller-side return buffer has two variables
+                    // naming one record: the buffer (`__ref_N`, function-scoped and
+                    // reused) and the witness the author actually bound.  The author's
+                    // binding is the one that ends — per loop iteration, at its own
+                    // scope — so the witness drops and the buffer never does.  Getting
+                    // that backwards is a rollback that runs once for a loop that opened
+                    // a transaction on every pass.
+                    let is_buffer = is_work_ref && self.paired_witness.contains_key(&v)
+                        || self.witness_buffer.values().any(|&b| b == v);
                     if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
@@ -5277,6 +5288,13 @@ impl Scopes {
                         // per-iteration free when they still alias so the
                         // buffer stays reserved across iterations; the buffer's
                         // own function-exit OpFreeRef releases it once.
+                        //
+                        // The FREE is skipped in the adoption case; the DROP is not.
+                        // The store surviving into the next iteration is a reuse
+                        // optimisation, and the value it held is over either way.
+                        if let Some(hook) = drop_hook(function, v, data) {
+                            ls.push(hook);
+                        }
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(buffer)],
@@ -5287,6 +5305,14 @@ impl Scopes {
                         // a genuine leak. The `check-leak` scan must go RED on it — the true-positive
                         // gate. Mirrors LOFT_NO_A1B / LOFT_STORE_GUARD_INJECT.
                     } else {
+                        // The type's scope-end hook, immediately BEFORE the free that ends
+                        // the value's life — unless `v` is a buffer whose witness already
+                        // ran it.
+                        if !is_buffer
+                            && let Some(hook) = drop_hook(function, v, data)
+                        {
+                            ls.push(hook);
+                        }
                         ls.push(call("OpFreeRef", v, data));
                     }
                 }
@@ -6109,6 +6135,58 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
 
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
     Value::Call(data.def_nr(to), vec![Value::Var(v)])
+}
+
+/// @PLN125 arc B — the scope-end hook `v`'s type declares, as a call on `v`.
+///
+/// > **A drop runs exactly where the value's own `OpFree*` runs — the same binding, the
+/// > same scope exit, the same early-exit paths — and never anywhere else.**
+///
+/// That is the whole design, and phrasing it that way is what makes it small: loft already
+/// COMPUTES the fact.  The ownership model decides per binding whether this scope owns the
+/// value and whether it dies here, which is what puts an `OpFreeRef` in this list; a
+/// returned or borrowed value is already excluded, and the early-`return`, `break` and
+/// return-out-of-a-loop paths are already handled here (loft#731 exists because a hand-
+/// rolled version of exactly those went wrong).  So the drop DERIVES from the borrow model
+/// rather than sitting beside it: there is one answer to "when does this run", not two that
+/// can drift.
+///
+/// Scope is honest and narrow: a **binding this scope owns**.  A droppable that is a FIELD
+/// of another record is released by that record's cascade, which is not this list, so it
+/// does not fire — a hook that ran from two different mechanisms would be the drift this
+/// design exists to avoid.
+///
+/// **The free is null-tolerant and a drop is not**, which is the one place "where the free
+/// runs" needed sharpening.  `OpFreeRef` on a slot that was never written is a no-op — it
+/// checks `rec == 0` and returns — so the emitter has never had to know whether a binding
+/// actually holds anything.  A drop is a USER call, and running it on an unwritten slot
+/// runs the author's rollback against a record that does not exist:
+///
+/// ```loft
+/// if n > 0 { t = Tx { … } }     // the else path never writes `t`
+/// ```
+///
+/// printed `[drop null]` before the guard.  So the call is wrapped in the same liveness
+/// test the free performs internally (`OpConvBoolFromRef` IS `rec != 0`), which makes the
+/// rule *where the free runs, on a value that exists*.  The same guard settles the aliasing
+/// case for free: a caller-side `__ref_N` return buffer that the callee did not adopt is
+/// null here and correctly does not fire, while one that WAS adopted never reaches this
+/// branch at all (it takes the `OpFreeRefIfDistinct` pairing above).
+fn drop_hook(function: &Function, v: u16, data: &Data) -> Option<Value> {
+    let Type::Reference(d, _) = function.tp(v).base() else {
+        return None;
+    };
+    let name = data.def(*d).name();
+    let nr = data.def_nr(&format!("t_{}{}_OpDrop", name.len(), name));
+    if nr == u32::MAX {
+        return None;
+    }
+    let live = Value::Call(data.def_nr("OpConvBoolFromRef"), vec![Value::Var(v)]);
+    Some(Value::If(
+        Box::new(live),
+        Box::new(Value::Call(nr, vec![Value::Var(v)])),
+        Box::new(Value::Null),
+    ))
 }
 
 /// @PLN85 skip_free-orphan (case a): collect the `skip_free` text `__ncc_N` temps

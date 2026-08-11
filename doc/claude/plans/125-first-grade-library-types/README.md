@@ -11,7 +11,7 @@ issue cannot: the running record of what shipped, and the instruments.
 | arc | what | state |
 |---|---|---|
 | **A** | associated types — an interface names a companion type | A1 / A2a / A2b / **A2c** shipped; A3–A4 here |
-| **B** | a hook at scope end (`#drop`) | not started |
+| **B** | a hook at scope end (`OpDrop`) | **SHIPPED** |
 | **C** | `x[i]` dispatched to a library type | **SHIPPED** |
 
 Each arc lands **inert first**: the contract declared, every existing program
@@ -147,6 +147,52 @@ message that names the alternative, rather than left to a confusing error.
 The `op []` spelling is handled where an `op` has just been read and a `[` can be
 nothing else: the lexer has no `[]` token, and it must not have one, because `[`
 and `]` are separate everywhere else.
+
+---
+
+## Arc B — shipped
+
+The reference lives in [INTERFACES.md § Running at scope end](../../INTERFACES.md);
+what belongs here is the record of what the design predicted, what it got right,
+and the two places it needed sharpening.
+
+**The prediction held.** "A drop runs exactly where the value's own `OpFree*`
+runs" turned into one call pushed into `get_free_vars`, and eleven of the
+thirteen shapes were then correct with no further code — early `return`, `break`,
+return-out-of-a-loop, reverse-declaration order, a returned value not firing in
+the callee, a borrowed argument not firing at all, one per loop iteration, value
+structs, and both backends producing identical traces. That is what "derives from
+the borrow model rather than sitting beside it" buys.
+
+**Two sharpenings, both found by running the matrix rather than by reading:**
+
+| what the design said | what was missing |
+|---|---|
+| the drop goes where the free goes | **the free is null-tolerant and a drop is not.** `OpFreeRef` on a slot never written is a no-op — it checks `rec == 0` and returns — so the emitter never had to know whether a binding held anything. A drop is a USER call, and `if n > 0 { t = Tx { … } }` ran the author's rollback on the else path against a record that does not exist. The call is now wrapped in the same liveness test the free performs internally. |
+| the drop goes where the free goes | **the free is about the STORE, the drop is about the BINDING.** A value delivered through a caller-side return buffer has two variables naming one record: the buffer (`__ref_N`, function-scoped and REUSED across iterations) and the witness the author bound. `t = begin(…)` in a loop freed through `OpFreeRefIfDistinct(t, buffer)` — a branch the first cut skipped — so a loop opening a transaction every pass rolled back once, at the end. The witness drops and the buffer does not. |
+
+The second one is the dangerous shape and the reason B5 asked for a matrix
+rather than a demo: it is silent, ordinary code, and wrong in the direction that
+loses work.
+
+**One spelling changed from the sketch.** The design proposed `#drop fn`; it
+ships as `fn OpDrop(self: T)`. Attributes in loft describe a function's
+IMPLEMENTATION (`#pure`, `#native`, `#c`), and every other first-grade surface
+keys behaviour to a TYPE by the method's name — `to_text`, `OpAdd`, `next`,
+`lit`/`hole_*`, and now `OpIndex`. A scope-end hook is one more of those. It also
+needs no `Definition` field and so no IR-store schema change.
+
+**What the matrix documented that no one had written down:** a struct field
+COPIES at construction, and a drop receives only `self` — so a drop cannot write
+back into a caller's loft-side collection at all. Its effect reaches the world or
+nowhere. That is exactly right for the motivating case (a `#c` `ROLLBACK` on a
+handle the transaction owns) and a real limit worth stating, which is why the
+test's trace is a file rather than a vector.
+
+**Consumers (B5): two, unrelated.** A transaction, where `commit` ANSWERS and the
+closing brace does not — the asymmetry the whole design rests on — and a lease,
+which has no explicit release at all. Nothing about the second resembles the
+first, which is the point: one consumer leaves the invariant tested by one shape.
 
 ---
 
