@@ -428,8 +428,26 @@ fail: it is that they are quietly marked and then read as the wrong shape, so
 `a_compound_the_arena_does_not_carry_still_behaves_identically` pins the refusal
 by requiring the program to be identical either way.
 
+### What the arena cost the shared allocator
+
+Borrowing a slot per CALL, rather than once, is new — and it found two things in
+`Stores` that had been true since long before this plan:
+
+* `adopt_store` **pushed** a slot when nothing below the watermark was free,
+  growing the table by one every time, because the Vec never shrinks while `max`
+  does.  `database_named` has never done that.  Both now follow one rule: reuse
+  below the watermark, else take the watermark, else grow.
+* `release_slot` never lowered `max`, which `free_named` has always done for a
+  freed top slot.  Same fact, now one function.  Its walk stops on the free
+  BITMAP rather than the store's own `free` flag, and the two are not the same
+  question: `take_store` leaves a sentinel that IS flagged free but whose bit
+  stays clear on purpose, and trimming past one of those hands out a number
+  somebody still holds (`slot_recycling_tests` says exactly that, and said so
+  the moment the first version got it wrong).
+
 `LOFT_TRACE_ARENA=1` narrates what each side put in the arena and read back out,
-which is the instrument that found (3) and (4) above in minutes.
+which is the instrument that found (3) and (4) above in minutes — and, with the
+process id on each line, which of the two sides was walking the table.
 
 ## Arc D as built (2026-08-11)
 
@@ -510,13 +528,30 @@ loft-ship skill, with placement as the axis instead of target.
 
 **What the gate proves, and what it does not.**  Its VALUE half is proven live:
 `the_gate_can_fail` runs two deliberately different libraries and requires the
-comparison to notice.  Its LEAK half is not, and should not be read as though it
-were.  `check_store_leaks` prints to stderr and the gate compares stderr, so a
-leak *would* show — but no probe has yet made that channel report on demand, so
-"no leak" is corroboration rather than a proven gate.  Positive readings taken
-alongside it (`LOFT_ALLOC_REPORT`, `LOFT_TEXT_TIMELINE`, `LOFT_STRICT_STORES`)
-agree across placements, which is evidence of the same kind.  Making the leak
-half falsifiable belongs with arc C, where a leak becomes possible.
+comparison to notice.
+
+**Its LEAK half is now falsifiable too, and it caught something (2026-08-11).**
+The stderr channel alone was never enough, and the reason is worth stating
+because it generalises: `check_store_leaks` reports what is UNFREED AT EXIT, so
+it is structurally blind to a program that allocates a store per call and frees
+it — which is exactly the shape a placed call has, and exactly the shape that
+runs a long program out of store slots.  What makes it visible is
+`LOFT_STRICT_STORES`, which stops the allocator recycling a released slot: the
+peak slot count then becomes a straight count of how many stores a run ever
+needed, and the two placements have to agree on it.
+
+They did not.  Three separate contributors, one in this plan's dispatcher and
+two in the shared allocator, cost **two slots per call** against four for the
+whole in-process run — all 65535 gone after ~32k iterations, with the same loop
+in-process flat.  Guard:
+`placement_does_not_change_how_many_stores_a_run_needs`, which compares the two
+numbers rather than asserting a constant, so it fails if either side regresses.
+
+The lesson is the plan's own
+[absent-warning-is-not-a-pass](../../STABILITY_METHOD.md) with a twist: the leak
+channel was not silent because nothing was wrong, it was silent because it
+answers a different question than the one being asked.  Picking the instrument
+whose reading CHANGES when the fault is present is the whole job.
 
 **`--native` is outside the gate, deliberately.**  That backend compiles a
 library's own body into the whole-program binary, so a placed library's calls do

@@ -998,13 +998,28 @@ impl Stores {
     /// that can come down — without this, a loop calling a placed library ran out
     /// of the 65535 store slots after ~32k iterations while the same loop
     /// in-process sat flat at four.
+    /// The walk stops on the free BITMAP rather than on the store's own `free`
+    /// flag, and the two are not the same question. `take_store` leaves a
+    /// sentinel that IS flagged free but whose bit stays clear on purpose — the
+    /// slot is handed out to outlive the table, so its number is reserved. Trim
+    /// past one of those and the next allocation lands on a number somebody
+    /// still holds.
     fn trim_free_top(&mut self, slot: u16) {
         if self.max > 0 && slot == self.max - 1 {
             self.max -= 1;
-            while self.max > 0 && self.allocations[(self.max - 1) as usize].free {
+            while self.max > 0 && self.slot_bit_free(self.max - 1) {
                 self.max -= 1;
             }
         }
+    }
+
+    /// Is `slot` marked available in the free bitmap — the authoritative record
+    /// of "this number may be handed out"?
+    fn slot_bit_free(&self, slot: u16) -> bool {
+        let (wi, bi) = (slot as usize / 64, slot as usize % 64);
+        self.free_bits
+            .get(wi)
+            .is_some_and(|w| w & (1u64 << bi) != 0)
     }
 
     /// S29: Clear bit `slot` in `free_bits` (slot is now active).
