@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A binding position mints a local, whatever else carries that name (loft#852, loft#756) (2026-08-11)
+
+A library's public function occupied the CONSUMER's variable namespace: with
+`use engine_host;` in scope, `turn = 0` was a compile error anywhere in the consuming
+program. So one public verb added to a library broke every consumer already using that
+word as a local — crawler's gate went red across 109 rows, on a commit crawler did not
+make. [C97](DESIGN_DECISIONS.md)/[C98](DESIGN_DECISIONS.md) make this impossible for
+the *stdlib*; this is the same hazard one level up, where nothing weighs each new name
+and nothing announces which words a release claims.
+
+**The refusal was one code path, not a rule.** It fired in three binding forms —
+`name = …`, the typed local `name: T = …`, and a tuple-destructuring element — all
+three routing through the bare-function-reference fallback in `parse_var`
+(`src/parser/objects.rs`). The other three never refused, for the stdlib either: a
+parameter, a `for` variable and a struct field could all be called `chr` while
+`chr(65)` in the same scope answered `"A"`. So loft already keeps values and functions
+in **separate namespaces**, and the parentheses already pick between them.
+
+**The fix** is that the function-ref fallback yields at a binding position, exactly as
+the type/enum branch beside it already did (`def_nr(name) != MAX && !at_binding_name()`);
+the name then takes the ordinary new-local path. The pass-2 rescue that re-resolves an
+untyped pass-1 placeholder to a forward-declared function takes the same guard — without
+it a binding whose type pass 1 could not infer (`turn = a_forward_fn();`) would hand
+`parse_assign` a function-ref where its target belongs.
+
+What the refusal was really reporting was a **recovery** problem, not a namespace one:
+@P335/@P392 found that the function-ref left the `:` or `=` unconsumed and the author
+saw a confusing `Expect token ;`. Binding supplies the `Value::Var` that recovery
+wanted, so those forms parse rather than diagnose. `tests/scripts/repro_p392.loft`
+changes from an `@EXPECT_ERROR` case to asserting the typed local binds and `now()`
+still answers — the mis-parse it exists for fails it either way.
+
+**Pinned by** `tests/scripts/852-local-shadows-a-function-name.loft`, which carries the
+parameter / loop / field cells as CONTROLS so a change that frees the three refusing
+forms by breaking the three that already worked fails there, and
+`pln102_c98_a_local_may_shadow_a_library_function` (`tests/imports.rs`) for the library
+half on both backends. Register entry: [C112](DESIGN_DECISIONS.md).
+
+**Residual, unchanged by this:** a bare `use lib;` still wildcard-imports every public
+name into the unqualified namespace (`src/parser/mod.rs`,
+`None => Some(ImportSpec::Wildcard)`), so `turn(3)` is callable unqualified after
+`use mylib;`. C98 rules it must bind only the `lib` handle. That is a breaking
+resolution change needing a pre-freeze migration (`use lib;` → `use lib::*;`), so it is
+owner-timed rather than folded in here — and C112 is forward-compatible with it.
+
 ### `--html` binds a filesystem, over raw `loft_io` imports (loft#851) (2026-08-11)
 
 `--html` bound no filesystem. The loft-side file calls compiled anyway — the

@@ -570,6 +570,19 @@ falls back to the imported-library and standard-library *prelude*:
   `radix`, `spatial`, `iterator`, `reference`, and the sized integers
   `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. `struct integer { … }` errors with *"conflicts
   with a type"* (for `struct`, `enum`, and `type` alike).
+- **A local may carry a function's name** — values and functions are separate
+  namespaces, and the parentheses pick between them. `chr = 65` binds a local while
+  `chr(65)` in the same scope still reaches the stdlib function; a bare `chr` reads
+  the local once one is bound. This holds for every binding form — assignment, the
+  typed local `chr: integer = 65`, a tuple-destructuring element, a parameter, a
+  `for` variable, a struct field.
+
+  It is what keeps a library's growth off its consumers (loft#852): every short verb
+  a library exports — `turn`, `step`, `run`, `wait`, `next`, `open`, `send` — would
+  otherwise become a word no consumer of that library may use as a local, taken away
+  on someone else's release with nothing to announce it. Shadowing a name you rely on
+  is still worth avoiding; it is just yours to decide, not a library's.
+
 - **Two imported libraries may not both answer a bare name** (loft#788). When
   `use a;` and `use b;` each export `Chunk`, writing bare `Chunk` is an error naming
   both — *"`Chunk` is declared by more than one package here — write `a::Chunk` or

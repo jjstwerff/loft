@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (GitHub #852, and the second half of #756): a local binding may
+// carry the name of a function, and the function stays reachable as a call.
+//
+// loft keeps values and functions in SEPARATE namespaces.  Three binding forms
+// always honoured that — a parameter, a `for` variable and a struct field could
+// all be called `chr` while `chr(65)` in the same scope still answered "A" — but
+// the three that route through `parse_var`'s function-ref fallback refused with
+// "Cannot redefine function 'chr' as a variable": `name = …`, the typed local
+// `name: T = …`, and a tuple-destructuring element.
+//
+// The refusal was never a namespace rule, only that one path, and it made every
+// public function a library adds a breaking change for each consumer already
+// using that word as a local — a cost nothing announces and no consumer can
+// prepare for.  crawler's gate went red on 109 rows, on a commit crawler did not
+// make, when `engine_host` gained `pub fn turn()`.
+//
+// The CONTROL cells (the parameter / loop / field forms) are here on purpose: a
+// change that freed the three refusing forms by breaking the three that already
+// worked would pass every cell above and fail here.  The library half of the
+// same guarantee is `pln102_c98_a_local_may_shadow_a_library_function`
+// (tests/imports.rs) — it needs a `use`, which this harness does not supply.
+
+struct S852 {
+  // A field may carry a function's name — it always could.
+  chr: integer,
+  now: integer,
+}
+
+fn pair852() -> (integer, integer) {
+  (7, 41)
+}
+
+// A PARAMETER named after a stdlib function, calling that function in its body.
+fn param852(chr: integer) -> text {
+  chr(chr + 1)
+}
+
+// A bare function name on the right of a binding, with NO local of that name in
+// scope, still resolves to the function — the binding-position rule reads the
+// name being written, not the one being read.
+fn fnref852() -> text {
+  f = chr;
+  f(67)
+}
+
+// A `for` variable named after a stdlib function.  Its own function because loft
+// does not block-scope loop variables: reusing a name already local to `test()`
+// is a separate, deliberate error and would mask what this cell checks.
+fn loop852() -> integer {
+  total = 0;
+  for now in 3..6 {
+    total = total + now;
+  }
+  total
+}
+
+fn test() {
+  // --- the three forms that used to refuse ---
+
+  // 1. plain assignment
+  chr = 65;
+  chr = chr + 1;
+  assert(chr == 66, "a local may be named after a function: {chr}");
+
+  // 2. typed local (@P392 — this form once mis-parsed as "Expect token ;"
+  //    because the function-ref left the `:` unconsumed; binding is what gives
+  //    parse_assign the Var its typed-annotation arm needs)
+  now: integer = 42;
+  assert(now == 42, "a TYPED local may be named after a function: {now}");
+
+  // 3. tuple-destructuring element (loft#756 reached this spelled `,` / `)`)
+  (a, ticks) = pair852();
+  assert(a == 7, "the other element still binds: {a}");
+  assert(ticks == 41, "a destructured element may name a function: {ticks}");
+
+  // --- and the function is still reachable, in the very same scope ---
+  assert(chr(chr) == "B", "the call namespace still reaches chr(): {chr(chr)}");
+  assert(now() > 0, "now() still answers a clock reading, not the local 42");
+  assert(ticks() > 0, "ticks() still answers, beside the local 41");
+
+  // …and the two namespaces stay sorted the way the local was written: with a
+  // local `chr` in scope a BARE `chr` reads that local, while `chr(x)` is a call
+  // and reaches the function.  Nothing here is ambiguous — the parentheses are
+  // what pick the namespace.
+  echo = chr;
+  assert(echo == 66, "a bare name reads the LOCAL once one is bound: {echo}");
+
+  // With no local of that name, the same bare form is still a function
+  // reference — see `fnref852`.
+  assert(fnref852() == "C", "a bare name with no local bound is a function ref");
+
+  // --- CONTROL: the forms that never refused must keep working ---
+  assert(param852(65) == "B", "a parameter may be named after a function");
+
+  assert(loop852() == 12, "a `for` variable may be named after a function: {loop852()}");
+
+  s = S852 { chr: 3, now: 4 };
+  assert(s.chr + s.now == 7, "a field may be named after a function: {s.chr + s.now}");
+}

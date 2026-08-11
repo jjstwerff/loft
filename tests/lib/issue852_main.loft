@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#852 — the consumer half.  `issue852lib` exports `pub fn turn`, and this
+// program uses `turn` as a local, exactly as crawler's `src/story.loft` had for
+// months before `engine_host` gained `pub fn turn()` and took 109 test rows red
+// on a commit crawler did not make.
+//
+// Three things must hold together, which is why they share one program: the
+// local binds and keeps its own value, an unqualified call still reaches the
+// library function from a scope that has no such local, and a call reaches it
+// from the scope that DOES.
+use issue852lib;
+
+// No local named `turn` here — the unqualified call is the ordinary one.
+fn other852() -> integer {
+  turn(3)
+}
+
+fn main() {
+  turn = 41;
+  turn = turn + 1;
+  println("turn={turn} call={turn(2)} other={other852()}");
+}

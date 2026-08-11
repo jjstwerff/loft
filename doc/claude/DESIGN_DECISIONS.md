@@ -3205,3 +3205,80 @@ this boundary actually hurts, and none exists yet: @PLN138's registry wraps ONE 
 backend and drops it whole. New evidence means such a consumer, not the observation that Rust's
 `Vec` drops its elements on `remove` — Rust can afford it because `Drop::drop` is an ordinary
 monomorphised call, not a re-entry into an interpreter.
+
+## C112 — a binding position mints a local whatever else carries that name; the function stays reachable as a call
+
+**Catalogue:** @F2 (operators) / modules + naming · [C98](#c98--)'s consumer-facing half · loft#852, loft#756
+
+### Question
+
+A library's public functions occupied the **consumer's variable namespace**. With `use engine_host;`
+in scope, `turn = 0` was a compile error anywhere in the consuming program — so adding one public
+verb to a library was a breaking change for every consumer that already used that word as a local.
+crawler's gate went red across 109 rows, on a commit crawler did not make, when `engine_host` gained
+`pub fn turn()`.
+
+[C97](#c97--) and [C98](#c98--) exist to make exactly this impossible for the *stdlib*: the stdlib may
+grow additively forever because a library's symbols are module-scoped. The question C98 left is the
+same hazard one level up, and it is worse there — a package ecosystem has no chokepoint weighing each
+new name, and nothing announces "this release claims the word `turn`".
+
+### Evaluation
+
+**The refusal was never a rule loft held.** It held in exactly three binding forms — `name = …`, the
+typed local `name: T = …`, and a tuple-destructuring element — all three of which route through one
+path, the bare-function-reference fallback in `parse_var`. The other three binding forms never
+refused, for the stdlib either:
+
+```loft
+for chr in 65..67 { chr(chr) }   // binds a local AND calls the function → "A", "B"
+fn go(chr: integer) -> text { chr(chr + 1) }
+struct S { chr: integer }
+```
+
+So loft already keeps **values and functions in separate namespaces**, and the parentheses already
+pick between them. The three refusing forms were not enforcing a namespace; they were reporting a
+parser-recovery problem (@P335/@P392: the function-ref left the `:` or `=` unconsumed and the author
+saw a confusing `Expect token ;`). Binding is what supplies the `Value::Var` that recovery wanted.
+
+The alternative — keep the refusal and let the consumer rename — is what crawler did, and it is a
+clean workaround for the instance. It is not an answer to the class: the cost lands on the consumer
+with no local change, and it is not available in advance. You find out which words are forbidden by
+compiling against each new library release.
+
+**This does not re-open [C95](#c95--).** C95 refuses a top-level *function definition* that a method
+would silently shadow, because that definition is dead code the author believes runs. A local binding
+is scoped to one function body, re-points no other call site, and is not silent — the author wrote
+the name. The three forms that never refused are the proof that the language already accepted that
+reasoning.
+
+### Decision
+
+- **A name at a binding position mints a local, whatever else carries that name.** All six binding
+  forms agree: assignment, the typed local, a tuple-destructuring element, a parameter, a `for`
+  variable, a struct field.
+- **The function stays reachable as a call in the same scope** — `chr = 65` beside `chr(65)` — and a
+  bare mention reads the local once one is bound. Parentheses pick the namespace.
+- **A library's new `pub fn` therefore cannot break a consumer's locals**, which is C97's guarantee
+  extended from the stdlib to packages, where the argument for it is stronger.
+- **Rejected:** keeping the refusal (makes every short verb a library exports a word its consumers
+  may not use, revoked on someone else's release); a diagnostic naming the collision instead (loft#756
+  earned that message, and #852's point is that the cost is not the message — there is nothing the
+  consumer can do in advance).
+- Implemented 2026-08-11 in `src/parser/objects.rs` (`parse_var`: the function-ref fallback yields at
+  a binding position; the pass-2 placeholder rescue beside it takes the same guard). Pinned by
+  `tests/scripts/852-local-shadows-a-function-name.loft` — which carries the parameter / loop / field
+  cells as CONTROLS, so a change that freed the three forms by breaking the three that already worked
+  fails there — and `pln102_c98_a_local_may_shadow_a_library_function` (`tests/imports.rs`, the
+  library half, both backends).
+
+### Residual — C98's own half is still open
+
+Measured while fixing this, and unchanged by it: **a bare `use lib;` still wildcard-imports every
+public name into the unqualified namespace** (`src/parser/mod.rs`, `None => Some(ImportSpec::Wildcard)`),
+so `turn(3)` is callable unqualified after `use mylib;`. C98 rules that it must bind only the `lib`
+handle. That migration is mechanical for a consumer (`use lib;` → `use lib::*;`) but it is a
+**breaking** resolution change, it must land pre-freeze, and it breaks out-of-repo consumers on the
+day it lands — so it is owner-timed work, not a fix to fold into a bug. C112 is independent of it and
+forward-compatible with it: once a bare `use` stops importing, a local named after a library function
+is legal for a second reason as well.

@@ -26,6 +26,30 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A library adding a function no longer takes a word away from you
+
+If a library you use gained a `pub fn turn`, then `turn = 0` stopped compiling
+anywhere in your program — a break that arrived on someone else's release, that
+nothing announced, and that you could not prepare for. One package doing this took a
+consumer's whole test gate red across 109 rows, on a commit that consumer never made.
+Every short verb a library exports — `turn`, `step`, `run`, `wait`, `next`, `open`,
+`send` — was a word its users could not name a variable.
+
+A local may now carry a function's name, and the function is still there to call:
+
+```loft
+chr = 65;                  // a local, not an error
+println("{chr(chr)}");     // …and this still calls the function → "A"
+```
+
+The parentheses are what pick between the two. This was already true of a parameter, a
+`for` variable and a struct field — `fn go(chr: integer) { chr(chr + 1) }` has always
+compiled — so what changed is that plain assignment, the typed local `chr: integer = 65`
+and a tuple-destructuring element now agree with them instead of refusing.
+
+Shadowing a name you actually rely on is still worth avoiding. It is now your call
+rather than a library's.
+
 ### A page can save its work
 
 A loft program exported with `--html` could draw, play audio, talk over a

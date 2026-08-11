@@ -344,3 +344,47 @@ fn an_unresolvable_call_names_the_package_that_declares_the_method() {
         "the stdlib declared nothing here: {msgs}"
     );
 }
+
+/// @PLN102 C98 / loft#852 — a library's public function must not claim the
+/// CONSUMER's variable namespace.
+///
+/// `use lib;` beside a local named after one of the library's `pub fn`s has to
+/// compile, or every short verb a library exports (`turn`, `step`, `run`,
+/// `wait`, `next`, `open`, `send`) becomes a word no consumer of that library
+/// may use as a local — a break that arrives on someone else's release, that
+/// nothing announces, and that no consumer can prepare for.
+///
+/// Values and functions live in separate namespaces, so all three facts hold at
+/// once and all three are asserted: the local keeps its own value, an
+/// unqualified call reaches the library function from a scope with no such
+/// local, and a call reaches it from the scope that has one. Asserting only
+/// "it compiles" would pass a fix that bound the name to the wrong thing.
+///
+/// Run on BOTH backends through the binary rather than parsed in-process: the
+/// resolution is the parser's, but the values are what a consumer sees, and
+/// only running proves the call did not silently answer the local.
+#[test]
+fn pln102_c98_a_local_may_shadow_a_library_function() {
+    let s = sep_str();
+    let main = format!("tests{s}lib{s}issue852_main.loft");
+    let libs = format!("tests{s}lib");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("turn=42 call=200 other=300"),
+            "{backend}: a local named after a library's `pub fn` must bind (42), \
+             and the function stay callable from both a scope with the local (200) \
+             and one without (300); got stdout {stdout:?} stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
