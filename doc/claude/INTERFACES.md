@@ -372,20 +372,14 @@ than it gets credit for. Measured on the current tree, not recalled:
 | `for x in <value>` | **yes** | a `next(self) -> τ?` on the type — a struct iterates like a collection |
 | bounded generics | **yes** | structural satisfaction, no `impl` block |
 | **receive the parts of `"{…}"`** | **yes** | `fn lit(self: T, s: text)` + `fn hole_<kind>(self: T, v: τ)` — the target type decides (@PLN124). A hole may be a scalar OR a value of a named type, whose kind is its own name in method case (`SqlIdent` → `hole_sql_ident`) |
+| **associated types** | **yes** | `type Rows: Cursor` in an interface body; `Self.Rows` in its signatures (@PLN125 arc A) |
 | **`x[i]` indexing** | **no** | `OpIndex` is not dispatched: *"Indexing a non vector"* |
 | **run at scope end** | **no** | no destructor / `#drop` hook |
-| **associated types** | **no** | an interface cannot say "and a cursor type that goes with it" |
 
-Three gaps are left. They are listed in the order the evidence supports, which is
+Two gaps are left. They are listed in the order the evidence supports, which is
 not the order of apparent size:
 
-1. **Associated types.** This one bit twice while building one library. A `sql`
-   interface cannot say "a connection, and the cursor type it produces", so the
-   cursor became state ON the connection; and an interpolation `hole` cannot be
-   generic over the value, so it needs one method per scalar kind. Both are
-   liveable and both are the same missing feature. **@PLN125 arc A.**
-
-2. **A hook at scope end.** loft already computes the fact — the ownership model
+1. **A hook at scope end.** loft already computes the fact — the ownership model
    decides per binding whether this scope owns a value and whether it dies here,
    which is what emits `OpFreeRef` today. So a drop is a call at an existing
    point, not new analysis, and it inherits the early-`return` and loop-epilogue
@@ -396,7 +390,7 @@ not the order of apparent size:
    **@PLN125 arc B** — which requires a second, unrelated consumer before it
    lands, because a hook with one user is a hook whose invariant is untested.
 
-3. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
+2. **Indexing.** The smallest and least urgent: `OpIndex` would let a matrix, a
    bitset, a row or a ring buffer read as `x[i]` instead of `x.at(i)`. Nothing is
    impossible without it; it is the one remaining place where a library type is
    visibly not a built-in one. **@PLN125 arc C.**
@@ -406,6 +400,82 @@ contract declared, every existing program proved byte-identical in IR and native
 Rust, before any new behaviour is routed through it. That ordering is what keeps
 a language change from being a rewrite: the proof that nothing changed is a
 smaller and much earlier step than the feature.
+
+## Associated types — an interface that names a companion type
+
+An interface can name a **type that goes with** the implementor, not only a set of
+methods. A `sql` connection and the cursor it produces are one contract, and
+without this the cursor has to become state ON the connection — which means a
+connection can hold only one, and the type system cannot say so.
+
+```loft
+interface Cursor {
+  fn width(self: Self) -> integer
+}
+
+interface Source {
+  type Rows: Cursor                     // the companion, and what it must satisfy
+  fn open(self: Self) -> Self.Rows      // named in a signature as `Self.<Name>`
+  fn label(self: Self) -> text
+}
+```
+
+An implementor declares the methods, as always — there is no `impl` block, so
+there is nowhere to write the companion down, and nowhere is needed:
+
+```loft
+struct FileRows  { w: integer }
+struct FileSource { path: text }
+
+fn width(self: FileRows) -> integer { return self.w; }
+fn open(self: FileSource) -> FileRows { return FileRows { w: len(self.path) }; }
+fn label(self: FileSource) -> text { return "file"; }
+```
+
+**The rule in one sentence:** an associated type is a type variable owned by the
+interface — inside a generic it dispatches through its declared bounds exactly as
+`<T: I>` does, and at instantiation it binds to the one concrete type the
+implementor's methods agree on, which must satisfy those bounds.
+
+So a generic may hold the companion and call the bound's methods on it, and it
+binds per implementor:
+
+```loft
+fn first_width<S: Source>(s: S) -> integer {
+  r = s.open();        // r is S's own companion — FileRows here
+  return r.width();    // authorised by `type Rows: Cursor`
+}
+```
+
+Three consequences worth stating:
+
+- **The companion is INFERRED from the implementor's signature**, read back
+  through the interface's: where the interface writes `Self.Rows`, the
+  implementor writes a concrete type. Return and parameter positions are both
+  read, and they must AGREE — an implementor whose `open` yields one type while
+  its `feed` takes another is refused rather than resolved by declaration order.
+- **The bound is checked per monomorph**, because the companion is per
+  implementor. A companion missing one of the bound's methods is a compile error
+  naming the implementor, the associated type, the companion, the bound and the
+  method — three of those are invisible at the call site, where the reader only
+  wrote `first_width(s)`.
+- **A bound-less `type Held` still binds.** Nothing of the companion's own is
+  callable — no bound, no methods — but the interface that named it can take it
+  back (`fn keep(self: Self, h: Self.Held)`), and that round trip is what an
+  un-bounded companion is for.
+
+There is **no runtime cost**: generics are static-dispatch and specialise per
+concrete type, so an associated type is a compile-time name and the monomorph is
+byte-identical to the same body written against the concrete types by hand. It is
+not dynamic dispatch and not a trait-object system — it names a type in a
+contract, it does not choose an implementation at run time.
+
+Two rules on the syntax: the name is a type name and is enforced **CamelCase**,
+and `Self.<Name>` is only spellable inside the declaring interface's body —
+elsewhere a `.` after a type is not this construct.
+
+Shipped as @PLN125 arc A; `tests/scripts/pln125-a2c-companion.loft` is the
+behaviour matrix.
 
 ## Interpolation targets — receiving the parts of `"{…}"`
 

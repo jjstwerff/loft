@@ -423,6 +423,13 @@ pub struct Parser {
     /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
     /// set is complete, so `parse_function` reproduces the promoted type.
     par_worker_defs: std::collections::HashSet<u32>,
+    /// @PLN125 — every bound-method stub built on pass 1, as
+    /// `(stub, the interface method it stands in for, the holder that replaced `Self`)`.
+    /// Consumed by `refresh_bound_method_stubs` between the passes, where a forward-
+    /// referenced return type has finally resolved and the stub's hidden parameters can be
+    /// decided correctly. A vector rather than a set: the order is the order stubs were
+    /// created, so the refresh is deterministic.
+    bound_method_stubs: Vec<(u32, u32, u32)>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -859,6 +866,7 @@ impl Parser {
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
+            bound_method_stubs: Vec::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
@@ -1612,6 +1620,11 @@ impl Parser {
         // the boxing lands before `reserve_late_return_buffers` hands the now-heap
         // return its `__retbuf` and before the H5 snapshot counts attributes.
         self.promote_par_worker_tuple_returns();
+        // @PLN125 — the same class, one step earlier in the chain: a bound-method stub's
+        // hidden parameters are decided from the INTERFACE method's return type, which on
+        // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
+        // buffers below and before the H5 snapshot.
+        self.refresh_bound_method_stubs();
         self.reserve_late_return_buffers();
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
@@ -1750,6 +1763,28 @@ impl Parser {
             // already filled it with the bare tuple this promotion replaces.
             self.data.definitions[d as usize].returned =
                 Type::Reference(synthetic_d_nr, crate::data::Deps::none());
+        }
+    }
+
+    /// @PLN125 — re-derive every bound-method stub's signature now that all types resolve.
+    ///
+    /// A stub stands in for the concrete method `re_resolve_call` will substitute, so its
+    /// ABI has to equal that method's ABI. The hidden parameters in that ABI are decided
+    /// from the interface method's RETURN TYPE, and on pass 1 that type can still be an
+    /// unresolved forward reference — an interface method returning a struct declared later
+    /// in the file reads as `Unknown` there, so the `__retbuf` arm never fired. The
+    /// monomorph then gained a `__ref_N` to match the concrete method's arity, with no
+    /// scope and no initialiser, and codegen met a variable that never got a stack slot:
+    /// *"Incorrect var `__ref_2[65535]`"*, an internal compiler error on both backends.
+    ///
+    /// The cure is the one #675 already found for the same question asked of a function's
+    /// own return: ask it HERE, between the passes, where every type IS resolved — never in
+    /// pass 2, which would grow an attribute after pass 1 counted them and break the H5
+    /// two-pass contract. Idempotent wherever the two passes already agreed, which is what
+    /// keeps `bytecode-comparisons/bound-stubs-corpus.loft` byte-identical.
+    fn refresh_bound_method_stubs(&mut self) {
+        for (stub_nr, child_nr, holder_nr) in std::mem::take(&mut self.bound_method_stubs) {
+            self.set_bound_stub_signature(stub_nr, child_nr, holder_nr);
         }
     }
 
@@ -1967,6 +2002,17 @@ impl Parser {
         let type_nr = self.data.def_nr(type_name);
         if type_nr == u32::MAX {
             return false;
+        }
+        // @PLN125 — the other holder of bound stubs is an interface's ASSOCIATED TYPE,
+        // whose stubs are equally pass-2-only when the interface it is bounded by is
+        // declared further down the file. Recognised the same way the rest of the parser
+        // recognises one: a `Struct` child of an `Interface`.
+        let parent = self.data.def(type_nr).parent();
+        if matches!(self.data.def_type(type_nr), DefType::Struct)
+            && parent != u32::MAX
+            && matches!(self.data.def_type(parent), DefType::Interface)
+        {
+            return true;
         }
         (0..self.data.definitions()).any(|g| {
             matches!(self.data.def_type(g), DefType::Generic)
@@ -3773,22 +3819,56 @@ impl Parser {
         None
     }
 
-    /// Check whether the current generic function's bounds include an interface that
-    /// declares the given method.  Returns false if not inside a generic or if no bound
-    /// declares the method.
-    pub(crate) fn has_bound_for_method(&self, method: &str) -> bool {
-        if self.context == u32::MAX {
-            return false;
+    /// The user-facing method name behind an interface child's internal one.
+    ///
+    /// An interface's method stubs are named `__iface_{interface}_{method}` so two
+    /// interfaces can declare the same method without colliding (legacy stubs use
+    /// `t_4Self_{method}`).  Three places need the name back — satisfaction, stub building,
+    /// and companion inference — so it is derived here once.
+    ///
+    /// Answers `None` for a child that is not a method: an interface's children are its
+    /// method stubs AND, since @PLN125 A2b, its associated-type placeholders.  A method
+    /// stub is a `Function` and a placeholder a `Struct`, so the two are told apart by
+    /// `DefType` rather than by name — a placeholder named `Rows` must never read as a
+    /// demand for a `rows()` method.
+    pub(crate) fn interface_method_name(data: &Data, child_nr: u32) -> Option<String> {
+        if !matches!(data.def_type(child_nr), DefType::Function) {
+            return None;
         }
-        let bounds = &self.data.definitions[self.context as usize].bounds;
+        let name = data.def(child_nr).name();
+        let self_prefix = format!("t_{}Self_", "Self".len());
+        Some(if let Some(rest) = name.strip_prefix("__iface_") {
+            rest.split_once('_')
+                .map_or_else(|| rest.to_string(), |(_, m)| m.to_string())
+        } else if let Some(rest) = name.strip_prefix(&self_prefix) {
+            rest.to_string()
+        } else {
+            name.to_string()
+        })
+    }
+
+    /// Check whether the bounds that authorise `holder_nr`'s methods include an interface
+    /// declaring `method`.
+    ///
+    /// The bounds are the HOLDER's, not the enclosing function's. For a generic's type
+    /// variable the two are the same list (a bound `<T: A + B>` is recorded on the function
+    /// that declares it), which is why this used to read only the function. An interface's
+    /// ASSOCIATED type carries its own bounds — `type Rows: Cursor` says which methods a
+    /// `Self.Rows` value has, and the enclosing generic's bounds say nothing about it.
+    pub(crate) fn has_bound_for_method(&self, method: &str, holder_nr: u32) -> bool {
+        let from_holder = (holder_nr != u32::MAX)
+            .then(|| &self.data.definitions[holder_nr as usize].bounds)
+            .filter(|b| !b.is_empty());
+        let bounds = match from_holder {
+            Some(b) => b,
+            None if self.context != u32::MAX => {
+                &self.data.definitions[self.context as usize].bounds
+            }
+            None => return false,
+        };
         for &iface_nr in bounds {
             for child_nr in self.data.children_of(iface_nr) {
-                let name = self.data.def(child_nr).name();
-                // Interface stubs use "__iface_{d_nr}_{method}" naming
-                if let Some(rest) = name.strip_prefix("__iface_")
-                    && let Some((_, m)) = rest.split_once('_')
-                    && m == method
-                {
+                if Self::interface_method_name(&self.data, child_nr).as_deref() == Some(method) {
                     return true;
                 }
             }
@@ -4835,6 +4915,13 @@ impl Parser {
         if existing != u32::MAX {
             return existing;
         }
+        // @PLN125 A2c — a monomorph substitutes a LIST of holders, not one.  The type
+        // variable is the first, and each associated type the bounds declare follows: the
+        // template holds `Source.Rows` wherever the interface wrote `Self.Rows`, and this
+        // is where that name becomes the implementor's own companion.  With no associated
+        // types the list is one long and every step below reads exactly as it did.
+        let mut bindings: Vec<(u32, Type)> = vec![(tv_nr, concrete.clone())];
+        bindings.extend(self.associated_bindings(g_nr, type_nr));
         // Clone the template data before mutating self.data.
         let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
@@ -4843,7 +4930,7 @@ impl Parser {
             .iter()
             .map(|a| Argument {
                 name: a.name.clone(),
-                typedef: Self::substitute_type(a.typedef.clone(), tv_nr, &concrete),
+                typedef: Self::substitute_all(a.typedef.clone(), &bindings),
                 default: a.value.clone(),
                 constant: false,
             })
@@ -4853,17 +4940,25 @@ impl Parser {
         // The per-element iteration stride for vector<T=concrete> — from the
         // ONE home (`vector_elem_iter_stride`), threaded into the fixup so the
         // generic path can never drift from the direct-emission stride again.
-        let iter_stride = i32::from(self.vector_elem_iter_stride(&concrete));
-        let new_code =
-            Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, iter_stride, &self.data);
+        // Per binding, because an associated type is as much a element type as the
+        // type variable is.
+        let mut new_code = tmpl_code;
+        for (holder, bound_to) in &bindings {
+            let iter_stride = i32::from(self.vector_elem_iter_stride(bound_to));
+            new_code = Self::substitute_type_in_value(
+                new_code,
+                *holder,
+                bound_to,
+                iter_stride,
+                &self.data,
+            );
+        }
         // `from_tv` computed on the PRE-substitution template return, identically to
         // `predict_generic_return_type`, so the second-pass instantiated return type
         // matches the first-pass prediction (the cross-pass H5 contract).
         let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
-        let new_returned = self.tuple_return_rewrite(
-            Self::substitute_type(tmpl_returned, tv_nr, &concrete),
-            from_tv,
-        );
+        let new_returned =
+            self.tuple_return_rewrite(Self::substitute_all(tmpl_returned, &bindings), from_tv);
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
         for a in &tmpl_attrs {
@@ -4888,7 +4983,9 @@ impl Parser {
         );
         // Copy the variable table with substituted types.
         let mut vars = Function::copy(&tmpl_vars);
-        vars.substitute_type(tv_nr, &concrete);
+        for (holder, bound_to) in &bindings {
+            vars.substitute_type(*holder, bound_to);
+        }
         // P241 fix (2026-05-11): post-substitution rewrite of the
         // parametric vector-element-write triplet to the primitive
         // shape, plus elm-var type patch.  Runs after both code
@@ -4913,7 +5010,7 @@ impl Parser {
         self.instantiate_nested_generics(d_nr, &concrete);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
-        if !self.check_satisfaction(g_nr, type_nr) {
+        if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
             // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
             // "Unknown function" error — the satisfaction error is sufficient.
             // The function won't execute because parsing will halt on errors.
@@ -4921,10 +5018,164 @@ impl Parser {
         d_nr
     }
 
+    /// @PLN125 A2c — what each associated type of `g_nr`'s bounds binds to, for the
+    /// implementor `concrete_nr`.  One `(placeholder, companion)` pair per associated type
+    /// that can be inferred; the empty vector when the bounds declare none.
+    ///
+    /// The inference is the implementor's own signature read back through the interface's:
+    /// where the interface writes `Self.Rows`, the implementor writes a concrete type, and
+    /// THAT is the companion.  Nothing else can say it — satisfaction is structural, so
+    /// there is no `impl` block to name the companion in.
+    ///
+    /// Both the return and the parameters are read, and every position must AGREE.  An
+    /// implementor whose `open` yields one type while its `feed` takes another does not
+    /// have one companion, and binding to whichever the walk reached first would make the
+    /// answer depend on declaration order.  Disagreement is a compile error naming both
+    /// types, because the alternative is a monomorph typed against a companion the author
+    /// never chose.
+    fn associated_bindings(&mut self, g_nr: u32, concrete_nr: u32) -> Vec<(u32, Type)> {
+        let bounds = self.data.definitions[g_nr as usize].bounds.clone();
+        if bounds.is_empty() || concrete_nr == u32::MAX {
+            return Vec::new();
+        }
+        let concrete_type = self.data.def(concrete_nr).returned().clone();
+        let mut out: Vec<(u32, Type)> = Vec::new();
+        for iface_nr in bounds {
+            let children: Vec<u32> = self.data.children_of(iface_nr).collect();
+            // The placeholders this interface declares — its non-method children.
+            for &ph in &children {
+                if !matches!(self.data.def_type(ph), DefType::Struct) {
+                    continue;
+                }
+                let mut found: Option<(Type, String)> = None;
+                let mut clash: Option<(String, String)> = None;
+                for &child_nr in &children {
+                    let Some(method) = Self::interface_method_name(&self.data, child_nr) else {
+                        continue;
+                    };
+                    let imp = self.data.find_fn(u16::MAX, &method, &concrete_type);
+                    if imp == u32::MAX {
+                        continue;
+                    }
+                    // Every position where the interface named the placeholder, paired with
+                    // what the implementor put there.  Parameters align by index: an
+                    // interface method carries no hidden parameters, and the hidden ones a
+                    // concrete method carries are appended after the declared ones.
+                    let mut candidates: Vec<Type> = Vec::new();
+                    if self.data.def(child_nr).returned().contains_def(ph) {
+                        candidates.push(self.data.def(imp).returned().clone());
+                    }
+                    for a in 0..self.data.def(child_nr).attributes().len() {
+                        if self.data.attr_type(child_nr, a).contains_def(ph)
+                            && a < self.data.def(imp).attributes().len()
+                        {
+                            candidates.push(self.data.attr_type(imp, a));
+                        }
+                    }
+                    for cand in candidates {
+                        let Some(cand_nr) = Self::named_def(&cand) else {
+                            continue;
+                        };
+                        match &found {
+                            None => found = Some((cand, method.clone())),
+                            Some((seen, seen_method)) => {
+                                if Self::named_def(seen) != Some(cand_nr) {
+                                    clash = Some((seen_method.clone(), method.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((first, second)) = clash {
+                    let ph_name = self.data.def(ph).name().to_string();
+                    let concrete_name = self.data.def(concrete_nr).name().to_string();
+                    let msg = crate::diagnostics::diagnostic_format(
+                        Level::Error,
+                        format_args!(
+                            "'{concrete_name}' does not agree with itself about '{ph_name}': \
+                             '{first}' and '{second}' name different types for it",
+                        ),
+                    );
+                    let peek_pos = self.lexer.peek().position.clone();
+                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+                    continue;
+                }
+                if let Some((companion, _)) = found {
+                    out.push((ph, companion));
+                }
+            }
+        }
+        out
+    }
+
+    /// The definition a type NAMES, for a struct, a vector element or a struct-enum —
+    /// `None` for a scalar, which has no definition to compare.
+    fn named_def(tp: &Type) -> Option<u32> {
+        match tp.base() {
+            Type::Reference(d, _) | Type::Enum(d, _, _) => Some(*d),
+            Type::Vector(inner, _) => Self::named_def(inner),
+            _ => None,
+        }
+    }
+
+    /// Every way `concrete_nr` fails to satisfy `iface_nr` — empty when it satisfies it.
+    ///
+    /// One home for the structural judgement, because it is now asked TWICE: of the
+    /// implementor against the generic's bounds, and of the COMPANION against the bound
+    /// declared on an associated type (@PLN125 A2c). Answering with the reasons rather
+    /// than emitting them lets each caller say whose promise was broken; the words after
+    /// the colon are the same either way.
+    fn satisfaction_failures(&self, iface_nr: u32, concrete_nr: u32) -> Vec<String> {
+        let concrete_name = self.data.def(concrete_nr).name().to_string();
+        let concrete_type = self.data.def(concrete_nr).returned().clone();
+        let mut out = Vec::new();
+        for child_nr in self.data.children_of(iface_nr).collect::<Vec<u32>>() {
+            // Only the METHODS are structural satisfaction; a companion type is matched
+            // against the implementor's own by `associated_bindings`, not by looking for a
+            // method of that name.  Without this skip, `type Rows` would demand a `rows()`
+            // method of every implementor and no type could satisfy the interface at all.
+            let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
+                continue;
+            };
+            // I9-prim: use find_fn which checks both the method-style convention
+            // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
+            let mut found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+            // @PLN25 E2 — a synth `__nullable<S>` delegates method/interface
+            // resolution to its underlying `S` (a method call on a nullable
+            // element unwraps through `Some` to call `S`'s method), so satisfy
+            // the bound against `S`'s methods when the wrapper itself lacks them.
+            // Gate-off-inert (no `__nullable<` type exists).
+            if found == u32::MAX
+                && let Some(inner) = concrete_name
+                    .strip_prefix("__nullable<")
+                    .and_then(|r| r.strip_suffix('>'))
+            {
+                let s_nr = self.data.def_nr(inner);
+                if s_nr != u32::MAX {
+                    let s_type = self.data.def(s_nr).returned().clone();
+                    found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
+                }
+            }
+            if found == u32::MAX {
+                out.push(format!("missing {method_suffix}"));
+            } else if let Some(msg) =
+                self.return_type_mismatch(child_nr, found, concrete_nr, &method_suffix)
+            {
+                out.push(msg);
+            }
+        }
+        out
+    }
+
     /// I6: Check that the concrete type (identified by `concrete_nr`) implements every
-    /// interface in `g_nr`'s bounds.  Returns `true` if satisfied (or no bounds),
-    /// `false` and emits a diagnostic for the first missing method otherwise.
-    fn check_satisfaction(&mut self, g_nr: u32, concrete_nr: u32) -> bool {
+    /// interface in `g_nr`'s bounds, and that each companion it binds to an associated type
+    /// satisfies that type's declared bound.  Returns `true` if satisfied (or no bounds),
+    /// `false` and a diagnostic per failure otherwise.
+    ///
+    /// `assoc` is what `instantiate_generic` already inferred for this monomorph — passed
+    /// in rather than recomputed, so a companion the implementor cannot agree on is
+    /// reported once, not once per place that asks.
+    fn check_satisfaction(&mut self, g_nr: u32, concrete_nr: u32, assoc: &[(u32, Type)]) -> bool {
         let bounds = self.data.definitions[g_nr as usize].bounds.clone();
         if bounds.is_empty() {
             return true;
@@ -4933,81 +5184,47 @@ impl Parser {
             return true; // can't check without a concrete type def_nr
         }
         let concrete_name = self.data.def(concrete_nr).name().to_string();
-        let mut satisfied = true;
+        let mut messages: Vec<String> = Vec::new();
         for iface_nr in bounds {
             let iface_name = self.data.def(iface_nr).name().to_string();
-            let children: Vec<u32> = self.data.children_of(iface_nr).collect();
-            for child_nr in children {
-                let child_name = self.data.def(child_nr).name().to_string();
-                // @PLN125 arc A step A2b — an interface's children are its method stubs
-                // AND, since A2b, its associated-type placeholders.  Only the methods are
-                // structural satisfaction; a companion type is matched by A2c against the
-                // implementor's own, not by looking for a method of that name.  Without
-                // this skip, `type Rows` would demand a `rows()` method of every
-                // implementor and no type could satisfy the interface at all.
-                //
-                // Told apart by `DefType`, not by the name: a method stub is registered as
-                // a `Function` and a placeholder as a `Struct`, so this stays right if the
-                // placeholder is ever renamed.
-                if !matches!(self.data.def_type(child_nr), DefType::Function) {
-                    continue;
-                }
-                // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
-                let self_prefix = format!("t_{}Self_", "Self".len());
-                let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
-                    rest.split_once('_')
-                        .map_or(rest.to_string(), |(_, m)| m.to_string())
-                } else if child_name.starts_with(&self_prefix) {
-                    child_name[self_prefix.len()..].to_string()
-                } else {
-                    child_name.clone()
-                };
-                // I9-prim: use find_fn which checks both the method-style convention
-                // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
-                let concrete_type = self.data.def(concrete_nr).returned().clone();
-                let mut found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
-                // @PLN25 E2 — a synth `__nullable<S>` delegates method/interface
-                // resolution to its underlying `S` (a method call on a nullable
-                // element unwraps through `Some` to call `S`'s method), so satisfy
-                // the bound against `S`'s methods when the wrapper itself lacks them.
-                // Gate-off-inert (no `__nullable<` type exists).
-                if found == u32::MAX
-                    && let Some(inner) = concrete_name
-                        .strip_prefix("__nullable<")
-                        .and_then(|r| r.strip_suffix('>'))
-                {
-                    let s_nr = self.data.def_nr(inner);
-                    if s_nr != u32::MAX {
-                        let s_type = self.data.def(s_nr).returned().clone();
-                        found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
-                    }
-                }
-                if found == u32::MAX {
-                    let msg = crate::diagnostics::diagnostic_format(
-                        Level::Error,
-                        format_args!(
-                            "'{concrete_name}' does not satisfy interface '{iface_name}': missing {method_suffix}",
-                        ),
-                    );
-                    let peek_pos = self.lexer.peek().position.clone();
-                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
-                    satisfied = false;
-                } else if let Some(msg) =
-                    self.return_type_mismatch(child_nr, found, concrete_nr, &method_suffix)
-                {
-                    let msg = crate::diagnostics::diagnostic_format(
-                        Level::Error,
-                        format_args!(
-                            "'{concrete_name}' does not satisfy interface '{iface_name}': {msg}",
-                        ),
-                    );
-                    let peek_pos = self.lexer.peek().position.clone();
-                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
-                    satisfied = false;
+            for why in self.satisfaction_failures(iface_nr, concrete_nr) {
+                messages.push(format!(
+                    "'{concrete_name}' does not satisfy interface '{iface_name}': {why}"
+                ));
+            }
+        }
+        // @PLN125 A2c — the bound declared on an associated type is a promise about the
+        // COMPANION, and this is the only place it can be kept: `type Rows: Cursor` says a
+        // generic may call `Cursor`'s methods on whatever `open` returns, and the template
+        // was typed on exactly that promise.  Checked per monomorph, because the companion
+        // is per implementor.
+        //
+        // The message names all four parties, because three of them are invisible at the
+        // call site: the reader wrote `use_it(db)` and gets told about a type they never
+        // mentioned, so it has to say how that type was reached.
+        for (ph, companion) in assoc {
+            let Some(companion_nr) = Self::named_def(companion) else {
+                continue;
+            };
+            let ph_name = self.data.def(*ph).name().to_string();
+            let companion_name = self.data.def(companion_nr).name().to_string();
+            for bound_nr in self.data.definitions[*ph as usize].bounds.clone() {
+                let bound_name = self.data.def(bound_nr).name().to_string();
+                for why in self.satisfaction_failures(bound_nr, companion_nr) {
+                    messages.push(format!(
+                        "'{concrete_name}' binds '{ph_name}' to '{companion_name}', which does \
+                         not satisfy the declared bound '{bound_name}': {why}"
+                    ));
                 }
             }
         }
-        satisfied
+        for message in &messages {
+            let msg =
+                crate::diagnostics::diagnostic_format(Level::Error, format_args!("{message}"));
+            let peek_pos = self.lexer.peek().position.clone();
+            self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+        }
+        messages.is_empty()
     }
 
     /// @PLN125 A2a — does the implementor's method return a DIFFERENT named type
@@ -5356,6 +5573,17 @@ impl Parser {
     }
 
     /// Substitute all occurrences of `Type::Reference(tv_nr, _)` with `concrete` in a type.
+    /// Apply every `(holder → bound-to)` pair of a monomorph to one type, in order.
+    ///
+    /// The pairs are disjoint by construction — a type variable and each associated type
+    /// are separate definitions — so the order only fixes which is tried first, never the
+    /// result.
+    fn substitute_all(tp: Type, bindings: &[(u32, Type)]) -> Type {
+        bindings.iter().fold(tp, |t, (holder, bound_to)| {
+            Self::substitute_type(t, *holder, bound_to)
+        })
+    }
+
     fn substitute_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
             Type::Reference(d, _) if d == tv_nr => concrete.clone(),
@@ -7809,7 +8037,7 @@ impl Parser {
             // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
             if stub_nr != u32::MAX
                 && self.context != u32::MAX
-                && self.has_bound_for_method(&op_method)
+                && self.has_bound_for_method(&op_method, self.data.def_nr(tv_name))
             {
                 let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {

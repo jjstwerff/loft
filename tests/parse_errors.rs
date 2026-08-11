@@ -1337,6 +1337,82 @@ fn satisfaction_accepts_self_as_the_return_type() {
     );
 }
 
+/// @PLN125 A2c: the bound on an associated type is a promise about the COMPANION,
+/// and the only place it can be kept is the monomorph — the companion is per
+/// implementor, so `type Rows: Cursor` cannot be checked until one is chosen.
+///
+/// The message names all four parties because three of them are invisible at the
+/// call site: the reader wrote `use_it(s)` and is being told about a type they
+/// never mentioned, so it has to say how that type was reached.
+#[test]
+fn associated_type_companion_must_satisfy_its_bound() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type Rows: Cursor
+                            fn open(self: Self) -> Self.Rows }
+         struct Bad { z: integer }
+         struct S1 { t: text }
+         fn open(self: S1) -> Bad { Bad { z: len(self.t) } }
+         fn use_it<S: Source>(s: S) -> integer { r = s.open(); r.width() }
+         fn test() { use_it(S1{t:\"x\"}) }"
+    )
+    .error(
+        "'S1' binds 'Source.Rows' to 'Bad', which does not satisfy the declared bound \
+         'Cursor': missing width at associated_type_companion_must_satisfy_its_bound:8:40",
+    );
+}
+
+/// @PLN125 A2c: an implementor's methods must AGREE about what the companion is.
+///
+/// The companion is inferred from every position where the interface named the
+/// placeholder — the return of `open`, the parameter of `feed`. An implementor
+/// that answers two different types there does not have one companion, and
+/// binding to whichever the walk reached first would make the monomorph depend on
+/// declaration order rather than on what the author wrote.
+#[test]
+fn associated_type_companion_must_be_one_type() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type Rows: Cursor
+                            fn open(self: Self) -> Self.Rows
+                            fn feed(self: Self, r: Self.Rows) -> integer }
+         struct RowsA { a: integer }
+         struct RowsB { b: integer }
+         fn width(self: RowsA) -> integer { self.a }
+         fn width(self: RowsB) -> integer { self.b }
+         struct S2 { t: text }
+         fn open(self: S2) -> RowsA { RowsA { a: len(self.t) } }
+         fn feed(self: S2, r: RowsB) -> integer { r.b + len(self.t) }
+         fn use_it<S: Source>(s: S) -> integer { r = s.open(); r.width() }
+         fn test() { use_it(S2{t:\"x\"}) }"
+    )
+    .error(
+        "'S2' does not agree with itself about 'Source.Rows': 'open' and 'feed' name \
+         different types for it at associated_type_companion_must_be_one_type:13:40",
+    );
+}
+
+/// @PLN125 A2c: an associated type's name is a TYPE name and follows the same
+/// rule as every other one.
+///
+/// It is also load-bearing rather than cosmetic: it becomes the
+/// `t_<LEN><Interface>.<Name>_<method>` dispatch stub, whose LEN prefix is parsed
+/// back to recover the method name — an underscore in it would split that name in
+/// the wrong place and silently leave the call on the template stub.
+#[test]
+fn associated_type_name_must_be_camel_case() {
+    code!(
+        "interface Cursor { fn width(self: Self) -> integer }
+         interface Source { type row_set: Cursor
+                            fn open(self: Self) -> Self.row_set }
+         fn test() {}"
+    )
+    .error(
+        "Associated type 'row_set' must be CamelCase at \
+         associated_type_name_must_be_camel_case:2:42",
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable

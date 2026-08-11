@@ -242,10 +242,22 @@ impl Parser {
             // in `definitions.rs:670+`); on first pass it doesn't.
             // Both branches end up at `parse_method(stub_nr, t)`; the
             // first-pass branch creates the stub on demand if missing.
-            if let Some(_tv_name) = self.generic_type_name(&t) {
+            //
+            // @PLN125 A2c — the receiver may equally be an interface's ASSOCIATED type
+            // (`r = s.open(); r.width()`, where `open` is declared `-> Self.Rows`). It is
+            // the same shape: a name with declared bounds and no definition yet, so the
+            // bounds are what authorise the call — the HOLDER's bounds, which for an
+            // associated type are its own `type Rows: Cursor` and not the generic's.
+            if self.generic_type_name(&t).is_some() {
+                // `generic_type_name` answers `Some` only for a `Reference`, so this is
+                // the same definition it just named.
+                let holder_nr = match &t {
+                    Type::Reference(d, _) => *d,
+                    _ => u32::MAX,
+                };
                 let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
                 if stub_nr != u32::MAX
-                    && self.has_bound_for_method(&field)
+                    && self.has_bound_for_method(&field, holder_nr)
                     && self.lexer.has_token("(")
                 {
                     return self.parse_method(code, stub_nr, t.clone());
