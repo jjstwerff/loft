@@ -39,6 +39,14 @@ tables.
   a scope end runs AFTER the function body, so a resource whose owner is closed inside
   that body must be released explicitly first; and the release must be idempotent,
   because exhaustion and the scope end both call it. INTERFACES.md § `OpDrop`.
+  Two things the filed scope does not say, both measured on BOTH backends:
+  the source dropping is only VISIBLY early when the container OUTLIVES that scope
+  (returned) — inside one scope the source dies last anyway, which is why the shape
+  reads as working; and a **`vector` of droppables is worse than a struct field** —
+  `v: vector<H> = [mk(8), mk(9)]` closes id 9 TWICE and id 8 never, because the
+  inline call's lift temp and the caller-side return buffer name one record and BOTH
+  carry a scope-exit drop (a one-element vector is fine, so a two-element test is the
+  smallest that shows it). Do not put a droppable in a collection at all yet.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.
