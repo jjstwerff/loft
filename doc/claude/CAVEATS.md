@@ -46,7 +46,11 @@ tables.
   value MOVED into an element had its store released by the copy, and the consumed
   source's scope-exit drop then ran on a recycled record — `[mk(8), mk(9)]` closed id
   9 twice and id 8 never). A moved element now drops NOT AT ALL, which is the same
-  state a struct field is in: the open half is whether a container's copy should drop.
+  state a struct field is in. The remaining half is scheduled: a droppable copied into a
+  container is a MOVE, and the container's death drops what it owns (@PLN139) — with the
+  scope boundary decided in [DESIGN_DECISIONS.md § C111](DESIGN_DECISIONS.md): *a drop
+  runs when the value's OWNER dies; taking a value out of its owner does not*, so
+  removing or overwriting a collection element will not drop it.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.

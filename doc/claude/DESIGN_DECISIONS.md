@@ -3138,3 +3138,70 @@ into a store, pointing at records that hold their own key — is exactly what th
   builder or accumulator that legitimately takes any renderable value — or when a
   multi-parameter generic type has a use that a record set genuinely cannot express. New
   evidence means a real consumer, not a shape that reads more familiar from another language.
+
+---
+
+## C111 — a drop cascade reaches a container's death, not an element's removal
+
+**Catalogue:** @F-drop (`OpDrop`, @PLN125 arc B) · loft#849
+
+### Context
+
+`OpDrop` runs where a value's own free runs. loft#849 is what happens when the value is put
+INSIDE something: a struct field, an enum payload, a collection element. A field COPIES at
+construction, so wrapping a droppable leaves two records holding one resource — and it is the
+SOURCE that drops, while the container's copy is never dropped at all.
+
+The answer chosen is **move-on-construction**: copying a droppable into a container transfers
+ownership, so the source no longer drops and the container's death drops what it owns. The
+refusal alternative (a type with `OpDrop` may not be a container member) was rejected because the
+sanctioned workaround — `disown` after constructing the container — REQUIRES the droppable to be
+a field, so a declaration-site refusal rejects its own cure, and with the collection case in
+scope it would have to cover `vector<T>` as well.
+
+That leaves one question, and it is a question about the GUARANTEE rather than the mechanism:
+which container deaths run the cascade?
+
+### Evaluation
+
+Every death site with a statically known type can be emitted: a named binding's scope end, a
+temp's, a nested field's, a collection's own scope end. One class cannot: an element that dies
+**without** its container dying — `v.remove(i)`, or `v[i] = x` overwriting the old element. Those
+release through the runtime store cascade (`free_named` walking DbRef fields), so running a drop
+there means the runtime calling back into user code — re-entering `State` for the interpreter and
+calling a generated symbol for `--native`.
+
+Two things argue against paying that:
+
+- **A drop cannot fail and cannot be observed by its caller** (the @PLN125 arc B contract), so a
+  drop invoked from inside a free has no way to report anything either. It would be the deepest
+  re-entrancy in the runtime for the least observable effect.
+- **The free cascade is the one path the heap invariant rests on** (priority #1). Making it call
+  user code — which can allocate, free, and reach the same store — puts arbitrary loft execution
+  inside the operation that maintains the invariant.
+
+The cost of NOT paying it is a partial guarantee, which for RAII is the uncomfortable kind: it
+looks like it works until someone removes an element. That is real, and it is why this is a
+register entry rather than a footnote — the boundary has to be stated where a reader will find
+it, not discovered.
+
+### Decision
+
+**Partial, 2026-08-11.** The cascade covers container deaths whose type is statically known at
+the death site. **Removing or overwriting a collection element does NOT run the element's drop**
+— the resource leaks and the program is otherwise correct. A droppable meant to be released on
+removal needs an explicit call (`v[i].close()` before the overwrite), the same way a resource
+whose owner closes inside the function body already does.
+
+The rule to state in the contract is therefore not "a drop always runs" but:
+
+> A drop runs when the value's OWNER dies. Taking a value out of its owner does not.
+
+### Revisit when
+
+A consumer meets it for real — a long-lived collection of live resources that is churned rather
+than dropped whole (a connection pool that evicts, a cache of open handles). That is the shape
+this boundary actually hurts, and none exists yet: @PLN138's registry wraps ONE cursor per
+backend and drops it whole. New evidence means such a consumer, not the observation that Rust's
+`Vec` drops its elements on `remove` — Rust can afford it because `Drop::drop` is an ordinary
+monomorphised call, not a re-entry into an interpreter.
