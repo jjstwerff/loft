@@ -113,8 +113,18 @@ Each stage lands against the matrix below, on BOTH backends, with the full gate 
   It also forced the last ownership hole closed: a copy into an element from a NAMED local sets
   no `0x8000` bit (the source stays live), so once elements release, the local releasing too is
   one resource released twice. An element append is now a transfer on the same terms as a field.
-- **F — the contract.** INTERFACES.md § `OpDrop` rewritten to the owner rule, CAVEATS entry
-  retired, C111 cross-linked. THE REMAINING STAGE.
+- **F — the contract. SHIPPED.** INTERFACES.md § `OpDrop` rewritten to the owner rule, with a
+  worked container example and a "three things a drop does NOT do" section; LOFT.md's one-line
+  summary follows it; the CAVEATS entry is cut down to the residual surprises and points at the
+  contract. Every claim in the new prose was RUN before it was written — the documented example
+  and all three non-guarantees (removal/overwrite leaks, keyed collections do not release, two
+  containers release twice) are verified on both backends, so the doc states measured behaviour
+  rather than intended behaviour.
+
+**The plan is complete.** All six stages shipped, the 14-cell matrix matches hand-computed
+expectations on both backends, `LOFT_STRICT_STORES` clean, full suite green. Guards:
+`tests/owns_droppable.rs` (stage A), `tests/scripts/139-drop-cascade.loft` (B–E, 18 cells),
+`tests/scripts/849-move-copy-source-drop.loft` (the collection half of loft#849).
 
 ## Open, found while building
 
