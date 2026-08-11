@@ -72,6 +72,79 @@ fn idx_command(args: &[&str]) -> Command {
 // `index/tags.json`.  Serialising into one test avoids the
 // race without needing a global mutex.
 // @speed 2.3
+/// @PLN119 arc F — the index covers exactly what git carries.
+///
+/// The scanner used to enumerate a hard-coded list of source roots, pruned by a
+/// hand-maintained set of directory names that mean "ignored" (`target`,
+/// `node_modules`, `pkg`, `generated`, a worktree…). Every comment in that list
+/// said what it really was — "bash's `git ls-files` skips these" — and a copy of
+/// `.gitignore` maintained by hand is stale the moment anyone edits the real one.
+///
+/// It was stale in both directions when this landed: four TRACKED source trees
+/// (`fuzz/`, `loft-ffi/`, `loft-ffi-build/`, `loft-ffi-macros/`) were never
+/// indexed at all because nobody added them to the root list, while a leftover
+/// `lib/.loft_test_tmp_*/` scratch directory WAS, because nobody had added that
+/// name to the skip list.
+///
+/// So the property is now the one that was always meant: **every file the index
+/// mentions is a file git carries, and a tracked file outside the old root list
+/// is covered.** Both halves matter — the first alone passes on an index that
+/// covers nothing.
+fn check_index_matches_git() {
+    let carried: std::collections::HashSet<String> = {
+        let out = Command::new("git")
+            .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+            .output()
+            .expect("failed to spawn git ls-files");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        carried.len() > 500,
+        "git listed {} files — this test is measuring nothing",
+        carried.len()
+    );
+
+    // Pull the paths out by hand rather than adding a JSON dependency: the
+    // rows are `{"file":"<path>","line":N,…}`, and what is being checked is
+    // the set of paths, not the document's shape (which `idx` already reads).
+    let index = std::fs::read_to_string("index/tags.json").expect("read index/tags.json");
+    let mut indexed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for chunk in index.split("\"file\":\"").skip(1) {
+        if let Some(end) = chunk.find('"') {
+            indexed.insert(&chunk[..end]);
+        }
+    }
+    assert!(
+        indexed.len() > 500,
+        "the index names {} files — this test is measuring nothing",
+        indexed.len()
+    );
+
+    let strays: Vec<&&str> = indexed.iter().filter(|p| !carried.contains(**p)).collect();
+    assert!(
+        strays.is_empty(),
+        "the index names {} file(s) git does not carry — the enumeration has \
+         drifted away from `git ls-files`: {:?}",
+        strays.len(),
+        &strays[..strays.len().min(10)]
+    );
+
+    // Coverage: a tracked file in a tree the old hard-coded root list never
+    // mentioned. If `loft-ffi` is ever removed, replace this with another —
+    // the point is that the root list is gone, not that this path exists.
+    let outside = "loft-ffi/src/lib.rs";
+    if carried.contains(outside) {
+        assert!(
+            indexed.contains(outside),
+            "`{outside}` is tracked but not indexed — the scanner is back to \
+             enumerating a fixed list of roots"
+        );
+    }
+}
+
 #[test]
 fn index_hygiene_clean() {
     // 1. Refresh the index.  `make index` must exit 0.
@@ -86,6 +159,12 @@ fn index_hygiene_clean() {
         String::from_utf8_lossy(&make.stdout),
         String::from_utf8_lossy(&make.stderr)
     );
+
+    // 1b. @PLN119 arc F — the index covers exactly what git carries.
+    //     Here rather than in a test of its own: two tests running `make index`
+    //     concurrently corrupt `index/tags.json`, which is why this file has
+    //     one gate rather than several.
+    check_index_matches_git();
 
     // 2. Phase 03 — broken @-tag refs.
     let broken_tags = idx_command(&["broken"])

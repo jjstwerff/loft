@@ -186,6 +186,22 @@ pub fn diff_file(base: text, path: text) -> text {
   ask(8, base, path, 0)
 }
 
+// Every file in the working tree git would carry — tracked, plus untracked that
+// is not ignored — as repository-relative paths.
+//
+// The question a tool that walks the repository actually wants.  Walking the
+// filesystem instead means keeping a list of directory names that mean
+// "ignored" (`target`, `node_modules`, `pkg`, a worktree, whatever the next
+// build tool adds), and that list is a copy of `.gitignore` maintained by hand
+// and out of date the moment someone edits the real one.
+pub fn tracked_files() -> vector<text> {
+  out: vector<text> = [];
+  for line in ask(13, "", "", 0).split('\n') {
+    if len(line) > 0 { out += [line]; }
+  }
+  out
+}
+
 // One commit in full, as `git show` prints it.
 pub fn show(sha: text) -> text {
   ask(9, sha, "", 0)

@@ -31,9 +31,10 @@ The engine host — sockets, client table, event queue — runs in a worker too,
 a live websocket client sees the same conversation either way
 ([the engine-host wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
 
-**What is left:** `make index`'s "filter loft to bash-tracked files" workaround,
-which wants one more `lib/git` query (`ls-files`); and the open questions below
-that are genuinely open rather than answered.
+**Every consumer this plan named is done**, including `make index`'s
+bash-tracked-files workaround — see
+[the tracker index](#arc-f-third-the-tracker-index-2026-08-11).  What is left is
+the open questions below that are genuinely open rather than answered.
 Opened 2026-07-24 from the question "does loft have a safe way to spawn
 sub-processes?".  It does not, and the answer is deliberately not to add one:
 `lib_plans/67-process/`'s `run(cmd, args) -> {stdout, stderr, code}` is
@@ -192,7 +193,7 @@ Guards: `tests/placement_parity.rs`.
 | **C** — ownership + lifetime across the boundary, proven with the @PLN94 oracle | this README + Q2 | **Done 2026-08-11** — the delivery three-way, the `const` no-write guarantee, and a failed crossing that maps neither arena ([Arc C as built](#arc-c-as-built-2026-08-11)). Also closes arc D's second half |
 | **D** — fault isolation: worker death → typed loft error, caller stores provably intact | this README | **Done 2026-08-11** — a killed worker is an error, not a hang ([Arc D as built](#arc-d-as-built-2026-08-11)) |
 | **E** — `placement = "remote"` | this README | **Done 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)) — over a socket, with the arena's bytes on it. NOT over the paged / Range reader, and [#632](https://github.com/loft-lang/loft/issues/632) was never a blocker |
-| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **Done 2026-08-11** — `lib/git` ([Arc F](#arc-f-as-built-2026-08-11)) deleted the viewer's bash; the engine host is placeable and proven against a live client ([the engine-host wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)) |
+| **F** — consumers: `lib/git` first, then the engine_host wire | [lib_plans/67-process](../../lib_plans/67-process/README.md) | **Done 2026-08-11** — `lib/git` ([Arc F](#arc-f-as-built-2026-08-11)) deleted the viewer's bash, the engine host is placeable against a live client ([the wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)), and the tracker index asks git ([the index](#arc-f-third-the-tracker-index-2026-08-11)) |
 
 ## Arc A as built (2026-08-11)
 
@@ -461,6 +462,40 @@ Borrowing a slot per CALL, rather than once, is new — and it found two things 
 `LOFT_TRACE_ARENA=1` narrates what each side put in the arena and read back out,
 which is the instrument that found (3) and (4) above in minutes — and, with the
 process id on each line, which of the two sides was walking the table.
+
+## Arc F, third — the tracker index (2026-08-11)
+
+`make index`'s scanner walked a hard-coded list of eleven source roots, pruned by
+a hand-maintained set of directory names that mean "ignored" — `target`,
+`node_modules`, `pkg`, `pkg-*`, `generated`, `worktrees` — plus a special case
+for the top level.  Every comment in that skip list said what it really was:
+*"bash's `git ls-files` skips these"*.  A copy of `.gitignore` maintained by
+hand, in other words, and stale the moment anyone edits the real one.
+
+It now asks git: `git::tracked_files()` over one more `Query`
+(`ls-files --cached --others --exclude-standard` — what git would CARRY, so a
+file added but not committed is indexed and a build artefact is not).  The root
+list, the skip list and the top-level special case are all gone.
+
+**It was stale in both directions, which is the answer to "was this worth it".**
+Four TRACKED source trees — `fuzz/`, `loft-ffi/`, `loft-ffi-build/`,
+`loft-ffi-macros/` — were never indexed at all, because nobody added them to the
+root list; and a leftover `lib/.loft_test_tmp_*/` scratch directory WAS indexed,
+because nobody had added that name to the skip list.  Net: 8 files gained, 2 lost,
+and every tracker tag in loft's FFI crates became visible for the first time.
+
+Guard: `index_hygiene_clean` now also asserts the property that was always meant
+— **every file the index names is one git carries**, plus a coverage half so it
+cannot pass on an index that covers nothing.
+
+### And it closed a real gap in `lib/git`
+
+`make index` compiles its scanner (`--native-release`), which is how it turned
+out that **`lib/git` was interpreter-only**: the native backend resolves a
+runtime function through `CODEGEN_RUNTIME_FNS` by loft DEF NAME, and nothing had
+registered `n_git_query`.  Exactly the lesson the engine-host wire had just
+taught, arriving from the other direction.  Both backends now share one `answer`
+function, so they cannot drift.
 
 ## Arc F, second half — the engine-host wire (2026-08-11)
 
@@ -858,9 +893,9 @@ the @PLN94 oracle, and that belongs with arc C.
    ([Arc F](#arc-f-as-built-2026-08-11), [the engine-host
    wire](#arc-f-second-half--the-engine-host-wire-2026-08-11)).
    `tools/viewer/refresh.sh` is deleted (135 lines of bash, and the dashboard's
-   dependency on `jq` with it), and the engine host is placeable.  What remains:
-   `make index`'s "filter loft to bash-tracked files" workaround, which wants one
-   more `Query` (`ls-files`).
+   dependency on `jq` with it), the engine host is placeable, and `make index`
+   asks git which files the repository carries instead of mirroring `.gitignore`
+   by hand ([the tracker index](#arc-f-third-the-tracker-index-2026-08-11)).
 9. ~~**Arc E**~~ — **DONE 2026-08-11** ([Arc E as built](#arc-e-as-built-2026-08-11)),
    over a socket rather than the Range reader the row assumed.
 

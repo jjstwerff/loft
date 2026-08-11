@@ -67,6 +67,9 @@ enum Query {
     LogShas = 11,
     /// The paths that differ from `<ref>`, one per line.
     ChangedNames = 12,
+    /// Every file in the working tree git would carry: tracked, plus untracked
+    /// that is not ignored.
+    LsFiles = 13,
 }
 
 impl Query {
@@ -85,6 +88,7 @@ impl Query {
             10 => Query::ShowNumstat,
             11 => Query::LogShas,
             12 => Query::ChangedNames,
+            13 => Query::LsFiles,
             _ => return None,
         })
     }
@@ -130,6 +134,17 @@ fn argv(query: Query, a: &str, b: &str, n: i64) -> Vec<String> {
         Query::DiffFile => vec![s("diff"), format!("{a}...HEAD"), s("--"), s(b)],
         Query::Show => vec![s("show"), s(a)],
         Query::ShowNumstat => vec![s("show"), s(a), s("--numstat"), s("--pretty=format:")],
+        // `--cached --others --exclude-standard`: what git would CARRY, which is
+        // not the same as what it tracks. A file added but not yet committed is
+        // part of the work; a build artefact `.gitignore` names is not — and the
+        // distinction is git's to make, which is the whole point of asking it
+        // instead of maintaining a list of directory names that mean "ignored".
+        Query::LsFiles => vec![
+            s("ls-files"),
+            s("--cached"),
+            s("--others"),
+            s("--exclude-standard"),
+        ],
     }
 }
 
@@ -190,8 +205,16 @@ pub fn n_git_query(stores: &mut Stores, stack: &mut DbRef) {
     let a = *stores.get::<Str>(stack);
     let kind = *stores.get::<i64>(stack);
 
-    let (code, text) = match Query::from_code(kind) {
-        Some(q) => run(q, a.str(), b.str(), n, dir.str()),
+    let (code, text) = answer(kind, a.str(), b.str(), n, dir.str());
+    *stores.store_mut(&out).addr_mut::<String>(out.rec, out.pos) = text;
+    stores.put(stack, code);
+}
+
+/// The whole query, independent of which backend asked — so the interpreter and
+/// the compiled call cannot answer differently.
+fn answer(kind: i64, a: &str, b: &str, n: i64, dir: &str) -> (i64, String) {
+    match Query::from_code(kind) {
+        Some(q) => run(q, a, b, n, dir),
         // An unknown code is a loft/binary mismatch, not a git failure: a
         // library built against a newer vocabulary asking an older binary.
         None => (
@@ -200,9 +223,34 @@ pub fn n_git_query(stores: &mut Stores, stack: &mut DbRef) {
                 "this loft does not know git query {kind} — the library is newer than the binary"
             ),
         ),
-    };
-    *stores.store_mut(&out).addr_mut::<String>(out.rec, out.pos) = text;
-    stores.put(stack, code);
+    }
+}
+
+/// The compiled backend's twin.
+///
+/// `--native` resolves a runtime function by loft DEF NAME through
+/// `CODEGEN_RUNTIME_FNS`, and a `&text` out-parameter arrives as `&mut String`
+/// (the shape `OpGetFileText` already uses). Without this, `lib/git` is
+/// **interpreter-only** — which `make index` found at once, because it compiles
+/// its scanner.
+pub mod typed {
+    use crate::database::Stores;
+    use std::cell::UnsafeCell;
+
+    /// See [`super::n_git_query`].
+    pub fn n_git_query(
+        _cell: &UnsafeCell<Stores>,
+        kind: i64,
+        a: &str,
+        b: &str,
+        n: i64,
+        dir: &str,
+        out: &mut String,
+    ) -> i64 {
+        let (code, text) = super::answer(kind, a, b, n, dir);
+        *out = text;
+        code
+    }
 }
 
 #[cfg(test)]
@@ -245,8 +293,27 @@ mod tests {
     /// wrong — and `-c`, which names programs git will RUN, is unreachable.
     #[test]
     fn the_caller_chooses_no_subcommand_and_no_config() {
-        let reads = ["rev-parse", "log", "diff", "status", "show", "rev-list"];
-        for code in 0..=12 {
+        let reads = [
+            "rev-parse",
+            "log",
+            "diff",
+            "status",
+            "show",
+            "rev-list",
+            "ls-files",
+        ];
+        // Found rather than written down, so adding a query cannot leave it
+        // unchecked. The vocabulary is append-only, so counting up from zero
+        // reaches exactly its top — and this test failing when a query is added
+        // is the check working, not a chore.
+        // Bounded rather than open: the vocabulary is a `u8` discriminant, so
+        // 256 is past every possible entry, and an unbounded scan on a table
+        // that answered `Some` forever would hang instead of failing.
+        let top = (0i64..256)
+            .take_while(|&c| Query::from_code(c).is_some())
+            .count() as i64;
+        assert!(top >= 14, "the vocabulary shrank to {top} queries");
+        for code in 0..top {
             let q = Query::from_code(code).expect("every code below the top is a query");
             let v = argv(q, "main", "some/path", 20);
             assert!(
@@ -261,7 +328,7 @@ mod tests {
             );
         }
         assert!(
-            Query::from_code(13).is_none(),
+            Query::from_code(top).is_none() && Query::from_code(i64::MAX).is_none(),
             "the vocabulary must be closed at its top, or an unknown code runs \
              whatever the next entry happens to be"
         );

@@ -271,6 +271,12 @@ existed only because loft could not call git, and the review dashboard's
 dependency on `jq` along with it. It also fixed a bug on the way: the bash split
 `git log` output on tabs, and a commit subject may contain one.
 
+The second was the tracker indexer, which used to walk a hard-coded list of
+source directories minus a hand-written list of names that mean "ignored"
+(`target`, `node_modules`, `pkg`…). It asks git now. That list had drifted both
+ways: four tracked source trees were never indexed at all, and a leftover test
+scratch directory was.
+
 ### A library can run in its own process, and you cannot tell from the code
 
 A library adds one line to its own `loft.toml`:

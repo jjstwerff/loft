@@ -39,11 +39,31 @@
 // @PLN9: cwd-relative repo-root scanner — reads doc/, src/, etc. from the
 // working directory; #cwd opts out of the program-relative default.
 #cwd
-fn source_roots() -> vector<text> {
-    // Match the set bash's `git ls-files` enumerates.  `examples`
-    // is included optimistically (currently empty); `.claude` and
-    // `.config` are dot-dirs that git tracks intentionally.
-    [".claude", ".config", "bench", "default", "doc", "lib", "scripts", "src", "tests", "tools", "examples"]
+
+// @PLN119 arc F — git as a typed library, so this scanner can ask which
+// files the repository actually carries.
+use git;
+// Every indexable file in the repository, asked of git rather than
+// worked out.
+//
+// This used to be a hard-coded root list plus a hand-maintained set
+// of directory names that mean "ignored" (`target`, `node_modules`,
+// `pkg`, `generated`, a worktree...) plus a special case for the
+// top level.  All three were the same thing: a copy of `.gitignore`
+// maintained by hand, and stale the moment anyone edited the real
+// one.  Every comment in that skip list said so — "bash's
+// `git ls-files` skips these" — so now we ask git.
+//
+// `tracked_files()` is `--cached --others --exclude-standard`: what
+// git would CARRY.  A file added but not yet committed is part of
+// the work and gets indexed; a build artefact `.gitignore` names is
+// not.  That distinction is git's to make.
+fn indexable_files() -> vector<text> {
+    out: vector<text> = [];
+    for p in git::tracked_files() {
+        if is_indexable_ext(p) { out += [p]; }
+    }
+    out
 }
 
 // ── Leaf helpers (declared first so the validators below can
@@ -298,77 +318,12 @@ struct LinkRef {
     ctx_escaped: text
 }
 
-// Directory names to skip during the recursive walk.  Any
-// match (basename equality) prunes the entire subtree.
-fn is_skipped_dir(name: text) -> boolean {
-    if name == "target" { return true; }
-    if name == ".git" { return true; }
-    if name == "node_modules" { return true; }
-    if name == ".loft" { return true; }
-    // `bin` and `state` show up under tools/viewer/ and
-    // tools/indexer/ as build-output / runtime-state dirs but
-    // ALSO as legit code dirs (e.g., src/state/codegen.rs).
-    // The bin dirs hold non-indexable binaries; the state dirs
-    // hold non-indexable JSON.  Neither has indexable
-    // extensions, so we don't actually need to skip them — the
-    // is_indexable_ext filter does the work.  Kept the previous
-    // exclusion of generated test artefacts (tests/generated/
-    // is .gitignored) since loft otherwise picks up their
-    // tag refs and bash doesn't.
-    if name == "generated" { return true; }
-    // Git worktree dirs (`.claude/worktrees/`) are local-only
-    // copies of in-flight work; bash's `git ls-files` skips
-    // them because they're untracked, but the loft walker would
-    // descend into them and re-index every loft source twice.
-    if name == "worktrees" { return true; }
-    // `pkg` directories hold WASM / package build output
-    // (`loft.js` / `loft_bg.wasm` / generated README).  The
-    // generated README contains relative links anchored to
-    // the wrong root and would surface as false-positive
-    // broken links — bash's `git ls-files` skips these
-    // (they're gitignored); loft mirrors via the dir name.
-    // `pkg-mt` (the threaded bundle, @PLN117) is the same
-    // output under a different name, so match the family.
-    if name == "pkg" { return true; }
-    if name.starts_with("pkg-") { return true; }
-    false
-}
-
 // Aliases that resolve to the leaf helpers near the top of
 // the file.  Kept distinct names so older callers below didn't
 // have to be renamed when the validators were added — both
 // names compile to the same body.
 fn is_digit(c: character) -> boolean { is_digit_leaf(c) }
 fn is_word_char(c: character) -> boolean { is_word_char_leaf(c) }
-
-// Walks the tree rooted at `path`, calling visit on every
-// indexable file.  Pruning happens at directory boundaries
-// (is_skipped_dir).  visit receives the relative path so
-// downstream code can write it as-is into the index.
-fn walk_tree(root: text) -> vector<text> {
-    out: vector<text> = [];
-    walk_into(root, out);
-    out
-}
-
-fn walk_into(path: text, out: vector<text>) {
-    f = file(path);
-    if f.format == Format.NotExists { return; }
-    if f.format == Format.Directory {
-        for child in f.files() {
-            cp = child.path;
-            base = cp.basename();
-            if child.format == Format.Directory {
-                if is_skipped_dir(base) { continue; }
-                walk_into(cp, out);
-            } else if is_indexable_ext(cp) {
-                out += [cp];
-            }
-        }
-    } else if is_indexable_ext(path) {
-        out += [path];
-    }
-}
 
 // `basename_of` removed in @PLAN37 phase 10.16 — call sites
 // updated to `cp.basename()` (stdlib method shipped in 10.9).
@@ -1683,31 +1638,13 @@ fn main() {
     rows: vector<RawRef> = [];
     links: vector<LinkRef> = [];
     timings = ScanTimings {};
-    // Top-level indexable files (CLAUDE.md, README.md,
-    // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
-    // they don't require the recursive walker to descend from
-    // `.` (which would re-walk every source root and double-count).
-    // file(".").files() returns paths with a leading `./`; strip
-    // it so the output matches the bash scanner's bare-relative
-    // shape (`CLAUDE.md`, not `./CLAUDE.md`).
-    root = file(".");
-    if root.format == Format.Directory {
-        for entry in root.files() {
-            if entry.format != Format.Directory && is_indexable_ext(entry.path) {
-                p = entry.path;
-                if p.starts_with("./") { p = p[2..p.size()]; }
-                scan_file(p, rows, links, timings);
-            }
-        }
+    // One enumeration, repository-relative and already pruned — git
+    // knows what it carries, including the top-level files that used
+    // to need a special case of their own.
+    for fp in indexable_files() {
+        scan_file(fp, rows, links, timings);
     }
-    if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
-    for src_root in source_roots() {
-        files = walk_tree(src_root);
-        for fp in files {
-            scan_file(fp, rows, links, timings);
-        }
-    }
-    if profile { t_now = ticks(); eprintln("  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
+    if profile { t_now = ticks(); eprintln("  perf: scan {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
     if profile {
         eprintln("    sub: file IO {timings.st.io_us / 1000}ms / scan loop {timings.st.walk_us / 1000}ms over {timings.st.file_count} files");
     }
