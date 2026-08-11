@@ -174,6 +174,33 @@ fn a_call_in_a_loop_keeps_its_answer() {
 }
 
 #[test]
+fn a_warning_in_the_library_does_not_decide_whether_it_can_be_placed() {
+    // A library that is CORRECT but not diagnostic-free. The worker loads it
+    // through `parse_dir`, which used to refuse a directory whose parse
+    // reported ANYTHING — so one `never-read` warning made the consumer exit 1
+    // under `placement = "process"` and 0 in-process, i.e. placement decided
+    // whether the program ran at all. Errors still stop the load; warnings and
+    // advice never did gate anything else in loft, and now do not gate this.
+    let library = "pub fn ok(a: integer, unused: integer) -> integer {\n    a * 2\n}\n";
+    let consumer = "use parity;\nfn main() {\n    println(\"ok = {ok(21, 5)}\");\n}\n";
+    let (inproc, placed) = both_placements("warned", library, consumer);
+    assert_eq!(
+        inproc.code, 0,
+        "the in-process run must succeed: {}",
+        inproc.stderr
+    );
+    // The warning has to be REAL, or this test would pass on a library that
+    // never had one — the same blindness `the_gate_can_fail` guards against.
+    assert!(
+        inproc.stderr.contains("never read"),
+        "the probe library no longer warns, so it proves nothing: {:?}",
+        inproc.stderr
+    );
+    assert_indistinguishable("a library that warns", &inproc, &placed);
+    assert!(inproc.stdout.contains("ok = 42"), "{:?}", inproc.stdout);
+}
+
+#[test]
 fn the_gate_can_fail() {
     // A parity gate that cannot report a difference would pass forever. Give the
     // two placements DIFFERENT library sources and require the comparison to

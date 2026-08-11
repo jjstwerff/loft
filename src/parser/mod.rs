@@ -2410,11 +2410,26 @@ impl Parser {
             let data = metadata(&f)?;
             if data.is_dir() {
                 self.parse_dir(&f, default, debug)?;
-            } else if !self.parse(&f, default) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{}", self.diagnostics),
-                ));
+            } else {
+                self.parse(&f, default);
+                // Errors stop the load; warnings and advice do not.  `parse`
+                // answers the narrower question "was anything at all reported",
+                // so gating on it refuses a directory over a deprecation notice
+                // — against loft's own tier rule, which is that a diagnostic
+                // gates if and only if ignoring it can produce a wrong result.
+                //
+                // The refusal was not academic.  This is the path a
+                // process-placed library's worker loads through (@PLN119), so
+                // one `never-read` warning in a library made its consumer exit
+                // 1 under `placement = "process"` and 0 in-process — placement
+                // deciding whether the program ran at all, which is exactly the
+                // invariant it must not touch.
+                if self.diagnostics.level() >= Level::Error {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{}", self.diagnostics),
+                    ));
+                }
             }
             scopes::check(&mut self.data);
             if debug {
