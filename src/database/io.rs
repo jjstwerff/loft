@@ -7,9 +7,9 @@ use crate::database::{Parts, Stores};
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::vector;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::collections::BTreeMap;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::io::Write as _;
 
 enum Format {
@@ -35,7 +35,7 @@ fn fill_absent(store: &mut Store, file: &DbRef) {
     store.set_byte(file.rec, file.pos + 32, 0, Format::NotExists as i32);
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
     store.set_long(file.rec, file.pos + 8, i64::MIN); // current
     store.set_long(file.rec, file.pos + 16, i64::MIN); // next
@@ -450,10 +450,7 @@ impl Stores {
     // target-gated).  Without this, get_file's wasm-unknown stub
     // short-circuited every exists()/file() under wasip2 → the
     // world_load assert in lib/hex_world failed → `wasm unreachable`.
-    #[cfg(all(
-        not(feature = "wasm"),
-        any(not(target_arch = "wasm32"), target_os = "wasi")
-    ))]
+    #[cfg(not(host_fs))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;
@@ -473,50 +470,10 @@ impl Stores {
         fill_file(path, store, file)
     }
 
-    /// QUALITY Tier 3 #9: `wasm32-unknown-unknown` without the `wasm`
-    /// host-bridge feature has no reachable filesystem.  Stub
-    /// `get_file` so `file().exists()` returns a reliable
-    /// `Format::NotExists` instead of depending on whatever
-    /// `std::fs` does in a browser (implementations vary: some
-    /// panic, some return Err, some hang).  Matches the stub in
-    /// `State::get_file_text` for the content-read path.
-    ///
-    /// @P334 fix: narrowed from `target_arch = "wasm32"` to also exclude
-    /// `target_os = "wasi"`, so this stub only fires for the actual
-    /// no-filesystem browser target — wasip2 falls through to the
-    /// std::fs impl above.
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    /// FS-E: ask the JS host for the metadata.  Both browser shells arrive
+    /// here — the wasm-bindgen bundle and, since loft#851, `--html`.
+    #[cfg(host_fs)]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
-        if file.rec == 0 {
-            return false;
-        }
-        // @P321(c): consult the browser-side asset table so PNGs
-        // auto-discovered by `--html` report as `TextFile` (size 0 — JS
-        // owns the decoded bytes).  Without this the get_file stub
-        // unconditionally short-circuits with NotExists and
-        // `file().png()` never reaches the imaging bridge.
-        let path = {
-            let store = self.store_mut(file);
-            store
-                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
-                .to_owned()
-        };
-        let store = self.store_mut(file);
-        store.set_long(file.rec, file.pos + 8, i64::MIN);
-        store.set_long(file.rec, file.pos + 16, i64::MIN);
-        if crate::wasm_assets::asset_exists(&path) {
-            store.set_long(file.rec, file.pos, 0);
-            store.set_byte(file.rec, file.pos + 32, 0, Format::TextFile as i32);
-            true
-        } else {
-            fill_absent(store, file);
-            false
-        }
-    }
-
-    #[cfg(feature = "wasm")]
-    pub fn get_file(&mut self, file: &DbRef) -> bool {
-        // FS-E: query file metadata from JS host bridge.
         if file.rec == 0 {
             return false;
         }
@@ -538,13 +495,24 @@ impl Stores {
             store.set_long(file.rec, file.pos, sz.max(0));
             store.set_byte(file.rec, file.pos + 32, 0, Format::TextFile as i32);
             true
+        } else if crate::wasm_assets::asset_exists(&file_path) {
+            // @P321(c): a PNG `--html` auto-discovered beside the entry file is
+            // not in the host filesystem — JS owns its decoded bytes — but it
+            // must still report as `TextFile` (size 0) or `file().png()` never
+            // reaches the imaging bridge.  Asked AFTER the host so a page that
+            // writes over the name gets its own bytes back, which is the same
+            // delta-wins-over-base rule the page filesystem uses throughout.
+            // No-op (`false`) on the wasm-bindgen bundle, which has no asset table.
+            store.set_long(file.rec, file.pos, 0);
+            store.set_byte(file.rec, file.pos + 32, 0, Format::TextFile as i32);
+            true
         } else {
             fill_absent(store, file);
             false
         }
     }
 
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(host_fs))]
     pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
         // #255 / @PLN9: re-home a relative dir path against the program anchor.
         let resolved = self.resolve_path(file_path);
@@ -589,7 +557,7 @@ impl Stores {
         true
     }
 
-    #[cfg(feature = "wasm")]
+    #[cfg(host_fs)]
     pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
         // FS-E: list directory entries from JS host bridge.
         let mut entries = crate::wasm::host_fs_list_dir(file_path);
@@ -665,7 +633,7 @@ impl Stores {
     /// failed `write_all` (disk full, closed handle) — so the `write` builtin can
     /// surface a `FileResult` instead of swallowing the failure (H3).
     pub fn write_file(&mut self, file: &DbRef, v: &str) -> bool {
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-E: write text content via JS host bridge (best-effort; the host
             // shim does not return a status, so a browser write reports success).
@@ -676,7 +644,7 @@ impl Stores {
             crate::wasm::host_fs_write_text(&file_path, v);
             true
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let f_nr = self.files.len() as i32;
             // #255 / @PLN9: resolve against the program anchor before borrowing
@@ -730,7 +698,7 @@ impl Stores {
         let resolved = self.resolve_path(path);
         // @PLN102 H4 — a MISSING / non-directory path lists as NULL (the null
         // vector), distinct from an EMPTY-but-present directory (a length-0 vector).
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         let names: Option<Vec<String>> = {
             // The host bridge can't cheaply distinguish empty-vs-missing here; treat
             // a non-directory as absent via the is-dir probe.
@@ -740,7 +708,7 @@ impl Stores {
                 None
             }
         };
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         let names: Option<Vec<String>> = match std::fs::read_dir(std::path::Path::new(&resolved)) {
             Ok(iter) => {
                 let mut v = Vec::new();
@@ -776,17 +744,15 @@ impl Stores {
         // @PLN102 H4 — a MISSING / unreadable file reads as NULL (the null vector),
         // distinct from an EMPTY-but-present file (a length-0 vector).  `None` is the
         // absent case; `Some(v)` (possibly empty) is a real read.
-        #[cfg(feature = "wasm")]
-        let data: Option<Vec<u8>> = {
-            // VirtFS read: a negative size is the host's "no such file" signal.
-            let sz = crate::wasm::host_fs_file_size(&resolved);
-            if sz < 0 {
-                None
-            } else {
-                crate::wasm::host_fs_read_bytes(&resolved, sz as usize)
-            }
-        };
-        #[cfg(not(feature = "wasm"))]
+        // The WHOLE file, so the host's per-path cursor must not be consulted:
+        // `host_fs_read_bytes` reads `n` bytes FROM the cursor, and after any
+        // preceding write that cursor sits at the end — which read back zero
+        // bytes from a file that had just been written (loft#851's probe cell E).
+        // `host_fs_read_binary` answers the file, and `None` iff it is absent,
+        // which is also the distinction the size probe was standing in for.
+        #[cfg(host_fs)]
+        let data: Option<Vec<u8>> = crate::wasm::host_fs_read_binary(&resolved);
+        #[cfg(not(host_fs))]
         let data: Option<Vec<u8>> = std::fs::read(std::path::Path::new(&resolved)).ok();
         let Some(data) = data else { return DbRef::NULL };
         // Owning field is a 4-byte vector pointer; the inner record holds the
@@ -823,11 +789,15 @@ impl Stores {
                 store.buffer(vec_rec)[..length as usize].to_vec()
             }
         };
-        #[cfg(feature = "wasm")]
+        // Truncating, so this is `write_binary` and not the cursor-relative
+        // `write_bytes` — that one appends at wherever the path's cursor was
+        // left, which neither replaces the old content nor starts at 0.  The
+        // native arm below is `std::fs::write`, whose contract this matches.
+        #[cfg(host_fs)]
         {
-            crate::wasm::host_fs_write_bytes(&resolved, &data) == 0
+            crate::wasm::host_fs_write_binary(&resolved, &data) == 0
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             std::fs::write(std::path::Path::new(&resolved), &data).is_ok()
         }

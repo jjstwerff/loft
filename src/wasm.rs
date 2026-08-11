@@ -41,6 +41,37 @@ pub fn host_call_raw(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValu
     host_call(method, args)
 }
 
+// ── loft#851  Raw-import call helpers (`--html`, no wasm-bindgen) ─────────────
+//
+// `--html` reaches the same host filesystem as the wasm-bindgen build, but over
+// raw `loft_io` imports (`src/lib.rs`) rather than `js_sys` — this target
+// refuses a page that imports anything else.  These two helpers are the whole
+// difference; every `host_fs_*` below shares one body shape across both
+// transports, so the two cannot answer differently.
+
+/// Drain the host's read stash into an owned buffer.  `len` is what the read
+/// import answered: `usize::MAX` means the path is absent, which is not the
+/// same as an empty file that exists.
+#[cfg(all(host_fs, not(feature = "wasm")))]
+fn stashed(len: usize) -> Option<Vec<u8>> {
+    if len == usize::MAX {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    if len > 0 {
+        crate::loft_host_fs_copy(buf.as_mut_ptr());
+    }
+    Some(buf)
+}
+
+/// Drain the host's read stash as UTF-8 text.  Invalid UTF-8 reads as absent —
+/// the same answer `read_file_text_into` gives on native for a file whose bytes
+/// are not text, so `content()` cannot start returning mojibake on one target.
+#[cfg(all(host_fs, not(feature = "wasm")))]
+fn stashed_text(len: usize) -> Option<String> {
+    String::from_utf8(stashed(len)?).ok()
+}
+
 // ── W1.7 / FS-A  File I/O host bridge ────────────────────────────────────────
 
 /// Check whether a path exists in the virtual filesystem.
@@ -51,7 +82,11 @@ pub fn host_fs_exists(path: &str) -> bool {
         let args = js_sys::Array::of1(&path.into());
         host_call("fs_exists", &args).as_bool().unwrap_or(false)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_exists(path.as_ptr(), path.len()) != 0
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         false
@@ -70,7 +105,11 @@ pub fn host_fs_read_text(path: &str) -> Option<String> {
             v.as_string()
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed_text(crate::loft_host_fs_read_text(path.as_ptr(), path.len()))
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         None
@@ -86,7 +125,11 @@ pub fn host_fs_write_text(path: &str, data: &str) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_write_text(path.as_ptr(), path.len(), data.as_ptr(), data.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (path, data);
         0
@@ -108,7 +151,11 @@ pub fn host_fs_read_binary(path: &str) -> Option<Vec<u8>> {
             None
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed(crate::loft_host_fs_read_binary(path.as_ptr(), path.len()))
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         None
@@ -125,7 +172,11 @@ pub fn host_fs_write_binary(path: &str, data: &[u8]) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_write_binary(path.as_ptr(), path.len(), data.as_ptr(), data.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (path, data);
         0
@@ -141,7 +192,11 @@ pub fn host_fs_delete(path: &str) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_delete(path.as_ptr(), path.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         1
@@ -155,7 +210,11 @@ pub fn host_fs_move(from: &str, to: &str) -> i32 {
         let args = js_sys::Array::of2(&from.into(), &to.into());
         host_call("fs_move", &args).as_f64().map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_move(from.as_ptr(), from.len(), to.as_ptr(), to.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (from, to);
         1
@@ -171,7 +230,11 @@ pub fn host_fs_mkdir(path: &str) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_mkdir(path.as_ptr(), path.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         1
@@ -187,7 +250,11 @@ pub fn host_fs_mkdir_all(path: &str) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_mkdir_all(path.as_ptr(), path.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         1
@@ -207,7 +274,19 @@ pub fn host_fs_list_dir(path: &str) -> Vec<String> {
             Vec::new()
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        // The host joins names with `\n`.  An EMPTY answer is an empty
+        // directory, not one name that happens to be "" — `split` on "" yields
+        // one empty field, so it is special-cased rather than filtered, which
+        // would also drop a legitimately odd name.
+        let joined = stashed_text(crate::loft_host_fs_list_dir(path.as_ptr(), path.len()));
+        match joined.as_deref() {
+            None | Some("") => Vec::new(),
+            Some(s) => s.split('\n').map(str::to_owned).collect(),
+        }
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         Vec::new()
@@ -221,7 +300,11 @@ pub fn host_fs_is_dir(path: &str) -> bool {
         let args = js_sys::Array::of1(&path.into());
         host_call("fs_is_dir", &args).as_bool().unwrap_or(false)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_is_dir(path.as_ptr(), path.len()) != 0
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         false
@@ -235,7 +318,11 @@ pub fn host_fs_is_file(path: &str) -> bool {
         let args = js_sys::Array::of1(&path.into());
         host_call("fs_is_file", &args).as_bool().unwrap_or(false)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_is_file(path.as_ptr(), path.len()) != 0
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         false
@@ -251,7 +338,11 @@ pub fn host_fs_file_size(path: &str) -> i64 {
             .as_f64()
             .map_or(-1, |v| v as i64)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_file_size(path.as_ptr(), path.len()) as i64
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         -1
@@ -266,7 +357,12 @@ pub fn host_fs_seek(path: &str, pos: i64) {
         let args = js_sys::Array::of2(&path.into(), &(pos as f64).into());
         host_call("fs_seek", &args);
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        #[allow(clippy::cast_precision_loss)]
+        crate::loft_host_fs_seek(path.as_ptr(), path.len(), pos as f64);
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (path, pos);
     }
@@ -288,7 +384,11 @@ pub fn host_fs_read_bytes(path: &str, n: usize) -> Option<Vec<u8>> {
             None
         }
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed(crate::loft_host_fs_read_bytes(path.as_ptr(), path.len(), n))
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (path, n);
         None
@@ -305,7 +405,11 @@ pub fn host_fs_write_bytes(path: &str, bytes: &[u8]) -> i32 {
             .as_f64()
             .map_or(5, |v| v as i32)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_write_bytes(path.as_ptr(), path.len(), bytes.as_ptr(), bytes.len())
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = (path, bytes);
         0
@@ -322,7 +426,11 @@ pub fn host_fs_get_cursor(path: &str) -> i64 {
             .as_f64()
             .map_or(0, |v| v as i64)
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        crate::loft_host_fs_get_cursor(path.as_ptr(), path.len()) as i64
+    }
+    #[cfg(not(host_fs))]
     {
         let _ = path;
         0
@@ -400,7 +508,11 @@ pub fn host_fs_cwd() -> String {
             .as_string()
             .unwrap_or_default()
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed_text(crate::loft_host_fs_cwd()).unwrap_or_default()
+    }
+    #[cfg(not(host_fs))]
     String::new()
 }
 
@@ -412,7 +524,11 @@ pub fn host_fs_user_dir() -> String {
             .as_string()
             .unwrap_or_default()
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed_text(crate::loft_host_fs_user_dir()).unwrap_or_default()
+    }
+    #[cfg(not(host_fs))]
     String::new()
 }
 
@@ -424,7 +540,11 @@ pub fn host_fs_program_dir() -> String {
             .as_string()
             .unwrap_or_default()
     }
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(host_fs, not(feature = "wasm")))]
+    {
+        stashed_text(crate::loft_host_fs_program_dir()).unwrap_or_default()
+    }
+    #[cfg(not(host_fs))]
     String::new()
 }
 
@@ -979,14 +1099,16 @@ thread_local! {
     static SWAP_STAGE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-// Consumed by the browser kernel's `swap_world` (wasm32 + feature "wasm");
-// a native build with --all-features sees it dead — that's the cfg, not rot.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+// Consumed by the browser kernel's `swap_world`, which exists only in the
+// wasm-bindgen bundle.  Both other builds that compile this module — a native
+// `--all-features` one and `--html` (loft#851) — see these dead, and that is
+// the cfg, not rot.
+#[cfg_attr(not(all(target_arch = "wasm32", feature = "wasm")), allow(dead_code))]
 pub(crate) fn swap_root_set(root: crate::keys::DbRef, kt: u16) {
     SWAP_ROOT.with(|r| r.set(Some((root, kt))));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(not(all(target_arch = "wasm32", feature = "wasm")), allow(dead_code))]
 pub(crate) fn swap_stage_take() -> Option<String> {
     SWAP_STAGE.with(|s| s.borrow_mut().take())
 }

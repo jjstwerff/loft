@@ -257,13 +257,14 @@ fn p137_html_arithmetic_loop_runs() {
 
 /// QUALITY Tier 3 #9 — `file("...")` under `--html` (wasm32
 /// without the wasm host-bridge) must not trap even though there
-/// is no reachable filesystem.  The stub in
-/// `src/database/io.rs::get_file` returns `Format::NotExists` and
-/// `src/state/io.rs::get_file_text` leaves the buffer untouched.
-/// A `--html` program calling `file("x").content()` must therefore
-/// read as `null` — a MISSING file (@PLN102 H4: `content() -> text?`,
-/// missing → null, distinct from an empty file) — without crashing.
-/// This test exercises the full `--html` build → browser repro path.
+/// is nothing at that path.  The page HAS a filesystem now (loft#851) — it just
+/// starts empty unless the page seeds a base tree — so a file nobody wrote must
+/// still read as `null`: a MISSING file (@PLN102 H4: `content() -> text?`,
+/// missing → null, distinct from an empty file), without crashing.
+///
+/// This is the half of the contract that binding a filesystem could most easily
+/// have broken, because the bridge's "absent" and "an empty file" arrive over
+/// the same import and are told apart only by a `usize::MAX` length.
 #[test]
 fn q9_html_file_content_returns_empty_on_wasm() {
     let src = "fn main() {
@@ -281,6 +282,118 @@ fn q9_html_file_content_returns_empty_on_wasm() {
         "expected 'missing=true' (a missing file reads as null on the wasm32 stub, @PLN102 H4).\
          \nstdout: {stdout}\nstderr: {stderr}"
     );
+}
+
+/// loft#851 — a page has a filesystem, and it is the SAME one every other target
+/// answers with.
+///
+/// `--html` used to bind none: the file calls compiled, each took an inert branch
+/// and answered "absent", and `loft --html` reported success — so a rendering
+/// editor in a page could draw and could not save, and the consumer found out by
+/// GREPPING the emitted bundle for `fs_`.
+///
+/// Every expected value below is what `--interpret` and `--native` print for this
+/// exact program, so the test fails both ways: if the page loses its filesystem
+/// again, and if it grows one that answers differently from the other backends.
+/// The empty-vs-absent pair is deliberate — the two cross the bridge as the same
+/// import and are told apart only by a length sentinel.
+#[test]
+fn html_page_has_a_filesystem() {
+    let src = r#"fn main() {
+    f = file("story.txt");
+    f += "hello";
+    f += "-page";
+    a = file("story.txt");
+    println("content={a.content() ?? "<null>"} size={a#size}");
+    write_bytes("blob.bin", [7, 8, 9]);
+    bs = read_bytes("blob.bin") ?? [];
+    println("bytes={len(bs)} first={bs[0] ?? -1}");
+    mkdir_all("d/sub");
+    g = file("d/sub/inner.txt");
+    g += "x";
+    println("dir={is_dir("d/sub")} list={list_dir("d/sub")}");
+    delete("story.txt");
+    println("gone={exists("story.txt")} still={exists("blob.bin")}");
+    empty = file("empty.txt");
+    empty += "";
+    println("empty_is_null={file("empty.txt").content() == null} absent_is_null={file("nope.txt").content() == null}");
+}
+"#;
+    let Some((stdout, stderr, ok)) = run_html_wasm("h851_page_fs", src) else {
+        return;
+    };
+    assert!(
+        ok,
+        "WASM trapped while using the page filesystem.\n{stderr}"
+    );
+    for expected in [
+        "content=hello-page size=10",
+        "bytes=3 first=7",
+        r#"dir=true list=["inner.txt"]"#,
+        "gone=false still=true",
+        "empty_is_null=false absent_is_null=true",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "expected {expected:?} from the page filesystem (loft#851)\
+             \nstdout: {stdout}\nstderr: {stderr}"
+        );
+    }
+}
+
+/// loft#851 — the cursor.  A page has no OS file handle, so the HOST keeps the
+/// read/write position per path; `f#next` and a sized `f#read(n)` have to mean
+/// the same thing there as they do over a real handle.
+///
+/// Worth its own test because the first round of this work passed every
+/// whole-file cell and still had the cursor wrong: `write_bytes` left the
+/// position at the end of the file, and the next `read_bytes` — which asks for
+/// the WHOLE file — started from there and answered zero bytes.
+#[test]
+fn html_page_filesystem_cursor_matches_the_other_backends() {
+    let src = r#"fn main() {
+    f = file("cur.txt");
+    f += "abcde";
+    g = file("cur.txt");
+    g#next = 1;
+    s: text = g#read(3);
+    s2: text = g#read(1);
+    println("seek={s ?? "<null>"} continue={s2 ?? "<null>"} next={g#next}");
+    h = file("cur.txt");
+    h#next = 3;
+    short: text = h#read(99);
+    println("short={short ?? "<null>"}");
+    w = file("cur.txt");
+    w#next = 0;
+    w += "XY";
+    println("overwrite={file("cur.txt").content() ?? "<null>"}");
+    t = file("cur.txt");
+    ok = t.set_file_size(2);
+    println("resize={ok} left={file("cur.txt").content() ?? "<null>"}");
+    move("cur.txt", "moved.txt");
+    println("moved={file("moved.txt").content() ?? "<null>"} old={exists("cur.txt")}");
+}
+"#;
+    let Some((stdout, stderr, ok)) = run_html_wasm("h851_cursor", src) else {
+        return;
+    };
+    assert!(
+        ok,
+        "WASM trapped on the page filesystem's cursor.\n{stderr}"
+    );
+    for expected in [
+        "seek=bcd continue=e next=5",
+        "short=de",
+        "overwrite=XYcde",
+        "resize=Ok left=XY",
+        "moved=XY old=false",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "expected {expected:?} — the page's per-path cursor must read as an \
+             OS handle does (loft#851)\nstdout: {stdout}\nstderr: {stderr}"
+        );
+    }
 }
 
 /// P137 follow-up: vectors + iteration.  Exercises store allocation
@@ -1516,4 +1629,31 @@ fn pln24_a_reachable_c_binding_is_refused_end_to_end_on_wasm() {
         assert!(ok2, "{flag} must build an UNUSED #c declaration: {err2}");
     }
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// loft#851 — the page filesystem's own unit tests (`tools/loft_fs_unit.mjs`),
+/// driven from here so they run in the ordinary suite.
+///
+/// `tests/wasm/*.test.mjs` is the older home for JS unit tests and nothing runs
+/// those — a green that means nothing.  The two properties this covers are the
+/// ones the end-to-end tests above CANNOT reach: the node harness has no
+/// localStorage and no bundled base tree, so "the delta survives a reload" and
+/// "a base tree is read-only" are invisible from a `--html` page under node.
+#[test]
+fn html_page_filesystem_unit_checks() {
+    if which("node").is_none() {
+        eprintln!("SKIP: node not installed");
+        return;
+    }
+    let out = std::process::Command::new("node")
+        .arg(repo_root().join("tools/loft_fs_unit.mjs"))
+        .current_dir(repo_root())
+        .output()
+        .expect("invoke the loft-fs unit harness");
+    assert!(
+        out.status.success(),
+        "doc/loft-fs.js unit checks failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
 }

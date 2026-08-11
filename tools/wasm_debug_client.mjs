@@ -7,11 +7,17 @@
 // `loft_debug_pump`, and print the wasm's `D:` replies. This is what the server
 // relay does over the WebSocket the client holds.
 import fs from 'node:fs';
+// loft#851 — the page's filesystem, imported rather than restubbed so every
+// harness answers what a real page answers.  A stub returning 0 would mean "an
+// empty file that EXISTS" where the contract says absent, and a missing import
+// is a LinkError the moment a program under test touches a file.
+import { loftFSImports } from '../doc/loft-fs.js';
 const wasm = fs.readFileSync(process.argv[2]);
 const enc = new TextEncoder(), dec = new TextDecoder();
 let mem = null, out = '';
 const inQ = ['D!:bp compute', 'D!:run', 'D!:eval n', 'D!:eval n + 2', 'D!:resume'].map(s => enc.encode(s));
 const io = {
+  ...loftFSImports(() => mem),
   loft_host_print: (p, l) => { out += dec.decode(new Uint8Array(mem.buffer, p, l)); },
   loft_host_input_len: () => (inQ.length ? inQ[0].length : 0),
   loft_host_input_copy: (p) => { const b = inQ.shift(); if (b) new Uint8Array(mem.buffer, p, b.length).set(b); },

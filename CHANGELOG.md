@@ -26,6 +26,47 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A page can save its work
+
+A loft program exported with `--html` could draw, play audio, talk over a
+WebSocket — and could not write a file. Every file call compiled and every one of
+them quietly answered as if the file were not there, so a drawing editor in a page
+looked like it saved and stored nothing. Finding that out meant grepping the
+emitted page for `fs_`.
+
+A page now has a filesystem, and it answers exactly what the interpreter and
+`--native` answer for the same program:
+
+```loft
+fn main() {
+  w = file("world.hxw");
+  w += render_world();
+  println("saved {file("world.hxw")#size} bytes");
+}
+```
+
+`file(p)` with `#size` / `#next` / `#read(n)` / `+=`, `read_bytes` /
+`write_bytes`, `delete` / `move` / `mkdir` / `mkdir_all` / `list_dir` / `is_dir`
+/ `is_file` / `exists` — the whole surface.
+
+It is the *page's* filesystem, not the visitor's disk. A browser cannot read
+`/home/you/data.csv`, and nothing here pretends otherwise. What the page gets is
+an immutable **base tree** you supply, plus every write it makes, kept in
+`localStorage`:
+
+```html
+<script>
+  loftBaseFS = { "/data/parts/tree.obj": "...", "/data/parts/rock.obj": "..." };
+</script>
+```
+
+Reads take your writes first and fall back to the base tree, so closing the tab
+keeps the user's work and `resetToBase()` throws it away. Set
+`loftFSPersist = false` if you would rather it lasted only as long as the tab.
+
+A program that only stores still gets the small engine-less page — the
+filesystem does not drag a WebGL2 shim in with it.
+
 ### A vocabulary you ship, not one you download
 
 A `trie<T[k]>` can already be read a page at a time — `store_load_prefix(local,

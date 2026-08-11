@@ -6,9 +6,9 @@ use super::{State, new_ref, size_ref};
 use crate::database::{Parts, ShowDb};
 use crate::keys::{Content, DbRef, Key};
 use crate::{hash, tree, vector};
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::fs::{File, OpenOptions};
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(host_fs))]
 use std::io::{Read, Seek, SeekFrom, Write};
 
 impl State {
@@ -23,7 +23,7 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-B: read entire file via JS host bridge.
             let file_path = {
@@ -47,27 +47,14 @@ impl State {
                 *buf = text;
             }
         }
-        // QUALITY Tier 3 #9: explicit stub for `wasm32-unknown-unknown` without
-        // the `wasm` host-bridge feature (the `--html` browser build target).
-        // `std::fs::File::open` compiles there but fails at runtime in a way
-        // that depends on the embedding's panic-hook configuration.  The stub
-        // always leaves `buf` untouched — same observable semantics as a file
-        // that doesn't exist on native — so a `--html` program calling
-        // `file("x").content()` reliably gets an empty String instead of
-        // racing against an unpredictable runtime error.
-        //
-        // @P334 fix (2026-05-29): narrowed from `target_arch = "wasm32"` to
-        // also exclude `target_os = "wasi"`, so wasip2 (which HAS a working
-        // FS via WASI preopens) falls through to the std::fs impl.  Mirrors
-        // the same fix at `src/database/io.rs::get_file`.
-        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-        {
-            let _ = (file, r);
-        }
-        #[cfg(all(
-            not(feature = "wasm"),
-            any(not(target_arch = "wasm32"), target_os = "wasi")
-        ))]
+        // Everything else has a real filesystem: native, and `wasm32-wasip2`
+        // through its `--dir` preopens.  `--html` used to need a third arm here
+        // — an explicit stub, because `std::fs::File::open` compiles on
+        // wasm32-unknown-unknown but fails at runtime in whatever way the
+        // embedding's panic hook decides.  It reaches the host bridge above
+        // instead now (loft#851), which is the answer that stub was standing in
+        // for all along.
+        #[cfg(not(host_fs))]
         {
             let store = self.database.store(&file);
             let raw_path = store
@@ -187,7 +174,7 @@ impl State {
         // `f#next = N` still overwrites at offset N.  Call
         // `f.set_file_size(0)` before the first write to truncate.
         let next_pos = if raw_next == i64::MIN {
-            #[cfg(feature = "wasm")]
+            #[cfg(host_fs)]
             {
                 let file_path = {
                     let store = self.database.store(&file);
@@ -198,7 +185,7 @@ impl State {
                 let sz = crate::wasm::host_fs_file_size(&file_path);
                 if sz < 0 { 0 } else { sz }
             }
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(host_fs))]
             {
                 let path = {
                     let store = self.database.store(&file);
@@ -218,7 +205,7 @@ impl State {
             .set_long(file.rec, file.pos + 8, next_pos);
         let data = self.assemble_write_data(val, db_tp, little_endian);
         let written = data.len();
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-C: seek to position then write; VirtFS writeBytes handles extension.
             let file_path = {
@@ -230,7 +217,7 @@ impl State {
             crate::wasm::host_fs_seek(&file_path, next_pos);
             crate::wasm::host_fs_write_bytes(&file_path, &data);
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let f_nr = self.database.files.len() as i32;
             let file_ref = self
@@ -408,7 +395,7 @@ impl State {
             .store_mut(&file)
             .set_long(file.rec, file.pos + 8, next_pos);
         let n = bytes as usize;
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-D: seek JS cursor to position then read n bytes.
             let file_path = {
@@ -428,7 +415,7 @@ impl State {
                 self.dispatch_read_data(val, db_tp, little_endian, data, n);
             }
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let f_nr = self.database.files.len() as i32;
             // #255 / @PLN9: resolve against the program anchor before borrowing
@@ -501,7 +488,7 @@ impl State {
         if file.rec == 0 {
             return;
         }
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-D: seek JS-side cursor and update store #next position.
             let file_path = {
@@ -515,7 +502,7 @@ impl State {
                 .store_mut(&file)
                 .set_long(file.rec, file.pos + 16, pos);
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let file_ref = self
                 .database
@@ -541,7 +528,7 @@ impl State {
             self.put_stack(i64::MIN);
             return;
         }
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-D: get file size from JS host bridge.
             let file_path = {
@@ -553,7 +540,7 @@ impl State {
             let size = crate::wasm::host_fs_file_size(&file_path);
             self.put_stack(if size < 0 { i64::MIN } else { size });
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let store = self.database.store(&file);
             let file_path = store
@@ -572,12 +559,12 @@ impl State {
             self.put_stack(false);
             return;
         }
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             let _ = file;
             self.put_stack(false);
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let file_ref = self
                 .database
@@ -602,7 +589,7 @@ impl State {
             self.put_stack(false);
             return;
         }
-        #[cfg(feature = "wasm")]
+        #[cfg(host_fs)]
         {
             // FS-D: truncate by reading current content, slicing, and rewriting.
             let file_path = {
@@ -621,7 +608,7 @@ impl State {
             };
             self.put_stack(ok);
         }
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         {
             let path = {
                 let store = self.database.store(&file);
@@ -721,7 +708,7 @@ impl State {
         }
         // Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file
         // handle whenever its File store is freed (free_named frees unconditionally).
-        #[cfg(not(feature = "wasm"))]
+        #[cfg(not(host_fs))]
         if db.store_nr != u16::MAX
             && (db.store_nr as usize) < self.database.allocations.len()
             && !self.database.allocations[db.store_nr as usize].free

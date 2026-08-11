@@ -101,9 +101,16 @@ this writing every stdlib builtin is available on the browser target.
 - **Audio** — raw PCM playback via the Web Audio API.
 - **WebSocket** — a live network socket, through the `web` library (see §4b).
 
-**NOT available in `--html`** (these silently do nothing or return empty):
+**Also available:**
 
-- **No filesystem** — `file(...)` returns "not found".
+- **A filesystem** (loft#851) — the whole file surface, answering what
+  `--interpret` and `--native` answer for the same program. It is the PAGE's
+  filesystem, not the user's disk: an immutable base tree the page supplies
+  (`globalThis.loftBaseFS`) plus every write, kept in `localStorage` so a tab
+  close does not lose the user's work. A path the page was never given reads as
+  absent. See [WASM.md § The page filesystem](WASM.md).
+
+**NOT available in `--html`** (these silently do nothing or return empty):
 - **No program arguments** — `arguments()` returns an empty list. (Use
   `host_input()` for JavaScript-supplied input instead — §5.)
 - **No HTTP client** — `web`'s `http_get` / `http_post` / … are **native-only**;
@@ -116,8 +123,9 @@ this writing every stdlib builtin is available on the browser target.
 > never have to do that.
 
 (There is a *second*, unrelated browser build — the IDE's `make wasm`
-[wasm-bindgen] build — which *does* expose a filesystem/args bridge. That bridge
-belongs to that build, **not** to `--html`. See [WASM.md](WASM.md) § Host Bridge
+[wasm-bindgen] build — which exposes an args bridge `--html` still lacks. Its
+bridges belong to that build, **not** to `--html`, which reaches its own
+filesystem over raw `loft_io` imports instead. See [WASM.md](WASM.md) § Host Bridge
 API, and do not assume it applies here.)
 
 ## 4. The three shapes of a loft web app

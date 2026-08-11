@@ -397,24 +397,60 @@ fn json_stdlib_has_no_stale_stub_language() {
     );
 }
 
-/// QUALITY Tier 3 #9 — `wasm32-unknown-unknown` without the `wasm`
-/// host-bridge feature has no reachable filesystem.  `file().content()`
-/// and `file().exists()` must return safe defaults (empty string /
-/// NotExists) rather than depend on `std::fs` behaviour, which varies
-/// by browser embedding.  This guard asserts both native implementations
-/// carry an explicit `cfg(target_arch = "wasm32")` branch so a refactor
-/// that collapses the feature-flag arms can't silently regress the
-/// `--html` build target.
+/// loft#851 — every file operation asks ONE question about the browser, and it
+/// is the `host_fs` cfg.
+///
+/// This guard replaces a Tier 3 #9 one that asserted the opposite: that
+/// `src/state/io.rs` and `src/database/io.rs` each carry an explicit
+/// `target_arch = "wasm32"` branch STUBBING file operations, because `--html`
+/// had no reachable filesystem. It does now, so the stubs are gone — but the
+/// hazard the old guard was pointing at is real and unchanged: these arms drift.
+/// They drifted for a year. The interpreter's browser branches were real host
+/// bridges while `codegen_runtime.rs`'s were stubs returning nothing, so the two
+/// backends had different filesystems and `--html` — which runs the generated
+/// code — had the empty one.
+///
+/// A hand-written `feature = "wasm"` on a file site is how that happens: the
+/// wasm-bindgen bundle and `--html` are both browsers and both reach the host,
+/// but only one of them sets that feature. `host_fs` (`build.rs`) names the
+/// question once. So the rule is per-site: a file arm may not gate on the
+/// wasm-bindgen FEATURE.
 #[test]
-fn wasm32_file_operations_have_explicit_stubs() {
-    for (path, needle) in [
-        ("src/state/io.rs", "target_arch = \"wasm32\""),
-        ("src/database/io.rs", "target_arch = \"wasm32\""),
+fn file_operations_gate_on_host_fs_not_the_wasm_feature() {
+    for path in [
+        "src/state/io.rs",
+        "src/database/io.rs",
+        "src/codegen_runtime.rs",
     ] {
         let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("cannot read {path}"));
         assert!(
-            src.contains(needle),
-            "{path} must contain an explicit `{needle}` cfg branch that stubs filesystem operations on browser WASM.  See QUALITY.md Tier 3 #9."
+            src.contains("host_fs"),
+            "{path} must gate its file operations on the `host_fs` cfg — the one name for \
+             \"this build reaches the filesystem through a JS host\" (loft#851)."
+        );
+        // `feature = "wasm"` still has honest uses here: `src/codegen_runtime.rs`
+        // reads the CLOCK differently under wasm-bindgen, which is a real
+        // difference between the two browsers rather than a file question. So the
+        // check is scoped to lines that also mention a file operation.
+        let strays: Vec<String> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("cfg") && l.contains("feature = \"wasm\""))
+            .filter(|(n, _)| {
+                // Look at what the arm guards, not at the attribute alone.
+                let window: String = src.lines().skip(*n).take(4).collect::<Vec<_>>().join(" ");
+                ["File", "file", "fs_", "read_bytes", "write_bytes", "std::fs"]
+                    .iter()
+                    .any(|k| window.contains(k))
+            })
+            .map(|(n, l)| format!("{path}:{}: {}", n + 1, l.trim()))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "a file operation must not gate on the wasm-bindgen FEATURE — `--html` is a \
+             browser too and does not set it, which is exactly how the two backends ended \
+             up with different filesystems (loft#851).  Use the `host_fs` cfg:\n  {}",
+            strays.join("\n  ")
         );
     }
 }

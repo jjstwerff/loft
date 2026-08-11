@@ -6,11 +6,17 @@
 // read + resume) runs on wasm32.  Prints the wasm's host output, then a final
 // `RETURN=<0|1>` line (1 = the cycle produced the expected outcome).
 import fs from 'node:fs';
+// loft#851 — the page's filesystem, imported rather than restubbed so every
+// harness answers what a real page answers.  A stub returning 0 would mean "an
+// empty file that EXISTS" where the contract says absent, and a missing import
+// is a LinkError the moment a program under test touches a file.
+import { loftFSImports } from '../doc/loft-fs.js';
 const wasm = fs.readFileSync(process.argv[2]);
 const dec = new TextDecoder();
 let mem = null;
 let out = '';
 const io = {
+  ...loftFSImports(() => mem),
   loft_host_print: (p, l) => { out += dec.decode(new Uint8Array(mem.buffer, p, l)); },
   loft_host_input_len: () => 0,
   loft_host_input_copy: () => {},

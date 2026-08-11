@@ -8566,54 +8566,6 @@ fn main() {
             }
             uses_par = out.uses_parallel();
         }
-        // loft#851 — say so when the program stores and this target cannot.
-        //
-        // `--html` binds no filesystem, and the file calls compile anyway: each
-        // one takes the inert branch and answers "absent", so a page that saves
-        // silently saves nothing and the build reports success. Reported BEFORE
-        // the wasm build, which takes the best part of a minute — a warning that
-        // arrives after it has already cost the reader the wait.
-        //
-        // A warning rather than advice, by the rule in CLAUDE.md: ignoring it
-        // produces lost writes, which is a wrong result and not a matter of
-        // style. Nothing is refused — the page is still built, because a program
-        // may reach a file only on a path the page never takes, and that is the
-        // author's call to make (loft#709 settled the same question for a call
-        // this target cannot serve).
-        {
-            let fs_sites = native_utils::filesystem_call_sites(&p.data);
-            if !fs_sites.is_empty() {
-                let shown: Vec<String> = fs_sites
-                    .iter()
-                    .take(5)
-                    .map(|(caller, callees)| {
-                        if callees.is_empty() {
-                            format!("    {caller}")
-                        } else {
-                            format!("    {caller} — {}", callees.join(", "))
-                        }
-                    })
-                    .collect();
-                let more = if fs_sites.len() > shown.len() {
-                    format!("\n    … and {} more", fs_sites.len() - shown.len())
-                } else {
-                    String::new()
-                };
-                eprintln!(
-                    "loft: warning — this program uses file I/O and the --html target binds no \
-                     filesystem.\n{}{}\n  \
-                     Each of these answers as if the file were absent: a write reports failure, \
-                     a read answers null, a size answers 0.  Nothing raises, so a page that \
-                     saves will appear to work and store nothing.\n  \
-                     To persist from a page today, carry the data over `host_output` to JS and \
-                     back with `globalThis.loftPush` — both are bound here.  For a browser \
-                     target WITH a filesystem, build `--native-wasm` (WASI) instead.\n  \
-                     See doc/claude/WASM.md § What each target binds.",
-                    shown.join("\n"),
-                    more
-                );
-            }
-        }
         // @PLN100 Slice 1 — build (on stale/missing) + locate loft's own wasm
         // runtime rlib in the ISOLATED `--html` shape dir (`target/loft/html/`), so
         // a wasm-bindgen `make wasm` build can't stomp it and no manual `make` step
@@ -9088,6 +9040,12 @@ fn main() {
         // headless templates.  gl_js references it, so it is emitted FIRST.
         let asyncify_js =
             include_str!("../doc/loft-asyncify.js").replace("export { AsyncifyCtrl };", "");
+        // loft#851 — the page's filesystem.  Emitted BEFORE gl_js, whose
+        // `loft_io` block spreads `loftFSImports(getMem)` into its handlers, and
+        // used directly by the minimal shell below.  Module `export` stripped
+        // like the asyncify and deliver glue, so a page stays a single file.
+        let fs_js = include_str!("../doc/loft-fs.js")
+            .replace("export { LoftPageFS, loftFS, loftFSImports };", "");
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
         // @PLN105 Phase 2/3 — the generic deliver reader, embedded so both page shells reconstruct a
         // JS value from a `deliver`/`expose` handle. Strip the trailing `export` (the file is a
@@ -9158,7 +9116,7 @@ fn main() {
         // engine page: the minimal shell is chosen because the program imports `loft_io`
         // alone, which that shell defines in full.
         if !minimal_page {
-            let provided = format!("{gl_js}{host_js_extensions}{thread_js}");
+            let provided = format!("{gl_js}{fs_js}{host_js_extensions}{thread_js}");
             let missing = crate::native_utils::missing_host_imports(&wasm_bytes, &provided);
             if !missing.is_empty() {
                 // loft#681 — the check assumes the page it is about to write is the one
@@ -9215,6 +9173,7 @@ fn main() {
 {asyncify_js}
 {reader_js}
 {thread_js}
+{fs_js}
 // Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
 // canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
 // Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
@@ -9242,6 +9201,9 @@ globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 // fetch, stashed between the unwind and rewind halves of loft_host_http_get.
 const ctrl={{ac:null,httpBytes:null,httpTotal:-1}};
 const imports={{loft_io:{{
+  // loft#851 — the page's filesystem (loft-fs.js, inlined above).  `mem` is
+  // re-read per call because growing the wasm heap detaches the old buffer.
+  ...loftFSImports(()=>mem),
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
   // #620: the browser CLOCK bridge.  This target has no std clock, so without
   // these `now()`/`ticks()` returned a hardcoded 0 — every duration measured
@@ -9359,6 +9321,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
 {asyncify_js}
 {reader_js}
 {thread_js}
+{fs_js}
 {gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";

@@ -9,6 +9,65 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `--html` binds a filesystem, over raw `loft_io` imports (loft#851) (2026-08-11)
+
+`--html` bound no filesystem. The loft-side file calls compiled anyway — the
+wasm-bindgen feature that routes them to a JS host is off for this target, so each
+one took its inert branch and answered "absent" — and the build reported success.
+A page could draw and could not save, and the consumer discovered it by grepping
+the emitted bundle.
+
+**The transport.** `--html` cannot reuse the `loftHost.fs_*` bridges: those are
+`js_sys::Reflect` lookups needing wasm-bindgen, and this target builds its rlib
+`--no-default-features --features random` and refuses a page whose wasm imports
+anything beyond `loft_gl` and `loft_io`. So the file functions are raw `loft_io`
+imports declared in `src/lib.rs`, and reads use the `len`-then-`copy` shape
+`loft_host_input_len`/`copy` already proves, sharing one host stash — safe because
+each is a synchronous loft call, so the next read cannot begin before this one has
+copied. `usize::MAX` is absent, which is not a length of 0.
+
+**One chokepoint.** `src/wasm.rs::host_fs_*` is the only place that picks a
+transport (`js_sys` under the `wasm` feature, raw imports otherwise). Every call
+site asks one question instead — the new `host_fs` cfg from `build.rs`, set for the
+wasm-bindgen bundle and for `--html`, and deliberately NOT for `wasm32-wasip2`,
+which has a real WASI filesystem. That replaced 40-odd hand-written
+`feature = "wasm"` gates across `state/io.rs`, `database/io.rs` and
+`codegen_runtime.rs`, and the two `--html`-only inert stubs they had grown beside
+them. `codegen_runtime.rs` is the one that mattered: `--html` runs generated code,
+and its browser arms were stubs returning nothing while the interpreter's were real
+bridges — so the two backends had different filesystems and only one of them was
+documented.
+
+**The cursor.** A page has no OS file handle, so the host keeps the read/write
+position per path. This is where the first working version was still wrong, and the
+matrix is what caught it: every whole-file cell passed while `read_bytes` answered
+zero bytes for a file that had just been written. `fs_read_bytes` / `fs_write_bytes`
+in `database/io.rs` are WHOLE-file operations and were calling the cursor-relative
+bridges — so a preceding write left the cursor at the end and the read started
+there. They call `read_binary` / `write_binary` now, which also fixes the same wrong
+result in the wasm-bindgen build, where it had been latent.
+
+**The host half** is `doc/loft-fs.js`: an immutable base tree the page supplies
+(`globalThis.loftBaseFS`) plus a delta holding every write, persisted to
+`localStorage` — the `LayeredFS` shape, which is what a page needs. Both page
+shells bind it, so a program that only stores still gets the minimal engine-less
+page. Every node harness that instantiates an `--html` wasm imports the same module
+rather than restubbing it, because a stub answering 0 means "an empty file that
+exists" where the contract says absent.
+
+**Guards.** `tests/html_wasm.rs` drives a real page through the whole surface and
+through the cursor, with every expected value taken from what `--interpret` and
+`--native` print for the same program; `tools/loft_fs_unit.mjs` (run from the same
+test binary) covers the base tree and the reload, which a node-hosted page cannot
+reach. The build-time warning added earlier for this issue is gone — its premise
+was that the target binds no filesystem.
+
+Also here: the wasm32 rlib would not compile at all. An entry inserted into
+`src/native.rs`'s natives table landed between a `#[cfg(not(target_arch =
+"wasm32"))]` and the item it guarded, so `n_kernel_listen` lost its gate; `--html`
+reported "install the target" — blaming the environment for a source error — and
+linked the previous rlib.
+
 ### `store_release` — a working-set hint, and the per-record shape it replaces is measured dead (@PLN126) (2026-08-11)
 
 @PLN126 opened on a measurement rather than an API: *does ordered insertion leave a

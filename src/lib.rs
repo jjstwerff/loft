@@ -134,6 +134,87 @@ unsafe extern "C" {
         desc_len: usize,
     );
     pub(crate) safe fn loft_host_release(tag: i64);
+    // loft#851 — the page's FILESYSTEM.  `--html` used to bind none at all: every
+    // file call took an inert branch and answered "absent", so an editor in a page
+    // could draw but could not save.  These are the raw-import twins of the
+    // `globalThis.loftHost.fs_*` bridges the wasm-bindgen host already defines
+    // (`tests/wasm/host.mjs`), which `--html` cannot reuse — those need
+    // wasm-bindgen, and this target refuses a page importing anything beyond
+    // `loft_gl` and `loft_io`.  `src/wasm.rs` is the one place that picks between
+    // the two transports; everything above it calls `host_fs_*` and never learns
+    // which one it got.
+    //
+    // Reads answer a LENGTH and then fill a buffer, the `len`-then-`copy` shape
+    // `loft_host_input_len`/`copy` already proves — a raw wasm import cannot
+    // return a string.  `usize::MAX` means absent, which is distinct from a
+    // length of 0 (an empty file that really exists).  All six readers share ONE
+    // host-side stash drained by `loft_host_fs_copy`, and that is safe for the
+    // same reason the HTTP bridge's single stash is: each of these is a
+    // SYNCHRONOUS loft call, so the next read cannot begin before this one has
+    // copied.  Unlike the HTTP bridge none of them suspends, so they are not in
+    // the asyncify allowlist.
+    pub(crate) safe fn loft_host_fs_read_text(path_ptr: *const u8, path_len: usize) -> usize;
+    pub(crate) safe fn loft_host_fs_read_binary(path_ptr: *const u8, path_len: usize) -> usize;
+    pub(crate) safe fn loft_host_fs_read_bytes(
+        path_ptr: *const u8,
+        path_len: usize,
+        want: usize,
+    ) -> usize;
+    // Directory names, `\n`-joined.  A newline cannot occur in a name the host
+    // stores, and joining keeps this to one import instead of a count-then-
+    // index-then-copy triple.
+    pub(crate) safe fn loft_host_fs_list_dir(path_ptr: *const u8, path_len: usize) -> usize;
+    pub(crate) safe fn loft_host_fs_cwd() -> usize;
+    pub(crate) safe fn loft_host_fs_user_dir() -> usize;
+    pub(crate) safe fn loft_host_fs_program_dir() -> usize;
+    pub(crate) safe fn loft_host_fs_copy(ptr: *mut u8);
+    // Writes and metadata answer directly.  An `i32` result is 0 on success and
+    // an errno-shaped code otherwise, matching what `fs_classify` returns on
+    // native so a `FileResult` reads the same on every target.
+    pub(crate) safe fn loft_host_fs_write_text(
+        path_ptr: *const u8,
+        path_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub(crate) safe fn loft_host_fs_write_binary(
+        path_ptr: *const u8,
+        path_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub(crate) safe fn loft_host_fs_write_bytes(
+        path_ptr: *const u8,
+        path_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub(crate) safe fn loft_host_fs_delete(path_ptr: *const u8, path_len: usize) -> i32;
+    pub(crate) safe fn loft_host_fs_move(
+        from_ptr: *const u8,
+        from_len: usize,
+        to_ptr: *const u8,
+        to_len: usize,
+    ) -> i32;
+    pub(crate) safe fn loft_host_fs_mkdir(path_ptr: *const u8, path_len: usize) -> i32;
+    pub(crate) safe fn loft_host_fs_mkdir_all(path_ptr: *const u8, path_len: usize) -> i32;
+    pub(crate) safe fn loft_host_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
+    pub(crate) safe fn loft_host_fs_is_dir(path_ptr: *const u8, path_len: usize) -> i32;
+    pub(crate) safe fn loft_host_fs_is_file(path_ptr: *const u8, path_len: usize) -> i32;
+    // No `truncate` import: resizing is `read_binary` → slice → `write_binary`,
+    // which the wasm-bindgen path already composes the same way.  Every import
+    // here is one more function a page (and each headless stub) must define, so
+    // a resize that costs one extra round trip is worth not having a 22nd name.
+    //
+    // Sizes and cursor positions cross as `f64` for the same reason the HTTP
+    // range bridge's offsets do: a JS number is exact to 2^53 (eight petabytes),
+    // while a `u64`/`i64` would arrive as a `BigInt` every headless stub would
+    // then have to return too — and a plain `0` there traps at the call rather
+    // than at link, which is the kind of failure that shows up in one target only.
+    // `-1` from `file_size` means absent.
+    pub(crate) safe fn loft_host_fs_file_size(path_ptr: *const u8, path_len: usize) -> f64;
+    pub(crate) safe fn loft_host_fs_seek(path_ptr: *const u8, path_len: usize, pos: f64);
+    pub(crate) safe fn loft_host_fs_get_cursor(path_ptr: *const u8, path_len: usize) -> f64;
 }
 
 #[macro_use]
@@ -285,7 +366,10 @@ pub mod documentation;
 pub mod migrate_long;
 pub mod stdlib_sources;
 
-#[cfg(feature = "wasm")]
+// `host_fs`, not `feature = "wasm"`: `--html` reaches the same host bridges
+// over raw `loft_io` imports, and this module is where the two transports are
+// told apart (loft#851).  Its wasm-bindgen half stays behind the feature.
+#[cfg(host_fs)]
 pub mod wasm;
 pub mod wasm_assets;
 pub mod wasm_gl;

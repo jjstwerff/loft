@@ -170,6 +170,24 @@ fn main() {
         println!("cargo:rustc-cfg=paged_store");
     }
 
+    // loft#851 — one name for "this build reaches the filesystem through a JS
+    // host rather than through `std::fs`".  Two builds qualify and they differ
+    // only in HOW they call out: the wasm-bindgen bundle reaches
+    // `globalThis.loftHost.fs_*` through `js_sys`, and `--html`
+    // (wasm32-unknown-unknown, no wasm-bindgen) reaches the same contract
+    // through raw `loft_io` imports.  `src/wasm.rs` owns that choice; every
+    // call site asks only this one question.
+    //
+    // wasip2 is deliberately excluded.  `--native-wasm` has a REAL filesystem
+    // through WASI preopens, so routing it to a page's host would replace a
+    // working `std::fs` with a bridge no wasip2 host defines — the same
+    // over-broad `target_arch = "wasm32"` that @P334 already had to narrow in
+    // `src/state/io.rs` and `src/database/io.rs`.
+    println!("cargo:rustc-check-cfg=cfg(host_fs)");
+    if wasm_bindgen_build || browser_wasm {
+        println!("cargo:rustc-cfg=host_fs");
+    }
+
     // Re-run when anything that identifies this build changes: git HEAD / refs
     // (committed state), build.rs itself, the compiler source (`src/`) and stdlib
     // (`default/`), and loft-ffi's source.  Without src/ + default/, build.rs never
