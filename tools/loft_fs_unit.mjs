@@ -81,10 +81,27 @@ console.log('persistence');
   first.write('/work/world.hxw', new Uint8Array([1, 2, 250]));
   first.mkdirAll('/work/saves');
   first.delete('/base.txt');
-  first.persist();
+  // `persist()` only SCHEDULES (writes coalesce into one save once the run
+  // finishes); `flush()` is the synchronous force, and what `pagehide` calls.
+  first.flush();
 
   const raw = globalThis.localStorage.getItem('loft-fs-unit');
   check('the delta reached localStorage', typeof raw === 'string' && raw.length > 0, true);
+
+  // A burst of writes must cost ONE save, not one per write — serialising the
+  // whole delta each time is quadratic, and building a file by `f += chunk` is
+  // what a page saving a world does.
+  let saves = 0;
+  const realSet = globalThis.localStorage.setItem;
+  globalThis.localStorage.setItem = function (k, v) { saves++; return realSet.call(this, k, v); };
+  const bursty = new LoftPageFS({}, null, '/');
+  const chunk = new TextEncoder().encode('x'.repeat(64));
+  for (let i = 0; i < 500; i++) { bursty.seek('/log.txt', i * 64); bursty.writeBytes('/log.txt', chunk); }
+  check('500 writes schedule, none save yet', saves, 0);
+  bursty.flush();
+  check('and they collapse into one save', saves, 1);
+  check('with every byte present', bursty.size('/log.txt'), 500 * 64);
+  globalThis.localStorage.setItem = realSet;
 
   // What a reload does: same page, same base tree, delta read back off the key.
   const reloaded = new LoftPageFS(base, JSON.parse(raw), '/');

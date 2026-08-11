@@ -439,9 +439,16 @@ fn file_operations_gate_on_host_fs_not_the_wasm_feature() {
             .filter(|(n, _)| {
                 // Look at what the arm guards, not at the attribute alone.
                 let window: String = src.lines().skip(*n).take(4).collect::<Vec<_>>().join(" ");
-                ["File", "file", "fs_", "read_bytes", "write_bytes", "std::fs"]
-                    .iter()
-                    .any(|k| window.contains(k))
+                [
+                    "File",
+                    "file",
+                    "fs_",
+                    "read_bytes",
+                    "write_bytes",
+                    "std::fs",
+                ]
+                .iter()
+                .any(|k| window.contains(k))
             })
             .map(|(n, l)| format!("{path}:{}: {}", n + 1, l.trim()))
             .collect();

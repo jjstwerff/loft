@@ -200,7 +200,15 @@ class LoftPageFS {
     return slice;
   }
 
-  /** Write at the cursor, zero-filling any gap past the current end. */
+  /**
+   * Write at the cursor, zero-filling any gap past the current end.
+   *
+   * This rebuilds the file's buffer, so building a file by many small appends
+   * costs O(size²) in copying — about 1.1s for a 1.28 MB file written 64 bytes
+   * at a time, against 45 ms for 256 KB.  One `write_bytes` of a finished blob,
+   * or a few large `f += …`, does not pay it.  Worth a chunk list if a consumer
+   * ever appends at that scale; measure before assuming they do.
+   */
   writeBytes(path, data) {
     const at = this.cursor(path);
     const old = this.read(path) || new Uint8Array(0);
@@ -228,14 +236,48 @@ class LoftPageFS {
   }
 
   /**
-   * Save the delta.  A quota failure is reported once and then tolerated: the
-   * page keeps working against the in-memory delta, because losing the run is
-   * strictly worse than losing the persistence, and a write that half-succeeded
-   * would be the one outcome a consumer cannot reason about.
+   * Mark the delta dirty and save it once the stack unwinds.
+   *
+   * Saving on every write is quadratic and not by a little: serialising the
+   * WHOLE delta per write made 4000 appends to a 256 KB file cost 2.5 seconds,
+   * against 11 ms for 200 — and building a file by `f += chunk` is exactly what
+   * a page that saves a world does.  A loft run is synchronous, so a
+   * zero-delay timer cannot fire until it finishes: a burst of writes
+   * collapses into ONE save, and an idle page still saves promptly.
    */
   persist() {
     if (globalThis.loftFSPersist === false) return;
     if (typeof localStorage === 'undefined') return;
+    this._dirty = true;
+    if (this._scheduled) return;
+    this._scheduled = true;
+    // A page can be closed or hidden before the timer fires, so flush on the
+    // way out too.  `pagehide` rather than `beforeunload`: it is the one a
+    // mobile browser actually fires when the tab is backgrounded and then
+    // discarded, which is when a page loses work.
+    if (!this._unloadBound && typeof addEventListener === 'function') {
+      this._unloadBound = true;
+      addEventListener('pagehide', () => this.flush());
+    }
+    setTimeout(() => {
+      this._scheduled = false;
+      this.flush();
+    }, 0);
+  }
+
+  /**
+   * Write the delta out now.
+   *
+   * A quota failure is reported once and then tolerated: the page keeps working
+   * against the in-memory delta, because losing the run is strictly worse than
+   * losing the persistence, and a write that half-succeeded would be the one
+   * outcome a consumer cannot reason about.
+   */
+  flush() {
+    if (!this._dirty) return;
+    if (globalThis.loftFSPersist === false) return;
+    if (typeof localStorage === 'undefined') return;
+    this._dirty = false;
     try {
       localStorage.setItem(globalThis.loftFSKey || 'loft-fs-delta', JSON.stringify(this.getDelta()));
     } catch (e) {
