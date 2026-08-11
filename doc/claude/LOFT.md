@@ -2371,6 +2371,20 @@ Multiple bounds: `<T: Ordered + Printable>`.
 Bounded generics work with for-loops, method calls, and operator dispatch
 on all types including structs.
 
+**Interpolating a type variable needs `Printable`.** Inside a generic only the
+BOUNDS may be relied on — that is already true of a method call, a subscript and
+an operator, and formatting is not an exception, because `"{v}"` picks its op
+from the value's type and a template has no concrete one to pick from:
+
+```loft
+fn show<T>(v: T) -> text { "{v}" }             // refused, and says why
+fn show<T: Printable>(v: T) -> text { "{v}" }  // renders every kind
+```
+
+A **collection** of a type variable needs no bound — `"{v}"` on a `vector<T>`
+dumps through the schema, which renders elements from their storage, so
+`fn showv<T>(v: vector<T>)` formats fine (loft#845).
+
 ---
 
 ## Design decisions and constraints

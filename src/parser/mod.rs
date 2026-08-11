@@ -5007,6 +5007,11 @@ impl Parser {
         // delivers through a hidden `&text` buffer (no orphaned owned String).
         // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
         self.promote_monomorph_text_return(d_nr);
+        // loft#845 — a `"{v}"` on a `vector<T>` was emitted against the row the TEMPLATE
+        // could see, which is a vector over the type variable's own storage.  Substitution
+        // replaces the type and leaves that row behind, so the dump walked a
+        // `vector<integer>` through the wrong schema and printed `{}`.
+        self.retarget_parametric_vector_format(d_nr);
         self.instantiate_nested_generics(d_nr, &concrete);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
@@ -5441,6 +5446,80 @@ impl Parser {
         } else {
             d_nr
         }
+    }
+
+    /// loft#845 — make a monomorph's collection FORMAT agree with the value it formats.
+    ///
+    /// `"{v}"` on a collection dumps through the schema, so the emitted call carries a
+    /// storage-row id rather than an element type. In a template that id is the row the
+    /// parser could see — a vector over the TYPE VARIABLE's own storage — and substitution
+    /// replaces types, not constants, so the monomorph kept it and walked a
+    /// `vector<integer>` through the wrong schema: `{}` instead of `[1, 2, 3]`, silently,
+    /// on both backends. A bound does not help; `Printable` gives the ELEMENT a `to_text`,
+    /// while the dump needs the element's ROW.
+    ///
+    /// The row is re-derived from the VALUE's own (already substituted) type rather than
+    /// from the type variable's binding. That is the difference between a rule and a guess:
+    /// the first attempt recomputed the parametric row from `concrete` and matched on it,
+    /// and it did not reproduce what the emitter had chosen — an integer literal's inferred
+    /// range picks the NARROW element row, so "the row for T = integer" and "the row this
+    /// variable actually has" were two different numbers. Asking the variable removes the
+    /// second derivation entirely, and makes the pass a no-op wherever the row was already
+    /// right, since the registry is name-keyed.
+    ///
+    /// Both op spellings appear because they are one op with two delivery targets
+    /// (`__work_N` on the stack vs a heap text); `append_data` chooses between them by the
+    /// accumulator's storage, long before any of this.
+    fn retarget_parametric_vector_format(&mut self, d_nr: u32) {
+        let ops: Vec<u32> = ["OpFormatDatabase", "OpFormatStackDatabase"]
+            .iter()
+            .map(|n| self.data.def_nr(n))
+            .filter(|d| *d != u32::MAX)
+            .collect();
+        if ops.is_empty() {
+            return;
+        }
+        // Collect first — re-deriving a row needs `&mut self` while the walk holds the IR.
+        // Keyed on the ROW rather than on a traversal position: the two walkers treat
+        // `Span` differently, so a positional pairing between them would be a coincidence.
+        // A row is name-keyed on its content, so one stale row can only have come from one
+        // element type, and the map is well defined.
+        let mut want: Vec<(u16, Type)> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v
+                && ops.contains(d)
+                && args.len() == 4
+                && let Value::Var(n) = args[1].unspan()
+                && let Value::Int(row) = &args[2]
+                && let Ok(stale) = u16::try_from(*row)
+                && !want.iter().any(|(r, _)| *r == stale)
+                && let Type::Vector(cont, _) = self.data.def(d_nr).variables.tp(*n).base()
+            {
+                want.push((stale, (**cont).clone()));
+            }
+        });
+        let fixes: Vec<(u16, u16)> = want
+            .into_iter()
+            .map(|(stale, cont)| (stale, self.format_vector_row(&cont)))
+            .filter(|(stale, fresh)| stale != fresh)
+            .collect();
+        if fixes.is_empty() {
+            return;
+        }
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && ops.contains(d)
+                && args.len() == 4
+                && let Value::Int(row) = &args[2]
+                && let Some((_, fresh)) = u16::try_from(*row)
+                    .ok()
+                    .and_then(|r| fixes.iter().find(|(stale, _)| *stale == r))
+            {
+                args[2] = Value::Int(i32::from(*fresh));
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
     }
 
     /// The half of [`re_resolve_call`] that has to CREATE rather than look up.

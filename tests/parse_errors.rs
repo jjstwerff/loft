@@ -1514,6 +1514,37 @@ fn op_drop_takes_only_self() {
     );
 }
 
+/// loft#845: `"{v}"` on an UNBOUNDED type variable is refused, and the message
+/// names the bound that renders it.
+///
+/// A format string picks its op from the value's TYPE, and in a template the only
+/// type available is the parameter's — an attribute-less struct, so a reference.
+/// Substitution replaces types, not the ops chosen from them, so the monomorph
+/// ran the RECORD formatter against a concrete value. Measured over every
+/// argument kind, not one produced a right answer: `integer` / `float` /
+/// `boolean` / `character` / an enum SIGSEGV'd on `--interpret` and were `E0308`
+/// on `--native`; `text` and a struct rendered the literal `{}` on both. So this
+/// refuses nothing that worked.
+///
+/// It is also the rule the rest of the language already applies — inside a
+/// generic only the BOUNDS may be relied on, as a method call, a subscript
+/// (@PLN125 arc C) and an operator all say. `Printable` is that bound, and the
+/// bounded path renders correctly on both backends for every kind
+/// (`tests/scripts/845-generic-format.loft`).
+#[test]
+fn formatting_an_unbounded_type_variable_is_refused() {
+    code!(
+        "fn show<T>(v: T) -> text { \"{v}\" }
+         fn test() { assert(show(7) == \"7\", \"never reached\") }"
+    )
+    .error(
+        "generic type T cannot be formatted — `\"{\u{2026}}\"` needs a bound that renders \
+         it; write `<T: Printable>` (every built-in satisfies it, and a user type does by \
+         defining `fn to_text(self: T) -> text`) at \
+         formatting_an_unbounded_type_variable_is_refused:1:33",
+    );
+}
+
 // ── fix-tvscope — Type variable namespace ────────────────────────────────────
 
 /// fix-tvscope: defining a struct whose name clashes with a generic type variable
