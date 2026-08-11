@@ -123,6 +123,9 @@ struct Scopes {
     /// is a runtime value, so this local fact is what lets the lift ask the
     /// callee's own `returns_borrowed_view()` instead of guessing from the type.
     fnref_target: HashMap<u16, u32>,
+    /// loft#849 — vars whose store a MOVE-copy already released.  See
+    /// [`collect_move_consumed_sources`].
+    move_consumed: HashSet<u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -993,6 +996,48 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
     out
 }
 
+/// loft#849 — the vars an `OpCopyRecord` with the `0x8000` source-free bit CONSUMED.
+///
+/// That bit means "deep-copy me, then FREE my source store" — the move a vector
+/// element-append does for a value it knows is dead after the copy
+/// (`v: vector<H> = [mk(8), mk(9)]` lifts each call into a `__lift_N` temp and moves
+/// it into the element).  The store is gone, but the variable still names it, and the
+/// scope-exit sweep then runs the type's `OpDrop` hook on a freed record.  With the
+/// slot recycled by the next allocation that reads as a LIVE record belonging to
+/// somebody else: two elements closed the second one's resource twice and the first's
+/// never, and `LOFT_STRICT_STORES` calls it what it is — a use-after-free.
+///
+/// A drop is user code, so it cannot run on a store this function already released;
+/// the free beside it is null-tolerant and is left alone.  This does not answer the
+/// open half of loft#849 (whether a container's copy should drop at all) — it only
+/// stops the consumed SOURCE from dropping something it no longer owns.
+///
+/// Only a plain `Var` source can be marked: any other expression names no slot that
+/// could carry a scope-exit drop.
+fn collect_move_consumed_sources(code: &Value, data: &Data) -> HashSet<u16> {
+    let copy_d = data.def_nr("OpCopyRecord");
+    let mut out: HashSet<u16> = HashSet::new();
+    if copy_d == u32::MAX {
+        return out;
+    }
+    code.walk(&mut |n| {
+        let Value::Call(d, args) = n else { return };
+        if *d != copy_d || args.len() < 3 {
+            return;
+        }
+        let Value::Int(tp) = args[2].unspan() else {
+            return;
+        };
+        if tp & 0x8000 == 0 {
+            return;
+        }
+        if let Value::Var(src) = args[0].unspan() {
+            out.insert(*src);
+        }
+    });
+    out
+}
+
 fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
     let mut out: HashMap<u16, u32> = HashMap::new();
     code.walk(&mut |v| {
@@ -1073,6 +1118,7 @@ fn run_scan_phase(
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
+        move_consumed: collect_move_consumed_sources(orig_code, data),
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -3301,6 +3347,17 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
 }
 
 impl Scopes {
+    /// The type's scope-end hook for `v`, unless a MOVE-copy already released `v`'s
+    /// store — see [`collect_move_consumed_sources`].  One home for the rule, because
+    /// both emission sites (the buffer-adoption leg and the ordinary one) must agree:
+    /// a drop that runs on a released store is a use-after-free either way.
+    fn scope_end_drop(&self, function: &Function, v: u16, data: &Data) -> Option<Value> {
+        if self.move_consumed.contains(&v) {
+            return None;
+        }
+        drop_hook(function, v, data)
+    }
+
     fn enter_scope(&mut self) -> u16 {
         self.stack.push(self.scope);
         self.scope = self.max_scope;
@@ -5292,7 +5349,7 @@ impl Scopes {
                         // The FREE is skipped in the adoption case; the DROP is not.
                         // The store surviving into the next iteration is a reuse
                         // optimisation, and the value it held is over either way.
-                        if let Some(hook) = drop_hook(function, v, data) {
+                        if let Some(hook) = self.scope_end_drop(function, v, data) {
                             ls.push(hook);
                         }
                         ls.push(Value::Call(
@@ -5309,7 +5366,7 @@ impl Scopes {
                         // the value's life — unless `v` is a buffer whose witness already
                         // ran it.
                         if !is_buffer
-                            && let Some(hook) = drop_hook(function, v, data)
+                            && let Some(hook) = self.scope_end_drop(function, v, data)
                         {
                             ls.push(hook);
                         }
@@ -5555,6 +5612,15 @@ impl Scopes {
         // works on both backends.  Gated on a CreateStack-receiver first arg so
         // ordinary calls keep their existing argument lowering untouched.
         let create_stack_nr = data.def_nr("OpCreateStack");
+        // loft#849 — `OpCopyRecord(src, dst, kt|0x8000)` deep-copies and then FREES
+        // `src`'s store (the move a vector element-append does for a value it knows is
+        // dead after the copy).  When `src` is an inline call it is lifted into a
+        // `__lift_N` temp right here, and that temp then names a RELEASED store — so
+        // its scope-exit drop must not run.  Mark it as the lift happens: the copy's
+        // source is arg 0, and after the lift nothing else records which temp the copy
+        // consumed.
+        let move_copy_source = outer_call == data.def_nr("OpCopyRecord")
+            && matches!(args.get(2).map(Value::unspan), Some(Value::Int(tp)) if tp & 0x8000 != 0);
         let has_create_stack_receiver = args.first().is_some_and(|a| {
             matches!(a.unspan(), Value::Call(d, cargs)
                 if *d == create_stack_nr
@@ -5591,6 +5657,9 @@ impl Scopes {
                 // the same call to a named local yields `flat:vector<integer>
                 // ["__ref_1"]` and NO `OpFreeRef`.
                 function.set_skip_free(tmp);
+                if move_copy_source && arg_idx == 0 {
+                    self.move_consumed.insert(tmp);
+                }
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;
@@ -5658,6 +5727,9 @@ impl Scopes {
                         self.inline_struct_return(&final_val, data, outer_call, function)
                     {
                         let tmp = self.new_lift_var(function, &tp);
+                        if move_copy_source && arg_idx == 0 {
+                            self.move_consumed.insert(tmp);
+                        }
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -5679,6 +5751,9 @@ impl Scopes {
                 // get_free_vars emits OpFreeRef(tmp) at scope exit because
                 // the dep is empty (owned).
                 let tmp = self.new_lift_var(function, &tp);
+                if move_copy_source && arg_idx == 0 {
+                    self.move_consumed.insert(tmp);
+                }
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
