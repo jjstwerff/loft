@@ -26,6 +26,22 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Redefining a stdlib function says so once, and says where
+
+Naming your own function after one the standard library already provides is refused —
+but for some names the refusal came with a second error that was not real:
+
+```
+error: Cannot redefine 'sum'
+error: Syntax error: unexpected '->'      ← there is nothing wrong with the `->`
+```
+
+Now there is one message, and it points at the function you collided with:
+
+```
+error: Cannot redefine 'sum' (already defined at default/01_code.loft:1657:53)
+```
+
 ### Reading a tuple out of a vector is now as cheap as reading a struct
 
 `v[i]` on a `vector<(float, float, float)>` was about **fourteen times** slower than

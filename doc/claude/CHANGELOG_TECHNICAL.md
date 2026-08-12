@@ -9,6 +9,57 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The heap ledger is per-linkage-unit, and a store outlives the one that made it (loft#862) (2026-08-12)
+
+`make ci` aborted at `exit_codes::moros_glb_cli_end_to_end` with `store_budget.rs:219:
+attempt to add with overflow` — an *add* overflowing a `u64`, which can only happen if
+`TOTAL` is already near `u64::MAX`, which can only happen if a `fetch_sub` already went
+below zero and wrapped. So the reported site was the victim; the cause was a release.
+
+The instrument said the rest in one run. Asserting `bytes <= TOTAL` inside `release`
+rather than waiting for the next allocation gave:
+
+```
+PROBE release underflow: kt=125 bytes=4344 born_at=99218 TOTAL=0
+  store_budget::release ← codegen_runtime::OpDatabase ← extensions::shared_store_dispatch
+```
+
+`TOTAL=0` with 4344 bytes being released: that `OpDatabase` runs INSIDE the library's
+auto-native cdylib, which links its **own** copy of libloft and therefore its own
+`store_budget` statics. The store was counted by the host's ledger and released against
+the cdylib's, which starts empty.
+
+`TOTAL` now saturates at zero, because below zero is not a quantity of heap — it is the
+ledger being asked about bytes belonging to another one. What that costs is stated rather
+than hidden: the HOST still counts those bytes as live, since its own ledger never sees
+the release either, so the ceiling reads high for a program that frees inside a library.
+That direction is the safe one (it can refuse early, never late) and it is what the
+behaviour already was; making the two ledgers one needs a `loft_ffi` hand-off and is not
+this change. Guarded by `releasing_more_than_was_added_stops_at_zero`, which asserts the
+VALUE — a saturating floor and a wrap both survive a debug `fetch_sub`, and only the
+number tells them apart.
+
+Worth noting where it hid: `binary(exit_codes)` is outside `find_problems.sh`'s curated
+selection, so a green `--wait` never covered it, and a release build wraps silently rather
+than aborting. Both were true of `main` as well — verified on a clean worktree at
+`00db858b`, not inferred.
+
+### A refusal that returned `u32::MAX` became a syntax error (loft#863) (2026-08-12)
+
+`fn sum(v: vector<integer>) -> integer { … }` collides with the stdlib's
+`pub fn sum <T: Addable>` and is correctly refused — but it answered with a bare
+`Cannot redefine 'sum'` and then `Syntax error: unexpected '->'` against a signature that
+is perfectly well formed. Reporting the collision returned `u32::MAX`, `parse_function`
+reads that as "this was not a function" and returns `false`, and the top-level loop then
+resumed with the lexer parked between the parameter list and the `->`.
+
+The sibling branch ten lines above — a free function shadowed by a METHOD on its first
+argument's type, which `len` takes — never had the second message, because it reports and
+falls THROUGH to the registration. This is the same fall-through: the rejected definition
+registers under a `#dup` name no call can spell, so the rest of it parses, the real error
+stands alone, and the winner keeps the real name. The position is printed too, which is
+what says `sum` is the stdlib's rather than a duplicate of the reader's own.
+
 ### A tuple element read was a cursor typed as an owner (loft#857, loft#858) (2026-08-12)
 
 Two issues, one line. `v[i]` on a `vector<(…)>` unboxes the element through a work-ref

@@ -230,10 +230,34 @@ pub(crate) fn add(kt: u16, bytes: usize, born_at: u32) {
     }
 }
 
+/// Subtract from the running total, stopping at zero.
+///
+/// **This ledger is per-LINKAGE-UNIT, and a store outlives the one it was created in.**
+/// A library's native cdylib links its own copy of libloft, so it has its own `TOTAL`,
+/// starting at zero — and a store the host allocated is routinely released through the
+/// library's `OpDatabase`, which reaches this function with `bytes` the cdylib's ledger
+/// never saw. A plain `fetch_sub` then wrapped `TOTAL` to near `u64::MAX`, and the next
+/// allocation's `TOTAL + bytes` aborted the program with "attempt to add with overflow" —
+/// pointing at whichever allocation came next rather than at the crossing, and taking a
+/// CORRECT program down with it (loft#862: `moros_glb_cli_end_to_end`, a debug build).
+///
+/// So the floor is real, not defensive rounding: below zero is not a quantity of heap,
+/// it is the ledger being asked about bytes that belong to another one. What it costs is
+/// stated rather than hidden — the HOST's total still counts those bytes as live, because
+/// its own ledger never sees the release either, so the ceiling reads high for a program
+/// that frees inside a library. That direction is the safe one (it can refuse early, never
+/// late) and it is the pre-existing behaviour; making the two ledgers one is a separate
+/// change that needs a `loft_ffi` hand-off.
+fn sub_total(bytes: u64) {
+    let _ = TOTAL.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+        Some(t.saturating_sub(bytes))
+    });
+}
+
 /// A store of type `kt`, allocated at bytecode position `born_at`, gave `bytes` of
 /// heap back.
 pub(crate) fn release(kt: u16, bytes: usize, born_at: u32) {
-    TOTAL.fetch_sub(bytes as u64, Ordering::Relaxed);
+    sub_total(bytes as u64);
     if sites_armed() {
         site_release(kt, bytes, born_at, 1);
     }
@@ -279,7 +303,7 @@ pub(crate) fn grow(kt: u16, old: usize, new: usize, born_at: u32) {
 /// to `new` bytes.
 pub(crate) fn shrink(kt: u16, old: usize, new: usize, born_at: u32) {
     let freed = old.saturating_sub(new) as u64;
-    TOTAL.fetch_sub(freed, Ordering::Relaxed);
+    sub_total(freed);
     if sites_armed() {
         site_release(kt, freed as usize, born_at, 0);
     }
@@ -420,5 +444,38 @@ mod tests {
         assert_eq!(human(512), "512 B");
         assert_eq!(human(2 << 30), "2.0 GiB");
         assert_eq!(human(180 << 20), "180.0 MiB");
+    }
+
+    /// loft#862 — releasing bytes this ledger never counted must stop at zero.
+    ///
+    /// A library's cdylib links its own libloft, so its `TOTAL` starts at zero while the
+    /// stores it frees were counted by the host's. A plain `fetch_sub` wrapped to near
+    /// `u64::MAX` and the NEXT allocation aborted on `TOTAL + bytes` — naming an innocent
+    /// allocation, in a correct program. The assertion is the wrap specifically, not just
+    /// "no panic": a saturating floor and a wrap both survive a debug `fetch_sub`, and
+    /// only the value tells them apart.
+    #[test]
+    fn releasing_more_than_was_added_stops_at_zero() {
+        // `TOTAL` is a process-wide static, so put back whatever was there. nextest gives
+        // each test its own process, but `cargo test` shares one across threads.
+        let restore = TOTAL.swap(0, Ordering::Relaxed);
+
+        sub_total(4344); // the crossing size from the filed repro
+        assert_eq!(
+            TOTAL.load(Ordering::Relaxed),
+            0,
+            "a release the ledger never saw must leave it at zero, not wrap"
+        );
+
+        // And the floor must not cost an honest release its effect.
+        TOTAL.store(1000, Ordering::Relaxed);
+        sub_total(400);
+        assert_eq!(
+            TOTAL.load(Ordering::Relaxed),
+            600,
+            "ordinary release still counts"
+        );
+
+        TOTAL.store(restore, Ordering::Relaxed);
     }
 }

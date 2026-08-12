@@ -4901,13 +4901,34 @@ impl Data {
         }
         let mut d_nr = own(self, &name); // C97: a library's mangled name is scoped to its own source
         if d_nr != u32::MAX {
+            // Name WHERE the winner lives, exactly as the shadowing branch above does.
+            // Without it a stdlib collision read as a bare "Cannot redefine 'sum'", which
+            // does not say that `sum` is the stdlib's rather than a duplicate of the
+            // reader's own (loft#863).
             diagnostic!(
                 lexer,
                 Level::Error,
-                "Cannot redefine '{}'",
-                fn_name.strip_prefix("n_").unwrap_or(fn_name)
+                "Cannot redefine '{}' (already defined at {})",
+                fn_name.strip_prefix("n_").unwrap_or(fn_name),
+                self.def(d_nr).position
             );
-            return u32::MAX;
+            // Report and CONTINUE, under a name nothing can reach.  Answering `u32::MAX`
+            // here made `parse_function` return `false` — "this was not a function" —
+            // with the lexer parked between the parameter list and the `->`, so the
+            // top-level loop resumed there and reported `Syntax error: unexpected '->'`
+            // against a signature that is perfectly well formed.  The shadowing branch
+            // above never had that second message because it falls through to the
+            // registration below, and this is the same fall-through: the rest of the
+            // definition parses into a def no call can name (`#dup` cannot be spelled in
+            // loft), the real error stands alone, and the winner keeps the real name so
+            // calls still resolve to it.  The program is refused either way.
+            let mut shadow = format!("{name}#dup");
+            let mut seq = 2;
+            while self.def_nr(&shadow) != u32::MAX {
+                shadow = format!("{name}#dup{seq}");
+                seq += 1;
+            }
+            name = shadow;
         }
         d_nr = self.add_def(&name, lexer.pos(), DefType::Function);
         for a in arguments {

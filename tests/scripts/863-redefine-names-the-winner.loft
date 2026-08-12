@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @EXPECT_ERROR: Cannot redefine 'sum' (already defined at
+//
+// A name collision with a stdlib free function reports ONCE, and says where the winner is.
+//
+// `sum` is `pub fn sum <T: Addable>(v: vector<T>, init: T) -> T` in `01_code.loft`, so this
+// definition is correctly refused. But the refusal answered with a bare "Cannot redefine
+// 'sum'" and then a SECOND error — `Syntax error: unexpected '->'` — against a signature
+// that is perfectly well formed: reporting the collision returned `u32::MAX`, which
+// `parse_function` reads as "this was not a function", leaving the lexer parked between the
+// parameter list and the `->` for the top-level loop to trip over. A reader who trusted the
+// second message went looking at their return-type syntax (loft#863).
+//
+// The guard is as much the absence of the second error as the presence of the first: the
+// harness fails on any error it was not told to expect, so a return to the two-message shape
+// fails here even though the file still errors.
+//
+// The sibling branch — a free function shadowed by a METHOD on its first argument's type,
+// which `len` takes — always reported once and always named the position. That is the
+// behaviour this brings the second branch to, so both now read the same.
+
+fn sum(v: vector<integer>) -> integer {
+  t = 0;
+  for e in v { t += e; }
+  t
+}
+
+fn main() {
+  println("{sum([1, 2, 3])}");
+}
