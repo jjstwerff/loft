@@ -310,31 +310,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from(["872-vector-return-into-struct-literal-field.loft"])
-}
-
-/// loft#872 — OPEN. A `vector<T>`-returning function delivers an EMPTY vector
-/// when its result initialises a struct-literal field inside an append, while
-/// the same function called directly in the same run answers 1024. The write
-/// that follows then lands out of bounds silently, which is how the consumer
-/// met it: content lost from a sibling layer, every write reporting success.
-///
-/// Kept as a runnable repro rather than a note, because the shape resisted
-/// hand-minimisation — it is a mechanical delta-debug reduction from the
-/// consumer, and its remaining oddities (the empty function bodies) are
-/// load-bearing. The script's own header carries the diagnosis.
-///
-/// Drop the `#[ignore]` and the `ignored_scripts()` entry together when it
-/// passes; it then becomes the guard.
-#[test]
-#[ignore = "loft#872 open — vector return into a struct-literal field arrives empty"]
-fn issue_872_vector_return_into_struct_literal_field() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/872-vector-return-into-struct-literal-field.loft"),
-        false,
-        false,
-    )
+    HashSet::new()
 }
 
 /// Part B leak gate — script/doc files with KNOWN, pre-existing store leaks at

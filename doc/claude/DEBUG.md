@@ -123,6 +123,21 @@ answer the ownership question in the same line: `arg`, `def`, `skipfree`, `inlin
 and `OWNS` (the `Function::owns_store` verdict — the ONE predicate every consumer
 reads; an element or a match binding must NOT show it).
 
+`LOFT_TRACE_WORKREF=1` is the var table's other half — the ORDER the `__ref_N` names were
+claimed in, one line per mint, naming the site that asked:
+
+```
+[workref] fn=bad -> v2 __ref_1 tp=Vector(Reference(707, …)) at src/parser/mod.rs:8977:40
+[workref] fn=bad -> v5 __ref_3 tp=Reference(707, …)         at src/parser/objects.rs:3051:31
+```
+
+Reach for it when the var table shows the right names in the wrong ROLES.  The table is the
+end state; a collision is about sequence, and the two parser passes mint different ones —
+which is what showed a call's out-param buffer claiming, on pass 2, the name pass 1 had
+promoted to the return-buffer argument (loft#872).  The table alone said only that one
+variable was both.  Its companion is `LOFT_TRACE_RR=1`, which prints `ref_return`'s
+`(ls, ls_types, returned)` plus the per-candidate promotion verdict, with the PASS.
+
 One flag is there for a different reason.  **`amplink`** marks a binding the author
 spelled with `&` at a struct-typed projection (`c = &v[0]`, `c = &o.inner`).  Such a
 projection is already a view, so both spellings emit *byte-identical* IR — this column

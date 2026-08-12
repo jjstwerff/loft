@@ -99,12 +99,22 @@ fn oracle_clean_on_correct_corpus() {
     }
 }
 
-/// 4.3 — the true-positive gate: the `LOFT_NO_A1B` wrong plan is flagged, the correct default is not.
+/// 4.3 — the true-positive gate: the known-wrong plan is flagged, the correct default is not.
 /// This is the class the runtime gates (exit / leak / interp-vs-native) structurally MISS — see the
 /// strictness table in PHASE4_DESIGN.md.
+///
+/// It takes BOTH opt-outs to reach that plan now. `LOFT_NO_A1B` restores the promotion collapse, but
+/// loft#872's work-ref/argument step-over then keeps the roles apart anyway — pass 2's mint for the
+/// inner call asks for a `vector` and the promoted buffer is a record, so it steps to a fresh local
+/// and `n_h` comes out correct. Either fix alone makes this fixture right, which is worth knowing:
+/// they are independent guards on the same collapse, and the gate has to disable both to have a
+/// defect to catch.
 #[test]
 fn oracle_flags_the_a1b_wrong_plan() {
-    let wrong = check_reds(A1B_UAF, &[("LOFT_NO_A1B", "1")]);
+    let wrong = check_reds(
+        A1B_UAF,
+        &[("LOFT_NO_A1B", "1"), ("LOFT_NO_WORKREF_STEPOVER", "1")],
+    );
     assert!(
         wrong
             .iter()

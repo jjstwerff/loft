@@ -543,6 +543,20 @@ pub fn a1b_materialise_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_A1B").is_none())
 }
 
+/// loft#872: a work-ref mint may not RE-TYPE an argument — **DEFAULT ON**. `ref_return` promotes a
+/// body work-ref to the function's hidden return-buffer argument on pass 1, and the variable tables
+/// persist by NAME, so on pass 2 the same `__ref_N` name is minted again. When the site asking is the
+/// return delivery, re-finding it is exactly right; when it is a DIFFERENT role — a call's out-param
+/// buffer — the caller's buffer is handed to a callee that builds something else into it. The type
+/// asked for is the signal, so a mint whose type differs from the argument's steps to the next name.
+/// Opt OUT with `LOFT_NO_WORKREF_STEPOVER` (restores the collision: an empty vector out of the call
+/// and an out-of-bounds write after it). One cached env read. See `Function::retypes_argument`.
+#[must_use]
+pub fn work_ref_stepover_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_WORKREF_STEPOVER").is_none())
+}
+
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a
 /// dead-after owned source directly into its destination field/element instead of copy-then-free,
 /// for every proven-safe shape (Record `v[i]=e`/`o.f=src`; Construct field-append, fresh
