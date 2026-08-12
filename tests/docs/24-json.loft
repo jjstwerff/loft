@@ -19,6 +19,11 @@ struct User {
   email: text
 }
 
+struct MaybeUser {
+  id: integer,
+  name: text?,
+}
+
 // ## Parsing — JSON to struct
 // Call 'Type.parse(text)' to create a struct from JSON text.
 // Text arguments are auto-wrapped through 'json_parse' internally.
@@ -108,12 +113,15 @@ fn main() {
   assert(c.address.city == "Amsterdam", "nested city: {c.address.city}");
   assert(c.address.zip == "1012", "nested zip");
 
-  // ## Missing fields get null
-  // When a field is absent from the JSON, the struct field gets its null sentinel.
-  // For text, that is the NUL character '\0' (not the empty string ""); for integer
-  // it is the minimum i64 value (integer is 64-bit). Check with '!' before use, or
-  // assign a default with '??'.
+  // ## A missing field gets its own declared absence
+  // When a field is absent from the JSON, it gets the absent value its DECLARATION
+  // allows — not the type's null sentinel. A plain field cannot hold null, so it
+  // takes its empty value: 0 for a number, "" for text, false for a boolean. Declare
+  // the field 'T?' when "the document did not say" has to be tellable from "the
+  // document said zero", and check it with '!' or '??' before use.
   partial = User.parse(`{{"id":1}}`);
   assert(partial.id == 1, "partial id");
-  assert(!partial.name, "missing name is null");
+  assert(partial.name == "", "a missing `text` field is empty: [{partial.name}]");
+  maybe = MaybeUser.parse(`{{"id":1}}`);
+  assert(!maybe.name, "a missing `text?` field is null");
 }

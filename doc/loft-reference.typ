@@ -4325,6 +4325,12 @@ struct NullTextHolder {
 ```
 
 ```rust
+struct OptTextHolder {
+  s: text?,
+}
+```
+
+```rust
 fn main() {
 ```
 
@@ -4356,16 +4362,16 @@ Arithmetic on null propagates: null plus anything is null.
   assert(! (n + 1), "null + 1 is still null");
 ```
 
-Text null is the NUL character ('\\0'), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:
+Text null is the NUL character ('\\0'), not the empty string. A `text?` local or field can hold it; a plain `text` cannot, and a parse respects that.
 
 ```rust
   holder = NullTextHolder.parse(`{{}}`);
-  assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
+  assert(holder.s == "", "a missing `text` field is empty, because it cannot be null");
+  opt = OptTextHolder.parse(`{{}}`);
+  assert(!opt.s, "a missing `text?` field IS null — the declaration decides");
   empty = "";
   assert(empty, "empty string is NOT null — this surprises most newcomers");
 ```
-
-Mitigation: declare struct fields as `not null` so that reserved value can be used as data.
 
 === Parsing text to a number needs a fallback
 
@@ -4559,6 +4565,13 @@ struct User {
 }
 ```
 
+```rust
+struct MaybeUser {
+  id: integer,
+  name: text?,
+}
+```
+
 === Parsing — JSON to struct
 
 Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally.
@@ -4663,14 +4676,16 @@ Type-mismatched fields (id: string, name: number) parse as JSON fine, but the st
   assert(c.address.zip == "1012", "nested zip");
 ```
 
-=== Missing fields get null
+=== A missing field gets its own declared absence
 
-When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character '\\0' (not the empty string ""); for integer it is the minimum i64 value (integer is 64-bit). Check with '!' before use, or assign a default with '??'.
+When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type's null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field 'T?' when "the document did not say" has to be tellable from "the document said zero", and check it with '!' or '??' before use.
 
 ```rust
   partial = User.parse(`{{"id":1}}`);
   assert(partial.id == 1, "partial id");
-  assert(!partial.name, "missing name is null");
+  assert(partial.name == "", "a missing `text` field is empty: [{partial.name}]");
+  maybe = MaybeUser.parse(`{{"id":1}}`);
+  assert(!maybe.name, "a missing `text?` field is null");
 }
 ```
 

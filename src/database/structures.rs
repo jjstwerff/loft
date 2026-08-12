@@ -17,6 +17,24 @@ use crate::vector;
 use crate::{hash, keys, tree};
 use std::collections::HashSet;
 
+/// Why a field is being given its absent value — which decides what that value may COST.
+///
+/// The two are the same for every type whose absence is a bit pattern, and differ only for
+/// `text`, whose empty value has to be interned. `set_default_value` runs per RECORD on the
+/// allocation path, where the literal or the walker that follows writes every field anyway;
+/// making it intern there is pure garbage (measured: +78 % wall, +91 % peak heap over 400 000
+/// three-text-field rows). What a reader actually sees is written by the walker, per FIELD,
+/// and that is the call that has to be right.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Absent {
+    /// Pre-fill for a freshly claimed record: a value nothing may MISREAD, on the
+    /// understanding that the caller overwrites it.
+    Prefill,
+    /// The value that stays. A JSON key written `null`, one the document omits, and a parse
+    /// that failed all leave the field exactly as this call writes it.
+    Final,
+}
+
 /// Walker-native diagnostic for `walk_parsed_into` failures.
 ///
 /// `at` is a byte offset into the original input; `path` is the
@@ -729,7 +747,7 @@ impl Stores {
         // (loft#870).
         if matches!(parsed, crate::json::Parsed::Null) {
             let nullable = self.field_declared_nullable(rec_tp, field);
-            self.set_default_value_nullable(tp, nullable, to);
+            self.set_default_value_nullable(tp, nullable, Absent::Final, to);
             return Ok(());
         }
         let mismatch = || WalkErr {
@@ -1027,7 +1045,7 @@ impl Stores {
                 };
                 // A key the JSON simply omits is the same question as one written
                 // `null`, and gets the same answer — the FIELD's default (loft#870).
-                self.set_default_value_nullable(f.content, f.nullable, &slot);
+                self.set_default_value_nullable(f.content, f.nullable, Absent::Final, &slot);
             }
         }
         Ok(())
@@ -1130,7 +1148,17 @@ impl Stores {
         On inconsistent database definitions.
     */
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
-        self.set_default_value_nullable(tp, true, rec);
+        self.set_default_value_nullable(tp, true, Absent::Prefill, rec);
+    }
+
+    /// [`Self::set_default_value`] for a record the caller is about to HAND OUT — a
+    /// `text as Struct` fills its target this way before parsing, so every field the
+    /// document does not reach keeps exactly what this writes.  A parse that fails
+    /// outright reaches none of them, which is why the difference is not academic:
+    /// `#errors` is the channel that says a parse failed, and the value must not
+    /// double as that signal (loft#870, and its `text` half loft#875).
+    pub fn set_final_default_value(&mut self, tp: u16, rec: &DbRef) {
+        self.set_default_value_nullable(tp, true, Absent::Final, rec);
     }
 
     /// The absent value of a struct FIELD, which is not the same question as the
@@ -1152,7 +1180,13 @@ impl Stores {
     ///
     /// # Panics
     /// On inconsistent database definitions.
-    pub fn set_default_value_nullable(&mut self, tp: u16, nullable: bool, rec: &DbRef) {
+    pub fn set_default_value_nullable(
+        &mut self,
+        tp: u16,
+        nullable: bool,
+        why: Absent,
+        rec: &DbRef,
+    ) {
         // @PLN25 — a forward-referenced field's content can still be u16::MAX here (its known_type
         // is not laid out yet — e.g. a `__nullable<S>` element of a forward-ref'd struct, gate-on
         // 371_p375_forward_ref_positions).  It has no per-type default to write, and zero-on-claim
@@ -1194,7 +1228,23 @@ impl Stores {
                     self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, 0);
                 }
                 5 => {
-                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+                    // A text handle of 0 reads back as `null` (`Store::get_str`), so a field
+                    // declared plain `text` that KEEPS this value needs an interned empty
+                    // string — the same value a struct literal writes for an omitted field
+                    // (`OpSetText(rec, off, "")`), so a cast and a literal answer the same
+                    // question the same way (loft#875).
+                    //
+                    // Only for `Absent::Final`. An empty string claims a word, and the
+                    // prefill runs per RECORD on the allocation path: interning there cost
+                    // +78 % wall and +91 % peak heap on 400 000 rows with three text fields,
+                    // every one of them overwritten by the literal that followed.
+                    let intern = !nullable && why == Absent::Final;
+                    let h = if intern {
+                        self.store_mut(rec).set_str("")
+                    } else {
+                        0
+                    };
+                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, h);
                 }
                 _ => (),
             }
@@ -1236,6 +1286,7 @@ impl Stores {
                     self.set_default_value_nullable(
                         f.content,
                         f.nullable,
+                        why,
                         &DbRef {
                             store_nr: rec.store_nr,
                             rec: rec.rec,

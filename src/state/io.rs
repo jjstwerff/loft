@@ -2018,7 +2018,7 @@ impl State {
             rec: db.rec,
             pos: 8,
         };
-        self.database.set_default_value(db_tp, &into);
+        self.database.set_final_default_value(db_tp, &into);
         self.database.last_parse_errors.clear();
         if let Some(err) = self.database.parse(val, db_tp, &into) {
             self.database.last_parse_errors.push(err);

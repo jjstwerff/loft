@@ -9,6 +9,62 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A work-ref mint landed on the return-buffer ARGUMENT (2026-08-12)
+
+`ref_return` promotes a body work-ref to the function's hidden return-buffer argument on
+pass 1, and the variable tables persist across passes BY NAME while the counter restarts —
+so on pass 2 `Function::work_refs` re-minted `__ref_N`, found the argument, and
+`set_type`'d it to whatever the new site asked for. `work_refs`'s own doc already stated
+the rule ("a name that resolves to an argument is STEPPED OVER rather than reused") and
+the body never implemented it.
+
+The site asking was a CALL's out-param buffer: the callee was handed the caller's record
+buffer as its `vector<T>` destination, cleared it as a vector and built into it. The value
+came back empty and the write that followed landed out of bounds — silently on the
+interpreter, as `store_nr == 65535` reaching `allocations[…]` on native.
+
+The step-over is keyed on the TYPE, not on argument-ness alone: pass 2 re-minting the same
+name for the same ROLE is how the return buffer is re-found, and a blanket step-over grew a
+lambda a second return-buffer attribute on pass 2 ("grew a pass-2-only attribute", the H5
+two-pass contract). `Function::retypes_argument` = argument AND `without_deps()` differs, so
+only a mint that would RE-TYPE the buffer steps on. `LOFT_NO_WORKREF_STEPOVER` opts out
+(`keys::work_ref_stepover_enabled`).
+
+It subsumes half of @PLN90 W1's A1b collapse: with `LOFT_NO_A1B=1` alone the known-wrong
+plan is now correct, so `oracle_flags_the_a1b_wrong_plan` disables both gates to still have
+a defect to catch. loft#872.
+
+### A container in `ls` was renamed onto a RECORD return buffer (2026-08-12)
+
+`classify_reference_delivery`'s fallback renames the return's dep candidates onto
+`__retbuf`. A tail that indexes a call — `make(n)[0] ?? d` — leaves the indexed CONTAINER
+in `ls`, and that container has no further deps of its own, so `return_views_local` reads
+it as owned and the rename fires: a `vector<Cell>` became the `Cell`-shaped buffer the
+caller allocated. Same promotion `moros H12` hit through a field projection, reached here
+through an index, which is why the guard is on the buffer's SHAPE (`ls_can_be_record_buffer`)
+rather than a fourth tail walker. Both delivery arms carry it — the block tail and the
+`RetSite::MidReturn` explicit `return`, which fails identically.
+
+Only a COLLECTION blocks the rename, and that narrowness is load-bearing: a first, wider
+spelling refused every non-record candidate, so a `-> Dialect?` whose value came from a
+call was MATERIALISED — and materialising a null-valued record fabricates an empty one.
+`registry_pure.loft`'s "a refusal speaks no dialect" caught it. loft#877.
+
+### `ShowDb::write_hash` walked a layout that had moved (2026-08-12)
+
+Formatting a struct with a `hash<…>` field SIGSEGV'd the interpreter in `OpFormatDatabase`
+and exited 1 with no output on native; `to_json()` on the same record shared the walker and
+so shared the crash. `write_hash` carried a bucket loop of its own that read each slot as a
+bare record number at `pos: 8` — the layout before @PLN135 arc H moved entries into an
+arena, where several share one record and `(rec, pos)` identifies an entry.
+
+Nothing caught the drift because nothing reached it: a BARE hash is refused at compile time
+(`append_data`: "Cannot format type hash<…>"), so a hash FIELD of a struct is the only way
+in, and the method was marked `#[allow(dead_code)]`. It is `hash::records_sorted` now — the
+module that owns the layout — which also gives the render a stated order (key order, like
+`index`/`sorted`) instead of bucket order. The `max_elements` cap the debugger's glance
+relies on came along with it. loft#873.
+
 ### A not-found key field was used as an attribute INDEX (2026-08-12)
 
 `Data::attr` answers `usize::MAX` for a name it cannot find, and `set_mutable` /
@@ -80,11 +136,39 @@ through `result.v == null` on a plain `integer`; `v` is `integer?` now, because 
 @PLAN59 site under test would otherwise have gone unexercised while every assertion
 still passed.
 
-Not fixed here, both filed: `text` has the same hole (loft#875) but its zero costs an
-interned record, and the struct arm runs per vector element, so it needs a canonical
-empty-string representation rather than an allocation on the hot path; and a DECLARED
-default (`= 1.5`) is still ignored by the walker (loft#876) because it lives parser-side
-as a `Value` IR node, not in `Field::default`. loft#870.
+Still open, filed: a DECLARED default (`= 1.5`) is ignored by the walker (loft#876)
+because it lives parser-side as a `Value` IR node, not in `Field::default`. The fix
+attaches at the same missing-key loop below and needs an answer for a non-constant
+default first — fold a constant one into the schema, refuse a computed one on a
+JSON-castable struct, or give the walker an evaluator. loft#870.
+
+### The `text` half: what an absent text field costs (2026-08-12)
+
+`text` was left out of the fix above because a text handle of 0 IS null (`Store::get_str`),
+so its empty value has to be INTERNED — and `set_default_value`'s struct arm runs per
+record on the allocation path. Interning there measured +78 % wall and +91 % peak heap over
+400 000 rows with three text fields, every one of them overwritten by the literal that
+followed.
+
+So the call was split by what the value is FOR (`structures::Absent`): `Prefill` — a fresh
+record, whose fields the literal or the walker will write — keeps the cheap 0, and `Final`
+— the value a reader actually sees — interns. Three sites are `Final`: `walk_parsed_into`'s
+`Parsed::Null` arm, `walk_parsed_struct`'s missing-key loop, and `db_from_text`'s pre-parse
+fill (`set_final_default_value`), that last one because a parse that FAILS reaches neither
+walker and leaves the record exactly as the fill left it.
+
+A wide first spelling — intern in every arm — also leaked: `set_text` claims a fresh record
+and overwrites the handle without freeing the old one, so a prefilled empty leaked once per
+text field per record (`removal-frees-what-the-element-owned.loft`: 323 → 773).
+
+The literal keeps @PLN25's base-zero rule for a NULLABLE field (`text? → ""`), which is a
+decision, not a divergence: a constructor omitting a field asks for the zero, while a
+document omitting a key did not say anything. `875-json-absent-text-field.loft` pins both.
+
+Three assertions in the suite were the demonstration and are now updated: `57-json.loft:65`,
+`tests/docs/24-json.loft` and `tests/docs/23-safety.loft` each asserted `!x` on a plain
+`text` — passing only because of this defect, on a line where `redundant-null-negation` said
+it never could. loft#875.
 
 ### A narrow vector element got the wide store op from the comprehension (2026-08-12)
 

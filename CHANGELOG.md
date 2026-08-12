@@ -40,6 +40,52 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### Taking an element out of what a function just returned
+
+A function whose answer is an index into a call — `make(n)[0] ?? Cell {}`, whether it is
+the last expression or an explicit `return` — read the fallback for every input, and
+crashed with an out-of-bounds index when compiled with `--native`.
+
+The vector the inner call built was mistaken for the buffer the CALLER had allocated for
+the result, so the callee cleared a single record as though it were a vector and built
+into it; the index that followed then found nothing. A `??` fallback is exactly where a
+wrong answer is designed to look plausible, and in a tower-defence dogfood this landed as
+every enemy stepping onto the hex it was already standing on, from a three-line function
+that reads correctly.
+
+Binding the call to a local first was always right and still is — it just is no longer
+the difference between a correct program and a silent one.
+
+### A function that builds a vector and hands it back
+
+`fn cells() -> vector<Cell> { c = [...]; c }` could deliver an EMPTY vector when its
+result was used to fill a struct field, while the same function called directly in the
+same run answered all 1024 elements. The write that followed then landed out of bounds
+without saying so, which showed up as content disappearing from a neighbouring layer
+while every write reported success.
+
+The function's own return buffer and a scratch buffer inside its body could end up as the
+same slot, and the second use silently retyped the first. Both spellings of building the
+vector — a comprehension and an append loop — were affected, and what actually decided it
+was how the value was handed back.
+
+### Printing a struct that has a `hash` field
+
+Interpolating a record with a `hash<…>` field — `println("{field}")`, or the message of a
+failing assertion — segfaulted the interpreter and exited without a word on `--native`.
+So did `to_json()` on the same record, which meant such a record could not be serialised
+at all.
+
+The formatter walked the hash with an out-of-date picture of how its entries are stored.
+It now renders in key order, like every other collection, and round-trips through JSON:
+
+```
+{cells: [{q: 1, r: 2, v: 7}, {q: 3, r: 4, v: 8}], n: 2}
+```
+
+The cost of this one was mostly in finding it: an assertion message is evaluated only when
+the assertion fails, so a test that should have said what went wrong crashed instead.
+
 ### Reading JSON into a struct no longer puts `null` in a field that cannot hold it
 
 A field written plainly — `height: float`, not `height: float?` — is not allowed to be
@@ -61,6 +107,12 @@ One visible consequence: printing a struct skips its null fields, so fields that
 wrongly null used to be missing from the output and now appear as `0`. Printing a parsed
 struct therefore fills it in rather than echoing what you fed it — and what it prints
 reads back as itself.
+
+Text fields follow the same rule now: a plain `text` the JSON leaves out reads as the
+empty string, not as the one-character null. Write `text?` when "the document did not say"
+has to be tellable from "the document said nothing much". The suite's own assertions were
+the demonstration — `assert(!user.name, "missing name is null")` passed only because of
+this, on a line where the compiler said it never could.
 
 ### A vector of narrow integers can be built by a comprehension
 

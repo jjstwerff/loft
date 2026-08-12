@@ -1822,6 +1822,9 @@ elapsed_ms  = elapsed_us / 1000
 <pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> {
   s: <span class="ty"><a href="stdlib-types.html">text</a></span>,
 }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">OptTextHolder</span> {
+  s: <span class="ty"><a href="stdlib-types.html">text</a></span>?,
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
 <p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
@@ -1842,12 +1845,13 @@ elapsed_ms  = elapsed_us / 1000
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i64::MIN is the most negative 64-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
-<p>Text null is the NUL character (<code>\0</code>), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:</p>
+<p>Text null is the NUL character (<code>\0</code>), not the empty string. A <code>text?</code> local or field can hold it; a plain <code>text</code> cannot, and a parse respects that.</p>
 <pre><code>  holder = <span class="en">NullTextHolder</span>.<span class="fn-call">parse</span>(`{{}}`);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!holder.s, <span class="st">"missing JSON text field is null (the NUL sentinel)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(holder.s == <span class="st">""</span>, <span class="st">"a missing `text` field is empty, because it cannot be null"</span>);
+  opt = <span class="en">OptTextHolder</span>.<span class="fn-call">parse</span>(`{{}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!opt.s, <span class="st">"a missing `text?` field IS null — the declaration decides"</span>);
   empty = <span class="st">""</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty, <span class="st">"empty string is NOT null — this surprises most newcomers"</span>);</code></pre>
-<p>Mitigation: declare struct fields as <code>not null</code> so that reserved value can be used as data.</p>
 <h2 id="parsing-text-to-a-number-needs-a-fallback">Parsing text to a number needs a fallback</h2>
 <p>An unchecked <code>text as integer</code> is a COMPILE error: parsing can fail, and loft refuses to let that failure slip through as a silent null. Ask for a checked cast with <code>integer?</code> (yields the number or null), or supply a default with <code>?? &lt;value&gt;</code>. The same rule applies to <code>float</code>.</p>
 <pre><code>  parsed = <span class="st">"42"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>?;
@@ -1949,6 +1953,10 @@ elapsed_ms  = elapsed_us / 1000
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   email: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">MaybeUser</span> {
+  id: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>?,
+}</code></pre>
 <h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
 <p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally.</p>
 <p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type<code>s absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field </code>integer?<code> / </code>float?' if you need to tell "absent" from "zero" apart:</p>
@@ -2006,11 +2014,13 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
-<h2 id="missing-fields-get-null">Missing fields get null</h2>
-<p>When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character <code>\0</code> (not the empty string ""); for integer it is the minimum i64 value (integer is 64-bit). Check with <code>!</code> before use, or assign a default with <code>??</code>.</p>
+<h2 id="a-missing-field-gets-its-own-declared-absence">A missing field gets its own declared absence</h2>
+<p>When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type<code>s null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field </code>T?<code> when "the document did not say" has to be tellable from "the document said zero", and check it with </code>!<code> or </code>??' before use.</p>
 <pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.name == <span class="st">""</span>, <span class="st">"a missing `text` field is empty: [{partial.name}]"</span>);
+  maybe = <span class="en">MaybeUser</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!maybe.name, <span class="st">"a missing `text?` field is null"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="25-generics">
