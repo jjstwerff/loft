@@ -249,8 +249,10 @@ pub(crate) fn add(kt: u16, bytes: usize, born_at: u32) {
 /// late) and it is the pre-existing behaviour; making the two ledgers one is a separate
 /// change that needs a `loft_ffi` hand-off.
 fn sub_total(bytes: u64) {
-    let _ = TOTAL.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
-        Some(t.saturating_sub(bytes))
+    // `update`, not `try_update`: the saturating subtraction cannot fail, so there is no
+    // `None` case to report.  (Both replace the deprecated `fetch_update`.)
+    TOTAL.update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+        t.saturating_sub(bytes)
     });
 }
 

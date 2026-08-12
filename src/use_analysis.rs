@@ -124,30 +124,22 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
 /// `first_arg_write` set in `parser::find_written_vars`). Used to build `mut_max_pos`,
 /// the position-aware "the source is mutated after the copy" fact. `OpCopyRecord` writes
 /// its SECOND arg (the dest), handled separately.
-fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
-    let mut s = HashSet::new();
-    for d in 0..data.definitions() {
-        let n = data.def(d).name();
-        if n.starts_with("OpSet")
-            || n.starts_with("OpAppendStack")
-            || n.starts_with("OpClearStack")
-            || matches!(
-                n,
-                "OpNewRecord"
-                    | "OpAppendCopy"
-                    | "OpAppendVector"
-                    | "OpClearVector"
-                    | "OpClearKeyed"
-                    | "OpSetKeyed"
-                    | "OpHashRemove"
-                    | "OpInsertVector"
-                    | "OpRemoveVector"
-            )
-        {
-            s.insert(d);
-        }
-    }
-    s
+fn is_first_arg_write_name(n: &str) -> bool {
+    n.starts_with("OpSet")
+        || n.starts_with("OpAppendStack")
+        || n.starts_with("OpClearStack")
+        || matches!(
+            n,
+            "OpNewRecord"
+                | "OpAppendCopy"
+                | "OpAppendVector"
+                | "OpClearVector"
+                | "OpClearKeyed"
+                | "OpSetKeyed"
+                | "OpHashRemove"
+                | "OpInsertVector"
+                | "OpRemoveVector"
+        )
 }
 
 /// LENGTH ops — the collection `len` methods (`t_6vector_len`, `t_6sorted_len`, …).
@@ -163,16 +155,9 @@ fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
 /// The bound guard is not the author's mistake, either: it is the idiom the `v[i]`
 /// may-be-null warning ASKS for (skip-pattern 5), so the two lints were in tension —
 /// satisfying one silenced the other.
-fn length_ops(data: &Data) -> HashSet<u32> {
-    let mut s = HashSet::new();
-    for d in 0..data.definitions() {
-        let n = data.def(d).name();
-        // Method naming is `t_<LEN><Type>_<method>` (CODE.md), so match the suffix.
-        if n.starts_with("t_") && n.ends_with("_len") {
-            s.insert(d);
-        }
-    }
-    s
+fn is_length_op_name(n: &str) -> bool {
+    // Method naming is `t_<LEN><Type>_<method>` (CODE.md), so match the suffix.
+    n.starts_with("t_") && n.ends_with("_len")
 }
 
 /// VALUE-READER ops return a fresh value, not a reference into a container — their
@@ -190,6 +175,60 @@ fn value_reader_ops(data: &Data) -> HashSet<u32> {
             "t_6vector_len",
         ],
     )
+}
+
+/// The op-number sets the use / dead-store / ownership walks consult.
+///
+/// Every one of them is a pure function of the definition **name** table, so for a
+/// given [`Data`] they are constant — yet each walk rebuilt them, and the walks ask
+/// once per FUNCTION. Two of the four are a full scan of every definition doing
+/// string prefix matches, so the cost is O(functions × definitions): a
+/// `println`-sized program rebuilt them **9 000 times over 708 definitions**, which
+/// measured ~40 % of a warm-cache startup run (the rebuild itself plus the
+/// `HashSet<u32>` inserts and rehashes it drives).
+///
+/// Cached on [`Data::op_sets`]. That is sound here for the reason it is NOT sound for
+/// `function_defs` (loft#854): these derive from def names, which never change once a
+/// definition exists, whereas `function_defs` derives from `Definition::code`, which
+/// `scopes.rs` rewrites — a `Data`-lived cache of that would answer from a body that
+/// no longer exists. It is the same reason `caller_index` may live on `Data`.
+///
+/// The sets are `Arc`-shared so a consumer that needs to OWN them (`Uses`) pays a
+/// refcount bump instead of a rebuild.
+#[derive(Clone)]
+pub(crate) struct OpSets {
+    /// Projection ops — see [`projection_ops`].
+    pub(crate) projections: std::sync::Arc<HashSet<u32>>,
+    /// Value-reader ops — see [`value_reader_ops`].
+    pub(crate) value_readers: std::sync::Arc<HashSet<u32>>,
+    /// Ops writing through arg 0 — see [`is_first_arg_write_name`].
+    pub(crate) write_first_arg: std::sync::Arc<HashSet<u32>>,
+    /// Collection `len` methods — see [`is_length_op_name`].
+    pub(crate) lengths: std::sync::Arc<HashSet<u32>>,
+}
+
+impl OpSets {
+    /// Build every set. The two prefix-matched sets share ONE pass over the
+    /// definition table — they scanned it separately before.
+    pub(crate) fn build(data: &Data) -> Self {
+        let mut write_first_arg = HashSet::new();
+        let mut lengths = HashSet::new();
+        for d in 0..data.definitions() {
+            let n = data.def(d).name();
+            if is_first_arg_write_name(n) {
+                write_first_arg.insert(d);
+            }
+            if is_length_op_name(n) {
+                lengths.insert(d);
+            }
+        }
+        Self {
+            projections: std::sync::Arc::new(projection_ops(data)),
+            value_readers: std::sync::Arc::new(value_reader_ops(data)),
+            write_first_arg: std::sync::Arc::new(write_first_arg),
+            lengths: std::sync::Arc::new(lengths),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -225,15 +264,13 @@ fn base_var(node: &Value, get_field: u32) -> Option<u16> {
 /// [`projection_ops`]: `d.f[i]=x` → `OpSetInt(OpGetField(Var(d),f), i, v)` descends to the
 /// root var `d`, and the projection's INDEX args are ordinary reads.
 pub(crate) fn dead_store_accesses(body: &Value, n_vars: usize, data: &Data) -> Vec<(u16, u16)> {
-    let projs = projection_ops(data);
-    let writes = first_arg_write_ops(data);
+    let ops = data.op_sets();
     let mut acc = vec![(0u16, 0u16); n_vars];
-    let lens = length_ops(data);
     let cx = AccessCx {
         data,
-        projs: &projs,
-        writes: &writes,
-        lens: &lens,
+        projs: &ops.projections,
+        writes: &ops.write_first_arg,
+        lens: &ops.lengths,
         copy_record: data.def_nr("OpCopyRecord"),
     };
     classify_access(body, &cx, &mut acc);
@@ -379,10 +416,13 @@ struct Uses {
     /// element, a struct copy). Not append-based, so the var-buffer / construction /
     /// return-buffer branches never see it; recorded here so the decision covers it.
     op_copy_record: u32,
-    projections: HashSet<u32>,
-    value_readers: HashSet<u32>,
-    /// @PLN90 item 3 — ops that write through their first argument (see `first_arg_write_ops`).
-    write_first_arg: HashSet<u32>,
+    /// Shared with [`OpSets`] — an `Arc` so building `Uses` per function is a refcount
+    /// bump, not a rebuild of a set that cannot have changed.
+    projections: std::sync::Arc<HashSet<u32>>,
+    value_readers: std::sync::Arc<HashSet<u32>>,
+    /// @PLN90 item 3 — ops that write through their first argument (see
+    /// [`is_first_arg_write_name`]).
+    write_first_arg: std::sync::Arc<HashSet<u32>>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
     /// matches execution order (Tier 1 uses it to prove a source is unmutated
     /// after the copy-fill). Bumped once per visited node.
@@ -767,15 +807,16 @@ impl Uses {
 /// report-only link-safety oracle (`link_safety_of`) reads the SAME facts the shipped elision does,
 /// with no second, drifting analysis.
 fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
+    let ops = data.op_sets();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
         op_database: data.def_nr("OpDatabase"),
         op_free: data.def_nr("OpFreeRef"),
         op_copy_record: data.def_nr("OpCopyRecord"),
-        projections: projection_ops(data),
-        value_readers: value_reader_ops(data),
-        write_first_arg: first_arg_write_ops(data),
+        projections: std::sync::Arc::clone(&ops.projections),
+        value_readers: std::sync::Arc::clone(&ops.value_readers),
+        write_first_arg: std::sync::Arc::clone(&ops.write_first_arg),
         ineligible: HashSet::new(),
         def_count: HashMap::new(),
         database_vars: HashSet::new(),
@@ -1614,7 +1655,7 @@ struct Ownership<'a> {
     op_database: u32,
     op_new_record: u32,
     op_copy_record: u32,
-    projections: HashSet<u32>,
+    projections: std::sync::Arc<HashSet<u32>>,
     ret_memo: HashMap<u32, Own>,
     visiting: HashSet<u32>,
     /// Vars currently being classified — the var-level twin of [`Self::visiting`].
@@ -1746,7 +1787,7 @@ impl<'a> Ownership<'a> {
             op_database: data.def_nr("OpDatabase"),
             op_new_record: data.def_nr("OpNewRecord"),
             op_copy_record: data.def_nr("OpCopyRecord"),
-            projections: projection_ops(data),
+            projections: std::sync::Arc::clone(&data.op_sets().projections),
             ret_memo: HashMap::new(),
             visiting: HashSet::new(),
             visiting_vars: HashSet::new(),
@@ -2289,7 +2330,7 @@ pub(crate) fn ownership_of_with(data: &Data, d_nr: u32, value: &Value, defs: &De
 pub fn classifies_structurally(data: &Data, d: u32) -> bool {
     d == data.def_nr("OpDatabase")
         || d == data.def_nr("OpNewRecord")
-        || projection_ops(data).contains(&d)
+        || data.op_sets().projections.contains(&d)
 }
 
 /// The bare verdict name (no base) — for the free-site dump's `class=` field.

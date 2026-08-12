@@ -3607,6 +3607,29 @@ impl Clone for LazyDriverCache {
     }
 }
 
+/// The answer to [`Data::op_sets`], kept beside the definition count that produced it.
+///
+/// Keyed by COUNT rather than computed once, because the first question arrives while
+/// the definition table is still growing: pinning the answer to that moment made every
+/// later question a miss (measured: 7.5 M rebuilds over the `tests/scripts` corpus).
+/// The count settles before the analysis phase, so re-keying costs a handful of builds
+/// and then hits for the rest of the run.
+///
+/// **Clones EMPTY, on purpose** — same reason as [`LazyDriverCache`]: a clone's
+/// definitions diverge from the original's, and a count alone cannot tell two tables of
+/// equal size apart.
+#[derive(Default)]
+struct OpSetCache(
+    #[allow(clippy::type_complexity)]
+    std::sync::Mutex<Option<(usize, std::sync::Arc<crate::use_analysis::OpSets>)>>,
+);
+
+impl Clone for OpSetCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 /// The immutable data of a parsed loft program
@@ -3723,6 +3746,9 @@ pub struct Data {
     /// a process-wide `OnceLock<(Data, Stores)>` and parallel
     /// workers read from a `&Data` across threads.
     caller_index: std::sync::OnceLock<HashMap<u32, Vec<u32>>>,
+    /// Lazy cache of the op-number sets the use/dead-store/ownership walks read
+    /// (see [`crate::use_analysis::OpSets`] and [`OpSetCache`]).
+    op_sets: OpSetCache,
 }
 
 #[must_use]
@@ -3976,6 +4002,7 @@ impl Data {
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
+            op_sets: OpSetCache::default(),
         }
     }
 
@@ -4071,6 +4098,10 @@ impl Data {
     /// `(name, own_source)` but never the `(name, importing_source)` alias an import
     /// creates.  Without the replay a rollback drops every `use`d name.
     pub(crate) fn rebuild_indices(&mut self) {
+        // A rollback can REMOVE definitions as well as add them, so the count alone
+        // could in principle land back on its old value over a different table.  This
+        // is the one place that happens, and dropping the cache here costs one rebuild.
+        self.op_sets = OpSetCache::default();
         self.def_names.clear();
         // loft#788 — derived from the imports exactly as `def_names` is, so it
         // is rebuilt by the same replay. Keeping stale entries would refuse a
@@ -6626,6 +6657,36 @@ impl Data {
     pub fn callers_of(&self, callee_d_nr: u32) -> Vec<u32> {
         let map = self.caller_index.get_or_init(|| self.build_caller_index());
         map.get(&callee_d_nr).cloned().unwrap_or_default()
+    }
+
+    /// The op-number sets the use / dead-store / ownership walks consult, built once.
+    ///
+    /// See [`crate::use_analysis::OpSets`] for why a `Data`-lived cache is sound for
+    /// these (def NAMES never change) when it is not for the body-derived facts of
+    /// loft#854.  Rebuilding them per question was ~40 % of a warm-cache startup.
+    ///
+    /// Staleness is handled by CONSTRUCTION, not by an assertion.  A definition added
+    /// after the sets were built would make them stale SILENTLY and in the unsound
+    /// direction (a missing `OpSet*` reads as "not a write"), and a `debug_assert`
+    /// cannot cover that: `[profile.dev.package.loft]` sets `debug-assertions = false`,
+    /// so such a guard is compiled out of the library in every standard build.  So the
+    /// definition count is part of the key — a changed table rebuilds rather than
+    /// answering from sets that cannot describe it.
+    pub(crate) fn op_sets(&self) -> std::sync::Arc<crate::use_analysis::OpSets> {
+        let n = self.definitions.len();
+        let mut slot = self
+            .op_sets
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, cached)) = slot.as_ref()
+            && *at == n
+        {
+            return std::sync::Arc::clone(cached);
+        }
+        let sets = std::sync::Arc::new(crate::use_analysis::OpSets::build(self));
+        *slot = Some((n, std::sync::Arc::clone(&sets)));
+        sets
     }
 
     /// Internal helper for `callers_of`.  Walks every user fn body,

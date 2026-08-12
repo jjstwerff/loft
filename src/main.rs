@@ -901,7 +901,11 @@ fn api_resolve_pkg_dir(name: &str) -> Option<std::path::PathBuf> {
 
 /// `~/.loft/` honouring `LOFT_HOME` (the same base `registry_index::cache_dir`
 /// resolves against).
-#[cfg(feature = "registry")]
+///
+/// Deliberately NOT behind the `registry` feature: `cache_areas` (the `loft cache`
+/// command) resolves the build cache through it, and that command is unconditional —
+/// gating this made a `--no-default-features` build fail to compile.  The `dirs`
+/// dependency it uses is unconditional too.
 fn loft_home() -> std::path::PathBuf {
     std::env::var_os("LOFT_HOME")
         .map(std::path::PathBuf::from)
