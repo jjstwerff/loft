@@ -314,5 +314,5 @@ machinery is the right tool but the wrong default.
   retires; Discard/Reduce/Queue stay.
 - [07-fused-for-par.md](07-fused-for-par.md) — phase 7, promoted to
   the canonical par surface.
-- [src/parallel.rs](../../../../src/parallel.rs) — Stitch enum,
+- [src/parallel.rs](../../../../../src/parallel.rs) — Stitch enum,
   StoreRebase, rebase_walk_record, adopt_worker_excess.

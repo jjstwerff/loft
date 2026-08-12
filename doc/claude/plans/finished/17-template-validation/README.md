@@ -98,7 +98,7 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
   — peer matrix (donor template for cross_mode + matrix style)
 - [`../15-closure-validation/`](../15-closure-validation)
   (SHIPPED 2026-05-12)
-  / [`../../16-coroutine-validation/`](../../16-coroutine-validation)
+  / [`../../16-coroutine-validation/`](../16-coroutine-validation)
   / [`../../future/18-match-validation/`](../../29-match-validation)
   — peer matrix plans following the same shape
 - `tests/template_matrix.rs` — the 26 PASS cells + harness wiring

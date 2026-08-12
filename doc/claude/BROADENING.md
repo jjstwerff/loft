@@ -296,7 +296,7 @@ cache is allocation-bound: the dominant work is materialising library bodies +
 variable tables into native `String` / `Box<Type>`.  In the native-library model
 you never materialise those — libraries are native artifacts, loaded via `dlopen`;
 you load only the small library interface (type schema + function signatures +
-symbol map).  The allocation cost is **avoided**, not eliminated via a multi-week
+symbol map).  The allocation cost is **avoided**, not eliminated via a `VH`
 zero-copy rewrite.
 
 E2 (zero-copy `read_data`) therefore drops from "startup-perf endgame" to

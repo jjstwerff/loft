@@ -287,5 +287,5 @@ blocks, links resolve, broken-link sentries highlighted.
 - [Phase 02 — code files](02-code-files.md) — provides `escape()` and the file-route handler
 - [Phase 06 — proper tables](06-tables-design.md) — the
   forward-looking phase that completes markdown coverage
-- [`default/03_text.loft`](../../../../default/03_text.loft) — text manipulation API
+- [`default/03_text.loft`](../../../../../default/03_text.loft) — text manipulation API
 - [GitHub's slugger reference](https://github.com/Flet/github-slugger) — the rules our slugify() emulates

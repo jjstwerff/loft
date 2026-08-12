@@ -122,7 +122,9 @@ check_time() {
     '[0-9]+-[0-9]+ weeks'
     'multi-week'
     'next [0-9]+ months'
-    'expected to take'
+    # A time unit must follow, or this fires on "expected to take the identical
+    # spelling" — a warning that is wrong is one people learn to skip past.
+    'expected to take [^.]*(hour|day|week|month|session)'
     'Estimated cost.*hours'
     'Estimated cost.*sessions'
   )

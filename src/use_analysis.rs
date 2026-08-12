@@ -190,8 +190,8 @@ fn value_reader_ops(data: &Data) -> HashSet<u32> {
 /// Cached on [`Data::op_sets`]. That is sound here for the reason it is NOT sound for
 /// `function_defs` (loft#854): these derive from def names, which never change once a
 /// definition exists, whereas `function_defs` derives from `Definition::code`, which
-/// `scopes.rs` rewrites — a `Data`-lived cache of that would answer from a body that
-/// no longer exists. It is the same reason `caller_index` may live on `Data`.
+/// `scopes.rs` rewrites — so a `Data`-lived cache of that serves a stale body after
+/// any rewrite. It is the same reason `caller_index` may live on `Data`.
 ///
 /// The sets are `Arc`-shared so a consumer that needs to OWN them (`Uses`) pays a
 /// refcount bump instead of a rebuild.

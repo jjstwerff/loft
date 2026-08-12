@@ -56,7 +56,7 @@ v6 — or new `tests/multiplayer_v6.rs`).
 
 ### Plan-36 audience-demo retrofit
 
-Plan-36 ([plans/6-audience-generative-art/](../../future/6-audience-generative-art))
+Plan-36 ([plans/6-audience-generative-art/](../../6-audience-generative-art))
 hasn't shipped its server yet.  Phase 06 ships the server using
 writable closures from day one.  Loft snippets projected to the
 audience read `state.X` instead of `state.inner.X` — the
@@ -156,5 +156,5 @@ should report:
 - [README § Drivers](README.md#drivers) — TTT v6 + @PLN6 motivation.
 - [README § Verification](README.md#verification) — original verification list (subset of phase 06's).
 - [@PLN39 TTT § v6](../../39-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
-- [@PLN6 audience demo](../../future/6-audience-generative-art) — driver.
+- [@PLN6 audience demo](../../6-audience-generative-art) — driver.
 - [@PLAN15 phase 06](../15-closure-validation/00-matrix.md) — closeout pattern.

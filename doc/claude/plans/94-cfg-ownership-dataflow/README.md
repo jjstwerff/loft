@@ -342,7 +342,7 @@ oracle beside), each green on both backends with shipped output byte-identical.
   complete, statically-computed ownership system … from which every codegen decision derives
   mechanically") and would move [`../../formal/ownership.md`](../../formal/ownership.md) from
   *validated-complete* to *structurally-complete*.
-- Current substrate: [`../../../src/use_analysis.rs`](../../../src/use_analysis.rs) (analyses A + B),
+- Current substrate: [`../../../src/use_analysis.rs`](../../../../src/use_analysis.rs) (analyses A + B),
   [`LIFETIME.md`](../../LIFETIME.md), [`DEPS_INVENTORY.md`](../../DEPS_INVENTORY.md).
 - Tracked as [`@PLN94`](https://github.com/loft-lang/plans/issues/94); promoted from the
   "usage-analysis vs rustc" evaluation.

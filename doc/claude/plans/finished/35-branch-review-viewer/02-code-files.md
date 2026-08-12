@@ -240,5 +240,5 @@ plain `<pre>` view is enough for code review.
   phase the route handler infrastructure
 - [Phase 03 — markdown subset](03-markdown-minimal.md) — what
   fires when `classify(path) == FileKind.Markdown`
-- [`default/03_text.loft`](../../../../default/03_text.loft) —
+- [`default/03_text.loft`](../../../../../default/03_text.loft) —
   text iteration / replace primitives

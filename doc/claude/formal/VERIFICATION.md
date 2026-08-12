@@ -18,7 +18,7 @@ imprecisions were caught exactly by re-checking a written rule in detail:
   crash is now a clean diagnostic). Both closed 2026-07-04.
 
 This worklist drives that detailed pass over **every rule**: for each, the single falsifiable
-claim, its status on **BOTH backends**, and the standing guard (an [oracle](../../tests/oracle/)
+claim, its status on **BOTH backends**, and the standing guard (an [oracle](../../../tests/oracle/)
 program or a `tests/scripts/` guard) that should keep it true. It is the concrete D-op-1 coverage
 plan for the new rules — the oracle already guards each *area*; this drives it down to each *rule*.
 

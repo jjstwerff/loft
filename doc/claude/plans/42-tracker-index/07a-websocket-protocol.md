@@ -293,6 +293,6 @@ the viewer expects.
 - [`lib/server/src/server.loft`](../../../lib/server/src/server.loft)
   — the WebSocket plumbing this protocol reuses (`run`,
   `send_to`, `broadcast`, `WsEvent`).
-- [`tools/viewer/src/main.loft`](../../../tools/viewer/src/main.loft)
+- [`tools/viewer/src/main.loft`](../../../../tools/viewer/src/main.loft)
   — the viewer that becomes a WebSocket client in this
   phase.

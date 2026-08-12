@@ -188,15 +188,15 @@ These are not addressed by @PLN28 even though they're tempting:
 
 ## Cross-references
 
-- [src/diagnostics.rs](../../../src/diagnostics.rs) — current
+- [src/diagnostics.rs](../../../../src/diagnostics.rs) — current
   `DiagEntry` / `Diagnostics` / `suggest_similar`.
-- [src/lexer.rs:443](../../../src/lexer.rs) — `Position` source +
+- [src/lexer.rs:443](../../../../src/lexer.rs) — `Position` source +
   `diagnostic` / `pos_diagnostic` entry points.
-- [src/crash_report.rs](../../../src/crash_report.rs) — SIGSEGV /
+- [src/crash_report.rs](../../../../src/crash_report.rs) — SIGSEGV /
   SIGABRT context publisher; phase 3 extends its output.
-- [src/data.rs:291](../../../src/data.rs) — `Value::Line(u32)`
+- [src/data.rs:291](../../../../src/data.rs) — `Value::Line(u32)`
   marker (replace or augment in phase 1).
-- [src/fill.rs:1675](../../../src/fill.rs) — the one intentional
+- [src/fill.rs:1675](../../../../src/fill.rs) — the one intentional
   `panic!` (the `panic(text)` builtin); every other panic in
   `fill.rs` is a phase-4 candidate.
 - [doc/claude/COMPILER.md](../../COMPILER.md) — diagnostic flow

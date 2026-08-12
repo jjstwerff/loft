@@ -1023,7 +1023,7 @@ eventual target.
 ## Tic-tac-toe v5 — binary world stream + many clients + reconnect catch-up + sluggish tempo
 
 **Status:** scoped 2026-05-10 to validate the wire-protocol
-primitives [`plans/6-audience-generative-art/`](../future/6-audience-generative-art)
+primitives [`plans/6-audience-generative-art/`](../6-audience-generative-art)
 needs.  Builds **before v4** in the practical sequence — v4
 also depends on binary WS frames; v5 lands them and v4
 inherits.

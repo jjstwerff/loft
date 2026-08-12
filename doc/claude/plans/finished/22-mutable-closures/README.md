@@ -33,7 +33,7 @@ concrete consumers with a soft deadline:
   `tick_counter`).  Writable closures drop the `.inner`
   ceremony at every access — ~10% fewer characters and one
   fewer mental indirection.
-- **Plan-36 audience-generative-art demo** ([plans/6-audience-generative-art/](../../future/6-audience-generative-art))
+- **Plan-36 audience-generative-art demo** ([plans/6-audience-generative-art/](../../6-audience-generative-art))
   is the more time-pressured driver.  The talk frames itself as
   an "art show with loft footnotes" — small loft snippets
   projected to the audience.  Server code with `state.inner.X`

@@ -164,5 +164,5 @@ must be visible as such, not reported green.
 
 ## See also
 
-- [revalidate-libs.yml](../../../.github/workflows/revalidate-libs.yml) — the forward dual · `scripts/vet-lib.sh` — the own axis · [library-ship-validation.md](library-ship-validation.md) — the ship / vet / registry apparatus this rides on · [COMPATIBILITY.md](../../COMPATIBILITY.md) — absolute compat (the verdict's authority).
+- [revalidate-libs.yml](../../../../.github/workflows/revalidate-libs.yml) — the forward dual · `scripts/vet-lib.sh` — the own axis · [library-ship-validation.md](library-ship-validation.md) — the ship / vet / registry apparatus this rides on · [COMPATIBILITY.md](../../COMPATIBILITY.md) — absolute compat (the verdict's authority).
 - **Rejected:** a capability manifest — see § above (accidental capability drift is not a real failure mode; the honest guarantee is the test run).
