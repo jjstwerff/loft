@@ -9,6 +9,59 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The op-sets are a property of the program, not of each question (2026-08-12)
+
+`use_analysis` consults four op-number sets — `projection_ops`, `value_reader_ops`, the
+arg-0 writers (`is_first_arg_write_name`) and the collection `len` methods
+(`is_length_op_name`). Each is a pure function of the definition NAME table, so each is
+constant for a given program. Each was rebuilt per question, and the walks
+(`dead_store_accesses`, `collect_uses`, `Ownership::new`, `classifies_structurally`) ask
+once per FUNCTION — two of the four being a full scan of every definition doing string
+prefix matches. O(functions × definitions).
+
+Measured on a `println`-sized program: **9 000 rebuilds over 708 definitions**. `perf`
+put `first_arg_write_ops` at **22.7 %** of a warm-cache run — the hottest symbol in the
+process — and with the `HashSet<u32>` inserts, rehashes and sip-hashing it drives, ~40 %
+of startup. Warm 18.3 → 9.0 ms/run, cold 53.7 → 30.0 ms/run, against a HEAD build of the
+same tree.
+
+Cached on `Data` as `OpSetCache`, **keyed by definition count**. The keying is the whole
+correctness story, and the first attempt (a plain `OnceLock`) was a measured no-op: the
+first question arrives while the definition table is still growing, so pinning the answer
+to that moment made every later question a miss — **7.5 M rebuilds** across the
+`tests/scripts` corpus, i.e. the cache never once answered. A `debug_assert` would not
+have caught it either: `[profile.dev.package.loft]` sets `debug-assertions = false`, so
+such a guard is compiled out of the library in every standard build. Hence a checked key
+rather than an asserted invariant.
+
+Shape and clones-empty rationale follow `LazyDriverCache`, the existing precedent
+directly above it. Deliberately NOT the loft#854 shape: those facts derive from
+`Definition::code`, which `scopes.rs` rewrites, so a `Data`-lived cache would answer from
+a body that no longer exists; these derive from def names, which never change once a
+definition exists. `rebuild_indices` (which can REMOVE definitions) drops the cache.
+
+Behaviour-preservation gate: `loft introspect` over all **672** `tests/scripts` programs
+byte-identical before and after, IR and bytecode.
+
+Closes loft#864 (per-invocation floor). The issue proposed a warm session or a `loft
+serve` daemon; the measurement said the floor did not need one. Two facts settled it.
+An INSTALLED loft was already at ~20 ms, not the 80–220 ms reported: the whole-program
+cache is default-on but deliberately disabled for a dev build
+(`cache::running_a_dev_build` — any `debug`/`release` path component), and the report
+measured a from-source binary, which is the one configuration where it is off. And the
+floor that remained was over a third pure waste, which is what this removes. A
+persistent-session daemon stays available as future work; it is no longer the answer to
+this issue.
+
+Two unrelated reds cleared alongside:
+
+- `cargo build --no-default-features` did not compile (already red on HEAD): `loft_home`
+  sat behind the `registry` feature while `cache_areas` — the unconditional `loft cache`
+  command — resolves the build cache through it. `dirs` is an unconditional dependency,
+  so the gate was simply wrong.
+- `AtomicU64::fetch_update` is deprecated; now `update`, not `try_update` — the
+  saturating subtraction cannot fail, so there is no `None` case to report.
+
 ### The heap ledger is per-linkage-unit, and a store outlives the one that made it (loft#862) (2026-08-12)
 
 `make ci` aborted at `exit_codes::moros_glb_cli_end_to_end` with `store_budget.rs:219:

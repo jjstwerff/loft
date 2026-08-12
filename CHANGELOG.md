@@ -87,6 +87,22 @@ If you split a generated file into chunks to work around this, you can stop: the
 cost was never per-literal, so chunking one function into several literals did not
 help anyway.
 
+### Every run starts in half the time
+
+Running a loft file has a fixed cost before your program does anything, and you pay it
+on every single run — which is the whole story for the edit-rerun loop, or a script you
+invoke in a sweep a few hundred times.
+
+Most of that cost was work with no result. The compiler consults a handful of small
+tables while it checks your program, and each is decided entirely by the program's own
+definitions, so each is the same answer every time. They were being recomputed for
+every question asked — thousands of times per run, each one re-reading every definition
+there is. A `println`-sized program rebuilt them **9 000 times**.
+
+They are now worked out once. A run that hits the startup cache went from **18 ms to
+9 ms**; one that does not, from **54 ms to 30 ms**. Nothing about your program changes —
+the compiled result is byte-for-byte what it was.
+
 ### A library adding a function no longer takes a word away from you
 
 If a library you use gained a `pub fn turn`, then `turn = 0` stopped compiling
