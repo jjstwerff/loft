@@ -44,23 +44,38 @@ you can read it, time it, or reason the hot loop out of it without any instrumen
 Which means **a probe is precisely the case where the tool is not needed** — and therefore
 the case that cannot validate it.
 
-That is a bar, not an observation. Every arc below is validated against a **real grown
-consumer** — one of the dogfooding programs (`moros` / `dryopea` / `crawler` /
-`lib/markdown`) — and not only against a synthetic script. An instrument that ranks
-correctly on a two-function file and drowns on a program with a thousand allocation sites
-has passed nothing. (Consumer trees are read-only: point a scratchpad package at their libs
-by path, per `CLAUDE.md § Dogfood loop`.)
+That is a bar, not an observation — but it splits into **two roles that do not substitute
+for each other**, and collapsing them is how an instrument passes without being checked.
 
-Two consequences fall straight out of the scale bar:
+**The oracle: the performance-measurement programs we already have.** `bench/01_fibonacci`
+… `bench/11_parallel-for` and the `// @speed`-annotated tests are written to be measured —
+they run long (so they sample plentifully, and the toy-run noise never arises) and, decisive
+here, **their hot spot is known in advance**. `fib`'s time is in `fib`; the matrix benchmark's
+is the inner loop. That makes them a falsifier: an instrument that fails to name the known
+hot spot is *wrong*, and says so immediately. They are in-tree, need no read-only dance, and
+several carry `bench.py` / `bench.rs` twins, so a second profiler can be asked the same
+question and its answer compared. This is the cheap first check, and it belongs before any
+consumer work.
+
+**The scale test: a real grown consumer.** One of the dogfooding programs (`moros` /
+`dryopea` / `crawler` / `lib/markdown`). Here the hot spot is *not* known, so this proves
+nothing about correctness — what it proves is **usability**: does a thousand-site report
+still fit on a screen, does the ranking put the right thing on top, does the overhead matter.
+(Consumer trees are read-only: point a scratchpad package at their libs by path, per
+`CLAUDE.md § Dogfood loop`.)
+
+So: benchmarks say the instrument is *correct*, consumers say it is *usable*. Two
+consequences follow, and neither shows up on a probe:
 
 * **The small-run noise problem is not the real problem.** The 50-sample profiles that made
-  `--annotate` pick a 1-sample `getenv` are an artefact of toy programs; a grown program
-  samples plentifully. Guarding the sample count is still right, but **aggregation and
-  ranking** — thousands of sites, one screen of output — is the harder design, and it does
-  not appear at all on a probe.
+  `--annotate` pick a 1-sample `getenv` are an artefact of toy programs; a benchmark samples
+  plentifully. Guarding the sample count is still right, but **aggregation and ranking** —
+  thousands of sites, one screen of output — is the harder design, and only the consumer
+  exercises it.
 * **Overhead is measured where it lands.** An op-clock check or a per-allocation stack
   capture costs nothing worth noticing on a probe. Arc B's and arc C's overhead numbers only
-  mean something taken on a program big enough to need them.
+  mean something taken on a program big enough to need the instrument — and the benchmark
+  corpus already reports drift for exactly that comparison (`make speed`).
 
 ## Composition matrix — Stage A
 
@@ -79,7 +94,8 @@ instrument**, and it is where the current asymmetry shows:
 Done means every cell is green or **explicitly declined with a reason recorded here** — the
 two ✗ columns are not symmetric accidents, they are different mechanisms failing, and one
 of them (native memory attribution) may be a legitimate decline rather than a gap. A cell
-counts as green only when it has been read on a grown consumer, per the scale bar above.
+counts as green only when a benchmark whose hot spot is known confirms the instrument names
+it, **and** a grown consumer confirms the report is still readable — the two roles above.
 
 Why the interpreter's CPU path is *structurally* impossible rather than merely missing: a
 loft call creates no machine frame, so perf's stack walk yields the interpreter's own path,
@@ -176,6 +192,10 @@ The "semi" half, and the part that turns three instruments into a tool.
 * **Corpus mode.** Run over `bench/` plus the `@speed`-annotated tests, emit a hot-spot
   table, and **diff against the previous capture**. Ranked hot spots that moved are the
   output; a human triages. `make speed` is the precedent — a report, never a gate.
+  Note the corpus here is the *same* corpus that serves as the correctness oracle above, so
+  arc D gets a second job almost free: a benchmark whose known hot spot stops appearing at
+  the top is a **regression in the profiler**, not in the program, and the corpus run is
+  where that shows up.
 * **Honesty guards** (partly shipped): sample count in the banner, rustc share when the
   build leaked into the window, startup-cache-hit detection. Each was a wrong answer that
   looked right. The remaining one: refuse to `--annotate` a symbol whose share rests on a
@@ -184,7 +204,12 @@ The "semi" half, and the part that turns three instruments into a tool.
 
 ## Phase ordering
 
-1. **A** first — it is the smallest, and it starts from a report that already works. It also
+0. **Pick the oracle benchmarks before building anything** — for each arc, name the
+   `bench/` program (or `@speed` test) whose hot spot is known and write down what the
+   instrument must say about it. This is the cheapest step in the plan and the only one that
+   can prove an instrument wrong rather than merely exercise it; written first, it is also
+   reviewable while it is still cheap to change.
+1. **A** next — it is the smallest, and it starts from a report that already works. It also
    delivers the one capability with no equivalent anywhere today: memory hot spots by loft
    line.
 2. **D's corpus mode + remaining guards** next, on top of A. This is what makes the tooling
