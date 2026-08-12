@@ -99,6 +99,61 @@ problem space* rather than *design + build*, use the investigation shape below.
 
 ---
 
+## Cutting a phase — two bounds, not one
+
+Effort letters size a phase; they do not tell you where to cut it.  The rule that
+does:
+
+> **A phase should be as small as possible while STILL BEING VALIDATED.**
+>
+> **Upper bound (safety).** The old path and the new one can both run at once and be
+> compared *exactly*.  If the only way to see whether it worked is to swap and look,
+> the phase is too big.
+>
+> **Lower bound (validity).** The phase can go red **on its own, for a real reason**.
+> If the only way to test it is to also do the next phase, they are one phase and
+> splitting them buys a green tick on an empty claim.
+
+So two questions per phase, and it has to pass both:
+
+1. *When this phase is half done, what exactly am I comparing against?*  "Nothing, I
+   look at it afterwards" means **too big** — a lump wearing a small phase's effort
+   letter, whose failure mode is `git revert`.
+2. *What would go red if I did this phase wrong?*  "Nothing until the next phase
+   lands" means **too small** — merge it forward.
+
+**The lower bound is the one that gets skipped**, because a phase that ends with
+something built and *called by nobody* cannot fail — it is green by construction.
+Splitting *"add the function"* from *"call it"* manufactures that state on purpose.
+If the first half cannot go red, it was never a phase.
+
+**A self-test is not validation.**  The discriminator is not *is there an assert*, it
+is **could this assert ever be surprised**.  "The table exists and every key maps to
+one entry" is checked against the table and cannot fail for any reason a reader cares
+about.  A guard that cannot fire is the same defect wearing a different hat — verify
+the guard is even compiled in and can go red before trusting a sweep that used it
+(loft: `[profile.dev.package.loft]` sets `debug-assertions = false`, so a
+`debug_assert` in library code is *absent* from every standard build).  This is the
+planning-time face of the master instructions' matrix rule — *prove the harness can
+fail; a no-output cell is vacuous* (loft: `CLAUDE.md § Debugging policy`).
+
+**Three shapes that pass both bounds:**
+
+- **Parallel run.** Build the new thing beside the old, compare exactly (bytes, IR,
+  a histogram), *then* delete the old.
+- **A probe first.** An XS phase whose only job is to try to falsify the design
+  before anything is built on it — the cheapest phase in any plan, and the one that
+  kills a bad design for the cost of a compile.
+- **One call site at a time, each with its own comparison.**  "Wire four callers" is
+  four phases, and each wants the same gate: the old call and the new call leave the
+  same world.
+
+**The comparison is the phase; the edit is the easy part.**  A three-line change that
+alters behaviour under every caller is safe only because something written beside it
+can see that.
+
+---
+
 ## Opening an investigation-style plan
 
 Use when the deliverable is **mechanism understanding before fix design** —
@@ -323,6 +378,14 @@ Hard-won and tree-independent:
     prose, a stale example, or a wrong label ships as authoritative documentation.
     Verify existence → accuracy → tags, run the example, regenerate, let the drift
     guard confirm.  Behaviour that moved mid-plan is the likeliest to have drifted.
+15. **A phase that cannot go red on its own was never a phase.**  Effort letters size
+    a phase; they do not tell you where to cut it — that needs both bounds (see
+    [§ Cutting a phase](#cutting-a-phase--two-bounds-not-one)).  The lower bound is
+    the one that gets skipped, and it fails silently: something built and called by
+    nobody is green by construction, as is a self-test checked against its own
+    subject and a guard that is not compiled in.  Name the comparison in the phase's
+    `Verify` cell *when you cut it* — an empty cell means the phase is not cut yet,
+    not that verification is pending.
 
 ---
 

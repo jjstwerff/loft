@@ -110,10 +110,23 @@ row links back to the design source if reference content
 lives elsewhere (pointer-plan shape) or to the phase file
 if it lives here.
 
-| Item | Source | Status |
-|---|---|---|
-| **A** — short title | (link) | Open / In-flight / Shipped |
-| **B** — short title | (link) | Open / Blocked on X |
+**`Verify` names the comparison that would go RED if this phase were done wrong** —
+a test file, a both-backends matrix cell, a byte-identical `introspect` diff, a
+round-trip fixture, a rendered image.  `Source` says where the design is; `Verify`
+says how you would find out it is wrong, and they are different questions.
+
+Fill `Verify` **when you cut the phase**, not when you implement it.  An empty cell
+does not mean verification is pending — it means the phase is not cut yet, because
+nothing about it could fail on its own.  That is the lower bound in the
+loft-plan-workflow skill (§ Cutting a phase): a phase that ends with something built
+and called by nobody is green by construction.  An `H`/`VH` phase usually fails the
+*other* bound — too big to have a half-done state with anything exact to compare
+against; split it until each part has its own comparison.
+
+| Item | Source | Verify | Status |
+|---|---|---|---|
+| **A** — short title | (link) | `tests/scripts/NN-<slug>.loft`, both backends | Open / In-flight / Shipped |
+| **B** — short title | (link) | `introspect` byte-identical vs A | Open / Blocked on X |
 
 ## Phase ordering (OPTIONAL — for multi-arc plans)
 
