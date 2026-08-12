@@ -7,7 +7,6 @@ use crate::database::{Field, Parts, ShowDb, Stores};
 use crate::keys::{self, DbRef};
 use crate::store::Store;
 use crate::vector;
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Write as _};
 
 /// Render a walker / unified-parser failure as `"line N:M path:X"`.
@@ -1447,47 +1446,31 @@ impl ShowDb<'_> {
         s.push(']');
     }
 
-    #[allow(dead_code)]
+    /// The elements of a hash, in key order.
+    ///
+    /// The walk is [`crate::hash::records_sorted`] rather than a bucket loop of its own.
+    /// This method used to carry one, and it decayed: @PLN135 arc H moved entries into an
+    /// ARENA, where several share one record and `(rec, pos)` identifies an entry, while
+    /// the loop here still read every bucket slot as a bare record number at `pos: 8`.
+    /// Nothing caught it because nothing reached it — a BARE hash is refused at compile
+    /// time (`Cannot format type hash<…>`), so the only way in is a hash FIELD of a
+    /// struct, which is exactly the report: `{r_f}` segfaulted the interpreter and exited
+    /// silently on native while `{r_f.cells[1, 2]}` and every scalar field were fine
+    /// (loft#873). One walk, in the module that owns the layout, cannot drift from it.
     fn write_hash(&self, s: &mut String, content: u16, indent: u16, data: &DbRef, complex: bool) {
-        let mut map = BTreeMap::new();
-        let mut pos = i32::MAX;
-        let rec = self
-            .stores
-            .store_nr(self.store)
-            .get_u32_raw(data.rec, data.pos);
-        if rec == 0 {
-            s.push(']');
-            return;
-        }
-        let max_pos = *self.stores.store_nr(self.store).addr::<i32>(rec, 0) * 8;
-        loop {
-            if pos == i32::MAX {
-                pos = 8;
-            } else if pos < max_pos - 4 {
-                pos += 4;
-            } else {
+        let recs = crate::hash::records_sorted(
+            data,
+            &self.stores.allocations,
+            self.stores.keys(self.known_type),
+        );
+        let mut first_elm = true;
+        for (n, r) in recs.iter().enumerate() {
+            // Bounded render (the debugger's glance) — the same cap `write_list` applies
+            // to a vector; the round-tripping serializers pass `u16::MAX` and never hit it.
+            if self.max_elements != u16::MAX && n >= usize::from(self.max_elements) {
+                s.push_str(",...");
                 break;
             }
-            let rec = self
-                .stores
-                .store_nr(self.store)
-                .get_i32_raw(rec, pos as u32);
-            if rec != 0 {
-                let r = DbRef {
-                    store_nr: data.store_nr,
-                    rec: rec as u32,
-                    pos: 8,
-                };
-                let key = keys::get_simple(
-                    &r,
-                    &self.stores.allocations,
-                    self.stores.keys(self.known_type),
-                );
-                map.insert(key, rec);
-            }
-        }
-        let mut first_elm = true;
-        for (_, p) in map {
             if first_elm {
                 if self.pretty {
                     self.write_indent(complex, s, indent, true);
@@ -1505,9 +1488,9 @@ impl ShowDb<'_> {
             }
             let sub = ShowDb {
                 stores: self.stores,
-                store: self.store,
-                rec: p as u32,
-                pos: 8,
+                store: r.store_nr,
+                rec: r.rec,
+                pos: r.pos,
                 known_type: content,
                 pretty: self.pretty,
                 json: self.json,
