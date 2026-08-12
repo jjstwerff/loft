@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I76 — Logger runtime: the sampling profiler, beside `trace.rs` as the other
+// instrument that reports on a RUNNING program rather than on its compilation.
 // @PLN140 arc B/C — the loft-level profiler (CPU hot spots, and paths to allocations)
 
 //! Which **loft** function and line is a run spending its time in, and what path

@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I86 — Startup cache & embedded stdlib: the collector for the on-disk caches
+// `cache.rs` / `startup_cache.rs` populate — the half that gives space back.
 // loft#861 — what the on-disk build caches hold, and what can be dropped.
 
 //! The auto-native caches were append-only.
