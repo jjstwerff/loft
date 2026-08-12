@@ -26,6 +26,52 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A vector of narrow integers can be built by a comprehension
+
+`[for i in 0..n { i as i32 }]` returned instantly at twelve elements and never returned
+at thirteen. Each element was written eight bytes wide into a four-byte slot, so it
+overwrote its neighbour, and past the initial allocation the write reached the vector's
+own length — after which the append never finished.
+
+Every narrow width was affected (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`), just at
+different sizes. Two things hid it: `vector<integer>` is genuinely eight bytes wide, so
+it was always fine, and the `+=` append loop already wrote the right width, so the
+obvious workaround worked and the comprehension looked like the odd one out.
+
+### Parsing JSON into a struct or a vector works wherever you write it
+
+`file(path).content() as vector<Row>` as a function's last expression answered an EMPTY
+vector when compiled with `--native` — no error, just nothing, which every caller read
+as "the file was empty". The same cast into a plain struct crashed the interpreter
+outright, and refused to compile at all on `--native`.
+
+The cast builds a new value out of the text it reads, but it was recorded as if it were
+a *view into* that text. Anything borrowed has to be handled specially on the way out of
+a function, and that handling is what lost — or corrupted — the result. What you got
+depended only on where the text came from, which is why passing a filename worked and
+passing the file's contents did not.
+
+### An unknown function says its own name again
+
+Calling a function that does not exist, and then reading a tuple out of the result, used
+to report this and nothing else:
+
+```
+error: Expect token ;
+  --> app.loft:3:18
+  |
+3 |     first = pair.0;
+  |                   ^
+```
+
+The line it points at is correct as written; the mistake is on the line above. Across a
+library boundary — one missing `use` — every file in the package went red this way and
+nothing named the import. Now the call names itself, with a spelling suggestion where
+there is one.
+
+The same gap also rejected code that was always valid: a function declared *later* in
+the file returning a tuple could not have its result tuple-accessed at all.
+
 ### Redefining a stdlib function says so once, and says where
 
 Naming your own function after one the standard library already provides is refused —

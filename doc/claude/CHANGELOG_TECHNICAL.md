@@ -9,6 +9,91 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A narrow vector element got the wide store op from the comprehension (2026-08-12)
+
+`narrow_elm_set` (`src/parser/vectors.rs`) picks the store op for an element's own width,
+and its contract is that every site BUILDING a vector routes through it — its own doc
+names the failure mode: "a site that misses it emits the wide 8-byte `OpSetInt` into a
+1-byte slot, so one write covers eight element slots" (the slice half of #624).
+`build_comprehension_code` was a third such site and went straight to `set_field`, which
+dispatches on the element DEF. A narrow integer is an ALIAS of `integer`, so a 4-byte
+slot got the 8-byte op.
+
+Each element overwrote its successor; once the writes passed the initial allocation they
+reached the vector's own bookkeeping and `vector_add` stopped terminating. Hence a
+BOUNDARY rather than a slowdown — `[for i in 0..13 { i as i32 }]` hung where `0..12`
+returned instantly, that being where the overrun first reaches the header. Measured
+boundaries: i8/u8 at 17, i16/u16/i32/u32 at 13, `integer` never (8 into 8 is correct).
+
+Two things narrowed the filed scope. `+=` was already routed through the helper, so the
+append loop was clean to n=5000 and the defect read as comprehension-specific rather than
+width-specific. And `r.len()` cannot see the damage BELOW the boundary: a store that
+clobbers its neighbours leaves the count right and the values wrong, so the guard
+(`tests/scripts/869-narrow-vector-comprehension.loft`) checks elements and a
+hand-computed sum. loft#869.
+
+### A text→heap cast was typed as a view of its source (2026-08-12)
+
+`OpCastVectorFromText` (`State::db_from_text`) interns text into a store of its OWN, but
+the `as` handler (`src/parser/operators.rs`) grafted the source's deps onto the result.
+@PLN99 arc C had already established the rule for `convert`'s allocating conversions —
+"the result is not a view of the source, so grafting would mark it a borrow" — and `cast`,
+which has the same property, never reported it. `Parser::cast_allocates` now answers it
+from the two TYPES (text source, heap target), which is what makes the verdict
+pass-stable: the return buffer is chosen on PASS 1 and freezes the signature, so a
+pass-2-only correction lands after the text local has already become a parameter.
+
+A freshly allocated record therefore read as a borrow of the text it parsed, and the
+return-buffer machinery delivered it as one. The symptom was decided entirely by what the
+source expression was:
+
+| cast source | interpreter | native |
+|---|---|---|
+| text LOCAL (incl. a literal) | renamed onto `__retbuf` — one slot both `text` and record buffer: #306 guard, then SIGSEGV | 4 × rustc E0308 (`"".to_string()` into a `DbRef`) |
+| LIFTED call temp | correct | bound as the buffer, cast emitted as a bare STATEMENT, untouched buffer returned — an EMPTY vector, silently |
+| PARAMETER | correct | correct |
+
+`file()` was never part of the trigger: a text literal reproduces it, which is what says
+the defect is the cast. rustc had been reporting the vector half from the other side all
+along ("unused return value of `db_from_text`").
+
+With the deps corrected, the struct target still answered null on native:
+`classify_vector_delivery` has a #409 forward-copy leg for a `#rust` callee that delivers
+its own store, and `classify_reference_delivery` had none — it classified `AsIs`, which
+claims the tail already wrote the buffer. It gets the record twin
+(`emit_forward_copy_ref_409`), and "does this tail forward its own store"
+(`tail_forwards_own_store`) now has ONE home instead of two that disagreed.
+
+Matrix: 13 probes over {vector, struct} × {tail, non-tail, bound-local, inline, no-return}
+× {parameter, text local, literal, lifted call, const}, every cell value-checked by hand on
+both backends plus `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`. The spurious `File×1`
+leak those shapes reported went away with the borrow that caused it.
+
+Residue: the interpreter still prints the #306 guard twice for
+`t = <text>; m = t as Struct; m` — value correct on both backends, native clean. Two
+mechanisms were tried and reverted (rerouting the delivery to `MaterializeView` returned
+a null; a `SkipReassigned` rung in `classify_ret_promotion` changed nothing), so the
+rename is reached from a site neither covers. loft#866, loft#867.
+
+### A member access recovered only over an identifier (2026-08-12)
+
+`Parser::field`'s Unknown/Never recovery skips the member token so parsing can continue
+past a receiver with no type yet. It consumed an IDENTIFIER only, so a numeric tuple
+index stayed in the stream and the statement parser tripped on it as `Expect token ;` —
+on PASS 1, and a pass-1 error means pass 2 never runs.
+
+Two failures from that one gap. A forward reference to a tuple-returning function could
+not be tuple-accessed AT ALL (`v = later("x"); a = v.0;` with `later` declared below is
+legal, and Unknown on pass 1 by design). And an unresolved call was never reported:
+"Unknown function" is a pass-2 diagnostic — pass 1 cannot tell a typo from a forward
+reference — so the aborting `Expect token ;` left the real cause unmentioned. The
+named-field and `[i]` spellings always recovered, each consuming its own member token;
+only the tuple form had no consumer.
+
+Indexing a `Never`-poisoned receiver is now silent too, matching the @P376 recovery in
+`field()`: the receiver's own error is already on screen, so "Indexing a non vector" only
+named a second correct line. loft#868.
+
 ### The op-sets are a property of the program, not of each question (2026-08-12)
 
 `use_analysis` consults four op-number sets — `projection_ops`, `value_reader_ops`, the
