@@ -44,6 +44,13 @@ PROFILE_FLAGS="--no-cache"  # profile a COMPILE, not a startup-cache reload
 PROFILE_FLAGS="--no-warm"   # skip the native pre-build (see "the build is not the run")
 ```
 
+**The report goes to STDERR.** So `LOFT_PROFILE=1 loft test > out.txt` keeps the test
+results and drops the profile, and an empty `out.txt` section reads as *"no profile was
+produced"* — which is the same wrong conclusion the two lies below produce, reached a
+different way. It cost a consumer one confused measurement. Redirect both (`> out.txt
+2>&1`) or keep stderr on the terminal. Stderr is deliberate: the profile must not land in
+the program's own output, where it would corrupt whatever reads it.
+
 ### Two profilers, and the driver picks
 
 **`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your
