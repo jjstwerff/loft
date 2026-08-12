@@ -9,6 +9,55 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A declared field default now reaches a cast, when it is a constant (2026-08-12)
+
+`height: float = 1.5` was honoured by a struct literal and ignored by `text as Struct`,
+which wrote the type's zero — the same field with two absent values depending on how the
+record was made. Invisible before loft#870, because the cast answered `null` for all
+three cases and the value was wrong in a louder way.
+
+The default lives parser-side as a `Value` IR node and the JSON walker sits below the
+parser with no evaluator, which is what made this `needs-design`. Of the three possible
+answers, the one taken is folding a CONSTANT default into the schema `Field`
+(`typedef::fold_declared_default`) — it needs no evaluator, and it comes with a contract
+to state rather than a hole:
+
+* a LITERAL default (`= 1.5`, `= 7`, `= "hi"`, `= true`) is part of the type: it answers
+  a missing key, an explicit `null`, and a struct literal alike;
+* any other default is computed, is already lowered parser-side into a function the
+  CONSTRUCTION site calls, and keeps exactly its previous reach — the constructor, not a
+  cast. Documented in LOFT.md § struct fields, and pinned by a probe cell rather than
+  left implicit.
+
+Deposited at the one parse-time site that knows (`typedef::fill_database`), beside the
+`nullable` deposit and for the same reason. Three details carry the weight:
+
+* **The value goes in through `walk_parsed_into`** — the same writer the cast uses for a
+  key the document DID carry — so a default lands exactly as if the JSON had spelled it,
+  and every field encoding (ranged `u8`/`u16`, text interning, the `Parts` dispatch) is
+  handled in one place instead of restated. A literal that does not fit its field writes
+  nothing and the previous absent value stands.
+* **It is written only for `Absent::Final`.** A `Prefill` is overwritten by whatever
+  follows, so honouring a default there would pay back the per-record cost loft#875 split
+  the enum apart to avoid.
+* **It is carried, never RENDERED.** A default changes no width and no offset, so
+  `layout_dump` must not see it — otherwise `height: float = 1.5` becomes a different
+  layout from `height: float` and adding a default would refuse an existing store. The
+  dump's default branch is removed; it never fired, because every field held the `Str("")`
+  placeholder. Same call `nullable` made (@PLN127 arc D).
+
+`Field::default` becomes `Option<Content>` (it was `Content`, set to `Str("")` at every
+site and read by nothing). The snapshot and IR-store formats are unchanged: `None` is
+written as `Str("")` and read back as `None`, so an existing schema round-trips
+byte-identically. `--native` needed its own half — the generated `init()` replays the
+schema, so `emit_field` now emits `set_field_default`, folded by the same function, which
+is why the two backends cannot disagree about which defaults are constant.
+
+Matrix: 9 cells on both backends, 7 failing on the published `2026.8.0`; the negative
+controls (a present key beating the default, a field with no default keeping loft#870's
+answers, a literal override) pass on both. Guarded in
+`tests/scripts/876-declared-field-default-in-cast.loft`.
+
 ### An optional return was a shape the lift never recognised (2026-08-12)
 
 `inline_struct_return` (`src/scopes.rs`) is the one predicate that answers "does this

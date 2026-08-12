@@ -18,7 +18,43 @@
 use crate::data::{Data, DefType, Deps, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
+use crate::keys::{Content, Str};
 use crate::lexer::Lexer;
+
+/// loft#876 — fold a field's declared default (`height: float = 1.5`) to the constant
+/// the store schema can carry, or `None` when it is not one.
+///
+/// A default is an arbitrary expression, and the store layer that answers "what is this
+/// field when nobody said" sits below the parser with no evaluator. Rather than give it
+/// one, only a default that is already a LITERAL is carried, which is the majority
+/// spelling and needs nothing to run.
+///
+/// The rest keep exactly their previous reach: a default needing a temporary (`= mk()`,
+/// `= [1, 2]`, a nested struct literal) is lowered parser-side into a function the
+/// CONSTRUCTION site calls, so it still applies to `D {}` and still does not apply to a
+/// `text as D` cast. That is the contract — a constant default is part of the type, a
+/// computed one is part of construction — and it is stated in LOFT.md rather than left
+/// as a hole.
+///
+/// `Value::Null` is "no default declared". An explicit `= null` is the same answer the
+/// absent-value path already writes, so folding it would change nothing.
+pub(crate) fn fold_declared_default(value: &Value) -> Option<Content> {
+    match value.unspan() {
+        Value::Int(i) => Some(Content::Long(i64::from(*i))),
+        Value::Long(i) => Some(Content::Long(*i)),
+        // A boolean field is a byte holding 0/1; `Content` has no boolean spelling and
+        // the walker reads this back through the field's own content type.
+        Value::Boolean(b) => Some(Content::Long(i64::from(*b))),
+        Value::Float(f) => Some(Content::Float(*f)),
+        Value::Single(f) => Some(Content::Single(*f)),
+        // `Str` is the schema's interned spelling; a declared default outlives the parse
+        // exactly like a type name does.
+        Value::Text(s) => Some(Content::Str(Str::new(Box::leak(
+            s.clone().into_boxed_str(),
+        )))),
+        _ => None,
+    }
+}
 
 /// Set the correct type and initial size in definitions.
 /// This will not factor in the space for attributes for records
@@ -1262,6 +1298,12 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             // can be asked about it.
             if nullable {
                 database.set_field_nullable(s_type, &data.attr_name(d_nr, a_nr), true);
+            }
+            // loft#876 — the same "ONE parse-time site that knows" for the field's
+            // DECLARED default.  It lives here as an IR node and the store layer has no
+            // evaluator, so a cast could not consult it and wrote the type's zero.
+            if let Some(c) = fold_declared_default(&data.def(d_nr).attributes[a_nr].value) {
+                database.set_field_default(s_type, &data.attr_name(d_nr, a_nr), c);
             }
         }
     }

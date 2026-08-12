@@ -288,6 +288,25 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
   construction. One form is refused, and says so: an expression that reads `$` **and**
   needs a temporary, since a `$`-reading default is built against the record at each
   construction site and so cannot be built once and shared.
+
+  **Where a default reaches depends on whether it is a constant** (loft#876). A default
+  that is a LITERAL — `= 1.5`, `= 7`, `= "hi"`, `= true` — is part of the type: it is
+  carried on the stored schema, so it answers a `text as Struct` / `text as vector<Struct>`
+  cast for a key the document omits or writes `null`, exactly as it answers a struct
+  literal that leaves the field out. Any other default is *computed*, and the store layer
+  that fills a cast has no evaluator to run it, so it applies **where the constructor
+  runs** and not to a cast:
+
+  ```
+  struct D {
+      height: float   = 1.5,     // constant → literal AND cast both give 1.5
+      area:   float   = 1 + 2,   // computed → literal gives 3, a cast gives 0.0
+  }
+  ```
+
+  A key the document actually carries always beats the default, either way. When a
+  computed default must survive a cast, write the field into the JSON or assign it after
+  the cast.
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 

@@ -51,6 +51,21 @@ Rust renames one of them to keep them apart — but one place that writes a CALL
 the original name. Both spellings work now, and neither needs renaming to avoid the
 other.
 
+### A field's default now applies when you read JSON into it
+
+A field declared with a default — `height: float = 1.5` — got that default from a struct
+literal and not from a `text as Struct` cast, which wrote `0` instead. The same field had
+two different "absent" values depending on how the record was made, and a key the document
+simply omits is exactly the question a default is there to answer.
+
+A default that is a plain value — `= 1.5`, `= 7`, `= "hi"`, `= true` — is now part of the
+type, so it answers a missing key, an explicit `null`, and a struct literal alike. A key
+the document actually carries still wins.
+
+A default that has to be *computed* — `= 1 + 2`, `= mk()`, `= [1, 2]` — still applies
+only where the record is constructed, because reading JSON does not run your code. If you
+need one of those after a cast, put the field in the JSON or assign it afterwards.
+
 ### A function returning `T?` no longer leaks what it built
 
 A function whose answer is an optional struct or vector — `fn pick(n) -> Cell?` — leaked

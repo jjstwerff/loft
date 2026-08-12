@@ -746,6 +746,13 @@ impl Stores {
         // type-only answer would write is a value DN1 says the slot cannot hold
         // (loft#870).
         if matches!(parsed, crate::json::Parsed::Null) {
+            // A field that DECLARES a default answers with it — `null` and an omitted
+            // key are the same question, so they get the same answer (loft#876).
+            if let Some(f) = self.declared_field(rec_tp, field)
+                && self.write_declared_default(&f, rec_tp, field, to)
+            {
+                return Ok(());
+            }
             let nullable = self.field_declared_nullable(rec_tp, field);
             self.set_default_value_nullable(tp, nullable, Absent::Final, to);
             return Ok(());
@@ -1033,7 +1040,7 @@ impl Stores {
             }
             found_fields.insert(name.as_str());
         }
-        for f in object {
+        for (f_nr, f) in object.iter().enumerate() {
             if (f.other_indexes.is_empty() || f.other_indexes[0] != u16::MAX)
                 && !found_fields.contains(f.name.as_str())
                 && f.name != "enum"
@@ -1045,7 +1052,12 @@ impl Stores {
                 };
                 // A key the JSON simply omits is the same question as one written
                 // `null`, and gets the same answer — the FIELD's default (loft#870).
-                self.set_default_value_nullable(f.content, f.nullable, Absent::Final, &slot);
+                // A field that DECLARES one answers with it (loft#876); otherwise the
+                // type's absent value stands.
+                let f = f.clone();
+                if !self.write_declared_default(&f, tp, f_nr as u16, &slot) {
+                    self.set_default_value_nullable(f.content, f.nullable, Absent::Final, &slot);
+                }
             }
         }
         Ok(())
@@ -1139,6 +1151,48 @@ impl Stores {
             }
             _ => true,
         }
+    }
+
+    /// The declared field at `field` of struct `rec_tp`, when the question applies — a
+    /// top-level or array-element target carries `field == u16::MAX` and a non-struct
+    /// `rec_tp` has no fields.  The companion of [`Self::field_declared_nullable`].
+    fn declared_field(&self, rec_tp: u16, field: u16) -> Option<Field> {
+        if rec_tp == u16::MAX || field == u16::MAX {
+            return None;
+        }
+        match &self.types[rec_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.get(field as usize).cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// loft#876 — write a field's DECLARED default into `slot`, answering whether there
+    /// was one.  `false` means the caller writes the type's absent value as before.
+    ///
+    /// The value goes in through [`Self::walk_parsed_into`] — the same writer the cast
+    /// uses for a key the document DID carry — so a declared default lands exactly as if
+    /// the JSON had spelled it, and every field encoding (narrow ranged ints, text
+    /// interning, the `Parts` dispatch) is handled in one place rather than restated
+    /// here.  A default whose literal does not fit the field's type writes nothing and
+    /// answers `false`, so the absent value stays what it was.
+    fn write_declared_default(&mut self, f: &Field, rec_tp: u16, field: u16, slot: &DbRef) -> bool {
+        let Some(c) = f.default.clone() else {
+            return false;
+        };
+        let parsed = match c {
+            // A boolean field is content type 4, whose walker arm accepts only
+            // `Parsed::Bool`; every other numeric field reads the integer spelling.
+            crate::keys::Content::Long(n) if f.content == 4 => crate::json::Parsed::Bool(n != 0),
+            crate::keys::Content::Long(n) => crate::json::Parsed::Int(n),
+            crate::keys::Content::Float(v) => crate::json::Parsed::Number(v),
+            crate::keys::Content::Single(v) => crate::json::Parsed::Number(f64::from(v)),
+            crate::keys::Content::Str(s) => crate::json::Parsed::Str(s.str().to_string()),
+        };
+        let mut path = Vec::new();
+        self.walk_parsed_into(&parsed, f.content, rec_tp, field, slot, &mut path, 0)
+            .is_ok()
     }
 
     /**
@@ -1275,24 +1329,30 @@ impl Stores {
                     .set_i32_raw(rec.rec, rec.pos, if null { i32::MIN } else { 0 });
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                for f in &fields {
+                for (f_nr, f) in fields.iter().enumerate() {
                     if f.name == "type" && f.position == 0 {
                         self.store_mut(rec)
                             .set_short(rec.rec, rec.pos, 0, i32::from(tp));
                         continue;
                     }
+                    let slot = DbRef {
+                        store_nr: rec.store_nr,
+                        rec: rec.rec,
+                        pos: rec.pos + u32::from(f.position),
+                    };
+                    // loft#876 — a DECLARED default is the value that STAYS, so it is
+                    // written only for `Final`.  A `Prefill` is overwritten by the
+                    // literal or walker that follows, and honouring a default there
+                    // would pay the same per-record cost the text interning was split
+                    // out to avoid (see [`Absent`]).
+                    if why == Absent::Final
+                        && self.write_declared_default(f, tp, f_nr as u16, &slot)
+                    {
+                        continue;
+                    }
                     // The field, not the enclosing record, decides: a non-null field of a
                     // record reached through a nullable one is still non-null.
-                    self.set_default_value_nullable(
-                        f.content,
-                        f.nullable,
-                        why,
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: rec.rec,
-                            pos: rec.pos + u32::from(f.position),
-                        },
-                    );
+                    self.set_default_value_nullable(f.content, f.nullable, why, &slot);
                 }
             }
             Parts::Sorted(_, _)

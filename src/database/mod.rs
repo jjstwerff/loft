@@ -126,7 +126,24 @@ pub struct Field {
     /// that iterate `Parts::Struct(_)`.
     pub content: u16,
     pub position: u16,
-    pub default: Content,
+    /// loft#876 — the field's DECLARED default (`height: float = 1.5`), folded to a
+    /// constant, or `None` when the field declares none.
+    ///
+    /// Only a default that folds to a literal lands here. `= mk()` / `= [1, 2]` and
+    /// anything else needing a temporary is lowered parser-side into a function the
+    /// CONSTRUCTION site calls, and the store layer has no evaluator to run it — so
+    /// those keep applying where the constructor runs, and nowhere else. That split is
+    /// the contract, not an omission ([`crate::typedef::fold_declared_default`]).
+    ///
+    /// Carried, never RENDERED: a default changes no width and no offset, so
+    /// `layout_dump` / `LayoutDesc::render_dump` must not see it or adding `= 1.5` to a
+    /// field would change the @PLN97 layout identity and refuse an existing store.
+    /// Same reasoning as `nullable` below.
+    ///
+    /// Serialized as its `Content` with `None` written as `Content::Str("")` — the
+    /// value every registration site wrote before this field carried anything, so the
+    /// snapshot and IR-store formats stay byte-identical for a field with no default.
+    pub default: Option<Content>,
     /// @PLN127 arc D — was this field DECLARED nullable?
     ///
     /// Not derivable from anything else here: a narrow scalar registers a
@@ -150,6 +167,29 @@ impl Field {
     /// @PLN11 D2a — reconstruct a `Field` from cached store fields (the
     /// `pub(self)` `other_indexes` makes a direct literal impossible outside
     /// this module).
+    /// The wire spelling of a declared default: `None` is written as the empty string,
+    /// which is what every registration site wrote before defaults were carried, so an
+    /// existing snapshot / IR store round-trips byte-identically.  A field declaring
+    /// `= ""` collapses onto the same spelling, and reads back as "no declared
+    /// default" — harmless, because the absent value of a non-null `text` IS the
+    /// interned empty string (loft#875), so both routes answer identically.
+    #[must_use]
+    pub(crate) fn default_to_wire(default: Option<&Content>) -> Content {
+        match default {
+            Some(c) => c.clone(),
+            None => Content::Str(crate::keys::Str::new("")),
+        }
+    }
+
+    /// Inverse of [`Self::default_to_wire`].
+    #[must_use]
+    pub(crate) fn default_from_wire(c: Content) -> Option<Content> {
+        match &c {
+            Content::Str(s) if s.len == 0 => None,
+            _ => Some(c),
+        }
+    }
+
     #[must_use]
     pub(crate) fn from_stored(
         name: String,
@@ -163,7 +203,7 @@ impl Field {
             name,
             content,
             position,
-            default,
+            default: Self::default_from_wire(default),
             nullable,
             other_indexes,
         }

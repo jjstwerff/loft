@@ -262,7 +262,7 @@ fn write_field(out: &mut String, f: &Field) {
         ",\"content\":{},\"position\":{},\"default\":",
         f.content, f.position
     );
-    write_content(out, &f.default);
+    write_content(out, &Field::default_to_wire(f.default.as_ref()));
     out.push_str(",\"nullable\":");
     out.push_str(if f.nullable { "true" } else { "false" });
     out.push_str(",\"other_indexes\":");
@@ -275,7 +275,7 @@ fn field_from(p: &Parsed) -> Result<Field, SchemaDecodeError> {
         name: as_str(field(p, "name")?)?,
         content: as_u16(field(p, "content")?)?,
         position: as_u16(field(p, "position")?)?,
-        default: content_from(field(p, "default")?)?,
+        default: Field::default_from_wire(content_from(field(p, "default")?)?),
         // An older snapshot has no `nullable` key; absent reads as non-null,
         // which is what every field in one of those was.
         nullable: field(p, "nullable")
