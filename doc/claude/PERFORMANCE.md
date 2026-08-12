@@ -37,7 +37,12 @@ make profile ARGS="--interpret --check prog.loft"
 PROFILE_FLAGS="--annotate"  # the hot function's source LINES
 PROFILE_FLAGS="--calls"     # who calls the hot function
 PROFILE_FLAGS="--no-cache"  # profile a COMPILE, not a startup-cache reload
+PROFILE_FLAGS="--no-warm"   # skip the native pre-build (see "the build is not the run")
 ```
+
+The banner carries the sample count — `self time — 42 samples`. Read it before you read
+the percentages: at fifty samples a 2 % row is one sample, and `--annotate` annotates
+whichever symbol won that coin toss. A short run wants a higher `--freq`, or more work.
 
 ### One-time setup
 
@@ -49,10 +54,39 @@ echo 'kernel.perf_event_paranoid = 1' | sudo tee /etc/sysctl.d/99-perf.conf
 sudo sysctl --system
 ```
 
-### The four choices that make a profile honest
+### The five choices that make a profile honest
 
 These are baked into the script rather than offered as options, because each one is a way a
 profile can be confidently wrong.
+
+**The build is not the run.** loft's *default* backend is the compiler: `loft prog.loft`
+generates Rust, shells out to rustc, and runs the binary it built. `perf` follows forks, so
+recording that command records the **build** — rustc, LLVM and lld take the entire top of
+the profile, and the few samples that are your program come back as bare hex, because the
+binary is stripped. So a native run is built **once, unprofiled**, and only then recorded;
+`--no-warm` opts out. The warm-up really does run your program, side effects and all, which
+is why the script announces it.
+
+The lever that symbolizes the binary is the `--native-debug` flag, and it is the only one:
+the binary cache key hashes *that flag*, not the environment (`src/main.rs`). Set
+`LOFT_NATIVE_KEEP_SYMBOLS=1` on its own and an already-cached **stripped** binary is handed
+straight back — the setting applies and nothing changes. `--native-debug` keeps symbols,
+emits DWARF line tables, and preserves the generated `.rs`, so `--annotate` lands on
+generated Rust carrying its `// loft:<file>:<line>` marker.
+
+What survives is a profile that names your code:
+
+```
+25.27%  hot_a-d780ac7f0  [.] loft_native_1057163::n_slow_part
+14.66%  hot_a-d780ac7f0  [.] loft::ops::op_add_int
+13.86%  loft             [.] loft::use_analysis::first_arg_write_ops   ← front end, not your program
+ 5.53%  hot_a-d780ac7f0  [.] loft_native_1057163::n_fast_part
+```
+
+The `loft` rows are the front end (parse, IR, codegen, cache lookup); the other command is
+your compiled program, its functions named `n_<yours>`. When rustc still takes 20 % or more,
+the script says so rather than letting a plausible-looking LLVM profile pass for a hot
+program.
 
 **Self time, not inclusive.** loft's hot paths are recursive tree walkers — `scopes::scan`,
 `use_analysis::collect_defs`, every `for_each_child` descent. Inclusive time hands ~100 % to

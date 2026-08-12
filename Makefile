@@ -52,8 +52,12 @@
 #                   inclusive time names only the walker.  Add
 #                   PROFILE_FLAGS="--annotate" for source lines, "--calls"
 #                   for who calls the hot function, "--no-cache" to profile
-#                   a COMPILE rather than a startup-cache reload.  Release
-#                   is untouched.  See PERFORMANCE.md § Profiling a run.
+#                   a COMPILE rather than a startup-cache reload, "--no-warm"
+#                   to skip the native pre-build.  A native run (the DEFAULT
+#                   backend) is built once unprofiled and profiled with
+#                   --native-debug, so the profile names your loft functions
+#                   instead of rustc.  Release is untouched.  See
+#                   PERFORMANCE.md § Profiling a run.
 #   make ci-full    `ci` + the development-only suites (test-packages,
 #                   test-gl-smoke, test-gl-golden).  What we used to
 #                   call `make ci` before the slim-down.

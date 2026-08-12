@@ -1832,7 +1832,9 @@ native, and Rust reference implementations.
 
 Profile it: `make profile ARGS="--native prog.loft"`, and
 `PROFILE_FLAGS="--annotate"` for the hot source lines
-([PERFORMANCE.md § Profiling a run](PERFORMANCE.md)). Common issues:
+([PERFORMANCE.md § Profiling a run](PERFORMANCE.md)). The profiler builds the
+binary once unprofiled and records with `--native-debug`, so the report names
+your `n_<fn>` symbols rather than rustc and LLVM. Common issues:
 unnecessary store allocation, bounds checks in tight loops, string
 allocation overhead.
 
