@@ -51,6 +51,20 @@ Rust renames one of them to keep them apart — but one place that writes a CALL
 the original name. Both spellings work now, and neither needs renaming to avoid the
 other.
 
+### A function returning `T?` no longer leaks what it built
+
+A function whose answer is an optional struct or vector — `fn pick(n) -> Cell?` — leaked
+the record it allocated whenever the result was not bound to a variable. Writing the
+call inline was enough: as an argument, inside a `??`, in an interpolation, or as a
+statement on its own whose answer you did not need. One record per call, so a loop grew
+the heap for as long as it ran.
+
+Nothing pointed at it. The run was correct, the value was right, and the only signal was
+a store-count warning at exit that a long-running or embedded program never reaches.
+
+Binding the result first was always clean, and that is exactly what the compiler now
+writes for you.
+
 ### Taking an element out of what a function just returned
 
 A function whose answer is an index into a call — `make(n)[0] ?? Cell {}`, whether it is

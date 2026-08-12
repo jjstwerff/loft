@@ -9,6 +9,41 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An optional return was a shape the lift never recognised (2026-08-12)
+
+`inline_struct_return` (`src/scopes.rs`) is the one predicate that answers "does this
+call hand back a store the caller must own?", and every arm matched the callee's
+return type UNPEELED. `Optional(τ)` is a compile-time wrapper over τ's own runtime
+layout (@PLN25), so `-> C?` allocates and delivers exactly what `-> C` does — but it
+read as "not liftable", and the result got a bare stack-pop (`FreeStack`) instead of a
+`__lift_N` temp with a scope-exit `OpFreeRef`. One leaked record per call, unbounded in
+a loop, interpreter-only (native frees through its own drop path).
+
+Filed as loft#879, a `??` bug. The `??` is incidental: a discarded `pick(1);` leaks the
+same store with no `??` anywhere, `takeopt(pick(1))` leaks it as an argument, and an
+optional VECTOR return leaks too. The deciding axis is the optional aggregate return
+whose result stays a temporary — not the spelling that produced it.
+
+The `??` half is a second arm. A null-coalesce lowers to an `ncc` value-block that
+assigns the subject to a `__ncc_N` temp and yields either that temp or the default arm's
+`__ref_N`. The temp is `skip_free` — the block's result ALIASES it, so freeing at the
+block would dangle the value the consumer reads — which leaves the subject owned by
+nothing when the block is used inline. Text ncc temps were already covered by the
+@PLN85 skip_free-orphan pass and vectors by their own delivery path; only the
+`Reference` result leaked, and only that arm was added.
+
+Both halves emit what the hand-correct bound form has always emitted: `x = pick(1)`
+binds an `optional(reference(C))` local and frees it at scope exit. The lift rewrites
+the inline spelling into that bound form, so the fix adds no new delivery path — which
+is also the soundness argument for the borrowed case (`fn kid(h) -> Cell? { h.child }`),
+since binding one has always been clean.
+
+Boundary matrix (11 cells, both backends, `scripts/probe-matrix`): 7 cells fail on the
+published `2026.8.0` and pass here; the 4 negative controls — the default arm, a
+borrowed optional view, a non-optional return, and store-free optional scalars — pass
+on both, so the matrix is not green by having stopped checking. Guarded in
+`tests/scripts/174-inline-temp-free.loft`, the file that already owns this class.
+
 ### One call emitter re-derived the Rust fn identifier (2026-08-12)
 
 Emitted Rust is one flat namespace, so two same-named fns from different files get a
