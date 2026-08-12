@@ -359,5 +359,9 @@ picks *when*, a wall clock says *how much*, and the period is JITTERED because a
 samples a single phase of a periodic program and reports it as the whole) ·
 `LOFT_ALLOC_SITES=1` ranks live store BYTES by the loft line that allocated them, captured at
 the run's PEAK rather than at exit · `LOFT_ALLOC_PATHS=<ops>` adds the call paths that reached
-each allocation. Prefer `make profile`, which picks the instrument. Off costs nothing (the
+each allocation. `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
+`--tests`), merged into ONE report keyed by resolved `function` + `file:line` — each test
+compiles its own bytecode, so positions cannot be merged, only labels (loft#860).
+`LOFT_ALLOC_SITES` is program-only and says so under a suite instead of going quiet.
+Prefer `make profile`, which picks the instrument. Off costs nothing (the
 sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.

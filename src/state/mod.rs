@@ -65,26 +65,6 @@ pub struct CallFrame {
 /// Cannot clash with real Stores allocations (limited by `Stores::max`).
 pub const COROUTINE_STORE: u16 = u16::MAX;
 
-/// @PLN140 — `12.4 %`, for a profile row.
-fn pct(part: u64, whole: u64) -> String {
-    #[allow(clippy::cast_precision_loss)] // display only
-    let p = part as f64 * 100.0 / whole as f64;
-    format!("{p:.1} %")
-}
-
-/// @PLN140 — `1.24 s`, `312 ms`, `48 µs`: a duration at the scale it happens to be.
-fn secs(nanos: u64) -> String {
-    #[allow(clippy::cast_precision_loss)] // display only
-    let n = nanos as f64;
-    if nanos >= 1_000_000_000 {
-        format!("{:.2} s", n / 1e9)
-    } else if nanos >= 1_000_000 {
-        format!("{:.0} ms", n / 1e6)
-    } else {
-        format!("{:.0} µs", n / 1e3)
-    }
-}
-
 /// Lifecycle state of a coroutine frame (CO1.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoroutineStatus {
@@ -5309,150 +5289,43 @@ impl State {
         }
     }
 
-    /// @PLN140 arc B/C — what the run spent its time on, and what path reached each
+    /// @PLN140 arc B/C — what this run spent its time on, and what path reached each
     /// allocation. Silent unless [`arm_profiler`](Self::arm_profiler) armed it.
+    ///
+    /// The single-run convenience over [`fold_profile`](Self::fold_profile): a run
+    /// that IS the whole program has nothing to merge with.
     pub fn report_profile(&self, data: &crate::data::Data) {
+        let mut totals = crate::profiler::Totals::default();
+        self.fold_profile(data, &mut totals);
+        totals.report();
+    }
+
+    /// @PLN140 arc B/C — resolve this run's samples against `data` and add them to
+    /// `totals`. A no-op unless [`arm_profiler`](Self::arm_profiler) armed it.
+    ///
+    /// Resolution has to happen HERE, per run, because a `pc` only means something
+    /// inside the `Data` it was compiled from — and a test run compiles a fresh one
+    /// per test function (loft#860). `totals` therefore accumulates
+    /// `(function, file:line)` strings, never positions.
+    pub fn fold_profile(&self, data: &crate::data::Data, totals: &mut crate::profiler::Totals) {
         let Some(prof) = self.debug.as_deref().and_then(|d| d.prof.as_ref()) else {
             return;
         };
+        totals.add_run(prof);
         if prof.cpu_armed() {
-            self.report_cpu_profile(data, prof);
+            for (pc, site) in prof.sites_ranked() {
+                let (func, place) = self.site_label(data, pc);
+                totals.add_site(&func, &place, site);
+            }
+            for (chain, site) in prof.paths_ranked() {
+                totals.add_path(&Self::chain_label(data, &chain), site);
+            }
         }
         if prof.alloc_armed() {
-            self.report_alloc_paths(data, prof);
-        }
-    }
-
-    /// The CPU half: self time by function, by line, and by path.
-    fn report_cpu_profile(&self, data: &crate::data::Data, prof: &crate::profiler::Profiler) {
-        let ranked = prof.sites_ranked();
-        eprintln!(
-            "\n════ loft CPU profile — {} samples over {} ════",
-            prof.samples,
-            secs(prof.elapsed_ns())
-        );
-        // The sample count is the first thing on the banner for the same reason the
-        // perf script prints it: a percentage computed from a handful of samples is
-        // noise wearing a number's clothes, and the fix is a longer run, not a
-        // quieter report.
-        if prof.samples < 100 {
-            eprintln!(
-                "  ⚠  {} samples is too few to rank. Lower the interval \
-                 (LOFT_PROFILE=<ops per sample>, default 1024) or profile a longer run.",
-                prof.samples
-            );
-        }
-        if ranked.is_empty() {
-            return;
-        }
-        let total = prof.nanos.max(1);
-        // By function first: it is the question people actually arrive with, and the
-        // line view below is the same samples split finer.
-        let mut by_fn: std::collections::HashMap<String, crate::profiler::Site> =
-            std::collections::HashMap::new();
-        let mut by_line: std::collections::HashMap<(String, String), crate::profiler::Site> =
-            std::collections::HashMap::new();
-        for (pc, site) in &ranked {
-            let (func, place) = self.site_label(data, *pc);
-            let e = by_fn.entry(func.clone()).or_default();
-            e.samples += site.samples;
-            e.nanos += site.nanos;
-            let e = by_line.entry((place, func)).or_default();
-            e.samples += site.samples;
-            e.nanos += site.nanos;
-        }
-        eprintln!("── by function (self time) ──");
-        let mut fns: Vec<_> = by_fn.into_iter().collect();
-        fns.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos).then_with(|| a.0.cmp(&b.0)));
-        for (name, s) in fns.into_iter().take(15) {
-            eprintln!("  {:>6}  {:>9}  {name}", pct(s.nanos, total), secs(s.nanos));
-        }
-        eprintln!("── by line (self time) ──");
-        let mut lines: Vec<_> = by_line.into_iter().collect();
-        lines.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos).then_with(|| a.0.cmp(&b.0)));
-        for ((place, func), s) in lines.into_iter().take(15) {
-            eprintln!(
-                "  {:>6}  {:>9}  {place:<28} {func}",
-                pct(s.nanos, total),
-                secs(s.nanos)
-            );
-        }
-        let paths = prof.paths_ranked();
-        if !paths.is_empty() {
-            eprintln!(
-                "── hottest paths (innermost {} frames) ──",
-                crate::profiler::PATH_DEPTH
-            );
-            for (chain, s) in paths.into_iter().take(8) {
-                eprintln!(
-                    "  {:>6}  {:>9}  {}",
-                    pct(s.nanos, total),
-                    secs(s.nanos),
-                    Self::chain_label(data, &chain)
-                );
+            for ((pc, chain), (n, stores)) in prof.alloc_paths_ranked() {
+                let (func, place) = self.site_label(data, pc);
+                totals.add_alloc(&func, &place, &Self::chain_label(data, &chain), n, stores);
             }
-        }
-        if prof.paths_dropped > 0 {
-            eprintln!(
-                "  ({} samples fell outside the retained paths — the call graph is larger \
-                 than the table)",
-                prof.paths_dropped
-            );
-        }
-        eprintln!(
-            "  (op-clock sampling: `par` worker threads run their own State and are not \
-             sampled here)"
-        );
-    }
-
-    /// The allocation-path half: which chains reach each allocating line.
-    fn report_alloc_paths(&self, data: &crate::data::Data, prof: &crate::profiler::Profiler) {
-        eprintln!(
-            "\n════ allocation paths — {} allocating ops, {} sampled (1 in {}) ════",
-            prof.alloc_events,
-            prof.alloc_sampled,
-            prof.alloc_interval()
-        );
-        let rows = prof.alloc_paths_ranked();
-        if rows.is_empty() {
-            // "Nothing allocated" and "nothing was sampled" are different facts, and
-            // reporting the second as the first is how a rate set too coarse reads as
-            // a program that takes no memory.
-            if prof.alloc_events == 0 {
-                eprintln!("  nothing allocated during this run.");
-            } else {
-                eprintln!(
-                    "  {} allocating ops, none of them sampled at 1 in {} — lower the rate \
-                     with LOFT_ALLOC_PATHS=2\n  (the value is ops-per-capture; `1`, `on` \
-                     and `yes` all mean the default rate).",
-                    prof.alloc_events,
-                    prof.alloc_interval()
-                );
-            }
-            return;
-        }
-        let total: u64 = rows.iter().map(|(_, (n, _))| *n).sum();
-        let shown = rows.len().min(15);
-        let rest = rows.len() - shown;
-        for ((pc, chain), (n, stores)) in rows.into_iter().take(shown) {
-            let (func, place) = self.site_label(data, pc);
-            eprintln!(
-                "  {:>6}  {n:>7} sampled  {stores:>7} stores  {func} @ {place}",
-                pct(n, total.max(1))
-            );
-            eprintln!("            ← {}", Self::chain_label(data, &chain));
-        }
-        // A cap that is not announced reads as "this is all of it" — the same reason
-        // the CPU half prints its dropped-path count.
-        if rest > 0 {
-            eprintln!("  … and {rest} more (site, path) pairs below these");
-        }
-        if prof.paths_dropped > 0 {
-            eprintln!(
-                "  ({} captures fell outside the retained table — the call graph is larger \
-                 than it holds)",
-                prof.paths_dropped
-            );
         }
     }
 

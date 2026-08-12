@@ -108,6 +108,259 @@ pub struct Site {
     pub nanos: u64,
 }
 
+/// A profile merged across one or more runs, keyed by RESOLVED label rather than by
+/// bytecode position.
+///
+/// A `pc` means something only inside the `Data` it was compiled from, and a test run
+/// compiles a fresh one per test function — 420 of them in the package that reported
+/// loft#860. Adding those `sites` maps together would sum positions that name
+/// different code, and the result would look exactly like a profile. So every run is
+/// resolved against its OWN `Data` first
+/// ([`State::fold_profile`](crate::state::State::fold_profile)) and the merge happens
+/// on the resulting `(function, file:line)` strings.
+///
+/// That also settles the shape question loft#860 left open — one report per file, or
+/// one merged report. It is merged, because 39 banners rank nothing; and no
+/// attribution is lost by merging, because each row already carries the file it came
+/// from.
+#[derive(Debug, Default)]
+pub struct Totals {
+    /// How many profiled runs were folded in. `0` = nothing was armed, so there is
+    /// nothing to report — distinct from "armed and idle", which reports a zero.
+    pub runs: u64,
+    /// Whether CPU sampling was armed (mirrors [`Profiler::cpu_armed`]).
+    pub cpu: bool,
+    pub samples: u64,
+    /// Wall-clock nanoseconds accounted for by samples, summed over the runs.
+    pub nanos: u64,
+    /// Wall-clock nanoseconds the sampler was armed for, summed over the runs.
+    pub elapsed_ns: u64,
+    pub paths_dropped: u64,
+    by_fn: HashMap<String, Site>,
+    /// `(file:line, function) → self time`, the same pairing the single-run report
+    /// used, so a line is never ambiguous between two functions.
+    by_line: HashMap<(String, String), Site>,
+    by_path: HashMap<String, Site>,
+
+    // ── arc C: paths to ALLOCATIONS ──────────────────────────────────────────────
+    pub alloc_armed: bool,
+    /// The rate the runs were sampled at. Uniform across runs — it comes from the
+    /// environment, which cannot change mid-process.
+    pub alloc_interval: u32,
+    pub alloc_events: u64,
+    pub alloc_sampled: u64,
+    /// `(function, file:line, call path) → (sampled allocations, stores)`.
+    alloc_rows: HashMap<(String, String, String), (u64, u64)>,
+}
+
+impl Totals {
+    /// Fold one profiled run's headline counters in. The per-site rows arrive
+    /// separately via [`add_site`](Self::add_site) and friends, because only the
+    /// caller holds the `Data` that can resolve them.
+    pub fn add_run(&mut self, prof: &Profiler) {
+        self.runs += 1;
+        self.cpu |= prof.cpu_armed();
+        self.samples += prof.samples;
+        self.nanos += prof.nanos;
+        self.elapsed_ns += prof.elapsed_ns();
+        self.paths_dropped += prof.paths_dropped;
+        self.alloc_armed |= prof.alloc_armed();
+        if prof.alloc_armed() {
+            self.alloc_interval = prof.alloc_interval();
+        }
+        self.alloc_events += prof.alloc_events;
+        self.alloc_sampled += prof.alloc_sampled;
+    }
+
+    /// Credit `site` to a resolved function and `file:line`.
+    pub fn add_site(&mut self, func: &str, place: &str, site: Site) {
+        let e = self.by_fn.entry(func.to_string()).or_default();
+        e.samples += site.samples;
+        e.nanos += site.nanos;
+        let e = self
+            .by_line
+            .entry((place.to_string(), func.to_string()))
+            .or_default();
+        e.samples += site.samples;
+        e.nanos += site.nanos;
+    }
+
+    /// Credit `site` to a rendered call chain.
+    pub fn add_path(&mut self, chain: &str, site: Site) {
+        let e = self.by_path.entry(chain.to_string()).or_default();
+        e.samples += site.samples;
+        e.nanos += site.nanos;
+    }
+
+    /// Credit sampled allocations to a resolved site and the chain that reached it.
+    pub fn add_alloc(&mut self, func: &str, place: &str, chain: &str, n: u64, stores: u64) {
+        let e = self
+            .alloc_rows
+            .entry((func.to_string(), place.to_string(), chain.to_string()))
+            .or_insert((0, 0));
+        e.0 += n;
+        e.1 += stores;
+    }
+
+    /// What the run(s) spent time on, and what path reached each allocation. Silent
+    /// when nothing was profiled, so an unprofiled run prints nothing at all.
+    pub fn report(&self) {
+        if self.runs == 0 {
+            return;
+        }
+        if self.cpu {
+            self.report_cpu();
+        }
+        if self.alloc_armed {
+            self.report_alloc_paths();
+        }
+    }
+
+    /// How the banner names the extent of the profile: one run says how long it ran,
+    /// many say how many they were, because "2 m 10 s over 420 runs" and "2 m 10 s"
+    /// invite different readings of the percentages below it.
+    fn extent(&self) -> String {
+        if self.runs > 1 {
+            format!("{} across {} runs", secs(self.elapsed_ns), self.runs)
+        } else {
+            secs(self.elapsed_ns)
+        }
+    }
+
+    /// The CPU half: self time by function, by line, and by path.
+    fn report_cpu(&self) {
+        eprintln!(
+            "\n════ loft CPU profile — {} samples over {} ════",
+            self.samples,
+            self.extent()
+        );
+        // The sample count is the first thing on the banner for the same reason the
+        // perf script prints it: a percentage computed from a handful of samples is
+        // noise wearing a number's clothes, and the fix is a longer run, not a
+        // quieter report.
+        if self.samples < 100 {
+            eprintln!(
+                "  ⚠  {} samples is too few to rank. Lower the interval \
+                 (LOFT_PROFILE=<ops per sample>, default 1024) or profile a longer run.",
+                self.samples
+            );
+        }
+        if self.by_fn.is_empty() {
+            return;
+        }
+        let total = self.nanos.max(1);
+        // By function first: it is the question people actually arrive with, and the
+        // line view below is the same samples split finer.
+        eprintln!("── by function (self time) ──");
+        let mut fns: Vec<_> = self.by_fn.iter().collect();
+        fns.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos).then_with(|| a.0.cmp(b.0)));
+        for (name, s) in fns.into_iter().take(15) {
+            eprintln!("  {:>6}  {:>9}  {name}", pct(s.nanos, total), secs(s.nanos));
+        }
+        eprintln!("── by line (self time) ──");
+        let mut lines: Vec<_> = self.by_line.iter().collect();
+        lines.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos).then_with(|| a.0.cmp(b.0)));
+        for ((place, func), s) in lines.into_iter().take(15) {
+            eprintln!(
+                "  {:>6}  {:>9}  {place:<28} {func}",
+                pct(s.nanos, total),
+                secs(s.nanos)
+            );
+        }
+        if !self.by_path.is_empty() {
+            eprintln!("── hottest paths (innermost {PATH_DEPTH} frames) ──");
+            let mut paths: Vec<_> = self.by_path.iter().collect();
+            paths.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos).then_with(|| a.0.cmp(b.0)));
+            for (chain, s) in paths.into_iter().take(8) {
+                eprintln!(
+                    "  {:>6}  {:>9}  {chain}",
+                    pct(s.nanos, total),
+                    secs(s.nanos)
+                );
+            }
+        }
+        if self.paths_dropped > 0 {
+            eprintln!(
+                "  ({} samples fell outside the retained paths — the call graph is larger \
+                 than the table)",
+                self.paths_dropped
+            );
+        }
+        eprintln!(
+            "  (op-clock sampling: `par` worker threads run their own State and are not \
+             sampled here)"
+        );
+    }
+
+    /// The allocation-path half: which chains reach each allocating line.
+    fn report_alloc_paths(&self) {
+        eprintln!(
+            "\n════ allocation paths — {} allocating ops, {} sampled (1 in {}) ════",
+            self.alloc_events, self.alloc_sampled, self.alloc_interval
+        );
+        if self.alloc_rows.is_empty() {
+            // "Nothing allocated" and "nothing was sampled" are different facts, and
+            // reporting the second as the first is how a rate set too coarse reads as
+            // a program that takes no memory.
+            if self.alloc_events == 0 {
+                eprintln!("  nothing allocated during this run.");
+            } else {
+                eprintln!(
+                    "  {} allocating ops, none of them sampled at 1 in {} — lower the rate \
+                     with LOFT_ALLOC_PATHS=2\n  (the value is ops-per-capture; `1`, `on` \
+                     and `yes` all mean the default rate).",
+                    self.alloc_events, self.alloc_interval
+                );
+            }
+            return;
+        }
+        let mut rows: Vec<_> = self.alloc_rows.iter().collect();
+        rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(b.0)));
+        let total: u64 = rows.iter().map(|(_, (n, _))| *n).sum();
+        let shown = rows.len().min(15);
+        let rest = rows.len() - shown;
+        for ((func, place, chain), (n, stores)) in rows.into_iter().take(shown) {
+            eprintln!(
+                "  {:>6}  {n:>7} sampled  {stores:>7} stores  {func} @ {place}",
+                pct(*n, total.max(1))
+            );
+            eprintln!("            ← {chain}");
+        }
+        // A cap that is not announced reads as "this is all of it" — the same reason
+        // the CPU half prints its dropped-path count.
+        if rest > 0 {
+            eprintln!("  … and {rest} more (site, path) pairs below these");
+        }
+        if self.paths_dropped > 0 {
+            eprintln!(
+                "  ({} captures fell outside the retained table — the call graph is larger \
+                 than it holds)",
+                self.paths_dropped
+            );
+        }
+    }
+}
+
+/// `part` as a percentage of `whole`, for a report column.
+fn pct(part: u64, whole: u64) -> String {
+    #[allow(clippy::cast_precision_loss)] // display only
+    let p = part as f64 * 100.0 / whole as f64;
+    format!("{p:.1} %")
+}
+
+/// A duration in the largest unit that keeps it readable.
+fn secs(nanos: u64) -> String {
+    #[allow(clippy::cast_precision_loss)] // display only
+    let n = nanos as f64;
+    if nanos >= 1_000_000_000 {
+        format!("{:.2} s", n / 1e9)
+    } else if nanos >= 1_000_000 {
+        format!("{:.0} ms", n / 1e6)
+    } else {
+        format!("{:.0} µs", n / 1e3)
+    }
+}
+
 /// The sampler, owned by the [`Debugger`](crate::debugger::Debugger) so that arming
 /// it costs an ordinary run nothing — the dispatch loop's `self.debug.is_some()`
 /// branch is already paid for.

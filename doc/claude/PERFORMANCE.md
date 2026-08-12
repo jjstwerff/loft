@@ -67,8 +67,27 @@ stack, not a truncated one. loft keeps the right one itself (`State::call_stack`
 interpreted program is sampled over *that*, and the report names loft functions, loft
 lines and loft call paths (@PLN140 arc B, `src/profiler.rs`).
 
-So the script decides: a run that executes a program under `--interpret` gets loft's own
+So the script decides: a run that executes loft code under the interpreter gets loft's own
 sampler, everything else gets perf. `--engine` and `--program` override it.
+
+That includes **test runs** — `loft test` and `--tests` both interpret, and a suite is
+usually the biggest interpreted workload a project owns (loft#860). Each test compiles its
+own bytecode and runs in its own `State`, so a `pc` means something different in each one;
+the samples are therefore resolved to `(function, file:line)` per test and merged on those
+labels, never on positions. One report for the whole run, not one per file — 39 banners
+rank nothing, and no attribution is lost, because every row already names its file:
+
+```
+════ loft CPU profile — 31274 samples over 255 ms across 3 runs ════
+── by line (self time) ──
+  37.3 %      95 ms  other.loft:3                 other_work
+  33.3 %      85 ms  hot.loft:3                   slow_part
+```
+
+Two instruments are out of scope there and say so rather than going quiet: `--native` test
+runs (nothing to sample — no dispatch loop) and `LOFT_ALLOC_SITES` (it ranks a
+*process-wide* peak by bytecode position, and a suite's peak may have been reached in any
+of its runs, so those positions have no single `Data` to resolve against).
 
 ```
 ════ loft CPU profile — 44339 samples over 1.07 s ════

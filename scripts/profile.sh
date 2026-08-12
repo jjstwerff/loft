@@ -101,6 +101,7 @@ if [ "$NOCACHE" = 1 ]; then export LOFT_NO_CACHE=1; fi
 
 NATIVE=1
 RUNS_PROGRAM=1     # does this invocation actually EXECUTE the user's loft code?
+TESTS=0            # a test run: interprets by default, and IS loft code (loft#860)
 skip_value=0
 first_positional=""
 for a in "$@"; do
@@ -108,6 +109,7 @@ for a in "$@"; do
   case "$a" in
     --path|--project|--lib|--log-conf|--timeout)                 skip_value=1;;
     --interpret|--repl)                                          NATIVE=0;;
+    --tests)                                                     TESTS=1;;
     --check|--dump)                                              NATIVE=0; RUNS_PROGRAM=0;;
     --native-emit*|--native-wasm*|--html*|--native-android*)      NATIVE=0; RUNS_PROGRAM=0;;
     -*) ;;
@@ -115,6 +117,20 @@ for a in "$@"; do
   esac
 done
 case "$first_positional" in *.loft) ;; *) NATIVE=0; RUNS_PROGRAM=0;; esac
+
+# loft#860 — a test run executes loft code under the interpreter, so the loft-level
+# sampler is the right instrument for it, exactly as for `--interpret prog.loft`.
+# It is not caught by the rule above: `loft test` has no `.loft` positional at all,
+# and `loft --tests p.loft` has one but reaches it through a runner that defaults to
+# the interpreter whatever the backend flags say.  Without this, `make profile
+# ARGS="test"` recorded perf over the loft binary and answered with loft's own Rust
+# — a profile of the harness, offered as a profile of the suite.
+[ "$first_positional" = test ] && TESTS=1
+if [ "$TESTS" = 1 ]; then
+  RUNS_PROGRAM=1
+  # An EXPLICIT --native is the one case a test run is not interpreted.
+  case " $* " in *" --native "*) NATIVE=1;; *) NATIVE=0;; esac
+fi
 
 # ── which instrument answers the question that was asked? ─────────────────────
 #
