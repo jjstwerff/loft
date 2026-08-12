@@ -2624,6 +2624,263 @@ pub fn warn_dead_stores(
     }
 }
 
+/// Where one straight-line sequence has already handed a variable's value to an owner:
+/// source var → the position of that hand-off. A second entry for the same var is the defect.
+type Handoffs = HashMap<u16, Position>;
+
+/// The walk behind [`warn_double_move`]. Carries the position breadcrumb and the findings;
+/// the per-sequence pending set travels as an argument, because a conditional subtree gets
+/// its own and must not write back into its parent's.
+struct DoubleMove<'a> {
+    data: &'a Data,
+    func: &'a Function,
+    copy_d: u32,
+    /// The nearest enclosing span/line, the location a hand-off is reported at.
+    cur: Option<Position>,
+    /// `(source var, first hand-off, second hand-off)`, one per var per sequence.
+    found: Vec<(u16, Position, Position)>,
+}
+
+impl DoubleMove<'_> {
+    /// Walk a subtree that is CERTAIN to run, given what `st` has already been handed off.
+    fn scan(&mut self, node: &Value, st: &mut Handoffs) {
+        if let Some(p) = node.span_pos() {
+            self.cur = Some(p.clone());
+        } else if let Value::Line(n) = node {
+            // A bare line marker is the coarse fallback, exactly as the copy notice uses it:
+            // an empty `file` means "borrow the definition's own file" (filled in by the
+            // caller, which is the pairing loft#781 got wrong the other way round).
+            self.cur = Some(Position {
+                file: String::new(),
+                line: *n,
+                pos: 0,
+            });
+        }
+        match node.unspan() {
+            // A branch is the whole reason this is a walk and not a `walk`. Two hand-offs in
+            // opposite arms release the value ONCE however the branch goes, so they must not
+            // pair — each arm therefore scans with a FRESH set, and hand-offs inside an arm
+            // never reach the parent's. What the parent must still learn from the subtree is
+            // every variable it ASSIGNS: a conditional reassignment gives the variable a new
+            // value on one path, so a pending hand-off from before it is no longer certainly
+            // the same resource, and pairing it with a later one would be a false positive.
+            Value::If(cond, then, els) => {
+                self.scan(cond, st);
+                for arm in [then.as_ref(), els.as_ref()] {
+                    kill_assigned(arm, st);
+                    self.scan(arm, &mut Handoffs::new());
+                }
+            }
+            // A loop body is certain relative to ITSELF (two hand-offs inside one iteration
+            // are two releases) but not relative to the code around it, so it is scanned the
+            // same way an arm is. The iteration count is what stays invisible: ONE hand-off
+            // in a body that runs twice is a real double release this lint cannot see, and
+            // that false negative is the documented boundary.
+            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) | Value::ParFor(_) => {
+                kill_assigned(node, st);
+                self.scan_children_isolated(node);
+            }
+            // Nothing after a terminator runs, so the pending set cannot pair across it.
+            Value::Return(v) => {
+                self.scan(v, st);
+                st.clear();
+            }
+            Value::BreakWith(_, v) => {
+                self.scan(v, st);
+                st.clear();
+            }
+            Value::Break(_) | Value::Continue(_) => st.clear(),
+            // A reassignment replaces the value, so what was handed off is no longer what
+            // this variable holds — `s1 = S{h:c}; c = mk(); s2 = S{h:c}` moves two distinct
+            // resources into two containers and is correct.
+            Value::Set(v, rhs) => {
+                self.scan(rhs, st);
+                st.remove(v);
+            }
+            Value::Call(d, args) if *d == self.copy_d && args.len() >= 3 => {
+                for a in args {
+                    self.scan(a, st);
+                }
+                self.record(args, st);
+            }
+            // Everything else — a `Block`/`Insert` statement sequence, an ordinary call, an
+            // operand — runs straight through, so its children share the caller's set and
+            // are visited in evaluation order.
+            _ => self.scan_children(node, st),
+        }
+    }
+
+    /// Recurse into every child in evaluation order, sharing the caller's pending set.
+    fn scan_children(&mut self, node: &Value, st: &mut Handoffs) {
+        node.for_each_child(&mut |c| self.scan(c, st));
+    }
+
+    /// Recurse into every child, each with its OWN pending set — the shape a branch, a loop
+    /// body and a parallel arm share: certain within itself, not with what surrounds it.
+    fn scan_children_isolated(&mut self, node: &Value) {
+        node.for_each_child(&mut |c| self.scan(c, &mut Handoffs::new()));
+    }
+
+    /// Record one `OpCopyRecord` that hands its source's ownership away, and report the
+    /// SECOND such hand-off of the same variable.
+    fn record(&mut self, args: &[Value], st: &mut Handoffs) {
+        // The exact predicate the drop suppression uses (`scopes::collect_drop_transferred`),
+        // so the lint and the mechanism cannot drift: a hand-off is what makes the source
+        // stop dropping, and this asks the same question of the same node.
+        let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
+        if !moved
+            && !crate::scopes::copy_hands_off(&args[1], self.func, self.data)
+            && !crate::scopes::appends_to_element(&args[1], self.func, self.data)
+        {
+            return;
+        }
+        let Some(src) = crate::scopes::drop_bearing_source(&args[0]) else {
+            return;
+        };
+        // Only a variable the AUTHOR wrote can be acted on. A compiler temp handed off twice
+        // (`__lift_N`, `__ref_N`, `_elm_N`) is either impossible or our own bug, and either
+        // way names nothing the reader can edit.
+        let name = self.func.name(src);
+        if name.starts_with('_') || name.contains('#') {
+            return;
+        }
+        let Some(at) = self.cur.clone() else { return };
+        if let Some(first) = st.get(&src) {
+            self.found.push((src, first.clone(), at));
+            // Drop the pending entry so a third hand-off reports once more against the
+            // second, rather than N-1 times against the first.
+            st.insert(src, self.found.last().expect("just pushed").2.clone());
+        } else {
+            st.insert(src, at);
+        }
+    }
+}
+
+/// Every variable a subtree ASSIGNS. A conditional assignment must retire the parent's
+/// pending hand-off for that variable — see the `If` arm of [`DoubleMove::scan`].
+fn kill_assigned(node: &Value, st: &mut Handoffs) {
+    if st.is_empty() {
+        return;
+    }
+    node.walk(&mut |n| {
+        if let Value::Set(v, _) = n {
+            st.remove(v);
+        }
+    });
+}
+
+/// @PLN139 stage G — the DOUBLE-MOVE lint (`LOFT_NO_DOUBLE_MOVE` opts out).
+///
+/// @PLN139 made a copy into a container a MOVE: the container owns the value now and its
+/// death releases it. That closed loft#849 — and made a shape that used to LEAK into a
+/// double close. `c = mk(); s1 = S { h: c }; s2 = S { h: c }` hands one resource to two
+/// owners, and both release it. Rust prevents this with move checking, which loft does not
+/// have, so the hazard is caught by a diagnostic instead of by the type system.
+///
+/// `warning`, not `advice`, per the two-tier rule: ignoring it produces a wrong result.
+/// A warning gates a library's CI, so the lint is deliberately an UNDER-approximation — it
+/// fires only where both hand-offs are certain to run:
+///
+/// - opposite arms of an `if` release the value once however the branch goes → silent;
+/// - a reassignment between the two hand-offs makes them two distinct resources → silent,
+///   and a reassignment on only ONE path retires the pending hand-off for the same reason;
+/// - a terminator between them means the second never runs → silent.
+///
+/// The boundary it cannot see is the iteration count: one hand-off inside a loop body that
+/// runs twice is a real double release with one static node behind it. So is a hand-off on
+/// only one branch, which LEAKS rather than double-releasing. Both need the control-flow
+/// graph loft does not build, and both are false NEGATIVES — the safe direction for a tier
+/// that gates. Runs POST-`scopes::check`, from `main`, beside [`warn_dead_stores`].
+pub fn warn_double_move(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::double_move_enabled() {
+        return;
+    }
+    let copy_d = data.def_nr("OpCopyRecord");
+    if copy_d == u32::MAX {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        // The file must come from the DEFINITION, not the entry file: this is a warning, and
+        // a warning gates a library's CI, so a dependency's line number paired with the
+        // consumer's path would fail a consumer on a line it cannot see (loft#781).
+        let def_file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut cx = DoubleMove {
+            data,
+            func: &def.variables,
+            copy_d,
+            cur: None,
+            found: Vec::new(),
+        };
+        cx.scan(&def.code, &mut Handoffs::new());
+        for (src, first, at) in std::mem::take(&mut cx.found) {
+            let name = def.variables.name(src);
+            let ty = data.type_name_str(def.variables.tp(src));
+            let file = if at.file.is_empty() {
+                def_file
+            } else {
+                at.file.as_str()
+            };
+            // Name the FACT, not the cure — the cure is `--explain`'s job. Both positions
+            // matter to the reader: the second is where the defect is written, the first is
+            // the owner they have forgotten about. Naming a line the caret already points at
+            // reads as a second site that is not there, so the same-line case drops it.
+            let earlier = if first.line == at.line {
+                "earlier on this line".to_string()
+            } else {
+                format!("at line {}", first.line)
+            };
+            let msg = format!(
+                "`{name}` is handed to a second owner here — a container already took \
+                 ownership of it {earlier}, and each owner releases what it owns, so this \
+                 one {ty} value is released TWICE"
+            );
+            diags.add_at_coded(
+                crate::diagnostics::Level::Warning,
+                Some("double-move"),
+                &msg,
+                file,
+                at.line,
+                at.pos,
+            );
+            // Both ways out are Conditional, and that is the honest tier: the diagnostic
+            // proves one value reaches two owners, not which of the two the author meant.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("build a second {ty} for the second container"),
+                condition: Some(format!(
+                    "the two containers are meant to hold separate values — `{name}` holds one"
+                )),
+                edit: None,
+                concept: "move",
+                concept_ref: "@F106",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "give the value to one container only".to_string(),
+                condition: Some(format!(
+                    "the containers are meant to SHARE — then only one may own `{name}`, and \
+                     the other must read it from that one"
+                )),
+                edit: None,
+                concept: "move",
+                concept_ref: "@F106",
+            });
+        }
+    }
+}
+
 /// @PLN102 arc C step 4 — the FOLD lint (C5.2).  For every `#superseded "Y"` symbol X in loft's
 /// OWN code — the stdlib (`STD_SOURCE`, so loft's `make ci` enforces its stdlib folds) or the entry
 /// project (`MAIN_SOURCE`, a library author's own lib / a user's program); a third-party dependency

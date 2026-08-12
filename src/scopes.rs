@@ -1095,7 +1095,7 @@ fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
 /// NOT a hand-off, so its source keeps dropping exactly as it does today. Suppressing there
 /// would turn today's early release into a silent leak — the failure mode that makes half a
 /// cascade worse than none.
-fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
+pub(crate) fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
     let get_field_d = data.def_nr("OpGetField");
     if get_field_d == u32::MAX {
         return false;
@@ -1127,7 +1127,7 @@ fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
 /// A NAMED local appended to a collection (`v: vector<H> = [h1, h2]`) stays live, so no move
 /// bit is set — and once the collection releases its elements, leaving the local dropping too
 /// means one resource released twice.
-fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
+pub(crate) fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
     let Value::Var(dv) = dest.unspan() else {
         return false;
     };
@@ -1146,7 +1146,7 @@ fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
 /// that BUILDS it, whose tail is the work-ref holding the finished record — `Nest { s: S { … } }`
 /// copies such a block into `Nest`'s field, and without peeling it the inner `S` temp kept a
 /// scope-exit drop and released the payload a second time.
-fn drop_bearing_source(src: &Value) -> Option<u16> {
+pub(crate) fn drop_bearing_source(src: &Value) -> Option<u16> {
     match src.unspan() {
         Value::Var(v) => Some(*v),
         Value::Block(bl) => bl.operators.last().and_then(drop_bearing_source),

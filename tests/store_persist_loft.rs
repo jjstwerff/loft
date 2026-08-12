@@ -2889,6 +2889,29 @@ fn fixed_hash_seed_makes_a_persisted_store_reproducible() {
         c != d,
         "without LOFT_HASH_SEED the bytes must still vary — otherwise this test proves nothing"
     );
+
+    // loft#856 — the SPELLING is part of the contract, and only the decimal one was covered.
+    // `0x…` parsed as nothing and fell through to the random default in silence, so a caller
+    // who wrote a 64-bit seed the way 64-bit seeds are written got the behaviour they had
+    // explicitly opted out of, with no way to tell. It was loft's own suite that paid:
+    // `paged_browser.rs` pinned the seed in hex, with a comment explaining that the pin is
+    // what stops the test measuring a coin flip, and the pin never took effect.
+    //
+    // Reproducible-in-hex is not enough to assert — a hex value that parsed to some OTHER
+    // number would also be reproducible. So the hex and decimal spellings of one value must
+    // give the SAME bytes, which only holds if both reached the same seed.
+    let hex = read("seed710_hex", Some("0x0123456789abcdef"));
+    let dec = read("seed710_dec", Some("81985529216486895"));
+    assert!(
+        hex == dec,
+        "`0x0123456789abcdef` and its decimal spelling must be the same seed: {} vs {} bytes",
+        hex.len(),
+        dec.len()
+    );
+    assert!(
+        hex != c,
+        "the hex-seeded build must differ from an unseeded one — otherwise the seed did nothing"
+    );
 }
 
 /// loft#727 — READING a keyed collection must cost its store nothing, in
@@ -3558,6 +3581,17 @@ fn a_pointer_bearing_element_relocates_in_bulk() {
             .env("LOFT_PERSIST_TEST_PATH", &path)
             .env("LOFT_LOADER_STATS", "1")
             .env("LOFT_TIMEOUT", "180")
+            // Pin the hash seed, or this test measures the write's luck rather than the
+            // loader. The store is written through a KEYED collection, its bucket seed is
+            // drawn per hash, and the seed decides the bucket ORDER — so records land at
+            // different offsets on every run and the ones that happen to be adjacent
+            // coalesce into one read. Unpinned, the identical program cost 330..594
+            // four-byte reads over 40 fresh writes (median 378), which put the old
+            // `< 500` bound inside the spread: it failed on roughly the top decile and
+            // read as a concurrency flake, because the full suite runs it often enough
+            // to hit the tail. Pinned, it is 378 every time (loft#856 — and the hex
+            // spelling used here is the one that used to be ignored in silence).
+            .env("LOFT_HASH_SEED", "0x0123456789abcdef")
             .current_dir(workspace_root());
         if !mode.is_empty() {
             cmd.env("P783_MODE", mode);
@@ -3620,10 +3654,21 @@ fn a_pointer_bearing_element_relocates_in_bulk() {
         "the wordwise control must still be word-at-a-time ({slow_reads} reads) — if it is \
          not, this test is measuring nothing"
     );
-    // 1000 elements. The defect was ~3 four-byte reads EACH; the bound is deliberately
-    // loose (well under one per element) so it pins the CLASS rather than today's count.
+    // Stated as a RATIO against the control as well as an absolute count. Both arms read the
+    // SAME store in the same invocation, and the wordwise route is word-at-a-time whatever
+    // the layout, so the ratio says "bulk, not field-at-a-time" without depending on how many
+    // records happened to land adjacent — the property the test is actually about. Observed
+    // 16x..29x across layouts; 8x leaves a wide margin and still fails hard on the defect,
+    // where the two routes ARE the same route and the ratio is 1x.
     assert!(
-        fast_reads < 500,
+        fast_reads * 8 < slow_reads,
+        "a pointer-bearing element must relocate in bulk: {fast_reads} four-byte reads against \
+         the word-at-a-time control's {slow_reads} — under 8x apart is the pre-fix route"
+    );
+    // The class boundary in absolute terms: 1000 elements, so one four-byte read EACH is 1000.
+    // The defect cost ~3 each. Loose on purpose — it pins the CLASS, not today's count.
+    assert!(
+        fast_reads < 1000,
         "a pointer-bearing element must not cost a four-byte read each: {fast_reads} reads \
          for 1000 elements (wordwise control: {slow_reads})"
     );

@@ -31,6 +31,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | code | level | what it says | what to write instead | fix |
 |---|---|---|---|---|
 | `avoidable-copy` | advice | A structure was deep-copied because its source is still used after the copy site, so it could not be moved. | Build the value in place, or stop using the source afterwards. Both take the copy to zero — see `@F106`. | M C · `@F106` |
+| `double-move` | warning | One droppable value was handed to TWO owners, and each owner releases what it owns, so the value is released twice. Fires only where both hand-offs certainly run (@PLN139). | Build a second value for the second container, or give it to one container only and read it back from there. | C C · `@F106` |
 | `lost-write` | warning | A local was mutated but never read. A whole-value bind COPIES the heap value (C86), so the mutation landed in the copy and the write is LOST. | Bind a live reference with `&` for write-through, or read the local after the mutation if a copy was intended. | C C · `@F21` `@F106` |
 | `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `?? <default>` for a fallback, `(… as T?)?` for the type's default, or `as T?` for a checked cast. | C C C · `@F2` `@F96` `@F5` |
 | `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `?? <default>` for a fallback, or `as T?` for a checked cast. | C C · `@F2` `@F5` |

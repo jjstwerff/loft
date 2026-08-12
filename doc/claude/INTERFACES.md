@@ -502,6 +502,13 @@ omission:
 - **Moving one droppable into TWO containers releases it twice.** loft has no
   move checker, so `a = C { h: h }; b = C { h: h }` compiles and both containers
   release `h`'s resource. Build the second container from its own value.
+  `warning[double-move]` catches this where both hand-offs certainly run
+  (`LOFT_NO_DOUBLE_MOVE` opts out). It is deliberately quiet where they do not:
+  opposite `if` arms release once however the branch goes, and a reassignment
+  between the two hand-offs makes them two distinct values — but so is a
+  hand-off inside a LOOP, which the compiler sees once and the program runs N
+  times. A warning gates a library's CI, so it errs toward missing a defect
+  rather than failing correct code; the loop shape is on you.
 
 **When to reach for it.** A drop pays for itself when the value owns something
 the program cannot see — a `#c` handle, a lock, a file — and the release is

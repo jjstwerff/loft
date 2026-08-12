@@ -319,6 +319,12 @@ BOUND GUARD does not count as reading it, since a length cannot witness an eleme
 that hole made the lint silent on `if i < len(d) { d[i]=x }`, the exact shape the `v[i]`
 may-be-null warning asks for, and the published `graphics` canvas shipped every drawing
 primitive as a no-op through it) ·
+`LOFT_NO_DOUBLE_MOVE` (@PLN139 stage G: one droppable handed to TWO owners — `s1 = S{h:c};
+s2 = S{h:c}` — where each owner's death releases what it owns, so the resource is released
+twice. Counts hand-offs per source with the SAME predicate that suppresses the source's own
+drop, so lint and mechanism cannot drift. `warning` because ignoring it produces a wrong
+result; therefore an UNDER-approximation — silent across opposite `if` arms, a reassignment
+between the hand-offs, and a terminator, and blind to the iteration count of a loop) ·
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·

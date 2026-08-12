@@ -7770,6 +7770,10 @@ fn main() {
     // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
     // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
     loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN139 stage G — the double-move lint. Runs here for the same reason the dead-store
+    // one does: the hand-offs it counts are the materialised `OpCopyRecord`s, which only
+    // exist once the program is scope-checked.
+    loft::use_analysis::warn_double_move(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol in owned source must resolve
     // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
     // symbol is marked, so a no-op for every program today.

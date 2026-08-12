@@ -29,6 +29,16 @@ const CODES: &[(&str, &str)] = &[
         "struct H { v: vector<integer> }\nfn u(h: H) -> integer { len(h.v) }\n\
          fn main() { s = [1, 2, 3]; h = H { v: s }; print(\"{u(h)} {len(s)}\"); }",
     ),
+    // @PLN139 stage G — one `H` handed to two containers. The cascade releases what each
+    // container owns, so this closes one resource twice; both hand-offs are straight-line,
+    // which is the certainty the lint requires.
+    (
+        "double-move",
+        "struct H { id: integer }\nfn OpDrop(self: H) { print(\"{self.id}\"); }\n\
+         struct S { h: H }\n\
+         fn main() { c = H { id: 1 }; a = S { h: c }; b = S { h: c }; \
+         print(\"{a.h.id}{b.h.id}\"); }",
+    ),
     // @PLN107 dead-store lint. `d = s.items` COPIES (C86), so writing `d` cannot reach
     // `s`, and `d` is never read afterwards — the write is lost.
     (
