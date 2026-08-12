@@ -380,3 +380,128 @@ fn alloc_sites_refuses_a_test_run_instead_of_going_quiet() {
         "…and it must not print a table it cannot attribute:\n{out}"
     );
 }
+
+// ── loft#865 and its neighbour: the two ways a profile can be silent or blind ──
+
+/// loft#865 — the DEFAULT backend is native, so this is the run a user reaches for a
+/// profiler WITH, and it accepted `LOFT_PROFILE` and exited 0 with an empty terminal.
+/// That is indistinguishable from "the profiler ran and your program is not the
+/// problem". `--interpret` was the only arm that armed the sampler.
+///
+/// Ignored by default: it needs rustc to build the native binary, which the ordinary
+/// suite does not assume.
+#[test]
+#[ignore = "requires rustc (native build)"]
+fn a_native_run_says_the_sampler_cannot_follow_it() {
+    let path = std::env::temp_dir().join("loft_prof_865.loft");
+    std::fs::write(&path, "fn main() { println(\"x\"); }\n").expect("write probe");
+    // Both spellings: the explicit flag, and the DEFAULT, which is the same backend
+    // reached without typing anything. They were silent for the identical reason, so
+    // fixing only the explicit one would leave the common case broken.
+    for args in [vec!["--native"], vec![]] {
+        let mut cmd = Command::new(loft_bin());
+        for a in &args {
+            cmd.arg(a);
+        }
+        let out = cmd
+            .arg(&path)
+            .env("LOFT_PROFILE", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("spawn loft");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("interpreter-only") && text.contains("Add --interpret"),
+            "a native run must say the variable was read and cannot be honoured, and \
+             name the cure (args: {args:?}):\n{text}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The blind spot moros measured, and the reason it is worse than silence: the report
+/// is POPULATED and inverted. A `use`d library runs as a compiled cdylib, so its
+/// functions cannot be sampled — their time lands on the calling line.
+///
+/// The probe is built so the true answer is not a matter of opinion: the library loops
+/// 150× what the program does, so it owns ~99 % of the run. Unwarned, the table said
+/// `100 % app_bit`.
+#[test]
+#[ignore = "requires rustc (builds the library cdylib)"]
+fn a_profile_says_when_a_used_library_is_invisible_to_it() {
+    let root = std::env::temp_dir().join("loft_prof_libblind");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("hotlib/src")).expect("lib dir");
+    std::fs::create_dir_all(root.join("app")).expect("app dir");
+    std::fs::write(
+        root.join("hotlib/loft.toml"),
+        "[package]\nname = \"hotlib\"\nversion = \"0.0.0\"\nloft = \">=0.8\"\n\n\
+         [library]\nentry = \"src/hotlib.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("hotlib/src/hotlib.loft"),
+        "pub fn lib_grind(n: integer) -> integer {\n  acc = 0;\n  \
+         for i in 0..n { acc = acc + i % 7; }\n  acc\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("app/prog.loft"),
+        "use hotlib;\n\nfn app_bit(n: integer) -> integer {\n  t = 0;\n  \
+         for i in 0..n { t = t + i % 3; }\n  t\n}\n\n\
+         fn main() {\n  a = lib_grind(3000000);\n  b = app_bit(20000);\n  \
+         println(\"{a} {b}\");\n}\n",
+    )
+    .unwrap();
+
+    let run = |no_native: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg("--lib")
+            .arg(&root)
+            .arg(root.join("app/prog.loft"))
+            .env("LOFT_PROFILE", "1")
+            .env("LOFT_TIMEOUT", "180");
+        if no_native {
+            cmd.env("LOFT_NO_NATIVE_LIBS", "1");
+        }
+        let o = cmd.output().expect("spawn loft");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+
+    let blind = run(false);
+    assert!(
+        blind.contains("CALLED INTO `use`d LIBRARIES"),
+        "the report must announce the blind spot before its tables:\n{blind}"
+    );
+    assert!(
+        blind.contains("LOFT_NO_NATIVE_LIBS=1"),
+        "…and name the switch that lifts it:\n{blind}"
+    );
+
+    // The claim is not decoration: with the libraries interpreted, the ranking really
+    // does invert. If this ever stops inverting, the warning has become a lie and
+    // should be reworded, not deleted.
+    let seeing = run(true);
+    let top = top_row(&seeing, "── by function");
+    assert!(
+        top.contains("lib_grind"),
+        "with LOFT_NO_NATIVE_LIBS=1 the library must dominate — it loops 150× the \
+         program's work.\nGot: {top}\n{seeing}"
+    );
+    let blind_top = top_row(&blind, "── by function");
+    assert!(
+        blind_top.contains("app_bit"),
+        "…and without it, the CALLER is what the table shows, which is the whole \
+         hazard.\nGot: {blind_top}\n{blind}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

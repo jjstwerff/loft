@@ -238,12 +238,43 @@ impl Totals {
         // perf script prints it: a percentage computed from a handful of samples is
         // noise wearing a number's clothes, and the fix is a longer run, not a
         // quieter report.
-        if self.samples < 100 {
+        // A `use`d library runs as a native cdylib, and the sampler cannot follow it
+        // in. Said BEFORE the tables, because it changes what they mean rather than
+        // adding a footnote to them.
+        let lib_calls =
+            crate::state::SHARED_DISPATCH_HITS.load(std::sync::atomic::Ordering::Relaxed);
+        if lib_calls > 0 {
+            // The COUNT is not the severity and must not be read as it: one call to a
+            // library that loops is the whole run. Measured on a two-function probe,
+            // ONE bridge call hid 99.5 % of the time and the table below read
+            // "100 % app_bit" — the true ranking inverted, with nothing to suggest it.
             eprintln!(
-                "  ⚠  {} samples is too few to rank. Lower the interval \
-                 (LOFT_PROFILE=<ops per sample>, default 1024) or profile a longer run.",
-                self.samples
+                "  ⚠  THIS RUN CALLED INTO `use`d LIBRARIES ({lib_calls} {}), WHICH RUN AS \
+                 COMPILED CODE.\n     Their functions cannot appear below at any sample \
+                 rate. Their time lands on the loft\n     line that called them, so a \
+                 library doing most of the work reads as a hot CALLER —\n     and one call \
+                 is enough for that, because the count measures calls, not work.\n     \
+                 Re-run with LOFT_NO_NATIVE_LIBS=1 to see inside them; the ranking can \
+                 invert.",
+                if lib_calls == 1 { "call" } else { "calls" }
             );
+        }
+        if self.samples < 100 {
+            // With libraries native, "profile a longer run" is the wrong cure — the
+            // missing samples are missing ops, not missing seconds.
+            if lib_calls > 0 {
+                eprintln!(
+                    "  ⚠  {} samples is too few to rank, and the library calls above are \
+                     why. Start with\n     LOFT_NO_NATIVE_LIBS=1 rather than a longer run.",
+                    self.samples
+                );
+            } else {
+                eprintln!(
+                    "  ⚠  {} samples is too few to rank. Lower the interval \
+                     (LOFT_PROFILE=<ops per sample>, default 1024) or profile a longer run.",
+                    self.samples
+                );
+            }
         }
         if self.by_fn.is_empty() {
             return;

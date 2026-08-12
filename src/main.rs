@@ -3707,6 +3707,34 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
     }
 }
 
+/// loft#865 — say that a profiling variable was read and cannot be honoured, when the
+/// program is about to run as a compiled binary.
+///
+/// All three instruments hang off the interpreter's dispatch loop: the CPU sampler
+/// walks `State::call_stack`, and the allocation ones key on `alloc_pc`, the bytecode
+/// position the loop republishes per op. A native binary has no dispatch loop, so
+/// there is nothing to hook and nothing to attribute — this is a real limit, not a
+/// missing feature, and `scripts/profile.sh --engine` is the instrument for that side.
+///
+/// Silent unless one of the variables is actually set, so an ordinary native run is
+/// unchanged.
+fn announce_profiler_cannot_follow_native() {
+    let asked: Vec<&str> = ["LOFT_PROFILE", "LOFT_ALLOC_PATHS", "LOFT_ALLOC_SITES"]
+        .into_iter()
+        .filter(|v| std::env::var_os(v).is_some())
+        .collect();
+    if asked.is_empty() {
+        return;
+    }
+    eprintln!(
+        "loft: {} set, but the loft-level profiler is interpreter-only — this program \
+         runs native,\n  so nothing will be sampled. Add --interpret to profile it (it \
+         burns the same loft\n  lines), or `make profile PROFILE_FLAGS=--engine` to \
+         profile the generated binary with perf.",
+        asked.join(" + ")
+    );
+}
+
 /// loft#861: Handle `loft cache <status|prune>`.
 ///
 /// The auto-native caches are keyed on a value that moves with every installed loft
@@ -10227,6 +10255,16 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         if let Some(dir) = binary.parent() {
             native_utils::stage_native_dlls(dir, &p.data);
         }
+        // loft#865 — the loft-level profiler cannot follow the program here, and this
+        // is the LAST point at which that is still certain: everything before it may
+        // still `break 'native` and interpret after all, where the sampler does arm.
+        //
+        // Said out loud because the default backend is native, so this is the run a
+        // user reaches for a profiler WITH — and an accepted-then-ignored variable
+        // ends in a clean exit and an empty terminal, which is indistinguishable from
+        // "the profiler ran and your program is not the problem". loft#860 fixed the
+        // same hole for test runs; this is the branch next to it.
+        announce_profiler_cannot_follow_native();
         // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
         // re-parses the same sources, so hand it the resolved paths the driver
         // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;

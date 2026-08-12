@@ -363,5 +363,11 @@ each allocation. `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`
 `--tests`), merged into ONE report keyed by resolved `function` + `file:line` — each test
 compiles its own bytecode, so positions cannot be merged, only labels (loft#860).
 `LOFT_ALLOC_SITES` is program-only and says so under a suite instead of going quiet.
+**A NATIVE run is not sampled** — and the default backend IS native, so a bare
+`LOFT_PROFILE=1 loft p.loft` announces that rather than exiting empty (loft#865).
+**A `use`d library is a cdylib the sampler cannot enter**: its functions cannot appear
+and their time lands on the CALLING line, so a library doing the work reads as a hot
+caller — one probe inverted from `100 % app_bit` to `99.5 % lib_grind` under
+`LOFT_NO_NATIVE_LIBS=1`. The report says so whenever a library was called.
 Prefer `make profile`, which picks the instrument. Off costs nothing (the
 sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.

@@ -89,6 +89,34 @@ runs (nothing to sample — no dispatch loop) and `LOFT_ALLOC_SITES` (it ranks a
 *process-wide* peak by bytecode position, and a suite's peak may have been reached in any
 of its runs, so those positions have no single `Data` to resolve against).
 
+### The two ways a profile can lie, and what it now says instead
+
+Both were found by pointing the sampler at a real consumer (moros), and both matter more
+than a missing feature would, because each ends in something that *looks* like an answer.
+
+**A native run is not sampled at all (loft#865).** The sampler is interpreter-only, and the
+DEFAULT backend is native — so `LOFT_PROFILE=1 loft prog.loft`, the command a person
+actually types, accepted the variable and exited 0 with an empty terminal. That is
+indistinguishable from *"the profiler ran and your program is not the problem"*. A native
+run now says so before it starts, naming `--interpret` and `--engine` as the two cures.
+
+**A `use`d library is a cdylib the sampler cannot see into.** This is the sharper one,
+because the report is *populated*. A library runs as compiled code, so its functions cannot
+be sampled at any rate; their time lands on the loft line that called them. Measured on a
+two-function probe where the library loops 150× what the program does:
+
+| | samples | top row |
+|---|---|---|
+| default | 365 | `100.0 % app_bit` |
+| `LOFT_NO_NATIVE_LIBS=1` | 61 824 | `99.5 % lib_grind`, `0.5 % app_bit` |
+
+The ranking is **inverted**, and nothing in the first table hints at it. Note also that
+*one* bridge call was enough — the call count measures calls, not work — and that the low
+sample count is a symptom, not a sampling-rate problem: the op clock does not tick while
+compiled code runs, so a longer run does not help. The CPU report now leads with this
+whenever any library call happened, and the "too few samples to rank" line points at the
+library rather than at the interval when that is the real cause.
+
 ```
 ════ loft CPU profile — 44339 samples over 1.07 s ════
 ── by function (self time) ──
