@@ -721,11 +721,15 @@ impl Stores {
         path: &mut Vec<String>,
         at: usize,
     ) -> Result<(), WalkErr> {
-        // `null` at any target position resets to the type's
-        // default sentinel — mirrors the legacy scanner's
-        // first-line behaviour and keeps round-tripping correct.
+        // `null` at any target position resets to the target's default — mirrors the
+        // legacy scanner's first-line behaviour and keeps round-tripping correct.
+        // Which default is the FIELD's question, not the type's: JSON `null` into a
+        // field declared non-null lands as that type's zero, because the sentinel a
+        // type-only answer would write is a value DN1 says the slot cannot hold
+        // (loft#870).
         if matches!(parsed, crate::json::Parsed::Null) {
-            self.set_default_value(tp, to);
+            let nullable = self.field_declared_nullable(rec_tp, field);
+            self.set_default_value_nullable(tp, nullable, to);
             return Ok(());
         }
         let mismatch = || WalkErr {
@@ -1021,7 +1025,9 @@ impl Stores {
                     rec,
                     pos: fld + u32::from(f.position),
                 };
-                self.set_default_value(f.content, &slot);
+                // A key the JSON simply omits is the same question as one written
+                // `null`, and gets the same answer — the FIELD's default (loft#870).
+                self.set_default_value_nullable(f.content, f.nullable, &slot);
             }
         }
         Ok(())
@@ -1099,6 +1105,24 @@ impl Stores {
         }
     }
 
+    /// Is the field at `field` of struct `rec_tp` DECLARED nullable?
+    ///
+    /// Answers `true` — today's behaviour, the null sentinel — whenever the question
+    /// does not apply: a top-level or array-element target carries `field == u16::MAX`,
+    /// and a non-struct `rec_tp` has no fields to consult. Only a field that a
+    /// declaration site actually spelled non-null gets the other answer.
+    fn field_declared_nullable(&self, rec_tp: u16, field: u16) -> bool {
+        if rec_tp == u16::MAX || field == u16::MAX {
+            return true;
+        }
+        match &self.types[rec_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.get(field as usize).is_none_or(|f| f.nullable)
+            }
+            _ => true,
+        }
+    }
+
     /**
         Write default(null) values on all fields. This should normally only be done while debugging
         as all fields should be set anyway under correctly generated code.
@@ -1106,6 +1130,29 @@ impl Stores {
         On inconsistent database definitions.
     */
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
+        self.set_default_value_nullable(tp, true, rec);
+    }
+
+    /// The absent value of a struct FIELD, which is not the same question as the
+    /// absent value of its TYPE.
+    ///
+    /// `integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a
+    /// SENTINEL and share one content type between their `T` and `T?` spellings, so
+    /// a type-only answer has to pick one, and [`Self::set_default_value`] picks the
+    /// sentinel. Writing that into a field declared non-null puts a null in a slot
+    /// DN1 says cannot hold one: the reader answers `null`, the declared type says
+    /// otherwise, and `redundant-coalesce` then advises deleting the guard that is
+    /// doing the work (loft#870).
+    ///
+    /// Every other type either has no sentinel to choose (`text`, `boolean`,
+    /// `character`, a collection header — all already zero) or carries its own
+    /// nullability in its `Parts` (`Byte`/`Short`/`ShortRaw`/`Int`), which is why a
+    /// ranged `u8` field was already right while a plain `integer` was not. So
+    /// `nullable` changes exactly four arms and nothing else.
+    ///
+    /// # Panics
+    /// On inconsistent database definitions.
+    pub fn set_default_value_nullable(&mut self, tp: u16, nullable: bool, rec: &DbRef) {
         // @PLN25 — a forward-referenced field's content can still be u16::MAX here (its known_type
         // is not laid out yet — e.g. a `__nullable<S>` element of a forward-ref'd struct, gate-on
         // 371_p375_forward_ref_positions).  It has no per-type default to write, and zero-on-claim
@@ -1117,7 +1164,8 @@ impl Stores {
         if tp <= 6 {
             match tp {
                 0 => {
-                    self.store_mut(rec).set_int(rec.rec, rec.pos, i64::MIN);
+                    let v = if nullable { i64::MIN } else { 0 };
+                    self.store_mut(rec).set_int(rec.rec, rec.pos, v);
                 }
                 6 => {
                     // Content type 6 is a 4-byte u32-raw field (read via `get_u32_raw`,
@@ -1131,13 +1179,16 @@ impl Stores {
                     self.store_mut(rec).set_i32_raw(rec.rec, rec.pos, 0);
                 }
                 1 => {
-                    self.store_mut(rec).set_long(rec.rec, rec.pos, i64::MIN);
+                    let v = if nullable { i64::MIN } else { 0 };
+                    self.store_mut(rec).set_long(rec.rec, rec.pos, v);
                 }
                 2 => {
-                    self.store_mut(rec).set_single(rec.rec, rec.pos, f32::NAN);
+                    let v = if nullable { f32::NAN } else { 0.0 };
+                    self.store_mut(rec).set_single(rec.rec, rec.pos, v);
                 }
                 3 => {
-                    self.store_mut(rec).set_float(rec.rec, rec.pos, f64::NAN);
+                    let v = if nullable { f64::NAN } else { 0.0 };
+                    self.store_mut(rec).set_float(rec.rec, rec.pos, v);
                 }
                 4 => {
                     self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, 0);
@@ -1180,8 +1231,11 @@ impl Stores {
                             .set_short(rec.rec, rec.pos, 0, i32::from(tp));
                         continue;
                     }
-                    self.set_default_value(
+                    // The field, not the enclosing record, decides: a non-null field of a
+                    // record reached through a nullable one is still non-null.
+                    self.set_default_value_nullable(
                         f.content,
+                        f.nullable,
                         &DbRef {
                             store_nr: rec.store_nr,
                             rec: rec.rec,

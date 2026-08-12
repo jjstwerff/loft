@@ -1950,7 +1950,12 @@ elapsed_ms  = elapsed_us / 1000
   email: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
 <h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
-<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally. Missing fields get null sentinels.  Caveat (Q1): the auto-wrap form currently DROPS diagnostics — malformed input and schema mismatches leave fields null with <code>json_errors()</code> empty.  For error reporting, stage explicitly: <code>User.parse(json_parse(text))</code> — that form pushes both parse and schema errors to <code>json_errors()</code>.</p>
+<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally.</p>
+<p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type<code>s absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field </code>integer?<code> / </code>float?' if you need to tell "absent" from "zero" apart:</p>
+<pre><code>struct Reading { id: integer, drift: float? }
+r = Reading.parse("{}")     // r.id == 0, r.drift == null
+</code></pre>
+<p>Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with <code>json_errors()</code> empty.  For error reporting, stage explicitly: <code>User.parse(json_parse(text))</code> — that form pushes both parse and schema errors to <code>json_errors()</code>.</p>
 <pre><code>user = User.parse(json_text)
 </code></pre>
 <p>to inspect <code>json_errors()</code> between the two steps.</p>
@@ -1988,9 +1993,9 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
-<p>Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap produces null sentinels; path-qualified diagnostics on the mismatch are collected in <code>json_errors</code>. Here we verify the unwrap does not crash on mismatched shapes.</p>
+<p>Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in <code>json_errors</code>. <code>id</code> is declared plain, so its default is 0 — the mismatch is reported through <code>json_errors</code>, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="kw">null</span>, <span class="st">"type-mismatched id becomes null: {bad.id}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="nm">0</span>, <span class="st">"type-mismatched id keeps its default: {bad.id}"</span>);</code></pre>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
   total = <span class="nm">0</span>;
   <span class="kw">for</span> s <span class="kw">in</span> scores {

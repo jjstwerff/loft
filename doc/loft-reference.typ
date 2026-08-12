@@ -4561,7 +4561,16 @@ struct User {
 
 === Parsing — JSON to struct
 
-Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally. Missing fields get null sentinels.  Caveat (Q1): the auto-wrap form currently DROPS diagnostics — malformed input and schema mismatches leave fields null with 'json_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json_parse(text))' — that form pushes both parse and schema errors to 'json_errors()'.
+Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally.
+
+A field the JSON does not mention — and a field written 'null' — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field 'integer?' / 'float?' if you need to tell "absent" from "zero" apart:
+
+```
+struct Reading { id: integer, drift: float? }
+r = Reading.parse("{}")     // r.id == 0, r.drift == null
+```
+
+Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with 'json_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json_parse(text))' — that form pushes both parse and schema errors to 'json_errors()'.
 
 ```
 user = User.parse(json_text)
@@ -4631,11 +4640,11 @@ fn main() {
   assert(u2.name == u.name, "round-trip name");
 ```
 
-Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap produces null sentinels; path-qualified diagnostics on the mismatch are collected in `json_errors`. Here we verify the unwrap does not crash on mismatched shapes.
+Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in `json_errors`. `id` is declared plain, so its default is 0 — the mismatch is reported through `json_errors`, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
-  assert(bad.id == null, "type-mismatched id becomes null: {bad.id}");
+  assert(bad.id == 0, "type-mismatched id keeps its default: {bad.id}");
 ```
 
 ```rust

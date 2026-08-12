@@ -14,7 +14,11 @@
 // Distinctive value per return path; every path checked.
 
 struct S {
-  v: integer,
+  // Nullable so `from_json` below can reach its third return site on a parse that
+  // supplies nothing. A plain `integer` cannot hold null, so the absent key would
+  // read 0 and the fallback would never fire — the site under test would go
+  // unexercised while every assertion still passed (loft#870).
+  v: integer?,
 }
 
 // `mk` is defined AFTER its callers — the forward-reference shape that
