@@ -581,10 +581,16 @@ impl Output<'_> {
             } else {
                 None
             };
+            // `fn_ident`, not `callee.name()`: two modules may define the same fn name,
+            // and emitted Rust is one flat namespace, so the DEFINITION is written with a
+            // file-hash suffix (#305).  This site re-derived the identifier and emitted the
+            // bare name, so a call reached a `fn` that had been emitted under another —
+            // rustc E0425 "cannot find function `n_defaulted` in this scope", from a package
+            // whose test file happened to name a helper the way the library did (loft#878).
             write!(
                 w,
                 "{{ let _dst = var_{name}; let _src = {}(cell",
-                callee.name()
+                self.fn_ident(callee)
             )?;
             // Emit each arg through the shared `emit_call_arg` helper so the
             // ABI-B call applies the same per-parameter coercions (boolean→u8,

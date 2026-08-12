@@ -4006,6 +4006,99 @@ fn run_lib_test_in_temp_cwd(
     }
 }
 
+/// loft#878 — a test file that names a helper the way its LIBRARY does must still
+/// compile under `--native`.
+///
+/// Emitted Rust is one flat namespace, so two same-named fns from different files get a
+/// file-hash suffix on the DEFINITION (`disambiguated_fn_ident`, #305).  One call
+/// emitter re-derived the identifier from `callee.name()` instead of going through
+/// `Output::fn_ident`, so the call named a `fn` that had been emitted under another —
+/// `error[E0425]: cannot find function n_defaulted in this scope`, on a package whose
+/// interpreter suite was green.
+///
+/// The shape is narrow, which is why the reporter's own minimisation came out green and
+/// is recorded here rather than repeated: it needs the colliding call to take the
+/// ADOPT-or-COPY bind (`{ let _dst = …; let _src = <callee>(cell, …)`), which is the one
+/// emitter that bypassed the chokepoint.  A first bind of a call result goes through
+/// `calls.rs` and was always right.  Here the callee returns a LOCAL bound from another
+/// call, which is what puts the caller's assignment on the adopt path.
+///
+/// Both halves are asserted: the library's private `defaulted(W) -> boolean` is REACHED
+/// (through `cell`, which the test calls), and the test-local `defaulted(integer) -> W`
+/// is reached directly — so the guard fails if either definition goes missing, not only
+/// if the name resolves wrongly.
+// @speed 1.2
+#[test]
+fn a_test_local_name_shadowing_a_library_fn_compiles_natively_878() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if find_loft_rlib().is_none() {
+        println!("shadowed-fn-name guard: skipped (no libloft.rlib / rustc unavailable)");
+        return Ok(());
+    }
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_878_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("shadowlib");
+    std::fs::create_dir_all(pkg.join("src"))?;
+    std::fs::create_dir_all(pkg.join("tests"))?;
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"shadowlib\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+         [library]\nentry = \"src/shadowlib.loft\"\n",
+    )?;
+    std::fs::write(
+        pkg.join("src/shadowlib.loft"),
+        "pub struct W { w_n: integer, w_tag: text }\n\
+         pub struct H { h_q: integer, h_r: integer }\n\
+         pub fn make(n: integer) -> W { W { w_n: n, w_tag: \"lib\" } }\n\
+         pub fn bump(w: W, n: integer) -> integer { w.w_n + n }\n\
+         fn defaulted(w: W) -> boolean { w.w_n > 0 }\n\
+         pub fn cell(w: W, q: integer) -> H {\n\
+         \x20 if q < 0 {\n\
+         \x20   if defaulted(w) { return H { h_q: w.w_n, h_r: 0 }; }\n\
+         \x20   return H {};\n\
+         \x20 }\n\
+         \x20 return H { h_q: q, h_r: 1 };\n\
+         }\n",
+    )?;
+    std::fs::write(
+        pkg.join("tests/probe.loft"),
+        "use shadowlib;\n\
+         fn defaulted(h: integer) -> W {\n\
+         \x20 w = make(h);\n\
+         \x20 assert(bump(w, 0) == h, \"the fixture was built wrong: {w.w_n}\");\n\
+         \x20 w\n\
+         }\n\
+         fn test_shadow() {\n\
+         \x20 d = defaulted(3);\n\
+         \x20 assert(d.w_n == 3, \"the test-local one answered {d.w_n}\");\n\
+         \x20 c = cell(W { w_n: 5, w_tag: \"x\" }, -1);\n\
+         \x20 assert(c.h_q == 5, \"the library reached its own private helper: {c.h_q}\");\n\
+         \x20 e = cell(W { w_n: 0, w_tag: \"x\" }, -1);\n\
+         \x20 assert(e.h_q == 0, \"and the helper answered false: {e.h_q}\");\n\
+         }\n",
+    )?;
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    for extra in [vec![], vec!["--native"]] {
+        let out = run_lib_test_in_temp_cwd(loft_bin, &pkg, "probe", &extra)?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            combined.contains("test result: ok")
+                && !combined.contains("native compile:")
+                && !combined.contains("test result: FAILED"),
+            "loft test {extra:?} on a package whose test file shadows a library fn name:\n{combined}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
 /// `lib/<pkg>/tests/*.loft` under `--native`, skipping packages/files with known
 /// native-codegen gaps (`LIB_*_NATIVE_SKIP`, @P321).  Shells out
 /// `cd lib/<pkg> && loft --native test <stem>` so it reuses the CLI's package

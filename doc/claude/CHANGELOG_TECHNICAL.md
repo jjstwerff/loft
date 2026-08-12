@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### One call emitter re-derived the Rust fn identifier (2026-08-12)
+
+Emitted Rust is one flat namespace, so two same-named fns from different files get a
+file-hash suffix on the DEFINITION (`disambiguated_fn_ident`, #305). `Output::fn_ident`
+is the chokepoint, and its doc says every site writing a definition OR a call must go
+through it. `dispatch.rs`'s adopt-or-copy bind — `{ let _dst = …; let _src =
+<callee>(cell, …)` — wrote `callee.name()` instead, so the call named a `fn` that had
+been emitted under another: `error[E0425]: cannot find function n_defaulted in this
+scope`, on a package whose interpreter suite was green.
+
+The trigger is narrow enough that both the reporter's minimisation and my first one came
+out GREEN, which is what the guard's comment records. A FIRST bind of a call result goes
+through `calls.rs`, which was always right; it takes the adopt path — the callee returning
+a LOCAL bound from another call — to reach this emitter at all. Reproduced by
+reconstructing the consumer's pre-fix state from its current source (the failing state was
+never committed), then reduced to a 20-line package.
+
+Swept the siblings: `dispatch.rs:665` delegates to `output_code_inner`, and the other
+`def_fn.name()` reads are dispatch predicates on `Op*` builtins, which are never mangled.
+loft#878.
+
 ### A work-ref mint landed on the return-buffer ARGUMENT (2026-08-12)
 
 `ref_return` promotes a body work-ref to the function's hidden return-buffer argument on

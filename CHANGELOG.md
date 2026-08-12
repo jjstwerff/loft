@@ -40,6 +40,17 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### A test that names a helper the way its library does
+
+A package whose test file defined `fn defaulted(…)` while its library had a private
+helper of the same name ran fine on the interpreter and would not compile with
+`--native`: `cannot find function n_defaulted in this scope`, on eight tests at once.
+
+Two functions can share a name when they come from different files, and the generated
+Rust renames one of them to keep them apart — but one place that writes a CALL spelled
+the original name. Both spellings work now, and neither needs renaming to avoid the
+other.
+
 ### Taking an element out of what a function just returned
 
 A function whose answer is an index into a call — `make(n)[0] ?? Cell {}`, whether it is
