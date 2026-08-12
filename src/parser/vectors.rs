@@ -2095,6 +2095,17 @@ impl Parser {
                 "OpCopyRecord",
                 &[Value::Var(comp_var), Value::Var(elm), type_nr],
             ));
+        } else if let Some(op) = self.narrow_elm_set(in_t, elm, &Value::Var(comp_var)) {
+            // A NARROW element gets the store op for its own width — the third site
+            // `narrow_elm_set` exists for, beside the `+=` append and the slice.
+            // `set_field` below dispatches on the element DEF, and a narrow integer is
+            // an ALIAS of `integer`, so it picked the wide 8-byte `OpSetInt` for a
+            // 4-byte slot: every element overwrote the next, and past the initial
+            // allocation the write reached the vector's own bookkeeping and
+            // `vector_add` stopped terminating. `[for i in 0..13 { i as i32 }]` hung
+            // while 12 returned instantly, and the `+=` loop — already routed here —
+            // was fine at any size (loft#869).
+            lp.push(op);
         } else {
             lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
         }
