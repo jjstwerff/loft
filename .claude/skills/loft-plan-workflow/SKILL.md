@@ -33,6 +33,7 @@ span several sessions.
 | Work shape | Path |
 |---|---|
 | **Bug fix** (single root cause, fits one commit) | Fix + regression test + commit.  Reference the tracker issue if one exists; otherwise the fix + test *are* the record.  No plan, no open-work row, no archive entry. |
+| **A defect in something UPSTREAM** (the engine, a library you consume) | File it in **that** repo, with a minimal repro.  **Never a plan here** — see [§ Consumer projects](#consumer-dogfood-projects-how-a-plan-works-across-two-repos). |
 | **Tiny deliverable** (demo deploy, version bump) | One overview/roadmap row, or nothing.  No plan. |
 | **Operational change** (CI tweak, doc fix) | Direct commit. |
 | **Light TODO** *(the default)* — fits in one row of a reference doc's table | An `## Open work` section in the relevant reference doc.  Same lifecycle as a plan, just one row.  Edit that doc's architecture content directly when you implement; the row and the design share a file. |
@@ -40,6 +41,68 @@ span several sessions.
 
 The light flow is the default.  A plan earns its directory only when the work is
 genuinely multi-phase **and** benefits from its own document space.
+
+---
+
+## Consumer (dogfood) projects: how a plan works across two repos
+
+A **consumer** is a project built ON the engine to find out what the engine is
+missing — a game, a tool, a library that dogfoods the language.  It runs the same
+plan model as the engine repo, deliberately: one convention, so a plan reads the
+same wherever you open it, and an agent moving between trees does not re-learn it.
+What differs is only what a plan is allowed to CONTAIN.
+
+**The one rule that makes the split work: a plan describes work THIS repo will do.**
+Everything else follows from it.
+
+| What you found | Where it goes |
+|---|---|
+| An engine defect, reproducible with the engine alone | An **issue in the engine repo**, minimal both-backend repro.  Never a plan here — a plan here would track work this repo cannot do. |
+| An engine gap that blocks a phase | The engine issue, **plus** a line in the blocked phase naming it.  The phase stays `Blocked on <issue>`; it does not become an engine plan wearing a consumer's directory. |
+| "The engine is awkward here" with no repro yet | A row in the light TODO doc until it has a repro.  A gap you cannot demonstrate is not yet a report. |
+| Work this repo does — content, tools, a subsystem | The normal ladder above. |
+
+**Why the discipline is worth it.** The two streams are adversarial on purpose: the
+engine stream builds and fixes, the consumer stream uses and tries to break, and the
+report is the product.  A consumer plan that absorbs engine work hides the finding in
+a directory the engine's agent never reads — the gap is then discovered twice and
+fixed neither time.  The engine's tracker is the shared channel; a consumer plan is
+private by comparison.
+
+**Read the other tree, write only your own.**  A consumer may read the engine's
+source, docs, git log and handoff freely, and must not write to it — the symmetric
+half of the engine's own "edit only this repo" rule.  Both trees are often worked
+concurrently, so a staged file or a checkout lands in someone else's uncommitted
+work.  Verify a cross-repo bug from a **scratchpad** package that points at the other
+tree by path, never by editing inside it.
+
+**What stays identical across repos** — this is what makes one convention cheaper
+than two:
+
+- **Identity is the issue number** in *that repo's own* tracker, claimed before the
+  directory exists.  Numbers are per-repo and never shared; a plan id is only
+  meaningful next to its repo.
+- **The same value letters** (`S/R/G/F/U/C/Q/N`) and the same effort letters
+  (`XS…VH`), so "a `G` plan at `MH`" reads the same everywhere.  Only the *examples*
+  are repo-specific.
+- **The same closing procedure** — move reference content out, rewrite incoming
+  links, leave the closure record, set the lifecycle label on the issue.
+- **The same phase-cutting rule** — both bounds, and a `Verify` cell naming the
+  comparison ([§ Cutting a phase](#cutting-a-phase--two-bounds-not-one)).
+
+**Cross-repo coordination, when a phase genuinely spans both.**  Say in the plan
+which repo owns which half, and what *done* means on each side.  An engine change
+that consumers depend on is done when **every** named consumer is green — so name
+them; "consumers are updated" with no list is a claim nobody can check.  Expect the
+consumer's phase to sit `Blocked on <engine issue>` for as long as the engine's
+release clock takes, and prefer a phase cut so the consumer half can land first
+behind the old behaviour.
+
+**Efficiency, concretely.** Most consumer work is not a plan: a row in the light
+TODO doc beats a plan directory that only points back at a reference doc, and the
+cap of 2–3 active plans is what keeps the tracker readable.  A plan whose only
+content is "wait for the engine" is not a plan — it is one blocked row and an
+upstream issue.
 
 ---
 
@@ -378,7 +441,12 @@ Hard-won and tree-independent:
     prose, a stale example, or a wrong label ships as authoritative documentation.
     Verify existence → accuracy → tags, run the example, regenerate, let the drift
     guard confirm.  Behaviour that moved mid-plan is the likeliest to have drifted.
-15. **A phase that cannot go red on its own was never a phase.**  Effort letters size
+15. **In a consumer repo, a plan describes work THAT repo will do.**  An engine
+    defect is an issue in the engine's tracker, not a plan in yours — a plan that
+    absorbs upstream work hides the finding in a directory the engine's agent never
+    reads, so the gap gets discovered twice and fixed neither time.  A plan whose
+    only content is "wait for upstream" is one blocked row plus an issue.
+16. **A phase that cannot go red on its own was never a phase.**  Effort letters size
     a phase; they do not tell you where to cut it — that needs both bounds (see
     [§ Cutting a phase](#cutting-a-phase--two-bounds-not-one)).  The lower bound is
     the one that gets skipped, and it fails silently: something built and called by
@@ -390,6 +458,10 @@ Hard-won and tree-independent:
 ---
 
 ## Filing bugs found during plan work
+
+Two independent questions, and both must be answered before you file: **which repo
+owns it** ([§ Consumer projects](#consumer-dogfood-projects-how-a-plan-works-across-two-repos))
+and **is it already on the mainline** (below).
 
 A tracker issue is a **claim about the mainline**.  So, working inside a plan:
 **file a problem only when it reproduces *outside* the plan — already on the
@@ -431,5 +503,7 @@ Everything above is tree-agnostic.  This section is the **only** loft-specific p
 | Probe gates (leak / exit) | `LOFT_STORES=warn`; the `loft_suite` leak gate; both backends = interpreter + native |
 | Execution modes to verify across | `--interpret` and `--native` |
 | Canonical examples | partial defer: plan-28 / plan-12 · create-and-move close: `31-html-export → HTML_EXPORT.md` · trim-only close: `04-slot-assignment-redesign → SLOTS.md` |
+| Consumer (dogfood) repos + their trackers | `moros` ([`jjstwerff/moros`](https://github.com/jjstwerff/moros/issues), `plans/<N>-<slug>/`, `make plan-check`) · `dryopea` · `crawler` · `lib/markdown`.  Each keeps its own issue numbers and its own `plans/README.md` binding; the method above is shared verbatim |
+| Where a consumer files an ENGINE defect | `loft-lang/loft` issues (`bug_report`), `sev:`/`area:` + a verified `wa:*` label — never a plan in the consumer repo |
 | Branch / commit / bug-filing policy | `CLAUDE.md` |
 | Full dev procedures (rebase, commit hygiene) | `doc/claude/DEVELOPMENT.md` |
