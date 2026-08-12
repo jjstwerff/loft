@@ -9,6 +9,85 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A tuple element read was a cursor typed as an owner (loft#857, loft#858) (2026-08-12)
+
+Two issues, one line. `v[i]` on a `vector<(…)>` unboxes the element through a work-ref
+that holds a DbRef into the vector's store, and `unbox_tuple_from_dbref` minted it with
+`Deps::none()` — which in this codebase means OWNS, not "unknown".
+
+Read as an owner, the cursor was freed at scope exit. Reading out of a `vector<(…)>`
+**parameter** therefore destroyed the CALLER's vector store on return; the slot was
+recycled, and the next call's `+=` appended through a handle that named another record
+entirely (loft#857 — `vector_append: field 1.8 lies outside its own record, which claims
+-99 words`). The filed scope was three axes too wide: the hash parameter, the outer loop
+and the call count are all irrelevant, and one indexed read plus two calls reproduces it.
+A DEAD read does too, so it is the read and not the dataflow.
+
+Read as an owner, the cursor also had to hold its own store, so `__ref_1 = <foreign
+DbRef>` lowered to `OpDatabase` + `OpCopyRecord`: every `v[i]` **allocated a store,
+deep-copied the element into it and freed the previous one**, then read the elements back
+out of the copy (loft#858). That is the ~14× against `vector<struct>`, whose cursor has
+carried a dep on the vector all along and just copies a pointer. The reporter's verbatim
+benchmark goes **379 ms → 12 ms**, against 11 ms for the struct — 14.6× to 1.09×.
+
+So the cursor names the vector in its deps when the receiver is a variable, which is what
+the struct path always did. Two measurements say the earlier readings of #858 were wrong,
+and both are worth recording: the `??` join is **not** the cost (`v[i]?` measured the
+same, 159 ms vs 155 ms), and it is **not** per-element unboxing either (arity 2 cost
+139 ms against arity 3's 155 ms — the allocate/free dominates, so the gap barely moves
+with arity). A `vector<float>` indexed read is only 2.2× its iteration, which is the
+raising `OpGetVector` (a length read on top of `get_vector`) and is a separate, small
+thing left alone.
+
+The free still needs suppressing separately: the scope-exit sweep frees a `__ref_N` on
+its NAME ahead of asking whether it owns anything — a rule written for the work-refs that
+back ref-returning calls, which do own what they hold. And the borrow verdict is per-DbRef,
+not per-call-site: the same helper unboxes heap-carrying tuple RETURNS, which ARE owned,
+and a blanket skip leaked the four `pair(…)` return buffers in
+`822-vector-tuple-spellings.loft`. A vector element read is the positive, checkable case;
+everything unrecognised keeps the owning treatment. The mark is pass-2 only — the variable
+table persists across passes by name while the `__ref_N` counter restarts, so a pass-1
+mark could land on whatever temp pass 2 gives that name (loft#848).
+
+`857-vector-tuple-element-read-borrow.loft` pins both, including the cells a borrow newly
+has to survive: a read and an append in one statement, and 40 rounds of grow-then-read so
+a cursor left pointing at a moved allocation shows up as wrong values rather than a crash.
+
+### `τ` → `τ?` was refused with advice that could not work (loft#859) (2026-08-12)
+
+Storing `x / g` back into a non-null `g` is refused correctly — a variable divisor can be
+zero, so the quotient is `τ?` (C80). But the message offered `as` and a new variable name,
+and on this shape **both fail**: the cast checker refuses `as τ` for the very reason the
+store was refused, `as τ?` lands back on this same error — a closed loop between two
+diagnostics — and a fresh name still has to store the value somewhere. The cures that
+work, `?` and `?? <default>`, were named only by the cast checker.
+
+`reject_retype` now picks the advice by which property changed. Only the ADVICE half
+differs: the diagnosis, "cannot change type from τ to τ?", is right as it stands and is
+kept word for word, so the two messages remain one diagnostic to anyone reading, grepping
+or testing for it. A genuine type change (`integer` → `text`) keeps the `as` advice, which
+is what it was written for.
+
+`bench/06_newton_sqrt/bench.loft` was the reason @PLN140's oracle corpus had no row for
+it — it did not run on either backend. It discharges at the division now and runs.
+
+### The runtime rebuild retried against the state that motivated it (loft#855) (2026-08-12)
+
+`--native`'s post-compile heal rebuilds loft's runtime rlib and retries the compile with
+the SAME `Command` — whose `--extern loft=` / `-L dependency=` args were chosen from the
+rlib that was on disk when the command was built. With no rlib at all they were never
+added, so the retry re-ran a rustc that still named no crate: the heal reported its own
+success and an identical `E0463: can't find crate for loft` in one breath, which reads as
+a broken toolchain rather than a missed refresh. The runtime args are re-asked after a
+successful rebuild.
+
+The nightly ASan legs were red for a different reason and no leak: the per-file scan
+reported **0 leaking files of 701**. Two tests spawn loft on both backends, and the
+`--native` leg makes the spawned run BUILD native artifacts, which cannot resolve loft's
+proc-macro deps under `-Zsanitizer` + `--target`. The ASan sweep already excluded them;
+the leak gate did not, so it now does — a gate that reds on its own toolchain teaches
+readers to ignore it.
+
 ### The ownership oracle is asked once per function, not once per question (loft#854) (2026-08-12)
 
 `use_analysis::ownership_of` is documented as *"the ONE fact every own-vs-borrow

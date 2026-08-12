@@ -9739,7 +9739,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // the host linker has no equivalent for is not passed to it.
             #[cfg(not(any(target_os = "macos", windows)))]
             cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
-            let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
+            // Point rustc at loft's own runtime rlib and everything it links against,
+            // answering the deps dir it found.  A closure rather than straight-line code
+            // because the post-compile heal below rebuilds that rlib and must ask AGAIN:
+            // the args are decided from what is on disk, and the whole point of the
+            // rebuild is to change that (loft#855).
+            let attach_loft_runtime = |cmd: &mut std::process::Command| {
+                let lib_dir = loft_lib_dir()?;
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
                 // One `-L` per search dir: the classic layout yields exactly one
@@ -9772,9 +9778,8 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     cmd.arg("-L").arg(format!("native={}", out_dir.display()));
                 }
                 Some(deps)
-            } else {
-                None
             };
+            let mut native_deps_dir = attach_loft_runtime(&mut cmd);
             // PKG.4: add --extern flags for native packages.
             native_utils::add_native_extern_flags(
                 &mut cmd,
@@ -9858,6 +9863,22 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     "the runtime rlib this program links was built by a different rustc",
                 )
             {
+                // Retry against what the rebuild PRODUCED, not against what motivated it.
+                // The `--extern loft=` / `-L dependency=` args above were chosen from the
+                // rlib that was on disk when the command was built, so when there was no
+                // rlib at all they were never added — and re-running the same command
+                // after a successful rebuild re-ran a rustc that still named no crate.
+                // The heal then reported its own success and the identical `E0463: can't
+                // find crate for loft` in one breath, which is how it read as a broken
+                // toolchain rather than a missed refresh (loft#855, `Suite under nightly`).
+                //
+                // Only the runtime args are re-asked. Package `--extern`s came from
+                // `add_native_extern_flags` and re-running that would emit a second copy
+                // of each; a tree with no runtime rlib has no built packages either, so
+                // the case this recovers does not need them.
+                if native_deps_dir.is_none() {
+                    native_deps_dir = attach_loft_runtime(&mut cmd);
+                }
                 if let Ok(retry) = cmd.output() {
                     output = retry;
                 }

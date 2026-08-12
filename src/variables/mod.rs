@@ -1637,14 +1637,7 @@ impl Function {
                 return self.is_new(var_nr);
             }
             if !tp.is_unknown() {
-                diagnostic!(
-                    lexer,
-                    Level::Error,
-                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                    self.variables[var_nr as usize].name,
-                    self.variables[var_nr as usize].type_def.name(data),
-                    type_def.name(data)
-                );
+                self.reject_retype(var_nr, type_def, data, lexer);
             }
         } else if !var_tp.is_unknown()
             // `&unknown` → `&T` (#375): a `&` parameter whose pointee was an
@@ -1721,19 +1714,59 @@ impl Function {
                     scalar_name
                 );
             } else {
-                diagnostic!(
-                    lexer,
-                    Level::Error,
-                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                    self.name(var_nr),
-                    self.variables[var_nr as usize].type_def.name(data),
-                    type_def.name(data)
-                );
+                self.reject_retype(var_nr, type_def, data, lexer);
             }
         }
         self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();
         true
+    }
+
+    /// Report a rejected re-type of `var_nr`, choosing the advice by WHICH property
+    /// of the type changed.
+    ///
+    /// A `τ` → `τ?` rejection is about nullability, and none of the cures the general
+    /// message names get a user out of it: `as τ` is refused by the cast checker for
+    /// exactly the reason the store was refused (the value may be null), `as τ?` lands
+    /// back on this same rejection, and a fresh variable name only moves the store one
+    /// line down. What works is discharging the null at the value — `?` for the type's
+    /// default, or `?? <default>` — or widening the variable to `τ?`, and the general
+    /// message mentions neither, so following it went in a circle (loft#859).
+    ///
+    /// Only the ADVICE half differs. The diagnosis — "cannot change type from τ to τ?"
+    /// — is right as it stands and stays word for word, so the two messages remain one
+    /// diagnostic to anyone reading, grepping or testing for it.
+    ///
+    /// Everything else keeps the general message: for a genuine type change (`sorted<…>`
+    /// → `T`) `as` is the right instrument, which is what it was written for.
+    fn reject_retype(&self, var_nr: u16, type_def: &Type, data: &Data, lexer: &mut Lexer) {
+        let var_tp = &self.variables[var_nr as usize].type_def;
+        let widened_to_nullable = matches!(type_def, Type::Optional(_))
+            && !matches!(var_tp, Type::Optional(_))
+            && var_tp.is_equal(type_def.base());
+        if widened_to_nullable {
+            let base = var_tp.name(data);
+            diagnostic!(
+                lexer,
+                Level::Error,
+                "Variable '{}' cannot change type from {} to {}; discharge the null where it is produced: `?` (the type's default) or `?? <default>`, or declare it `{}?` to let it hold null (do NOT cast with `as`: `as {}` is refused for the same reason this store is, and `as {}?` returns here)",
+                self.name(var_nr),
+                base,
+                type_def.name(data),
+                base,
+                base,
+                base
+            );
+            return;
+        }
+        diagnostic!(
+            lexer,
+            Level::Error,
+            "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
+            self.name(var_nr),
+            var_tp.name(data),
+            type_def.name(data)
+        );
     }
 
     fn is_new(&self, var_nr: u16) -> bool {

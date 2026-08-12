@@ -1351,6 +1351,37 @@ impl Parser {
         None
     }
 
+    /// `Some(deps)` when `v` reads an element out of a vector — the DbRef it yields is a
+    /// pointer INTO that vector's store rather than a record of its own — carrying the
+    /// deps a cursor over it should be typed with.  `None` for anything else.
+    ///
+    /// The two ops named here are the only borrowing producers that can reach
+    /// [`Parser::unbox_tuple_from_dbref`]: the `is_linked` element paths emit
+    /// `OpVectorRef`/`OpVectorRefNullable` and dereference to a record instead of
+    /// unboxing, and every other caller hands over an expression it does not read out of
+    /// a vector at all.  Anything unrecognised answers `None`, so a new producer keeps
+    /// the owning treatment rather than silently inheriting a suppression.
+    ///
+    /// The receiver is a plain variable for `v[i]` and a field / call chain for
+    /// `s.pts[i]`.  Only a variable can be named in a frame dep list, so a chain answers
+    /// EMPTY deps: still exempt from the free, but read as owning by the assignment
+    /// lowering, which keeps the copy it has always made there.
+    fn vector_element_cursor_deps(&self, v: &Value) -> Option<crate::data::Deps> {
+        let Value::Call(d_nr, args) = v.unspan() else {
+            return None;
+        };
+        if !matches!(
+            self.data.def(*d_nr).name(),
+            "OpGetVector" | "OpGetVectorNullable"
+        ) {
+            return None;
+        }
+        Some(match args.first().map(Value::unspan) {
+            Some(Value::Var(x)) => crate::data::Deps::frame1(*x),
+            _ => crate::data::Deps::none(),
+        })
+    }
+
     /// P189b: assemble a stack-tuple from a DbRef pointing to an
     /// inline tuple in vector storage.
     ///
@@ -1370,13 +1401,53 @@ impl Parser {
     /// inflation correctly because each type uses the same opcodes
     /// the struct-field path uses (`OpGetText` reads a 4-byte heap
     /// text pointer and pushes a 16-byte `Str` onto the stack).
+    ///
+    /// Whether that work-ref BORROWS what it points at or owns it is
+    /// [`Parser::vector_element_cursor_deps`]' question — it decides both the deps the
+    /// cursor is typed with and whether the scope-exit free applies (loft#857/#858).
     pub(crate) fn unbox_tuple_from_dbref(&mut self, dbref: Value, elems: &[Type]) -> Value {
         let elems_vec = elems.to_vec();
         let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
-        let ref_tp = Type::Reference(tuple_d_nr, crate::data::Deps::none());
+        // Is this cursor a POINTER INTO somebody else's store, or a record of its own?
+        // Both arrive at this one helper, and the answer is a property of the DbRef: read
+        // an element out of a `vector<(…)>` and it points into that vector; unbox a
+        // heap-carrying tuple RETURN and it is the callee's own record, which nobody else
+        // will release.  A vector element read is the positive, checkable case and the
+        // only borrowing producer that reaches here (the `is_linked` element paths never
+        // unbox), so everything unrecognised keeps the owning treatment it had.
+        let borrows = self.vector_element_cursor_deps(&dbref);
+        // loft#858 — say BORROW in the type, not merely "do not free".  The deps list is
+        // what the assignment lowering reads: an owning `Reference` local must hold its
+        // own store, so `__ref_1 = <foreign DbRef>` lowered to `OpDatabase` + `OpCopyRecord`
+        // — every `v[i]` on a `vector<(…)>` allocated a store, deep-copied the element into
+        // it and freed the previous one, then read the elements back out of the copy.  That
+        // is the ~13× against `vector<struct>`, whose cursor has carried a dep on the
+        // vector all along and therefore just copies a pointer; it is also why the gap
+        // barely moved with arity (the allocate/free dominates, not the element loads).
+        let ref_tp = Type::Reference(
+            tuple_d_nr,
+            borrows.clone().unwrap_or_else(crate::data::Deps::none),
+        );
         let tmp = self.vars.work_refs(&ref_tp, &mut self.lexer);
         if !self.first_pass {
             self.change_var_type(tmp, &ref_tp);
+            // loft#857 — and the deps alone are not enough to stop the free, because the
+            // scope-exit sweep frees a `__ref_N` on its NAME (`scopes.rs`: "work-refs …
+            // accumulate unfreed stores") ahead of asking whether it owns anything — a rule
+            // written for the work-refs that back ref-returning calls, which do own what
+            // they hold.  So it freed the borrowing cursor too, and reading `v[i]` out of a
+            // `vector<(…)>` PARAMETER destroyed the CALLER's vector store on return: the
+            // slot was recycled, and the next call's `+=` appended through a handle that
+            // now named another record entirely.  Suppressing the free for the OWNING
+            // sources instead leaks their return buffer, which is what a blanket skip did
+            // to the four `pair(…)` returns in `822-vector-tuple-spellings.loft`.
+            //
+            // Only the MARK is pass-2: the variable table persists across passes by name
+            // while the `__ref_N` counter restarts, so a pass-1 mark could land on whatever
+            // temp pass 2 gives that name (loft#848) and suppress a free that is real.
+            if borrows.is_some() {
+                self.vars.set_skip_free(tmp);
+            }
         }
         // Stored tuples MUST use the synthetic `__tuple<…>` struct's
         // post-finish field positions (the same offsets used by

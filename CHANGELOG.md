@@ -26,6 +26,36 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reading a tuple out of a vector is now as cheap as reading a struct
+
+`v[i]` on a `vector<(float, float, float)>` was about **fourteen times** slower than
+the same read on a vector of structs — enough that rewriting a mesh generator to use
+tuples made it *slower* overall, even though the arithmetic got much faster. Every such
+read was quietly allocating a scratch record, copying the element into it, and throwing
+it away again. It now reads the element where it already lives: **379 ms → 12 ms** on
+the reporter's benchmark, against 11 ms for the struct version.
+
+The same mistake had a sharper edge. If you passed a `vector<(…)>` to a function, read
+an element from it, and called that function twice, the first call could free the
+vector's storage out from under the caller — after which the second call appended into
+whatever had taken its place. On the interpreter that ended in a crash naming a record
+of "-99 words"; compiled with `--native` it did not complain at all. Both are fixed.
+
+### When a value might be null, the error now tells you something that works
+
+`guess = (guess + x / guess) / 2.0` was refused, correctly: a variable divisor can be
+zero, so the division might be null and `guess` cannot hold null. But the error
+suggested casting with `as` — and the cast is refused for exactly the same reason, and
+casting to `float?` instead came straight back to the first error. Following the
+compiler's advice went in a circle.
+
+It now names the cures that work:
+
+```loft
+guess = (guess + (x / guess)?) / 2.0;   // `?` — the type's default when null
+guess = (guess + (x / guess ?? 0.0)) / 2.0;   // or your own fallback
+```
+
 ### A big generated file compiles in a second, not a quarter of an hour
 
 A program holding one long vector literal took time proportional to the *square* of
