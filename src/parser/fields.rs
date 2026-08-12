@@ -31,8 +31,18 @@ impl Parser {
             if !self.first_pass && matches!(tp, Type::Unknown(_)) {
                 diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
             }
-            // In the first pass, skip the field name token so parsing continues.
-            self.lexer.has_identifier();
+            // Skip the member token so parsing continues past an access whose
+            // receiver has no type yet.  A member is spelled EITHER way — an
+            // identifier for a named field, an integer for a tuple index — and
+            // consuming only the identifier left `.0` in the stream, where the
+            // statement parser tripped on it as "Expect token ;" (loft#868).
+            // That error fires on pass 1, which aborts the run before pass 2 —
+            // so the receiver's real problem was never reported, and a forward
+            // reference to a tuple-returning function (legal, and Unknown on
+            // pass 1 by design) could not be tuple-accessed at all.
+            if self.lexer.has_identifier().is_none() {
+                self.lexer.has_integer();
+            }
             // @P281 — when the dot-access is followed by `(args)`
             // (i.e., `s.method(arg1, arg2)`), the parser must
             // consume the ENTIRE call expression so the surrounding
@@ -1089,6 +1099,13 @@ impl Parser {
         } else if t.is_unknown() {
             // First pass: type not yet resolved; suppress error until second pass.
             Type::Unknown(0)
+        } else if matches!(t, Type::Never) {
+            // @P376 poison — the receiver's own error (an unknown function, an
+            // unknown struct) is already on screen, so indexing it has nothing
+            // left to say.  Without this the cascade named the index line, which
+            // is correct as written, right beside the line that is not
+            // (loft#868).  Mirrors the `Unknown | Never` recovery in `field()`.
+            Type::Never
         } else {
             // @PLN125 arc C — a library type CAN be subscripted now, so a struct or enum
             // arriving here has a cause of its own: it did not define `OpIndex`.  Saying
