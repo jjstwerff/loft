@@ -4,6 +4,8 @@
 # program.  Rationale, and what this corpus cannot prove:
 #   doc/claude/plans/140-semi-automatic-profiling/ORACLE.md
 #
+# No row for 06_newton_sqrt: it does not run under --interpret at all (loft#859).
+#
 # program        instrument  expect (regex, matched against the top-ranked row)  min_share  line
 01_fibonacci	cpu	\bfib\b	85	3
 02_sum_loop	cpu	\bmain\b	85	6

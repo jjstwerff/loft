@@ -296,8 +296,9 @@ The "semi" half, and the part that turns three instruments into a tool.
 * **Text buffers are not in the memory ledger.** They are Rust `String`s, not stores;
   `bench/07_string_build`'s 5.9 MB is invisible. The report says so.
 * **`bench/06_newton_sqrt` does not run under `--interpret`** — `guess = (guess + x / guess)
-  / 2.0` is refused as a `float` → `float?` type change. Found while picking oracles; it is
-  a language issue, not a profiling one, and it is why `06` carries no oracle row.
+  / 2.0` is refused as a `float` → `float?` type change, and every cure the error names
+  fails (loft#859). Found while picking oracles; a language issue, not a profiling one, and
+  it is why `06` carries no oracle row.
 
 ## Cross-arc dependencies
 
