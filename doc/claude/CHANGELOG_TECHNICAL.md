@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A not-found key field was used as an attribute INDEX (2026-08-12)
+
+`Data::attr` answers `usize::MAX` for a name it cannot find, and `set_mutable` /
+`set_mutable_directed` (`src/typedef.rs`) handed that straight to
+`definitions[..].attributes[a_nr]`. Any key field a keyed collection names that its
+ELEMENT type does not have therefore panicked — "index out of bounds: the len is 6 but
+the index is 18446744073709551615" — with a Rust source location and a caret on
+whatever line the layout was reached from, which is correct as written.
+
+Wider than the report, which arrived as the two-argument `hash<integer, At>` spelling.
+The same sentinel is reached by an ordinary MISSPELLING (`hash<At[ca_kye]>`), which is
+both well-formed and far more likely, and by all five keyed kinds — `hash`, `index`,
+`sorted`, `spatial`/radix and `trie` — since every one of them routes through these two
+helpers. Sweep of the five spellings: all ICE'd before, none does now.
+
+The name is recorded (`Data::record_unknown_key_field`) rather than reported in place
+because `fill_database` has no lexer; `fill_all` has one and drains it
+(`report_unknown_key_fields`) — the same record-here / report-there split
+`actual_types_deferred`'s `defer_unknown` uses. The caret lands on the FIELD that
+declared the collection, which is where the name was written.
+
+The message corrects the MODEL rather than just naming the symptom, because the way in
+is a user who believes `hash<K, V>`: it says the key must be a field of the element and
+shows the spelling. A did-you-mean rides `suggest_similar_capped`; failing that it lists
+the element's fields, except when the element is not a struct at all (`hash<integer,
+At>` puts the key in the element slot) — there it says so, because listing what
+`integer` answers to would offer its METHODS as candidate keys. loft#874.
+
+
 ### A struct field's absent value is the FIELD's question, not the type's (2026-08-12)
 
 `integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a SENTINEL and

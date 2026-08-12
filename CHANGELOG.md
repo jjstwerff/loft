@@ -26,6 +26,20 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A mistyped key field says so, instead of crashing the compiler
+
+Naming a key a collection's element type does not have — a typo, or the `hash<key, Value>`
+spelling most other languages use — used to crash the compiler with an internal error and
+point at a line that was fine. It now says what is wrong, where you wrote it:
+
+```
+error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — did you mean
+`ca_key`? A keyed collection names its keys as FIELDS OF ITS ELEMENT — write
+`hash<Element[key_field]>`, not `hash<key, Element>`
+```
+
+All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
+
 ### Reading JSON into a struct no longer puts `null` in a field that cannot hold it
 
 A field written plainly — `height: float`, not `height: float?` — is not allowed to be

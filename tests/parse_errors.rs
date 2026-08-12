@@ -2762,3 +2762,35 @@ fn f2_dead_view_before_removal_keeps_writing_through() {
     .expr("check()")
     .result(Value::Int(99));
 }
+
+/// loft#874 — a key field the ELEMENT type does not have used to be an ICE.
+///
+/// `Data::attr` answers `usize::MAX` for a name it cannot find and `set_mutable`
+/// handed that straight to `attributes[…]`, so an ordinary typo panicked with a Rust
+/// source location and a caret on a line that was correct as written. The way in that
+/// was reported is the `hash<K, V>` spelling every other language uses, but a plain
+/// misspelling reaches it too — the same defect, and the far more likely one.
+#[test]
+fn keyed_collection_unknown_key_field_is_a_diagnostic_not_an_ice() {
+    code!("struct At { ca_key: integer, ca_at: integer }\nstruct W { idx: hash<At[ca_kye]> }")
+        .error(
+            "Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — did you \
+             mean `ca_key`? A keyed collection names its keys as FIELDS OF ITS ELEMENT — \
+             write `hash<Element[key_field]>`, not `hash<key, Element>` at \
+             keyed_collection_unknown_key_field_is_a_diagnostic_not_an_ice:2:11",
+        );
+}
+
+/// The same guard for a name too far off to suggest: the message lists what IS
+/// available rather than going quiet, because the user's model of the syntax is what
+/// is wrong and a bare "unknown field" would leave it intact.
+#[test]
+fn keyed_collection_unknown_key_field_lists_the_fields_when_it_cannot_suggest() {
+    code!("struct At { ca_key: integer, ca_at: integer }\nstruct W { idx: sorted<At[zzzzzz]> }")
+        .error(
+            "Field `idx`: `zzzzzz` is not a field of `At`, so it cannot be a key — the fields \
+             of `At` are: ca_key, ca_at. A keyed collection names its keys as FIELDS OF ITS \
+             ELEMENT — write `hash<Element[key_field]>`, not `hash<key, Element>` at \
+             keyed_collection_unknown_key_field_lists_the_fields_when_it_cannot_suggest:2:11",
+        );
+}

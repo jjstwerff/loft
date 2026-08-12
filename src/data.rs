@@ -3684,6 +3684,16 @@ pub struct Data {
     /// breaks). What is not well-defined is the bare name, and that is exactly
     /// where this is consulted.
     ambiguous: HashMap<(String, u16), Vec<u32>>,
+    /// loft#874 — key fields named by a keyed collection that its ELEMENT type does
+    /// not have: `(declaring def, attribute nr, element def, the name)`.
+    ///
+    /// Recorded during `fill_database`, which has no lexer, and reported by
+    /// `fill_all`, which does — the same record-here / report-there split
+    /// `defer_unknown` uses. Not derivable afterwards: `set_mutable` is the only
+    /// place that asks the element for the name, and `Data::attr`'s answer for a
+    /// name it cannot find is `usize::MAX`, which used to be handed straight to
+    /// `attributes[…]` as an index.
+    unknown_key_fields: Vec<(u32, usize, u32, String)>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -3985,6 +3995,7 @@ impl Data {
             use_names: HashMap::new(),
             applied: Vec::new(),
             ambiguous: HashMap::new(),
+            unknown_key_fields: Vec::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -4603,6 +4614,33 @@ impl Data {
         } else {
             usize::MAX
         }
+    }
+
+    /// loft#874 — note a key field that its element type does not have, for
+    /// [`Self::take_unknown_key_fields`] to report once a lexer is in reach.
+    pub(crate) fn record_unknown_key_field(&mut self, decl: (u32, usize), on_d: u32, name: &str) {
+        let entry = (decl.0, decl.1, on_d, name.to_string());
+        if !self.unknown_key_fields.contains(&entry) {
+            self.unknown_key_fields.push(entry);
+        }
+    }
+
+    /// Drain the deferred unknown-key-field notes.  Draining rather than reading
+    /// because `fill_all` runs once per parsed file and a note must be reported
+    /// exactly once, however many later files re-enter the layout.
+    pub(crate) fn take_unknown_key_fields(&mut self) -> Vec<(u32, usize, u32, String)> {
+        std::mem::take(&mut self.unknown_key_fields)
+    }
+
+    /// The attribute names of `d_nr`, for a did-you-mean over a field name.
+    #[must_use]
+    pub(crate) fn attr_names_of(&self, d_nr: u32) -> Vec<&str> {
+        self.def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
+            .map(|a| a.name.as_str())
+            .collect()
     }
 
     #[must_use]
