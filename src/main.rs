@@ -371,6 +371,12 @@ fn print_help() {
     );
     println!("                                list             — browse all packages in registry");
     println!("                                list --installed — show only installed packages");
+    println!("  cache <subcommand>            the on-disk build caches (~/.loft)");
+    println!(
+        "                                status           — footprint, and what is reclaimable"
+    );
+    println!("                                prune            — drop what this loft cannot reuse");
+    println!("                                prune --all      — drop the live generation too");
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
@@ -3698,6 +3704,151 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         println!("Wrote {} stubs to {}", stubs.len(), out_file.display());
     } else {
         print!("{output}");
+    }
+}
+
+/// loft#861: Handle `loft cache <status|prune>`.
+///
+/// The auto-native caches are keyed on a value that moves with every installed loft
+/// build, so a reinstall orphans the previous generation. Nothing collected them, and
+/// the documented remedy was a hand-typed `rm -rf` — which also removes the LIVE
+/// generation, so the next build pays a full cold rebuild (545 s of rustc CPU on one
+/// measured project gate). `status` says what is there; `prune` takes the part that
+/// cannot be used again.
+fn handle_cache(argv: &[String], i: &mut usize) {
+    let sub = if argv.get(*i).is_some_and(|s| !s.starts_with('-')) {
+        *i += 1;
+        argv[*i - 1].as_str()
+    } else {
+        "status"
+    };
+    let all = argv[*i..].iter().any(|a| a == "--all");
+    let force = argv[*i..].iter().any(|a| a == "--force");
+    match sub {
+        "status" => cache_report(&cache_areas(), false, all),
+        "prune" => {
+            // The dead-generation test is "the entry's stamp is not THIS loft's key",
+            // and a development build has a different key from the installed one (its
+            // BUILD_ID is the git HEAD).  So pruning with one reports the installed
+            // loft's LIVE generation as unusable and deletes it — correct about the
+            // binary that asked, and a full cold rebuild for every project on the
+            // machine.  Measured while building this: a dev binary called 49 of 50
+            // build trees reclaimable, against 0 for the installed one.
+            if loft::cache_gc::running_is_the_installed_loft() != Some(true) && !force {
+                eprintln!(
+                    "loft cache prune: this is not the installed loft, so it answers for a \
+                     different\n  cache key — it would drop the generation the installed loft \
+                     is still using,\n  and every project on this machine would rebuild from \
+                     cold.\n\n  `loft cache status` is safe from here. Use the installed \
+                     binary to prune, or\n  --force if this build IS the one you want the \
+                     cache keyed to."
+                );
+                std::process::exit(1);
+            }
+            cache_report(&cache_areas(), true, all);
+        }
+        _ => {
+            eprintln!("usage: loft cache <status|prune> [--all] [--force]");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The cache areas this loft can speak for, surveyed against ITS OWN key — a prune run
+/// with one loft build reports and removes what that build cannot select, which is the
+/// only question a given binary can answer.
+fn cache_areas() -> Vec<loft::cache_gc::Area> {
+    let home = loft_home();
+    vec![
+        loft::cache_gc::survey_build_cache(
+            &home.join("build-cache"),
+            loft::cache::native_artifact_cache_key(),
+        ),
+        loft::cache_gc::survey_native_auto(&home.join("registry"), loft::cache_gc::KEEP_ARTIFACTS),
+    ]
+}
+
+/// Print the footprint, and (when `remove`) take the reclaimable part.
+///
+/// `status` is the dry run — same figures, nothing touched — so there is no need for a
+/// `--dry-run` flag on `prune`, and no way to discover the numbers only by deleting.
+fn cache_report(areas: &[loft::cache_gc::Area], remove: bool, all: bool) {
+    use loft::cache_gc::human;
+    let total: u64 = areas.iter().map(|a| a.bytes).sum();
+    let dead: u64 = areas.iter().map(|a| a.dead_bytes).sum();
+    if total == 0 {
+        println!("loft cache: nothing cached yet.");
+        return;
+    }
+    for a in areas {
+        let target = if all { a.bytes } else { a.dead_bytes };
+        let target_items = if all { a.items } else { a.dead_items };
+        println!("{:<22} {:>10}  {} entries", a.name, human(a.bytes), a.items);
+        if target_items > 0 {
+            println!(
+                "  {:>20} {:>10}  {} reclaimable — {}",
+                "",
+                human(target),
+                target_items,
+                if all {
+                    "everything (--all)"
+                } else {
+                    a.basis.label()
+                }
+            );
+        }
+    }
+    println!("{:<22} {:>10}", "total", human(total));
+    if !remove {
+        let would = if all { total } else { dead };
+        if would == 0 {
+            // Nothing to say beyond the footprint. Silence on "nothing to do" is the
+            // house rule; a line saying so would be the only output on every clean run.
+            return;
+        }
+        println!(
+            "\n{} reclaimable — `loft cache prune{}` to take it.",
+            human(would),
+            if all { " --all" } else { "" }
+        );
+        // Whose answer this is. A development build has its own cache key, so what it
+        // calls dead includes the installed loft's live generation — the figure is
+        // right about the binary that asked and wrong about the machine.
+        if loft::cache_gc::running_is_the_installed_loft() != Some(true) {
+            println!(
+                "  (this is not the installed loft: it answers for its own cache key, so \
+                 the figure\n   above counts generations the installed loft is still using.)"
+            );
+        }
+        if !all {
+            println!(
+                "  (--all also drops the LIVE generation: correct, but the next build \
+                 of each package pays a full rustc rebuild.)"
+            );
+        }
+        return;
+    }
+    let mut freed_bytes = 0;
+    let mut freed_items = 0;
+    for a in areas {
+        let (items, bytes) = if all {
+            loft::cache_gc::prune_all(a)
+        } else {
+            loft::cache_gc::prune(a)
+        };
+        freed_items += items;
+        freed_bytes += bytes;
+    }
+    // What was actually given back, not what was intended: a busy or vanished entry
+    // makes those differ, and reporting the intent is how a tool claims space it did
+    // not free.
+    if freed_items == 0 {
+        println!("\nnothing to prune.");
+    } else {
+        println!(
+            "\nfreed {} across {freed_items} entries.",
+            human(freed_bytes)
+        );
     }
 }
 
@@ -7175,6 +7326,10 @@ fn main() {
             std::process::exit(run_ship_command(&argv[i..]));
         } else if a == "registry" {
             handle_registry(&argv, &mut i);
+            return;
+        } else if a == "cache" {
+            // loft#861 — the other side of the auto-native caches, which only grew.
+            handle_cache(&argv, &mut i);
             return;
         } else if a == "generate" {
             // PKG.6a: `loft generate` — emit Rust stubs for #native declarations.

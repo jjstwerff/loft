@@ -876,8 +876,7 @@ fn fold_file_content(key: &mut u64, path: &std::path::Path, expected: bool) {
                         eprintln!(
                             "loft: warning — fingerprint input {} is missing; native \
                              staleness detection is degraded (a stale binary may be reused). \
-                             Rebuild loft, or clear ~/.loft/build-cache + the package \
-                             native-auto/ dirs.",
+                             Rebuild loft, or run `loft cache prune --all`.",
                             path.display()
                         );
                     }

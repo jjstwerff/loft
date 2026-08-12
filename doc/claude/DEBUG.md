@@ -976,9 +976,10 @@ auto-builds pass `--extern` for every rlib there) then dies on
 invalidates every cached cdylib.  Recovery, in order: `cargo clean --release`
 → full `cargo build --release` → `make rebuild-native-cdylibs` → rebuild the
 registry graphics cdylib (`cd ~/.loft/registry/graphics-*/native && cargo
-build --release`) → clear `~/.loft/build-cache` and any failing package's
-`native-auto/` → rebuild the wasm rlib (the `html_wasm` staleness guard
-checks it against source mtimes).
+build --release`) → `loft cache prune --all` (the whole-cache sweep; plain
+`loft cache prune` keeps the live generation and drops only what this loft
+cannot select — see loft#861) → rebuild the wasm rlib (the `html_wasm`
+staleness guard checks it against source mtimes).
 
 **Prevent + auto-heal it.**  Run sanitizer/nightly builds through
 **`scripts/asan.sh`**, which sets `CARGO_TARGET_DIR=target/asan` so nightly
