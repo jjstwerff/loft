@@ -87,6 +87,16 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // 191-source-dir.loft runs natively as of @PLN9 Phase 1 — the exe-dir anchor
     // (`Stores::source_dir_native` via `current_exe()`) makes `source_dir()`
     // non-empty under `--native`, so it is no longer skipped here.
+    //
+    // loft#872 is OPEN, and this file is its repro rather than a guard — the
+    // interpreter half is skipped by `ignored_scripts()` in `tests/wrap.rs`, and
+    // this is the same skip for the native half.  Native fails it EARLIER and
+    // LOUDER than the interpreter does: where the interpreter delivers a silently
+    // empty vector, native panics in `Stores::free_record`
+    // (`src/database/allocation.rs`) with `index out of bounds: the len is 6 but
+    // the index is 65535` — a `u16::MAX` field number reaching a field lookup.
+    // Remove both skips together when the issue closes.
+    "872-vector-return-into-struct-literal-field.loft",
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

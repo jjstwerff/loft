@@ -26,6 +26,28 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reading JSON into a struct no longer puts `null` in a field that cannot hold it
+
+A field written plainly — `height: float`, not `height: float?` — is not allowed to be
+null, and the compiler will tell you so if you guard it. But parsing JSON into such a
+struct put a null there anyway, whenever the JSON said `"height": null`, whenever it
+left the key out, and whenever the parse failed outright. The result was a value that
+compared `<= x` as true and `> x` as false, so a check like `if height > climb` read a
+wall as walkable — the right answer for the wrong reason. Write `?? 0.0` to defend it
+and the compiler told you the guard was redundant.
+
+Such a field now reads as its type's zero, and only a field you wrote `float?` /
+`integer?` can be null. Ranged fields (`u8`, `u16`, `i32`) always behaved this way,
+which is what made it look like a quirk of `float` and `integer`.
+
+When a parse fails, `#errors` is what says so; the value is no longer a second, quieter
+signal for the same thing.
+
+One visible consequence: printing a struct skips its null fields, so fields that were
+wrongly null used to be missing from the output and now appear as `0`. Printing a parsed
+struct therefore fills it in rather than echoing what you fed it — and what it prints
+reads back as itself.
+
 ### A vector of narrow integers can be built by a comprehension
 
 `[for i in 0..n { i as i32 }]` returned instantly at twelve elements and never returned

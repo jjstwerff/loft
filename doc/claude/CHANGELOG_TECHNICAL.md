@@ -9,6 +9,54 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A struct field's absent value is the FIELD's question, not the type's (2026-08-12)
+
+`integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a SENTINEL and
+share one content type between their `T` and `T?` spellings, so
+`Stores::set_default_value` — which sees only `tp` — had to pick one, and picked the
+sentinel. Writing that into a field declared plain put a null in a slot DN1 says cannot
+hold one: the reader answered `null`, the declared type said otherwise, and
+`redundant-coalesce` then advised deleting the `?? 0.0` doing the work. A ranged field
+was always right (`Parts::Byte`/`Short`/`ShortRaw`/`Int` carry `nullable` in the Part),
+which is what made the defect read as a float/integer oddity rather than a rule about
+FIELDS.
+
+`Field::nullable` (@PLN127 arc D) already existed and already documented why it must be
+DEPOSITED rather than derived — "`text?` and `integer?` share their non-null type and
+spell absence with a SENTINEL, so nothing in the store implies this". It simply was not
+being asked. Three sites default a struct field and all three dropped it:
+`set_default_value`'s `Parts::Struct | EnumValue` arm (recursed on `f.content` alone),
+`walk_parsed_struct`'s missing-key loop, and `walk_parsed_into`'s `Parsed::Null` arm.
+All three now route through `set_default_value_nullable`, which differs from the
+type-only answer in exactly four arms; `field_declared_nullable` resolves `(rec_tp,
+field)` and answers `true` — today's behaviour — wherever the question does not apply
+(`field == u16::MAX` for a top-level or array-element target, a non-struct `rec_tp`), so
+every non-struct path is byte-identical.
+
+Wider than filed on three counts. A key the JSON OMITS is the same question as one
+written `null` and had the same wrong answer. So did a FAILED parse — a syntax error or
+a leaf type mismatch abandons the record at its pre-defaults, and those were sentinels
+too, which is why `tests/docs/24-json.loft` and `tests/scripts/57-json.loft` both
+asserted `== null` after a bad parse. And a non-null field at DEPTH follows its own
+declaration, not its parent's.
+
+Consequence worth knowing: `ShowDb::write_fields` skips a field iff `is_null`, so fields
+that were wrongly null were invisible in a dump and are now printed. Parse-then-show
+NORMALISES rather than echoes, and the normalised form round-trips to itself —
+`tests/data_structures.rs::record` now asserts that second parse directly instead of
+asserting `show(parse(x)) == x`, which only held because the omitted fields were null.
+
+`tests/scripts/298-multi-return-site-ref-buffer.loft` reached its third return site
+through `result.v == null` on a plain `integer`; `v` is `integer?` now, because the
+@PLAN59 site under test would otherwise have gone unexercised while every assertion
+still passed.
+
+Not fixed here, both filed: `text` has the same hole (loft#875) but its zero costs an
+interned record, and the struct arm runs per vector element, so it needs a canonical
+empty-string representation rather than an allocation on the hot path; and a DECLARED
+default (`= 1.5`) is still ignored by the walker (loft#876) because it lives parser-side
+as a `Value` IR node, not in `Field::default`. loft#870.
+
 ### A narrow vector element got the wide store op from the comprehension (2026-08-12)
 
 `narrow_elm_set` (`src/parser/vectors.rs`) picks the store op for an element's own width,
