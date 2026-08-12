@@ -51,6 +51,17 @@ Rust renames one of them to keep them apart — but one place that writes a CALL
 the original name. Both spellings work now, and neither needs renaming to avoid the
 other.
 
+### `[x; n]` gives you n elements
+
+Writing `[7; 3]` built **four** elements, and the fourth held whatever was in memory — a
+wrong length and unpredictable contents, on both backends, with nothing said about it.
+
+`[7; 0]` was worse: it crashed the process inside the system allocator, because the copy
+count wrapped around and wrote past the end of the vector.
+
+Both are fixed: `[x; n]` now holds exactly `n` copies of `x`, for any `n` including zero,
+whether the count is written in the source or worked out while the program runs.
+
 ### A field's default now applies when you read JSON into it
 
 A field declared with a default — `height: float = 1.5` — got that default from a struct

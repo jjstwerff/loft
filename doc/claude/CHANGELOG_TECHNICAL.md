@@ -9,6 +9,31 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `[x; n]` built n+1 elements, and n=0 corrupted the heap (2026-08-12)
+
+`OpAppendCopy` receives the TOTAL a repeat literal asks for, and the template element is
+already appended by the time it runs — so it needs `n - 1` more. It added `n`:
+`vector_set_size(&data, multiply, size)` grew the vector one past the request while the
+copy loop wrote only `multiply - 1` slots, leaving the last one never initialised. `[7; 3]`
+read back as **length 4 with garbage in the last element** — a wrong length and an
+uninitialised read, silently, on both backends.
+
+`n == 0` is the same off-by-one taken to its end: `for i in 0..(multiply - 1)` on a `u32`
+wrapped to 4 294 967 295 and walked `copy_block` off the end of the store until glibc
+aborted the process (`Fatal glibc error: malloc.c:2599 (sysmalloc): assertion failed`).
+The template also has to be dropped, or a zero-length request answers length 1.
+
+The op's contract is now "the vector ends with exactly `count` copies of its last element",
+which is what the literal means, and it is total: 0 removes the template, 1 is already the
+answer, n adds `n - 1`. Fixed in BOTH twins — `State::append_copy` (`src/state/io.rs`) and
+`codegen_runtime::OpAppendCopy` — which carry separate copies of the loop.
+
+Both halves reproduce on the published `2026.8.0`. Found while measuring loft#884: the
+repeat literal is the bulk-fill path a constant comprehension would be lowered into, so it
+was read before being built on. Guarded in `tests/scripts/886-repeat-literal-count.loft`,
+including a RUNTIME count and a runtime zero — the rows no const-fold can reach — and a
+`float` element so a stride error shows as a wrong sum rather than a wrong length.
+
 ### A declared field default now reaches a cast, when it is a constant (2026-08-12)
 
 `height: float = 1.5` was honoured by a struct literal and ignored by `text as Struct`,

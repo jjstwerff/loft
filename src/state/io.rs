@@ -1535,9 +1535,27 @@ impl State {
             rec: v_rec,
             pos: 8 + (length * size - size),
         };
+        // `[x; n]` asks for n elements TOTAL and the template is already appended, so
+        // `n - 1` more are needed. Adding `n` grew the vector one too far and left the
+        // last slot never written — `[7; 3]` read back as length 4 with garbage in it.
+        //
+        // `n == 0` is the same statement taken to its end: the template must go too. It
+        // used to reach `0..(multiply - 1)` on a `u32`, wrapping to 4 294 967 295
+        // `copy_block`s that walked off the store and aborted in glibc's allocator.
+        if multiply == 0 {
+            let store = crate::keys::mut_store(&data, &mut self.database.allocations);
+            let vec_rec = store.get_u32_raw(data.rec, data.pos);
+            let len_now = store.get_u32_raw(vec_rec, 4);
+            store.set_u32_raw(vec_rec, 4, len_now.saturating_sub(1));
+            return;
+        }
+        let extra = multiply - 1;
+        if extra == 0 {
+            return; // the template alone already IS the answer
+        }
         vector::vector_append(&data, size, &mut self.database.allocations);
-        self.database.vector_set_size(&data, multiply, size);
-        for i in 0..(multiply - 1) {
+        self.database.vector_set_size(&data, extra, size);
+        for i in 0..extra {
             let to = DbRef {
                 store_nr: data.store_nr,
                 rec: v_rec,

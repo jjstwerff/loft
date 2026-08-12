@@ -2440,13 +2440,29 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
         rec: v_rec_before,
         pos: 8 + (length * size - size),
     };
-    let multiply = count as u32;
-    // Resize to accommodate `multiply` additional elements.
+    let multiply = count.max(0) as u32;
+    // `[x; n]` asks for n elements TOTAL and the template is already appended, so `n - 1`
+    // more are needed — adding `n` grew one too far and left the last slot never written
+    // (`[7; 3]` read back as length 4 with garbage). `n == 0` must drop the template too;
+    // it used to wrap `multiply - 1` on a `u32` into ~4.3 billion `copy_block`s.
+    // Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
+    if multiply == 0 {
+        let store = crate::keys::mut_store(&data, &mut stores.allocations);
+        let vec_rec = store.get_u32_raw(data.rec, data.pos);
+        let len_now = store.get_u32_raw(vec_rec, 4);
+        store.set_u32_raw(vec_rec, 4, len_now.saturating_sub(1));
+        return;
+    }
+    let extra = multiply - 1;
+    if extra == 0 {
+        return; // the template alone already IS the answer
+    }
+    // Resize to accommodate `extra` additional elements.
     vector::vector_append(&data, size, &mut stores.allocations);
-    stores.vector_set_size(&data, multiply, size);
+    stores.vector_set_size(&data, extra, size);
     // Re-read v_rec in case the resize moved the record.
     let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
-    for i in 0..(multiply - 1) {
+    for i in 0..extra {
         let to = DbRef {
             store_nr: data.store_nr,
             rec: v_rec,
