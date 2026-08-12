@@ -1447,6 +1447,38 @@ Parallel runs are what saturate the directory, since each distinct type-layout
 context mints an artifact of its own — this is the other half of why a suite
 loses a *different* test on each parallel run while passing serially.
 
+**Seeing and collecting the caches — `loft cache` (loft#861).**  The sweep above
+runs only after a successful build *in that directory*, so a package that stopped
+being rebuilt keeps whatever tail it had, and nothing ever looked at
+`~/.loft/build-cache` at all.  Ten GB accumulated on one box with no command to
+show it and no command to reduce it; the documented remedy was a hand-typed
+`rm -rf`, which also takes the LIVE generation (545 s of rustc CPU to rebuild, on
+one measured project gate).
+
+* `loft cache status` — the footprint per area, and what is reclaimable.  Read-only,
+  so it is also the dry run for `prune`.
+* `loft cache prune` — drop it.  `--all` takes the live generation too.
+
+The two areas are decided differently, and the report says which is which:
+
+| area | test | certainty |
+|---|---|---|
+| `build-cache/<pkg>-<ver>/` | `release/.loft-build-fp` ≠ this loft's `native_artifact_cache_key()` | **exact** — the same comparison the cache lookup makes, so the tree can never be selected again |
+| `registry/*/native-auto/` | beyond `KEEP_ARTIFACTS` newest per family | **conservative** — the artifact name folds the consumer's `layout_fp`, of which there is an open set, so reachability is not decidable from the name |
+
+An **age bound was tried and removed**: "older than the running loft binary" reads
+sound, and is how the issue measured the problem, but the reference point is the
+binary you invoked — a freshly built one dates *everything* and the tool reports
+100 % reclaimable, which is the `rm -rf` it exists to replace wearing a
+measurement's clothes.
+
+For the same reason `prune` **refuses to run from a binary that is not the installed
+`loft`** (`--force` overrides).  A development build has its own `BUILD_ID`, so it
+correctly judges the installed loft's live generation unusable *by itself* — and
+deleting it costs every project on the machine a cold rebuild.  Measured while
+building this: a dev binary called 49 of 50 build trees reclaimable, the installed
+one 0.
+
 ### Open completeness items
 
 All are *enhancements* on a complete, graceful core: a construct the dispatch can't
@@ -1830,9 +1862,13 @@ native, and Rust reference implementations.
 
 **If native is slower than expected:**
 
-Profile with `RUSTFLAGS="-C debuginfo=2"` and `cargo flamegraph`.
-Common issues: unnecessary store allocation, bounds checks in tight
-loops, string allocation overhead.
+Profile it: `make profile ARGS="--native prog.loft"`, and
+`PROFILE_FLAGS="--annotate"` for the hot source lines
+([PERFORMANCE.md § Profiling a run](PERFORMANCE.md)). The profiler builds the
+binary once unprofiled and records with `--native-debug`, so the report names
+your `n_<fn>` symbols rather than rustc and LLVM. Common issues:
+unnecessary store allocation, bounds checks in tight loops, string
+allocation overhead.
 
 ### Files
 

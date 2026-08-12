@@ -126,6 +126,22 @@ struct Scopes {
     /// loft#849 / @PLN139 — vars that no longer OWN what they hold, so their scope end must
     /// not drop it.  See [`collect_drop_transferred`].
     drop_transferred: HashSet<u16>,
+    /// loft#854 — the whole-function half of the ownership oracle, computed once
+    /// for `d_nr` instead of once per question.
+    ///
+    /// `ownership_of` walks the entire function body (and clones each defining
+    /// right-hand side) to answer about ONE value. `scan_set` asks about every
+    /// assignment, so a function with n of them paid n whole-function walks: a
+    /// vector literal is one `Set` per element, and 86 400 elements took over 13
+    /// minutes at 99 % CPU.
+    ///
+    /// Safe to memo for exactly as long as this `Scopes` lives: the body it
+    /// summarises is `data.def(d_nr).code`, `data` is borrowed `&Data` for the
+    /// whole traversal, and `run_scan_phase` installs the rewritten body only
+    /// after the scan returns — so the borrow checker, not a convention, is what
+    /// keeps this from going stale. A `Scopes` is built per scan phase, so a
+    /// second phase re-derives it.
+    fn_defs: Option<crate::use_analysis::Defs>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -1079,7 +1095,7 @@ fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
 /// NOT a hand-off, so its source keeps dropping exactly as it does today. Suppressing there
 /// would turn today's early release into a silent leak — the failure mode that makes half a
 /// cascade worse than none.
-fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
+pub(crate) fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
     let get_field_d = data.def_nr("OpGetField");
     if get_field_d == u32::MAX {
         return false;
@@ -1111,7 +1127,7 @@ fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
 /// A NAMED local appended to a collection (`v: vector<H> = [h1, h2]`) stays live, so no move
 /// bit is set — and once the collection releases its elements, leaving the local dropping too
 /// means one resource released twice.
-fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
+pub(crate) fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
     let Value::Var(dv) = dest.unspan() else {
         return false;
     };
@@ -1130,7 +1146,7 @@ fn appends_to_element(dest: &Value, function: &Function, data: &Data) -> bool {
 /// that BUILDS it, whose tail is the work-ref holding the finished record — `Nest { s: S { … } }`
 /// copies such a block into `Nest`'s field, and without peeling it the inner `S` temp kept a
 /// scope-exit drop and released the payload a second time.
-fn drop_bearing_source(src: &Value) -> Option<u16> {
+pub(crate) fn drop_bearing_source(src: &Value) -> Option<u16> {
     match src.unspan() {
         Value::Var(v) => Some(*v),
         Value::Block(bl) => bl.operators.last().and_then(drop_bearing_source),
@@ -1220,6 +1236,7 @@ fn run_scan_phase(
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
         drop_transferred: collect_drop_transferred(orig_code, orig_vars, data),
+        fn_defs: None,
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -3953,7 +3970,7 @@ impl Scopes {
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
-                Self::ref_rhs_ownership(value, data, self.d_nr),
+                self.ref_rhs_ownership(value, data),
                 RefRhs::View
             )
             // `value` is pre-scan IR: reads may name the original id (`ov`)
@@ -3968,7 +3985,7 @@ impl Scopes {
         }
         // Track the LATEST assignment's ownership for this var.
         if matches!(function.tp(v), Type::Reference(_, _)) {
-            match Self::ref_rhs_ownership(value, data, self.d_nr) {
+            match self.ref_rhs_ownership(value, data) {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
                 }
@@ -4366,8 +4383,15 @@ impl Scopes {
     /// borrow — tracking it owned would over-free the NEXT transition).  So Join
     /// folds to View, not "don't-track" — the p462 conditional
     /// `chosen = t[i] ?? m_none()` reassign needs the prior-store free.
-    fn ref_rhs_ownership(value: &Value, data: &Data, d_nr: u32) -> RefRhs {
-        match crate::use_analysis::ownership_of(data, d_nr, value) {
+    /// loft#854 — the memoised form. `ownership_of` recomputes the whole-function
+    /// summary per question; `scan_set` asks once per assignment, which made a
+    /// function with n assignments cost n whole-function walks.
+    fn ref_rhs_ownership(&mut self, value: &Value, data: &Data) -> RefRhs {
+        let d_nr = self.d_nr;
+        let defs = self
+            .fn_defs
+            .get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+        match crate::use_analysis::ownership_of_with(data, d_nr, value, defs) {
             crate::use_analysis::Own::Owned => RefRhs::Owned,
             crate::use_analysis::Own::Borrowed { .. } | crate::use_analysis::Own::Join { .. } => {
                 RefRhs::View
@@ -6068,11 +6092,32 @@ impl Scopes {
         // The fn-ref variable's own type is the declared shape; the definition is
         // the authority on what it returns.
         let _ = function;
-        match def.returned() {
-            Type::Reference(d, _) => Some(Type::Reference(*d, Deps::none())),
-            Type::Enum(d, true, _) => Some(Type::Enum(*d, true, Deps::none())),
+        let (returned, opt) = def.returned().peel_optional();
+        match returned {
+            Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
+            Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),
             _ => None,
         }
+    }
+
+    /// loft#879 — the shape question `inline_struct_return` asks ("does this call
+    /// hand back a store the caller must own, and of what shape?") is about the
+    /// BASE type: `Optional(τ)` is a compile-time wrapper over τ's own runtime
+    /// layout (@PLN25), so `-> C?` allocates and delivers exactly what `-> C`
+    /// does.  Matching the arms below on the unpeeled type therefore answered
+    /// "not liftable" for every optional aggregate return, and the result got a
+    /// bare stack-pop (`FreeStack`) that never freed the store — one leaked
+    /// record per call, unbounded in a loop, on the interpreter.
+    ///
+    /// The arms peel for the match; this puts the wrapper back on the temp's
+    /// type, so a lifted temp is typed exactly like the hand-correct bound form
+    /// (`x = pick(1)` → `x: optional(reference(C))` + a scope-exit `OpFreeRef`)
+    /// that has always been the clean spelling.  Keeping the `Optional` matters:
+    /// the temp may legitimately hold the null sentinel, and it is the bound
+    /// form — not the non-optional one — that proves this type flows correctly
+    /// through slot assignment, `get_free_vars`, and both backends' codegen.
+    fn reopt(was_optional: bool, tp: Type) -> Type {
+        if was_optional { Type::optional(tp) } else { tp }
     }
 
     fn inline_struct_return(
@@ -6087,6 +6132,27 @@ impl Scopes {
         if let Some(tp) = self.callref_owned_return(val, data, function) {
             return Some(tp);
         }
+        // loft#879 — a null-coalesce (`??`) lowers to an `ncc` value-block that
+        // assigns the subject to a `__ncc_N` temp and yields either that temp or
+        // the default arm's `__ref_N`.  The temp is `skip_free` (the block's
+        // result ALIASES it, so freeing at the block would dangle the value the
+        // consumer reads), which leaves the subject's store owned by nothing when
+        // the block is used INLINE — one leaked record per evaluation,
+        // unbounded in a loop.  Binding it first (`x = pick(1) ?? C{}`) has always
+        // been clean because the `Set` gives the store an owner; lifting here
+        // rewrites the inline spelling into exactly that bound form.
+        //
+        // REFERENCE results only.  A text ncc temp is already freed in place by
+        // the @PLN85 skip_free-orphan pass ([`collect_consumed_ncc_text`]) and a
+        // vector one by its own delivery path; both measured clean, and lifting
+        // them too would free what those mechanisms free.
+        if let Value::Block(bl) = val.unspan()
+            && bl.name == "ncc"
+            && let (Type::Reference(d_nr, dep), opt) = bl.result.peel_optional()
+            && dep.is_empty()
+        {
+            return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
+        }
         // @P297 — a USER struct-returning call (`n_*` with a body) passed
         // directly as a call argument is wrapped in `Value::Span` by
         // `parse_call` (and re-wrapped by `scan`), so the argument reaching
@@ -6095,6 +6161,9 @@ impl Scopes {
         // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
+            // loft#879 — peel `Optional` before asking the shape question; see
+            // [`Self::reopt`], which puts it back on the temp.
+            let (returned, opt) = def.returned.peel_optional();
             // #549 — a generic monomorph (`t_…`) whose return SHAPE is a concrete
             // aggregate (`f<T>(x) -> (integer,integer)` / `-> Struct` / `-> Enum`)
             // leaks its result store when used inline or discarded: the caller
@@ -6112,8 +6181,8 @@ impl Scopes {
             let lift_owned_return = def.name.starts_with("n_")
                 || (def.name.starts_with("t_") && def.attr_names.contains_key("__retbuf"));
             if lift_owned_return && def.code != Value::Null {
-                if let Type::Reference(d_nr, _) = &def.returned {
-                    return Some(Type::Reference(*d_nr, Deps::none()));
+                if let Type::Reference(d_nr, _) = returned {
+                    return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
                 }
                 // @P303 / #490 — a user fn returning a heap struct-enum that the
                 // caller OWNS leaks its result temp when used directly as a call
@@ -6133,10 +6202,10 @@ impl Scopes {
                 // case: on native the caller freed the by-value-stale `__ref_N`
                 // (never delivered back) instead of the reallocated store, leaking
                 // one enum store per inline use (#490 kt=65).
-                if let Type::Enum(d_nr, true, _) = &def.returned
+                if let Type::Enum(d_nr, true, _) = returned
                     && !def.returns_borrowed_view()
                 {
-                    return Some(Type::Enum(*d_nr, true, Deps::none()));
+                    return Some(Self::reopt(opt, Type::Enum(*d_nr, true, Deps::none())));
                 }
                 // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
                 // whose fn-ref carries a fresh closure record) leaks its result temp
@@ -6150,8 +6219,11 @@ impl Scopes {
                 // A non-capturing return carries the null closure sentinel → the free
                 // is a safe no-op; a borrowed fn-ref copy is marked `skip_free`
                 // elsewhere, so only a freshly produced closure is lifted here.
-                if let Type::Function(params, ret, _) = &def.returned {
-                    return Some(Type::Function(params.clone(), ret.clone(), Deps::none()));
+                if let Type::Function(params, ret, _) = returned {
+                    return Some(Self::reopt(
+                        opt,
+                        Type::Function(params.clone(), ret.clone(), Deps::none()),
+                    ));
                 }
             }
             // loft#792 — the same lift for a body-less NATIVE global that MINTS a
@@ -6175,7 +6247,7 @@ impl Scopes {
             // `JsonValue` constructors are struct-ENUMs and keep their own arm above.
             if lift_owned_return
                 && def.code == Value::Null
-                && let Type::Reference(d_nr, dep) = def.returned.base()
+                && let Type::Reference(d_nr, dep) = returned
                 && dep.is_empty()
                 && data.def_type(*d_nr) == DefType::Struct
                 && !def
@@ -6183,7 +6255,7 @@ impl Scopes {
                     .iter()
                     .any(|a| matches!(a.typedef.base(), Type::Reference(p, _) if p == d_nr))
             {
-                return Some(Type::Reference(*d_nr, Deps::none()));
+                return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
             }
         }
         // @P393 (t9) — a loft-source fn OR `t_` method returning an OWNED vector
@@ -6205,9 +6277,13 @@ impl Scopes {
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
             if def.is_loft_defined() {
-                match &def.returned {
+                // loft#879 — peel `Optional` for the match, restore it on the temp
+                // ([`Self::reopt`]).  The dep guards keep reading the BASE's dep,
+                // which is where a borrowed view records itself.
+                let (returned, opt) = def.returned.peel_optional();
+                match returned {
                     Type::Vector(elem, dep) if dep.is_empty() => {
-                        return Some(Type::Vector(elem.clone(), Deps::none()));
+                        return Some(Self::reopt(opt, Type::Vector(elem.clone(), Deps::none())));
                     }
                     // @PLN85 p188 — a discarded (or inline-unbound) owned KEYED
                     // collection return (`build() -> sorted<T[k]>`, and the
@@ -6218,19 +6294,28 @@ impl Scopes {
                     // borrowed view / NRVO'd hidden-buffer return carries a
                     // non-empty dep and is excluded (no double-free / UAF).
                     Type::Sorted(d, keys, dep) if dep.is_empty() => {
-                        return Some(Type::Sorted(*d, keys.clone(), Deps::none()));
+                        return Some(Self::reopt(
+                            opt,
+                            Type::Sorted(*d, keys.clone(), Deps::none()),
+                        ));
                     }
                     Type::Index(d, keys, dep) if dep.is_empty() => {
-                        return Some(Type::Index(*d, keys.clone(), Deps::none()));
+                        return Some(Self::reopt(
+                            opt,
+                            Type::Index(*d, keys.clone(), Deps::none()),
+                        ));
                     }
                     Type::Hash(d, keys, dep) if dep.is_empty() => {
-                        return Some(Type::Hash(*d, keys.clone(), Deps::none()));
+                        return Some(Self::reopt(opt, Type::Hash(*d, keys.clone(), Deps::none())));
                     }
                     Type::Radix(d, keys, dep) if dep.is_empty() => {
-                        return Some(Type::Radix(*d, keys.clone(), Deps::none()));
+                        return Some(Self::reopt(
+                            opt,
+                            Type::Radix(*d, keys.clone(), Deps::none()),
+                        ));
                     }
                     Type::Trie(d, key, dep) if dep.is_empty() => {
-                        return Some(Type::Trie(*d, key.clone(), Deps::none()));
+                        return Some(Self::reopt(opt, Type::Trie(*d, key.clone(), Deps::none())));
                     }
                     _ => {}
                 }
@@ -6243,24 +6328,27 @@ impl Scopes {
         // fresh store nothing ever frees (#490).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
+            // loft#879 — peel `Optional` for the match, restore it on the temp
+            // ([`Self::reopt`]).
+            let (returned, opt) = def.returned.peel_optional();
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
             // Accessors carry dep=[0] after parser dep-inference and are skipped here.
             if def.code == Value::Null
-                && let Type::Enum(d_nr, true, dep) = &def.returned
+                && let Type::Enum(d_nr, true, dep) = returned
                 && dep.is_empty()
             {
-                return Some(Type::Enum(*d_nr, true, Deps::none()));
+                return Some(Self::reopt(opt, Type::Enum(*d_nr, true, Deps::none())));
             }
             // Native vector-returning fns (e.g. `keys()`, `fields()` on
             // JsonValue) allocate a fresh vector store that the caller owns.
             // Without lifting, the chained call `v.keys().len()` leaks the
             // intermediate vector — same mechanism as the struct-return case.
             if def.code == Value::Null
-                && let Type::Vector(elem, dep) = &def.returned
+                && let Type::Vector(elem, dep) = returned
                 && dep.is_empty()
             {
-                return Some(Type::Vector(elem.clone(), Deps::none()));
+                return Some(Self::reopt(opt, Type::Vector(elem.clone(), Deps::none())));
             }
         }
         None

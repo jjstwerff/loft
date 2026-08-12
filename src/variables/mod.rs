@@ -1637,14 +1637,7 @@ impl Function {
                 return self.is_new(var_nr);
             }
             if !tp.is_unknown() {
-                diagnostic!(
-                    lexer,
-                    Level::Error,
-                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                    self.variables[var_nr as usize].name,
-                    self.variables[var_nr as usize].type_def.name(data),
-                    type_def.name(data)
-                );
+                self.reject_retype(var_nr, type_def, data, lexer);
             }
         } else if !var_tp.is_unknown()
             // `&unknown` → `&T` (#375): a `&` parameter whose pointee was an
@@ -1721,19 +1714,59 @@ impl Function {
                     scalar_name
                 );
             } else {
-                diagnostic!(
-                    lexer,
-                    Level::Error,
-                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                    self.name(var_nr),
-                    self.variables[var_nr as usize].type_def.name(data),
-                    type_def.name(data)
-                );
+                self.reject_retype(var_nr, type_def, data, lexer);
             }
         }
         self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();
         true
+    }
+
+    /// Report a rejected re-type of `var_nr`, choosing the advice by WHICH property
+    /// of the type changed.
+    ///
+    /// A `τ` → `τ?` rejection is about nullability, and none of the cures the general
+    /// message names get a user out of it: `as τ` is refused by the cast checker for
+    /// exactly the reason the store was refused (the value may be null), `as τ?` lands
+    /// back on this same rejection, and a fresh variable name only moves the store one
+    /// line down. What works is discharging the null at the value — `?` for the type's
+    /// default, or `?? <default>` — or widening the variable to `τ?`, and the general
+    /// message mentions neither, so following it went in a circle (loft#859).
+    ///
+    /// Only the ADVICE half differs. The diagnosis — "cannot change type from τ to τ?"
+    /// — is right as it stands and stays word for word, so the two messages remain one
+    /// diagnostic to anyone reading, grepping or testing for it.
+    ///
+    /// Everything else keeps the general message: for a genuine type change (`sorted<…>`
+    /// → `T`) `as` is the right instrument, which is what it was written for.
+    fn reject_retype(&self, var_nr: u16, type_def: &Type, data: &Data, lexer: &mut Lexer) {
+        let var_tp = &self.variables[var_nr as usize].type_def;
+        let widened_to_nullable = matches!(type_def, Type::Optional(_))
+            && !matches!(var_tp, Type::Optional(_))
+            && var_tp.is_equal(type_def.base());
+        if widened_to_nullable {
+            let base = var_tp.name(data);
+            diagnostic!(
+                lexer,
+                Level::Error,
+                "Variable '{}' cannot change type from {} to {}; discharge the null where it is produced: `?` (the type's default) or `?? <default>`, or declare it `{}?` to let it hold null (do NOT cast with `as`: `as {}` is refused for the same reason this store is, and `as {}?` returns here)",
+                self.name(var_nr),
+                base,
+                type_def.name(data),
+                base,
+                base,
+                base
+            );
+            return;
+        }
+        diagnostic!(
+            lexer,
+            Level::Error,
+            "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
+            self.name(var_nr),
+            var_tp.name(data),
+            type_def.name(data)
+        );
     }
 
     fn is_new(&self, var_nr: u16) -> bool {
@@ -2313,7 +2346,10 @@ impl Function {
 
     fn mark_skip_free_by_name(&mut self, n: &str) {
         let v_nr = self.var(n);
-        if v_nr == u16::MAX {
+        // A name inside the abandoned range can belong to the return-buffer ARGUMENT
+        // that `work_refs` stepped over rather than to a work-ref of this construction.
+        // The caller owns that buffer, so its free discipline is not ours to change.
+        if v_nr == u16::MAX || self.is_argument(v_nr) {
             return;
         }
         // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
@@ -2343,21 +2379,46 @@ impl Function {
     /// `Bind`/substitute leg that already serves every site whose numbering shifted.
     #[track_caller]
     pub fn work_refs(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
-        let n = format!("__ref_{}", self.work_ref + 1);
-        self.work_ref += 1;
-        let mut v = if let Some(nr) = self.names.get(&n) {
-            *nr
-        } else {
-            u16::MAX
+        let v = loop {
+            let n = format!("__ref_{}", self.work_ref + 1);
+            self.work_ref += 1;
+            let Some(&nr) = self.names.get(&n) else {
+                break self.add_variable(&n, tp, lexer);
+            };
+            if self.retypes_argument(nr, tp) {
+                continue;
+            }
+            self.set_type(nr, tp.clone());
+            self.variables[nr as usize].source = lexer.at();
+            break nr;
         };
-        if v == u16::MAX {
-            v = self.add_variable(&n, tp, lexer);
-        } else {
-            self.set_type(v, tp.clone());
-            self.variables[v as usize].source = lexer.at();
-        }
+        self.trace_work_ref(v, tp);
         self.work_refs.insert(v);
         v
+    }
+
+    /// `LOFT_TRACE_WORKREF=1` — one line per work-ref mint: the function, the variable
+    /// it resolved to, its type, and the SITE that asked for it (`#[track_caller]`).
+    ///
+    /// Reach for it when a buffer holds the wrong thing and the var table
+    /// (`LOFT_VAR_TABLE`) shows the right names in the wrong roles: the table is the
+    /// end state, and what a collision needs is the ORDER the names were claimed in,
+    /// which differs between the two parser passes.  That is what showed `__ref_1`
+    /// being minted for a call's out-param on pass 2 after pass 1 had promoted the
+    /// same name to the return-buffer argument (loft#872) — the table alone said only
+    /// that one variable was both.
+    #[track_caller]
+    fn trace_work_ref(&self, v: u16, tp: &Type) {
+        if std::env::var_os("LOFT_TRACE_WORKREF").is_none() {
+            return;
+        }
+        eprintln!(
+            "[workref] fn={} -> v{} {} tp={tp:?} at {}",
+            self.name,
+            v,
+            self.variables[v as usize].name,
+            std::panic::Location::caller()
+        );
     }
 
     /// A work-ref for a mint site that can fire ONLY on pass 2 (every caller sits
@@ -2367,18 +2428,45 @@ impl Function {
     /// ordinary work-ref, so it gets the null-init preamble and the scope-exit free.
     #[track_caller]
     pub fn work_refs_p2(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
-        let n = format!("__ref_p2_{}", self.work_ref_p2 + 1);
-        self.work_ref_p2 += 1;
-        let v = if let Some(nr) = self.names.get(&n) {
-            let nr = *nr;
+        let v = loop {
+            let n = format!("__ref_p2_{}", self.work_ref_p2 + 1);
+            self.work_ref_p2 += 1;
+            let Some(&nr) = self.names.get(&n) else {
+                break self.add_variable(&n, tp, lexer);
+            };
+            if self.retypes_argument(nr, tp) {
+                continue;
+            }
             self.set_type(nr, tp.clone());
             self.variables[nr as usize].source = lexer.at();
-            nr
-        } else {
-            self.add_variable(&n, tp, lexer)
+            break nr;
         };
+        self.trace_work_ref(v, tp);
         self.work_refs.insert(v);
         v
+    }
+
+    /// Would handing `v` to a mint asking for `tp` CHANGE the type of an argument?
+    ///
+    /// An argument's type is frozen at the signature: the caller allocates by it and
+    /// passes what it allocated.  A work-ref name that resolves to one belongs to the
+    /// return buffer `ref_return` promoted on pass 1, and pass 2 re-minting the SAME
+    /// name for the SAME role is how the buffer is re-found — that reuse is required
+    /// (a lambda's return site grows its attribute from it, and stepping over grows a
+    /// second one: "grew a pass-2-only attribute").
+    ///
+    /// What must not happen is a mint for a DIFFERENT role landing on that name, since
+    /// the only signal it has is the type it asked for.  In loft#872 a call's out-param
+    /// buffer asked for `vector<StoredHex>` and got the record buffer of the function it
+    /// was inside: the callee then cleared the caller's record as a vector and built into
+    /// it, so the value arrived empty and the write that followed landed out of bounds —
+    /// silently on the interpreter, as a `store_nr == 65535` panic on native.  Deps are
+    /// not part of the question (`without_deps`): they say where a value came from, not
+    /// what storage it is.
+    fn retypes_argument(&self, v: u16, tp: &Type) -> bool {
+        crate::keys::work_ref_stepover_enabled()
+            && self.is_argument(v)
+            && self.tp(v).without_deps() != tp.without_deps()
     }
 
     /// Work-ref for `vector_db()` — uses a separate `__vdb_N` counter/namespace.

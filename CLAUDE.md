@@ -41,6 +41,11 @@ make ci                                  # fmt → clippy → test (full local g
 make test                                # clippy + test → result.txt
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make speed                               # what got slower/faster — a REPORT, never a gate
+make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=
+                                         #   "--mem" heap by loft line at the PEAK, "--paths" the
+                                         #   paths that reached each allocation, "--engine" perf
+                                         #   over loft's own Rust.  `make profile-corpus` checks
+                                         #   the instruments against known answers — PERFORMANCE.md
 make index ; ./scripts/idx tag:@P259     # rebuild + query the tracker index (prefer over grep -rn)
 make view                                # branch-aware doc/code viewer (SSH-forward 8765)
 ```
@@ -319,6 +324,12 @@ BOUND GUARD does not count as reading it, since a length cannot witness an eleme
 that hole made the lint silent on `if i < len(d) { d[i]=x }`, the exact shape the `v[i]`
 may-be-null warning asks for, and the published `graphics` canvas shipped every drawing
 primitive as a no-op through it) ·
+`LOFT_NO_DOUBLE_MOVE` (@PLN139 stage G: one droppable handed to TWO owners — `s1 = S{h:c};
+s2 = S{h:c}` — where each owner's death releases what it owns, so the resource is released
+twice. Counts hand-offs per source with the SAME predicate that suppresses the source's own
+drop, so lint and mechanism cannot drift. `warning` because ignoring it produces a wrong
+result; therefore an UNDER-approximation — silent across opposite `if` arms, a reassignment
+between the hand-offs, and a terminator, and blind to the iteration count of a loop) ·
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
@@ -341,3 +352,22 @@ multi-byte text silently (the `cbor` encoder shipped this); advisory, use `for c
 bounded by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types
 non-null yet reads C80-null on overrun; advisory, the type is unchanged) ·
 `LOFT_DEV_SOFT_HALT` (**opt-in**: demote dev raises to log-and-continue so one run surfaces every fault).
+
+**Profiling (@PLN140, all opt-in, all `--interpret`):** `LOFT_PROFILE=<ops>` samples the loft
+call stack — hot FUNCTION, hot LINE, hot PATH (default one sample per 1024 ops; the op counter
+picks *when*, a wall clock says *how much*, and the period is JITTERED because a fixed one
+samples a single phase of a periodic program and reports it as the whole) ·
+`LOFT_ALLOC_SITES=1` ranks live store BYTES by the loft line that allocated them, captured at
+the run's PEAK rather than at exit · `LOFT_ALLOC_PATHS=<ops>` adds the call paths that reached
+each allocation. `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
+`--tests`), merged into ONE report keyed by resolved `function` + `file:line` — each test
+compiles its own bytecode, so positions cannot be merged, only labels (loft#860).
+`LOFT_ALLOC_SITES` is program-only and says so under a suite instead of going quiet.
+**A NATIVE run is not sampled** — and the default backend IS native, so a bare
+`LOFT_PROFILE=1 loft p.loft` announces that rather than exiting empty (loft#865).
+**A `use`d library is a cdylib the sampler cannot enter**: its functions cannot appear
+and their time lands on the CALLING line, so a library doing the work reads as a hot
+caller — one probe inverted from `100 % app_bit` to `99.5 % lib_grind` under
+`LOFT_NO_NATIVE_LIBS=1`. The report says so whenever a library was called.
+Prefer `make profile`, which picks the instrument. Off costs nothing (the
+sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.

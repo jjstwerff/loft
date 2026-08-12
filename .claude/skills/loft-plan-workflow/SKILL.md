@@ -1,10 +1,8 @@
 ---
 name: loft-plan-workflow
-description: Procedures for plan-shaped work — opening a plan, closing/deferring one, promoting a doc to a plan, choosing the lightest workflow, applying value categories. Apply when the task involves plans, plan directories, a roadmap, or doc-to-plan promotion. The method is tree-agnostic; the concrete paths/templates/tracker that bind it to this repo live in one § at the bottom. Cites source docs for definitions; does not restate.
+description: How to run plan-shaped work end to end — decide whether something even IS a plan, open one, cut its phases so each can fail on its own, close or defer it, and route a finding to the right repo. Use this whenever the task mentions a plan, a phase, a roadmap, an issue tracker for planned work, or promoting a design doc; whenever you are about to create a plan directory or close one; and whenever you are weighing "is this a plan or just a TODO?". Also use it in a consumer/dogfood repo deciding where an upstream defect belongs. Tree-agnostic method with one bindings section at the bottom.
 user-invocable: false
 ---
-
-# Plan workflow
 
 ## What this skill is — and what's portable
 
@@ -33,6 +31,7 @@ span several sessions.
 | Work shape | Path |
 |---|---|
 | **Bug fix** (single root cause, fits one commit) | Fix + regression test + commit.  Reference the tracker issue if one exists; otherwise the fix + test *are* the record.  No plan, no open-work row, no archive entry. |
+| **A defect in something UPSTREAM** (the engine, a library you consume) | File it in **that** repo, with a minimal repro.  **Never a plan here** — see [`references/consumer-projects.md`](references/consumer-projects.md). |
 | **Tiny deliverable** (demo deploy, version bump) | One overview/roadmap row, or nothing.  No plan. |
 | **Operational change** (CI tweak, doc fix) | Direct commit. |
 | **Light TODO** *(the default)* — fits in one row of a reference doc's table | An `## Open work` section in the relevant reference doc.  Same lifecycle as a plan, just one row.  Edit that doc's architecture content directly when you implement; the row and the design share a file. |
@@ -95,52 +94,62 @@ Use when the deliverable is a feature ship or a fix landing.
 the plan — extract it to its own reference doc.
 
 **When NOT to use this shape:** if the plan's first phase is *characterize the
-problem space* rather than *design + build*, use the investigation shape below.
+problem space* rather than *design + build*, use [`references/investigation-plans.md`](references/investigation-plans.md).
 
 ---
 
-## Opening an investigation-style plan
+## Cutting a phase — two bounds, not one
 
-Use when the deliverable is **mechanism understanding before fix design** —
-multiple failure clusters to catalogue, where source-reading alone won't converge
-and the fix-design decision can't be made without the catalogue.
+Effort letters size a phase; they do not tell you where to cut it.  The rule that
+does:
 
-1. Identity + flat directory as above, README from the **investigation** template;
-   add a `probes/` subdirectory.
-2. **Stage A first — write probes before reading source.**  Probes are the
-   executable spec for what "understood" means: a hypothesis is confirmed when the
-   probe-pair diff confirms it.  Be **liberal** — missing a crucial shape is the
-   worst failure; redundant variants cost nothing because they get attic-curated at
-   the *end* of Stage A, not during.  Extract at least one probe from a *real
-   consumer*, not only synthetic cases — real extraction catches classes synthetic
-   probes miss.
-3. **Run every probe on every execution mode** the result can diverge across
-   (e.g. interpreter vs compiler).  Record the full results matrix.
-4. Keep a **flat probe table** (one row per probe: file, shape, cluster, status).
-   Curate into groups only when the suite is large *and* multiple people read it
-   cold.
-5. For each failure mode, write a cluster doc with a **verified-vs-hypothesized
-   accountability table** — every mechanism statement is either VERIFIED (cited
-   trace/code-line) or HYPOTHESIZED (marked).  Without this column, hypotheses
-   drift into the prose as if they were facts.
-6. **Track severity as two separate fields** — corruption/panic/hang *and* leak —
-   so "FIXED" can't conflate them (closing corruption while leaks persist is a
-   false-fix trap).
-7. **Tools as needed, not upfront.**  Don't build a debugging framework first; add
-   the *one* tool blocking progress, revert nice-to-haves, and list what you added
-   in a `Tool gaps` section — tools added during the plan are part of its output.
-8. Add a Status + next-session roadmap (per-cluster action items with effort
-   estimates).
+> **A phase should be as small as possible while STILL BEING VALIDATED.**
+>
+> **Upper bound (safety).** The old path and the new one can both run at once and be
+> compared *exactly*.  If the only way to see whether it worked is to swap and look,
+> the phase is too big.
+>
+> **Lower bound (validity).** The phase can go red **on its own, for a real reason**.
+> If the only way to test it is to also do the next phase, they are one phase and
+> splitting them buys a green tick on an empty claim.
 
-**Probe → regression migration.**  Probes stay in `probes/` during the
-investigation and graduate to the regression suite **per cluster, as each cluster's
-fix lands** — not all at once.  The plan stays open during phased implementation
-and closes when the last cluster's regression is in the suite.  A probe is
-graduation-ready only when it passes **all** of: assertions pass · clean process
-exit (no crash at teardown — "PASSED prints" is not enough, check the exit code) ·
-no leak warning · bounded runtime (seconds, not a hang).  A probe that passes
-assertions but fails any other gate stays in `probes/` with a status note;
-graduate a representative sibling from the same cluster instead.
+So two questions per phase, and it has to pass both:
+
+1. *When this phase is half done, what exactly am I comparing against?*  "Nothing, I
+   look at it afterwards" means **too big** — a lump wearing a small phase's effort
+   letter, whose failure mode is `git revert`.
+2. *What would go red if I did this phase wrong?*  "Nothing until the next phase
+   lands" means **too small** — merge it forward.
+
+**The lower bound is the one that gets skipped**, because a phase that ends with
+something built and *called by nobody* cannot fail — it is green by construction.
+Splitting *"add the function"* from *"call it"* manufactures that state on purpose.
+If the first half cannot go red, it was never a phase.
+
+**A self-test is not validation.**  The discriminator is not *is there an assert*, it
+is **could this assert ever be surprised**.  "The table exists and every key maps to
+one entry" is checked against the table and cannot fail for any reason a reader cares
+about.  A guard that cannot fire is the same defect wearing a different hat — verify
+the guard is even compiled in and can go red before trusting a sweep that used it
+(loft: `[profile.dev.package.loft]` sets `debug-assertions = false`, so a
+`debug_assert` in library code is *absent* from every standard build).  This is the
+planning-time face of the master instructions' matrix rule — *prove the harness can
+fail; a no-output cell is vacuous* (loft: `CLAUDE.md § Debugging policy`).
+
+**Three shapes that pass both bounds:**
+
+- **Parallel run.** Build the new thing beside the old, compare exactly (bytes, IR,
+  a histogram), *then* delete the old.
+- **A probe first.** An XS phase whose only job is to try to falsify the design
+  before anything is built on it — the cheapest phase in any plan, and the one that
+  kills a bad design for the cost of a compile.
+- **One call site at a time, each with its own comparison.**  "Wire four callers" is
+  four phases, and each wants the same gate: the old call and the new call leave the
+  same world.
+
+**The comparison is the phase; the edit is the easy part.**  A three-line change that
+alters behaviour under every caller is safe only because something written beside it
+can see that.
 
 ---
 
@@ -205,54 +214,9 @@ commit having reached the trunk — the code lands on main later, on its own clo
    embedded in a finished plan gets linked to from other docs; those links rot when
    the content moves.  Grep every doc for the plan's path, rewrite the links to the
    new home, then run the repo's drift checker to catch what grep missed.
-6. **Check the feature catalogue against what actually shipped** — see the next
-   section.  A plan that shipped, changed, renamed or removed a feature is not closed
+6. **Check the feature catalogue against what actually shipped** — see
+   [`references/catalogue-check.md`](references/catalogue-check.md).  A plan that shipped, changed, renamed or removed a feature is not closed
    until that feature's own issue and labels describe the built thing.
-
----
-
-## Check the catalogue against what shipped
-
-Where a tracker issue is the **canonical** description of a feature — and the
-reference docs and example tests are GENERATED from it — shipping the code is only
-half the change.  **The issue *is* the documentation.**  Code that lands without its
-issue being updated publishes a wrong description, and the generated shadow gives
-that wrong description the authority of a checked-in file.
-
-Do this whenever work **adds, changes, renames, or removes a feature** — not only at
-close.  The likeliest thing to drift is a feature whose behaviour moved *during* the
-plan: the issue was written from the design, and then the design changed.
-
-Verify three things, in this order:
-
-1. **Existence** — every feature the work shipped has an issue.  Something built with
-   no catalogue entry is invisible to everyone who reads the catalogue instead of the
-   code.  Something *removed* still has one, and shouldn't.
-2. **Accuracy** — the prose and the example describe what the code does **now**:
-   the real name, signature, defaults, and behaviour, not what was proposed.  **Run
-   the example** — do not eyeball it.  If the generator turns an example into a test,
-   a stale example is a test asserting the old contract.
-3. **Tags** — the labels match reality.  A label is a query surface: the wrong one
-   hides the feature from everyone who filters by it, which is indistinguishable from
-   the feature not existing.  Check the kind/subject partition and any status or tier
-   the catalogue sorts on.
-
-Then **regenerate the shadow and run the drift guard**.  Never hand-edit a generated
-file — edit the issue and regenerate.  A drift guard that fails on hand-edits is
-protecting the one-home rule, not obstructing you.
-
-**A green coverage gate is not evidence the catalogue is complete.**  Know what yours
-actually measures before trusting it.  Coverage gates typically attribute *source
-regions* to catalogue entries — so a capability implemented inside a region that is
-already attributed to some other entry never trips them.  New file, no entry → caught;
-new feature in an old file → invisible.  That is the normal case for a mature codebase,
-which makes this section a **human** step the gate cannot replace.
-
-**Two traps worth naming.**  A generator that promotes the FIRST fenced example into
-a runnable test means a teaching snippet placed above the real example silently
-becomes the test — put the runnable example first.  And a feature issue closed or
-labelled by hand skips whatever automation the merge path would have run, so its tags
-drift exactly like a hand-closed plan's do.
 
 ---
 
@@ -276,57 +240,26 @@ drift exactly like a hand-closed plan's do.
 
 ## Transferable pitfalls
 
-Hard-won and tree-independent:
+The body above states the procedure; these are the three judgement calls that are
+easy to get wrong and are not implied by any step.
 
-1. **Audit shipped status before routing.**  The commonest misroute is filing a
-   partly-shipped doc as "future".  Audit first; the user's mid-flight status
-   question is the brake.
-2. **Prefer an `## Open work` section in the reference doc over a pointer-plan.**  A
-   thin plan that only links back to a doc adds a layer of indirection without
-   saving content.  One home, no pointer.
-3. **Split when broad; single-file when bounded.**  A doc with broad
+1. **Split when broad; single-file when bounded.**  A doc with broad
    intended-to-finish scope → split into focused files.  A doc with an explicit
    scope ceiling ("never going to ship past X") → one file with a status block.
-4. **Close = move reference out + rewrite incoming links.**  This is the
-   most-skipped step and the source of link rot.  Don't skip the grep + drift
-   check.
-5. **Named value categories beat numbered tiers.**  Categories that name the *kind*
+2. **Named value categories beat numbered tiers.**  Categories that name the *kind*
    of value are stable across sessions; numbered tiers (V1/V2/V3) get re-ranked
    constantly.  Re-categorize only when scope actually changes.
-6. **No per-plan entry in the master-instructions index.**  It duplicates the
-   plans-overview doc and costs tokens every session.  Plans are discoverable via
-   the overview.
-7. **Never calendar-time language** in plans, roadmaps, or memory — "2–3 weeks"
+3. **Never calendar-time language** in plans, roadmaps, or memory — "2–3 weeks"
    ships in 2 days and "quick fix" takes weeks.  Use effort letters.  Historical
    retrospectives that *document* the rule's validity are fine to keep.
-8. **Investigation plans get their own template and reading order**
-   (Status → Probes → Cluster docs → Roadmap).  Forcing investigation work into the
-   standard feature-ship template either bloats the README or loses the catalogue.
-9. **Probe-first beats source-first** for failure-class work.  Source-reading
-   without a probe to ground it explores code paths without converging; the probe
-   suite is the executable spec for "understood".
-10. **Liberal probes, attic-curate after.**  Make probes liberally; curate at the
-    end of Stage A.  Real-consumer extraction is non-negotiable — it surfaces
-    classes synthetic probes never imagine.
-11. **Verified-vs-hypothesized accountability prevents drift.**  Mark every
-    mechanism claim; the table answers "do we actually know?" honestly.
-12. **Tools as needed, not upfront.**  Add the one tool blocking progress; list it
-    in `Tool gaps`; revert nice-to-haves.
-13. **Claim the issue before the directory — never number a plan by scanning local
-    dirs.**  The issue number is the identity; file it first and name the directory
-    after it.  Scanning the local tree for "the next free number" misses unmerged plans
-    on sibling branches (a `15-debugger/` on a feature branch invisible from `main`),
-    so you mint a duplicate that collides on merge — and GitHub issue numbers are
-    immutable, so it cannot be cleanly reassigned afterward.
-14. **Shipping a feature is not done until its catalogue entry describes the built
-    thing.**  Where the issue is canonical and the docs are generated from it, stale
-    prose, a stale example, or a wrong label ships as authoritative documentation.
-    Verify existence → accuracy → tags, run the example, regenerate, let the drift
-    guard confirm.  Behaviour that moved mid-plan is the likeliest to have drifted.
 
 ---
 
 ## Filing bugs found during plan work
+
+Two independent questions, and both must be answered before you file: **which repo
+owns it** ([`references/consumer-projects.md`](references/consumer-projects.md))
+and **is it already on the mainline** (below).
 
 A tracker issue is a **claim about the mainline**.  So, working inside a plan:
 **file a problem only when it reproduces *outside* the plan — already on the
@@ -368,5 +301,20 @@ Everything above is tree-agnostic.  This section is the **only** loft-specific p
 | Probe gates (leak / exit) | `LOFT_STORES=warn`; the `loft_suite` leak gate; both backends = interpreter + native |
 | Execution modes to verify across | `--interpret` and `--native` |
 | Canonical examples | partial defer: plan-28 / plan-12 · create-and-move close: `31-html-export → HTML_EXPORT.md` · trim-only close: `04-slot-assignment-redesign → SLOTS.md` |
+| Consumer (dogfood) repos + their trackers | `moros` ([`jjstwerff/moros`](https://github.com/jjstwerff/moros/issues), `plans/<N>-<slug>/`, `make plan-check`) · `dryopea` · `crawler` · `lib/markdown`.  Each keeps its own issue numbers and its own `plans/README.md` binding; the method above is shared verbatim |
+| Where a consumer files an ENGINE defect | `loft-lang/loft` issues (`bug_report`), `sev:`/`area:` + a verified `wa:*` label — never a plan in the consumer repo |
 | Branch / commit / bug-filing policy | `CLAUDE.md` |
 | Full dev procedures (rebase, commit hygiene) | `doc/claude/DEVELOPMENT.md` |
+
+
+---
+
+## Reference files
+
+Read one when you are in its situation; none is needed for the common path above.
+
+| Read | When |
+|---|---|
+| [`references/investigation-plans.md`](references/investigation-plans.md) | The deliverable is mechanism understanding before fix design — probes, clusters, verified-vs-hypothesized accountability |
+| [`references/consumer-projects.md`](references/consumer-projects.md) | You are in a project built ON the engine and need to know which repo a finding belongs to |
+| [`references/catalogue-check.md`](references/catalogue-check.md) | The work adds, changes, renames or removes a feature whose tracker issue is the canonical description |

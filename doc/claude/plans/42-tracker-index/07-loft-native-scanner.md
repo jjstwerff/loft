@@ -1120,4 +1120,4 @@ slots between phase 04 (viewer integration) and phase 05
 - [Phase 03 — broken-tag validator](03-broken-validator.md) — `tests/index_hygiene.rs` extended here for the schema-diff test
 - [`lib/server/src/server.loft`](../../../lib/server/src/server.loft) — pattern for a long-running loft program with a host-bridge native lib
 - [`lib_plans/57-regex/`](../../lib_plans/57-regex) — text-search primitive that would simplify the scanner
-- [`plans/finished/35-branch-review-viewer/`](../future/finished/35-branch-review-viewer) — the viewer that consumes the same JSON
+- [`plans/finished/35-branch-review-viewer/`](../finished/35-branch-review-viewer) — the viewer that consumes the same JSON

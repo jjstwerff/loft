@@ -52,8 +52,8 @@ fn seeded_hasher(seed: u64) -> SipHasher13 {
 }
 
 /// `LOFT_HASH_SEED`, read once: the fixed seed every hash uses instead of an
-/// unpredictable one.  `None` (unset, empty, or not a number) keeps the random
-/// default.
+/// unpredictable one.  Accepts decimal or the `0x` hex spelling; `None` (unset
+/// or empty) keeps the random default.
 ///
 /// loft#710 — a random seed is stored in the hash's bucket record and decides
 /// the bucket ORDER, so a persisted store built twice from identical data came
@@ -64,12 +64,38 @@ fn seeded_hasher(seed: u64) -> SipHasher13 {
 /// It stays OPT-IN because the randomness is the P253 hash-DoS defense and a
 /// program taking attacker-supplied keys still wants it.  A build that needs
 /// reproducible artifacts sets this; a server does not.
+///
+/// loft#856 — the hex spelling is accepted because it is the one a 64-bit seed
+/// is actually written in, and it used to fall through to the random default in
+/// silence.  loft's own suite is what proved the cost: `paged_browser.rs` set
+/// `LOFT_HASH_SEED=0x0123456789abcdef` with a comment explaining that pinning
+/// the seed is what stops the test measuring a coin flip, and the pin never took
+/// effect — the test kept flaking for the reason its comment said it had fixed.
+/// A silently-ignored setting is worse than a rejected one: the caller has
+/// written down that they need reproducibility, so a value that cannot be read
+/// SAYS so rather than quietly handing back the behaviour they opted out of.
 fn fixed_seed() -> Option<u64> {
     static FIXED: OnceLock<Option<u64>> = OnceLock::new();
     *FIXED.get_or_init(|| {
-        std::env::var("LOFT_HASH_SEED")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
+        let raw = std::env::var("LOFT_HASH_SEED").ok()?;
+        let v = raw.trim();
+        if v.is_empty() {
+            return None;
+        }
+        let parsed = v
+            .strip_prefix("0x")
+            .or_else(|| v.strip_prefix("0X"))
+            .map_or_else(
+                || v.parse::<u64>().ok(),
+                |hex| u64::from_str_radix(hex, 16).ok(),
+            );
+        if parsed.is_none() {
+            eprintln!(
+                "warning: LOFT_HASH_SEED={raw:?} is not a 64-bit number — hashing stays \
+                 random, so a persisted store will NOT be byte-reproducible"
+            );
+        }
+        parsed
     })
 }
 
@@ -451,6 +477,22 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
+/// @PLN139 stage G: the double-move lint. Warns when one droppable value is handed to TWO
+/// owners — `c = mk(); s1 = S { h: c }; s2 = S { h: c }` — because @PLN139 made a copy into a
+/// container a MOVE, so each container's death releases what it took and the one resource is
+/// released twice. Before the cascade this shape merely leaked; the cascade is what turns it
+/// into a double close, which is why the diagnostic ships with it.
+///
+/// `warning` tier, per the two-tier rule: ignoring it produces a wrong result. It fires only
+/// where BOTH hand-offs are certain to run, so mutually-exclusive branches stay silent.
+/// **Default ON**; `LOFT_NO_DOUBLE_MOVE` opts out. One cached env read. See
+/// `use_analysis::warn_double_move`, `doc/claude/plans/139-drop-cascade.md`.
+#[must_use]
+pub fn double_move_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DOUBLE_MOVE").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
@@ -499,6 +541,20 @@ pub fn dump_link_safe() -> bool {
 pub fn a1b_materialise_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_A1B").is_none())
+}
+
+/// loft#872: a work-ref mint may not RE-TYPE an argument — **DEFAULT ON**. `ref_return` promotes a
+/// body work-ref to the function's hidden return-buffer argument on pass 1, and the variable tables
+/// persist by NAME, so on pass 2 the same `__ref_N` name is minted again. When the site asking is the
+/// return delivery, re-finding it is exactly right; when it is a DIFFERENT role — a call's out-param
+/// buffer — the caller's buffer is handed to a callee that builds something else into it. The type
+/// asked for is the signal, so a mint whose type differs from the argument's steps to the next name.
+/// Opt OUT with `LOFT_NO_WORKREF_STEPOVER` (restores the collision: an empty vector out of the call
+/// and an out-of-bounds write after it). One cached env read. See `Function::retypes_argument`.
+#[must_use]
+pub fn work_ref_stepover_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_WORKREF_STEPOVER").is_none())
 }
 
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a

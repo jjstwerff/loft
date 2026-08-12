@@ -18,7 +18,43 @@
 use crate::data::{Data, DefType, Deps, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
+use crate::keys::{Content, Str};
 use crate::lexer::Lexer;
+
+/// loft#876 — fold a field's declared default (`height: float = 1.5`) to the constant
+/// the store schema can carry, or `None` when it is not one.
+///
+/// A default is an arbitrary expression, and the store layer that answers "what is this
+/// field when nobody said" sits below the parser with no evaluator. Rather than give it
+/// one, only a default that is already a LITERAL is carried, which is the majority
+/// spelling and needs nothing to run.
+///
+/// The rest keep exactly their previous reach: a default needing a temporary (`= mk()`,
+/// `= [1, 2]`, a nested struct literal) is lowered parser-side into a function the
+/// CONSTRUCTION site calls, so it still applies to `D {}` and still does not apply to a
+/// `text as D` cast. That is the contract — a constant default is part of the type, a
+/// computed one is part of construction — and it is stated in LOFT.md rather than left
+/// as a hole.
+///
+/// `Value::Null` is "no default declared". An explicit `= null` is the same answer the
+/// absent-value path already writes, so folding it would change nothing.
+pub(crate) fn fold_declared_default(value: &Value) -> Option<Content> {
+    match value.unspan() {
+        Value::Int(i) => Some(Content::Long(i64::from(*i))),
+        Value::Long(i) => Some(Content::Long(*i)),
+        // A boolean field is a byte holding 0/1; `Content` has no boolean spelling and
+        // the walker reads this back through the field's own content type.
+        Value::Boolean(b) => Some(Content::Long(i64::from(*b))),
+        Value::Float(f) => Some(Content::Float(*f)),
+        Value::Single(f) => Some(Content::Single(*f)),
+        // `Str` is the schema's interned spelling; a declared default outlives the parse
+        // exactly like a type name does.
+        Value::Text(s) => Some(Content::Str(Str::new(Box::leak(
+            s.clone().into_boxed_str(),
+        )))),
+        _ => None,
+    }
+}
 
 /// Set the correct type and initial size in definitions.
 /// This will not factor in the space for attributes for records
@@ -596,6 +632,54 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
+    report_unknown_key_fields(data, lexer);
+}
+
+/// loft#874 — report the key fields a keyed collection named that its ELEMENT type
+/// does not have.
+///
+/// `set_mutable` records them because `fill_database` has no lexer; this is the
+/// reporting half. The caret lands on the FIELD that declared the collection, which
+/// is where the user wrote the name — the panic it replaces pointed at whatever line
+/// the layout happened to be reached from, and that line is correct as written.
+///
+/// The message names the element type, because the most common way in (`hash<K, V>`,
+/// the spelling nearly every other language uses) leaves a name that looks like a
+/// perfectly good type and is being read as a FIELD — saying only "unknown field"
+/// would confirm the user's wrong model instead of correcting it.
+fn report_unknown_key_fields(data: &mut Data, lexer: &mut Lexer) {
+    for (decl_d, decl_a, elem_d, name) in data.take_unknown_key_fields() {
+        let field = data.attr_name(decl_d, decl_a);
+        let elem = data.def(elem_d).name().to_string();
+        // Only a struct-shaped element HAS fields.  A base type reached here because
+        // the element slot itself is wrong — `hash<integer, At>` puts the key where
+        // the element goes — and listing what `integer` answers to would offer its
+        // METHODS as candidate keys, which is a worse answer than none.
+        let structured = matches!(
+            data.def_type(elem_d),
+            DefType::Struct | DefType::EnumValue | DefType::Enum
+        );
+        let candidates = if structured {
+            data.attr_names_of(elem_d)
+        } else {
+            Vec::new()
+        };
+        // The hint carries its own terminator: a did-you-mean ends in a question
+        // mark, and appending a full stop to that reads as a typo in the compiler.
+        let hint = match crate::diagnostics::suggest_similar_capped(&name, &candidates) {
+            Some(s) => format!(" — did you mean `{s}`?"),
+            None if !structured => format!(" — `{elem}` is not a struct, so it has no fields."),
+            None if candidates.is_empty() => ".".to_string(),
+            None => format!(" — the fields of `{elem}` are: {}.", candidates.join(", ")),
+        };
+        let msg = format!(
+            "Field `{field}`: `{name}` is not a field of `{elem}`, so it cannot be a key{hint} \
+             A keyed collection names its keys as FIELDS OF ITS ELEMENT — write \
+             `hash<Element[key_field]>`, not `hash<key, Element>`"
+        );
+        let position = data.def(decl_d).position.clone();
+        lexer.pos_diagnostic(Level::Error, &position, &msg);
+    }
 }
 
 /// @PLN25 E2a.2 — rewrite each nullable struct-typed field to the synthetic
@@ -1048,7 +1132,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if data.def(kd).known_type == u16::MAX {
                         fill_database(data, database, kd);
                     }
-                    set_mutable(data, kd, &key_fields);
+                    set_mutable(data, kd, &key_fields, (d_nr, a_nr));
                     database.hash(c_tp, &key_fields)
                 }
                 Type::Index(c_nr, key_fields, _) => {
@@ -1064,7 +1148,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if data.def(kd).known_type == u16::MAX {
                         fill_database(data, database, kd);
                     }
-                    set_mutable_directed(data, kd, &key_fields);
+                    set_mutable_directed(data, kd, &key_fields, (d_nr, a_nr));
                     database.index(c_tp, &key_fields)
                 }
                 Type::Sorted(c_nr, key_fields, _) => {
@@ -1077,7 +1161,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if data.def(kd).known_type == u16::MAX {
                         fill_database(data, database, kd);
                     }
-                    set_mutable_directed(data, kd, &key_fields);
+                    set_mutable_directed(data, kd, &key_fields, (d_nr, a_nr));
                     database.sorted(c_tp, &key_fields)
                 }
                 Type::Radix(c_nr, key_fields, _) => {
@@ -1086,7 +1170,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable(data, c_nr, &key_fields);
+                    set_mutable(data, c_nr, &key_fields, (d_nr, a_nr));
                     database.spatial(c_tp, &key_fields)
                 }
                 Type::Trie(c_nr, key, _) => {
@@ -1095,7 +1179,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable(data, c_nr, std::slice::from_ref(&key));
+                    set_mutable(data, c_nr, std::slice::from_ref(&key), (d_nr, a_nr));
                     database.trie(c_tp, &key)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
@@ -1215,6 +1299,12 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             if nullable {
                 database.set_field_nullable(s_type, &data.attr_name(d_nr, a_nr), true);
             }
+            // loft#876 — the same "ONE parse-time site that knows" for the field's
+            // DECLARED default.  It lives here as an IR node and the store layer has no
+            // evaluator, so a cast could not consult it and wrote the type's zero.
+            if let Some(c) = fold_declared_default(&data.def(d_nr).attributes[a_nr].value) {
+                database.set_field_default(s_type, &data.attr_name(d_nr, a_nr), c);
+            }
         }
     }
     // Propagate Data-side LinkedFieldGroups (currently: tuple element
@@ -1254,16 +1344,39 @@ pub(crate) fn key_bearing_def(data: &Data, c_nr: u32) -> u32 {
     c_nr
 }
 
-fn set_mutable(data: &mut Data, on_d: u32, fields: &[String]) {
+/// Mark a keyed collection's key fields immutable on the element definition —
+/// and record, rather than index with, a key field the element does not have.
+///
+/// [`Data::attr`] answers `usize::MAX` for a name it cannot find, and that is
+/// reachable from ordinary source: a typo (`hash<At[nosuch]>`) and the
+/// `hash<K, V>` spelling every other language uses (loft#874) both land here
+/// with a name that is not an attribute. Indexing with the sentinel panicked
+/// with a Rust location and a caret pointing at a line that was correct as
+/// written, which is the one response a user cannot act on.
+///
+/// The name is deferred to [`Data::take_unknown_key_fields`] rather than
+/// reported here because `fill_database` has no lexer — the same
+/// record-here / report-there shape as `defer_unknown` above. `decl` is the
+/// FIELD that declared the collection, not the element type, so the caret can
+/// land on the declaration the user wrote.
+fn set_mutable(data: &mut Data, on_d: u32, fields: &[String], decl: (u32, usize)) {
     for f in fields {
         let a_nr = data.attr(on_d, f);
+        if a_nr == usize::MAX {
+            data.record_unknown_key_field(decl, on_d, f);
+            continue;
+        }
         data.definitions[on_d as usize].attributes[a_nr].mutable = false;
     }
 }
 
-fn set_mutable_directed(data: &mut Data, on_d: u32, fields: &[(String, bool)]) {
+fn set_mutable_directed(data: &mut Data, on_d: u32, fields: &[(String, bool)], decl: (u32, usize)) {
     for f in fields {
         let a_nr = data.attr(on_d, &f.0);
+        if a_nr == usize::MAX {
+            data.record_unknown_key_field(decl, on_d, &f.0);
+            continue;
+        }
         data.definitions[on_d as usize].attributes[a_nr].mutable = false;
     }
 }

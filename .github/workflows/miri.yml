@@ -303,7 +303,15 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) |
-          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
+          test(native_rs_functions_up_to_date) |
+          test(a_private_scope_end_hook_in_a_library_runs) |
+          test(a_delegating_producer_binds_its_companion_cleanly)${{ matrix.extra_filter }})'
+          # ^ the last two are the "spawns an uninstrumented binary" case the comment
+          #   above names, in its sharpest form: the spawned run BUILDS native artifacts
+          #   (a library cdylib, the `--native` runtime), and that build cannot resolve
+          #   loft's proc-macro deps under `-Zsanitizer` + `--target` — the same E0463
+          #   that keeps doctests out of this sweep. They carry no ASan coverage either
+          #   way, and the normal Test jobs validate what they assert.
 
   # @PLN85 — the interpreter LEAK GATE.  SEPARATE from the ASan UAF/OOB sweep above:
   # its own runner (the slow single-threaded leak pass never gates the fast sweep) and
@@ -414,14 +422,29 @@ jobs:
         # The fault-path text class (append_text / format_text / format_long / text_tl_fmt)
         # is suppressed in lsan_suppressions.txt — a faulting program never frees its
         # in-flight text local, an accepted non-cleanup on the terminating abort path (the
-        # real binary process::exits, so this is never a production leak).  No test is
-        # excluded; the deliberately-faulting fixtures now run under the gate too.
+        # real binary process::exits, so this is never a production leak).  The
+        # deliberately-faulting fixtures run under the gate; the only exclusions are the
+        # toolchain-sensitive meta-tests and the two "spawns a build" tests below.
         run: >
           cargo +nightly nextest run --profile ci --release --no-fail-fast
           --target ${{ matrix.target }}
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(fill_rs_up_to_date) | test(n9_generated_fill_matches_src) |
-          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
+          test(native_rs_functions_up_to_date) |
+          test(a_private_scope_end_hook_in_a_library_runs) |
+          test(a_delegating_producer_binds_its_companion_cleanly)${{ matrix.extra_filter }})'
+          # ^ the same two the ASan sweep above excludes, for the same reason and not a
+          #   new one: each spawns the loft binary on BOTH backends, and the `--native`
+          #   leg makes the spawned run BUILD native artifacts (the `--native` runtime, a
+          #   library cdylib).  That build cannot resolve loft's proc-macro deps under
+          #   `-Zsanitizer` + `--target` — E0463 — so the test fails on the environment
+          #   before it ever allocates, which is no leak signal at all rather than a
+          #   weakened one.  Excluded here as well because a gate that reds on its own
+          #   toolchain teaches readers to ignore it (loft#855, where these two were the
+          #   whole of a four-leg red while the per-file scan reported 0 leaking files of
+          #   701).  What the exclusion does cost: `pln125-a2c-companion.loft` keeps its
+          #   leak coverage from the per-file scan below, `tests/multilib/
+          #   drop_scope_hook.loft` is not in that corpus and so loses its.
 
       # SPECIFIC LOGGING: nextest names the failing TEST, but the `loft_suite` /
       # `library_suite` runners execute the whole `.loft` corpus IN ONE PROCESS, so a

@@ -9,6 +9,7 @@ design for each planned improvement.
 
 ## Contents
 
+- [Profiling a run](#profiling-a-run)
 - [Benchmark results](#benchmark-results)
 - [How the interpreter executes](#how-the-interpreter-executes)
 - [Interpreter vs Python](#interpreter-vs-python)
@@ -17,14 +18,280 @@ design for each planned improvement.
 - [Design: P1 — Superinstruction merging](#design-p1--superinstruction-merging)
 - [Design: P2 — Reduce store indirection on the stack](#design-p2--reduce-store-indirection-on-the-stack)
 - [Design: P3 — Confirm integer paths carry no long sentinel](#design-p3--confirm-integer-paths-carry-no-long-sentinel)
+- [Design: P4 — Block-copy slice materialisation for primitive vectors](#design-p4--block-copy-slice-materialisation-for-primitive-vectors)
 - [Design: N1 — Direct-emit local collections in native codegen](#design-n1--direct-emit-local-collections-in-native-codegen)
 - [Design: N2 — Omit stores parameter from pure native functions](#design-n2--omit-stores-parameter-from-pure-native-functions)
 - [Design: N3 — Remove long null-sentinel from generated code](#design-n3--remove-long-null-sentinel-from-generated-code)
+- [Design: N4 — Suppress cr_call_push on `#pure` leaf functions](#design-n4--suppress-cr_call_push-on-pure-leaf-functions)
+- [Design: N5 — Inline `integer` arithmetic when operands are provably non-null](#design-n5--inline-integer-arithmetic-when-operands-are-provably-non-null)
+- [Design: N6 — Skip the rustc toolchain probe on a native cache hit](#design-n6--skip-the-rustc-toolchain-probe-on-a-native-cache-hit)
 - [Design: W1 — wasm string representation](#design-w1--wasm-string-representation)
 - [Improvement priority order](#improvement-priority-order)
 - [See also](#see-also)
+- [Runtime optimisation audit](#runtime-optimisation-audit)
+- [String Buffer Allocation and Optimization Opportunities](#string-buffer-allocation-and-optimization-opportunities)
+- [Struct Passing, Copies, and Optimization Opportunities](#struct-passing-copies-and-optimization-opportunities)
+- [Block Copy Efficiency: Analysis and Recommendations](#block-copy-efficiency-analysis-and-recommendations)
+- [Design: O8 — Bulk initialisation of constant data](#design-o8--bulk-initialisation-of-constant-data)
+- [Design: BUILD1 — Eliminate the lib/bin double compilation](#design-build1--eliminate-the-libbin-double-compilation)
+- [Design: BUILD2 — Persist the native-test binary cache across CI runs](#design-build2--persist-the-native-test-binary-cache-across-ci-runs)
+- [See also — bytecode and store internals](#see-also--bytecode-and-store-internals)
+- [Startup cache (shipped, default-on)](#startup-cache-shipped-default-on) — **what a rerun actually costs, and which binary you measured**
+- [Open work](#open-work)
 
 ---
+
+## Profiling a run
+
+`make profile ARGS="--interpret prog.loft"` answers *where did this run spend its time*,
+down to the source line — and with `--mem`, *where did its heap go*.
+`scripts/profile.sh` is the same thing with flags.
+
+```
+make profile ARGS="--interpret prog.loft"
+PROFILE_FLAGS="--mem"       # allocation hot spots, by loft LINE, at the peak
+PROFILE_FLAGS="--paths"     # + the call paths that reached each allocation
+PROFILE_FLAGS="--engine"    # profile LOFT ITSELF with perf, not your program
+PROFILE_FLAGS="--annotate"  # the hot function's source LINES
+PROFILE_FLAGS="--calls"     # who calls the hot function
+PROFILE_FLAGS="--no-cache"  # profile a COMPILE, not a startup-cache reload
+PROFILE_FLAGS="--no-warm"   # skip the native pre-build (see "the build is not the run")
+```
+
+**The report goes to STDERR.** So `LOFT_PROFILE=1 loft test > out.txt` keeps the test
+results and drops the profile, and an empty `out.txt` section reads as *"no profile was
+produced"* — which is the same wrong conclusion the two lies below produce, reached a
+different way. It cost a consumer one confused measurement. Redirect both (`> out.txt
+2>&1`) or keep stderr on the terminal. Stderr is deliberate: the profile must not land in
+the program's own output, where it would corrupt whatever reads it.
+
+### Two profilers, and the driver picks
+
+**`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your
+program, because your functions were compiled into the binary being sampled and come back
+named `n_<yours>`. To profile the front end alone — parse, IR, codegen — use
+`--engine -- --interpret --check p.loft`: **`--check` on its own is not front-end-only**,
+because the default backend is the compiler, so `check_only` still falls through the native
+pipeline and rustc builds a binary it then does not run (the rustc-share guard says so, and
+names the missing flag).
+
+**For an interpreted program it is the wrong instrument, structurally.** A loft call
+creates no machine frame, so perf's stack walk yields the interpreter's own path —
+
+```
+_start → __libc_start_main → main → std::rt::lang_start → loft::main
+       → execute_argv → put_stack::<i64>
+```
+
+— identical for every program ever run. No sampling frequency fixes that; it is the wrong
+stack, not a truncated one. loft keeps the right one itself (`State::call_stack`), so an
+interpreted program is sampled over *that*, and the report names loft functions, loft
+lines and loft call paths (@PLN140 arc B, `src/profiler.rs`).
+
+So the script decides: a run that executes loft code under the interpreter gets loft's own
+sampler, everything else gets perf. `--engine` and `--program` override it.
+
+That includes **test runs** — `loft test` and `--tests` both interpret, and a suite is
+usually the biggest interpreted workload a project owns (loft#860). Each test compiles its
+own bytecode and runs in its own `State`, so a `pc` means something different in each one;
+the samples are therefore resolved to `(function, file:line)` per test and merged on those
+labels, never on positions. One report for the whole run, not one per file — 39 banners
+rank nothing, and no attribution is lost, because every row already names its file:
+
+```
+════ loft CPU profile — 31274 samples over 255 ms across 3 runs ════
+── by line (self time) ──
+  37.3 %      95 ms  other.loft:3                 other_work
+  33.3 %      85 ms  hot.loft:3                   slow_part
+```
+
+Two instruments are out of scope there and say so rather than going quiet: `--native` test
+runs (nothing to sample — no dispatch loop) and `LOFT_ALLOC_SITES` (it ranks a
+*process-wide* peak by bytecode position, and a suite's peak may have been reached in any
+of its runs, so those positions have no single `Data` to resolve against).
+
+### The two ways a profile can lie, and what it now says instead
+
+Both were found by pointing the sampler at a real consumer (moros), and both matter more
+than a missing feature would, because each ends in something that *looks* like an answer.
+
+**A native run is not sampled at all (loft#865).** The sampler is interpreter-only, and the
+DEFAULT backend is native — so `LOFT_PROFILE=1 loft prog.loft`, the command a person
+actually types, accepted the variable and exited 0 with an empty terminal. That is
+indistinguishable from *"the profiler ran and your program is not the problem"*. A native
+run now says so before it starts, naming `--interpret` and `--engine` as the two cures.
+
+**A `use`d library is a cdylib the sampler cannot see into.** This is the sharper one,
+because the report is *populated*. A library runs as compiled code, so its functions cannot
+be sampled at any rate; their time lands on the loft line that called them. Measured on a
+two-function probe where the library loops 150× what the program does:
+
+| | samples | top row |
+|---|---|---|
+| default | 365 | `100.0 % app_bit` |
+| `LOFT_NO_NATIVE_LIBS=1` | 61 824 | `99.5 % lib_grind`, `0.5 % app_bit` |
+
+The ranking is **inverted**, and nothing in the first table hints at it. Note also that
+*one* bridge call was enough — the call count measures calls, not work — and that the low
+sample count is a symptom, not a sampling-rate problem: the op clock does not tick while
+compiled code runs, so a longer run does not help. The CPU report now leads with this
+whenever any library call happened, and the "too few samples to rank" line points at the
+library rather than at the interval when that is the real cause.
+
+```
+════ loft CPU profile — 44339 samples over 1.07 s ════
+── by function (self time) ──
+  95.2 %     1.02 s  is_prime
+   4.8 %      51 ms  main
+── by line (self time) ──
+  42.5 %     455 ms  bench.loft:7                 is_prime
+── hottest paths (innermost 8 frames) ──
+  95.2 %     1.02 s  main → is_prime
+```
+
+The clock is an **op counter choosing when to sample and the wall clock saying how much**:
+each sample carries the nanoseconds since the previous one. That is what keeps a single
+heavy native call (a `sort`, a store operation) from counting as one op — the plan's open
+question 1, answered in `src/profiler.rs`'s module doc, which also lists what the choice
+still cannot do (`par` workers are not sampled; a long op's time lands on the frame at the
+*next* sample).
+
+The sampling period is **jittered** around its mean, and that is not a detail. A fixed
+period samples one phase of a periodic program: the arc C oracle allocates down two paths
+in a known 9:1 ratio, and a fixed every-16th sampler put **100 %** on one and never once
+saw the other. Not noisy — confidently wrong, and no sample count would have shown it.
+
+`LOFT_PROFILE=<ops>` sets the mean (default 1024); `LOFT_ALLOC_PATHS=<ops>` the allocation
+rate (default 16). `1`, `on` and `yes` all mean "the default rate".
+
+**What it costs.** Nothing when off — the sampler hangs off the dispatch loop's existing
+`self.debug.is_some()` branch, and against the pre-@PLN140 binary the benchmark corpus is
+unchanged within noise (×0.90–×1.03, in both directions). Armed: **+7–11 %** for CPU
+sampling and **+4–7 %** for allocation paths, measured on `bench/02`, `03`, `05` and `10`.
+
+### Where the heap went (`--mem`)
+
+```
+════ allocation hot spots — peak 273.4 MiB, captured at 273.4 MiB (100 % of peak) ════
+   136.7 MiB       1 store   main_vector<float>    main    bench.loft:5
+   136.7 MiB       1 store   main_vector<float>    main    bench.loft:6
+```
+
+Three things separate this from the reports it grew out of, and each was a way the old one
+answered a question nobody asked:
+
+* **Live stores, not leaked ones.** `LOFT_LEAK_SITES` groups by the same key but over what
+  was never freed, so a program that frees everything gets an empty report however much
+  memory it used.
+* **At the peak, not at exit.** A program that peaks at 1.5 GiB and exits at 10 MB has
+  nothing left to report by the time an exit hook runs. The banner names both the peak and
+  the total the table was actually captured at, because a table describing a different
+  moment than its headline is the plausible-looking wrong answer this exists to refuse.
+* **Bytes, not store counts.** `LOFT_ALLOC_REPORT` counts allocations, weighing one 40 MiB
+  vector the same as one 32-byte record.
+
+Two blind spots it states rather than hides: **text buffers are Rust `String`s, not
+stores**, so they are not counted; and **`--native` has no allocation site at all** —
+`alloc_pc` is published by the interpreter's dispatch loop, so a native binary would
+report a table of `line 0`. That is a **decline, not a gap** (@PLN140 open question 3):
+`--mem` refuses on a native run and points at `--interpret`, which allocates from the same
+loft lines.
+
+### The corpus check — `make profile-corpus`
+
+`bench/profile_oracle.tsv` records what each instrument **must** say about a program whose
+hot spot is known in advance: `fib`'s time is in `fib`, `02_sum_loop`'s in `main` (the
+negative control — four of the five CPU rows would also pass an instrument that just
+reported the deepest frame), `09_matrix_mul`'s memory at the two lines that build its
+vectors. An instrument that fails a row is **wrong**, so that half is a gate. The share
+drift printed beside it never is: shares move with the machine, so the previous local
+capture is diffed rather than a committed baseline (@PLN140 open question 5). Rationale
+per row: `doc/claude/plans/140-semi-automatic-profiling/ORACLE.md`.
+
+### Sample counts
+
+The perf banner carries the sample count — `self time — 42 samples`. Read it before you
+read the percentages: at fifty samples a 2 % row is one sample. `--annotate` used to
+annotate whichever symbol won that coin toss — it once printed forty lines of disassembly
+about a **one-sample `getenv`** from libc — so it now refuses a symbol whose share rests on
+fewer than ~50 samples and says why. A short run wants a higher `--freq`, or more work.
+
+### One-time setup
+
+Sampling a user process needs `perf_event_paranoid <= 1`; the script refuses with the exact
+command when it is higher.
+
+```bash
+echo 'kernel.perf_event_paranoid = 1' | sudo tee /etc/sysctl.d/99-perf.conf
+sudo sysctl --system
+```
+
+### The five choices that make a profile honest
+
+These are baked into the script rather than offered as options, because each one is a way a
+profile can be confidently wrong.
+
+**The build is not the run.** loft's *default* backend is the compiler: `loft prog.loft`
+generates Rust, shells out to rustc, and runs the binary it built. `perf` follows forks, so
+recording that command records the **build** — rustc, LLVM and lld take the entire top of
+the profile, and the few samples that are your program come back as bare hex, because the
+binary is stripped. So a native run is built **once, unprofiled**, and only then recorded;
+`--no-warm` opts out. The warm-up really does run your program, side effects and all, which
+is why the script announces it.
+
+The lever that symbolizes the binary is the `--native-debug` flag, and it is the only one:
+the binary cache key hashes *that flag*, not the environment (`src/main.rs`). Set
+`LOFT_NATIVE_KEEP_SYMBOLS=1` on its own and an already-cached **stripped** binary is handed
+straight back — the setting applies and nothing changes. `--native-debug` keeps symbols,
+emits DWARF line tables, and preserves the generated `.rs`, so `--annotate` lands on
+generated Rust carrying its `// loft:<file>:<line>` marker.
+
+What survives is a profile that names your code:
+
+```
+25.27%  hot_a-d780ac7f0  [.] loft_native_1057163::n_slow_part
+14.66%  hot_a-d780ac7f0  [.] loft::ops::op_add_int
+13.86%  loft             [.] loft::use_analysis::first_arg_write_ops   ← front end, not your program
+ 5.53%  hot_a-d780ac7f0  [.] loft_native_1057163::n_fast_part
+```
+
+The `loft` rows are the front end (parse, IR, codegen, cache lookup); the other command is
+your compiled program, its functions named `n_<yours>`. When rustc still takes 20 % or more,
+the script says so rather than letting a plausible-looking LLVM profile pass for a hot
+program.
+
+**Self time, not inclusive.** loft's hot paths are recursive tree walkers — `scopes::scan`,
+`use_analysis::collect_defs`, every `for_each_child` descent. Inclusive time hands ~100 % to
+the walker at the root and names nothing. Self time names the function actually burning
+cycles; `--calls` then tells you who reaches it.
+
+**Frame pointers, not DWARF.** `--call-graph=dwarf` copies stack memory per sample. Against a
+walker that recurses hundreds deep that is slow *and* truncates exactly the chains you came
+for. The profiling profile is built `-Cforce-frame-pointers=yes`, so `fp` unwinding is both
+cheap and complete.
+
+**A separate cargo profile.** `[profile.profiling]` is release plus line tables.
+Release itself stays untouched on purpose: RELEASE.md pins a release binary's sha256 and
+`make speed` measures release, so adding debug info there changes the artifact both are
+about. (The old `make profile` did exactly that — `RUSTFLAGS=-g cargo build --release`.)
+
+**A cache hit is not a compile.** loft answers a second run of an unchanged file from the
+startup cache: same command, same output, a tenth of the time, and a flat profile that blames
+the store loader. That is the normal result of profiling the same file twice, so the script
+detects it and says so — use `--no-cache`, or vary the file's content per measurement.
+
+### Count before you time
+
+For an *asymptotic* question — "why is this quadratic?" — a profiler is the wrong first tool.
+It names the hot function but not the exponent, and the hot function is usually innocent. Add
+a counter, run it at two sizes, and read the growth.
+
+loft#854 is the worked example. Timing said `scopes::check` was 100 % of an 8 000-element
+compile. Counting said `scan` was called 33 832 → 61 832 → 117 832 times for 2 000 → 4 000 →
+8 000 elements — *linear*, while time went up 4× per doubling. Two numbers, and the whole
+"the walk re-traverses" family of explanations was dead: the walk is linear, so one call had
+to be doing O(n) work. Only then is a profiler the right instrument, and it went straight to
+`use_analysis::collect_defs`.
 
 ## Benchmark results
 
@@ -1407,10 +1674,12 @@ and P2 is low-priority.
 
 ---
 
+## Runtime optimisation audit
+
 This document audits the interpreter runtime for concrete performance improvements,
 weighing impact against implementation cost and maintainability.
 
-## Contents
+### Contents
 - [Open opportunities](#open-opportunities)
 - [Not worth changing](#not-worth-changing)
 - [Open — recommended priority order](#open--recommended-priority-order)
@@ -1420,9 +1689,9 @@ are recorded in CHANGELOG.md.
 
 ---
 
-## Open opportunities
+### Open opportunities
 
-### 1. `Stores::types` and `Stores::names` cloned for every worker
+#### 1. `Stores::types` and `Stores::names` cloned for every worker
 
 **File:** `database.rs:1541-1561`
 
@@ -1445,7 +1714,7 @@ if hundreds of parallel calls are made.
 
 ---
 
-## Not worth changing
+### Not worth changing
 
 | Pattern | Reason |
 |---|---|
@@ -1457,7 +1726,7 @@ if hundreds of parallel calls are made.
 
 ---
 
-## Open — recommended priority order
+### Open — recommended priority order
 
 | # | Change | File(s) | Effort | Impact |
 |---|--------|---------|--------|--------|
@@ -1467,13 +1736,13 @@ if hundreds of parallel calls are made.
 
 ---
 
-## O1 Superinstruction Peephole — Design Notes (deferred)
+### O1 Superinstruction Peephole — Design Notes (deferred)
 
 The infrastructure for superinstructions is in place but the peephole rewriting
 pass is deferred to a future release.  This section documents the design for
 the implementor.
 
-### What exists
+#### What exists
 
 - **Opcodes registered** in `default/01_code.loft`: `OpSiLoad2AddStore`,
   `OpSiLoadConstAddStore`, `OpSiLoadConstCmpBranch`, `OpSiLoad2CmpBranch`,
@@ -1487,7 +1756,7 @@ the implementor.
 - **`fill_rs_up_to_date`** CI test: asserts `src/fill.rs` matches the generated
   version — prevents drift when `01_code.loft` changes.
 
-### The stack-relative operand problem
+#### The stack-relative operand problem
 
 `get_var(pos)` computes `stack_base + stack_pos - pos`.  Each `VarInt` pushes
 4 bytes, advancing `stack_pos`.  The superinstruction runs without intermediate
@@ -1511,7 +1780,7 @@ The superinstruction at SP (no pushes):
 
 **Guard:** skip the pattern when `b < 4` (would underflow).
 
-### Real implementations for State methods
+#### Real implementations for State methods
 
 Replace the `nop()` stubs with:
 
@@ -1529,7 +1798,7 @@ pub fn si_load2_add_store(&mut self) {
 // For cmp+branch: si_load2_cmp_branch reads i16 offset, branches if va >= vb.
 ```
 
-### Peephole rewriter
+#### Peephole rewriter
 
 Add `PeepholeCtx` to `src/compile.rs` that:
 1. Builds opcode-length table via `build_opcode_len_table(data)`
@@ -1539,7 +1808,7 @@ Add `PeepholeCtx` to `src/compile.rs` that:
 5. Rewrites in-place with adjusted operands, fills excess bytes with OpNop
 6. **Skips default library functions** (`data.def(d_nr).position.file.starts_with("default/")`)
 
-### Known issue: default library corruption
+#### Known issue: default library corruption
 
 Default-library functions (`default/*.loft`) use VarInt operand patterns
 that interact with store-relative addressing in ways the simple `b-4`
@@ -1548,7 +1817,7 @@ tests.  **Mitigation:** skip default library functions — they're already
 fast (hand-optimised `#rust` templates); only user code benefits from
 superinstructions.
 
-### Adjustments per pattern
+#### Adjustments per pattern
 
 | Pattern | a | b/k | c/off | Super size |
 |---------|---|-----|-------|------------|
@@ -1563,12 +1832,12 @@ Compute: `new_off = (pc3 + 2 + old_off) - (pc + super_size)`.
 
 ---
 
-## See also
-- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results, root-cause analysis, and detailed designs for O1–O7 (superinstructions, stack pointer cache, native collection emit, purity analysis)
+### See also — backlog and internals
+- [Design: P1](#design-p1--superinstruction-merging) onward — the detailed O1–O7 designs (superinstructions, stack pointer cache, native collection emit, purity analysis)
 - [PLANNING.md](PLANNING.md) — Priority-ordered backlog
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/store.rs`, `src/state/` implementation details
 
-### 2. O8: Constant data initialisation (delivered 2026-04-02)
+#### 2. O8: Constant data initialisation (delivered 2026-04-02)
 
 **Files:** `src/const_eval.rs`, `src/vector.rs`, `src/fill.rs`, `src/parser/vectors.rs`
 
@@ -1590,9 +1859,9 @@ Full design: the Constant Data section below.
 ---
 
 
-# String Buffer Allocation and Optimization Opportunities
+## String Buffer Allocation and Optimization Opportunities
 
-## Text type duality
+### Text type duality
 
 Loft has two runtime representations for text:
 
@@ -1606,7 +1875,7 @@ references into the caller's (or constant pool's) memory.
 
 ---
 
-## Allocation lifecycle of a local text variable
+### Allocation lifecycle of a local text variable
 
 ```
 OpText          →  24B String written to stack, zero heap (String::new())
@@ -1623,7 +1892,7 @@ reuse the existing buffer.
 
 ---
 
-## Where copies actually happen
+### Where copies actually happen
 
 | Situation | What happens | Heap alloc? |
 |---|---|---|
@@ -1637,7 +1906,7 @@ reuse the existing buffer.
 | `x = "new"` (reassign) | OpClearText + OpAppendText | **Usually no** — reuses buffer |
 | Work text reuse | OpClearText | **No** — keeps capacity |
 
-### Destination passing (already optimized)
+#### Destination passing (already optimized)
 
 Text-returning functions use `RefVar(Text)`: the caller's String
 buffer is passed as an implicit parameter, and the callee writes
@@ -1655,7 +1924,7 @@ and `text_return()` in `control.rs`.
 
 ---
 
-## Current efficiency
+### Current efficiency
 
 Zero-copy Str references for arguments, destination-passing for
 text-returning functions, and `.clear()` + reappend reuse of heap
@@ -1665,9 +1934,9 @@ inherent to the owned-buffer design.
 
 ---
 
-## Optimization opportunities
+### Optimization opportunities
 
-### O-S1. `String::clone()` for `x = y` — **Low value**
+#### O-S1. `String::clone()` for `x = y` — **Low value**
 
 Currently `x = y` emits OpText (empty String) + OpVarText (read y) +
 OpAppendText (copy into x).  This does: allocate empty → reallocate
@@ -1679,7 +1948,7 @@ allocation at the correct size, one memcpy.  Saves one reallocation.
 **Impact:** Marginal — `String::clone()` vs empty + append is ~10%
 difference in microbenchmarks.  Not worth a new opcode.
 
-### O-S2. Pre-sized allocation for known lengths — **Low value**
+#### O-S2. Pre-sized allocation for known lengths — **Low value**
 
 For `x = "long literal string"`, the compiler knows the length at
 compile time.  `String::with_capacity(len)` would avoid the realloc
@@ -1688,7 +1957,7 @@ on first append.
 **Impact:** Negligible — short strings (< 16 chars) are the common
 case, and the allocator typically over-provisions anyway.
 
-### O-S3. Copy-on-write (Cow) for read-only variables — **Medium value, high complexity**
+#### O-S3. Copy-on-write (Cow) for read-only variables — **Medium value, high complexity**
 
 If a text variable is assigned once and only read thereafter, it
 could stay as a borrowed `Str` instead of copying into an owned
@@ -1714,7 +1983,7 @@ is safe today because Str arguments have function-call lifetime.
 Extending to local variables requires proving the source outlives
 the borrower.
 
-### O-S4. Small-string optimization (SSO) — **High value, high complexity**
+#### O-S4. Small-string optimization (SSO) — **High value, high complexity**
 
 Store strings ≤ 22 bytes inline in the 24-byte stack slot instead
 of heap-allocating.  This eliminates heap allocation for the vast
@@ -1731,7 +2000,7 @@ typical programs.  But the implementation cost is substantial.
 
 ---
 
-## Recommendation
+### Recommendation
 
 The current design is already well-optimized for the common cases.
 The `Str`/`String` split, destination passing, and work-text reuse
@@ -1746,9 +2015,9 @@ requires a custom string type that touches every text operation.
 ---
 
 
-# Struct Passing, Copies, and Optimization Opportunities
+## Struct Passing, Copies, and Optimization Opportunities
 
-## Loft parameter semantics
+### Loft parameter semantics
 
 Loft passes ALL struct parameters by reference (shared DbRef).  There
 is no implicit copy on function calls.  Mutation is the default:
@@ -1772,12 +2041,12 @@ The three parameter modes:
 
 ---
 
-## Where copies actually happen
+### Where copies actually happen
 
 Copies are NOT on parameter passing.  They happen on **first local
 variable assignment** and **return values**.
 
-### Copy landscape
+#### Copy landscape
 
 | Situation | What happens | Cost |
 |---|---|---|
@@ -1790,7 +2059,7 @@ variable assignment** and **return values**.
 | **Return values** | copy_block (byte copy) | **Moderate** |
 | Const lock check | Bool assert per write | Negligible |
 
-### When OpCopyRecord fires
+#### When OpCopyRecord fires
 
 Only three cases in `gen_set_first_at_tos` (codegen.rs):
 
@@ -1804,7 +2073,7 @@ Only three cases in `gen_set_first_at_tos` (codegen.rs):
 3. **Tuple destructuring** `(a, b) = expr` where an element is a
    Reference — deep copy for the extracted element.
 
-### What OpCopyRecord costs
+#### What OpCopyRecord costs
 
 Runtime at `state/io.rs:932`:
 ```
@@ -1815,7 +2084,7 @@ copy_claims(&data, &to, tp)      — deep copy of nested structures
 For `Mat4` (16 × f64 + vector wrapper): ~128 bytes + vector record.
 For `Scene` with meshes/materials/nodes: hundreds of bytes + all vectors.
 
-### Return value copy (latent issue)
+#### Return value copy (latent issue)
 
 `state/mod.rs:1032` copies return values with `copy_block` only — no
 `copy_claims`.  This is a shallow byte copy.  If a returned struct
@@ -1825,16 +2094,16 @@ use-after-free for complex return types.**
 
 ---
 
-## Optimization 1: Move semantics for return values
+### Optimization 1: Move semantics for return values
 
-### Problem
+#### Problem
 
 `br_mvp = rect_mvp(proj, x, y, w, h)` — called 60×/frame in Brick Buster.
 Each call: callee constructs Mat4, returns it, caller OpCopyRecord deep
 copies it into `br_mvp`'s store.  The callee's original is immediately
 freed.  The copy is wasted — the data could transfer ownership.
 
-### Fix: return slot pre-allocation (destination passing)
+#### Fix: return slot pre-allocation (destination passing)
 
 The caller pre-allocates the destination store and passes a DbRef to the
 callee.  The callee writes directly into it.  No copy on return.
@@ -1850,7 +2119,7 @@ This pattern already exists for text-returning functions
 (`try_text_dest_pass` in codegen.rs).  Extending it to struct returns
 is the natural next step.
 
-### Implementation
+#### Implementation
 
 **File:** `src/state/codegen.rs`
 
@@ -1864,7 +2133,7 @@ is the natural next step.
    - **Implicit:** codegen detects struct construction and redirects writes
    - **Explicit:** new `__dest` hidden parameter (like text_return)
 
-### Impact
+#### Impact
 
 | Function | Calls/frame | Bytes saved per call |
 |---|---|---|
@@ -1878,9 +2147,9 @@ renderer (PBR pass constructs Mat4 per node).
 
 ---
 
-## Optimization 2: Last-use move (elide copy when source dies)
+### Optimization 2: Last-use move (elide copy when source dies)
 
-### Problem
+#### Problem
 
 ```loft
 a = Point { x: 1.0, y: 2.0 };
@@ -1890,7 +2159,7 @@ b = a;       // OpCopyRecord — deep copy
 
 The copy is unnecessary — `a`'s store could be transferred to `b`.
 
-### Fix: last-use analysis
+#### Fix: last-use analysis
 
 If `x = y` and `y` is never read again after this point (last use),
 transfer `y`'s DbRef to `x` and null out `y`.  No copy needed.
@@ -1899,7 +2168,7 @@ The variable liveness analysis in `src/variables/` already tracks
 `first_def` and `last_use`.  If `last_use(y) == current_statement`,
 it's safe to move.
 
-### Implementation
+#### Implementation
 
 **File:** `src/state/codegen.rs`, in `gen_set_first_at_tos`
 
@@ -1917,7 +2186,7 @@ if let Value::Var(src) = value
 }
 ```
 
-### Impact
+#### Impact
 
 Eliminates copies for temporary struct results that are immediately
 assigned and never reused.  Common in builder patterns:
@@ -1929,15 +2198,15 @@ mvp = mat4_mul(proj, mat4_mul(view, m)); // inner result → temp (move)
 
 ---
 
-## Optimization 3: Auto-const inference (safety, not performance)
+### Optimization 3: Auto-const inference (safety, not performance)
 
-### Purpose
+#### Purpose
 
 Not a performance optimization (parameters aren't copied).  Instead:
 auto-lock stores for provably unwritten parameters to catch accidental
 mutation bugs at runtime.
 
-### When to auto-lock
+#### When to auto-lock
 
 A struct parameter can be auto-locked when:
 - Never directly written (`param.field = x`)
@@ -1946,7 +2215,7 @@ A struct parameter can be auto-locked when:
 - **Never passed as plain `T` to a non-const function** (conservative —
   callee might mutate through the shared reference)
 
-### Implementation
+#### Implementation
 
 1. Add `auto_const: bool` to Variable
 2. Run `find_written_vars()` at end of first pass
@@ -1954,7 +2223,7 @@ A struct parameter can be auto-locked when:
    where the receiving parameter is not `const`
 4. Lock store at function entry for auto-const params
 
-### Compiler warning
+#### Compiler warning
 
 When inference succeeds:
 ```
@@ -1963,9 +2232,9 @@ Warning: parameter 's' is never mutated — consider adding 'const'
 
 ---
 
-## Test cases
+### Test cases
 
-### Test 1: mutation through plain parameter (current behavior, correct)
+#### Test 1: mutation through plain parameter (current behavior, correct)
 
 ```loft
 struct S { x: integer not null }
@@ -1977,7 +2246,7 @@ fn main() {
 }
 ```
 
-### Test 2: const parameter locks store
+#### Test 2: const parameter locks store
 
 ```loft
 struct S { x: integer not null }
@@ -1988,7 +2257,7 @@ fn main() {
 }
 ```
 
-### Test 3: const prevents mutation via &T (runtime panic)
+#### Test 3: const prevents mutation via &T (runtime panic)
 
 ```loft
 struct S { x: integer not null }
@@ -1998,7 +2267,7 @@ fn main() { bad(S { x: 1 }); }
 // Panics: "Write to locked store"
 ```
 
-### Test 4: escape to non-const blocks auto-lock
+#### Test 4: escape to non-const blocks auto-lock
 
 ```loft
 struct S { x: integer not null }
@@ -2008,7 +2277,7 @@ fn caller(s: S) {
 }
 ```
 
-### Test 5: return value copy (current behavior)
+#### Test 5: return value copy (current behavior)
 
 ```loft
 struct Point { x: float not null, y: float not null }
@@ -2021,7 +2290,7 @@ fn main() {
 }
 ```
 
-### Test 6: move optimization target
+#### Test 6: move optimization target
 
 ```loft
 fn make() -> Point { Point { x: 1.0, y: 2.0 } }
@@ -2033,7 +2302,7 @@ fn main() {
 
 ---
 
-## Priority order
+### Priority order
 
 | # | Optimization | Impact | Effort | Risk |
 |---|---|---|---|---|
@@ -2043,7 +2312,7 @@ fn main() {
 
 ---
 
-## Related
+### Related
 
 - [PERFORMANCE.md](PERFORMANCE.md) — benchmark data and optimization plan
 - Optimisations section below — planned interpreter optimizations
@@ -2052,9 +2321,9 @@ fn main() {
 ---
 
 
-# Block Copy Efficiency: Analysis and Recommendations
+## Block Copy Efficiency: Analysis and Recommendations
 
-## What's actually expensive
+### What's actually expensive
 
 Block copy has two phases:
 
@@ -2076,7 +2345,7 @@ A `Mat4` with a `vector<float>` costs: 1 store allocation + vector
 allocation + 16 floats copied.  A `Scene` with meshes/materials/nodes:
 dozens of allocations, hundreds of bytes.
 
-## Where deep copies happen today
+### Where deep copies happen today
 
 Deep copies (OpCopyRecord) fire in exactly three codegen paths, all in
 `gen_set_first_at_tos` (codegen.rs:931-983):
@@ -2092,9 +2361,9 @@ Each emits: `OpConvRefFromNull` → `OpDatabase` → `OpCopyRecord`.
 Return values themselves are cheap (12-byte DbRef shallow copy in
 `copy_result`).  The deep copy only fires at first assignment.
 
-## Optimization candidates
+### Optimization candidates
 
-### O-B1. Last-use move — **IMPLEMENT THIS**
+#### O-B1. Last-use move — **IMPLEMENT THIS**
 
 **Pattern:**
 ```loft
@@ -2138,7 +2407,7 @@ Must verify that `last_use` accounts for implicit frees (OpFreeRef)
 
 ---
 
-### O-B2. Last-use move for function returns — **IMPLEMENT THIS**
+#### O-B2. Last-use move for function returns — **IMPLEMENT THIS**
 
 **Pattern:**
 ```loft
@@ -2169,7 +2438,7 @@ not freed until explicit OpFreeRef), this is safe.
 
 ---
 
-### O-B3. Destination passing for struct returns — **DEFER**
+#### O-B3. Destination passing for struct returns — **DEFER**
 
 **Pattern:** Extend the text `RefVar(Text)` destination-passing
 mechanism to struct-returning functions.  Caller pre-allocates the
@@ -2186,7 +2455,7 @@ next step.
 
 ---
 
-### O-B4. Shallow copy for immutable borrows — **DEFER**
+#### O-B4. Shallow copy for immutable borrows — **DEFER**
 
 **Pattern:** `x = y` where x is never mutated — share the DbRef
 instead of deep copying.
@@ -2198,7 +2467,7 @@ variables are immutable.  High complexity for moderate gain.
 
 ---
 
-## Status after O-B1
+### Status after O-B1
 
 **O-B1 is implemented** (codegen.rs `gen_set_first_ref_var_copy`).
 When `x = y` and y has `uses == 1` (only read here), **owns its store**
@@ -2223,7 +2492,7 @@ to move"); O-B1 is the shortcut that predates it. Any future move
 shortcut needs the same two questions, and *liveness* is only the second
 one.
 
-### Remaining deep copy sites
+#### Remaining deep copy sites
 
 | Site | Codegen function | Pattern | Frequency |
 |---|---|---|---|
@@ -2234,16 +2503,16 @@ one.
 **Site 1 is the dominant remaining cost.** Every `m = mat4_mul(a, b)`
 allocates a fresh store, deep copies, and **leaks the callee's store**.
 
-### Store leak on struct returns
+#### Store leak on struct returns
 
 When a function returns a struct, the callee's store is kept alive
 (scopes.rs `in_ret` check skips OpFreeRef).  After the caller deep
 copies from it, nobody frees it.  This is a latent store leak that
 grows linearly with struct-returning calls.
 
-## Recommendation
+### Recommendation
 
-### O-B2: Return store adoption — **IMPLEMENT NEXT**
+#### O-B2: Return store adoption — **IMPLEMENT NEXT**
 
 For `x = func()`, the source is always a temporary on the eval stack
 (no variable holds it).  Instead of allocating a NEW store + deep
@@ -2267,13 +2536,13 @@ struct constructor or a call to another struct-returning function
 **Complexity:** M — two-phase: (1) fix the leak (S), (2) skip copy
 for fresh returns (M, needs callee analysis).
 
-### O-B3 and O-B4 — **DEFER**
+#### O-B3 and O-B4 — **DEFER**
 
 Destination passing (O-B3) is the clean long-term solution but
 requires ABI changes.  Shallow copy for immutables (O-B4) needs
 copy-on-write.  Both deferred until the simpler O-B2 is in place.
 
-### Expected savings after O-B1 + O-B2
+#### Expected savings after O-B1 + O-B2
 
 | Pattern | Current cost | After O-B1+O-B2 |
 |---|---|---|
@@ -2288,7 +2557,7 @@ stores/frame → 720B moves + 0 leaks.
 
 ---
 
-## Implementation status
+### Implementation status
 
 | Optimisation | Status | Issue |
 |---|---|---|
@@ -2298,7 +2567,7 @@ stores/frame → 720B moves + 0 leaks.
 | Store leak fix (callee store after copy) | **Partial** — O-B2 adoption fixes no-ref-param case | P117 |
 | Threading regression | **Blocked** — needs investigation | P118 |
 
-### Known issues found during optimisation
+#### Known issues found during optimisation
 
 - **P116**: `x = func(s)` where func has Reference params aliases
   the store.  Codegen branch added but needs regression testing.
@@ -2309,28 +2578,30 @@ stores/frame → 720B moves + 0 leaks.
 
 ---
 
+## Design: O8 — Bulk initialisation of constant data
+
 Design for bulk initialisation of constant data structures, reducing bytecode
 size and interpreter dispatch overhead for vector literals, struct defaults,
 and repeated-element patterns.
 
 ---
 
-## Contents
+### Contents
 - [Motivation](#motivation)
 - [Current behaviour](#current-behaviour)
 - [Constant folding](#constant-folding)
 - [Proposed changes](#proposed-changes)
-  - [O8.1 Bulk primitive vector literals](#o81-bulk-primitive-vector-literals)
-  - [O8.2 Bulk struct vector literals](#o82-bulk-struct-vector-literals)
-  - [O8.3 Zero-fill struct defaults](#o83-zero-fill-struct-defaults)
-  - [O8.4 Const text table](#o84-const-text-table)
-  - [O8.5 Constant range comprehensions](#o85-constant-range-comprehensions)
+  - [O8.1 — Bulk primitive vector literals](#o81--bulk-primitive-vector-literals)
+  - [O8.2 — Bulk struct vector literals](#o82--bulk-struct-vector-literals)
+  - [O8.3 — Zero-fill struct defaults](#o83--zero-fill-struct-defaults)
+  - [O8.4 — Const text table](#o84--const-text-table)
+  - [O8.5 — Constant range comprehensions](#o85--constant-range-comprehensions)
 - [Out of scope](#out-of-scope)
 - [Implementation order](#implementation-order)
 
 ---
 
-## Motivation
+### Motivation
 
 A 20-element integer vector literal `[1, 2, ..., 20]` currently emits 60
 bytecodes (3 per element: `OpNewRecord` + `OpSetInt` + `OpFinishRecord`)
@@ -2344,9 +2615,9 @@ byte ranges in a single call.
 
 ---
 
-## Current behaviour
+### Current behaviour
 
-### Primitive vector literal: `[1, 2, 3, 4, 5]`
+#### Primitive vector literal: `[1, 2, 3, 4, 5]`
 
 Parser IR (per element):
 ```
@@ -2360,7 +2631,7 @@ which checks capacity and may call `store.resize()`.
 
 Native: 3 function calls per element.  No batching.
 
-### Struct literal: `Point { x: 1.0, y: 2.0 }`
+#### Struct literal: `Point { x: 1.0, y: 2.0 }`
 
 Parser IR (per field):
 ```
@@ -2370,20 +2641,20 @@ OpSetFloat(ref, field_offset, value)
 After all explicit fields, `object_init()` fills omitted fields with zero
 or default values — one `OpSetInt`/`OpSetFloat`/etc. per omitted field.
 
-### Repeated element: `[Struct { ... }; 100]`
+#### Repeated element: `[Struct { ... }; 100]`
 
 Already optimised: `OpAppendCopy` copies one initialised element N times
 using `copy_block()`.  Only the first element is constructed field-by-field.
 
 ---
 
-## Constant folding
+### Constant folding
 
 All O8 phases share a prerequisite: the ability to evaluate pure expressions
 at compile time.  `[2*3, 4+1, 10/2]` should be treated as `[6, 5, 5]` and
 become eligible for bulk init, not just bare literals like `[6, 5, 5]`.
 
-### What qualifies as a constant expression
+#### What qualifies as a constant expression
 
 An expression is **const-evaluable** when it contains only:
 
@@ -2405,7 +2676,7 @@ An expression is **const-evaluable** when it contains only:
 | Field access | `p.x` | **No** |
 | Format strings | `"val={x}"` | **No** — depends on runtime values |
 
-### Implementation: `const_eval()`
+#### Implementation: `const_eval()`
 
 Add a function `const_eval(val: &Value, data: &Data) -> Option<Value>` in
 `src/parser/expressions.rs` (or a new `src/const_eval.rs`):
@@ -2533,7 +2804,7 @@ Key safety properties:
 - Float division by zero → `Inf`/`NaN` via IEEE 754 (same as runtime)
 - `as i32` cast on non-finite float → `None` (avoids undefined truncation)
 
-### Where it plugs in
+#### Where it plugs in
 
 | Phase | Call site | Effect |
 |---|---|---|
@@ -2543,7 +2814,7 @@ Key safety properties:
 | O8.5 | `parse_vector_for()` for `[for i in 0..N { expr(i) }]` | Fold body for each i; if all fold → bulk init |
 | General | Any `Value::Call` during second pass | Opportunistic: replace with literal when possible |
 
-### Null sentinel folding
+#### Null sentinel folding
 
 Null sentinels differ by type:
 
@@ -2560,7 +2831,7 @@ Null sentinels differ by type:
 When folding `null` in a typed context, produce the correct sentinel value
 so it can be packed into the bulk data buffer.
 
-### File-scope constants
+#### File-scope constants
 
 Loft `UPPER_CASE` constants at file scope are already evaluated once:
 
@@ -2576,9 +2847,9 @@ qualify; a constant initialised from a function call does not.
 
 ---
 
-## Proposed changes
+### Proposed changes
 
-### O8.1 — Bulk primitive vector literals
+#### O8.1 — Bulk primitive vector literals
 
 **Applies to:** `vector<integer>`, `vector<float>`,
 `vector<single>` where ALL elements are const-evaluable (see
@@ -2670,7 +2941,7 @@ code position and advances past `len` bytes.  Panics in debug if
 
 ---
 
-### O8.2 — Bulk struct vector literals
+#### O8.2 — Bulk struct vector literals
 
 **Applies to:** `vector<Struct>` where ALL elements are struct literals with
 ALL fields being const-evaluable (integers, floats, booleans, characters;
@@ -2703,7 +2974,7 @@ coordinates, pixel data).
 
 ---
 
-### O8.3 — Zero-fill struct defaults
+#### O8.3 — Zero-fill struct defaults
 
 **Applies to:** Any struct construction where omitted fields use the default
 value (null sentinel for the type).
@@ -2739,7 +3010,7 @@ See S6 in the safety section for the full null-sentinel analysis.
 
 ---
 
-### O8.4 — Const text table
+#### O8.4 — Const text table
 
 **Applies to:** Repeated text literals across a program.
 
@@ -2762,7 +3033,7 @@ repeated literals.  Defer unless bytecode size becomes a bottleneck.
 
 ---
 
-### O8.5 — Constant range comprehensions
+#### O8.5 — Constant range comprehensions
 
 **Applies to:** `[for i in A..B { expr(i) }]` where `A` and `B` are
 const-evaluable integers and `expr(i)` is const-evaluable for every `i`
@@ -2825,9 +3096,9 @@ before emitting the loop IR:
 
 ---
 
-## Safety analysis
+### Safety analysis
 
-### S1 — Endianness: native byte order only
+#### S1 — Endianness: native byte order only
 
 `store.set_int()` writes via `*addr_mut::<i32>() = val`, which uses the host's
 native byte order.  `OpInitVector` must pack constant bytes in the **same
@@ -2842,7 +3113,7 @@ bug would only surface on a big-endian target.
 packing loop.  Add a test that round-trips a known value through pack →
 `OpInitVector` → `get_vector` → compare.
 
-### S2 — Alignment: store uses 8-byte-word addressing
+#### S2 — Alignment: store uses 8-byte-word addressing
 
 The store's `ptr` is `*mut u8` but `addr_mut::<T>` casts to `*mut T` via
 `ptr.offset(...).cast::<T>()`.  This is safe because all records are
@@ -2859,7 +3130,7 @@ aligned (because the header is 8 bytes).
 (struct vectors), the struct record size must be a multiple of the largest
 field alignment (guaranteed by `calc::calculate_positions`).
 
-### S3 — Buffer overflow in code stream
+#### S3 — Buffer overflow in code stream
 
 `OpInitVector` reads `count * elem_size` bytes from the bytecode stream.
 If the bytecode is malformed (count or elem_size is wrong), the read could
@@ -2871,7 +3142,7 @@ In release builds the code stream is compiler-generated and cannot be
 malformed unless the compiler has a bug — same trust model as existing
 opcodes that read `code::<u16>()` etc.
 
-### S4 — Store allocation overflow
+#### S4 — Store allocation overflow
 
 `store.claim((total + 8 + 7) / 8)` can overflow if `count * elem_size`
 exceeds `u32::MAX - 15`.  For `u16` count and `u16` elem_size, the maximum
@@ -2881,7 +3152,7 @@ exceeds `u32::MAX - 15`.  For `u16` count and `u16` elem_size, the maximum
 before the allocation.  If exceeded, panic with a clear message (same as
 the existing `MAX_STORE_WORDS` guard in `store.rs`).
 
-### S5 — `const_eval` correctness
+#### S5 — `const_eval` correctness
 
 If `const_eval` produces a wrong value, the bulk-initialised vector silently
 contains incorrect data — with no runtime check.
@@ -2906,7 +3177,7 @@ contains incorrect data — with no runtime check.
    compares `const_eval(expr)` against `state.execute(expr)` for the same
    inputs.  Any divergence is a bug.
 
-### S6 — O8.3 zero-fill assumes null sentinels are zero
+#### S6 — O8.3 zero-fill assumes null sentinels are zero
 
 `zero_fill` writes all-zero bytes.  This is correct for:
 - `integer` null = `0` (which IS `i32::MIN`? **No** — `i32::MIN` is
@@ -2934,7 +3205,7 @@ So `zero_fill` is safe when the struct has no nullable numeric fields.
 Otherwise, emit explicit `OpSetInt(i32::MIN)` / `OpSetFloat(NaN)` for
 those fields after the zero-fill.
 
-### S7 — O8.5 compile-time resource exhaustion
+#### S7 — O8.5 compile-time resource exhaustion
 
 Unrolling `[for i in 0..1000000 { i }]` at compile time produces a 4 MB
 byte buffer and a 4 MB bytecode segment.  Without a size limit, an
@@ -2945,7 +3216,7 @@ should be enforced as a hard limit in the parser, not configurable.
 Ranges above the limit silently fall back to runtime loops — no error,
 no performance regression, just no optimisation.
 
-### S8 — Parallel execution
+#### S8 — Parallel execution
 
 `OpInitVector` writes to a store via `keys::mut_store()`.  In parallel
 `for` loops, each worker has its own store set.  The bulk init is safe
@@ -2955,7 +3226,7 @@ If a parallel worker constructs a constant vector, the `OpInitVector`
 runs on the worker's private store — same as the current per-element
 path.  No new concurrency risk.
 
-### S9 — Native codegen: static data in generated Rust
+#### S9 — Native codegen: static data in generated Rust
 
 O8.1 native codegen emits `static INIT_DATA: [u8; N] = [...]`.  Rust
 statics are immutable and thread-safe.  The `copy_block_from_slice` call
@@ -2965,7 +3236,7 @@ copies from the static into the mutable store.
 
 ---
 
-## Out of scope
+### Out of scope
 
 | Pattern | Why |
 |---|---|
@@ -2977,7 +3248,7 @@ copies from the static into the mutable store.
 
 ---
 
-## Implementation order
+### Implementation order
 
 | Phase | Item | Status | Effort | Impact |
 |---|---|---|---|---|
@@ -2988,7 +3259,7 @@ copies from the static into the mutable store.
 | O8.3 | Zero-fill struct defaults | Not started | Small | Low-Medium |
 | O8.2 | Bulk struct vectors | Not started | Medium | Medium |
 
-### Delivered
+#### Delivered
 
 - **`const_eval()`** — 130-line module with 10 unit tests.  Folds
   arithmetic, casts, comparisons, boolean ops across all numeric types.
@@ -2998,7 +3269,7 @@ copies from the static into the mutable store.
   bounds and body are const-evaluable.  Filtered comprehensions also
   supported.  10,000-element safety limit.
 
-### Remaining
+#### Remaining
 
 - **O8.1b** — embed packed constant bytes in bytecode for one-memcpy
   init.  Needs `Value::Bytes` IR variant and `State::code_ptr()`.
@@ -3010,14 +3281,14 @@ copies from the static into the mutable store.
 
 ---
 
-## LLVM overlap analysis
+### LLVM overlap analysis
 
 The native backend compiles generated Rust through `rustc` → LLVM.  With
 `--native-release` (`-O`), LLVM applies constant folding, inlining, and
 dead-code elimination.  This section evaluates which O8 optimisations
 overlap with what LLVM already does, and which remain uniquely valuable.
 
-### What LLVM already optimises
+#### What LLVM already optimises
 
 **Arithmetic on literal arguments:**
 The generated code emits `ops::op_mul_int(2_i32, 3_i32)`.  With `-O`,
@@ -3033,7 +3304,7 @@ This means `const_eval` for **simple arithmetic** (`2*3`, `4+1`) is
 constant propagation.  `const_eval` for conditionals is also redundant
 in native-release.
 
-### What LLVM cannot optimise
+#### What LLVM cannot optimise
 
 **Per-element vector construction:**
 The generated code calls `OpNewRecord` / `OpFinishRecord` per element.
@@ -3061,7 +3332,7 @@ It emits a loft-level loop with `OpStep`/`OpIterate` runtime calls.  LLVM
 cannot unroll or eliminate these because they're opaque function calls with
 mutable store references.
 
-### Summary per phase
+#### Summary per phase
 
 | Phase | Interpreter value | Native-debug value | Native-release value |
 |---|---|---|---|
@@ -3072,7 +3343,7 @@ mutable store references.
 | **O8.4** text table | Low — smaller bytecode | Low | **None** — text literals are Rust `&str` in native |
 | **O8.5** const comprehensions | High — eliminates loop | High — eliminates loop | **High** — eliminates opaque loop |
 
-### Revised recommendations
+#### Revised recommendations
 
 1. **O8.1 (bulk vectors) is valuable across ALL backends.**  The
    per-element `OpNewRecord`/`OpFinishRecord` overhead cannot be
@@ -3243,9 +3514,8 @@ safeguards landed).  Independent of BUILD1.
 
 ---
 
-## See also
-- Optimisations section below — Runtime optimisation audit
-- [PERFORMANCE.md](PERFORMANCE.md) — Benchmark data and root-cause analysis
+## See also — bytecode and store internals
+- [Runtime optimisation audit](#runtime-optimisation-audit) — the opportunities register
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Bytecode layout and State stack model
 - [DATABASE.md](DATABASE.md) — Store allocator and `copy_block` API
 
@@ -3275,11 +3545,49 @@ order:
 1. `LOFT_NO_CACHE` (non-empty) → **off** — the explicit kill switch for
    production scripts that must never read/write bundles.
 2. `LOFT_PROGRAM_CACHE` (non-empty) → **on** — explicit force; used by the
-   cache's own tests to override the cargo-context default below.
+   cache's own tests to override the two dev defaults below.
 3. `CARGO_MANIFEST_DIR` present → **off** — auto-disables inside
    `cargo run` / `cargo test`.  The compiler-debug loop and the entire
    integration-test suite never read/write bundles with zero per-test wiring.
-4. otherwise → **on** — the default for installed / real invocations.
+4. **the binary lives in a `target/{debug,release}/` tree → off** — the OTHER
+   half of the same compiler-debug loop, and the half that surprises people.
+   Rule 3 only catches an invocation *Cargo* made; running `target/release/loft`
+   by hand sets no variable, and that is what iterating on the compiler actually
+   looks like.  Keyed on the binary's own path (`running_a_dev_build`), so it
+   also covers `CARGO_TARGET_DIR=target-da`.
+5. otherwise → **on** — the default for installed / real invocations.
+
+### Which loft am I measuring? (rule 4 is a trap for benchmarks)
+
+Rule 4 means **a binary you built from source pays the cold cost on every run,
+forever** — by design, so a parser change is never answered by a stale bundle.  It
+also means the two binaries on your machine have startup costs that differ by
+roughly the warm/cold ratio below, and nothing in the output says which one you ran.
+
+That is not hypothetical: loft#864 was filed as *"every invocation pays full
+process-spawn + compile overhead, give me a warm session or a daemon"*, on numbers
+measured with a from-source build.  The same programs on the installed binary ran
+several times faster, because the cache the report needed was already there and
+rule 4 had switched it off.  **Benchmark the installed binary, or say which one you
+measured.**
+
+| invocation | program cache | a rerun of an unchanged program |
+|---|---|---|
+| `loft prog.loft` (installed) | on | warm — no parsing at all |
+| `target/release/loft prog.loft` | **off** (rule 4) | full stdlib parse, every run |
+| `cargo run -- prog.loft` | off (rule 3) | full stdlib parse, every run |
+| `LOFT_NO_CACHE=1 loft prog.loft` | off (rule 1) | full stdlib parse, every run |
+
+**How to tell which you got, in one command.**  `LOFT_TIMING=1` prints
+`parse_default=<n>ms`: a couple of ms is a warm bundle load, tens of ms is a cold
+parse of `default/`.  It is the cheapest hit/miss check there is, and it works on
+any build.
+
+**`LOFT_STDLIB_CACHE` is the narrower fallback, not an addition.**  It caches
+`default/` only, and `main.rs` engages it **just when the program cache is off** —
+so on an installed binary setting it changes nothing, while on a from-source build
+it recovers most (not all) of what rule 4 gave up.  A measurable win from setting it
+is therefore itself a signal that the program cache was disabled.
 
 ### Invalidation
 
@@ -3296,10 +3604,10 @@ order:
 oldest `(.store + .manifest)` pairs until the cache directory is under
 `LOFT_CACHE_MAX_MB` (default **512 MiB**).
 
-### See also
+### See also — the startup-cache design
 
 Full design, E1/E2/E3 arc, and the zero-copy follow-up: see
-`doc/claude/plans/11-data-as-store/README.md`.
+[`plans/11-data-as-store/README.md`](plans/11-data-as-store/README.md).
 
 ---
 

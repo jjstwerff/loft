@@ -603,7 +603,11 @@ fn write_db_fields(stores: &mut Stores, parent: &Record, off: u32, fields: &[Sch
         let dr = r
             .field_recvec(ds::DBFIELD_DEFAULT, ds::DBCONTENT_STRIDE)
             .push(stores);
-        write_db_content(stores, &dr, &f.default);
+        write_db_content(
+            stores,
+            &dr,
+            &crate::database::Field::default_to_wire(f.default.as_ref()),
+        );
         dep_list(stores, &r, ds::DBFIELD_OTHER_INDEXES, f.other_indexes());
     }
 }

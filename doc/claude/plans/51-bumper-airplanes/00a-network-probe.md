@@ -22,7 +22,7 @@ at probe-stage than after a full phone client is in flight.
 ## What's already proven from @PLN6
 
 PLAN36's `load_test.loft` (in
-[`tools/audience-demo/`](../../../tools/audience-demo))
+[`tools/audience-demo/`](../../../../tools/audience-demo))
 already validated:
 
 - **Connection establishment** at 30 clients: ~10 sec total
@@ -180,7 +180,7 @@ adjusted.  No new library work, no new language features.
 
 ## Cross-references
 
-- [`tools/audience-demo/load_test.loft`](../../../tools/audience-demo/load_test.loft)
+- [`tools/audience-demo/load_test.loft`](../../../../tools/audience-demo/load_test.loft)
   — the existing harness this adapts.
 - [@PLN6 phase 1.9](../6-audience-generative-art/01-server-state.md)
   — what's already validated about the underlying pump.

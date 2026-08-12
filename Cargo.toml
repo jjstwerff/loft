@@ -173,6 +173,21 @@ opt-level = 1
 [profile.dev.package.loft]
 debug-assertions = false
 
+# `scripts/profile.sh` builds here — release code, but with the line tables a
+# profiler needs to name a LINE rather than only a function.  Separate from
+# `[profile.release]` on purpose: RELEASE.md pins a release binary's sha256 and
+# `make speed` measures release, so adding debug info there would change the
+# artifact both of those are about.
+#
+# `debug = 1` is line tables only (no per-variable info) — enough for
+# `perf annotate` and a fraction of full DWARF's size.  `strip = false` is
+# explicit rather than inherited, because a future `strip` on release would
+# otherwise silently take the symbols away here too.
+[profile.profiling]
+inherits = "release"
+debug    = 1
+strip    = false
+
 [package.metadata.deb]
 maintainer = "Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
 copyright = " 2026, Jurjen Stellingwerff <j.stellingwerff@gmail.com>"

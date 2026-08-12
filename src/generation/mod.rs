@@ -3144,6 +3144,7 @@ extern crate loft;"
                     forced,
                     bare_io,
                     bare_emitted,
+                    &a.value,
                 )?;
             }
             // PLAN51 Cluster V-a — re-register the synthetic tuple's
@@ -3392,6 +3393,7 @@ extern crate loft;"
         forced_size: Option<u8>,
         bare_io: &[(u16, BareIo)],
         bare_emitted: &mut [bool],
+        declared_default: &Value,
     ) -> std::io::Result<()> {
         self.emit_field_inner(
             w,
@@ -3409,6 +3411,33 @@ extern crate loft;"
             writeln!(
                 w,
                 "    db.set_field_nullable({s_var}, \"{field_name}\", true);"
+            )?;
+        }
+        // loft#876 — replay the field's DECLARED constant default.  The schema this
+        // `init()` rebuilds is the one the JSON walker consults for "what is this field
+        // when nobody said", so without this line a `text as Struct` cast answers the
+        // type's zero on `--native` while the interpreter answers the default.  Folded
+        // by the same function the parse-time deposit uses, so the two backends cannot
+        // disagree about which defaults are constant.
+        if let Some(c) = crate::typedef::fold_declared_default(declared_default) {
+            let lit = match c {
+                crate::keys::Content::Long(n) => format!("loft::keys::Content::Long({n}_i64)"),
+                // `{:?}` on a float round-trips exactly (`1.5` → `1.5`); a declared
+                // default is a literal, so there is no NaN / infinity to spell.
+                crate::keys::Content::Float(v) => format!("loft::keys::Content::Float({v:?}_f64)"),
+                crate::keys::Content::Single(v) => {
+                    format!("loft::keys::Content::Single({v:?}_f32)")
+                }
+                crate::keys::Content::Str(s) => {
+                    format!(
+                        "loft::keys::Content::Str(loft::keys::Str::new({:?}))",
+                        s.str()
+                    )
+                }
+            };
+            writeln!(
+                w,
+                "    db.set_field_default({s_var}, \"{field_name}\", {lit});"
             )?;
         }
         Ok(())
@@ -3865,6 +3894,7 @@ extern crate loft;"
                 forced,
                 bare_io,
                 bare_emitted,
+                &a.value,
             )?;
         }
         Ok(())

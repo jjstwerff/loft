@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#853 — the consumer half.  `issue853lib::split(pattern, input)` must reach the
+// LIBRARY's free function, even though the stdlib declares `split` as a method on
+// `text`, which is what the first argument is.
+//
+// This is how the published `regex` package is called, and resolving it to the
+// stdlib's `split(self: text, separator: character)` took it from compiling to
+// `expected character, got text on argument 2` — a language change retro-breaking a
+// shipped library, which the freeze forbids.
+use issue853lib;
+
+fn main() {
+  n = issue853lib::split("ab", "cde");
+  // CONTROL: the stdlib's own text surface must still resolve from the same scope —
+  // a fix that reached the free function by losing the methods would pass the line
+  // above and fail here.
+  m = split_text("a,b,c", ",");
+  println("qualified={n} stdlib_free={len(m)} stdlib_method={"abc".starts_with("a")}");
+}

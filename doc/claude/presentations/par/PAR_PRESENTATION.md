@@ -425,6 +425,6 @@ site" ergonomics.
 - [plans/finished/06-typed-par/PRIORITY.md](../../plans/finished/06-typed-par/PRIORITY.md)
   — historical spine; superseded by ARC.md but retained as the
   record of how steps 1–7 were sequenced.
-- [bench/11_par/bench.loft](../../bench/11_par/bench.loft) — the
+- [bench/11_par/bench.loft](../../../../bench/11_par/bench.loft) — the
   100 K-element × 50-iter Newton's-sqrt workload that gates ±5 %
   regression at every @PLAN06 step boundary.

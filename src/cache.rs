@@ -487,8 +487,7 @@ pub fn loft_build_fingerprint() -> u64 {
             eprintln!(
                 "loft: warning — cannot fingerprint this loft build (no readable \
                  libloft.rlib or executable); native artifacts cannot be staleness-checked \
-                 and are reused as-is. If results look stale, clear ~/.loft/build-cache and \
-                 the package native-auto/ dirs."
+                 and are reused as-is. If results look stale, run `loft cache prune --all`."
             );
         }
         fp

@@ -200,7 +200,7 @@ audience can see who's where without needing to read labels.
      continuous regardless of the underlying rate-LOD band.
 
      **Why Hermite and not pure linear:** the
-     [interpolation test](../../../tools/audience-demo-50/interp_test.loft)
+     [interpolation test](../../../../tools/audience-demo-50/interp_test.loft)
      shows that **linear interp on a constant turn at 7.5 Hz
      produces 67 mm peak position error, Hermite produces 0**
      (cubic-with-end-velocities fits a circular arc exactly
@@ -330,7 +330,7 @@ plane_id is itself the trigger for the phone's fade-in.
 **Bounces as forecast, not as report.**  Normal flight is
 continuous motion well-approximated by linear or Hermite
 interpolation between sparse samples (per the
-[interpolation test](../../../tools/audience-demo-50/interp_test.loft)).
+[interpolation test](../../../../tools/audience-demo-50/interp_test.loft)).
 But a bounce is a *discrete* event: the velocity vector flips
 in one frame; no interpolation between pre-bounce and
 post-bounce *samples* recovers the actual path (test shows

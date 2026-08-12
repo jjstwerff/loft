@@ -499,6 +499,22 @@ pub(crate) fn run_tests(
         }
     }
 
+    // loft#860 — `--native` compiles each test to Rust, so there is no dispatch loop
+    // to sample and no loft call stack to sample it over.  Said once, up front, because
+    // the alternative is a run that accepts the variable and ends without a report —
+    // which reads as "the profiler found nothing", the one thing an instrument must
+    // never say when it did not run.
+    if native_mode
+        && (std::env::var_os("LOFT_PROFILE").is_some()
+            || std::env::var_os("LOFT_ALLOC_PATHS").is_some())
+    {
+        eprintln!(
+            "loft: the loft-level profiler is interpreter-only — these tests run --native, \
+             so nothing\n  will be sampled. Drop --native to profile them, or use \
+             `make profile PROFILE_FLAGS=--engine`\n  to profile the generated binary with perf."
+        );
+    }
+
     let mut total_pass = 0u32;
     let mut total_fail = 0u32;
     let mut total_files = 0u32;
@@ -524,6 +540,16 @@ pub(crate) fn run_tests(
     // package system is meant to support.
     let mut coverage: BTreeMap<(String, u32, String), bool> = BTreeMap::new();
     let mut dir_summaries: Vec<(String, u32, u32)> = Vec::new(); // (dir, pass, fail)
+    // loft#860 — the loft-level profile, merged across every test in the run.
+    //
+    // A suite is usually the biggest interpreted workload a project owns, and the one
+    // whose time everyone notices; before this it was the one workload `LOFT_PROFILE`
+    // could not see, because the sampler was armed at exactly one call site on the
+    // program path.  Each test gets a fresh `State` *and* a fresh `Data`, so the
+    // samples are resolved to `(function, file:line)` per test and merged on those —
+    // see `Totals`.  A `RefCell` because the arming and the folding both happen inside
+    // the per-test `catch_unwind` closure.
+    let profile = std::cell::RefCell::new(loft::profiler::Totals::default());
 
     for (dir_path, files) in &dirs {
         let mut dir_pass = 0u32;
@@ -1374,6 +1400,10 @@ pub(crate) fn run_tests(
                         // Arm coverage for this run.  Sized to the definition table so
                         // the hook is a bounds-checked index, never a resize.
                         state.entered_fns = Some(vec![false; data_copy.definitions() as usize]);
+                        // loft#860 — and the profiler, if the environment asked for it.
+                        // A no-op otherwise: `Profiler::from_env` returns `None`, so an
+                        // ordinary test run pays a single `var_os` per test.
+                        state.arm_profiler();
                         if loft_log_active {
                             // When LOFT_LOG is set, emit IR+bytecode+trace to stderr
                             // (same format as cargo-test dump files, but to stderr so
@@ -1390,6 +1420,12 @@ pub(crate) fn run_tests(
                         } else {
                             state.execute_argv(&fn_name_owned, &data_copy, &user_args);
                         }
+                        // loft#860 — resolve this test's samples against ITS `Data` and
+                        // merge them.  Before the fault check below, because a test
+                        // that FAULTED still burnt the time it burnt; only a Rust panic
+                        // (caught outside) loses its samples, and that is an aborted run
+                        // rather than a measured one.
+                        state.fold_profile(&data_copy, &mut profile.borrow_mut());
                         // Fold this test's entries into the file's tally.  A function
                         // reached by any one test in the file counts as reached.
                         if let Some(seen) = state.entered_fns.take() {
@@ -1667,6 +1703,26 @@ pub(crate) fn run_tests(
                 unreached.len() - shown
             );
         }
+    }
+
+    // loft#860 — one merged profile for the whole suite, after the per-file output so
+    // it is the last thing on the screen.  `report` is silent when nothing was armed.
+    profile.borrow().report();
+    // ...and say so for the one profiling instrument a suite CANNOT answer, rather
+    // than accepting the variable and printing nothing.  `LOFT_ALLOC_SITES` ranks a
+    // process-global peak by the `pc` that allocated, and a suite's peak may have been
+    // reached in any of its runs — every one of which compiled its own bytecode.  So
+    // there is no `Data` those positions can be resolved against, and resolving them
+    // against whichever run happened to finish last would name real lines in the wrong
+    // file: the table would look exactly like an answer.
+    if loft::store_budget::sites_armed() {
+        eprintln!(
+            "loft: LOFT_ALLOC_SITES is not available under a test run.\n  \
+             The ledger ranks a process-wide peak by bytecode position, and each test \
+             compiles its own\n  bytecode, so those positions cannot be resolved to \
+             lines. LOFT_PROFILE and LOFT_ALLOC_PATHS\n  do work here; for the heap \
+             ledger, run the code as a program (loft --interpret prog.loft)."
+        );
     }
 
     let total = total_pass + total_fail;

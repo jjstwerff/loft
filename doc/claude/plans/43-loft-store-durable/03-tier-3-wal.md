@@ -194,4 +194,4 @@ busy server amortises fsync cost across the burst.
 
 - [Phase 02 — Tier 2 snapshots](02-tier-2-snapshots.md) — checkpoint mechanism reused here
 - [Phase 04 — stress test](04-stress-test.md) — validates Tier 3 zero-loss claim
-- [Plan-36 audience demo](../future/6-audience-generative-art) — first Tier 3 consumer
+- [Plan-36 audience demo](../6-audience-generative-art) — first Tier 3 consumer

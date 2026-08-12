@@ -26,6 +26,257 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A mistyped key field says so, instead of crashing the compiler
+
+Naming a key a collection's element type does not have — a typo, or the `hash<key, Value>`
+spelling most other languages use — used to crash the compiler with an internal error and
+point at a line that was fine. It now says what is wrong, where you wrote it:
+
+```
+error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — did you mean
+`ca_key`? A keyed collection names its keys as FIELDS OF ITS ELEMENT — write
+`hash<Element[key_field]>`, not `hash<key, Element>`
+```
+
+All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
+
+### A test that names a helper the way its library does
+
+A package whose test file defined `fn defaulted(…)` while its library had a private
+helper of the same name ran fine on the interpreter and would not compile with
+`--native`: `cannot find function n_defaulted in this scope`, on eight tests at once.
+
+Two functions can share a name when they come from different files, and the generated
+Rust renames one of them to keep them apart — but one place that writes a CALL spelled
+the original name. Both spellings work now, and neither needs renaming to avoid the
+other.
+
+### A field's default now applies when you read JSON into it
+
+A field declared with a default — `height: float = 1.5` — got that default from a struct
+literal and not from a `text as Struct` cast, which wrote `0` instead. The same field had
+two different "absent" values depending on how the record was made, and a key the document
+simply omits is exactly the question a default is there to answer.
+
+A default that is a plain value — `= 1.5`, `= 7`, `= "hi"`, `= true` — is now part of the
+type, so it answers a missing key, an explicit `null`, and a struct literal alike. A key
+the document actually carries still wins.
+
+A default that has to be *computed* — `= 1 + 2`, `= mk()`, `= [1, 2]` — still applies
+only where the record is constructed, because reading JSON does not run your code. If you
+need one of those after a cast, put the field in the JSON or assign it afterwards.
+
+### A function returning `T?` no longer leaks what it built
+
+A function whose answer is an optional struct or vector — `fn pick(n) -> Cell?` — leaked
+the record it allocated whenever the result was not bound to a variable. Writing the
+call inline was enough: as an argument, inside a `??`, in an interpolation, or as a
+statement on its own whose answer you did not need. One record per call, so a loop grew
+the heap for as long as it ran.
+
+Nothing pointed at it. The run was correct, the value was right, and the only signal was
+a store-count warning at exit that a long-running or embedded program never reaches.
+
+Binding the result first was always clean, and that is exactly what the compiler now
+writes for you.
+
+### Taking an element out of what a function just returned
+
+A function whose answer is an index into a call — `make(n)[0] ?? Cell {}`, whether it is
+the last expression or an explicit `return` — read the fallback for every input, and
+crashed with an out-of-bounds index when compiled with `--native`.
+
+The vector the inner call built was mistaken for the buffer the CALLER had allocated for
+the result, so the callee cleared a single record as though it were a vector and built
+into it; the index that followed then found nothing. A `??` fallback is exactly where a
+wrong answer is designed to look plausible, and in a tower-defence dogfood this landed as
+every enemy stepping onto the hex it was already standing on, from a three-line function
+that reads correctly.
+
+Binding the call to a local first was always right and still is — it just is no longer
+the difference between a correct program and a silent one.
+
+### A function that builds a vector and hands it back
+
+`fn cells() -> vector<Cell> { c = [...]; c }` could deliver an EMPTY vector when its
+result was used to fill a struct field, while the same function called directly in the
+same run answered all 1024 elements. The write that followed then landed out of bounds
+without saying so, which showed up as content disappearing from a neighbouring layer
+while every write reported success.
+
+The function's own return buffer and a scratch buffer inside its body could end up as the
+same slot, and the second use silently retyped the first. Both spellings of building the
+vector — a comprehension and an append loop — were affected, and what actually decided it
+was how the value was handed back.
+
+### Printing a struct that has a `hash` field
+
+Interpolating a record with a `hash<…>` field — `println("{field}")`, or the message of a
+failing assertion — segfaulted the interpreter and exited without a word on `--native`.
+So did `to_json()` on the same record, which meant such a record could not be serialised
+at all.
+
+The formatter walked the hash with an out-of-date picture of how its entries are stored.
+It now renders in key order, like every other collection, and round-trips through JSON:
+
+```
+{cells: [{q: 1, r: 2, v: 7}, {q: 3, r: 4, v: 8}], n: 2}
+```
+
+The cost of this one was mostly in finding it: an assertion message is evaluated only when
+the assertion fails, so a test that should have said what went wrong crashed instead.
+
+### Reading JSON into a struct no longer puts `null` in a field that cannot hold it
+
+A field written plainly — `height: float`, not `height: float?` — is not allowed to be
+null, and the compiler will tell you so if you guard it. But parsing JSON into such a
+struct put a null there anyway, whenever the JSON said `"height": null`, whenever it
+left the key out, and whenever the parse failed outright. The result was a value that
+compared `<= x` as true and `> x` as false, so a check like `if height > climb` read a
+wall as walkable — the right answer for the wrong reason. Write `?? 0.0` to defend it
+and the compiler told you the guard was redundant.
+
+Such a field now reads as its type's zero, and only a field you wrote `float?` /
+`integer?` can be null. Ranged fields (`u8`, `u16`, `i32`) always behaved this way,
+which is what made it look like a quirk of `float` and `integer`.
+
+When a parse fails, `#errors` is what says so; the value is no longer a second, quieter
+signal for the same thing.
+
+One visible consequence: printing a struct skips its null fields, so fields that were
+wrongly null used to be missing from the output and now appear as `0`. Printing a parsed
+struct therefore fills it in rather than echoing what you fed it — and what it prints
+reads back as itself.
+
+Text fields follow the same rule now: a plain `text` the JSON leaves out reads as the
+empty string, not as the one-character null. Write `text?` when "the document did not say"
+has to be tellable from "the document said nothing much". The suite's own assertions were
+the demonstration — `assert(!user.name, "missing name is null")` passed only because of
+this, on a line where the compiler said it never could.
+
+### A vector of narrow integers can be built by a comprehension
+
+`[for i in 0..n { i as i32 }]` returned instantly at twelve elements and never returned
+at thirteen. Each element was written eight bytes wide into a four-byte slot, so it
+overwrote its neighbour, and past the initial allocation the write reached the vector's
+own length — after which the append never finished.
+
+Every narrow width was affected (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`), just at
+different sizes. Two things hid it: `vector<integer>` is genuinely eight bytes wide, so
+it was always fine, and the `+=` append loop already wrote the right width, so the
+obvious workaround worked and the comprehension looked like the odd one out.
+
+### Parsing JSON into a struct or a vector works wherever you write it
+
+`file(path).content() as vector<Row>` as a function's last expression answered an EMPTY
+vector when compiled with `--native` — no error, just nothing, which every caller read
+as "the file was empty". The same cast into a plain struct crashed the interpreter
+outright, and refused to compile at all on `--native`.
+
+The cast builds a new value out of the text it reads, but it was recorded as if it were
+a *view into* that text. Anything borrowed has to be handled specially on the way out of
+a function, and that handling is what lost — or corrupted — the result. What you got
+depended only on where the text came from, which is why passing a filename worked and
+passing the file's contents did not.
+
+### An unknown function says its own name again
+
+Calling a function that does not exist, and then reading a tuple out of the result, used
+to report this and nothing else:
+
+```
+error: Expect token ;
+  --> app.loft:3:18
+  |
+3 |     first = pair.0;
+  |                   ^
+```
+
+The line it points at is correct as written; the mistake is on the line above. Across a
+library boundary — one missing `use` — every file in the package went red this way and
+nothing named the import. Now the call names itself, with a spelling suggestion where
+there is one.
+
+The same gap also rejected code that was always valid: a function declared *later* in
+the file returning a tuple could not have its result tuple-accessed at all.
+
+### Redefining a stdlib function says so once, and says where
+
+Naming your own function after one the standard library already provides is refused —
+but for some names the refusal came with a second error that was not real:
+
+```
+error: Cannot redefine 'sum'
+error: Syntax error: unexpected '->'      ← there is nothing wrong with the `->`
+```
+
+Now there is one message, and it points at the function you collided with:
+
+```
+error: Cannot redefine 'sum' (already defined at default/01_code.loft:1657:53)
+```
+
+### Reading a tuple out of a vector is now as cheap as reading a struct
+
+`v[i]` on a `vector<(float, float, float)>` was about **fourteen times** slower than
+the same read on a vector of structs — enough that rewriting a mesh generator to use
+tuples made it *slower* overall, even though the arithmetic got much faster. Every such
+read was quietly allocating a scratch record, copying the element into it, and throwing
+it away again. It now reads the element where it already lives: **379 ms → 12 ms** on
+the reporter's benchmark, against 11 ms for the struct version.
+
+The same mistake had a sharper edge. If you passed a `vector<(…)>` to a function, read
+an element from it, and called that function twice, the first call could free the
+vector's storage out from under the caller — after which the second call appended into
+whatever had taken its place. On the interpreter that ended in a crash naming a record
+of "-99 words"; compiled with `--native` it did not complain at all. Both are fixed.
+
+### When a value might be null, the error now tells you something that works
+
+`guess = (guess + x / guess) / 2.0` was refused, correctly: a variable divisor can be
+zero, so the division might be null and `guess` cannot hold null. But the error
+suggested casting with `as` — and the cast is refused for exactly the same reason, and
+casting to `float?` instead came straight back to the first error. Following the
+compiler's advice went in a circle.
+
+It now names the cures that work:
+
+```loft
+guess = (guess + (x / guess)?) / 2.0;   // `?` — the type's default when null
+guess = (guess + (x / guess ?? 0.0)) / 2.0;   // or your own fallback
+```
+
+### A big generated file compiles in a second, not a quarter of an hour
+
+A program holding one long vector literal took time proportional to the *square* of
+its length. A generated terrain file — a single 86 400-element `vector<integer>` —
+took **over 13 minutes**, at 99 % CPU, printing nothing. Nothing was wrong with it;
+it compiles correctly if you wait. But nothing says *"still working"* either, so it
+reads as a hang, and five build targets that imported it simply stopped being run.
+
+It now takes **under a second**, and the time grows with the length of the literal
+rather than its square.
+
+If you split a generated file into chunks to work around this, you can stop: the
+cost was never per-literal, so chunking one function into several literals did not
+help anyway.
+
+### Every run starts in half the time
+
+Running a loft file has a fixed cost before your program does anything, and you pay it
+on every single run — which is the whole story for the edit-rerun loop, or a script you
+invoke in a sweep a few hundred times.
+
+Most of that cost was work with no result. The compiler consults a handful of small
+tables while it checks your program, and each is decided entirely by the program's own
+definitions, so each is the same answer every time. They were being recomputed for
+every question asked — thousands of times per run, each one re-reading every definition
+there is. A `println`-sized program rebuilt them **9 000 times**.
+
+They are now worked out once. A run that hits the startup cache went from **18 ms to
+9 ms**; one that does not, from **54 ms to 30 ms**. Nothing about your program changes —
+the compiled result is byte-for-byte what it was.
+
 ### A library adding a function no longer takes a word away from you
 
 If a library you use gained a `pub fn turn`, then `turn = 0` stopped compiling

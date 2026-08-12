@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I117 — Git query natives — a repository as a typed library, not a subprocess
 // @PLN119 arc F — the git natives behind `lib/git`.
 
 //! loft has no subprocess primitive, and [C101](../doc/claude/DESIGN_DECISIONS.md)

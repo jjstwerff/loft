@@ -4119,6 +4119,12 @@ impl State {
     /// `false` to continue (record-and-continue mode — the frame is appended to
     /// `debug.hits`).  Always `false` when `pc` is not a breakpoint.
     fn debug_check(&mut self, pc: u32, data: &crate::data::Data) -> bool {
+        // @PLN140 arc B — the sample tick rides the branch that got us here, which is
+        // the whole reason the profiler lives on the `Debugger`: a run that is not
+        // profiling pays for none of it.
+        if self.debug.as_deref().is_some_and(|d| d.prof.is_some()) {
+            self.profile_tick(pc);
+        }
         let is_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
         if !is_bp {
             return false;
@@ -4141,6 +4147,48 @@ impl State {
             self.validate_undo_history(data);
         }
         suspended
+    }
+
+    /// @PLN140 arc B — one op of a profiled run: count it, and when it is a sample
+    /// point credit the interval since the previous sample to this position and this
+    /// call path.
+    fn profile_tick(&mut self, pc: u32) {
+        // The frames are read BEFORE the profiler is borrowed mutably, so the two
+        // never overlap and the sampler needs no access to the rest of `State`.
+        let due = self
+            .debug
+            .as_deref_mut()
+            .and_then(|d| d.prof.as_mut())
+            .is_some_and(|p| p.cpu_armed() && p.tick());
+        if !due {
+            return;
+        }
+        let frames = self.profile_frames();
+        if let Some(p) = self.debug.as_deref_mut().and_then(|d| d.prof.as_mut()) {
+            p.record(pc, &frames);
+        }
+    }
+
+    /// @PLN140 arc C — the op at `pc` allocated `stores` stores; hand the path that
+    /// reached them to the sampler.
+    fn profile_alloc(&mut self, pc: u32, stores: u64) {
+        let frames = self.profile_frames();
+        if let Some(p) = self.debug.as_deref_mut().and_then(|d| d.prof.as_mut()) {
+            p.record_alloc(pc, &frames, stores);
+        }
+    }
+
+    /// The innermost frames of the live call stack, as definition numbers.
+    ///
+    /// Only the innermost window is collected: a recursive program's stack is
+    /// hundreds deep and the sampler keeps that window anyway, so copying the rest
+    /// would be work thrown away once per sample.
+    fn profile_frames(&self) -> Vec<u32> {
+        let start = self
+            .call_stack
+            .len()
+            .saturating_sub(crate::profiler::PATH_DEPTH);
+        self.call_stack[start..].iter().map(|f| f.d_nr).collect()
     }
 
     /// Read the current (topmost) frame's in-scope variables into a
@@ -4935,6 +4983,16 @@ impl State {
         #[cfg(target_arch = "wasm32")]
         let reload_on = false;
         let mut reload_tick: u32 = RELOAD_POLL_OPS;
+        // @PLN140 arc C — allocation PATHS. Hoisted out of the loop like `reload_on`
+        // and `uaf_on` above, so an ordinary run pays one never-taken branch per op
+        // rather than a lookup. The op is the finest granularity a path can be read
+        // at: `database_named` allocates from inside `Stores`, which has no view of
+        // the loft call stack, so the store count is compared across the op instead.
+        let alloc_paths_on = self
+            .debug
+            .as_deref()
+            .is_some_and(|d| d.prof.as_ref().is_some_and(|p| p.alloc_armed()));
+        let mut last_allocs = self.database.stores_allocated;
         while self.code_pos < bytecode_len {
             if reload_on {
                 reload_tick -= 1;
@@ -4979,6 +5037,15 @@ impl State {
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
+            }
+            // @PLN140 arc C — the op just ran; if it took stores, record the path
+            // that reached them.
+            if alloc_paths_on {
+                let allocs = self.database.stores_allocated;
+                if allocs != last_allocs {
+                    self.profile_alloc(op_pos_rt, allocs - last_allocs);
+                    last_allocs = allocs;
+                }
             }
             // LOFT_UAF: the op freed store slots — scan live frame variables
             // for one that still reads a freed slot (premature free).  Under the
@@ -5201,6 +5268,246 @@ impl State {
                 }
             }
         }
+    }
+
+    /// @PLN140 arc B/C — arm the loft-level sampler from the environment, if it is
+    /// asked for. Idempotent, and a no-op when a debug session already owns the run
+    /// (the two would fight over the same per-op hook, and the debugger was asked for
+    /// explicitly).
+    pub fn arm_profiler(&mut self) {
+        if self.debug.as_deref().is_some_and(|d| d.prof.is_some()) {
+            return;
+        }
+        let Some(prof) = crate::profiler::Profiler::from_env() else {
+            return;
+        };
+        if self.debug.is_none() {
+            self.debug = Some(Box::default());
+        }
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.prof = Some(Box::new(prof));
+        }
+    }
+
+    /// @PLN140 arc B/C — what this run spent its time on, and what path reached each
+    /// allocation. Silent unless [`arm_profiler`](Self::arm_profiler) armed it.
+    ///
+    /// The single-run convenience over [`fold_profile`](Self::fold_profile): a run
+    /// that IS the whole program has nothing to merge with.
+    pub fn report_profile(&self, data: &crate::data::Data) {
+        let mut totals = crate::profiler::Totals::default();
+        self.fold_profile(data, &mut totals);
+        totals.report();
+    }
+
+    /// @PLN140 arc B/C — resolve this run's samples against `data` and add them to
+    /// `totals`. A no-op unless [`arm_profiler`](Self::arm_profiler) armed it.
+    ///
+    /// Resolution has to happen HERE, per run, because a `pc` only means something
+    /// inside the `Data` it was compiled from — and a test run compiles a fresh one
+    /// per test function (loft#860). `totals` therefore accumulates
+    /// `(function, file:line)` strings, never positions.
+    pub fn fold_profile(&self, data: &crate::data::Data, totals: &mut crate::profiler::Totals) {
+        let Some(prof) = self.debug.as_deref().and_then(|d| d.prof.as_ref()) else {
+            return;
+        };
+        totals.add_run(prof);
+        if prof.cpu_armed() {
+            for (pc, site) in prof.sites_ranked() {
+                let (func, place) = self.site_label(data, pc);
+                totals.add_site(&func, &place, site);
+            }
+            for (chain, site) in prof.paths_ranked() {
+                totals.add_path(&Self::chain_label(data, &chain), site);
+            }
+        }
+        if prof.alloc_armed() {
+            for ((pc, chain), (n, stores)) in prof.alloc_paths_ranked() {
+                let (func, place) = self.site_label(data, pc);
+                totals.add_alloc(&func, &place, &Self::chain_label(data, &chain), n, stores);
+            }
+        }
+    }
+
+    /// A call chain rendered outermost-first, with a leading `…` when frames above
+    /// the retained window were dropped.
+    fn chain_label(data: &crate::data::Data, chain: &[u32]) -> String {
+        if chain.is_empty() {
+            return "(no loft frame)".to_string();
+        }
+        let names: Vec<String> = chain
+            .iter()
+            .map(|&d| {
+                if d == u32::MAX || d as usize >= data.definitions.len() {
+                    "<worker>".to_string()
+                } else {
+                    let n = &data.def(d).name;
+                    n.strip_prefix("n_").unwrap_or(n).to_string()
+                }
+            })
+            .collect();
+        let prefix = if chain.len() == crate::profiler::PATH_DEPTH {
+            "… → "
+        } else {
+            ""
+        };
+        format!("{prefix}{}", names.join(" → "))
+    }
+
+    /// @PLN140 arc A — where the heap went: live store bytes at the run's **peak**,
+    /// grouped by the loft line that allocated them.  Silent unless
+    /// `LOFT_ALLOC_SITES` is set.
+    ///
+    /// Three things separate this from the reports it grew out of, and each was a
+    /// way the old one answered a question nobody asked:
+    ///
+    /// * **Live stores, not leaked ones.** `LOFT_LEAK_SITES` groups by the same key
+    ///   but over what was *never freed*, so a program that frees everything — the
+    ///   normal case — gets an empty report however much memory it used.
+    /// * **At the peak, not at exit.** Everything else fires after the run, by which
+    ///   time the peak is long over: a program that peaks at 1.5 GiB and exits at
+    ///   10 MB has nothing left to report.
+    /// * **Bytes, not store counts.** `LOFT_ALLOC_REPORT` counts allocations, which
+    ///   weighs one 40 MiB vector the same as one 32-byte record.
+    ///
+    /// The capture is taken at most of the peak rather than exactly at it (see
+    /// [`peak_sites`](crate::store_budget::peak_sites)), and the banner says which —
+    /// a table that silently described a different moment than its headline number is
+    /// exactly the plausible-looking wrong answer this instrument exists to refuse.
+    pub fn report_alloc_sites(&self, data: &crate::data::Data) {
+        if !crate::store_budget::sites_armed() {
+            return;
+        }
+        use crate::store_budget::human;
+        let (peak, captured_at, mut rows) = crate::store_budget::peak_sites();
+        if rows.is_empty() {
+            eprintln!(
+                "[alloc-sites] this run held no store heap ({}).",
+                human(peak)
+            );
+            return;
+        }
+        rows.sort_by_key(|&(pc, kt, bytes, _)| (std::cmp::Reverse(bytes), pc, kt));
+        let held: u64 = rows.iter().map(|&(_, _, b, _)| b).sum();
+        #[allow(clippy::cast_precision_loss)] // display only
+        let pct = if peak == 0 {
+            100.0
+        } else {
+            captured_at as f64 * 100.0 / peak as f64
+        };
+        eprintln!(
+            "\n════ allocation hot spots — peak {}, captured at {} ({pct:.0} % of peak) ════",
+            human(peak),
+            human(captured_at)
+        );
+        // Every site at pc 0 means nothing stamped one: the native backend never
+        // publishes a bytecode position, so a table of `line 0` would be a table of
+        // nothing wearing a report's clothes.
+        if rows.iter().all(|&(pc, _, _, _)| pc == 0) {
+            eprintln!(
+                "  Nothing here carries an allocation site, so there is nothing to attribute:\n  \
+                 every byte was taken either before the first op ran (the interpreter's own\n  \
+                 stores) or under --native, where the dispatch loop that publishes `alloc_pc`\n  \
+                 never runs. Total held at the peak: {}",
+                human(held)
+            );
+            return;
+        }
+        const TOP: usize = 12;
+        for &(pc, kt, bytes, stores) in rows.iter().take(TOP) {
+            let tn = self
+                .database
+                .types
+                .get(kt as usize)
+                .map_or("?", |t| t.name.as_str());
+            let (func, place) = self.site_label(data, pc);
+            let plural = if stores == 1 { "store" } else { "stores" };
+            eprintln!(
+                "  {:>10}  {stores:>6} {plural:<6}  {tn:<24} {func:<20} {place}",
+                human(bytes)
+            );
+        }
+        if rows.len() > TOP {
+            let rest: u64 = rows[TOP..].iter().map(|&(_, _, b, _)| b).sum();
+            eprintln!(
+                "  … and {} more sites holding {}",
+                rows.len() - TOP,
+                human(rest)
+            );
+            // Roll up by function once the site list stops fitting on a screen — the
+            // question at that size is which routine to look at, not which line.
+            let mut by_fn: std::collections::BTreeMap<String, (u64, u32)> =
+                std::collections::BTreeMap::new();
+            for &(pc, _, bytes, stores) in &rows {
+                let e = by_fn.entry(self.site_label(data, pc).0).or_insert((0, 0));
+                e.0 += bytes;
+                e.1 += stores;
+            }
+            let mut fns: Vec<_> = by_fn.into_iter().collect();
+            fns.sort_by_key(|(name, (b, _))| (std::cmp::Reverse(*b), name.clone()));
+            eprintln!("  ── rolled up by function ──");
+            for (name, (bytes, stores)) in fns.into_iter().take(TOP) {
+                eprintln!("  {:>10}  {stores:>6} stores  {name}", human(bytes));
+            }
+        }
+        eprintln!(
+            "  (text buffers are Rust Strings, not stores — this ledger does not count them)"
+        );
+    }
+
+    /// The loft function and `file:line` that bytecode position `pc` belongs to, for
+    /// a report that has to point somewhere a reader can open.
+    ///
+    /// `line_numbers` is the dense per-run table, so an arbitrary pc resolves to the
+    /// line that was executing — unlike the call-site span table, whose nearest entry
+    /// below an arbitrary pc is routinely in an unrelated function.
+    fn site_label(&self, data: &crate::data::Data, pc: u32) -> (String, String) {
+        // pc 0 is the "never stamped" sentinel, not a position: resolving it lands on
+        // whichever function happens to start the bytecode, which reads as a real
+        // answer and is not one.
+        if pc == 0 {
+            return (
+                "(runtime)".to_string(),
+                "no site — before the first op".into(),
+            );
+        }
+        let d_nr = Self::fn_d_nr_for_pos(pc, data);
+        if d_nr == u32::MAX {
+            let line = self
+                .line_numbers
+                .range(..=pc)
+                .next_back()
+                .map_or(0, |(_, &v)| v);
+            return ("?".to_string(), format!("pc={pc} (line {line})"));
+        }
+        let def = data.def(d_nr);
+        let name = def.name.strip_prefix("n_").unwrap_or(&def.name).to_string();
+        let file = def.position.file.rsplit('/').next().unwrap_or("?");
+        (
+            name,
+            format!("{file}:{}", self.line_at_in_fn(pc, d_nr, data)),
+        )
+    }
+
+    /// The source line at bytecode position `pc`, scoped to the function that owns it.
+    ///
+    /// An unscoped `line_numbers.range(..=pc).next_back()` is wrong at the top of a
+    /// function: entries land *after* the frame-setup ops, so a `pc` in the prologue
+    /// has no entry at or below it inside its own body and picks up the last line of
+    /// whichever function precedes it in the bytecode. That is not a rounding error —
+    /// it names a different function's line, in a different file, with no sign that
+    /// anything went wrong. @PLN140 arc C found it by reporting `make` at a line in
+    /// `hot`, and it is the shape a store allocated by a prologue always takes.
+    fn line_at_in_fn(&self, pc: u32, d_nr: u32, data: &crate::data::Data) -> u32 {
+        let def = data.def(d_nr);
+        let (start, end) = (def.code_position, def.code_position + def.code_length);
+        self.line_numbers
+            .range(start..=pc)
+            .next_back()
+            // Before the body's first mapped op — the prologue — so the body's first
+            // line is the honest answer.
+            .or_else(|| self.line_numbers.range(start..end).next())
+            .map_or(0, |(_, &v)| v)
     }
 
     /// Collect a description for every leaked store at program exit

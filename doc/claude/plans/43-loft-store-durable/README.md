@@ -384,7 +384,7 @@ phase 02 (Tier 2 snapshots) starts.
 
 ## Cross-references
 
-- [`src/store.rs`](../../../src/store.rs) — the existing
+- [`src/store.rs`](../../../../src/store.rs) — the existing
   Store primitive this plan extends.
 - `personal/training` repo (`loft-migration` branch),
   `MIGRATION.md` § "Loft capability gaps" #2 — the immediate
@@ -395,7 +395,7 @@ phase 02 (Tier 2 snapshots) starts.
   — phase that opts into Tier 1.
 - [`plans/39-tic-tac-toe/`](../39-tic-tac-toe) — TTT v5
   multiplayer; Tier 2 consumer.
-- [`plans/6-audience-generative-art/`](../future/6-audience-generative-art)
+- [`plans/6-audience-generative-art/`](../6-audience-generative-art)
   — audience demo; Tier 3 consumer.
 - [`lib/server/src/server.loft`](../../../lib/server/src/server.loft)
   — the server pattern these durability tiers complement.

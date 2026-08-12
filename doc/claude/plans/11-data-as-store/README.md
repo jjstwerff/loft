@@ -110,7 +110,7 @@ measurements reframed the cost/benefit and point to a clear priority order:
    variable tables (80%) that dominate.  The *real* M6/E2 prize is skipping the
    **entire** `read_data` reconstruction — but on the stdlib that is only **~0.7 ms**
    (it scales with def + variable count; a large whole-program bundle is more), and
-   it needs **E2** (a writable store IR so `scopes` can rewrite bodies), a multi-week,
+   it needs **E2** (a writable store IR so `scopes` can rewrite bodies), a `VH`,
    memory-safety-sensitive rewrite of the compiler's largest mutating pass.  Worth it
    *eventually* if startup latency is a headline goal, but as a **planned,
    fresh-context arc**, not a rushed branch extension.
@@ -227,7 +227,7 @@ the steady state is **native libraries + interpreted scripts**; this arc builds
 that architecture.  It **supersedes the G2 zero-copy endgame for perf** (E2 /
 M6-cold / M7 are parked — see recommendation #2): native libraries are never
 materialised, so the allocation-bound `read_data` cost is *avoided*, not chased
-with a multi-week rewrite.  Scope = **the full interpreted+native architecture
+with a `VH` rewrite.  Scope = **the full interpreted+native architecture
 EXCEPT the library validation layer** (deferred, customer-facing — see § Excluded).
 Each phase lands as a **self-contained, default-safe increment in `main`** (the
 dispatch primitive + caches stay opt-in / behind the automatic policy until N3+N5

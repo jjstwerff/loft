@@ -824,7 +824,7 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
         rec: db.rec,
         pos: 8,
     };
-    stores.set_default_value(db_tp, &into);
+    stores.set_final_default_value(db_tp, &into);
     stores.last_parse_errors.clear();
     if let Some(err) = stores.parse(val, db_tp, &into) {
         stores.last_parse_errors.push(err);

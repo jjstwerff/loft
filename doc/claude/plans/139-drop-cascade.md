@@ -5,6 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN139 — a droppable's owner drops it
 
+**Status — SHIPPED 2026-08-12.** All seven stages landed; this file is the closure record.
+**The contract lives in [INTERFACES.md § `OpDrop`](../INTERFACES.md)** — read that, not this,
+for what a drop does. Guards: `tests/owns_droppable.rs`, `tests/scripts/139-drop-cascade.loft`
+(the 14-cell matrix below, as a running test), `tests/scripts/849-move-copy-source-drop.loft`,
+`tests/double_move.rs`.
+
 **Canonical:** [loft-lang/plans#139](https://github.com/loft-lang/plans/issues/139) ·
 **Bug:** [loft#849](https://github.com/loft-lang/loft/issues/849) ·
 **Scope decision:** [DESIGN_DECISIONS.md § C111](../DESIGN_DECISIONS.md)
@@ -22,9 +28,9 @@ DEATH, not an element's REMOVAL. `v.remove(i)` / `v[i] = x` do not drop the disp
 
 > A drop runs when the value's OWNER dies. Taking a value out of its owner does not.
 
-## Where it stands
+## Where it started
 
-Two halves of loft#849 are already fixed on `tuxedo-decisions`:
+Two halves of loft#849 were already fixed on `tuxedo-decisions` when the plan opened:
 
 - `fc3fb2c3` — a consumed MOVE source no longer drops. `OpCopyRecord(src, dst, kt|0x8000)` frees
   the source store, and the lift temp kept naming it, so a vector literal of two droppables
@@ -121,31 +127,44 @@ Each stage lands against the matrix below, on BOTH backends, with the full gate 
   containers release twice) are verified on both backends, so the doc states measured behaviour
   rather than intended behaviour.
 
-**The plan is complete.** All six stages shipped, the 14-cell matrix matches hand-computed
-expectations on both backends, `LOFT_STRICT_STORES` clean, full suite green. Guards:
-`tests/owns_droppable.rs` (stage A), `tests/scripts/139-drop-cascade.loft` (B–E, 18 cells),
-`tests/scripts/849-move-copy-source-drop.loft` (the collection half of loft#849).
+- **G — the hazard the cascade created. SHIPPED.** The cascade turned "a droppable moved into
+  TWO containers" from a leak into a DOUBLE CLOSE, so it ships with the diagnostic that catches
+  it: `warning[double-move]`, `LOFT_NO_DOUBLE_MOVE` to opt out. `use_analysis::warn_double_move`
+  counts hand-offs per source variable using the SAME predicate the drop suppression uses
+  (`scopes::copy_hands_off` / `appends_to_element`), so the lint and the mechanism cannot drift.
+  `warning` not `advice`, per the tier rule — ignoring it produces a wrong result.
+  Because a warning gates a library's CI it is deliberately an UNDER-approximation, firing only
+  where both hand-offs certainly run: opposite `if` arms release once however the branch goes,
+  a reassignment between them makes two distinct resources (and a reassignment on only ONE
+  path retires the pending hand-off), and a terminator between them means the second never
+  runs. What it cannot see is the iteration count — one hand-off in a loop body that runs twice
+  — and a hand-off on only one branch, which LEAKS rather than double-releasing; both need a
+  CFG loft does not build, and both are false NEGATIVES, the safe direction here. Verified
+  silent across the whole corpus (1756 `.loft` files, 0 hits) before defaulting on, the sweep
+  @PLN107 established. Guard: `tests/double_move.rs`, 15 cells, each asserting the verdict AND
+  the runtime release count — a verdict-only test cannot tell a correct silence from a missed
+  defect, and the two cells that release twice without warning are pinned as the known boundary.
 
-## Open, found while building
+**The plan is complete.** All seven stages shipped, the 14-cell cascade matrix matches
+hand-computed expectations on both backends, `LOFT_STRICT_STORES` clean, full suite green.
+Guards: `tests/owns_droppable.rs` (stage A), `tests/scripts/139-drop-cascade.loft` (B–E, 18
+cells), `tests/scripts/849-move-copy-source-drop.loft` (the collection half of loft#849),
+`tests/double_move.rs` (stage G).
 
-- **A droppable moved into TWO containers is a double-close.** `s1 = S{h:c}; s2 = S{h:c}` — loft
-  has no move checker, so both containers release one resource. Statically detectable in the
-  common case (a var that is the source of more than one transfer); candidate is a
-  `warning`-tier diagnostic, which gates because ignoring it produces a wrong result.
-- **Two suite tests fail under full-suite concurrency and pass standalone**, both counting
-  assertions: `store_load_key_pages_over_the_browser_fetch_bridge` (bytes fetched) and
-  `a_pointer_bearing_element_relocates_in_bulk` (four-byte reads, 522 against a 500 bound).
-  Structurally unrelated to this plan — the stdlib declares no `OpDrop`, so no cascade is
-  synthesized and no drop is emitted for those programs — but a read COUNT that moves with
-  concurrency points at a shared scratch/fixture and is worth its own look.
+## Closed, found while building
 
-## Known hazard, not yet designed
-
-**A droppable moved into TWO containers** (`s1 = S{h:c}; s2 = S{h:c}`) becomes a double-close
-once the cascade exists — today it is merely a leak. Rust prevents this with move checking, which
-loft does not have. It is statically detectable in the common case (a var that is the source of
-more than one container-field copy), so the candidate is a `warning`-tier diagnostic; that gates,
-per the tier rule, because ignoring it produces a wrong result. Decide in stage C.
+- **The two "concurrency" flakes were one bug, and not concurrency.** Filed here as counting
+  assertions that moved under full-suite load; the read COUNT turned out to move because the
+  STORE did. A hash's bucket seed is drawn per store and decides the bucket order, so records
+  land at different offsets on every run and adjacent ones coalesce into one read: the identical
+  program cost 330..594 four-byte reads over 40 fresh writes (median 378). The `< 500` bound sat
+  inside that spread, so it failed on roughly the top decile — the suite just runs it often
+  enough to hit the tail. `LOFT_HASH_SEED` is loft#710's control for exactly this, and
+  `paged_browser.rs` already set it — in HEX, which `parse::<u64>()` rejects, so the pin fell
+  through to random in silence and that test kept flaking for the reason its comment said it had
+  fixed. loft#856: hex accepted, an unreadable value now says so, and the reproducibility guard
+  extended to assert that the hex and decimal spellings of one value give the same BYTES (it
+  only ever covered decimal — the working member hid the omission).
 
 ## The matrix
 
@@ -172,66 +191,32 @@ reason.
 | c13 | container in a loop | per iteration |
 | c14 | two droppables, never containered — CONTROL | 51 then 50 |
 
-Probe: the matrix source is at the bottom of this file.
-Regression guards already in tree: `tests/scripts/849-move-copy-source-drop.loft`.
+All fourteen match on BOTH backends. The probe is committed as
+`tests/scripts/139-drop-cascade.loft`; it lived in this file only while four cells still failed.
 
-## The matrix probe
+## The stage-G matrix
 
-Kept here rather than in `tests/scripts/` because four cells FAIL today — it becomes a
-regression guard when stage E lands. Run it on both backends and read it against the table
-above; a drop printed before `(alive)` is premature, a missing one is a leak, a repeat is a
-double-close.
+The lint's own cells, hand-computed before a line of it was written. Each asserts the verdict
+AND the runtime release count, because a verdict alone cannot tell a correct silence from a
+missed defect. Committed as `tests/double_move.rs`.
 
-```loft
-// Expectation matrix for the STATIC DROP CASCADE. Each case prints an (alive)
-// marker; a drop before it is premature, a missing drop is a leak, a repeat is a
-// double-close. Expectations are hand-computed from the rule:
-//   one drop per resource, at the death of whatever finally owns it;
-//   a container's OWN hook runs before the fields it owns.
-struct H { id: integer }
-fn OpDrop(self: H) { if self.id != 0 { println("    DROP:{self.id}") } }
-fn mk(id: integer) -> H { return H { id: id }; }
+| cell | shape | expected |
+|---|---|---|
+| m1 | two fields from one local | WARN — released twice |
+| m6 | `vector<H> = [c, c]` | WARN — released twice |
+| m7 | field then element, one source | WARN — released twice |
+| m10 | two hand-offs inside ONE `if` arm | WARN — released twice |
+| m2 | one hand-off — CONTROL | silent, released once |
+| m3 | opposite `if` arms | silent, released once |
+| m4 | reassigned between hand-offs | silent, two distinct values |
+| m5 | two distinct sources — CONTROL | silent, two distinct values |
+| m9 | no droppable anywhere — CONTROL | silent, nothing released |
+| m11 | two inline temps — CONTROL | silent, two distinct values |
+| m12 | nested container | silent, released once |
+| m14 | conditional reassignment retires the pair | silent, two distinct values |
+| m8 | one hand-off in a LOOP body | silent, released TWICE — blind spot |
+| m13 | second hand-off inside an `if` | silent, released TWICE — blind spot |
 
-struct S { h: H }
-struct Nest { s: S }
-struct Two { a: H, b: H }
-struct WithHook { h: H, tag: integer }
-fn OpDrop(self: WithHook) { println("    DROP-outer:{self.tag}") }
-enum W { WH { h: H }, WNone }
-struct Plain { n: integer }          // no droppable anywhere — must stay untouched
-
-fn c1()  { println("  c1 struct field, source local            exp: (alive) 1");
-           c = mk(1); s = S { h: c }; println("    (alive {s.h.id})"); }
-fn c2()  { println("  c2 struct field, inline temp             exp: (alive) 2");
-           s = S { h: mk(2) }; println("    (alive {s.h.id})"); }
-fn c3()  { println("  c3 enum payload                          exp: (alive) 3");
-           c = mk(3); w: W = WH { h: c }; println("    (alive)"); }
-fn c4()  { println("  c4 nested struct-in-struct               exp: (alive) 4");
-           n = Nest { s: S { h: mk(4) } }; println("    (alive {n.s.h.id})"); }
-fn c5()  { println("  c5 two droppable fields                  exp: (alive) 6 5");
-           t = Two { a: mk(5), b: mk(6) }; println("    (alive {t.a.id}{t.b.id})"); }
-fn c6()  { println("  c6 container with its OWN hook           exp: (alive) outer:7 70");
-           x = WithHook { h: mk(70), tag: 7 }; println("    (alive {x.h.id})"); }
-fn c7()  { println("  c7 vector of droppables                  exp: (alive) 8 9");
-           v: vector<H> = [mk(8), mk(9)]; println("    (alive {len(v)})"); }
-fn c8()  { println("  c8 vector of containers                  exp: (alive) 10");
-           v: vector<S> = [S { h: mk(10) }]; println("    (alive {len(v)})"); }
-fn c9m() -> S { return S { h: mk(11) }; }
-fn c9()  { println("  c9 container RETURNED, dies in caller    exp: (alive) 11");
-           s = c9m(); println("    (alive {s.h.id})"); }
-fn c10() { println("  c10 CONTROL plain local, no container    exp: (alive) 12");
-           c = mk(12); println("    (alive {c.id})"); }
-fn c11() { println("  c11 CONTROL no droppable anywhere        exp: (alive) nothing");
-           p = Plain { n: 1 }; println("    (alive {p.n})"); }
-fn c12() { println("  c12 enum unit variant, no payload        exp: (alive) nothing");
-           w: W = WNone; println("    (alive)"); }
-fn c13() { println("  c13 container in a loop, per iteration   exp: 41 (alive) 42 (alive)");
-           for i in 41..43 { s = S { h: mk(i) }; println("    (alive {s.h.id})"); } }
-fn c14() { println("  c14 CONTROL droppable never containered  exp: (alive) 51 50");
-           a = mk(50); b = mk(51); println("    (alive {a.id}{b.id})"); }
-
-fn main() {
-  c1(); c2(); c3(); c4(); c5(); c6(); c7(); c8(); c9(); c10(); c11(); c12(); c13(); c14();
-  println("end");
-}
-```
+The two blind-spot cells are the boundary, not an oversight: both need a control-flow graph
+loft does not build, and both fail in the direction a gating tier must fail. Sweep before
+defaulting on: 1756 corpus `.loft` files, 0 hits.

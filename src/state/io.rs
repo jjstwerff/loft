@@ -859,7 +859,7 @@ impl State {
         // under-claims for 1-byte payloads (a single-boolean struct/closure
         // record got zero payload bytes and wrote into the next word).
         let r = self.database.claim(db, 1 + u32::from(size).div_ceil(8));
-        self.database.allocations[r.store_nr as usize].created_at = code_pos;
+        self.database.allocations[r.store_nr as usize].set_created_at(code_pos);
         // P259 commit 3 — record the type allocated into this store so
         // free_named can recognise closure-record stores at free time
         // (cascade-free walks `__closure_*` records' DbRef fields).
@@ -2018,7 +2018,7 @@ impl State {
             rec: db.rec,
             pos: 8,
         };
-        self.database.set_default_value(db_tp, &into);
+        self.database.set_final_default_value(db_tp, &into);
         self.database.last_parse_errors.clear();
         if let Some(err) = self.database.parse(val, db_tp, &into) {
             self.database.last_parse_errors.push(err);

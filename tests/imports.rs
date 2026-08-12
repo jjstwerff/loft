@@ -388,3 +388,44 @@ fn pln102_c98_a_local_may_shadow_a_library_function() {
         );
     }
 }
+
+/// loft#853 — a library's free function must win its own QUALIFIED call, even when the
+/// stdlib declares that name as a METHOD on the first argument's type.
+///
+/// loft#850 taught the method lookup to re-ask in the receiver type's OWN source when
+/// the caller's scope answered with another package's method. But every type has an own
+/// source, and for a builtin it is the stdlib — so searching it unconditionally let a
+/// stdlib method on `text` outrank a library's free function of the same name.
+/// `regex::split(pattern, input)` resolved to `split(self: text, separator: character)`
+/// and the published `regex` package stopped compiling, which the freeze forbids.
+///
+/// The control line matters as much as the subject: a fix that reached the free function
+/// by losing the stdlib's own text surface would satisfy the first assertion and break
+/// every program in the language. Run through the binary so the resolution is checked by
+/// its RESULT, not by the absence of a diagnostic — a wrong-but-compiling resolution is
+/// exactly what loft#850 was about.
+#[test]
+fn issue853_a_library_free_fn_outranks_a_stdlib_method_of_the_same_name() {
+    let s = sep_str();
+    let main = format!("tests{s}lib{s}issue853_main.loft");
+    let libs = format!("tests{s}lib");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("qualified=5 stdlib_free=3 stdlib_method=true"),
+            "{backend}: `lib::split(text, text)` must reach the LIBRARY's free fn (5) while \
+             the stdlib's own free fn (3) and text methods (true) still resolve; \
+             got stdout {stdout:?} stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

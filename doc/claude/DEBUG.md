@@ -123,6 +123,21 @@ answer the ownership question in the same line: `arg`, `def`, `skipfree`, `inlin
 and `OWNS` (the `Function::owns_store` verdict — the ONE predicate every consumer
 reads; an element or a match binding must NOT show it).
 
+`LOFT_TRACE_WORKREF=1` is the var table's other half — the ORDER the `__ref_N` names were
+claimed in, one line per mint, naming the site that asked:
+
+```
+[workref] fn=bad -> v2 __ref_1 tp=Vector(Reference(707, …)) at src/parser/mod.rs:8977:40
+[workref] fn=bad -> v5 __ref_3 tp=Reference(707, …)         at src/parser/objects.rs:3051:31
+```
+
+Reach for it when the var table shows the right names in the wrong ROLES.  The table is the
+end state; a collision is about sequence, and the two parser passes mint different ones —
+which is what showed a call's out-param buffer claiming, on pass 2, the name pass 1 had
+promoted to the return-buffer argument (loft#872).  The table alone said only that one
+variable was both.  Its companion is `LOFT_TRACE_RR=1`, which prints `ref_return`'s
+`(ls, ls_types, returned)` plus the per-candidate promotion verdict, with the PASS.
+
 One flag is there for a different reason.  **`amplink`** marks a binding the author
 spelled with `&` at a struct-typed projection (`c = &v[0]`, `c = &o.inner`).  Such a
 projection is already a view, so both spellings emit *byte-identical* IR — this column
@@ -793,7 +808,9 @@ LOFT_NO_CACHE=1 loft --native p.loft
 
 **State a run inherits, none of it cleared by removing `.loft`:** the
 whole-program bundle in `$XDG_CACHE_HOME/loft` (`cache::program_cache_paths`,
-default-ON — `LOFT_NO_CACHE` disables), the stdlib bundle
+default-ON — `LOFT_NO_CACHE` disables; and already OFF for a binary under
+`target/{debug,release}/`, so on a from-source loft the bundle is not one of
+your variables — PERFORMANCE.md § Which loft am I measuring), the stdlib bundle
 (`LOFT_STDLIB_CACHE`), `target/` build artefacts, and an installed
 `$(which loft)` on `PATH`.
 
@@ -976,9 +993,10 @@ auto-builds pass `--extern` for every rlib there) then dies on
 invalidates every cached cdylib.  Recovery, in order: `cargo clean --release`
 → full `cargo build --release` → `make rebuild-native-cdylibs` → rebuild the
 registry graphics cdylib (`cd ~/.loft/registry/graphics-*/native && cargo
-build --release`) → clear `~/.loft/build-cache` and any failing package's
-`native-auto/` → rebuild the wasm rlib (the `html_wasm` staleness guard
-checks it against source mtimes).
+build --release`) → `loft cache prune --all` (the whole-cache sweep; plain
+`loft cache prune` keeps the live generation and drops only what this loft
+cannot select — see loft#861) → rebuild the wasm rlib (the `html_wasm`
+staleness guard checks it against source mtimes).
 
 **Prevent + auto-heal it.**  Run sanitizer/nightly builds through
 **`scripts/asan.sh`**, which sets `CARGO_TARGET_DIR=target/asan` so nightly

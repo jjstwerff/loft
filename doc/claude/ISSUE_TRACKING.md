@@ -230,6 +230,16 @@ Filing is half the loop; closing is the other half.
   `deferred` idea** (close-reason *not planned*, keep the `status:deferred` label, point
   at its design doc + un-defer trigger; reopenable, not terminal — see
   [§ Parking a deferred idea](#parking-a-deferred-idea--close-it-into-its-design-doc-dont-hoard-it-open)).
+- **Correct the labels the fix invalidated**, not just add `fixed-pending-merge`.
+  A label is a claim about the issue's CURRENT state, and fixing it settles several
+  of them at once: `needs-design` comes off the moment the design question is
+  answered, `needs-triage` once it is triaged, `blocked-by` once the blocker lands,
+  `status:*` moves to what it is now waiting on.  Add what triage never supplied —
+  a missing `sev:` / `area:` is normal on a report written by a consumer, who has
+  the repro but not the subsystem.  This matters because the labels are the QUERY
+  surface: `gh issue list --label needs-design` is read as the design backlog, and a
+  solved issue sitting in it sends the next agent to re-answer a question that has
+  an implementation.  Cheapest at fix time, when what changed is still in hand.
 - **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
   locks it in.  A `fixed-pending-merge` issue with no regression is a re-opening
   waiting to happen.

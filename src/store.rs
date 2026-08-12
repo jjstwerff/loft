@@ -382,7 +382,7 @@ impl Drop for Store {
         }
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         unsafe { A.dealloc(self.ptr, l) };
-        crate::store_budget::release(self.known_type, self.size as usize * 8);
+        crate::store_budget::release(self.known_type, self.size as usize * 8, self.created_at);
     }
 }
 
@@ -442,7 +442,7 @@ impl Store {
         let ptr = unsafe { A.alloc_zeroed(l) };
         // A fresh store has no type yet — `set_known_type` moves these bytes across
         // when `database_named` names it.
-        crate::store_budget::add(u16::MAX, size as usize * 8);
+        crate::store_budget::add(u16::MAX, size as usize * 8, 0);
         let mut store = Store {
             ptr,
             size,
@@ -610,7 +610,7 @@ impl Store {
         );
         let l = Layout::from_size_align(words as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc_zeroed(l) };
-        crate::store_budget::add(u16::MAX, words as usize * 8);
+        crate::store_budget::add(u16::MAX, words as usize * 8, 0);
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         }
@@ -706,7 +706,7 @@ impl Store {
         if ptr.is_null() {
             return None;
         }
-        crate::store_budget::add(u16::MAX, words as usize * 8);
+        crate::store_budget::add(u16::MAX, words as usize * 8, 0);
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         }
@@ -1419,7 +1419,12 @@ impl Store {
         }
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
-        crate::store_budget::shrink(self.known_type, self.size as usize * 8, bytes);
+        crate::store_budget::shrink(
+            self.known_type,
+            self.size as usize * 8,
+            bytes,
+            self.created_at,
+        );
         self.size = words;
         self.retile_tail(mark);
         true
@@ -1590,10 +1595,33 @@ impl Store {
         }
         if !self.borrowed && !self.is_file_backed() {
             let bytes = self.size as usize * 8;
-            crate::store_budget::release(self.known_type, bytes);
-            crate::store_budget::add(kt, bytes);
+            crate::store_budget::release(self.known_type, bytes, self.created_at);
+            crate::store_budget::add(kt, bytes, self.created_at);
         }
         self.known_type = kt;
+    }
+
+    /// Stamp the bytecode position that allocated this store, moving its bytes with
+    /// it in the allocation-site ledger (@PLN140 arc A).
+    ///
+    /// The site is stamped *after* the buffer exists — `Store::new` allocates, then
+    /// `database_named` says where from — and store slots are pooled, so a reused
+    /// slot keeps its buffer and gets a new site. Writing `created_at` directly still
+    /// compiles and is sound (the ceiling counts bytes, not sites), but it leaves
+    /// those bytes filed under the previous site, which is the one thing the hot-spot
+    /// report has to get right.
+    pub fn set_created_at(&mut self, pc: u32) {
+        if self.created_at == pc {
+            return;
+        }
+        if !self.borrowed && !self.is_file_backed() {
+            crate::store_budget::relabel(
+                (self.created_at, self.known_type),
+                (pc, self.known_type),
+                self.size as usize * 8,
+            );
+        }
+        self.created_at = pc;
     }
 
     /// Create a locked deep-copy of this store for use in a worker thread.
@@ -1601,7 +1629,7 @@ impl Store {
     pub fn clone_locked(&self) -> Store {
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc(l) };
-        crate::store_budget::add(self.known_type, self.size as usize * 8);
+        crate::store_budget::add(self.known_type, self.size as usize * 8, 0);
         unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
         Store {
             ptr,
@@ -1642,7 +1670,7 @@ impl Store {
     pub(crate) fn snapshot_copy(&self) -> Store {
         let l = Layout::from_size_align(self.size as usize * 8, 8).expect("snapshot layout");
         let ptr = unsafe { A.alloc(l) };
-        crate::store_budget::add(self.known_type, self.size as usize * 8);
+        crate::store_budget::add(self.known_type, self.size as usize * 8, self.created_at);
         unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
         Store {
             ptr,

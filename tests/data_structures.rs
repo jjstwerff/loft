@@ -43,23 +43,41 @@ pub fn record() {
     stores.parse(test_string, s, &result);
     let mut check = String::new();
     stores.show(&mut check, &result, s, true);
-    assert_eq!(test_string, check);
+    // loft#870 — `amount` and `calc` are non-null (nothing marked them nullable), so
+    // the keys the input omits land as their type's ZERO, not the null sentinel, and
+    // `show` prints them because 0 is a real value of a field that cannot hold null.
+    // So parse-then-show NORMALISES rather than echoes: what it prints is the full
+    // record, and THAT is what round-trips to itself (checked just below).
+    let shown = "{ name: \"Hello World!\", category: Hourly, size: 12345, amount: 0, \
+                  percentage: 0.15, calc: 0 }";
+    assert_eq!(shown, check);
+    let round = stores.database(1234);
+    stores.parse(shown, s, &round);
+    let mut again = String::new();
+    stores.show(&mut again, &round, s, true);
+    assert_eq!(shown, again);
     let pf = Stores::get_field(&result, stores.position(s, "percentage") as u32);
     assert_eq!(stores.store(&pf).get_single(pf.rec, pf.pos), 0.15);
     stores.store_mut(&pf).set_single(pf.rec, pf.pos, 0.125);
     check.clear();
     stores.show(&mut check, &result, s, true);
-    assert_ne!(test_string, check);
+    assert_ne!(shown, check);
     // @P366: an unknown JSON key (`blame`) is now skipped (lenient-ignore),
-    // not a parse error.  The object parses to an all-default struct (shown as
-    // `{}`) instead of the old `"line 1:7 path:blame"` strict-reject.  This
-    // aligns the typed `text as <T>` cast with the dynamic `JsonValue` walker,
-    // which already tolerates extra keys.
-    assert_eq!(stores.parse_message("{blame:\"nothing\"}", s), "{}");
+    // not a parse error.  The object parses to an all-default struct instead of the
+    // old `"line 1:7 path:blame"` strict-reject.  This aligns the typed
+    // `text as <T>` cast with the dynamic `JsonValue` walker, which already
+    // tolerates extra keys.  The defaults are visible (loft#870), and `name` joined
+    // them with loft#875: a plain `text` the document omits is the EMPTY string, which
+    // is a value `show` prints, not the null it used to hold and skip.  `category` is
+    // an enum, whose absent value genuinely is nothing, so it stays unprinted.
+    assert_eq!(
+        stores.parse_message("{blame:\"nothing\"}", s),
+        "{name:\"\",size:0,amount:0,percentage:0,calc:0}"
+    );
     assert_eq!("/", stores.path(&result, s));
     assert_eq!(
         stores.parse_message("{name:\"a\",category: Daily}", s),
-        "{name:\"a\",category:Daily}"
+        "{name:\"a\",category:Daily,size:0,amount:0,percentage:0,calc:0}"
     );
 }
 

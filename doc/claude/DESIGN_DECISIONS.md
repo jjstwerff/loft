@@ -956,7 +956,7 @@ it is the materialisation of library bodies + variable tables into native
 `String` / `Box<Type>`.  In the native-library model you NEVER materialise those
 (libraries are native); you load only the small library interface (type schema +
 function signatures + symbol map).  The allocation cost is AVOIDED, not
-eliminated via a multi-week zero-copy rewrite.  E2 / full zero-copy therefore
+eliminated via a `VH` zero-copy rewrite.  E2 / full zero-copy therefore
 drops to low priority / deferred-by-this-decision for perf purposes.  The store-IR
 foundation and the `IrNode` handle still have architectural and self-hosting value;
 the perf rationale for E2 is superseded.

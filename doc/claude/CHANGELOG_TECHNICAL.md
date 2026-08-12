@@ -9,6 +9,625 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A declared field default now reaches a cast, when it is a constant (2026-08-12)
+
+`height: float = 1.5` was honoured by a struct literal and ignored by `text as Struct`,
+which wrote the type's zero — the same field with two absent values depending on how the
+record was made. Invisible before loft#870, because the cast answered `null` for all
+three cases and the value was wrong in a louder way.
+
+The default lives parser-side as a `Value` IR node and the JSON walker sits below the
+parser with no evaluator, which is what made this `needs-design`. Of the three possible
+answers, the one taken is folding a CONSTANT default into the schema `Field`
+(`typedef::fold_declared_default`) — it needs no evaluator, and it comes with a contract
+to state rather than a hole:
+
+* a LITERAL default (`= 1.5`, `= 7`, `= "hi"`, `= true`) is part of the type: it answers
+  a missing key, an explicit `null`, and a struct literal alike;
+* any other default is computed, is already lowered parser-side into a function the
+  CONSTRUCTION site calls, and keeps exactly its previous reach — the constructor, not a
+  cast. Documented in LOFT.md § struct fields, and pinned by a probe cell rather than
+  left implicit.
+
+Deposited at the one parse-time site that knows (`typedef::fill_database`), beside the
+`nullable` deposit and for the same reason. Three details carry the weight:
+
+* **The value goes in through `walk_parsed_into`** — the same writer the cast uses for a
+  key the document DID carry — so a default lands exactly as if the JSON had spelled it,
+  and every field encoding (ranged `u8`/`u16`, text interning, the `Parts` dispatch) is
+  handled in one place instead of restated. A literal that does not fit its field writes
+  nothing and the previous absent value stands.
+* **It is written only for `Absent::Final`.** A `Prefill` is overwritten by whatever
+  follows, so honouring a default there would pay back the per-record cost loft#875 split
+  the enum apart to avoid.
+* **It is carried, never RENDERED.** A default changes no width and no offset, so
+  `layout_dump` must not see it — otherwise `height: float = 1.5` becomes a different
+  layout from `height: float` and adding a default would refuse an existing store. The
+  dump's default branch is removed; it never fired, because every field held the `Str("")`
+  placeholder. Same call `nullable` made (@PLN127 arc D).
+
+`Field::default` becomes `Option<Content>` (it was `Content`, set to `Str("")` at every
+site and read by nothing). The snapshot and IR-store formats are unchanged: `None` is
+written as `Str("")` and read back as `None`, so an existing schema round-trips
+byte-identically. `--native` needed its own half — the generated `init()` replays the
+schema, so `emit_field` now emits `set_field_default`, folded by the same function, which
+is why the two backends cannot disagree about which defaults are constant.
+
+Matrix: 9 cells on both backends, 7 failing on the published `2026.8.0`; the negative
+controls (a present key beating the default, a field with no default keeping loft#870's
+answers, a literal override) pass on both. Guarded in
+`tests/scripts/876-declared-field-default-in-cast.loft`.
+
+### An optional return was a shape the lift never recognised (2026-08-12)
+
+`inline_struct_return` (`src/scopes.rs`) is the one predicate that answers "does this
+call hand back a store the caller must own?", and every arm matched the callee's
+return type UNPEELED. `Optional(τ)` is a compile-time wrapper over τ's own runtime
+layout (@PLN25), so `-> C?` allocates and delivers exactly what `-> C` does — but it
+read as "not liftable", and the result got a bare stack-pop (`FreeStack`) instead of a
+`__lift_N` temp with a scope-exit `OpFreeRef`. One leaked record per call, unbounded in
+a loop, interpreter-only (native frees through its own drop path).
+
+Filed as loft#879, a `??` bug. The `??` is incidental: a discarded `pick(1);` leaks the
+same store with no `??` anywhere, `takeopt(pick(1))` leaks it as an argument, and an
+optional VECTOR return leaks too. The deciding axis is the optional aggregate return
+whose result stays a temporary — not the spelling that produced it.
+
+The `??` half is a second arm. A null-coalesce lowers to an `ncc` value-block that
+assigns the subject to a `__ncc_N` temp and yields either that temp or the default arm's
+`__ref_N`. The temp is `skip_free` — the block's result ALIASES it, so freeing at the
+block would dangle the value the consumer reads — which leaves the subject owned by
+nothing when the block is used inline. Text ncc temps were already covered by the
+@PLN85 skip_free-orphan pass and vectors by their own delivery path; only the
+`Reference` result leaked, and only that arm was added.
+
+Both halves emit what the hand-correct bound form has always emitted: `x = pick(1)`
+binds an `optional(reference(C))` local and frees it at scope exit. The lift rewrites
+the inline spelling into that bound form, so the fix adds no new delivery path — which
+is also the soundness argument for the borrowed case (`fn kid(h) -> Cell? { h.child }`),
+since binding one has always been clean.
+
+Boundary matrix (11 cells, both backends, `scripts/probe-matrix`): 7 cells fail on the
+published `2026.8.0` and pass here; the 4 negative controls — the default arm, a
+borrowed optional view, a non-optional return, and store-free optional scalars — pass
+on both, so the matrix is not green by having stopped checking. Guarded in
+`tests/scripts/174-inline-temp-free.loft`, the file that already owns this class.
+
+### One call emitter re-derived the Rust fn identifier (2026-08-12)
+
+Emitted Rust is one flat namespace, so two same-named fns from different files get a
+file-hash suffix on the DEFINITION (`disambiguated_fn_ident`, #305). `Output::fn_ident`
+is the chokepoint, and its doc says every site writing a definition OR a call must go
+through it. `dispatch.rs`'s adopt-or-copy bind — `{ let _dst = …; let _src =
+<callee>(cell, …)` — wrote `callee.name()` instead, so the call named a `fn` that had
+been emitted under another: `error[E0425]: cannot find function n_defaulted in this
+scope`, on a package whose interpreter suite was green.
+
+The trigger is narrow enough that both the reporter's minimisation and my first one came
+out GREEN, which is what the guard's comment records. A FIRST bind of a call result goes
+through `calls.rs`, which was always right; it takes the adopt path — the callee returning
+a LOCAL bound from another call — to reach this emitter at all. Reproduced by
+reconstructing the consumer's pre-fix state from its current source (the failing state was
+never committed), then reduced to a 20-line package.
+
+Swept the siblings: `dispatch.rs:665` delegates to `output_code_inner`, and the other
+`def_fn.name()` reads are dispatch predicates on `Op*` builtins, which are never mangled.
+loft#878.
+
+### A work-ref mint landed on the return-buffer ARGUMENT (2026-08-12)
+
+`ref_return` promotes a body work-ref to the function's hidden return-buffer argument on
+pass 1, and the variable tables persist across passes BY NAME while the counter restarts —
+so on pass 2 `Function::work_refs` re-minted `__ref_N`, found the argument, and
+`set_type`'d it to whatever the new site asked for. `work_refs`'s own doc already stated
+the rule ("a name that resolves to an argument is STEPPED OVER rather than reused") and
+the body never implemented it.
+
+The site asking was a CALL's out-param buffer: the callee was handed the caller's record
+buffer as its `vector<T>` destination, cleared it as a vector and built into it. The value
+came back empty and the write that followed landed out of bounds — silently on the
+interpreter, as `store_nr == 65535` reaching `allocations[…]` on native.
+
+The step-over is keyed on the TYPE, not on argument-ness alone: pass 2 re-minting the same
+name for the same ROLE is how the return buffer is re-found, and a blanket step-over grew a
+lambda a second return-buffer attribute on pass 2 ("grew a pass-2-only attribute", the H5
+two-pass contract). `Function::retypes_argument` = argument AND `without_deps()` differs, so
+only a mint that would RE-TYPE the buffer steps on. `LOFT_NO_WORKREF_STEPOVER` opts out
+(`keys::work_ref_stepover_enabled`).
+
+It subsumes half of @PLN90 W1's A1b collapse: with `LOFT_NO_A1B=1` alone the known-wrong
+plan is now correct, so `oracle_flags_the_a1b_wrong_plan` disables both gates to still have
+a defect to catch. loft#872.
+
+### A container in `ls` was renamed onto a RECORD return buffer (2026-08-12)
+
+`classify_reference_delivery`'s fallback renames the return's dep candidates onto
+`__retbuf`. A tail that indexes a call — `make(n)[0] ?? d` — leaves the indexed CONTAINER
+in `ls`, and that container has no further deps of its own, so `return_views_local` reads
+it as owned and the rename fires: a `vector<Cell>` became the `Cell`-shaped buffer the
+caller allocated. Same promotion `moros H12` hit through a field projection, reached here
+through an index, which is why the guard is on the buffer's SHAPE (`ls_can_be_record_buffer`)
+rather than a fourth tail walker. Both delivery arms carry it — the block tail and the
+`RetSite::MidReturn` explicit `return`, which fails identically.
+
+Only a COLLECTION blocks the rename, and that narrowness is load-bearing: a first, wider
+spelling refused every non-record candidate, so a `-> Dialect?` whose value came from a
+call was MATERIALISED — and materialising a null-valued record fabricates an empty one.
+`registry_pure.loft`'s "a refusal speaks no dialect" caught it. loft#877.
+
+### `ShowDb::write_hash` walked a layout that had moved (2026-08-12)
+
+Formatting a struct with a `hash<…>` field SIGSEGV'd the interpreter in `OpFormatDatabase`
+and exited 1 with no output on native; `to_json()` on the same record shared the walker and
+so shared the crash. `write_hash` carried a bucket loop of its own that read each slot as a
+bare record number at `pos: 8` — the layout before @PLN135 arc H moved entries into an
+arena, where several share one record and `(rec, pos)` identifies an entry.
+
+Nothing caught the drift because nothing reached it: a BARE hash is refused at compile time
+(`append_data`: "Cannot format type hash<…>"), so a hash FIELD of a struct is the only way
+in, and the method was marked `#[allow(dead_code)]`. It is `hash::records_sorted` now — the
+module that owns the layout — which also gives the render a stated order (key order, like
+`index`/`sorted`) instead of bucket order. The `max_elements` cap the debugger's glance
+relies on came along with it. loft#873.
+
+### A not-found key field was used as an attribute INDEX (2026-08-12)
+
+`Data::attr` answers `usize::MAX` for a name it cannot find, and `set_mutable` /
+`set_mutable_directed` (`src/typedef.rs`) handed that straight to
+`definitions[..].attributes[a_nr]`. Any key field a keyed collection names that its
+ELEMENT type does not have therefore panicked — "index out of bounds: the len is 6 but
+the index is 18446744073709551615" — with a Rust source location and a caret on
+whatever line the layout was reached from, which is correct as written.
+
+Wider than the report, which arrived as the two-argument `hash<integer, At>` spelling.
+The same sentinel is reached by an ordinary MISSPELLING (`hash<At[ca_kye]>`), which is
+both well-formed and far more likely, and by all five keyed kinds — `hash`, `index`,
+`sorted`, `spatial`/radix and `trie` — since every one of them routes through these two
+helpers. Sweep of the five spellings: all ICE'd before, none does now.
+
+The name is recorded (`Data::record_unknown_key_field`) rather than reported in place
+because `fill_database` has no lexer; `fill_all` has one and drains it
+(`report_unknown_key_fields`) — the same record-here / report-there split
+`actual_types_deferred`'s `defer_unknown` uses. The caret lands on the FIELD that
+declared the collection, which is where the name was written.
+
+The message corrects the MODEL rather than just naming the symptom, because the way in
+is a user who believes `hash<K, V>`: it says the key must be a field of the element and
+shows the spelling. A did-you-mean rides `suggest_similar_capped`; failing that it lists
+the element's fields, except when the element is not a struct at all (`hash<integer,
+At>` puts the key in the element slot) — there it says so, because listing what
+`integer` answers to would offer its METHODS as candidate keys. loft#874.
+
+
+### A struct field's absent value is the FIELD's question, not the type's (2026-08-12)
+
+`integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a SENTINEL and
+share one content type between their `T` and `T?` spellings, so
+`Stores::set_default_value` — which sees only `tp` — had to pick one, and picked the
+sentinel. Writing that into a field declared plain put a null in a slot DN1 says cannot
+hold one: the reader answered `null`, the declared type said otherwise, and
+`redundant-coalesce` then advised deleting the `?? 0.0` doing the work. A ranged field
+was always right (`Parts::Byte`/`Short`/`ShortRaw`/`Int` carry `nullable` in the Part),
+which is what made the defect read as a float/integer oddity rather than a rule about
+FIELDS.
+
+`Field::nullable` (@PLN127 arc D) already existed and already documented why it must be
+DEPOSITED rather than derived — "`text?` and `integer?` share their non-null type and
+spell absence with a SENTINEL, so nothing in the store implies this". It simply was not
+being asked. Three sites default a struct field and all three dropped it:
+`set_default_value`'s `Parts::Struct | EnumValue` arm (recursed on `f.content` alone),
+`walk_parsed_struct`'s missing-key loop, and `walk_parsed_into`'s `Parsed::Null` arm.
+All three now route through `set_default_value_nullable`, which differs from the
+type-only answer in exactly four arms; `field_declared_nullable` resolves `(rec_tp,
+field)` and answers `true` — today's behaviour — wherever the question does not apply
+(`field == u16::MAX` for a top-level or array-element target, a non-struct `rec_tp`), so
+every non-struct path is byte-identical.
+
+Wider than filed on three counts. A key the JSON OMITS is the same question as one
+written `null` and had the same wrong answer. So did a FAILED parse — a syntax error or
+a leaf type mismatch abandons the record at its pre-defaults, and those were sentinels
+too, which is why `tests/docs/24-json.loft` and `tests/scripts/57-json.loft` both
+asserted `== null` after a bad parse. And a non-null field at DEPTH follows its own
+declaration, not its parent's.
+
+Consequence worth knowing: `ShowDb::write_fields` skips a field iff `is_null`, so fields
+that were wrongly null were invisible in a dump and are now printed. Parse-then-show
+NORMALISES rather than echoes, and the normalised form round-trips to itself —
+`tests/data_structures.rs::record` now asserts that second parse directly instead of
+asserting `show(parse(x)) == x`, which only held because the omitted fields were null.
+
+`tests/scripts/298-multi-return-site-ref-buffer.loft` reached its third return site
+through `result.v == null` on a plain `integer`; `v` is `integer?` now, because the
+@PLAN59 site under test would otherwise have gone unexercised while every assertion
+still passed.
+
+Still open, filed: a DECLARED default (`= 1.5`) is ignored by the walker (loft#876)
+because it lives parser-side as a `Value` IR node, not in `Field::default`. The fix
+attaches at the same missing-key loop below and needs an answer for a non-constant
+default first — fold a constant one into the schema, refuse a computed one on a
+JSON-castable struct, or give the walker an evaluator. loft#870.
+
+### The `text` half: what an absent text field costs (2026-08-12)
+
+`text` was left out of the fix above because a text handle of 0 IS null (`Store::get_str`),
+so its empty value has to be INTERNED — and `set_default_value`'s struct arm runs per
+record on the allocation path. Interning there measured +78 % wall and +91 % peak heap over
+400 000 rows with three text fields, every one of them overwritten by the literal that
+followed.
+
+So the call was split by what the value is FOR (`structures::Absent`): `Prefill` — a fresh
+record, whose fields the literal or the walker will write — keeps the cheap 0, and `Final`
+— the value a reader actually sees — interns. Three sites are `Final`: `walk_parsed_into`'s
+`Parsed::Null` arm, `walk_parsed_struct`'s missing-key loop, and `db_from_text`'s pre-parse
+fill (`set_final_default_value`), that last one because a parse that FAILS reaches neither
+walker and leaves the record exactly as the fill left it.
+
+A wide first spelling — intern in every arm — also leaked: `set_text` claims a fresh record
+and overwrites the handle without freeing the old one, so a prefilled empty leaked once per
+text field per record (`removal-frees-what-the-element-owned.loft`: 323 → 773).
+
+The literal keeps @PLN25's base-zero rule for a NULLABLE field (`text? → ""`), which is a
+decision, not a divergence: a constructor omitting a field asks for the zero, while a
+document omitting a key did not say anything. `875-json-absent-text-field.loft` pins both.
+
+Three assertions in the suite were the demonstration and are now updated: `57-json.loft:65`,
+`tests/docs/24-json.loft` and `tests/docs/23-safety.loft` each asserted `!x` on a plain
+`text` — passing only because of this defect, on a line where `redundant-null-negation` said
+it never could. loft#875.
+
+### A narrow vector element got the wide store op from the comprehension (2026-08-12)
+
+`narrow_elm_set` (`src/parser/vectors.rs`) picks the store op for an element's own width,
+and its contract is that every site BUILDING a vector routes through it — its own doc
+names the failure mode: "a site that misses it emits the wide 8-byte `OpSetInt` into a
+1-byte slot, so one write covers eight element slots" (the slice half of #624).
+`build_comprehension_code` was a third such site and went straight to `set_field`, which
+dispatches on the element DEF. A narrow integer is an ALIAS of `integer`, so a 4-byte
+slot got the 8-byte op.
+
+Each element overwrote its successor; once the writes passed the initial allocation they
+reached the vector's own bookkeeping and `vector_add` stopped terminating. Hence a
+BOUNDARY rather than a slowdown — `[for i in 0..13 { i as i32 }]` hung where `0..12`
+returned instantly, that being where the overrun first reaches the header. Measured
+boundaries: i8/u8 at 17, i16/u16/i32/u32 at 13, `integer` never (8 into 8 is correct).
+
+Two things narrowed the filed scope. `+=` was already routed through the helper, so the
+append loop was clean to n=5000 and the defect read as comprehension-specific rather than
+width-specific. And `r.len()` cannot see the damage BELOW the boundary: a store that
+clobbers its neighbours leaves the count right and the values wrong, so the guard
+(`tests/scripts/869-narrow-vector-comprehension.loft`) checks elements and a
+hand-computed sum. loft#869.
+
+### A text→heap cast was typed as a view of its source (2026-08-12)
+
+`OpCastVectorFromText` (`State::db_from_text`) interns text into a store of its OWN, but
+the `as` handler (`src/parser/operators.rs`) grafted the source's deps onto the result.
+@PLN99 arc C had already established the rule for `convert`'s allocating conversions —
+"the result is not a view of the source, so grafting would mark it a borrow" — and `cast`,
+which has the same property, never reported it. `Parser::cast_allocates` now answers it
+from the two TYPES (text source, heap target), which is what makes the verdict
+pass-stable: the return buffer is chosen on PASS 1 and freezes the signature, so a
+pass-2-only correction lands after the text local has already become a parameter.
+
+A freshly allocated record therefore read as a borrow of the text it parsed, and the
+return-buffer machinery delivered it as one. The symptom was decided entirely by what the
+source expression was:
+
+| cast source | interpreter | native |
+|---|---|---|
+| text LOCAL (incl. a literal) | renamed onto `__retbuf` — one slot both `text` and record buffer: #306 guard, then SIGSEGV | 4 × rustc E0308 (`"".to_string()` into a `DbRef`) |
+| LIFTED call temp | correct | bound as the buffer, cast emitted as a bare STATEMENT, untouched buffer returned — an EMPTY vector, silently |
+| PARAMETER | correct | correct |
+
+`file()` was never part of the trigger: a text literal reproduces it, which is what says
+the defect is the cast. rustc had been reporting the vector half from the other side all
+along ("unused return value of `db_from_text`").
+
+With the deps corrected, the struct target still answered null on native:
+`classify_vector_delivery` has a #409 forward-copy leg for a `#rust` callee that delivers
+its own store, and `classify_reference_delivery` had none — it classified `AsIs`, which
+claims the tail already wrote the buffer. It gets the record twin
+(`emit_forward_copy_ref_409`), and "does this tail forward its own store"
+(`tail_forwards_own_store`) now has ONE home instead of two that disagreed.
+
+Matrix: 13 probes over {vector, struct} × {tail, non-tail, bound-local, inline, no-return}
+× {parameter, text local, literal, lifted call, const}, every cell value-checked by hand on
+both backends plus `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`. The spurious `File×1`
+leak those shapes reported went away with the borrow that caused it.
+
+Residue: the interpreter still prints the #306 guard twice for
+`t = <text>; m = t as Struct; m` — value correct on both backends, native clean. Two
+mechanisms were tried and reverted (rerouting the delivery to `MaterializeView` returned
+a null; a `SkipReassigned` rung in `classify_ret_promotion` changed nothing), so the
+rename is reached from a site neither covers. loft#866, loft#867.
+
+### A member access recovered only over an identifier (2026-08-12)
+
+`Parser::field`'s Unknown/Never recovery skips the member token so parsing can continue
+past a receiver with no type yet. It consumed an IDENTIFIER only, so a numeric tuple
+index stayed in the stream and the statement parser tripped on it as `Expect token ;` —
+on PASS 1, and a pass-1 error means pass 2 never runs.
+
+Two failures from that one gap. A forward reference to a tuple-returning function could
+not be tuple-accessed AT ALL (`v = later("x"); a = v.0;` with `later` declared below is
+legal, and Unknown on pass 1 by design). And an unresolved call was never reported:
+"Unknown function" is a pass-2 diagnostic — pass 1 cannot tell a typo from a forward
+reference — so the aborting `Expect token ;` left the real cause unmentioned. The
+named-field and `[i]` spellings always recovered, each consuming its own member token;
+only the tuple form had no consumer.
+
+Indexing a `Never`-poisoned receiver is now silent too, matching the @P376 recovery in
+`field()`: the receiver's own error is already on screen, so "Indexing a non vector" only
+named a second correct line. loft#868.
+
+### The op-sets are a property of the program, not of each question (2026-08-12)
+
+`use_analysis` consults four op-number sets — `projection_ops`, `value_reader_ops`, the
+arg-0 writers (`is_first_arg_write_name`) and the collection `len` methods
+(`is_length_op_name`). Each is a pure function of the definition NAME table, so each is
+constant for a given program. Each was rebuilt per question, and the walks
+(`dead_store_accesses`, `collect_uses`, `Ownership::new`, `classifies_structurally`) ask
+once per FUNCTION — two of the four being a full scan of every definition doing string
+prefix matches. O(functions × definitions).
+
+Measured on a `println`-sized program: **9 000 rebuilds over 708 definitions**. `perf`
+put `first_arg_write_ops` at **22.7 %** of a warm-cache run — the hottest symbol in the
+process — and with the `HashSet<u32>` inserts, rehashes and sip-hashing it drives, ~40 %
+of startup. Warm 18.3 → 9.0 ms/run, cold 53.7 → 30.0 ms/run, against a HEAD build of the
+same tree.
+
+Cached on `Data` as `OpSetCache`, **keyed by definition count**. The keying is the whole
+correctness story, and the first attempt (a plain `OnceLock`) was a measured no-op: the
+first question arrives while the definition table is still growing, so pinning the answer
+to that moment made every later question a miss — **7.5 M rebuilds** across the
+`tests/scripts` corpus, i.e. the cache never once answered. A `debug_assert` would not
+have caught it either: `[profile.dev.package.loft]` sets `debug-assertions = false`, so
+such a guard is compiled out of the library in every standard build. Hence a checked key
+rather than an asserted invariant.
+
+Shape and clones-empty rationale follow `LazyDriverCache`, the existing precedent
+directly above it. Deliberately NOT the loft#854 shape: those facts derive from
+`Definition::code`, which `scopes.rs` rewrites, so a `Data`-lived cache would answer from
+a body that no longer exists; these derive from def names, which never change once a
+definition exists. `rebuild_indices` (which can REMOVE definitions) drops the cache.
+
+Behaviour-preservation gate: `loft introspect` over all **672** `tests/scripts` programs
+byte-identical before and after, IR and bytecode.
+
+Closes loft#864 (per-invocation floor). The issue proposed a warm session or a `loft
+serve` daemon; the measurement said the floor did not need one. Two facts settled it.
+An INSTALLED loft was already at ~20 ms, not the 80–220 ms reported: the whole-program
+cache is default-on but deliberately disabled for a dev build
+(`cache::running_a_dev_build` — any `debug`/`release` path component), and the report
+measured a from-source binary, which is the one configuration where it is off. And the
+floor that remained was over a third pure waste, which is what this removes. A
+persistent-session daemon stays available as future work; it is no longer the answer to
+this issue.
+
+Two unrelated reds cleared alongside:
+
+- `cargo build --no-default-features` did not compile (already red on HEAD): `loft_home`
+  sat behind the `registry` feature while `cache_areas` — the unconditional `loft cache`
+  command — resolves the build cache through it. `dirs` is an unconditional dependency,
+  so the gate was simply wrong.
+- `AtomicU64::fetch_update` is deprecated; now `update`, not `try_update` — the
+  saturating subtraction cannot fail, so there is no `None` case to report.
+
+### The heap ledger is per-linkage-unit, and a store outlives the one that made it (loft#862) (2026-08-12)
+
+`make ci` aborted at `exit_codes::moros_glb_cli_end_to_end` with `store_budget.rs:219:
+attempt to add with overflow` — an *add* overflowing a `u64`, which can only happen if
+`TOTAL` is already near `u64::MAX`, which can only happen if a `fetch_sub` already went
+below zero and wrapped. So the reported site was the victim; the cause was a release.
+
+The instrument said the rest in one run. Asserting `bytes <= TOTAL` inside `release`
+rather than waiting for the next allocation gave:
+
+```
+PROBE release underflow: kt=125 bytes=4344 born_at=99218 TOTAL=0
+  store_budget::release ← codegen_runtime::OpDatabase ← extensions::shared_store_dispatch
+```
+
+`TOTAL=0` with 4344 bytes being released: that `OpDatabase` runs INSIDE the library's
+auto-native cdylib, which links its **own** copy of libloft and therefore its own
+`store_budget` statics. The store was counted by the host's ledger and released against
+the cdylib's, which starts empty.
+
+`TOTAL` now saturates at zero, because below zero is not a quantity of heap — it is the
+ledger being asked about bytes belonging to another one. What that costs is stated rather
+than hidden: the HOST still counts those bytes as live, since its own ledger never sees
+the release either, so the ceiling reads high for a program that frees inside a library.
+That direction is the safe one (it can refuse early, never late) and it is what the
+behaviour already was; making the two ledgers one needs a `loft_ffi` hand-off and is not
+this change. Guarded by `releasing_more_than_was_added_stops_at_zero`, which asserts the
+VALUE — a saturating floor and a wrap both survive a debug `fetch_sub`, and only the
+number tells them apart.
+
+Worth noting where it hid: `binary(exit_codes)` is outside `find_problems.sh`'s curated
+selection, so a green `--wait` never covered it, and a release build wraps silently rather
+than aborting. Both were true of `main` as well — verified on a clean worktree at
+`00db858b`, not inferred.
+
+### A refusal that returned `u32::MAX` became a syntax error (loft#863) (2026-08-12)
+
+`fn sum(v: vector<integer>) -> integer { … }` collides with the stdlib's
+`pub fn sum <T: Addable>` and is correctly refused — but it answered with a bare
+`Cannot redefine 'sum'` and then `Syntax error: unexpected '->'` against a signature that
+is perfectly well formed. Reporting the collision returned `u32::MAX`, `parse_function`
+reads that as "this was not a function" and returns `false`, and the top-level loop then
+resumed with the lexer parked between the parameter list and the `->`.
+
+The sibling branch ten lines above — a free function shadowed by a METHOD on its first
+argument's type, which `len` takes — never had the second message, because it reports and
+falls THROUGH to the registration. This is the same fall-through: the rejected definition
+registers under a `#dup` name no call can spell, so the rest of it parses, the real error
+stands alone, and the winner keeps the real name. The position is printed too, which is
+what says `sum` is the stdlib's rather than a duplicate of the reader's own.
+
+### A tuple element read was a cursor typed as an owner (loft#857, loft#858) (2026-08-12)
+
+Two issues, one line. `v[i]` on a `vector<(…)>` unboxes the element through a work-ref
+that holds a DbRef into the vector's store, and `unbox_tuple_from_dbref` minted it with
+`Deps::none()` — which in this codebase means OWNS, not "unknown".
+
+Read as an owner, the cursor was freed at scope exit. Reading out of a `vector<(…)>`
+**parameter** therefore destroyed the CALLER's vector store on return; the slot was
+recycled, and the next call's `+=` appended through a handle that named another record
+entirely (loft#857 — `vector_append: field 1.8 lies outside its own record, which claims
+-99 words`). The filed scope was three axes too wide: the hash parameter, the outer loop
+and the call count are all irrelevant, and one indexed read plus two calls reproduces it.
+A DEAD read does too, so it is the read and not the dataflow.
+
+Read as an owner, the cursor also had to hold its own store, so `__ref_1 = <foreign
+DbRef>` lowered to `OpDatabase` + `OpCopyRecord`: every `v[i]` **allocated a store,
+deep-copied the element into it and freed the previous one**, then read the elements back
+out of the copy (loft#858). That is the ~14× against `vector<struct>`, whose cursor has
+carried a dep on the vector all along and just copies a pointer. The reporter's verbatim
+benchmark goes **379 ms → 12 ms**, against 11 ms for the struct — 14.6× to 1.09×.
+
+So the cursor names the vector in its deps when the receiver is a variable, which is what
+the struct path always did. Two measurements say the earlier readings of #858 were wrong,
+and both are worth recording: the `??` join is **not** the cost (`v[i]?` measured the
+same, 159 ms vs 155 ms), and it is **not** per-element unboxing either (arity 2 cost
+139 ms against arity 3's 155 ms — the allocate/free dominates, so the gap barely moves
+with arity). A `vector<float>` indexed read is only 2.2× its iteration, which is the
+raising `OpGetVector` (a length read on top of `get_vector`) and is a separate, small
+thing left alone.
+
+The free still needs suppressing separately: the scope-exit sweep frees a `__ref_N` on
+its NAME ahead of asking whether it owns anything — a rule written for the work-refs that
+back ref-returning calls, which do own what they hold. And the borrow verdict is per-DbRef,
+not per-call-site: the same helper unboxes heap-carrying tuple RETURNS, which ARE owned,
+and a blanket skip leaked the four `pair(…)` return buffers in
+`822-vector-tuple-spellings.loft`. A vector element read is the positive, checkable case;
+everything unrecognised keeps the owning treatment. The mark is pass-2 only — the variable
+table persists across passes by name while the `__ref_N` counter restarts, so a pass-1
+mark could land on whatever temp pass 2 gives that name (loft#848).
+
+`857-vector-tuple-element-read-borrow.loft` pins both, including the cells a borrow newly
+has to survive: a read and an append in one statement, and 40 rounds of grow-then-read so
+a cursor left pointing at a moved allocation shows up as wrong values rather than a crash.
+
+### `τ` → `τ?` was refused with advice that could not work (loft#859) (2026-08-12)
+
+Storing `x / g` back into a non-null `g` is refused correctly — a variable divisor can be
+zero, so the quotient is `τ?` (C80). But the message offered `as` and a new variable name,
+and on this shape **both fail**: the cast checker refuses `as τ` for the very reason the
+store was refused, `as τ?` lands back on this same error — a closed loop between two
+diagnostics — and a fresh name still has to store the value somewhere. The cures that
+work, `?` and `?? <default>`, were named only by the cast checker.
+
+`reject_retype` now picks the advice by which property changed. Only the ADVICE half
+differs: the diagnosis, "cannot change type from τ to τ?", is right as it stands and is
+kept word for word, so the two messages remain one diagnostic to anyone reading, grepping
+or testing for it. A genuine type change (`integer` → `text`) keeps the `as` advice, which
+is what it was written for.
+
+`bench/06_newton_sqrt/bench.loft` was the reason @PLN140's oracle corpus had no row for
+it — it did not run on either backend. It discharges at the division now and runs.
+
+### The runtime rebuild retried against the state that motivated it (loft#855) (2026-08-12)
+
+`--native`'s post-compile heal rebuilds loft's runtime rlib and retries the compile with
+the SAME `Command` — whose `--extern loft=` / `-L dependency=` args were chosen from the
+rlib that was on disk when the command was built. With no rlib at all they were never
+added, so the retry re-ran a rustc that still named no crate: the heal reported its own
+success and an identical `E0463: can't find crate for loft` in one breath, which reads as
+a broken toolchain rather than a missed refresh. The runtime args are re-asked after a
+successful rebuild.
+
+The nightly ASan legs were red for a different reason and no leak: the per-file scan
+reported **0 leaking files of 701**. Two tests spawn loft on both backends, and the
+`--native` leg makes the spawned run BUILD native artifacts, which cannot resolve loft's
+proc-macro deps under `-Zsanitizer` + `--target`. The ASan sweep already excluded them;
+the leak gate did not, so it now does — a gate that reds on its own toolchain teaches
+readers to ignore it.
+
+### The ownership oracle is asked once per function, not once per question (loft#854) (2026-08-12)
+
+`use_analysis::ownership_of` is documented as *"the ONE fact every own-vs-borrow
+chokepoint READS instead of re-deriving"*. It re-derived it on every read:
+
+```rust
+pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
+    let def = data.def(d_nr);
+    collect_defs(&def.code, &FillOps::of(own.data), &mut defs);  // the WHOLE function
+    own.classify(value, &def.variables, &defs)                   // …to answer about ONE value
+}
+```
+
+`scopes::scan_set` asks once per assignment, and a vector literal is one assignment per
+element — so an n-element literal walked the function n times, **cloning every defining
+right-hand side** on each walk. Quadratic: 2 000 elements 0.68 s, 4 000 2.34 s, 8 000
+9.42 s, a clean 4× per doubling. crawler's generated terrain file (one 86 400-element
+`vector<integer>`) took **over 13 minutes** at 99 % CPU with no output, which reads as a
+hang; five of its `make` targets imported that module, so none of them were ever run.
+It is now **0.99 s**.
+
+**The fix is a memo, and where it lives is the whole design.** `function_defs` is split
+out of `ownership_of` and memoised on `Scopes` — created per scan phase, holding the
+`d_nr` being scanned. Correct *by construction* rather than by convention: `data` is
+borrowed `&Data` for the entire traversal and `run_scan_phase` installs the rewritten body
+only after `scan` returns, so the borrow checker is what keeps the memo from going stale.
+It is the same value the old code recomputed — `data.def(d_nr).code` — computed once.
+
+**Not cached on `Data`**, which is where it would naturally go. `Data` must stay `Sync`
+(tests park it in a process-wide `OnceLock` and parallel workers read `&Data` across
+threads), and the existing precedent there — `caller_index` — is a write-once `OnceLock`
+that is never invalidated, which is sound only because the caller graph is stable after
+parse. `Defs` is not: `scopes.rs` rewrites `definitions[d_nr].code` at four points, so a
+`Data`-lived cache would answer from a body that no longer exists — silently, and in the
+direction that mis-classifies ownership. The other 14 `ownership_of` call sites are
+unchanged and keep recomputing; none of them is hot.
+
+**Verified behaviour-preserving, not just green:** `loft introspect` over 60
+`tests/scripts/*.loft` programs is **byte-identical** before and after, IR and bytecode.
+Guarded by `tests/compile_scaling.rs`, a new home for complexity bounds, whose margin is
+measured in both directions — 69.9 s against the reverted fix, 0.33 s with it.
+
+Two things the filed report had wrong, worth recording because both would misdirect a
+reader: it is **not parsing** (parse is linear: 12 → 17 → 34 ms while `scopes::check` went
+705 → 2 271 → 9 323 ms), and the suggested **chunking workaround does not work** — eight
+1 000-element literals in one function cost the same as one of 8 000, because the axis is
+per-FUNCTION, not per-literal. Splitting across functions is what helped.
+
+### A method lookup asks the type's OWN source only to replace a foreign candidate (loft#850 follow-up) (2026-08-11)
+
+loft#850 taught `find_fn` that the mangled key `t_<len><Name>_<fn>` spells a type's NAME,
+not a type: two packages may each declare a `Thing`, both register `t_5Thing_go`, and the
+caller's name table holds whichever import landed first. The fix checks each candidate
+against the receiver it declares and, when the candidate is foreign, re-asks in the type's
+OWN source — where the right package's method lives.
+
+The re-ask was written as a plain second search source:
+
+```rust
+for from in [source, own_source] {
+    let d_nr = self.source_nr(from, &key);
+    if self.method_receives(d_nr, type_nr) { return d_nr; }
+}
+```
+
+**Every type has an own source, and for a builtin it is the stdlib.** So this did not just
+resolve collisions — it added the whole stdlib method surface as a fallback for any call
+whose first argument is a builtin type, ahead of the free-function lookup below it. A
+library's free `split(pattern: text, input: text)` lost its own qualified call to the
+stdlib's `split(self: text, separator: character)`: `regex::split("[,;]", "a,b;c")` stopped
+compiling with *expected character, got text on argument 2*. The published `regex` package
+had shipped that call since 0.2.0, and a language change retro-breaking a shipped library is
+what the freeze forbids — `revalidate-libs` is the gate that caught it, green on `main` and
+red on the branch.
+
+The re-ask is now what it was meant to be: a REPLACEMENT for a candidate this scope answered
+with and that proved foreign, never a second place to find a method the caller's scope does
+not have. No candidate under the key means nothing to disambiguate, so the search falls
+through to the free function exactly as it did before loft#850.
+
+Pinned by `issue853_a_library_free_fn_outranks_a_stdlib_method_of_the_same_name`
+(`tests/imports.rs`, both backends), whose control line asserts the stdlib's own free
+functions and text methods still resolve from the same scope — a fix that reached the free
+function by losing the methods would satisfy the subject and break the language.
+
 ### A binding position mints a local, whatever else carries that name (loft#852, loft#756) (2026-08-11)
 
 A library's public function occupied the CONSUMER's variable namespace: with

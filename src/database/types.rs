@@ -217,7 +217,26 @@ impl Stores {
     #[allow(dead_code)]
     pub fn set_default(&mut self, tp: u16, f: u16, value: Content) {
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &mut self.types[tp as usize].parts {
-            fld[f as usize].default = value;
+            fld[f as usize].default = Some(value);
+        }
+    }
+
+    /// loft#876 — deposit a field's DECLARED constant default (`height: float = 1.5`).
+    ///
+    /// The by-name twin of [`Self::set_field_nullable`], and deposited for the same
+    /// reason: the default lives parser-side as an IR node, the store layer has no
+    /// evaluator, and nothing here implies it.  Without it a `text as Struct` cast
+    /// writes the TYPE's zero for a key the document omits, while a struct literal
+    /// writes the declared default — the same field with two absent values depending
+    /// on how the record was made.
+    pub fn set_field_default(&mut self, structure: u16, name: &str, value: Content) {
+        if structure == u16::MAX {
+            return;
+        }
+        if let Parts::Struct(s) | Parts::EnumValue(_, s) = &mut self.types[structure as usize].parts
+            && let Some(f) = s.iter_mut().find(|f| f.name == name)
+        {
+            f.default = Some(value);
         }
     }
 
@@ -307,7 +326,7 @@ impl Stores {
                 name: name.to_string(),
                 content,
                 position: u16::MAX,
-                default: crate::keys::Content::Str(crate::keys::Str::new("")),
+                default: None,
                 nullable: false,
                 other_indexes: others,
             });
@@ -1620,7 +1639,7 @@ impl Stores {
                 name: format!("#left_{nr}"),
                 content: int4,
                 position: 0,
-                default: Content::Long(0),
+                default: None,
                 nullable: false,
                 other_indexes: Vec::new(),
             });
@@ -1628,7 +1647,7 @@ impl Stores {
                 name: format!("#right_{nr}"),
                 content: int4,
                 position: 0,
-                default: Content::Long(0),
+                default: None,
                 nullable: false,
                 other_indexes: Vec::new(),
             });
@@ -1636,7 +1655,7 @@ impl Stores {
                 name: format!("#color_{nr}"),
                 content: bool_c,
                 position: 0,
-                default: Content::Long(0),
+                default: None,
                 nullable: false,
                 other_indexes: Vec::new(),
             });
@@ -2621,15 +2640,13 @@ impl Stores {
             if !p.other_indexes.is_empty() {
                 write!(res, " other {:?}", p.other_indexes).unwrap();
             }
-            if let Content::Str(val) = p.default
-                && val.len == 0
-            {
-            } else if let Content::Long(v) = p.default
-                && v == 0
-            {
-            } else {
-                write!(res, " default {:?}", p.default).unwrap();
-            }
+            // loft#876 — a field's DECLARED default is deliberately NOT rendered.  This
+            // dump is the @PLN97 layout identity, and a default changes no width and no
+            // offset: rendering it would make `height: float = 1.5` a different layout
+            // from `height: float`, so adding a default would refuse an existing store.
+            // Same call as `nullable`, which is carried and never rendered for the same
+            // reason.  (Until defaults were carried every field held the `Str("")`
+            // placeholder, so the branch this replaces never fired.)
             if pretty {
                 *res += "\n";
             }
@@ -2845,7 +2862,6 @@ impl Type {
 #[cfg(test)]
 mod layout_tests {
     use super::{Field, Parts, Stores, Type};
-    use crate::keys::Content;
 
     /// Build a clean two-field struct via the public API.
     fn score_struct(s: &mut Stores) -> u16 {
@@ -3212,7 +3228,7 @@ mod layout_tests {
                 name: "x".to_string(),
                 content: int_c,
                 position: 0,
-                default: Content::Long(0),
+                default: None,
                 nullable: false,
                 other_indexes: Vec::new(),
             });

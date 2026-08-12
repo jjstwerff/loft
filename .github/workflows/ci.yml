@@ -1198,12 +1198,19 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date) |
-          test(loft_test_runs_admission_and_states_its_scope))'
-          # ^ excluded like the others above: it SPAWNS a `loft test` subprocess, so the
-          #   admission logic runs OUTSIDE this ASan-instrumented binary — zero UAF/OOB
-          #   coverage here — and it fails only under the ASan `--target` build (passes on
-          #   the normal Test ubuntu/macos jobs, which validate its logic), for an
-          #   environment reason that never reproduces locally.
+          test(loft_test_runs_admission_and_states_its_scope) |
+          test(a_private_scope_end_hook_in_a_library_runs) |
+          test(a_delegating_producer_binds_its_companion_cleanly))'
+          # ^ excluded like the others above: each SPAWNS the `loft` binary as a
+          #   subprocess, so the work runs OUTSIDE this ASan-instrumented binary — zero
+          #   UAF/OOB coverage here — and each fails only under the ASan `--target` build
+          #   (all pass on the normal Test ubuntu/macos jobs, which validate their logic),
+          #   for an environment reason that never reproduces locally.
+          #
+          #   The last two spawn a run that BUILDS native artifacts (a library cdylib, the
+          #   `--native` runtime), and that build cannot resolve loft's proc-macro deps
+          #   under `-Zsanitizer` + `--target` — the same E0463 the doctest note above
+          #   describes: `can't find crate for curve25519_dalek_derive`.
       # The interpreter LEAK GATE (detect_leaks=1, enforcing) is the nightly
       # `asan-leak-gate` job in miri.yml — kept off the per-PR path (its slow
       # single-threaded pass would bloat PR CI).  Its red/green surfaces onto PRs via

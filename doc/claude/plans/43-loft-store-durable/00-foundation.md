@@ -245,5 +245,5 @@ validating the sidecar — no signature-check refactor required.
 
 - [README § Foundation — integrity at the file level](README.md#foundation--integrity-at-the-file-level)
 - [Phase 01 — Tier 1: IntegrityOnly](01-tier-1-integrity.md) — first consumer of these types
-- [`src/store.rs`](../../../src/store.rs) — extension target
+- [`src/store.rs`](../../../../src/store.rs) — extension target
 - [`DATABASE.md`](../../DATABASE.md) — gets a § "Durable stores" subsection in phase 06 closeout

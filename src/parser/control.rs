@@ -295,6 +295,11 @@ enum RefDelivery {
     /// The tail borrows a LOCAL's store (#306) — copy it into an owned work-ref
     /// via `materialize_view_return` before it escapes, then rename that.
     MaterializeView,
+    /// #409 — a `#native`/`#rust` callee delivers its OWN record and never writes
+    /// the `__retbuf` it was handed: bind the forwarded store to a fresh `__fwd`
+    /// local, copy the record into `__retbuf`, and let scope analysis free `__fwd`.
+    /// The Reference twin of [`Delivery::ForwardCopy`].
+    ForwardCopy,
     /// `ls` empty and no work-ref to recover — the tail already delivers; emit nothing.
     AsIs,
 }
@@ -1645,6 +1650,30 @@ impl Parser {
     /// read the deps fact `ls` and the tail shape ONCE and pick a [`Delivery`].
     /// Pure (`&self`) so classification and emission stay separable. Replaces the
     /// three inline branches the vector arm of `block_result` used to carry.
+    /// #409 — does this tail call hand back a store of its OWN, ignoring the
+    /// `__retbuf` it was given?
+    ///
+    /// A `#native`/`#rust` declaration with a heap return does: its body is foreign
+    /// code that allocates and returns, so leaving the forward in place returns that
+    /// value with `__retbuf` still empty. The caller must copy the record/elements
+    /// across instead (`Delivery::ForwardCopy` / `RefDelivery::ForwardCopy`).
+    ///
+    /// Such a callee is PASS-STABLE (`code == Null` plus a symbol, identical on both
+    /// parse passes), so a local minted off this answer is safe. One home for the
+    /// fact because both delivery selectors ask it — they disagreed once, and the
+    /// Reference side's silent `AsIs` is loft#867's null-filled struct.
+    fn tail_forwards_own_store(tail: &Value, data: &crate::data::Data) -> bool {
+        matches!(tail.unspan(), Value::Call(d, _) if {
+            let cd = data.def(*d);
+            *cd.code() == Value::Null
+                && (!cd.native().is_empty() || !cd.rust().is_empty())
+                && matches!(
+                    cd.returned(),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+        })
+    }
+
     fn classify_vector_delivery(&self, ls: &[u16], l: &[Value], context: &str) -> Delivery {
         if ls.is_empty() && !l.is_empty() {
             // Issue #120 mirror (see the Reference arm): when filter_hidden
@@ -1660,21 +1689,7 @@ impl Parser {
             // which is pass-stable (unlike its `returned` deps).
             let callee_forwards = matches!(last.unspan(), Value::Call(d, _)
                 if self.callee_forwards_foreign_store(*d));
-            // #409: a NATIVE / `#rust` decl with a heap return delivers its OWN
-            // store and never writes the `__retbuf` it was handed — route the
-            // result through a fresh local and COPY into `__retbuf` (ForwardCopy).
-            // Such a callee is PASS-STABLE (`code==Null` + a symbol set, identical
-            // in both parse passes), so minting a local here is safe. Copying (not
-            // chaining) keeps the #355 orphan impossible.
-            let native_forwarder = matches!(last.unspan(), Value::Call(d, _) if {
-                let cd = self.data.def(*d);
-                *cd.code() == Value::Null
-                    && (!cd.native().is_empty() || !cd.rust().is_empty())
-                    && matches!(
-                        cd.returned(),
-                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                    )
-            });
+            let native_forwarder = Self::tail_forwards_own_store(last, &self.data);
             if !extra.is_empty() && !callee_forwards {
                 Delivery::Rename(extra)
             } else if native_forwarder {
@@ -1826,15 +1841,66 @@ impl Parser {
                 if !extra.is_empty() {
                     return RefDelivery::Rename(extra);
                 }
+                // #409, the Reference twin of the vector selector's `native_forwarder`
+                // leg: a `#native`/`#rust` callee with a heap return delivers a store
+                // of its OWN and never writes the `__retbuf` it was handed. `AsIs`
+                // claims the tail already wrote the buffer, so the call was emitted as
+                // a bare statement and the untouched buffer returned — a null-filled
+                // struct out of `text as Struct` on native (loft#867). Copy the
+                // forwarded record into the buffer instead.
+                if Self::tail_forwards_own_store(last, &self.data) {
+                    return RefDelivery::ForwardCopy;
+                }
             }
             RefDelivery::AsIs
-        } else if self.return_views_local(ls) {
+        } else if self.return_views_local(ls) || !self.ls_can_be_record_buffer(ls) {
             // #306: the tail borrows a LOCAL's store — copy it before it escapes.
             RefDelivery::MaterializeView
         } else {
             // Owned / arg-borrow: rename the tail's work-ref(s) onto `__retbuf`.
             RefDelivery::Rename(ls.to_vec())
         }
+    }
+
+    /// Can every candidate in `ls` BE the record return buffer?
+    ///
+    /// The buffer is what the CALLER allocates and the callee fills, so a candidate
+    /// renamed onto `__retbuf` must have the return's own shape — a record.  A tail
+    /// that indexes a local CONTAINER leaves that container in `ls`
+    /// (`make(n)[0] ?? d`: the `??` block's value depends on the vector, and the
+    /// vector itself has no further deps, so `return_views_local` reads it as owned).
+    /// Renaming it gave a `vector<Cell>` producer a `Cell`-shaped buffer to build
+    /// into: `make` cleared the caller's record as a vector, the index then read
+    /// absent and the `??` answered its fallback for every input — a wrong value on
+    /// the interpreter, an out-of-bounds store index on native (loft#877).  It is the
+    /// promotion `moros H12` hit through a field projection, reached here through an
+    /// index instead, which is why the guard is the SHAPE and not another tail walker.
+    ///
+    /// Only a COLLECTION blocks the rename.  It is what a record return can be a view
+    /// INTO, so it is the shape whose presence here means "the tail indexed something",
+    /// and the narrowness matters: a candidate is not always a container the return
+    /// borrows from, and materialising one that is merely a null-valued record turns
+    /// `null` into a freshly allocated empty record — a `-> Dialect?` that answers a
+    /// dialect for a connection that was never made.
+    ///
+    /// A PARAMETER is not a placement question — the return borrows it, and
+    /// `classify_ret_promotion`'s `MergeAttr` rung already says so by merging the attr
+    /// into the return deps — so an attribute never blocks the rename.
+    fn ls_can_be_record_buffer(&self, ls: &[u16]) -> bool {
+        let attr_names = &self.data.def(self.context).attr_names;
+        ls.iter().all(|&v| {
+            v >= self.vars.count()
+                || attr_names.contains_key(self.vars.name(v))
+                || !matches!(
+                    self.vars.tp(v),
+                    Type::Vector(_, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                )
+        })
     }
 
     /// @PLN85 D-own-1 — emit the mechanism the Reference selector chose. The tail of
@@ -1851,6 +1917,7 @@ impl Parser {
                 self.ref_return(&[w], l, RetSite::BlockTail);
                 self.nrvo_collapse_tail_set(l, &[w]);
             }
+            RefDelivery::ForwardCopy => self.emit_forward_copy_ref_409(td, l),
             RefDelivery::AsIs => {}
         }
     }
@@ -1863,6 +1930,44 @@ impl Parser {
     /// shape a hand-written `r = native(); r` produces. Finalize the return-type
     /// dep to `{__retbuf}` so a caller binds its result var to the buffer it
     /// passed (else the signature stays bare-vector and `+=` drops data). A no-op
+    /// #409 for a `Type::Reference` return — the record twin of
+    /// [`Self::emit_forward_copy_409`].
+    ///
+    /// The tail forwards a store the callee allocated itself, so bind it to a fresh
+    /// `__fwd` local and copy the RECORD into `__retbuf`; `__fwd` is an ordinary
+    /// owned local, so the normal scope sweep frees the forwarded store rather than
+    /// orphaning it. Finalise `returned` to `{__retbuf}` so a caller reads its result
+    /// out of the buffer it passed.
+    ///
+    /// A no-op when there is no buffer, no work-var, or no tail — the caller's
+    /// `AsIs` behaviour, which is what a fn with no heap-return ABI wants anyway.
+    fn emit_forward_copy_ref_409(&mut self, td: u32, l: &mut [Value]) {
+        let Some((buf_attr, buf_var)) = self.return_buffer() else {
+            return;
+        };
+        let fwd = self.create_var("__fwd", &Type::Reference(td, Deps::none()));
+        if fwd == u16::MAX {
+            return;
+        }
+        let Some(last) = l.last_mut() else {
+            return;
+        };
+        let orig = std::mem::replace(last, Value::Null);
+        // `materialize_return_into` emits the proven copy-into-a-destination shape
+        // (`dest = null; OpDatabase(dest, kt); OpCopyRecord(src, dest, kt); dest`),
+        // the same one `ref_return`'s copy leg uses to fill the buffer from a named
+        // local. Here the source is the `__fwd` we just bound.
+        let mut copy_tail = Value::Var(fwd);
+        self.materialize_return_into(td, &mut copy_tail, buf_var);
+        l[l.len() - 1] = crate::data::v_block(
+            vec![crate::data::v_set(fwd, orig), copy_tail],
+            Type::Reference(td, Deps::frame1(buf_var)),
+            "fwd_copy_409_ref",
+        );
+        let dep = Deps::attrs(vec![buf_attr]);
+        self.data.definitions[self.context as usize].returned = Type::Reference(td, dep);
+    }
+
     /// when there is no buffer, no work-var, or no tail.
     fn emit_forward_copy_409(&mut self, elm: &Type, l: &mut [Value]) {
         let elm_ty = elm.clone();
@@ -11457,10 +11562,13 @@ impl Parser {
                                 RetSite::MidReturn,
                             );
                         }
-                    } else if self.return_views_local(ls) {
+                    } else if self.return_views_local(ls) || !self.ls_can_be_record_buffer(ls) {
                         // #306: mid-body `return <view of a local>` — copy it
                         // into an owned work-ref before it escapes (mirrors
-                        // block_result's tail handling).
+                        // block_result's tail handling).  The shape guard mirrors
+                        // it too: `return make(n)[0] ?? d;` leaves the indexed
+                        // CONTAINER in `ls`, and a `vector<Cell>` cannot be the
+                        // buffer for a `Cell` return (loft#877).
                         let w = self.materialize_view_return(*td, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else {

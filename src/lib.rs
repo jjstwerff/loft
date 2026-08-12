@@ -228,6 +228,7 @@ pub mod c_call;
 pub mod c_shim;
 pub mod c_signature;
 pub mod cache;
+pub mod cache_gc;
 mod calc;
 pub mod copy_manifest;
 pub mod crash_report;
@@ -287,6 +288,7 @@ mod page_metrics;
 pub mod parser;
 #[cfg(feature = "png")]
 mod png_store;
+pub mod profiler;
 mod radix_db;
 mod radix_tree;
 mod spatial;

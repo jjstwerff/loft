@@ -566,7 +566,9 @@ repo, **out of the loft tree**, so no stale artifacts accrue in loft:
    `sync-fixtures.sh`, and commit the `tests/fixtures/libs/<pkg>/` diff in loft as
    **one reviewable commit** — separate from the issue close.  loft now tracks the
    fixed snapshot.
-6. **Teardown.** `rm -rf ~/loft-dev/<chunk>` and `~/.loft/build-cache/<pkg>-*`.
+6. **Teardown.** `rm -rf ~/loft-dev/<chunk>`, then `loft cache prune` — it drops the
+   generations this loft can no longer select and leaves the live one, so the next
+   build does not start cold (`loft cache status` first if you want the figure).
    The loft tree is pristine; no stale artifacts remain.
 
 The principle is the project's anti-stale-artifact rule (GOALS.md § "the method

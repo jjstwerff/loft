@@ -371,6 +371,12 @@ fn print_help() {
     );
     println!("                                list             — browse all packages in registry");
     println!("                                list --installed — show only installed packages");
+    println!("  cache <subcommand>            the on-disk build caches (~/.loft)");
+    println!(
+        "                                status           — footprint, and what is reclaimable"
+    );
+    println!("                                prune            — drop what this loft cannot reuse");
+    println!("                                prune --all      — drop the live generation too");
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
@@ -895,7 +901,11 @@ fn api_resolve_pkg_dir(name: &str) -> Option<std::path::PathBuf> {
 
 /// `~/.loft/` honouring `LOFT_HOME` (the same base `registry_index::cache_dir`
 /// resolves against).
-#[cfg(feature = "registry")]
+///
+/// Deliberately NOT behind the `registry` feature: `cache_areas` (the `loft cache`
+/// command) resolves the build cache through it, and that command is unconditional —
+/// gating this made a `--no-default-features` build fail to compile.  The `dirs`
+/// dependency it uses is unconditional too.
 fn loft_home() -> std::path::PathBuf {
     std::env::var_os("LOFT_HOME")
         .map(std::path::PathBuf::from)
@@ -3698,6 +3708,179 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         println!("Wrote {} stubs to {}", stubs.len(), out_file.display());
     } else {
         print!("{output}");
+    }
+}
+
+/// loft#865 — say that a profiling variable was read and cannot be honoured, when the
+/// program is about to run as a compiled binary.
+///
+/// All three instruments hang off the interpreter's dispatch loop: the CPU sampler
+/// walks `State::call_stack`, and the allocation ones key on `alloc_pc`, the bytecode
+/// position the loop republishes per op. A native binary has no dispatch loop, so
+/// there is nothing to hook and nothing to attribute — this is a real limit, not a
+/// missing feature, and `scripts/profile.sh --engine` is the instrument for that side.
+///
+/// Silent unless one of the variables is actually set, so an ordinary native run is
+/// unchanged.
+fn announce_profiler_cannot_follow_native() {
+    let asked: Vec<&str> = ["LOFT_PROFILE", "LOFT_ALLOC_PATHS", "LOFT_ALLOC_SITES"]
+        .into_iter()
+        .filter(|v| std::env::var_os(v).is_some())
+        .collect();
+    if asked.is_empty() {
+        return;
+    }
+    eprintln!(
+        "loft: {} set, but the loft-level profiler is interpreter-only — this program \
+         runs native,\n  so nothing will be sampled. Add --interpret to profile it (it \
+         burns the same loft\n  lines), or `make profile PROFILE_FLAGS=--engine` to \
+         profile the generated binary with perf.",
+        asked.join(" + ")
+    );
+}
+
+/// loft#861: Handle `loft cache <status|prune>`.
+///
+/// The auto-native caches are keyed on a value that moves with every installed loft
+/// build, so a reinstall orphans the previous generation. Nothing collected them, and
+/// the documented remedy was a hand-typed `rm -rf` — which also removes the LIVE
+/// generation, so the next build pays a full cold rebuild (545 s of rustc CPU on one
+/// measured project gate). `status` says what is there; `prune` takes the part that
+/// cannot be used again.
+fn handle_cache(argv: &[String], i: &mut usize) {
+    let sub = if argv.get(*i).is_some_and(|s| !s.starts_with('-')) {
+        *i += 1;
+        argv[*i - 1].as_str()
+    } else {
+        "status"
+    };
+    let all = argv[*i..].iter().any(|a| a == "--all");
+    let force = argv[*i..].iter().any(|a| a == "--force");
+    match sub {
+        "status" => cache_report(&cache_areas(), false, all),
+        "prune" => {
+            // The dead-generation test is "the entry's stamp is not THIS loft's key",
+            // and a development build has a different key from the installed one (its
+            // BUILD_ID is the git HEAD).  So pruning with one reports the installed
+            // loft's LIVE generation as unusable and deletes it — correct about the
+            // binary that asked, and a full cold rebuild for every project on the
+            // machine.  Measured while building this: a dev binary called 49 of 50
+            // build trees reclaimable, against 0 for the installed one.
+            if loft::cache_gc::running_is_the_installed_loft() != Some(true) && !force {
+                eprintln!(
+                    "loft cache prune: this is not the installed loft, so it answers for a \
+                     different\n  cache key — it would drop the generation the installed loft \
+                     is still using,\n  and every project on this machine would rebuild from \
+                     cold.\n\n  `loft cache status` is safe from here. Use the installed \
+                     binary to prune, or\n  --force if this build IS the one you want the \
+                     cache keyed to."
+                );
+                std::process::exit(1);
+            }
+            cache_report(&cache_areas(), true, all);
+        }
+        _ => {
+            eprintln!("usage: loft cache <status|prune> [--all] [--force]");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The cache areas this loft can speak for, surveyed against ITS OWN key — a prune run
+/// with one loft build reports and removes what that build cannot select, which is the
+/// only question a given binary can answer.
+fn cache_areas() -> Vec<loft::cache_gc::Area> {
+    let home = loft_home();
+    vec![
+        loft::cache_gc::survey_build_cache(
+            &home.join("build-cache"),
+            loft::cache::native_artifact_cache_key(),
+        ),
+        loft::cache_gc::survey_native_auto(&home.join("registry"), loft::cache_gc::KEEP_ARTIFACTS),
+    ]
+}
+
+/// Print the footprint, and (when `remove`) take the reclaimable part.
+///
+/// `status` is the dry run — same figures, nothing touched — so there is no need for a
+/// `--dry-run` flag on `prune`, and no way to discover the numbers only by deleting.
+fn cache_report(areas: &[loft::cache_gc::Area], remove: bool, all: bool) {
+    use loft::cache_gc::human;
+    let total: u64 = areas.iter().map(|a| a.bytes).sum();
+    let dead: u64 = areas.iter().map(|a| a.dead_bytes).sum();
+    if total == 0 {
+        println!("loft cache: nothing cached yet.");
+        return;
+    }
+    for a in areas {
+        let target = if all { a.bytes } else { a.dead_bytes };
+        let target_items = if all { a.items } else { a.dead_items };
+        println!("{:<22} {:>10}  {} entries", a.name, human(a.bytes), a.items);
+        if target_items > 0 {
+            println!(
+                "  {:>20} {:>10}  {} reclaimable — {}",
+                "",
+                human(target),
+                target_items,
+                if all {
+                    "everything (--all)"
+                } else {
+                    a.basis.label()
+                }
+            );
+        }
+    }
+    println!("{:<22} {:>10}", "total", human(total));
+    if !remove {
+        let would = if all { total } else { dead };
+        if would == 0 {
+            // Nothing to say beyond the footprint. Silence on "nothing to do" is the
+            // house rule; a line saying so would be the only output on every clean run.
+            return;
+        }
+        println!(
+            "\n{} reclaimable — `loft cache prune{}` to take it.",
+            human(would),
+            if all { " --all" } else { "" }
+        );
+        // Whose answer this is. A development build has its own cache key, so what it
+        // calls dead includes the installed loft's live generation — the figure is
+        // right about the binary that asked and wrong about the machine.
+        if loft::cache_gc::running_is_the_installed_loft() != Some(true) {
+            println!(
+                "  (this is not the installed loft: it answers for its own cache key, so \
+                 the figure\n   above counts generations the installed loft is still using.)"
+            );
+        }
+        if !all {
+            println!(
+                "  (--all also drops the LIVE generation: correct, but the next build \
+                 of each package pays a full rustc rebuild.)"
+            );
+        }
+        return;
+    }
+    let mut freed_bytes = 0;
+    let mut freed_items = 0;
+    for a in areas {
+        let (items, bytes) = if all {
+            loft::cache_gc::prune_all(a)
+        } else {
+            loft::cache_gc::prune(a)
+        };
+        freed_items += items;
+        freed_bytes += bytes;
+    }
+    // What was actually given back, not what was intended: a busy or vanished entry
+    // makes those differ, and reporting the intent is how a tool claims space it did
+    // not free.
+    if freed_items == 0 {
+        println!("\nnothing to prune.");
+    } else {
+        println!(
+            "\nfreed {} across {freed_items} entries.",
+            human(freed_bytes)
+        );
     }
 }
 
@@ -7176,6 +7359,10 @@ fn main() {
         } else if a == "registry" {
             handle_registry(&argv, &mut i);
             return;
+        } else if a == "cache" {
+            // loft#861 — the other side of the auto-native caches, which only grew.
+            handle_cache(&argv, &mut i);
+            return;
         } else if a == "generate" {
             // PKG.6a: `loft generate` — emit Rust stubs for #native declarations.
             let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
@@ -7770,6 +7957,10 @@ fn main() {
     // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
     // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
     loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN139 stage G — the double-move lint. Runs here for the same reason the dead-store
+    // one does: the hand-offs it counts are the materialised `OpCopyRecord`s, which only
+    // exist once the program is scope-checked.
+    loft::use_analysis::warn_double_move(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol in owned source must resolve
     // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
     // symbol is marked, so a no-op for every program today.
@@ -9735,7 +9926,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // the host linker has no equivalent for is not passed to it.
             #[cfg(not(any(target_os = "macos", windows)))]
             cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
-            let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
+            // Point rustc at loft's own runtime rlib and everything it links against,
+            // answering the deps dir it found.  A closure rather than straight-line code
+            // because the post-compile heal below rebuilds that rlib and must ask AGAIN:
+            // the args are decided from what is on disk, and the whole point of the
+            // rebuild is to change that (loft#855).
+            let attach_loft_runtime = |cmd: &mut std::process::Command| {
+                let lib_dir = loft_lib_dir()?;
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
                 // One `-L` per search dir: the classic layout yields exactly one
@@ -9768,9 +9965,8 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     cmd.arg("-L").arg(format!("native={}", out_dir.display()));
                 }
                 Some(deps)
-            } else {
-                None
             };
+            let mut native_deps_dir = attach_loft_runtime(&mut cmd);
             // PKG.4: add --extern flags for native packages.
             native_utils::add_native_extern_flags(
                 &mut cmd,
@@ -9854,6 +10050,22 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     "the runtime rlib this program links was built by a different rustc",
                 )
             {
+                // Retry against what the rebuild PRODUCED, not against what motivated it.
+                // The `--extern loft=` / `-L dependency=` args above were chosen from the
+                // rlib that was on disk when the command was built, so when there was no
+                // rlib at all they were never added — and re-running the same command
+                // after a successful rebuild re-ran a rustc that still named no crate.
+                // The heal then reported its own success and the identical `E0463: can't
+                // find crate for loft` in one breath, which is how it read as a broken
+                // toolchain rather than a missed refresh (loft#855, `Suite under nightly`).
+                //
+                // Only the runtime args are re-asked. Package `--extern`s came from
+                // `add_native_extern_flags` and re-running that would emit a second copy
+                // of each; a tree with no runtime rlib has no built packages either, so
+                // the case this recovers does not need them.
+                if native_deps_dir.is_none() {
+                    native_deps_dir = attach_loft_runtime(&mut cmd);
+                }
                 if let Ok(retry) = cmd.output() {
                     output = retry;
                 }
@@ -10047,6 +10259,16 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         if let Some(dir) = binary.parent() {
             native_utils::stage_native_dlls(dir, &p.data);
         }
+        // loft#865 — the loft-level profiler cannot follow the program here, and this
+        // is the LAST point at which that is still certain: everything before it may
+        // still `break 'native` and interpret after all, where the sampler does arm.
+        //
+        // Said out loud because the default backend is native, so this is the run a
+        // user reaches for a profiler WITH — and an accepted-then-ignored variable
+        // ends in a clean exit and an empty terminal, which is indistinguishable from
+        // "the profiler ran and your program is not the problem". loft#860 fixed the
+        // same hole for test runs; this is the branch next to it.
+        announce_profiler_cannot_follow_native();
         // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
         // re-parses the same sources, so hand it the resolved paths the driver
         // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;
@@ -10286,6 +10508,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         if std::env::var_os("LOFT_LIVE_RELOAD").is_some() {
             loft::live_reload::install(&abs_file, &default_str, &p.lib_dirs, &p.data);
         }
+        // @PLN140 arc B/C — arm the loft-level sampler before the program starts, so
+        // the interval the first sample credits is the program's, not start-up's.
+        state.arm_profiler();
         state.execute_argv("main", &p.data, &user_args);
         // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
         // causing execute_argv to return. Resume until the program finishes.
@@ -10313,6 +10538,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if runtime_err.is_none() {
         state.check_store_leaks();
     }
+    // @PLN140 — the profiling reports. Outside the leak guard on purpose: a run that
+    // ended in a fault still spent its time and its memory somewhere, and that is
+    // often exactly what is being asked. Both are silent unless armed.
+    state.report_alloc_sites(&p.data);
+    state.report_profile(&p.data);
     // @PLN119 arc A — say goodbye to each placed library's worker rather than
     // leaving the kernel to do it. `PR_SET_PDEATHSIG` is the backstop that
     // covers every `exit` path below and an outright kill; this is the graceful

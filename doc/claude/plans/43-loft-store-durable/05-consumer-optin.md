@@ -183,4 +183,4 @@ This is fast (<1 sec); ships in `make ci`.
 - [Phase 06 — closeout](06-closeout.md)
 - [Plan-37 phase 08](../42-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
 - [Plan-32 TTT v5](../39-tic-tac-toe) — Tier 2 consumer
-- [Plan-36 audience demo](../future/6-audience-generative-art) — Tier 3 consumer
+- [Plan-36 audience demo](../6-audience-generative-art) — Tier 3 consumer

@@ -18,6 +18,10 @@ struct NullTextHolder {
   s: text,
 }
 
+struct OptTextHolder {
+  s: text?,
+}
+
 fn main() {
   // ## Null values — hidden reserved values
   // Every type reserves one special value to mean "nothing here" (null).
@@ -42,14 +46,14 @@ fn main() {
   assert(n < 0, "i64::MIN is the most negative 64-bit integer");
   // Arithmetic on null propagates: null plus anything is null.
   assert(! (n + 1), "null + 1 is still null");
-  // Text null is the NUL character ('\0'), not the empty string.
-  // Parsing a JSON object with a missing text field produces the NUL sentinel:
+  // Text null is the NUL character ('\0'), not the empty string. A `text?` local
+  // or field can hold it; a plain `text` cannot, and a parse respects that.
   holder = NullTextHolder.parse(`{{}}`);
-  assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
+  assert(holder.s == "", "a missing `text` field is empty, because it cannot be null");
+  opt = OptTextHolder.parse(`{{}}`);
+  assert(!opt.s, "a missing `text?` field IS null — the declaration decides");
   empty = "";
   assert(empty, "empty string is NOT null — this surprises most newcomers");
-  // Mitigation: declare struct fields as `not null` so that reserved value can
-  // be used as data.
 
   // ## Parsing text to a number needs a fallback
   // An unchecked `text as integer` is a COMPILE error: parsing can fail, and

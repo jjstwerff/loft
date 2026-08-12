@@ -3607,6 +3607,29 @@ impl Clone for LazyDriverCache {
     }
 }
 
+/// The answer to [`Data::op_sets`], kept beside the definition count that produced it.
+///
+/// Keyed by COUNT rather than computed once, because the first question arrives while
+/// the definition table is still growing: pinning the answer to that moment made every
+/// later question a miss (measured: 7.5 M rebuilds over the `tests/scripts` corpus).
+/// The count settles before the analysis phase, so re-keying costs a handful of builds
+/// and then hits for the rest of the run.
+///
+/// **Clones EMPTY, on purpose** — same reason as [`LazyDriverCache`]: a clone's
+/// definitions diverge from the original's, and a count alone cannot tell two tables of
+/// equal size apart.
+#[derive(Default)]
+struct OpSetCache(
+    #[allow(clippy::type_complexity)]
+    std::sync::Mutex<Option<(usize, std::sync::Arc<crate::use_analysis::OpSets>)>>,
+);
+
+impl Clone for OpSetCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 /// The immutable data of a parsed loft program
@@ -3661,6 +3684,16 @@ pub struct Data {
     /// breaks). What is not well-defined is the bare name, and that is exactly
     /// where this is consulted.
     ambiguous: HashMap<(String, u16), Vec<u32>>,
+    /// loft#874 — key fields named by a keyed collection that its ELEMENT type does
+    /// not have: `(declaring def, attribute nr, element def, the name)`.
+    ///
+    /// Recorded during `fill_database`, which has no lexer, and reported by
+    /// `fill_all`, which does — the same record-here / report-there split
+    /// `defer_unknown` uses. Not derivable afterwards: `set_mutable` is the only
+    /// place that asks the element for the name, and `Data::attr`'s answer for a
+    /// name it cannot find is `usize::MAX`, which used to be handed straight to
+    /// `attributes[…]` as an index.
+    unknown_key_fields: Vec<(u32, usize, u32, String)>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -3723,6 +3756,9 @@ pub struct Data {
     /// a process-wide `OnceLock<(Data, Stores)>` and parallel
     /// workers read from a `&Data` across threads.
     caller_index: std::sync::OnceLock<HashMap<u32, Vec<u32>>>,
+    /// Lazy cache of the op-number sets the use/dead-store/ownership walks read
+    /// (see [`crate::use_analysis::OpSets`] and [`OpSetCache`]).
+    op_sets: OpSetCache,
 }
 
 #[must_use]
@@ -3959,6 +3995,7 @@ impl Data {
             use_names: HashMap::new(),
             applied: Vec::new(),
             ambiguous: HashMap::new(),
+            unknown_key_fields: Vec::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -3976,6 +4013,7 @@ impl Data {
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
+            op_sets: OpSetCache::default(),
         }
     }
 
@@ -4071,6 +4109,10 @@ impl Data {
     /// `(name, own_source)` but never the `(name, importing_source)` alias an import
     /// creates.  Without the replay a rollback drops every `use`d name.
     pub(crate) fn rebuild_indices(&mut self) {
+        // A rollback can REMOVE definitions as well as add them, so the count alone
+        // could in principle land back on its old value over a different table.  This
+        // is the one place that happens, and dropping the cache here costs one rebuild.
+        self.op_sets = OpSetCache::default();
         self.def_names.clear();
         // loft#788 — derived from the imports exactly as `def_names` is, so it
         // is rebuilt by the same replay. Keeping stale entries would refuse a
@@ -4574,6 +4616,33 @@ impl Data {
         }
     }
 
+    /// loft#874 — note a key field that its element type does not have, for
+    /// [`Self::take_unknown_key_fields`] to report once a lexer is in reach.
+    pub(crate) fn record_unknown_key_field(&mut self, decl: (u32, usize), on_d: u32, name: &str) {
+        let entry = (decl.0, decl.1, on_d, name.to_string());
+        if !self.unknown_key_fields.contains(&entry) {
+            self.unknown_key_fields.push(entry);
+        }
+    }
+
+    /// Drain the deferred unknown-key-field notes.  Draining rather than reading
+    /// because `fill_all` runs once per parsed file and a note must be reported
+    /// exactly once, however many later files re-enter the layout.
+    pub(crate) fn take_unknown_key_fields(&mut self) -> Vec<(u32, usize, u32, String)> {
+        std::mem::take(&mut self.unknown_key_fields)
+    }
+
+    /// The attribute names of `d_nr`, for a did-you-mean over a field name.
+    #[must_use]
+    pub(crate) fn attr_names_of(&self, d_nr: u32) -> Vec<&str> {
+        self.def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| !a.name.starts_with("__") && !a.name.starts_with('#'))
+            .map(|a| a.name.as_str())
+            .collect()
+    }
+
     #[must_use]
     pub fn attr_name(&self, d_nr: u32, a_nr: usize) -> String {
         if a_nr == usize::MAX {
@@ -4901,13 +4970,34 @@ impl Data {
         }
         let mut d_nr = own(self, &name); // C97: a library's mangled name is scoped to its own source
         if d_nr != u32::MAX {
+            // Name WHERE the winner lives, exactly as the shadowing branch above does.
+            // Without it a stdlib collision read as a bare "Cannot redefine 'sum'", which
+            // does not say that `sum` is the stdlib's rather than a duplicate of the
+            // reader's own (loft#863).
             diagnostic!(
                 lexer,
                 Level::Error,
-                "Cannot redefine '{}'",
-                fn_name.strip_prefix("n_").unwrap_or(fn_name)
+                "Cannot redefine '{}' (already defined at {})",
+                fn_name.strip_prefix("n_").unwrap_or(fn_name),
+                self.def(d_nr).position
             );
-            return u32::MAX;
+            // Report and CONTINUE, under a name nothing can reach.  Answering `u32::MAX`
+            // here made `parse_function` return `false` — "this was not a function" —
+            // with the lexer parked between the parameter list and the `->`, so the
+            // top-level loop resumed there and reported `Syntax error: unexpected '->'`
+            // against a signature that is perfectly well formed.  The shadowing branch
+            // above never had that second message because it falls through to the
+            // registration below, and this is the same fall-through: the rest of the
+            // definition parses into a def no call can name (`#dup` cannot be spelled in
+            // loft), the real error stands alone, and the winner keeps the real name so
+            // calls still resolve to it.  The program is refused either way.
+            let mut shadow = format!("{name}#dup");
+            let mut seq = 2;
+            while self.def_nr(&shadow) != u32::MAX {
+                shadow = format!("{name}#dup{seq}");
+                seq += 1;
+            }
+            name = shadow;
         }
         d_nr = self.add_def(&name, lexer.pos(), DefType::Function);
         for a in arguments {
@@ -5106,15 +5196,31 @@ impl Data {
         // @PLN25 — a `τ?` receiver tries its own overload first and falls back to the base
         // (non-null) one; the second spelling is the same string when sig == base (gate-OFF
         // or a non-nullable receiver), and looking it up twice would only repeat the work.
+        //
+        // The type's own source is consulted ONLY to replace a candidate this scope
+        // answered with and that turned out to be foreign — never as a second place to
+        // find a method the caller's scope does not have. That distinction is the whole
+        // of loft#853: EVERY type has an own source, and for a builtin it is the stdlib,
+        // so searching it unconditionally let a stdlib method on `text` outrank a
+        // library's free function of the same name. `regex::split(pattern, input)` — a
+        // free `fn split(text, text)` — resolved to the stdlib's `split(self: text,
+        // separator: character)` and the published library stopped compiling, which the
+        // freeze forbids. No candidate here means nothing to disambiguate, so the search
+        // falls through to the free function below, as it did before loft#850.
         let spellings: &[&String] = if sig == base { &[&sig] } else { &[&sig, &base] };
         let own_source = self.definitions[type_nr as usize].source;
         for spelling in spellings {
             let key = format!("t_{}{}_{fn_name}", spelling.len(), spelling);
-            for from in [source, own_source] {
-                let d_nr = self.source_nr(from, &key);
-                if self.method_receives(d_nr, type_nr) {
-                    return d_nr;
-                }
+            let d_nr = self.source_nr(source, &key);
+            if d_nr == u32::MAX {
+                continue;
+            }
+            if self.method_receives(d_nr, type_nr) {
+                return d_nr;
+            }
+            let own = self.source_nr(own_source, &key);
+            if self.method_receives(own, type_nr) {
+                return own;
             }
         }
         let d_nr = self.source_nr(source, &format!("n_{fn_name}"));
@@ -6589,6 +6695,36 @@ impl Data {
     pub fn callers_of(&self, callee_d_nr: u32) -> Vec<u32> {
         let map = self.caller_index.get_or_init(|| self.build_caller_index());
         map.get(&callee_d_nr).cloned().unwrap_or_default()
+    }
+
+    /// The op-number sets the use / dead-store / ownership walks consult, built once.
+    ///
+    /// See [`crate::use_analysis::OpSets`] for why a `Data`-lived cache is sound for
+    /// these (def NAMES never change) when it is not for the body-derived facts of
+    /// loft#854.  Rebuilding them per question was ~40 % of a warm-cache startup.
+    ///
+    /// Staleness is handled by CONSTRUCTION, not by an assertion.  A definition added
+    /// after the sets were built would make them stale SILENTLY and in the unsound
+    /// direction (a missing `OpSet*` reads as "not a write"), and a `debug_assert`
+    /// cannot cover that: `[profile.dev.package.loft]` sets `debug-assertions = false`,
+    /// so such a guard is compiled out of the library in every standard build.  So the
+    /// definition count is part of the key — a changed table rebuilds rather than
+    /// answering from sets that cannot describe it.
+    pub(crate) fn op_sets(&self) -> std::sync::Arc<crate::use_analysis::OpSets> {
+        let n = self.definitions.len();
+        let mut slot = self
+            .op_sets
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, cached)) = slot.as_ref()
+            && *at == n
+        {
+            return std::sync::Arc::clone(cached);
+        }
+        let sets = std::sync::Arc::new(crate::use_analysis::OpSets::build(self));
+        *slot = Some((n, std::sync::Arc::clone(&sets)));
+        sets
     }
 
     /// Internal helper for `callers_of`.  Walks every user fn body,

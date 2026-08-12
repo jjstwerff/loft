@@ -17,6 +17,24 @@ use crate::vector;
 use crate::{hash, keys, tree};
 use std::collections::HashSet;
 
+/// Why a field is being given its absent value — which decides what that value may COST.
+///
+/// The two are the same for every type whose absence is a bit pattern, and differ only for
+/// `text`, whose empty value has to be interned. `set_default_value` runs per RECORD on the
+/// allocation path, where the literal or the walker that follows writes every field anyway;
+/// making it intern there is pure garbage (measured: +78 % wall, +91 % peak heap over 400 000
+/// three-text-field rows). What a reader actually sees is written by the walker, per FIELD,
+/// and that is the call that has to be right.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Absent {
+    /// Pre-fill for a freshly claimed record: a value nothing may MISREAD, on the
+    /// understanding that the caller overwrites it.
+    Prefill,
+    /// The value that stays. A JSON key written `null`, one the document omits, and a parse
+    /// that failed all leave the field exactly as this call writes it.
+    Final,
+}
+
 /// Walker-native diagnostic for `walk_parsed_into` failures.
 ///
 /// `at` is a byte offset into the original input; `path` is the
@@ -721,11 +739,22 @@ impl Stores {
         path: &mut Vec<String>,
         at: usize,
     ) -> Result<(), WalkErr> {
-        // `null` at any target position resets to the type's
-        // default sentinel — mirrors the legacy scanner's
-        // first-line behaviour and keeps round-tripping correct.
+        // `null` at any target position resets to the target's default — mirrors the
+        // legacy scanner's first-line behaviour and keeps round-tripping correct.
+        // Which default is the FIELD's question, not the type's: JSON `null` into a
+        // field declared non-null lands as that type's zero, because the sentinel a
+        // type-only answer would write is a value DN1 says the slot cannot hold
+        // (loft#870).
         if matches!(parsed, crate::json::Parsed::Null) {
-            self.set_default_value(tp, to);
+            // A field that DECLARES a default answers with it — `null` and an omitted
+            // key are the same question, so they get the same answer (loft#876).
+            if let Some(f) = self.declared_field(rec_tp, field)
+                && self.write_declared_default(&f, rec_tp, field, to)
+            {
+                return Ok(());
+            }
+            let nullable = self.field_declared_nullable(rec_tp, field);
+            self.set_default_value_nullable(tp, nullable, Absent::Final, to);
             return Ok(());
         }
         let mismatch = || WalkErr {
@@ -1011,7 +1040,7 @@ impl Stores {
             }
             found_fields.insert(name.as_str());
         }
-        for f in object {
+        for (f_nr, f) in object.iter().enumerate() {
             if (f.other_indexes.is_empty() || f.other_indexes[0] != u16::MAX)
                 && !found_fields.contains(f.name.as_str())
                 && f.name != "enum"
@@ -1021,7 +1050,14 @@ impl Stores {
                     rec,
                     pos: fld + u32::from(f.position),
                 };
-                self.set_default_value(f.content, &slot);
+                // A key the JSON simply omits is the same question as one written
+                // `null`, and gets the same answer — the FIELD's default (loft#870).
+                // A field that DECLARES one answers with it (loft#876); otherwise the
+                // type's absent value stands.
+                let f = f.clone();
+                if !self.write_declared_default(&f, tp, f_nr as u16, &slot) {
+                    self.set_default_value_nullable(f.content, f.nullable, Absent::Final, &slot);
+                }
             }
         }
         Ok(())
@@ -1099,6 +1135,66 @@ impl Stores {
         }
     }
 
+    /// Is the field at `field` of struct `rec_tp` DECLARED nullable?
+    ///
+    /// Answers `true` — today's behaviour, the null sentinel — whenever the question
+    /// does not apply: a top-level or array-element target carries `field == u16::MAX`,
+    /// and a non-struct `rec_tp` has no fields to consult. Only a field that a
+    /// declaration site actually spelled non-null gets the other answer.
+    fn field_declared_nullable(&self, rec_tp: u16, field: u16) -> bool {
+        if rec_tp == u16::MAX || field == u16::MAX {
+            return true;
+        }
+        match &self.types[rec_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.get(field as usize).is_none_or(|f| f.nullable)
+            }
+            _ => true,
+        }
+    }
+
+    /// The declared field at `field` of struct `rec_tp`, when the question applies — a
+    /// top-level or array-element target carries `field == u16::MAX` and a non-struct
+    /// `rec_tp` has no fields.  The companion of [`Self::field_declared_nullable`].
+    fn declared_field(&self, rec_tp: u16, field: u16) -> Option<Field> {
+        if rec_tp == u16::MAX || field == u16::MAX {
+            return None;
+        }
+        match &self.types[rec_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.get(field as usize).cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// loft#876 — write a field's DECLARED default into `slot`, answering whether there
+    /// was one.  `false` means the caller writes the type's absent value as before.
+    ///
+    /// The value goes in through [`Self::walk_parsed_into`] — the same writer the cast
+    /// uses for a key the document DID carry — so a declared default lands exactly as if
+    /// the JSON had spelled it, and every field encoding (narrow ranged ints, text
+    /// interning, the `Parts` dispatch) is handled in one place rather than restated
+    /// here.  A default whose literal does not fit the field's type writes nothing and
+    /// answers `false`, so the absent value stays what it was.
+    fn write_declared_default(&mut self, f: &Field, rec_tp: u16, field: u16, slot: &DbRef) -> bool {
+        let Some(c) = f.default.clone() else {
+            return false;
+        };
+        let parsed = match c {
+            // A boolean field is content type 4, whose walker arm accepts only
+            // `Parsed::Bool`; every other numeric field reads the integer spelling.
+            crate::keys::Content::Long(n) if f.content == 4 => crate::json::Parsed::Bool(n != 0),
+            crate::keys::Content::Long(n) => crate::json::Parsed::Int(n),
+            crate::keys::Content::Float(v) => crate::json::Parsed::Number(v),
+            crate::keys::Content::Single(v) => crate::json::Parsed::Number(f64::from(v)),
+            crate::keys::Content::Str(s) => crate::json::Parsed::Str(s.str().to_string()),
+        };
+        let mut path = Vec::new();
+        self.walk_parsed_into(&parsed, f.content, rec_tp, field, slot, &mut path, 0)
+            .is_ok()
+    }
+
     /**
         Write default(null) values on all fields. This should normally only be done while debugging
         as all fields should be set anyway under correctly generated code.
@@ -1106,6 +1202,45 @@ impl Stores {
         On inconsistent database definitions.
     */
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
+        self.set_default_value_nullable(tp, true, Absent::Prefill, rec);
+    }
+
+    /// [`Self::set_default_value`] for a record the caller is about to HAND OUT — a
+    /// `text as Struct` fills its target this way before parsing, so every field the
+    /// document does not reach keeps exactly what this writes.  A parse that fails
+    /// outright reaches none of them, which is why the difference is not academic:
+    /// `#errors` is the channel that says a parse failed, and the value must not
+    /// double as that signal (loft#870, and its `text` half loft#875).
+    pub fn set_final_default_value(&mut self, tp: u16, rec: &DbRef) {
+        self.set_default_value_nullable(tp, true, Absent::Final, rec);
+    }
+
+    /// The absent value of a struct FIELD, which is not the same question as the
+    /// absent value of its TYPE.
+    ///
+    /// `integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a
+    /// SENTINEL and share one content type between their `T` and `T?` spellings, so
+    /// a type-only answer has to pick one, and [`Self::set_default_value`] picks the
+    /// sentinel. Writing that into a field declared non-null puts a null in a slot
+    /// DN1 says cannot hold one: the reader answers `null`, the declared type says
+    /// otherwise, and `redundant-coalesce` then advises deleting the guard that is
+    /// doing the work (loft#870).
+    ///
+    /// Every other type either has no sentinel to choose (`text`, `boolean`,
+    /// `character`, a collection header — all already zero) or carries its own
+    /// nullability in its `Parts` (`Byte`/`Short`/`ShortRaw`/`Int`), which is why a
+    /// ranged `u8` field was already right while a plain `integer` was not. So
+    /// `nullable` changes exactly four arms and nothing else.
+    ///
+    /// # Panics
+    /// On inconsistent database definitions.
+    pub fn set_default_value_nullable(
+        &mut self,
+        tp: u16,
+        nullable: bool,
+        why: Absent,
+        rec: &DbRef,
+    ) {
         // @PLN25 — a forward-referenced field's content can still be u16::MAX here (its known_type
         // is not laid out yet — e.g. a `__nullable<S>` element of a forward-ref'd struct, gate-on
         // 371_p375_forward_ref_positions).  It has no per-type default to write, and zero-on-claim
@@ -1117,7 +1252,8 @@ impl Stores {
         if tp <= 6 {
             match tp {
                 0 => {
-                    self.store_mut(rec).set_int(rec.rec, rec.pos, i64::MIN);
+                    let v = if nullable { i64::MIN } else { 0 };
+                    self.store_mut(rec).set_int(rec.rec, rec.pos, v);
                 }
                 6 => {
                     // Content type 6 is a 4-byte u32-raw field (read via `get_u32_raw`,
@@ -1131,19 +1267,38 @@ impl Stores {
                     self.store_mut(rec).set_i32_raw(rec.rec, rec.pos, 0);
                 }
                 1 => {
-                    self.store_mut(rec).set_long(rec.rec, rec.pos, i64::MIN);
+                    let v = if nullable { i64::MIN } else { 0 };
+                    self.store_mut(rec).set_long(rec.rec, rec.pos, v);
                 }
                 2 => {
-                    self.store_mut(rec).set_single(rec.rec, rec.pos, f32::NAN);
+                    let v = if nullable { f32::NAN } else { 0.0 };
+                    self.store_mut(rec).set_single(rec.rec, rec.pos, v);
                 }
                 3 => {
-                    self.store_mut(rec).set_float(rec.rec, rec.pos, f64::NAN);
+                    let v = if nullable { f64::NAN } else { 0.0 };
+                    self.store_mut(rec).set_float(rec.rec, rec.pos, v);
                 }
                 4 => {
                     self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, 0);
                 }
                 5 => {
-                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+                    // A text handle of 0 reads back as `null` (`Store::get_str`), so a field
+                    // declared plain `text` that KEEPS this value needs an interned empty
+                    // string — the same value a struct literal writes for an omitted field
+                    // (`OpSetText(rec, off, "")`), so a cast and a literal answer the same
+                    // question the same way (loft#875).
+                    //
+                    // Only for `Absent::Final`. An empty string claims a word, and the
+                    // prefill runs per RECORD on the allocation path: interning there cost
+                    // +78 % wall and +91 % peak heap on 400 000 rows with three text fields,
+                    // every one of them overwritten by the literal that followed.
+                    let intern = !nullable && why == Absent::Final;
+                    let h = if intern {
+                        self.store_mut(rec).set_str("")
+                    } else {
+                        0
+                    };
+                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, h);
                 }
                 _ => (),
             }
@@ -1174,20 +1329,30 @@ impl Stores {
                     .set_i32_raw(rec.rec, rec.pos, if null { i32::MIN } else { 0 });
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                for f in &fields {
+                for (f_nr, f) in fields.iter().enumerate() {
                     if f.name == "type" && f.position == 0 {
                         self.store_mut(rec)
                             .set_short(rec.rec, rec.pos, 0, i32::from(tp));
                         continue;
                     }
-                    self.set_default_value(
-                        f.content,
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: rec.rec,
-                            pos: rec.pos + u32::from(f.position),
-                        },
-                    );
+                    let slot = DbRef {
+                        store_nr: rec.store_nr,
+                        rec: rec.rec,
+                        pos: rec.pos + u32::from(f.position),
+                    };
+                    // loft#876 — a DECLARED default is the value that STAYS, so it is
+                    // written only for `Final`.  A `Prefill` is overwritten by the
+                    // literal or walker that follows, and honouring a default there
+                    // would pay the same per-record cost the text interning was split
+                    // out to avoid (see [`Absent`]).
+                    if why == Absent::Final
+                        && self.write_declared_default(f, tp, f_nr as u16, &slot)
+                    {
+                        continue;
+                    }
+                    // The field, not the enclosing record, decides: a non-null field of a
+                    // record reached through a nullable one is still non-null.
+                    self.set_default_value_nullable(f.content, f.nullable, why, &slot);
                 }
             }
             Parts::Sorted(_, _)

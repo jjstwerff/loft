@@ -4325,6 +4325,12 @@ struct NullTextHolder {
 ```
 
 ```rust
+struct OptTextHolder {
+  s: text?,
+}
+```
+
+```rust
 fn main() {
 ```
 
@@ -4356,16 +4362,16 @@ Arithmetic on null propagates: null plus anything is null.
   assert(! (n + 1), "null + 1 is still null");
 ```
 
-Text null is the NUL character ('\\0'), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:
+Text null is the NUL character ('\\0'), not the empty string. A `text?` local or field can hold it; a plain `text` cannot, and a parse respects that.
 
 ```rust
   holder = NullTextHolder.parse(`{{}}`);
-  assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
+  assert(holder.s == "", "a missing `text` field is empty, because it cannot be null");
+  opt = OptTextHolder.parse(`{{}}`);
+  assert(!opt.s, "a missing `text?` field IS null — the declaration decides");
   empty = "";
   assert(empty, "empty string is NOT null — this surprises most newcomers");
 ```
-
-Mitigation: declare struct fields as `not null` so that reserved value can be used as data.
 
 === Parsing text to a number needs a fallback
 
@@ -4559,9 +4565,25 @@ struct User {
 }
 ```
 
+```rust
+struct MaybeUser {
+  id: integer,
+  name: text?,
+}
+```
+
 === Parsing — JSON to struct
 
-Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally. Missing fields get null sentinels.  Caveat (Q1): the auto-wrap form currently DROPS diagnostics — malformed input and schema mismatches leave fields null with 'json_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json_parse(text))' — that form pushes both parse and schema errors to 'json_errors()'.
+Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally.
+
+A field the JSON does not mention — and a field written 'null' — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field 'integer?' / 'float?' if you need to tell "absent" from "zero" apart:
+
+```
+struct Reading { id: integer, drift: float? }
+r = Reading.parse("{}")     // r.id == 0, r.drift == null
+```
+
+Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with 'json_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json_parse(text))' — that form pushes both parse and schema errors to 'json_errors()'.
 
 ```
 user = User.parse(json_text)
@@ -4631,11 +4653,11 @@ fn main() {
   assert(u2.name == u.name, "round-trip name");
 ```
 
-Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap produces null sentinels; path-qualified diagnostics on the mismatch are collected in `json_errors`. Here we verify the unwrap does not crash on mismatched shapes.
+Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in `json_errors`. `id` is declared plain, so its default is 0 — the mismatch is reported through `json_errors`, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
-  assert(bad.id == null, "type-mismatched id becomes null: {bad.id}");
+  assert(bad.id == 0, "type-mismatched id keeps its default: {bad.id}");
 ```
 
 ```rust
@@ -4654,14 +4676,16 @@ Type-mismatched fields (id: string, name: number) parse as JSON fine, but the st
   assert(c.address.zip == "1012", "nested zip");
 ```
 
-=== Missing fields get null
+=== A missing field gets its own declared absence
 
-When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character '\\0' (not the empty string ""); for integer it is the minimum i64 value (integer is 64-bit). Check with '!' before use, or assign a default with '??'.
+When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type's null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field 'T?' when "the document did not say" has to be tellable from "the document said zero", and check it with '!' or '??' before use.
 
 ```rust
   partial = User.parse(`{{"id":1}}`);
   assert(partial.id == 1, "partial id");
-  assert(!partial.name, "missing name is null");
+  assert(partial.name == "", "a missing `text` field is empty: [{partial.name}]");
+  maybe = MaybeUser.parse(`{{"id":1}}`);
+  assert(!maybe.name, "a missing `text?` field is null");
 }
 ```
 

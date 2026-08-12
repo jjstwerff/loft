@@ -223,6 +223,15 @@ pub struct Debugger {
     /// @PLN63 RX3 — the ring's capacity (the reversible depth), set when reverse is armed from
     /// `LOFT_REVERSE_DEPTH` (default 200).  0 = unset (never, while armed).
     pub reverse_cap: usize,
+    /// @PLN140 arc B/C — the loft-level sampler, when `LOFT_PROFILE` /
+    /// `LOFT_ALLOC_PATHS` armed it.
+    ///
+    /// It lives here rather than beside it on [`State`](crate::state::State) for one
+    /// reason: the dispatch loop already runs `if self.debug.is_some()` on every op,
+    /// so a profiler reached through that branch adds **nothing** to a run that is
+    /// not profiling. A field of its own would have cost every program a branch to
+    /// buy a facility almost no run uses.
+    pub prof: Option<Box<crate::profiler::Profiler>>,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.

@@ -124,30 +124,22 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
 /// `first_arg_write` set in `parser::find_written_vars`). Used to build `mut_max_pos`,
 /// the position-aware "the source is mutated after the copy" fact. `OpCopyRecord` writes
 /// its SECOND arg (the dest), handled separately.
-fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
-    let mut s = HashSet::new();
-    for d in 0..data.definitions() {
-        let n = data.def(d).name();
-        if n.starts_with("OpSet")
-            || n.starts_with("OpAppendStack")
-            || n.starts_with("OpClearStack")
-            || matches!(
-                n,
-                "OpNewRecord"
-                    | "OpAppendCopy"
-                    | "OpAppendVector"
-                    | "OpClearVector"
-                    | "OpClearKeyed"
-                    | "OpSetKeyed"
-                    | "OpHashRemove"
-                    | "OpInsertVector"
-                    | "OpRemoveVector"
-            )
-        {
-            s.insert(d);
-        }
-    }
-    s
+fn is_first_arg_write_name(n: &str) -> bool {
+    n.starts_with("OpSet")
+        || n.starts_with("OpAppendStack")
+        || n.starts_with("OpClearStack")
+        || matches!(
+            n,
+            "OpNewRecord"
+                | "OpAppendCopy"
+                | "OpAppendVector"
+                | "OpClearVector"
+                | "OpClearKeyed"
+                | "OpSetKeyed"
+                | "OpHashRemove"
+                | "OpInsertVector"
+                | "OpRemoveVector"
+        )
 }
 
 /// LENGTH ops — the collection `len` methods (`t_6vector_len`, `t_6sorted_len`, …).
@@ -163,16 +155,9 @@ fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
 /// The bound guard is not the author's mistake, either: it is the idiom the `v[i]`
 /// may-be-null warning ASKS for (skip-pattern 5), so the two lints were in tension —
 /// satisfying one silenced the other.
-fn length_ops(data: &Data) -> HashSet<u32> {
-    let mut s = HashSet::new();
-    for d in 0..data.definitions() {
-        let n = data.def(d).name();
-        // Method naming is `t_<LEN><Type>_<method>` (CODE.md), so match the suffix.
-        if n.starts_with("t_") && n.ends_with("_len") {
-            s.insert(d);
-        }
-    }
-    s
+fn is_length_op_name(n: &str) -> bool {
+    // Method naming is `t_<LEN><Type>_<method>` (CODE.md), so match the suffix.
+    n.starts_with("t_") && n.ends_with("_len")
 }
 
 /// VALUE-READER ops return a fresh value, not a reference into a container — their
@@ -190,6 +175,60 @@ fn value_reader_ops(data: &Data) -> HashSet<u32> {
             "t_6vector_len",
         ],
     )
+}
+
+/// The op-number sets the use / dead-store / ownership walks consult.
+///
+/// Every one of them is a pure function of the definition **name** table, so for a
+/// given [`Data`] they are constant — yet each walk rebuilt them, and the walks ask
+/// once per FUNCTION. Two of the four are a full scan of every definition doing
+/// string prefix matches, so the cost is O(functions × definitions): a
+/// `println`-sized program rebuilt them **9 000 times over 708 definitions**, which
+/// measured ~40 % of a warm-cache startup run (the rebuild itself plus the
+/// `HashSet<u32>` inserts and rehashes it drives).
+///
+/// Cached on [`Data::op_sets`]. That is sound here for the reason it is NOT sound for
+/// `function_defs` (loft#854): these derive from def names, which never change once a
+/// definition exists, whereas `function_defs` derives from `Definition::code`, which
+/// `scopes.rs` rewrites — so a `Data`-lived cache of that serves a stale body after
+/// any rewrite. It is the same reason `caller_index` may live on `Data`.
+///
+/// The sets are `Arc`-shared so a consumer that needs to OWN them (`Uses`) pays a
+/// refcount bump instead of a rebuild.
+#[derive(Clone)]
+pub(crate) struct OpSets {
+    /// Projection ops — see [`projection_ops`].
+    pub(crate) projections: std::sync::Arc<HashSet<u32>>,
+    /// Value-reader ops — see [`value_reader_ops`].
+    pub(crate) value_readers: std::sync::Arc<HashSet<u32>>,
+    /// Ops writing through arg 0 — see [`is_first_arg_write_name`].
+    pub(crate) write_first_arg: std::sync::Arc<HashSet<u32>>,
+    /// Collection `len` methods — see [`is_length_op_name`].
+    pub(crate) lengths: std::sync::Arc<HashSet<u32>>,
+}
+
+impl OpSets {
+    /// Build every set. The two prefix-matched sets share ONE pass over the
+    /// definition table — they scanned it separately before.
+    pub(crate) fn build(data: &Data) -> Self {
+        let mut write_first_arg = HashSet::new();
+        let mut lengths = HashSet::new();
+        for d in 0..data.definitions() {
+            let n = data.def(d).name();
+            if is_first_arg_write_name(n) {
+                write_first_arg.insert(d);
+            }
+            if is_length_op_name(n) {
+                lengths.insert(d);
+            }
+        }
+        Self {
+            projections: std::sync::Arc::new(projection_ops(data)),
+            value_readers: std::sync::Arc::new(value_reader_ops(data)),
+            write_first_arg: std::sync::Arc::new(write_first_arg),
+            lengths: std::sync::Arc::new(lengths),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -225,15 +264,13 @@ fn base_var(node: &Value, get_field: u32) -> Option<u16> {
 /// [`projection_ops`]: `d.f[i]=x` → `OpSetInt(OpGetField(Var(d),f), i, v)` descends to the
 /// root var `d`, and the projection's INDEX args are ordinary reads.
 pub(crate) fn dead_store_accesses(body: &Value, n_vars: usize, data: &Data) -> Vec<(u16, u16)> {
-    let projs = projection_ops(data);
-    let writes = first_arg_write_ops(data);
+    let ops = data.op_sets();
     let mut acc = vec![(0u16, 0u16); n_vars];
-    let lens = length_ops(data);
     let cx = AccessCx {
         data,
-        projs: &projs,
-        writes: &writes,
-        lens: &lens,
+        projs: &ops.projections,
+        writes: &ops.write_first_arg,
+        lens: &ops.lengths,
         copy_record: data.def_nr("OpCopyRecord"),
     };
     classify_access(body, &cx, &mut acc);
@@ -379,10 +416,13 @@ struct Uses {
     /// element, a struct copy). Not append-based, so the var-buffer / construction /
     /// return-buffer branches never see it; recorded here so the decision covers it.
     op_copy_record: u32,
-    projections: HashSet<u32>,
-    value_readers: HashSet<u32>,
-    /// @PLN90 item 3 — ops that write through their first argument (see `first_arg_write_ops`).
-    write_first_arg: HashSet<u32>,
+    /// Shared with [`OpSets`] — an `Arc` so building `Uses` per function is a refcount
+    /// bump, not a rebuild of a set that cannot have changed.
+    projections: std::sync::Arc<HashSet<u32>>,
+    value_readers: std::sync::Arc<HashSet<u32>>,
+    /// @PLN90 item 3 — ops that write through their first argument (see
+    /// [`is_first_arg_write_name`]).
+    write_first_arg: std::sync::Arc<HashSet<u32>>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
     /// matches execution order (Tier 1 uses it to prove a source is unmutated
     /// after the copy-fill). Bumped once per visited node.
@@ -767,15 +807,16 @@ impl Uses {
 /// report-only link-safety oracle (`link_safety_of`) reads the SAME facts the shipped elision does,
 /// with no second, drifting analysis.
 fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
+    let ops = data.op_sets();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
         op_database: data.def_nr("OpDatabase"),
         op_free: data.def_nr("OpFreeRef"),
         op_copy_record: data.def_nr("OpCopyRecord"),
-        projections: projection_ops(data),
-        value_readers: value_reader_ops(data),
-        write_first_arg: first_arg_write_ops(data),
+        projections: std::sync::Arc::clone(&ops.projections),
+        value_readers: std::sync::Arc::clone(&ops.value_readers),
+        write_first_arg: std::sync::Arc::clone(&ops.write_first_arg),
         ineligible: HashSet::new(),
         def_count: HashMap::new(),
         database_vars: HashSet::new(),
@@ -1614,7 +1655,7 @@ struct Ownership<'a> {
     op_database: u32,
     op_new_record: u32,
     op_copy_record: u32,
-    projections: HashSet<u32>,
+    projections: std::sync::Arc<HashSet<u32>>,
     ret_memo: HashMap<u32, Own>,
     visiting: HashSet<u32>,
     /// Vars currently being classified — the var-level twin of [`Self::visiting`].
@@ -1640,7 +1681,7 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// a `materialized_view_return` fills in place), and the vars some branch FILLS
 /// IN PLACE (loft#704).
 #[derive(Default)]
-struct Defs {
+pub(crate) struct Defs {
     rhs: HashMap<u16, Vec<Value>>,
     db_vars: HashSet<u16>,
     /// loft#704 — vars a branch fills IN PLACE (`OpClearVector(v)` /
@@ -1746,7 +1787,7 @@ impl<'a> Ownership<'a> {
             op_database: data.def_nr("OpDatabase"),
             op_new_record: data.def_nr("OpNewRecord"),
             op_copy_record: data.def_nr("OpCopyRecord"),
-            projections: projection_ops(data),
+            projections: std::sync::Arc::clone(&data.op_sets().projections),
             ret_memo: HashMap::new(),
             visiting: HashSet::new(),
             visiting_vars: HashSet::new(),
@@ -2240,11 +2281,41 @@ pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
 /// entry point (the OWNERSHIP_MODEL north star).
 #[must_use]
 pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
-    let def = data.def(d_nr);
-    let mut own = Ownership::new(data);
+    ownership_of_with(data, d_nr, value, &function_defs(data, d_nr))
+}
+
+/// The whole-function half of [`ownership_of`]: every var's defining right-hand
+/// sides, the `OpDatabase` vars, and the vars a branch fills in place.
+///
+/// Split out because it depends on the FUNCTION, not on the value being asked
+/// about, while `ownership_of` recomputes it per question. That is quadratic
+/// wherever one function is asked many times — loft#854: a vector literal is one
+/// `Set` per element, `scopes::scan_set` asks about each, and each answer walked
+/// (and CLONED the right-hand side of) the whole function. 86 400 elements took
+/// over 13 minutes at 99 % CPU, reading as a hang.
+///
+/// A caller that asks repeatedly about ONE function computes this once and passes
+/// it to [`ownership_of_with`]. It is deliberately not cached on `Data`: the
+/// result is a function of `Definition::code`, which the scope pass REWRITES
+/// (`scopes.rs` assigns `definitions[d_nr].code` at four points), so a cache
+/// living as long as `Data` would answer from a body that no longer exists —
+/// silently, and in the direction that mis-classifies ownership. The memo belongs
+/// where a `&Data` borrow already proves the body cannot change underneath it.
+#[must_use]
+pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     let mut defs = Defs::default();
-    collect_defs(&def.code, &FillOps::of(own.data), &mut defs);
-    own.classify(value, &def.variables, &defs)
+    collect_defs(&data.def(d_nr).code, &FillOps::of(data), &mut defs);
+    defs
+}
+
+/// [`ownership_of`] against an already-computed [`function_defs`] for `d_nr`.
+///
+/// The caller owns the obligation the borrow cannot express: `defs` must be the
+/// defs of THIS `d_nr`, collected from the body `data` holds now.
+#[must_use]
+pub(crate) fn ownership_of_with(data: &Data, d_nr: u32, value: &Value, defs: &Defs) -> Own {
+    let def = data.def(d_nr);
+    Ownership::new(data).classify(value, &def.variables, defs)
 }
 
 /// True when `classify` resolves a `Call(d, …)` STRUCTURALLY — a store mint
@@ -2259,7 +2330,7 @@ pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
 pub fn classifies_structurally(data: &Data, d: u32) -> bool {
     d == data.def_nr("OpDatabase")
         || d == data.def_nr("OpNewRecord")
-        || projection_ops(data).contains(&d)
+        || data.op_sets().projections.contains(&d)
 }
 
 /// The bare verdict name (no base) — for the free-site dump's `class=` field.
@@ -2588,6 +2659,263 @@ pub fn warn_dead_stores(
                 )),
                 edit: None,
                 concept: "copy",
+                concept_ref: "@F106",
+            });
+        }
+    }
+}
+
+/// Where one straight-line sequence has already handed a variable's value to an owner:
+/// source var → the position of that hand-off. A second entry for the same var is the defect.
+type Handoffs = HashMap<u16, Position>;
+
+/// The walk behind [`warn_double_move`]. Carries the position breadcrumb and the findings;
+/// the per-sequence pending set travels as an argument, because a conditional subtree gets
+/// its own and must not write back into its parent's.
+struct DoubleMove<'a> {
+    data: &'a Data,
+    func: &'a Function,
+    copy_d: u32,
+    /// The nearest enclosing span/line, the location a hand-off is reported at.
+    cur: Option<Position>,
+    /// `(source var, first hand-off, second hand-off)`, one per var per sequence.
+    found: Vec<(u16, Position, Position)>,
+}
+
+impl DoubleMove<'_> {
+    /// Walk a subtree that is CERTAIN to run, given what `st` has already been handed off.
+    fn scan(&mut self, node: &Value, st: &mut Handoffs) {
+        if let Some(p) = node.span_pos() {
+            self.cur = Some(p.clone());
+        } else if let Value::Line(n) = node {
+            // A bare line marker is the coarse fallback, exactly as the copy notice uses it:
+            // an empty `file` means "borrow the definition's own file" (filled in by the
+            // caller, which is the pairing loft#781 got wrong the other way round).
+            self.cur = Some(Position {
+                file: String::new(),
+                line: *n,
+                pos: 0,
+            });
+        }
+        match node.unspan() {
+            // A branch is the whole reason this is a walk and not a `walk`. Two hand-offs in
+            // opposite arms release the value ONCE however the branch goes, so they must not
+            // pair — each arm therefore scans with a FRESH set, and hand-offs inside an arm
+            // never reach the parent's. What the parent must still learn from the subtree is
+            // every variable it ASSIGNS: a conditional reassignment gives the variable a new
+            // value on one path, so a pending hand-off from before it is no longer certainly
+            // the same resource, and pairing it with a later one would be a false positive.
+            Value::If(cond, then, els) => {
+                self.scan(cond, st);
+                for arm in [then.as_ref(), els.as_ref()] {
+                    kill_assigned(arm, st);
+                    self.scan(arm, &mut Handoffs::new());
+                }
+            }
+            // A loop body is certain relative to ITSELF (two hand-offs inside one iteration
+            // are two releases) but not relative to the code around it, so it is scanned the
+            // same way an arm is. The iteration count is what stays invisible: ONE hand-off
+            // in a body that runs twice is a real double release this lint cannot see, and
+            // that false negative is the documented boundary.
+            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) | Value::ParFor(_) => {
+                kill_assigned(node, st);
+                self.scan_children_isolated(node);
+            }
+            // Nothing after a terminator runs, so the pending set cannot pair across it.
+            Value::Return(v) => {
+                self.scan(v, st);
+                st.clear();
+            }
+            Value::BreakWith(_, v) => {
+                self.scan(v, st);
+                st.clear();
+            }
+            Value::Break(_) | Value::Continue(_) => st.clear(),
+            // A reassignment replaces the value, so what was handed off is no longer what
+            // this variable holds — `s1 = S{h:c}; c = mk(); s2 = S{h:c}` moves two distinct
+            // resources into two containers and is correct.
+            Value::Set(v, rhs) => {
+                self.scan(rhs, st);
+                st.remove(v);
+            }
+            Value::Call(d, args) if *d == self.copy_d && args.len() >= 3 => {
+                for a in args {
+                    self.scan(a, st);
+                }
+                self.record(args, st);
+            }
+            // Everything else — a `Block`/`Insert` statement sequence, an ordinary call, an
+            // operand — runs straight through, so its children share the caller's set and
+            // are visited in evaluation order.
+            _ => self.scan_children(node, st),
+        }
+    }
+
+    /// Recurse into every child in evaluation order, sharing the caller's pending set.
+    fn scan_children(&mut self, node: &Value, st: &mut Handoffs) {
+        node.for_each_child(&mut |c| self.scan(c, st));
+    }
+
+    /// Recurse into every child, each with its OWN pending set — the shape a branch, a loop
+    /// body and a parallel arm share: certain within itself, not with what surrounds it.
+    fn scan_children_isolated(&mut self, node: &Value) {
+        node.for_each_child(&mut |c| self.scan(c, &mut Handoffs::new()));
+    }
+
+    /// Record one `OpCopyRecord` that hands its source's ownership away, and report the
+    /// SECOND such hand-off of the same variable.
+    fn record(&mut self, args: &[Value], st: &mut Handoffs) {
+        // The exact predicate the drop suppression uses (`scopes::collect_drop_transferred`),
+        // so the lint and the mechanism cannot drift: a hand-off is what makes the source
+        // stop dropping, and this asks the same question of the same node.
+        let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
+        if !moved
+            && !crate::scopes::copy_hands_off(&args[1], self.func, self.data)
+            && !crate::scopes::appends_to_element(&args[1], self.func, self.data)
+        {
+            return;
+        }
+        let Some(src) = crate::scopes::drop_bearing_source(&args[0]) else {
+            return;
+        };
+        // Only a variable the AUTHOR wrote can be acted on. A compiler temp handed off twice
+        // (`__lift_N`, `__ref_N`, `_elm_N`) is either impossible or our own bug, and either
+        // way names nothing the reader can edit.
+        let name = self.func.name(src);
+        if name.starts_with('_') || name.contains('#') {
+            return;
+        }
+        let Some(at) = self.cur.clone() else { return };
+        if let Some(first) = st.get(&src) {
+            self.found.push((src, first.clone(), at));
+            // Drop the pending entry so a third hand-off reports once more against the
+            // second, rather than N-1 times against the first.
+            st.insert(src, self.found.last().expect("just pushed").2.clone());
+        } else {
+            st.insert(src, at);
+        }
+    }
+}
+
+/// Every variable a subtree ASSIGNS. A conditional assignment must retire the parent's
+/// pending hand-off for that variable — see the `If` arm of [`DoubleMove::scan`].
+fn kill_assigned(node: &Value, st: &mut Handoffs) {
+    if st.is_empty() {
+        return;
+    }
+    node.walk(&mut |n| {
+        if let Value::Set(v, _) = n {
+            st.remove(v);
+        }
+    });
+}
+
+/// @PLN139 stage G — the DOUBLE-MOVE lint (`LOFT_NO_DOUBLE_MOVE` opts out).
+///
+/// @PLN139 made a copy into a container a MOVE: the container owns the value now and its
+/// death releases it. That closed loft#849 — and made a shape that used to LEAK into a
+/// double close. `c = mk(); s1 = S { h: c }; s2 = S { h: c }` hands one resource to two
+/// owners, and both release it. Rust prevents this with move checking, which loft does not
+/// have, so the hazard is caught by a diagnostic instead of by the type system.
+///
+/// `warning`, not `advice`, per the two-tier rule: ignoring it produces a wrong result.
+/// A warning gates a library's CI, so the lint is deliberately an UNDER-approximation — it
+/// fires only where both hand-offs are certain to run:
+///
+/// - opposite arms of an `if` release the value once however the branch goes → silent;
+/// - a reassignment between the two hand-offs makes them two distinct resources → silent,
+///   and a reassignment on only ONE path retires the pending hand-off for the same reason;
+/// - a terminator between them means the second never runs → silent.
+///
+/// The boundary it cannot see is the iteration count: one hand-off inside a loop body that
+/// runs twice is a real double release with one static node behind it. So is a hand-off on
+/// only one branch, which LEAKS rather than double-releasing. Both need the control-flow
+/// graph loft does not build, and both are false NEGATIVES — the safe direction for a tier
+/// that gates. Runs POST-`scopes::check`, from `main`, beside [`warn_dead_stores`].
+pub fn warn_double_move(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::double_move_enabled() {
+        return;
+    }
+    let copy_d = data.def_nr("OpCopyRecord");
+    if copy_d == u32::MAX {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        // The file must come from the DEFINITION, not the entry file: this is a warning, and
+        // a warning gates a library's CI, so a dependency's line number paired with the
+        // consumer's path would fail a consumer on a line it cannot see (loft#781).
+        let def_file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut cx = DoubleMove {
+            data,
+            func: &def.variables,
+            copy_d,
+            cur: None,
+            found: Vec::new(),
+        };
+        cx.scan(&def.code, &mut Handoffs::new());
+        for (src, first, at) in std::mem::take(&mut cx.found) {
+            let name = def.variables.name(src);
+            let ty = data.type_name_str(def.variables.tp(src));
+            let file = if at.file.is_empty() {
+                def_file
+            } else {
+                at.file.as_str()
+            };
+            // Name the FACT, not the cure — the cure is `--explain`'s job. Both positions
+            // matter to the reader: the second is where the defect is written, the first is
+            // the owner they have forgotten about. Naming a line the caret already points at
+            // reads as a second site that is not there, so the same-line case drops it.
+            let earlier = if first.line == at.line {
+                "earlier on this line".to_string()
+            } else {
+                format!("at line {}", first.line)
+            };
+            let msg = format!(
+                "`{name}` is handed to a second owner here — a container already took \
+                 ownership of it {earlier}, and each owner releases what it owns, so this \
+                 one {ty} value is released TWICE"
+            );
+            diags.add_at_coded(
+                crate::diagnostics::Level::Warning,
+                Some("double-move"),
+                &msg,
+                file,
+                at.line,
+                at.pos,
+            );
+            // Both ways out are Conditional, and that is the honest tier: the diagnostic
+            // proves one value reaches two owners, not which of the two the author meant.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("build a second {ty} for the second container"),
+                condition: Some(format!(
+                    "the two containers are meant to hold separate values — `{name}` holds one"
+                )),
+                edit: None,
+                concept: "move",
+                concept_ref: "@F106",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "give the value to one container only".to_string(),
+                condition: Some(format!(
+                    "the containers are meant to SHARE — then only one may own `{name}`, and \
+                     the other must read it from that one"
+                )),
+                edit: None,
+                concept: "move",
                 concept_ref: "@F106",
             });
         }

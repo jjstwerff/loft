@@ -651,7 +651,6 @@ pub fn arena_records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
 /// compare — same invariant as the existing `hash::find` path and
 /// not reachable from valid loft source.
 #[must_use]
-#[allow(dead_code)]
 pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<DbRef> {
     let mut recs = records(hash_ref, stores);
     recs.sort_by(|a, b| keys::compare(a, b, stores, keys));

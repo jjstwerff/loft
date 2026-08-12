@@ -200,4 +200,4 @@ loft-view not built; run: make view-build
 
 - [README § Architecture — frozen-binary contract](README.md#architecture--frozen-binary-contract)
 - [PACKAGES.md](../../../PACKAGES.md) — `loft.toml` manifest spec
-- [Makefile](../../../../Makefile) — target conventions
+- [Makefile](../../../../../Makefile) — target conventions

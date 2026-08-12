@@ -3615,9 +3615,53 @@ impl Parser {
         false
     }
 
+    /// Does casting `is_type` to `should` ALLOCATE — hand back a store of its own
+    /// rather than a view of what it read?
+    ///
+    /// True for a text source and a heap target: the only way to answer a `vector`
+    /// or a struct `ref` from text is to intern it into a new store, which is what
+    /// `OpCastVectorFromText` (`db_from_text`) does. Every other cast either
+    /// produces a scalar, where ownership means nothing, or reinterprets a handle it
+    /// was given.
+    ///
+    /// Asked of the two TYPES rather than of the op that gets emitted, because the
+    /// answer has to be the same on both parse passes — pass 1 has not resolved the
+    /// op table yet, and its answer is the one that freezes the signature (see
+    /// `cast_allocated`).
+    fn cast_allocates(is_type: &Type, should: &Type) -> bool {
+        matches!(is_type, Type::Text(_))
+            && matches!(
+                should,
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+    }
+
+    /// Record that this cast ALLOCATED its result, so the `as` handler hands back
+    /// `should` as written instead of grafting the source's deps onto it.
+    ///
+    /// @PLN99 arc C established this for `convert`'s allocating user conversions;
+    /// `cast` has the same property and never said so. `text as Struct` /
+    /// `text as vector<T>` intern the text into a NEW store, so grafting made the
+    /// result read as a view of the text it parsed. A borrow crossing a function
+    /// return is then delivered as one, and the return-buffer machinery renames its
+    /// source onto `__retbuf`: a text local retyped to the record type and sharing
+    /// its slot (loft#867 — the #306 guard then SIGSEGV on the interpreter, four
+    /// rustc E0308s on native), or a lifted temp bound as the buffer with the cast's
+    /// value dropped on the floor (loft#866 — an empty vector, silently).
+    ///
+    /// The return-buffer decisions run on PASS 1 and freeze the signature, so this
+    /// must be set on both passes. A pass-2-only correction arrives after the text
+    /// local has already become a parameter, and nothing later can take that back.
+    fn cast_allocated(&mut self, should: &Type) {
+        self.conv_owned_result = Some(should.without_deps());
+    }
+
     /// Cast a type to another type when possible
     /// Returns false when impossible.
     fn cast(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
+        if Self::cast_allocates(is_type, should) {
+            self.cast_allocated(should);
+        }
         if self.first_pass {
             return true;
         }

@@ -1,0 +1,37 @@
+// @PLN140 arc C oracle — ONE allocation site, TWO paths, a 9:1 split.
+//
+// No program in `bench/` can falsify an allocation-path instrument: every
+// allocation there is reached by exactly one chain, so "captured the path" and
+// "printed the only path there is" produce identical output.  Here `make` is the
+// only allocating function and it is called down two chains in a known ratio, so
+// the report must show both, at roughly 9:1.  One path, or 5:5, is wrong.
+//
+// Run: loft --interpret bench/profile_oracle/alloc_paths.loft   (see ORACLE.md)
+
+struct Cell { v: integer }
+
+fn make(n: integer) -> vector<Cell> {
+  return [for mk_i in 0..n { Cell { v: mk_i } }];
+}
+
+fn hot(n: integer) -> integer {
+  c = make(n);
+  return len(c);
+}
+
+fn cold(n: integer) -> integer {
+  c = make(n);
+  return len(c);
+}
+
+fn main() {
+  total = 0;
+  for ap_i in 0..20000 {
+    if ap_i % 10 == 0 {
+      total += cold(4);
+    } else {
+      total += hot(4);
+    }
+  }
+  println("result: {total}");
+}
