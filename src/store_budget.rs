@@ -35,8 +35,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Live bytes across every store that owns its buffer.
 static TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +56,99 @@ static BY_TYPE: Mutex<BTreeMap<u16, (u64, u32)>> = Mutex::new(BTreeMap::new());
 /// Type id → name, so the report can say `Layer` rather than `kt=112`.
 /// Filled as stores are created; a type nothing ever allocated needs no name.
 static NAMES: Mutex<BTreeMap<u16, String>> = Mutex::new(BTreeMap::new());
+
+/// @PLN140 arc A — live bytes and store count per ALLOCATION SITE, keyed by the
+/// bytecode position that allocated the store and the type it holds.
+///
+/// The same ledger the ceiling keeps, split one level finer. It answers "which loft
+/// line is holding the heap", which no report before it could: `LOFT_LEAK_SITES`
+/// groups by site but over the LEAKED stores at exit, and [`breakdown`] weighs live
+/// bytes but only by type.
+static BY_SITE: Mutex<BTreeMap<(u32, u16), (u64, u32)>> = Mutex::new(BTreeMap::new());
+
+/// The high-water mark of [`total`] over the run — the peak the report is about.
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// [`BY_SITE`] as it stood at the last capture, with the total it was taken at.
+///
+/// Cloning the ledger at *every* new high-water mark would cost O(sites) per
+/// allocation in a program that grows steadily, so a capture is taken only when live
+/// bytes rise a further sixteenth above the captured total. That bounds the number of
+/// captures to a logarithm of the peak — and it means the snapshot is taken at *most*
+/// of the peak rather than exactly at it, which the report states rather than hides.
+static PEAK_SNAPSHOT: Mutex<(u64, Vec<SiteRow>)> = Mutex::new((0, Vec::new()));
+
+/// One row of the site ledger: `(born_at, known_type, bytes, stores)`.
+pub type SiteRow = (u32, u16, u64, u32);
+
+/// Whether allocation-site attribution is armed (`LOFT_ALLOC_SITES`).
+///
+/// Read once. It gates a mutex-guarded map update per allocation and free, which is
+/// far too much for an ordinary run and unremarkable for a profiling one.
+#[must_use]
+pub fn sites_armed() -> bool {
+    static ARMED: OnceLock<bool> = OnceLock::new();
+    *ARMED.get_or_init(|| std::env::var_os("LOFT_ALLOC_SITES").is_some())
+}
+
+/// Move `bytes` of type `kt`, allocated at `born_at`, into the site ledger, and
+/// capture the ledger when the run reaches a new high-water mark worth recording.
+/// `stores` is 1 when a store went live and 0 when an existing one grew, so the
+/// count column stays a store count rather than an event count.
+fn site_add(kt: u16, bytes: usize, born_at: u32, total_after: u64, stores: u32) {
+    if let Ok(mut by) = BY_SITE.lock() {
+        let e = by.entry((born_at, kt)).or_insert((0, 0));
+        e.0 += bytes as u64;
+        e.1 += stores;
+    }
+    if total_after <= PEAK.load(Ordering::Relaxed) {
+        return;
+    }
+    PEAK.store(total_after, Ordering::Relaxed);
+    let Ok(mut snap) = PEAK_SNAPSHOT.lock() else {
+        return;
+    };
+    // A sixteenth above the captured total — proportional, with no floor, so the
+    // FIRST allocation always captures (a program whose whole heap is 3 KiB still
+    // gets a report) and the number of captures stays logarithmic in the peak.
+    if total_after <= snap.0 + snap.0 / 16 {
+        return;
+    }
+    let Ok(by) = BY_SITE.lock() else { return };
+    snap.0 = total_after;
+    snap.1 = by
+        .iter()
+        .map(|(&(pc, kt), &(b, n))| (pc, kt, b, n))
+        .collect();
+}
+
+/// Take `bytes` of type `kt`, allocated at `born_at`, back out of the site ledger.
+fn site_release(kt: u16, bytes: usize, born_at: u32, stores: u32) {
+    if let Ok(mut by) = BY_SITE.lock()
+        && let Some(e) = by.get_mut(&(born_at, kt))
+    {
+        e.0 = e.0.saturating_sub(bytes as u64);
+        e.1 = e.1.saturating_sub(stores);
+        if e.0 == 0 && e.1 == 0 {
+            by.remove(&(born_at, kt));
+        }
+    }
+}
+
+/// The peak the run reached, and the site ledger as it stood at the last capture
+/// below it: `(peak_bytes, captured_at_bytes, rows)`.
+///
+/// `captured_at` is reported beside the peak on purpose — a table that claims to
+/// describe a 1.5 GiB peak while having been taken at 900 MiB is the kind of
+/// plausible-looking wrong answer this plan exists to refuse.
+#[must_use]
+pub fn peak_sites() -> (u64, u64, Vec<SiteRow>) {
+    let peak = PEAK.load(Ordering::Relaxed);
+    let Ok(snap) = PEAK_SNAPSHOT.lock() else {
+        return (peak, 0, Vec::new());
+    };
+    (peak, snap.0, snap.1.clone())
+}
 
 /// Set the ceiling in bytes. `0` removes it.
 pub fn set_limit(bytes: u64) {
@@ -112,7 +205,7 @@ pub fn apply_env_limit(default: u64) {
 
 /// Record what a store type is called, so the report can name it.
 pub fn note_type_name(kt: u16, name: &str) {
-    if LIMIT.load(Ordering::Relaxed) == 0 || name.is_empty() {
+    if name.is_empty() || (LIMIT.load(Ordering::Relaxed) == 0 && !sites_armed()) {
         return;
     }
     if let Ok(mut names) = NAMES.lock() {
@@ -120,9 +213,13 @@ pub fn note_type_name(kt: u16, name: &str) {
     }
 }
 
-/// A store of type `kt` took `bytes` more heap.
-pub(crate) fn add(kt: u16, bytes: usize) {
-    TOTAL.fetch_add(bytes as u64, Ordering::Relaxed);
+/// A store of type `kt`, allocated at bytecode position `born_at`, took `bytes` more
+/// heap.
+pub(crate) fn add(kt: u16, bytes: usize, born_at: u32) {
+    let total = TOTAL.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+    if sites_armed() {
+        site_add(kt, bytes, born_at, total, 1);
+    }
     if LIMIT.load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -133,9 +230,13 @@ pub(crate) fn add(kt: u16, bytes: usize) {
     }
 }
 
-/// A store of type `kt` gave `bytes` of heap back.
-pub(crate) fn release(kt: u16, bytes: usize) {
+/// A store of type `kt`, allocated at bytecode position `born_at`, gave `bytes` of
+/// heap back.
+pub(crate) fn release(kt: u16, bytes: usize, born_at: u32) {
     TOTAL.fetch_sub(bytes as u64, Ordering::Relaxed);
+    if sites_armed() {
+        site_release(kt, bytes, born_at, 1);
+    }
     if LIMIT.load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -162,7 +263,10 @@ pub(crate) fn grow(kt: u16, old: usize, new: usize, born_at: u32) {
         "{}",
         refusal(kt, old, new, cap, born_at)
     );
-    TOTAL.fetch_add(added, Ordering::Relaxed);
+    let total = TOTAL.fetch_add(added, Ordering::Relaxed) + added;
+    if sites_armed() {
+        site_add(kt, added as usize, born_at, total, 0);
+    }
     if cap == 0 {
         return;
     }
@@ -171,10 +275,14 @@ pub(crate) fn grow(kt: u16, old: usize, new: usize, born_at: u32) {
     }
 }
 
-/// A store of type `kt` shrank from `old` to `new` bytes.
-pub(crate) fn shrink(kt: u16, old: usize, new: usize) {
+/// A store of type `kt`, allocated at bytecode position `born_at`, shrank from `old`
+/// to `new` bytes.
+pub(crate) fn shrink(kt: u16, old: usize, new: usize, born_at: u32) {
     let freed = old.saturating_sub(new) as u64;
     TOTAL.fetch_sub(freed, Ordering::Relaxed);
+    if sites_armed() {
+        site_release(kt, freed as usize, born_at, 0);
+    }
     if LIMIT.load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -183,6 +291,25 @@ pub(crate) fn shrink(kt: u16, old: usize, new: usize) {
     {
         e.0 = e.0.saturating_sub(freed);
     }
+}
+
+/// A store's bytes moved from one ledger key to another — its type was named, or its
+/// allocation site was stamped, after the buffer already existed.
+///
+/// A store is routinely created before either fact is known: `Store::new` files its
+/// bytes under `(site 0, no type)` and `database_named` stamps the site, then the
+/// opcode names the type. Left where they started, every byte in the run would be
+/// filed under site 0, which is a report that names nothing. Store slots are also
+/// POOLED — a reused slot keeps its buffer and gets a new site — so this is the
+/// normal path, not a corner.
+pub(crate) fn relabel(from: (u32, u16), to: (u32, u16), bytes: usize) {
+    if from == to || !sites_armed() {
+        return;
+    }
+    site_release(from.1, bytes, from.0, 1);
+    // The peak cannot move: the same bytes are only changing key, so pass the current
+    // total rather than one that would trip a spurious capture.
+    site_add(to.1, bytes, to.0, TOTAL.load(Ordering::Relaxed), 1);
 }
 
 /// `4.9 GiB`, `180.0 MiB`, `512 B` — a size a person can compare at a glance.

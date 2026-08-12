@@ -7,12 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation yet. The capture side landed first (commit
-`1d6f2851`: a native profile named rustc and returned the program as bare hex; it now
-warms the build, records with `--native-debug`, reports the rustc share, and prints the
-sample count). What remains is **attribution** — turning samples into "this loft function,
-this loft line, reached this way" — and the driver that makes it a single command rather
-than a hand-driven perf session.
+**Closed — A, B, C and D shipped.** The capture side landed first (commit `1d6f2851`: a
+native profile named rustc and returned the program as bare hex; it now warms the build,
+records with `--native-debug`, reports the rustc share, and prints the sample count).
+Attribution followed: the reports now say *this loft function, this loft line, reached this
+way*, for both time and memory, and `make profile` picks the instrument rather than
+requiring a hand-driven perf session.
+
+What exists now:
+
+| | Command | Env |
+|---|---|---|
+| CPU hot spots + paths over loft frames | `make profile ARGS="--interpret p.loft"` | `LOFT_PROFILE=<ops>` |
+| Allocation hot spots by loft line, at the peak | `PROFILE_FLAGS="--mem"` | `LOFT_ALLOC_SITES=1` |
+| Call paths to allocations | `PROFILE_FLAGS="--paths"` | `LOFT_ALLOC_PATHS=<ops>` |
+| perf over loft's own Rust | `PROFILE_FLAGS="--engine"` | — |
+| Oracle check + drift report | `make profile-corpus` | — |
+
+Reader's guide: [PERFORMANCE.md § Profiling a run](../../PERFORMANCE.md) is the how;
+[ORACLE.md](ORACLE.md) is what each instrument must say and what the corpus cannot prove;
+`src/profiler.rs`'s module doc is the sampling mechanism and its stated blind spots.
 
 ## Goal
 
@@ -85,19 +99,25 @@ instrument**, and it is where the current asymmetry shows:
 
 | | `--interpret` | `--native` |
 |---|---|---|
-| CPU hot spot names a loft fn | ✗ interpreter internals only | ✓ shipped (`n_slow_part` 25 %) |
-| Path to the CPU hot spot | ✗ structurally impossible via perf | ~ real, truncates above `start_thread` |
-| Allocation site names a loft line | ~ built, fires only on a LEAK | ✗ `alloc_pc` is 0 outside interpretation |
-| Path to an allocation | ✗ one `u32`, no stack | ✗ |
-| Peak vs exit | ✗ exit only (ceiling report excepted) | ✗ |
+| CPU hot spot names a loft fn | ✓ arc B (`is_prime` at 95 %) | ✓ shipped (`n_slow_part` 25 %) |
+| Path to the CPU hot spot | ✓ arc B, over loft frames | ~ real, truncates above `start_thread` |
+| Allocation site names a loft line | ✓ arc A — live, at the peak, in bytes | **declined** (no dispatch loop) |
+| Path to an allocation | ✓ arc C, sampled | **declined** (same reason) |
+| Peak vs exit | ✓ arc A captures at the peak | **declined** (same reason) |
 
-Done means every cell is green or **explicitly declined with a reason recorded here** — the
-two ✗ columns are not symmetric accidents, they are different mechanisms failing, and one
-of them (native memory attribution) may be a legitimate decline rather than a gap. A cell
-counts as green only when a benchmark whose hot spot is known confirms the instrument names
-it, **and** a grown consumer confirms the report is still readable — the two roles above.
+Every cell is now green or explicitly declined.
 
-Why the interpreter's CPU path is *structurally* impossible rather than merely missing: a
+**The decline (open question 3).** The allocation site *is* the interpreter's bytecode
+position, republished per op by the dispatch loop. A native binary has no dispatch loop, so
+every store it allocates carries site 0 and the report would be a single row reading
+`line 0` — a table with the shape of an answer and none of the content. Giving native an
+equivalent stamp means emitting a per-statement position write into generated Rust, a
+standing cost on the backend whose whole point is not paying interpreter costs. So `--mem`
+**refuses** on a native run and points at `--interpret`, which allocates from the same loft
+lines; the report says the same thing if the environment variable is set directly.
+
+**The interpreter's CPU cells were called *structurally impossible* when this plan
+opened, and the reasoning was right about perf while being wrong about the conclusion.** A
 loft call creates no machine frame, so perf's stack walk yields the interpreter's own path,
 identical for every program ever run —
 
@@ -106,16 +126,22 @@ _start → __libc_start_main → main → std::rt::lang_start → loft::main
        → execute_argv → put_stack::<i64>
 ```
 
-No sampling frequency or unwinder fixes that. It is the wrong stack.
+No sampling frequency or unwinder fixes that. It is the wrong stack — so the answer was
+never to sample it better, but to sample the stack loft already keeps.
+
+A cell counts as green only when a benchmark whose hot spot is known confirms the
+instrument names it — done, `bench/profile_oracle.tsv`, gated by `make profile-corpus` —
+**and** when a grown consumer confirms the report is still readable. The second half is not
+done; see [§ What is not done](#what-is-not-done).
 
 ## Sub-arcs
 
 | Item | Source | Status |
 |---|---|---|
-| **A** — allocation hot spots by site, at peak | this doc | Open |
-| **B** — loft-level CPU profiler: sample `State.call_stack` | this doc | Open — mechanism undecided |
-| **C** — allocation *paths* (B's capture at allocation time) | this doc | Open — blocked on B |
-| **D** — the driver: one command, corpus mode, honesty guards | this doc | Open (guards partly shipped) |
+| **A** — allocation hot spots by site, at peak | this doc | **Shipped** — `LOFT_ALLOC_SITES`, `src/store_budget.rs` + `State::report_alloc_sites` |
+| **B** — loft-level CPU profiler: sample `State.call_stack` | this doc | **Shipped** — `LOFT_PROFILE`, `src/profiler.rs` (mechanism (iii) + a wall clock) |
+| **C** — allocation *paths* (B's capture at allocation time) | this doc | **Shipped** — `LOFT_ALLOC_PATHS`, sampled |
+| **D** — the driver: one command, corpus mode, honesty guards | this doc | **Shipped** — `scripts/profile.sh` picks; `make profile-corpus` |
 
 ### A — allocation hot spots by site
 
@@ -219,24 +245,59 @@ The "semi" half, and the part that turns three instruments into a tool.
 4. **C** — allocation paths, reusing B's capture. Do not start before B's mechanism is
    settled; C inherits whatever overhead B chooses.
 
-## Open design questions
+## Open design questions — answered
 
-1. **B's sampling mechanism** — (i) `SIGPROF` for true time sampling, (iii) the existing
-   per-op debug branch for free-when-off op sampling, or both (op sampling by default, time
-   sampling opt-in). The op-clock distortion is real: one op can hide a whole native call.
-   The watchdog precedent is the warning — an armed timeout does a mutex `try_lock` per
-   function call and inflated `fib` ~2× (PERFORMANCE.md), so "cheap per call" is not cheap.
-2. **Bytes or store counts in A?** Counts are what exists; bytes are what the user means by
-   "memory". Deriving bytes needs each store's size at sample time.
-3. **Native memory attribution — gap or decline?** `alloc_pc` is documented as *"Zero
-   outside interpretation (native/tooling)"*, so the backend that just gained CPU
-   attribution has no allocation attribution, and vice versa. Either the native backend gets
-   an equivalent stamp, or memory profiling is declared interpreter-only and the reason is
-   recorded here. Do not leave it implicit.
-4. **What may ever be on by default?** Nothing in A–C, on current evidence. Worth stating so
-   a later session does not re-litigate it.
-5. **Does the corpus mode's diff need a stored baseline**, or is capture-and-diff against a
-   previous run enough? `make speed`'s bless mechanism is the precedent to copy or reject.
+1. **B's sampling mechanism — (iii), with a wall clock bolted on.** The profiler lives on
+   the `Debugger`, so it rides the dispatch loop's existing `self.debug.is_some()` branch
+   and an unprofiled run pays nothing. The op-clock objection was real and is answered
+   rather than accepted: **the op counter chooses *when* to sample, the wall clock says
+   *how much*.** Each sample carries the nanoseconds since the previous one, so a
+   millisecond spent inside one heavy native op arrives as a millisecond. `SIGPROF` was not
+   needed; its cost (signal safety, `par` workers) buys only the residual skew, which is
+   that a long op's interval lands on the frame at the *next* sample.
+
+   A second property turned out to matter as much as the clock: **the period must be
+   jittered.** A fixed period samples one phase of a periodic program — see arc C below.
+
+   Measured: **nothing when off** (bench corpus unchanged against the pre-plan binary,
+   ×0.90–×1.03 in both directions), **+7–11 %** when armed. The watchdog precedent it was
+   warned against — a mutex `try_lock` per call, `fib` ~2× — did not repeat, because this
+   pays per *sample*, not per call.
+
+2. **Bytes AND counts in A.** Bytes rank the table (that is what "memory" means to the
+   person asking); the store count sits beside them because it is what separates a runaway
+   length from a leak — the same argument the ceiling report already makes. Bytes are a
+   store's **capacity**, which is what the process holds; see ORACLE.md's corrected
+   prediction.
+
+3. **Native memory attribution — DECLINED**, with the reason in the matrix above and
+   enforced in the tool: `--mem` refuses on a native run rather than printing `line 0`.
+
+4. **Nothing in A–C is ever on by default**, and nothing here changes that. All three are
+   opt-in environment variables, and the off-cost measured above is what makes that
+   affordable rather than merely stated.
+
+5. **No stored baseline.** Hot-spot *shares* move with the machine, the load and the kernel,
+   so a committed baseline would be a permanent source of false diffs — `make speed`'s bless
+   mechanism is rejected here for that reason. The previous local capture is diffed instead
+   (git-ignored, under the profile dir). What *is* committed is the part that does not move:
+   `bench/profile_oracle.tsv`, the hot spot known in advance, which is a gate.
+
+## What is not done
+
+* **The usability half of the bar.** The corpus proves the instruments are *correct*; only a
+  grown consumer (`moros` / `dryopea` / `crawler` / `lib/markdown`) proves the reports are
+  *readable* — that a thousand-site report still fits on a screen and ranks the right thing
+  on top. The ranking and roll-up are built for it (top 12 sites, then a by-function
+  roll-up; innermost-8 path folding; a stated `MAX_PATHS` cap that reports what it dropped)
+  but they have not met a program that needs them.
+* **`par` worker threads are not sampled.** A worker runs its own `State`. The report says
+  so rather than presenting the main thread's share as the whole.
+* **Text buffers are not in the memory ledger.** They are Rust `String`s, not stores;
+  `bench/07_string_build`'s 5.9 MB is invisible. The report says so.
+* **`bench/06_newton_sqrt` does not run under `--interpret`** — `guess = (guess + x / guess)
+  / 2.0` is refused as a `float` → `float?` type change. Found while picking oracles; it is
+  a language issue, not a profiling one, and it is why `06` carries no oracle row.
 
 ## Cross-arc dependencies
 
@@ -250,10 +311,12 @@ The "semi" half, and the part that turns three instruments into a tool.
 
 ## See also
 
-- [PERFORMANCE.md § Profiling a run](../../PERFORMANCE.md) — the shipped capture side and the
-  five choices that make a profile honest.
+- [ORACLE.md](ORACLE.md) — phase 0: what each instrument must say, what the corpus cannot
+  prove, and the three defects the oracle caught on first contact.
+- [PERFORMANCE.md § Profiling a run](../../PERFORMANCE.md) — the user-facing guide.
+- `src/profiler.rs` — the sampling mechanism and its stated blind spots.
 - [STACKTRACE.md](../../STACKTRACE.md) — `call_stack` / `CallFrame`, the vector arc B samples.
-- [DEBUG.md](../../DEBUG.md) — the per-op debugger hook arc B would piggyback.
+- [DEBUG.md](../../DEBUG.md) — the per-op debugger hook arc B piggybacks.
 - [TESTING.md § Store-memory ceiling](../../TESTING.md) — the at-peak trigger arc A copies.
 - [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md) / [LIFETIME.md](../../LIFETIME.md) — where a
   retention report belongs.

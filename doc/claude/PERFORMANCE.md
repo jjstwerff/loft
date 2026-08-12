@@ -29,20 +29,124 @@ design for each planned improvement.
 
 ## Profiling a run
 
-`make profile ARGS="--interpret --check prog.loft"` answers *where did this run spend its
-time*, down to the source line. `scripts/profile.sh` is the same thing with flags.
+`make profile ARGS="--interpret prog.loft"` answers *where did this run spend its time*,
+down to the source line — and with `--mem`, *where did its heap go*.
+`scripts/profile.sh` is the same thing with flags.
 
 ```
-make profile ARGS="--interpret --check prog.loft"
+make profile ARGS="--interpret prog.loft"
+PROFILE_FLAGS="--mem"       # allocation hot spots, by loft LINE, at the peak
+PROFILE_FLAGS="--paths"     # + the call paths that reached each allocation
+PROFILE_FLAGS="--engine"    # profile LOFT ITSELF with perf, not your program
 PROFILE_FLAGS="--annotate"  # the hot function's source LINES
 PROFILE_FLAGS="--calls"     # who calls the hot function
 PROFILE_FLAGS="--no-cache"  # profile a COMPILE, not a startup-cache reload
 PROFILE_FLAGS="--no-warm"   # skip the native pre-build (see "the build is not the run")
 ```
 
-The banner carries the sample count — `self time — 42 samples`. Read it before you read
-the percentages: at fifty samples a 2 % row is one sample, and `--annotate` annotates
-whichever symbol won that coin toss. A short run wants a higher `--freq`, or more work.
+### Two profilers, and the driver picks
+
+**`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your
+program, because your functions were compiled into the binary being sampled and come back
+named `n_<yours>`. To profile the front end alone — parse, IR, codegen — use
+`--engine -- --interpret --check p.loft`: **`--check` on its own is not front-end-only**,
+because the default backend is the compiler, so `check_only` still falls through the native
+pipeline and rustc builds a binary it then does not run (the rustc-share guard says so, and
+names the missing flag).
+
+**For an interpreted program it is the wrong instrument, structurally.** A loft call
+creates no machine frame, so perf's stack walk yields the interpreter's own path —
+
+```
+_start → __libc_start_main → main → std::rt::lang_start → loft::main
+       → execute_argv → put_stack::<i64>
+```
+
+— identical for every program ever run. No sampling frequency fixes that; it is the wrong
+stack, not a truncated one. loft keeps the right one itself (`State::call_stack`), so an
+interpreted program is sampled over *that*, and the report names loft functions, loft
+lines and loft call paths (@PLN140 arc B, `src/profiler.rs`).
+
+So the script decides: a run that executes a program under `--interpret` gets loft's own
+sampler, everything else gets perf. `--engine` and `--program` override it.
+
+```
+════ loft CPU profile — 44339 samples over 1.07 s ════
+── by function (self time) ──
+  95.2 %     1.02 s  is_prime
+   4.8 %      51 ms  main
+── by line (self time) ──
+  42.5 %     455 ms  bench.loft:7                 is_prime
+── hottest paths (innermost 8 frames) ──
+  95.2 %     1.02 s  main → is_prime
+```
+
+The clock is an **op counter choosing when to sample and the wall clock saying how much**:
+each sample carries the nanoseconds since the previous one. That is what keeps a single
+heavy native call (a `sort`, a store operation) from counting as one op — the plan's open
+question 1, answered in `src/profiler.rs`'s module doc, which also lists what the choice
+still cannot do (`par` workers are not sampled; a long op's time lands on the frame at the
+*next* sample).
+
+The sampling period is **jittered** around its mean, and that is not a detail. A fixed
+period samples one phase of a periodic program: the arc C oracle allocates down two paths
+in a known 9:1 ratio, and a fixed every-16th sampler put **100 %** on one and never once
+saw the other. Not noisy — confidently wrong, and no sample count would have shown it.
+
+`LOFT_PROFILE=<ops>` sets the mean (default 1024); `LOFT_ALLOC_PATHS=<ops>` the allocation
+rate (default 16). `1`, `on` and `yes` all mean "the default rate".
+
+**What it costs.** Nothing when off — the sampler hangs off the dispatch loop's existing
+`self.debug.is_some()` branch, and against the pre-@PLN140 binary the benchmark corpus is
+unchanged within noise (×0.90–×1.03, in both directions). Armed: **+7–11 %** for CPU
+sampling and **+4–7 %** for allocation paths, measured on `bench/02`, `03`, `05` and `10`.
+
+### Where the heap went (`--mem`)
+
+```
+════ allocation hot spots — peak 273.4 MiB, captured at 273.4 MiB (100 % of peak) ════
+   136.7 MiB       1 store   main_vector<float>    main    bench.loft:5
+   136.7 MiB       1 store   main_vector<float>    main    bench.loft:6
+```
+
+Three things separate this from the reports it grew out of, and each was a way the old one
+answered a question nobody asked:
+
+* **Live stores, not leaked ones.** `LOFT_LEAK_SITES` groups by the same key but over what
+  was never freed, so a program that frees everything gets an empty report however much
+  memory it used.
+* **At the peak, not at exit.** A program that peaks at 1.5 GiB and exits at 10 MB has
+  nothing left to report by the time an exit hook runs. The banner names both the peak and
+  the total the table was actually captured at, because a table describing a different
+  moment than its headline is the plausible-looking wrong answer this exists to refuse.
+* **Bytes, not store counts.** `LOFT_ALLOC_REPORT` counts allocations, weighing one 40 MiB
+  vector the same as one 32-byte record.
+
+Two blind spots it states rather than hides: **text buffers are Rust `String`s, not
+stores**, so they are not counted; and **`--native` has no allocation site at all** —
+`alloc_pc` is published by the interpreter's dispatch loop, so a native binary would
+report a table of `line 0`. That is a **decline, not a gap** (@PLN140 open question 3):
+`--mem` refuses on a native run and points at `--interpret`, which allocates from the same
+loft lines.
+
+### The corpus check — `make profile-corpus`
+
+`bench/profile_oracle.tsv` records what each instrument **must** say about a program whose
+hot spot is known in advance: `fib`'s time is in `fib`, `02_sum_loop`'s in `main` (the
+negative control — four of the five CPU rows would also pass an instrument that just
+reported the deepest frame), `09_matrix_mul`'s memory at the two lines that build its
+vectors. An instrument that fails a row is **wrong**, so that half is a gate. The share
+drift printed beside it never is: shares move with the machine, so the previous local
+capture is diffed rather than a committed baseline (@PLN140 open question 5). Rationale
+per row: `doc/claude/plans/140-semi-automatic-profiling/ORACLE.md`.
+
+### Sample counts
+
+The perf banner carries the sample count — `self time — 42 samples`. Read it before you
+read the percentages: at fifty samples a 2 % row is one sample. `--annotate` used to
+annotate whichever symbol won that coin toss — it once printed forty lines of disassembly
+about a **one-sample `getenv`** from libc — so it now refuses a symbol whose share rests on
+fewer than ~50 samples and says why. A short run wants a higher `--freq`, or more work.
 
 ### One-time setup
 

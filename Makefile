@@ -44,20 +44,25 @@
 #                   GL / packages suites — those live in their own
 #                   targets (test-packages, test-gl-smoke, test-gl-golden)
 #                   and are NOT gated by the remote.
-#   make profile ARGS="--interpret --check p.loft"
-#                   Where a run spends its time, down to the source LINE.
-#                   Builds the `profiling` profile (release + line tables,
-#                   frame pointers) and samples it with perf; reports SELF
-#                   time, because loft's hot paths are recursive walkers and
-#                   inclusive time names only the walker.  Add
-#                   PROFILE_FLAGS="--annotate" for source lines, "--calls"
-#                   for who calls the hot function, "--no-cache" to profile
-#                   a COMPILE rather than a startup-cache reload, "--no-warm"
-#                   to skip the native pre-build.  A native run (the DEFAULT
-#                   backend) is built once unprofiled and profiled with
-#                   --native-debug, so the profile names your loft functions
-#                   instead of rustc.  Release is untouched.  See
+#   make profile ARGS="--interpret p.loft"
+#                   Where a run spends its time, down to the source LINE, and
+#                   with --mem where its HEAP went.  It picks the instrument:
+#                   an interpreted program is measured by loft's own sampler
+#                   over its own call stack (perf's stack is the interpreter's,
+#                   the same for every program ever run), a --native run and a
+#                   --check by perf.  PROFILE_FLAGS="--engine" forces perf when
+#                   loft ITSELF is the question; "--mem" for allocation hot
+#                   spots by loft line, "--paths" to add the call paths that
+#                   reached them; "--annotate" for source lines, "--calls" for
+#                   who calls the hot function, "--no-cache" to profile a
+#                   COMPILE rather than a startup-cache reload, "--no-warm" to
+#                   skip the native pre-build.  Release is untouched.  See
 #                   PERFORMANCE.md § Profiling a run.
+#   make profile-corpus
+#                   Run the instruments over bench/ and check each against the
+#                   hot spot known in advance (bench/profile_oracle.tsv).  A
+#                   failing row is a regression in the PROFILER — that half is
+#                   a gate.  The share drift it prints beside it never is.
 #   make ci-full    `ci` + the development-only suites (test-packages,
 #                   test-gl-smoke, test-gl-golden).  What we used to
 #                   call `make ci` before the slim-down.
@@ -369,9 +374,11 @@ TEST_ENV := TMPDIR=$(TEST_SCRATCH) LOFT_TMPDIR=$(TEST_SCRATCH)
 # mostly contention), best of two runs, and prints what drifted.  `speed-discover`
 # is the wide parallel pass that finds which tests deserve an annotation.
 # Nothing here fails: correctness fails a build, speed is what you read.
-.PHONY: speed profile speed-discover speed-bless
-profile:  ## Sampling profile of a loft run: make profile ARGS="--interpret --check p.loft"
+.PHONY: speed profile profile-corpus speed-discover speed-bless
+profile:  ## Sampling profile of a loft run: make profile ARGS="--interpret p.loft"
 	@scripts/profile.sh $(PROFILE_FLAGS) -- $(ARGS)
+profile-corpus:  ## Check the profilers against bench/profile_oracle.tsv, then report drift
+	@scripts/profile_corpus.sh $(PROFILE_FLAGS)
 speed:  ## Report how the slow tests' speed has drifted (never fails)
 	python3 scripts/test_speed.py run
 speed-discover:  ## Find tests slow enough to deserve a @speed annotation

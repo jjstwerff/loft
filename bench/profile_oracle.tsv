@@ -1,0 +1,13 @@
+# @PLN140 phase 0 — what each instrument MUST say about a program whose hot spot is
+# known in advance.  Written before the instruments existed; `make profile-corpus`
+# checks it.  A row that stops holding is a regression in the PROFILER, not in the
+# program.  Rationale, and what this corpus cannot prove:
+#   doc/claude/plans/140-semi-automatic-profiling/ORACLE.md
+#
+# program        instrument  expect (regex, matched against the top-ranked row)  min_share  line
+01_fibonacci	cpu	\bfib\b	85	3
+02_sum_loop	cpu	\bmain\b	85	6
+03_sieve	cpu	\bis_prime\b	70
+05_mandelbrot	cpu	\bmandelbrot\b	70
+10_sort	cpu	\binsertion_sort\b	70
+09_matrix_mul	mem	bench\.loft:(5|6)	30

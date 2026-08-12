@@ -41,6 +41,11 @@ make ci                                  # fmt → clippy → test (full local g
 make test                                # clippy + test → result.txt
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make speed                               # what got slower/faster — a REPORT, never a gate
+make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=
+                                         #   "--mem" heap by loft line at the PEAK, "--paths" the
+                                         #   paths that reached each allocation, "--engine" perf
+                                         #   over loft's own Rust.  `make profile-corpus` checks
+                                         #   the instruments against known answers — PERFORMANCE.md
 make index ; ./scripts/idx tag:@P259     # rebuild + query the tracker index (prefer over grep -rn)
 make view                                # branch-aware doc/code viewer (SSH-forward 8765)
 ```
@@ -347,3 +352,12 @@ multi-byte text silently (the `cbor` encoder shipped this); advisory, use `for c
 bounded by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types
 non-null yet reads C80-null on overrun; advisory, the type is unchanged) ·
 `LOFT_DEV_SOFT_HALT` (**opt-in**: demote dev raises to log-and-continue so one run surfaces every fault).
+
+**Profiling (@PLN140, all opt-in, all `--interpret`):** `LOFT_PROFILE=<ops>` samples the loft
+call stack — hot FUNCTION, hot LINE, hot PATH (default one sample per 1024 ops; the op counter
+picks *when*, a wall clock says *how much*, and the period is JITTERED because a fixed one
+samples a single phase of a periodic program and reports it as the whole) ·
+`LOFT_ALLOC_SITES=1` ranks live store BYTES by the loft line that allocated them, captured at
+the run's PEAK rather than at exit · `LOFT_ALLOC_PATHS=<ops>` adds the call paths that reached
+each allocation. Prefer `make profile`, which picks the instrument. Off costs nothing (the
+sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.

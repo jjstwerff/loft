@@ -636,7 +636,7 @@ impl Stores {
         );
         store.free = false;
         store.pinned = false;
-        store.created_at = alloc_pc;
+        store.set_created_at(alloc_pc);
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
             0
@@ -3202,7 +3202,7 @@ impl Stores {
         // continuity; the on-disk bytes carry the user data.
         new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
-        new_store.created_at = preserved.2;
+        new_store.set_created_at(preserved.2);
         new_store.last_op_at = preserved.3;
         new_store.pinned = preserved.4;
 
@@ -3385,7 +3385,7 @@ impl Stores {
 
         new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
-        new_store.created_at = preserved.2;
+        new_store.set_created_at(preserved.2);
         new_store.last_op_at = preserved.3;
         new_store.pinned = preserved.4;
 
@@ -3510,7 +3510,7 @@ impl Stores {
         };
         store.set_known_type(preserved.0);
         store.free = preserved.1;
-        store.created_at = preserved.2;
+        store.set_created_at(preserved.2);
         store.last_op_at = preserved.3;
         store.pinned = preserved.4;
         self.allocations[slot as usize] = store;
@@ -4051,7 +4051,7 @@ impl Stores {
         let s = &self.allocations[idx];
         rebuilt.set_known_type(tp);
         rebuilt.free = s.free;
-        rebuilt.created_at = s.created_at;
+        rebuilt.set_created_at(s.created_at);
         rebuilt.last_op_at = s.last_op_at;
         rebuilt.pinned = s.pinned;
         self.allocations[idx] = rebuilt;
@@ -4081,7 +4081,7 @@ impl Stores {
         };
         new_store.set_known_type(preserved.0);
         new_store.free = preserved.1;
-        new_store.created_at = preserved.2;
+        new_store.set_created_at(preserved.2);
         new_store.last_op_at = preserved.3;
         new_store.pinned = preserved.4;
         self.allocations[slot_idx] = new_store;

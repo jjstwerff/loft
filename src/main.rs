@@ -10290,6 +10290,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         if std::env::var_os("LOFT_LIVE_RELOAD").is_some() {
             loft::live_reload::install(&abs_file, &default_str, &p.lib_dirs, &p.data);
         }
+        // @PLN140 arc B/C — arm the loft-level sampler before the program starts, so
+        // the interval the first sample credits is the program's, not start-up's.
+        state.arm_profiler();
         state.execute_argv("main", &p.data, &user_args);
         // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
         // causing execute_argv to return. Resume until the program finishes.
@@ -10317,6 +10320,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if runtime_err.is_none() {
         state.check_store_leaks();
     }
+    // @PLN140 — the profiling reports. Outside the leak guard on purpose: a run that
+    // ended in a fault still spent its time and its memory somewhere, and that is
+    // often exactly what is being asked. Both are silent unless armed.
+    state.report_alloc_sites(&p.data);
+    state.report_profile(&p.data);
     // @PLN119 arc A — say goodbye to each placed library's worker rather than
     // leaving the kernel to do it. `PR_SET_PDEATHSIG` is the backstop that
     // covers every `exit` path below and an outright kill; this is the graceful
