@@ -1853,13 +1853,54 @@ impl Parser {
                 }
             }
             RefDelivery::AsIs
-        } else if self.return_views_local(ls) {
+        } else if self.return_views_local(ls) || !self.ls_can_be_record_buffer(ls) {
             // #306: the tail borrows a LOCAL's store — copy it before it escapes.
             RefDelivery::MaterializeView
         } else {
             // Owned / arg-borrow: rename the tail's work-ref(s) onto `__retbuf`.
             RefDelivery::Rename(ls.to_vec())
         }
+    }
+
+    /// Can every candidate in `ls` BE the record return buffer?
+    ///
+    /// The buffer is what the CALLER allocates and the callee fills, so a candidate
+    /// renamed onto `__retbuf` must have the return's own shape — a record.  A tail
+    /// that indexes a local CONTAINER leaves that container in `ls`
+    /// (`make(n)[0] ?? d`: the `??` block's value depends on the vector, and the
+    /// vector itself has no further deps, so `return_views_local` reads it as owned).
+    /// Renaming it gave a `vector<Cell>` producer a `Cell`-shaped buffer to build
+    /// into: `make` cleared the caller's record as a vector, the index then read
+    /// absent and the `??` answered its fallback for every input — a wrong value on
+    /// the interpreter, an out-of-bounds store index on native (loft#877).  It is the
+    /// promotion `moros H12` hit through a field projection, reached here through an
+    /// index instead, which is why the guard is the SHAPE and not another tail walker.
+    ///
+    /// Only a COLLECTION blocks the rename.  It is what a record return can be a view
+    /// INTO, so it is the shape whose presence here means "the tail indexed something",
+    /// and the narrowness matters: a candidate is not always a container the return
+    /// borrows from, and materialising one that is merely a null-valued record turns
+    /// `null` into a freshly allocated empty record — a `-> Dialect?` that answers a
+    /// dialect for a connection that was never made.
+    ///
+    /// A PARAMETER is not a placement question — the return borrows it, and
+    /// `classify_ret_promotion`'s `MergeAttr` rung already says so by merging the attr
+    /// into the return deps — so an attribute never blocks the rename.
+    fn ls_can_be_record_buffer(&self, ls: &[u16]) -> bool {
+        let attr_names = &self.data.def(self.context).attr_names;
+        ls.iter().all(|&v| {
+            v >= self.vars.count()
+                || attr_names.contains_key(self.vars.name(v))
+                || !matches!(
+                    self.vars.tp(v),
+                    Type::Vector(_, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                )
+        })
     }
 
     /// @PLN85 D-own-1 — emit the mechanism the Reference selector chose. The tail of
@@ -11521,10 +11562,13 @@ impl Parser {
                                 RetSite::MidReturn,
                             );
                         }
-                    } else if self.return_views_local(ls) {
+                    } else if self.return_views_local(ls) || !self.ls_can_be_record_buffer(ls) {
                         // #306: mid-body `return <view of a local>` — copy it
                         // into an owned work-ref before it escapes (mirrors
-                        // block_result's tail handling).
+                        // block_result's tail handling).  The shape guard mirrors
+                        // it too: `return make(n)[0] ?? d;` leaves the indexed
+                        // CONTAINER in `ls`, and a `vector<Cell>` cannot be the
+                        // buffer for a `Cell` return (loft#877).
                         let w = self.materialize_view_return(*td, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else {
