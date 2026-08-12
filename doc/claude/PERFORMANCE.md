@@ -18,12 +18,20 @@ design for each planned improvement.
 - [Design: P1 — Superinstruction merging](#design-p1--superinstruction-merging)
 - [Design: P2 — Reduce store indirection on the stack](#design-p2--reduce-store-indirection-on-the-stack)
 - [Design: P3 — Confirm integer paths carry no long sentinel](#design-p3--confirm-integer-paths-carry-no-long-sentinel)
+- [Design: P4 — Block-copy slice materialisation for primitive vectors](#design-p4--block-copy-slice-materialisation-for-primitive-vectors)
 - [Design: N1 — Direct-emit local collections in native codegen](#design-n1--direct-emit-local-collections-in-native-codegen)
 - [Design: N2 — Omit stores parameter from pure native functions](#design-n2--omit-stores-parameter-from-pure-native-functions)
 - [Design: N3 — Remove long null-sentinel from generated code](#design-n3--remove-long-null-sentinel-from-generated-code)
+- [Design: N4 — Suppress cr_call_push on `#pure` leaf functions](#design-n4--suppress-cr_call_push-on-pure-leaf-functions)
+- [Design: N5 — Inline `integer` arithmetic when operands are provably non-null](#design-n5--inline-integer-arithmetic-when-operands-are-provably-non-null)
+- [Design: N6 — Skip the rustc toolchain probe on a native cache hit](#design-n6--skip-the-rustc-toolchain-probe-on-a-native-cache-hit)
 - [Design: W1 — wasm string representation](#design-w1--wasm-string-representation)
 - [Improvement priority order](#improvement-priority-order)
 - [See also](#see-also)
+- [Design: BUILD1 — Eliminate the lib/bin double compilation](#design-build1--eliminate-the-libbin-double-compilation)
+- [Design: BUILD2 — Persist the native-test binary cache across CI runs](#design-build2--persist-the-native-test-binary-cache-across-ci-runs)
+- [Startup cache (shipped, default-on)](#startup-cache-shipped-default-on) — **what a rerun actually costs, and which binary you measured**
+- [Open work](#open-work)
 
 ---
 
@@ -3528,11 +3536,49 @@ order:
 1. `LOFT_NO_CACHE` (non-empty) → **off** — the explicit kill switch for
    production scripts that must never read/write bundles.
 2. `LOFT_PROGRAM_CACHE` (non-empty) → **on** — explicit force; used by the
-   cache's own tests to override the cargo-context default below.
+   cache's own tests to override the two dev defaults below.
 3. `CARGO_MANIFEST_DIR` present → **off** — auto-disables inside
    `cargo run` / `cargo test`.  The compiler-debug loop and the entire
    integration-test suite never read/write bundles with zero per-test wiring.
-4. otherwise → **on** — the default for installed / real invocations.
+4. **the binary lives in a `target/{debug,release}/` tree → off** — the OTHER
+   half of the same compiler-debug loop, and the half that surprises people.
+   Rule 3 only catches an invocation *Cargo* made; running `target/release/loft`
+   by hand sets no variable, and that is what iterating on the compiler actually
+   looks like.  Keyed on the binary's own path (`running_a_dev_build`), so it
+   also covers `CARGO_TARGET_DIR=target-da`.
+5. otherwise → **on** — the default for installed / real invocations.
+
+### Which loft am I measuring? (rule 4 is a trap for benchmarks)
+
+Rule 4 means **a binary you built from source pays the cold cost on every run,
+forever** — by design, so a parser change is never answered by a stale bundle.  It
+also means the two binaries on your machine have startup costs that differ by
+roughly the warm/cold ratio below, and nothing in the output says which one you ran.
+
+That is not hypothetical: loft#864 was filed as *"every invocation pays full
+process-spawn + compile overhead, give me a warm session or a daemon"*, on numbers
+measured with a from-source build.  The same programs on the installed binary ran
+several times faster, because the cache the report needed was already there and
+rule 4 had switched it off.  **Benchmark the installed binary, or say which one you
+measured.**
+
+| invocation | program cache | a rerun of an unchanged program |
+|---|---|---|
+| `loft prog.loft` (installed) | on | warm — no parsing at all |
+| `target/release/loft prog.loft` | **off** (rule 4) | full stdlib parse, every run |
+| `cargo run -- prog.loft` | off (rule 3) | full stdlib parse, every run |
+| `LOFT_NO_CACHE=1 loft prog.loft` | off (rule 1) | full stdlib parse, every run |
+
+**How to tell which you got, in one command.**  `LOFT_TIMING=1` prints
+`parse_default=<n>ms`: a couple of ms is a warm bundle load, tens of ms is a cold
+parse of `default/`.  It is the cheapest hit/miss check there is, and it works on
+any build.
+
+**`LOFT_STDLIB_CACHE` is the narrower fallback, not an addition.**  It caches
+`default/` only, and `main.rs` engages it **just when the program cache is off** —
+so on an installed binary setting it changes nothing, while on a from-source build
+it recovers most (not all) of what rule 4 gave up.  A measurable win from setting it
+is therefore itself a signal that the program cache was disabled.
 
 ### Invalidation
 
