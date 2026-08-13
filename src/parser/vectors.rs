@@ -1941,16 +1941,18 @@ impl Parser {
         // value — the same vector, built with N times the IR.
         //
         // Only where the vector being built is a PLAIN LOCAL — not a struct field,
-        // not a captured collection, not an indexed element.  `OpAppendCopy` copies
-        // within one vector and so is handed that vector's handle, where
-        // `OpNewRecord` may instead take the enclosing record plus a field number
-        // and locate the field itself.  Every container that is addressed rather
-        // than named hits that difference: the field path hands the copy the record,
-        // and it appends into whichever vector that resolves to — `Pair { a: [0; 3],
-        // b: [0; 3] }` builds `a` with seven elements and `b` with one, on the
-        // published build and both backends.  That is the repeat literal's own bug
-        // (loft#892); routing a comprehension into it would spread it to code that
-        // never asked for the fill.
+        // not a captured collection, not an indexed element.  The container defect
+        // that first forced this narrowing is fixed (loft#892: `OpAppendCopy` was
+        // handed the enclosing record rather than the field's own handle, so
+        // `Pair { a: [0; 3], b: [0; 3] }` built `a` with seven elements and `b` with
+        // one), and `new_record` now derives one container for all three append ops.
+        //
+        // The restriction stays because the remaining question is a different one and
+        // is unmeasured: a captured target may be a KEYED collection, where "append n
+        // copies of one element" is not the same operation as n inserts — a hash or a
+        // sorted set dedups them.  Widening this to addressed containers is worth
+        // doing, but it needs that case decided and timed on its own, not inherited
+        // from a bug fix.
         if is_plain_local_target
             && let Some(fill) =
                 self.try_const_fill_comprehension(range_bounds.as_ref(), &body, &if_step)
@@ -3063,6 +3065,35 @@ impl Parser {
         } else {
             None
         };
+        // The container new elements are appended INTO, derived once for all three
+        // append ops.  `OpNewRecord`/`OpFinishRecord` can name a struct field
+        // indirectly — enclosing record plus field number, which needs no resolved
+        // handle — but `OpAppendCopy` copies WITHIN one vector and so must be handed
+        // that vector's own handle.  Deriving the two separately is how they came to
+        // disagree: the copy was given the enclosing RECORD and appended into
+        // whichever vector that resolved to, so `Pair { a: [0; 3], b: [0; 3] }` built
+        // `a` with seven elements and `b` with one (loft#892).
+        let container: Value = if let Some(target) = &vector_elem_target {
+            // #246: the inner vector that `val`'s indexed read yields.
+            target.clone()
+        } else if let Some(target) = &cap_target {
+            // @PLN93 (#511): the captured collection the `OpGetDbRef` points at.
+            target.clone()
+        } else if is_field {
+            // `val` IS the field read (`OpGetField(record, pos, vector_tp)`), so it
+            // already evaluates to the field's handle.  Unspanned, because `is_field`
+            // looks through a span and the container must agree with the test that
+            // selected it: a spanned field read (`q.a = [7; 3]`, `q.a += [7; 3]`,
+            // `vv[i] += [7; 3]`) failed the unspanned match below and fell through to
+            // `Value::Var(u16::MAX)`, indexing the variable table out of bounds and
+            // aborting the compiler with an internal error.
+            val.unspan().clone()
+        } else {
+            Value::Var(vec)
+        };
+        // Only a struct field reached directly — not through an index, not through a
+        // capture — can use the field-numbered form.
+        let field_form = is_field && vector_elem_target.is_none() && cap_target.is_none();
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -3089,29 +3120,21 @@ impl Parser {
             };
             let known = Value::Int(i32::from(known_tp));
             if let Value::Return(multiply) = p {
-                let to = if let Value::Call(_, ps) = val {
-                    ps[0].clone()
-                } else {
-                    Value::Var(vec)
-                };
-                ls.push(self.cl("OpAppendCopy", &[to, *multiply.clone(), known]));
+                ls.push(self.cl(
+                    "OpAppendCopy",
+                    &[container.clone(), *multiply.clone(), known],
+                ));
                 continue;
             }
             let fld = Value::Int(i32::from(u16::MAX));
-            let app_v = if let Some(target) = &vector_elem_target {
-                // #246: append directly to the inner vector (the indexed read).
-                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
-            } else if let Some(target) = &cap_target {
-                // @PLN93 (#511): allocate the element INSIDE the captured collection the
-                // `OpGetDbRef` points at — `fld = u16::MAX` so `record_new` keys off `known`
-                // (the keyed db-type resolved above), the same shape as the plain-local path.
-                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
-            } else if is_field {
+            let app_v = if field_form {
                 self.new_record_field_op(val, parent_tp, "OpNewRecord")
             } else {
+                // `fld = u16::MAX` so `record_new` keys off `known` (the keyed db-type
+                // resolved above), the same shape on every addressed container.
                 self.cl(
                     "OpNewRecord",
-                    &[Value::Var(vec), known.clone(), fld.clone()],
+                    &[container.clone(), known.clone(), fld.clone()],
                 )
             };
             ls.push(v_set(elm, app_v));
@@ -3274,19 +3297,7 @@ impl Parser {
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
-            let finish = if let Some(target) = &vector_elem_target {
-                // #246: finish the direct append into the inner vector.
-                self.cl(
-                    "OpFinishRecord",
-                    &[target.clone(), Value::Var(elm), known, fld],
-                )
-            } else if let Some(target) = &cap_target {
-                // @PLN93 (#511): commit the new element into the captured collection DbRef.
-                self.cl(
-                    "OpFinishRecord",
-                    &[target.clone(), Value::Var(elm), known, fld],
-                )
-            } else if is_field {
+            let finish = if field_form {
                 let mut finish_v = self.new_record_field_op(val, parent_tp, "OpFinishRecord");
                 // Replace placeholder Var(0) with the actual elm variable.
                 if let Value::Call(_, ref mut args) = finish_v
@@ -3296,9 +3307,10 @@ impl Parser {
                 }
                 finish_v
             } else {
+                // Commit the new element into the container resolved above.
                 self.cl(
                     "OpFinishRecord",
-                    &[Value::Var(vec), Value::Var(elm), known, fld],
+                    &[container.clone(), Value::Var(elm), known, fld],
                 )
             };
             ls.push(finish);
