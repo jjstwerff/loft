@@ -716,6 +716,17 @@ impl Parser {
                 self.database.types[*db_tp as usize].parts,
                 Parts::Hash(_, _)
                     | Parts::Sorted(_, _)
+                    // `Ordered` is the by-reference twin a `sorted<T[k]>` BECOMES as soon
+                    // as anything else in the program declares an `index<T[..]>` over the
+                    // same element type — so the same source line lowers differently
+                    // because of a declaration somewhere else entirely.  Its absence here
+                    // is loft#719's omission one function over: the removal arm
+                    // (`towards_set_hash_remove`) lists it, the INSERT arm did not, so
+                    // `s[k] = v` fell through to the update-only `OpCopyRecord` on a
+                    // lookup that misses.  Every insert was silently dropped and the
+                    // collection stayed empty — in a program that never used the struct
+                    // whose second field caused the promotion.
+                    | Parts::Ordered(_, _)
                     | Parts::Index(_, _, _)
                     | Parts::Radix(_, _)
                     | Parts::Trie(_, _)
