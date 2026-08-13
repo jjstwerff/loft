@@ -65,5 +65,43 @@ fn main() {
   for e in fl { tot += e; }
   assert(tot == 4.5, "sum [1.5;3] = {tot}, want 4.5");
 
+  // A NEGATIVE count. `n == 0` was fixed by dropping the template; a negative one took
+  // the same route through `as u32` and wrapped to 4 294 967 295 `copy_block`s, walking
+  // off the store until glibc aborted the process. The two backends did not even agree:
+  // `--native` already clamped, the interpreter did not — so this row is where a twin
+  // drift on a heap-corrupting input shows.
+  neg = 0 - 1;
+  rneg: vector<integer> = [3; neg];
+  assert(len(rneg) == 0, "len [3;neg=-1] = {len(rneg)}, want 0");
+
+  // An element whose value is NOT its inline bytes. A `text` element stores a 4-byte
+  // interned id, so the copy has to re-intern from the TEMPLATE — it re-interned from
+  // the vector handle instead, and every copy read back as junk while element 0 was
+  // right. Length and element 0 both looked correct, so only reading a LATER element
+  // catches it.
+  words: vector<text> = ["abc"; 4];
+  assert(len(words) == 4, "len [\"abc\";4] = {len(words)}, want 4");
+  joined = "";
+  for w in words { joined += w; }
+  assert(joined == "abcabcabcabc", "[\"abc\";4] joined to '{joined}'");
+
+  // The same question for a record and for a nested vector: both carry claims of their
+  // own, and a struct carries a text field INSIDE it.
+  pts: vector<R886P> = [R886P { px: 5, pnm: "hi" }; 3];
+  assert(len(pts) == 3, "len struct repeat = {len(pts)}, want 3");
+  psum = 0;
+  pnames = "";
+  for p in pts { psum += p.px; pnames += p.pnm; }
+  assert(psum == 15, "struct repeat sum = {psum}, want 15");
+  assert(pnames == "hihihi", "struct repeat names = '{pnames}'");
+
+  rows: vector<vector<integer>> = [[1, 2]; 3];
+  assert(len(rows) == 3, "len nested repeat = {len(rows)}, want 3");
+  rsum = 0;
+  for r in rows { rsum += r886_sum(r); }
+  assert(rsum == 9, "nested repeat sum = {rsum}, want 9");
+
   println("886 repeat-literal ok");
 }
+
+struct R886P { px: integer, pnm: text }

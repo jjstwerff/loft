@@ -2432,15 +2432,9 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
-    // Read v_rec before resize; from points to the last existing element.
-    let v_rec_before =
-        crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
-    let from = DbRef {
-        store_nr: data.store_nr,
-        rec: v_rec_before,
-        pos: 8 + (length * size - size),
-    };
-    let multiply = count.max(0) as u32;
+    // A count is a TOTAL; a negative one is no vector at all, so it answers the same as
+    // zero. Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
+    let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
     // `[x; n]` asks for n elements TOTAL and the template is already appended, so `n - 1`
     // more are needed — adding `n` grew one too far and left the last slot never written
     // (`[7; 3]` read back as length 4 with garbage). `n == 0` must drop the template too;
@@ -2460,8 +2454,15 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     // Resize to accommodate `extra` additional elements.
     vector::vector_append(&data, size, &mut stores.allocations);
     stores.vector_set_size(&data, extra, size);
-    // Re-read v_rec in case the resize moved the record.
+    // Re-read the backing record AFTER the resize: growing the vector can move it, and
+    // BOTH ends of the copy live inside it. Only the destination was re-read here, so
+    // the template `from` still named the record's old home.
     let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
+    let from = DbRef {
+        store_nr: data.store_nr,
+        rec: v_rec,
+        pos: 8 + (length * size - size),
+    };
     for i in 0..extra {
         let to = DbRef {
             store_nr: data.store_nr,
@@ -2469,7 +2470,9 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
             pos: 8 + (length + i) * size,
         };
         stores.copy_block(&from, &to, size);
-        stores.copy_claims(&data, &to, ctp);
+        // The claim source is the TEMPLATE element, not the vector handle — see the
+        // twin in `State::append_copy`.
+        stores.copy_claims(&from, &to, ctp);
     }
 }
 

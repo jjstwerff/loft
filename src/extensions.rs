@@ -945,12 +945,16 @@ mod bridgeless_report_tests {
 
     /// The report must name the LIBRARY to fix and every function that is dead in it —
     /// a count alone sends the author looking, which is the cost loft#886 paid.
+    ///
+    /// The sample symbols are invented, not borrowed from a real library: the
+    /// extraction-hygiene gate (`tests/extraction_hygiene.rs`) forbids a library's `n_*`
+    /// symbol from appearing anywhere in `src/`, and a test fixture is no exception.
     #[test]
     fn the_message_names_the_library_and_each_dead_function() {
-        let m = bridgeless_message("graphics", &["n_rasterize_text_into", "n_save_png"]);
-        assert!(m.contains("'graphics'"), "{m}");
-        assert!(m.contains("n_save_png"), "{m}");
-        assert!(m.contains("n_rasterize_text_into"), "{m}");
+        let m = bridgeless_message("samplelib", &["n_sample_alpha", "n_sample_beta"]);
+        assert!(m.contains("'samplelib'"), "{m}");
+        assert!(m.contains("n_sample_alpha"), "{m}");
+        assert!(m.contains("n_sample_beta"), "{m}");
         assert!(m.contains("2 of its"), "{m}");
         // It must not read as the sibling "stale build" diagnostic: the fix is a
         // registration, and telling the author to rebuild sends them nowhere.

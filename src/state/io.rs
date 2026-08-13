@@ -1523,18 +1523,18 @@ impl State {
 
     pub fn append_copy(&mut self) {
         let tp = self.code::<u16>();
-        let multiply = *self.get_stack::<i64>() as u32;
+        let count = *self.get_stack::<i64>();
+        // A count is a TOTAL, and a negative total is not a shorter vector — it is not a
+        // vector at all. `as u32` turned `[7; -1]` into 4 294 967 295 `copy_block`s that
+        // walked off the store until glibc aborted the process, which is the same failure
+        // `n == 0` used to have and the same answer: no elements. The `--native` twin
+        // already clamped; this one had not, so the two disagreed on a heap-corrupting
+        // input.
+        let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
-        let v_rec =
-            crate::keys::store(&data, &self.database.allocations).get_u32_raw(data.rec, data.pos);
-        let from = DbRef {
-            store_nr: data.store_nr,
-            rec: v_rec,
-            pos: 8 + (length * size - size),
-        };
         // `[x; n]` asks for n elements TOTAL and the template is already appended, so
         // `n - 1` more are needed. Adding `n` grew the vector one too far and left the
         // last slot never written — `[7; 3]` read back as length 4 with garbage in it.
@@ -1555,6 +1555,16 @@ impl State {
         }
         vector::vector_append(&data, size, &mut self.database.allocations);
         self.database.vector_set_size(&data, extra, size);
+        // Re-read the backing record AFTER the resize: growing the vector can move it,
+        // and both ends of the copy live inside it. Reading it once up front left the
+        // template `from` — and every destination — pointing at the record's old home.
+        let v_rec =
+            crate::keys::store(&data, &self.database.allocations).get_u32_raw(data.rec, data.pos);
+        let from = DbRef {
+            store_nr: data.store_nr,
+            rec: v_rec,
+            pos: 8 + (length * size - size),
+        };
         for i in 0..extra {
             let to = DbRef {
                 store_nr: data.store_nr,
@@ -1562,7 +1572,11 @@ impl State {
                 pos: 8 + (length + i) * size,
             };
             self.database.copy_block(&from, &to, size);
-            self.database.copy_claims(&data, &to, ctp);
+            // The claim source is the TEMPLATE element, not the vector handle. `data`
+            // points at the vector's 4-byte record id, so a `text` element re-interned
+            // whatever those bytes decoded to: `["abc"; 4]` gave "abc" in element 0 and
+            // junk in every copy. Same word wrong in the `--native` twin.
+            self.database.copy_claims(&from, &to, ctp);
             self.database
                 .watch_oob_text(&to, ctp, Some(&data), "append_copy");
         }
