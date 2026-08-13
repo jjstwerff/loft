@@ -27,6 +27,11 @@
 #                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
 #
+# If a run fails, re-run THIS script against the same checkout
+# (`--registry-dir <that dir>`) rather than the whole registry_maintain.sh cycle:
+# a refusal leaves the staged index in place and unsigned, so the retry is seconds
+# rather than the ~8 minutes a full re-clone + `compat check --full` costs.
+#
 # Signing — DEFAULT is YubiKey-first with a local-key fallback (both end at the
 # same trust gate):
 #   1. Try the YubiKey ON-CARD (PIV slot 9C, Ed25519) for LOFT_YUBIKEY_TIMEOUT
@@ -66,7 +71,7 @@ while [ $# -gt 0 ]; do
         --no-push)      PUSH=0;;
         --message)      MSG="$2"; shift;;
         --yes)          YES=1;;
-        -h|--help)      sed -n '2,30p' "$0"; exit 0;;
+        -h|--help)      sed -n '2,33p' "$0"; exit 0;;
         *) echo "unknown argument: $1" >&2; exit 2;;
     esac
     shift
@@ -221,12 +226,94 @@ fi
 
 set +e
 NOTES="$NOTES" DOWNLOAD="$DOWNLOAD" python3 - "$PREV" "$INDEX" <<'PY'
-import json, sys, os, re, hashlib, urllib.request, subprocess
+import json, sys, os, re, hashlib, shutil, tempfile, time, urllib.request, urllib.error, subprocess
 def load(p):
     try:
         with open(p) as f: return json.load(f)
     except Exception:
         return {}
+
+# ---- tarball fetch (loft#887) -------------------------------------------------
+# The re-download below is the trust-root backstop, so it must not be the thing
+# that fails.  Two rules:
+#
+#   * A dropped connection is RETRIED.  It says nothing about the artifact, and
+#     the sha256 comparison still decides correctness, so a retry can only turn a
+#     non-answer into an answer — it weakens no check.
+#   * An ABSENT asset (HTTP 404/410) is terminal and reported as such.  Retrying
+#     cannot make a missing file appear, and the old wording ("does the release
+#     exist with the named asset?") sent the reader to verify a release that was
+#     never in doubt.
+#
+# `curl` goes first when present: GitHub's release-asset redirect chain
+# (objects.githubusercontent.com) drops most of `urllib`'s connections on some
+# hosts while `curl` copes with the same URL at the same moment — 1/4 vs 4/4 when
+# loft#887 measured it.  `urllib` remains the fallback so the script keeps working
+# with python3 alone.
+FETCH_ATTEMPTS = 4
+
+def _fetch_curl(url):
+    """One `curl` attempt → `(data, reason, absent)`."""
+    fd, tmp = tempfile.mkstemp(prefix="loft-registry-sign-")
+    os.close(fd)
+    try:
+        out = subprocess.run(
+            ["curl", "-sSL", "--max-time", "180", "-o", tmp, "-w", "%{http_code}", url],
+            capture_output=True, text=True, timeout=200)
+        code = (out.stdout or "").strip()
+        if out.returncode != 0:
+            why = (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[-1]
+            return None, why, False
+        if code in ("404", "410"):
+            return None, f"HTTP {code}", True
+        if code != "200":
+            return None, f"HTTP {code}", False
+        with open(tmp, "rb") as f:
+            return f.read(), None, False
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}", False
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
+
+def _fetch_urllib(url):
+    """One `urllib` attempt → `(data, reason, absent)`."""
+    try:
+        return urllib.request.urlopen(url, timeout=60).read(), None, False
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code} {e.reason}", e.code in (404, 410)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}", False
+
+CLIENTS = ([("curl", _fetch_curl)] if shutil.which("curl") else []) + [("urllib", _fetch_urllib)]
+
+def fetch(url):
+    """Download `url` → `(data, None, False)`, or `(None, reason, absent)`.
+
+    `absent` True means the asset is genuinely not there (HTTP 404/410); False
+    means every attempt failed in transport, which is a network problem and not
+    a reason to doubt the release.
+    """
+    tried = []   # DISTINCT reasons — four identical DNS failures say one thing, not four
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        why = []
+        for client, fetcher in CLIENTS:
+            data, reason, absent = fetcher(url)
+            if data is not None:
+                return data, None, False
+            if absent:
+                return None, reason, True
+            why.append(f"{client}: {reason}")
+        for w in why:
+            if w not in tried:
+                tried.append(w)
+        print(f"        VERIFY   : attempt {attempt}/{FETCH_ATTEMPTS} failed — {'; '.join(why)}"
+              f"{' — retrying' if attempt < FETCH_ATTEMPTS else ''}")
+        if attempt < FETCH_ATTEMPTS:
+            time.sleep(2 ** (attempt - 1))
+    return None, "; ".join(tried), False
+# ------------------------------------------------------------------------------
+
 prev, cur = load(sys.argv[1]), load(sys.argv[2])
 show_notes = os.environ.get("NOTES") == "1"
 download   = os.environ.get("DOWNLOAD", "1") == "1"
@@ -274,8 +361,30 @@ for name, ver, meta, is_new in changes:
         except Exception as e:
             print(f"        notes    : (unavailable: {e})")
     if download and url and sha:
-        try:
-            data = urllib.request.urlopen(url, timeout=60).read()
+        data, why, absent = fetch(url)
+        if data is None:
+            print(f"        VERIFY   : download FAILED: {why}")
+            if absent:
+                failures.append((name, ver,
+                    f"release asset ABSENT ({why}) — the server answered, and answered that the "
+                    "named file is not on that release.\n"
+                    "             Cause: the release was never cut, the tag differs, or the asset "
+                    "failed to upload.\n"
+                    "             Fix: upload the asset to the release (or correct `url` in "
+                    "index.json), then re-run.\n"
+                    f"             url: {url}"))
+            else:
+                failures.append((name, ver,
+                    f"download failed in TRANSPORT after {FETCH_ATTEMPTS} attempts — no HTTP 404 was "
+                    "seen, so the release and its asset are NOT in question; the connection is.\n"
+                    f"             Attempts: {why}\n"
+                    "             Fix: re-run `scripts/registry-sign.sh --registry-dir <this "
+                    "checkout>`.  The staged index is\n"
+                    "             untouched and unsigned, so retrying the sign alone costs seconds "
+                    "instead of a full\n"
+                    "             registry_maintain.sh cycle.\n"
+                    f"             url: {url}"))
+        else:
             got = hashlib.sha256(data).hexdigest()
             if got == sha:
                 print(f"        VERIFY   : sha256 MATCH ({len(data)} bytes downloaded)")
@@ -293,11 +402,6 @@ for name, ver, meta, is_new in changes:
                     "             Fix: re-cut the release so its bytes match `loft package` at the tag "
                     "(bump the version + re-release if main has changed).\n"
                     f"             url: {url}"))
-        except Exception as e:
-            print(f"        VERIFY   : download FAILED: {e}")
-            failures.append((name, ver,
-                f"download failed ({e}) — does the release exist with the named asset?\n"
-                f"             url: {url}"))
     print()
 
 if failures:
