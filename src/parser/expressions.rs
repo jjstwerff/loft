@@ -2482,7 +2482,16 @@ use a separate collection or add after the loop"
                     *code = Value::Insert(vec![init_tmp, fill_tmp, clear, append]);
                 } else {
                     let rhs_saved = code.clone();
-                    let tmp = self.vars.unique("_p154_rhs", f_type, &mut self.lexer);
+                    // Dep-free, like the borrowed-Var arm above: the temp holds the
+                    // RHS's OWN storage, so its type must say it owns it.  Built from
+                    // `f_type` — the destination FIELD's type — it inherited the
+                    // field's deps, read as a borrow of the struct, and was never
+                    // freed at scope end.  An RHS that allocates then leaked its store
+                    // for the lifetime of the program: `b.d = f#read(8) as
+                    // vector<single>` (loft#897), where binding the same expression to
+                    // a local first was clean, because a user local has no such dep.
+                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+                    let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
                     let set_tmp = v_set(tmp, rhs_saved);
                     let clear = self.cl("OpClearVector", std::slice::from_ref(to));
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
@@ -2724,9 +2733,7 @@ use a separate collection or add after the loop"
         //
         // The var-RHS branch below stays separate: `s = other` deep-copies via
         // `OpReplaceKeyed`, which clears as part of the copy.
-        if keyed_kt.is_some()
-            && matches!(code, Value::Insert(ls) if !ls.is_empty())
-        {
+        if keyed_kt.is_some() && matches!(code, Value::Insert(ls) if !ls.is_empty()) {
             let clear = v_set(var_nr, Value::Null);
             if let Value::Insert(ls) = code {
                 ls.insert(0, clear);
