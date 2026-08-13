@@ -1118,11 +1118,12 @@ impl Parser {
             // First pass: type not yet resolved; suppress error until second pass.
             Type::Unknown(0)
         } else if matches!(t, Type::Never) {
-            // @P376 poison — the receiver's own error (an unknown function, an
-            // unknown struct) is already on screen, so indexing it has nothing
-            // left to say.  Without this the cascade named the index line, which
-            // is correct as written, right beside the line that is not
-            // (loft#868).  Mirrors the `Unknown | Never` recovery in `field()`.
+            // A poisoned receiver stays poisoned.  The receiver's own error (an
+            // unknown function, an unknown struct) is already on screen, so
+            // indexing it has nothing left to say — and reporting anyway names the
+            // index line, which is correct as written, right beside the line that
+            // is not (loft#868).  Mirrors the `Unknown | Never` recovery in
+            // `field()`.
             Type::Never
         } else {
             // @PLN125 arc C — a library type CAN be subscripted now, so a struct or enum

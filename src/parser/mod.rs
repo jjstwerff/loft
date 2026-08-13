@@ -3639,10 +3639,10 @@ impl Parser {
     /// Record that this cast ALLOCATED its result, so the `as` handler hands back
     /// `should` as written instead of grafting the source's deps onto it.
     ///
-    /// @PLN99 arc C established this for `convert`'s allocating user conversions;
-    /// `cast` has the same property and never said so. `text as Struct` /
-    /// `text as vector<T>` intern the text into a NEW store, so grafting made the
-    /// result read as a view of the text it parsed. A borrow crossing a function
+    /// Call it for any cast that allocates, the same way `convert`'s allocating user
+    /// conversions do. `text as Struct` / `text as vector<T>` intern the text into a
+    /// NEW store, so grafting makes the result read as a view of the text it parsed
+    /// rather than as the fresh value it is. A borrow crossing a function
     /// return is then delivered as one, and the return-buffer machinery renames its
     /// source onto `__retbuf`: a text local retyped to the record type and sharing
     /// its slot (loft#867 — the #306 guard then SIGSEGV on the interpreter, four

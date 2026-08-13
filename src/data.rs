@@ -3691,8 +3691,8 @@ pub struct Data {
     /// `fill_all`, which does — the same record-here / report-there split
     /// `defer_unknown` uses. Not derivable afterwards: `set_mutable` is the only
     /// place that asks the element for the name, and `Data::attr`'s answer for a
-    /// name it cannot find is `usize::MAX`, which used to be handed straight to
-    /// `attributes[…]` as an index.
+    /// name it cannot find is `usize::MAX` — a not-found sentinel, not an index
+    /// into `attributes[…]`.
     unknown_key_fields: Vec<(u32, usize, u32, String)>,
     /// Current source file
     pub source: u16,

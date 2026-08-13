@@ -2436,9 +2436,9 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     // zero. Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
     let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
     // `[x; n]` asks for n elements TOTAL and the template is already appended, so `n - 1`
-    // more are needed — adding `n` grew one too far and left the last slot never written
-    // (`[7; 3]` read back as length 4 with garbage). `n == 0` must drop the template too;
-    // it used to wrap `multiply - 1` on a `u32` into ~4.3 billion `copy_block`s.
+    // more are needed. `n == 0` drops the template too, and must return before the
+    // `multiply - 1` below: that subtraction is on a `u32`, so zero underflows into
+    // ~4.3 billion `copy_block`s that walk off the end of the store.
     // Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
     if multiply == 0 {
         let store = crate::keys::mut_store(&data, &mut stores.allocations);

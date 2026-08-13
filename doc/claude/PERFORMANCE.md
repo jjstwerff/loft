@@ -550,6 +550,45 @@ if v1 == i64::MIN || v2 == i64::MIN { i64::MIN } else { v1 + v2 }
 For Collatz (04, 2.24×) this appears in every loop iteration. Hand-written Rust uses
 plain arithmetic with no sentinel.
 
+**3b. The crate boundary: a runtime helper is only inlinable if it says so**
+
+A `--native` program is a **separate crate** that links loft's runtime rlib, built with
+`rustc --edition=2024 -O … --extern loft=libloft.rlib` — **and no LTO**. A plain
+non-generic `pub fn` in the runtime is therefore a real call from generated code, and
+rustc can never inline it there however small it is. The second cost is the bigger one:
+what the helper already computed stays invisible to its caller, so the caller computes it
+again.
+
+Indexed reads pay the most, because they are the hottest operation in the language. `v[i]`
+emits `vector::get_vector(…)`, then resolves the store a second time in the caller to read
+the element — a second resolution that exists only because the first one happened behind a
+call rustc cannot see into. Marking that chain inlinable (`vector::get_vector`,
+`vector::length_vector`, `keys::store`, `Stores::store`), measured on loft#885's scan over
+flat `vector<single>` columns, alternating single runs on a shared machine:
+
+```
+before   30.5  31.6  33.4  32.4  33.9  33.7   ns/iter   (median ~33.1)
+inlined  21.0  24.2  18.1  18.7  19.7  19.3   ns/iter   (median ~19.5)
+```
+
+Same accumulator on every run. About 1.7×, which moves `vector<single>` indexed reads from
+~25× hand-written Rust to ~15×.
+
+Two lessons worth keeping:
+
+- **A cross-crate cost cannot be fixed inside the rlib.** `get_vector` looks like it
+  resolves the store twice, because it calls `length_vector`, which resolves it again and
+  re-reads the same slot. Removing that by hand measured **no change at all**: inside the
+  rlib rustc already inlines and folds it. The duplicate that cost real time was the one
+  *across* the crate boundary, which no tidying inside can reach.
+- **Alternate single RUNS, not builds.** Rebuilding between variants left minutes between
+  the two arms. On a shared machine that reported a 35 % gain in one round and none in the
+  next, from the same two binaries. Alternating one run at a time separated the two
+  distributions with no overlap.
+
+The rule generalises: a runtime helper on a per-element path needs `#[inline]`, and the
+reason belongs beside it, because the attribute looks removable and is not.
+
 **4. Float near-parity — the target model**
 
 Newton sqrt (06, 1.05×) and Mandelbrot (05, 1.17×) show what the native pipeline
@@ -3643,7 +3682,7 @@ plan-cleanup audits:
 | Item | Section | ROADMAP row | Tier | Status |
 |---|---|---|---|---|
 | **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **unblocked** (corrected 2026-06): the two-byte escape (byte 255 → `OPERATORS[255+ext]`) gives ~242 free slots; superinstructions are escape-range ops. **Secondary** value — the debug loop runs interpreted, but bounded (library calls stay native via C71/N9; players run native), so it speeds only the maker's own glue. Worth doing because it is now cheap + low-risk. |
-| **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter **+ Native** | Open — design ready, no scheduled slot.  **Measured 2026-08-13 (loft#885): worth ~4.7x on an indexed-read kernel**, taking `vector<single>` reads from ~25x hand-written Rust to ~5x.  Ablation on the REAL generated code (`--native-emit`, hand-hoist `n_scan` only, rebuild the same way): 30.0 → 6.3 ns/iter with an identical accumulator.  Per element the current chain resolves a store **three times** — `get_vector` resolves it, then calls `length_vector` which resolves it AGAIN and re-reads a length that cannot change, then the caller resolves it a third time for `get_single`.  Hoisting `(store_nr, vec_record, length)` per vector to before the loop is the whole change.  **Enabling fact is an effects question, not a codegen one:** a write can REALLOCATE the backing record (the loft#886 `append_copy` bug was a stale record read after exactly that), so the hoist is only valid where no store mutation reaches the loop body — a first cut can require no call and no assignment through any collection, which is the shape hot numeric kernels have.  The sibling cost in the same report — `??`'s NaN sentinel — measured at ~0, so a non-nullable indexing form buys nothing on its own. |
+| **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter **+ Native** | Open — design ready, no scheduled slot.  **Measured 2026-08-13 (loft#885): worth ~4.7x on an indexed-read kernel**, taking `vector<single>` reads from ~25x hand-written Rust to ~5x.  Ablation on the REAL generated code (`--native-emit`, hand-hoist `n_scan` only, rebuild the same way): 30.0 → 6.3 ns/iter with an identical accumulator.  Per element the current chain resolves a store **three times** — `get_vector` resolves it, then calls `length_vector` which resolves it AGAIN and re-reads a length that cannot change, then the caller resolves it a third time for `get_single`.  **Partly banked 2026-08-13, and it re-bases this row:** the third resolution existed only because the rlib's `pub fn`s were not inlinable across the no-LTO crate boundary, so generated code could not see what `get_vector` had already done.  Marking that chain `#[inline]` (§ Native vs Rust, root cause 3b) took the same kernel 33.1 → 19.5 ns/iter, ~25x Rust to ~15x — and the second resolution, the one *inside* `get_vector`, turned out to already be optimised away within the rlib (removing it by hand measured as no change).  So the hoist's remaining value must be re-ablated against the INLINED baseline before it is scheduled: the 4.7x was measured against an un-inlined one and its hand-hoist sidestepped the crate boundary too, so some of that 4.7x has now been collected by a two-line change.  Hoisting `(store_nr, vec_record, length)` per vector to before the loop is the whole change.  **Enabling fact is an effects question, not a codegen one:** a write can REALLOCATE the backing record (the loft#886 `append_copy` bug was a stale record read after exactly that), so the hoist is only valid where no store mutation reaches the loop body — a first cut can require no call and no assignment through any collection, which is the shape hot numeric kernels have.  The sibling cost in the same report — `??`'s NaN sentinel — measured at ~0, so a non-nullable indexing form buys nothing on its own. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
 | **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
 | **P5** — `vector +=` capacity reservation (amortised growth) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Discovered via the `store_memory()` builtin while profiling the @PLN6 crystal mesh: single-element `+= [x]` reallocated the backing record on (nearly) every append, fragmenting the store into O(N) freed records (a 12 738-element build → **101 815 free blocks / ~250 MB** vs ~0.8 MB of data).  Fixed by amortised (~×2) growth in `vector::vector_append` (`src/vector.rs`): when the backing record is out of room it grows to ~2× `length+1` instead of exactly `length+1`; `Store::resize` is grow-only so in-room appends are no-ops.  Length lives in a separate field (word 1), so the trailing slack never affects `len()`/indexing/copy (length-based, shrinks to fit)/serialisation.  One shared function → both backends.  Same 12 000-element build now shows **~8 free blocks** (one trailing slack block).  Guards: `tests/scripts/124-vector-amortised-growth.loft` (cross-mode correctness + fragmentation digit-count bound).  `vector_set_size` (bulk `+= [a,b,c]`) and `insert_vector` keep exact sizing (not the hot path); a user-facing `reserve(v, n)` (wrapping the existing `OpPreAllocVector`) remains an optional opt-in follow-up. |

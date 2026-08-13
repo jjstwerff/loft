@@ -1525,23 +1525,25 @@ impl State {
         let tp = self.code::<u16>();
         let count = *self.get_stack::<i64>();
         // A count is a TOTAL, and a negative total is not a shorter vector — it is not a
-        // vector at all. `as u32` turned `[7; -1]` into 4 294 967 295 `copy_block`s that
-        // walked off the store until glibc aborted the process, which is the same failure
-        // `n == 0` used to have and the same answer: no elements. The `--native` twin
-        // already clamped; this one had not, so the two disagreed on a heap-corrupting
-        // input.
+        // vector at all, so it clamps to zero and yields no elements. A bare `as u32`
+        // instead turns `[7; -1]` into 4 294 967 295 `copy_block`s that walk off the store
+        // until glibc aborts the process.
+        // Twin of `OpAppendCopy` (`src/codegen_runtime.rs`) — keep the two in step, or
+        // they disagree on a heap-corrupting input.
         let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
         // `[x; n]` asks for n elements TOTAL and the template is already appended, so
-        // `n - 1` more are needed. Adding `n` grew the vector one too far and left the
-        // last slot never written — `[7; 3]` read back as length 4 with garbage in it.
+        // `n - 1` more are needed. Adding `n` instead grows the vector one too far and
+        // leaves the last slot never written — `[7; 3]` then reads back as length 4 with
+        // garbage in it.
         //
-        // `n == 0` is the same statement taken to its end: the template must go too. It
-        // used to reach `0..(multiply - 1)` on a `u32`, wrapping to 4 294 967 295
-        // `copy_block`s that walked off the store and aborted in glibc's allocator.
+        // `n == 0` is the same statement taken to its end: the template must go too, and
+        // the early return keeps `0..(multiply - 1)` from running on a `u32`, where zero
+        // wraps to 4 294 967 295 `copy_block`s that walk off the store and abort in
+        // glibc's allocator.
         if multiply == 0 {
             let store = crate::keys::mut_store(&data, &mut self.database.allocations);
             let vec_rec = store.get_u32_raw(data.rec, data.pos);

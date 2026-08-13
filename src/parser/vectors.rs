@@ -1815,12 +1815,12 @@ impl Parser {
         self.lexer.token("in");
         let loop_nr = self.vars.start_loop();
         let mut expr = Value::Null;
-        // O8.5 — bind the range bounds to THIS comprehension.  `last_range_*` is
-        // parser-wide state written by whichever range was parsed last, so it is
-        // only trustworthy in the window between clearing it and reading it back:
-        // cleared here, it is `Some` after the parse below exactly when the
-        // iterable IS a range (`parse_in_range_body` is the only writer), and a
-        // text or keyed iterable can no longer inherit an earlier loop's bounds.
+        // Bind the range bounds to THIS comprehension.  `last_range_*` is parser-wide
+        // state written by whichever range was parsed last, so it is only trustworthy
+        // in the window between clearing it and reading it back: cleared here, it is
+        // `Some` after the parse below exactly when the iterable IS a range
+        // (`parse_in_range_body` is the only writer), so a text or keyed iterable
+        // cannot inherit an earlier loop's bounds.
         // Snapshotting BEFORE the body is parsed matters just as much — the body
         // may contain ranges of its own, and they would otherwise be read as this
         // comprehension's length.
@@ -3065,28 +3065,27 @@ impl Parser {
         } else {
             None
         };
-        // The container new elements are appended INTO, derived once for all three
-        // append ops.  `OpNewRecord`/`OpFinishRecord` can name a struct field
-        // indirectly — enclosing record plus field number, which needs no resolved
-        // handle — but `OpAppendCopy` copies WITHIN one vector and so must be handed
-        // that vector's own handle.  Deriving the two separately is how they came to
-        // disagree: the copy was given the enclosing RECORD and appended into
-        // whichever vector that resolved to, so `Pair { a: [0; 3], b: [0; 3] }` built
-        // `a` with seven elements and `b` with one (loft#892).
+        // The container new elements are appended INTO — derived ONCE, because all three
+        // append ops must agree on it.  `OpNewRecord`/`OpFinishRecord` may name a struct
+        // field indirectly (enclosing record plus field number, no resolved handle
+        // needed), but `OpAppendCopy` copies WITHIN one vector, so it can only be handed
+        // that vector's own handle.  Give the copy the enclosing record instead and it
+        // appends into whichever vector that resolves to — the first vector field — so
+        // `Pair { a: [0; 3], b: [0; 3] }` builds `a` with seven elements and `b` with one
+        // (loft#892).
         let container: Value = if let Some(target) = &vector_elem_target {
-            // #246: the inner vector that `val`'s indexed read yields.
+            // The inner vector that `val`'s indexed read yields.
             target.clone()
         } else if let Some(target) = &cap_target {
-            // @PLN93 (#511): the captured collection the `OpGetDbRef` points at.
+            // The captured collection the `OpGetDbRef` points at.
             target.clone()
         } else if is_field {
             // `val` IS the field read (`OpGetField(record, pos, vector_tp)`), so it
-            // already evaluates to the field's handle.  Unspanned, because `is_field`
-            // looks through a span and the container must agree with the test that
-            // selected it: a spanned field read (`q.a = [7; 3]`, `q.a += [7; 3]`,
-            // `vv[i] += [7; 3]`) failed the unspanned match below and fell through to
-            // `Value::Var(u16::MAX)`, indexing the variable table out of bounds and
-            // aborting the compiler with an internal error.
+            // already evaluates to the field's own handle.  Unspanned, because
+            // `is_field` looks through a span and the container has to agree with the
+            // test that selected it — otherwise a spanned field read (`q.a = [7; 3]`,
+            // `q.a += [7; 3]`, `vv[i] += [7; 3]`) misses the match below, falls back to
+            // `Value::Var(u16::MAX)`, and indexes the variable table out of bounds.
             val.unspan().clone()
         } else {
             Value::Var(vec)

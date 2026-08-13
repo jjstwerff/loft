@@ -1255,7 +1255,12 @@ impl Stores {
         self.database_named(u32::MAX, name)
     }
 
+    /// `#[inline]` because generated `--native` code calls this for every element read
+    /// across a crate boundary with no LTO — see `vector::get_vector`. Inlining also
+    /// lets the `strict_stores()` check below hoist out of a loop instead of being
+    /// re-tested per element.
     #[must_use]
+    #[inline]
     pub fn store(&self, r: &DbRef) -> &Store {
         let s = &self.allocations[r.store_nr as usize];
         // @PLN130 F8 — under LOFT_STRICT_STORES the slot is never recycled, so a freed

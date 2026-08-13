@@ -433,7 +433,10 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
     keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1 + length);
 }
 
+/// `#[inline]` because a generated `--native` program links this across a crate
+/// boundary with no LTO — see [`get_vector`].
 #[must_use]
+#[inline]
 pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
     // A null vector (absent) and an unallocated/empty vector both have length 0;
     // the null sentinel is checked first so it never indexes stores[u16::MAX].
@@ -467,7 +470,25 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
     }
 }
 
+/// Read the element at `from` out of the vector `db` points at, as a `DbRef`.
+///
+/// An out-of-range index and a null vector both answer the null element (`rec: 0`),
+/// which is what makes `v[i]` a nullable read rather than a fault.
+///
+/// Keep the `#[inline]`. It is not a hint about size: a `--native` program is a
+/// SEPARATE crate that links loft's runtime rlib, and it is compiled without LTO, so a
+/// plain `pub fn` here is a real call per element that the caller cannot see into. The
+/// caller then resolves the store a second time for the element read, because nothing
+/// tells it this function already did. The whole indexed-read chain is marked inlinable
+/// for that reason — this, [`length_vector`], `keys::store` and `Stores::store` — and it
+/// is worth ~1.7x on an indexed-read kernel (loft#885, and PERFORMANCE.md § Native vs
+/// Rust root cause 3b for the measurement).
+///
+/// The `length_vector` call below is not the cost it appears to be: rustc inlines it
+/// within the rlib and drops the repeated resolution, so hoisting it by hand buys
+/// nothing.
 #[must_use]
+#[inline]
 pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     // Indexing into a null (absent) vector yields the null element, not an OOB
     // on stores[u16::MAX].  (An out-of-range index on a real vector returns the

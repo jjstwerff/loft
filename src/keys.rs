@@ -1203,7 +1203,11 @@ pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> 
     FREED_AT_GEN.with(|m| m.borrow().get(&(slot, want_gen)).copied())
 }
 
+/// `#[inline]` because a generated `--native` program links this across a crate
+/// boundary with no LTO, and it sits on the per-element indexed-read path —
+/// see `vector::get_vector`.
 #[must_use]
+#[inline]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
     debug_assert!(
         (r.store_nr as usize) < stores.len(),
