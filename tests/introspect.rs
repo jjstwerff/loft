@@ -368,7 +368,16 @@ fn missing_file_errors() {
 /// there is a real import alias to report.  `tests/lib/typeshift` is the same
 /// one-function fixture the session tests use.
 fn resolution(args: &[&str]) -> String {
-    let prog = std::env::temp_dir().join(format!("loft_res_{}.loft", std::process::id()));
+    // One file PER CALL, not per process.  Keyed on the pid alone, all four call
+    // sites here shared a single path: the tests run on 8 threads, so one call's
+    // `remove_file` below landed while another's `loft introspect` was still opening
+    // it.  The subprocess then printed nothing and `section()` panicked with "no
+    // `=== resolution ===` in:" — a ~50 % failure that passes in isolation, because
+    // it needs a second caller in flight.  The counter makes each call's path its
+    // own; the pid still separates concurrent `cargo test` invocations.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let prog = std::env::temp_dir().join(format!("loft_res_{}_{n}.loft", std::process::id()));
     std::fs::write(
         &prog,
         "use typeshift;\nfn main() { v = ts_touch(); assert(v == 7, \"lib\") }\n",

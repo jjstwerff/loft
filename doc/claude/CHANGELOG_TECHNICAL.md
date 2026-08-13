@@ -9,6 +9,29 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A test helper's temp file was keyed on the pid, so its four callers shared one path (2026-08-13)
+
+`tests/introspect.rs::resolution` wrote its program to
+`temp_dir()/loft_res_<pid>.loft`, ran `loft introspect` on it, and deleted it. The pid
+is the same for every test in the binary, so all **four** call sites shared one path —
+and `why_reports_where_a_name_is_defined_and_reachable_from` alone calls it twice. On 8
+threads one call's `remove_file` landed while another's subprocess was still opening the
+file; the subprocess printed nothing and `section()` panicked with ``no `=== resolution
+===` in:``.
+
+Measured at 4/6 failing runs of the binary, and 3/6 on the preceding commit — pre-existing,
+and the second of the two flakes behind the local gate's "4077 passed, 2 failed". It passes
+100 % in isolation, because the race needs a second caller in flight.
+
+Fixed by making the path per-CALL (an `AtomicUsize` counter alongside the pid) rather than
+per-process; the pid still separates concurrent `cargo test` invocations. 8/8 clean after.
+
+The wider pattern is worth knowing when writing a test helper here: **a fixed-name shared
+resource plus parallel tests**, the same family as the hardcoded ports in
+`engine_host_udp.rs` (18084) and `multiplayer` (18099). 70 test files call
+`std::process::id()`; most already add a per-test discriminator (`{name}`, `{tag}`,
+`{port}`), and a pid-only name is only safe where exactly one caller exists.
+
 ### The `#native` stub set was a process-global that every compile overwrote (2026-08-13)
 
 `compile::byte_code` recorded which `#native` symbols it registered a panic stub for —
