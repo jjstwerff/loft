@@ -9,6 +9,82 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A keyed element read never said it borrows its container (loft#882, 2026-08-13)
+
+`v[i]` on a vector types its result with a dep naming the container, and that dep is the
+whole reason the vector shape is safe: `return_views_local` sees a borrow from a local and
+`materialize_view_return` copies the element into the return buffer before the container is
+freed. Every keyed read — hash, index, sorted, trie, any key arity — carried none, so
+`return make_hash()[k]` handed back a pointer into a store the same function freed on the
+way out.
+
+`parse_index` propagates the container TYPE's deps (`for on in t.depend()`), and a freshly
+built collection has none to propagate. `Parser::keyed_container_dep`
+(`src/parser/fields.rs`) now names the container at the one place keyed element reads are
+typed: a local, parameter or field is depended on directly; an inline call that MINTS a
+container is bound to a pass-2 work-ref first, because `scopes.rs` lifts it into a
+`__lift_N` long after the materialisation decision has been made. A parameter's dep
+resolves to a function attribute, so the element correctly stays a borrow.
+
+The two backends disagreed, which is why it survived: an EMPTY dep list reads as OWNED by
+`--native`'s assignment lowering, so it inserted a defensive `OpCopyRecord` and the program
+was right, while the interpreter aliased and read freed bytes. Under `LOFT_POISON=1` the
+boundary matrix scored `--interpret` 6/17 and `--native` 14/17; both are 16/17 now.
+
+The filed cause (`parse_key`'s no-prelude branch) was not the boundary: the prelude branch
+attaches `dep.clone()` — the container type's deps, which are empty — so it named the
+container no more than the other branch did, and BOTH spellings were broken. The two cells
+still red are older and separate: loft#889 (a collection reached through a field of a call's
+result) and loft#890 (a bound keyed container on `--native` when the function returns a
+record — the workaround the issue was filed with).
+
+Guarded by `tests/keyed_element_borrow.rs`, which runs under `LOFT_POISON=1` on both
+backends plus a static oracle (the container must be NAMED and the return MATERIALISED), a
+leak check and a harness control. It needs its own binary because freed bytes are usually
+still intact — the ordinary suite was green over this.
+
+### A registered native with no bridge was only found by calling it (loft#886, 2026-08-13)
+
+A cdylib can export a `#native` symbol and register no marshal bridge for it. The symbol
+resolves, wiring succeeds, and `native_auto_dispatch` panics — but only when something
+calls it, so a library can ship, pass its own suite, and carry a function that is dead for
+every consumer exercising a path its tests do not.
+
+`wire_native_fns` now collects those symbols and reports them at load
+(`report_bridgeless_natives`), separately from `report_unresolved_natives` because the fix
+differs: the library is not stale, its registration is incomplete. The message names the
+library and each dead function and points at
+`loft_ffi_build::generate_register_from_loft_with_bridges`, which derives both the register
+list and the bridge list from the `#native` annotations and cannot drift — a hand-written
+`loft_register_bridges!` lives in a different file from the declarations and nothing
+compares the two.
+
+The issue's stated cause — a non-`pub` `#native` taking a vector gets no bridge — does not
+reproduce: a 9-cell package varying visibility against parameter kind, call site and symbol
+binding is correct in every cell on both backends, and `parse_register_symbols_from_loft`
+strips an optional `pub ` and never looks at it again.
+
+### A repeat literal walked off the store on a negative count, and lost its text (2026-08-13)
+
+Two further defects in `[x; n]`, found while reading the bulk-fill path before routing a
+constant comprehension into it (loft#884).
+
+A NEGATIVE count cast `as u32`, so `[7; -1]` became 4 294 967 295 `copy_block`s that walked
+off the store until glibc aborted — the same failure `n == 0` had. A count is a TOTAL and a
+negative total is no vector at all, so it now answers empty. `--native` already clamped with
+`count.max(0)` and the interpreter did not: a heap-corrupting input on which the twins
+disagreed.
+
+The claim copy took the VECTOR HANDLE as its source instead of the template element, so a
+`text` element re-interned whatever the handle's four bytes decoded to: `["abc"; 4]` gave
+"abc" at index 0 and junk at 1, 2 and 3. Structs and nested vectors carry claims too and
+were wrong the same way. Length and element 0 were both correct, which is what made it
+invisible.
+
+The twins are also back in step on the record re-read: growing the vector can move its
+backing record and both ends of the copy live inside it — `--native` re-read it for the
+destination only, the interpreter not at all.
+
 ### `[x; n]` built n+1 elements, and n=0 corrupted the heap (2026-08-12)
 
 `OpAppendCopy` receives the TOTAL a repeat literal asks for, and the template element is

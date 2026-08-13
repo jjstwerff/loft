@@ -51,16 +51,53 @@ Rust renames one of them to keep them apart — but one place that writes a CALL
 the original name. Both spellings work now, and neither needs renaming to avoid the
 other.
 
-### `[x; n]` gives you n elements
+### `[x; n]` gives you n elements — of whatever `x` is
 
 Writing `[7; 3]` built **four** elements, and the fourth held whatever was in memory — a
 wrong length and unpredictable contents, on both backends, with nothing said about it.
 
 `[7; 0]` was worse: it crashed the process inside the system allocator, because the copy
-count wrapped around and wrote past the end of the vector.
+count wrapped around and wrote past the end of the vector. A count that came out
+**negative** — `[7; a - b]` where `b` is the larger — did the same thing.
 
-Both are fixed: `[x; n]` now holds exactly `n` copies of `x`, for any `n` including zero,
-whether the count is written in the source or worked out while the program runs.
+And `["abc"; 4]` gave you `"abc"` once, then junk: only the first element was really the
+text you asked for. The same went for a struct or a nested vector, and for a text field
+inside a repeated struct. The length was right and the first element was right, so it read
+as correct until something looked past it.
+
+All fixed: `[x; n]` now holds exactly `n` copies of `x` — for any `n`, including zero and
+negative, whether the count is written in the source or worked out while the program runs,
+and whatever kind of value `x` is.
+
+Worth knowing if you build big arrays: `[x; n]` is currently about **five times faster**
+than the equivalent `[for _ in 0..n { x }]`, so it is the spelling to reach for when you
+are filling a vector with one repeated value.
+
+### Taking an element out of a keyed collection you just built
+
+`return lookup(n)[key]` — reading one record straight out of a `hash`, `index`, `sorted` or
+`trie` that a function just returned — handed back a pointer into storage that same
+function released on its way out. The record you got was whatever landed there next.
+
+It usually looked fine, because released storage normally still holds its old contents, and
+`--native` happened to make a defensive copy that hid it entirely. So the same program was
+correct compiled and quietly wrong interpreted.
+
+Every keyed collection is fixed, for every number of key fields, with or without a `??`
+fallback. Two related shapes are still open and are worth knowing about: reading through a
+**field** of what a function returned (`make_bag().items[k]`, loft#889), and binding a
+returned keyed collection to a local before reading it when the function returns a record,
+on `--native` only (loft#890). Indexing the call directly is correct in both cases.
+
+### A native library that forgot to wire up a function now says so
+
+If a library's native code exports a function but never registers the glue loft calls it
+through, that function is dead — and you only found out when something called it, deep in a
+program, possibly long after the library shipped.
+
+loft now reports it when the library loads, naming the library and each affected function,
+and tells the author how to generate the wiring so it cannot drift out of step with the
+declarations again.
 
 ### A field's default now applies when you read JSON into it
 
