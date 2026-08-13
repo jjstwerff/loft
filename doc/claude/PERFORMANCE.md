@@ -19,6 +19,7 @@ design for each planned improvement.
 - [Design: P2 — Reduce store indirection on the stack](#design-p2--reduce-store-indirection-on-the-stack)
 - [Design: P3 — Confirm integer paths carry no long sentinel](#design-p3--confirm-integer-paths-carry-no-long-sentinel)
 - [Design: P4 — Block-copy slice materialisation for primitive vectors](#design-p4--block-copy-slice-materialisation-for-primitive-vectors)
+- [Design: P8 — Store-effect classifier](#design-p8--store-effect-classifier) — **the enabling analysis P2, N2, N3, N4 and N5 all want**
 - [Design: N1 — Direct-emit local collections in native codegen](#design-n1--direct-emit-local-collections-in-native-codegen)
 - [Design: N2 — Omit stores parameter from pure native functions](#design-n2--omit-stores-parameter-from-pure-native-functions)
 - [Design: N3 — Remove long null-sentinel from generated code](#design-n3--remove-long-null-sentinel-from-generated-code)
@@ -906,6 +907,132 @@ If the raw-pointer approach is too risky, a smaller improvement: cache
 `&self.database.allocations[stack_store_nr]` as a field. This saves the `HashMap`
 or `Vec` index lookup but still requires the `rec + pos` offset calculation. Estimated
 gain: 10–20% vs 20–50% for the full approach.
+
+---
+
+## Design: P8 — Store-effect classifier
+
+**Wanted by:** P2 (the indexed-read hoist — its enabling gate), N2 (omit `stores` from pure
+fns), N3 / N5 (the non-null classifier's sibling question), N4 (`cr_call_push` on pure
+leaves).
+**Cost:** 2 bytes per definition. Nothing per IR node, per call site, per store, or per
+element.
+
+### The question it answers
+
+Reading a vector element through a hoisted `(store_nr, record, length)` triple is only
+correct while that triple still describes the vector. So an optimiser needs to ask, of any
+call it is about to step over: **can this write the thing I am holding?** Today nothing
+answers that. Three partial sources look like they do and none is usable — see *What this
+design already ruled out* below.
+
+### The invariant
+
+> A hoisted triple stays valid exactly while no write reaches **that vector's** container
+> slot or backing record — and because a store relocates only the record it is resizing,
+> never a bystander, "reaches that vector" is decidable from a call's **arguments** alone.
+
+The second clause is what buys argument-granular precision. `Store::resize` grows a record
+in place when it can and otherwise relocates it (`claim` → `copy` → `delete`, returning a
+new record number), but it moves only its own record; `claim` takes free space, `delete`
+touches only free blocks, and `resize_store` reallocates the backing buffer while record
+numbers — word offsets into it — survive unchanged. So appending to one vector cannot
+invalidate a triple held for another, and a classifier that tracks *which argument* a call
+writes through is sound rather than merely optimistic.
+
+### The representation — two granularities, two bytes
+
+Both live on the definition, beside `purity`, computed once during parse:
+
+```rust
+pub struct StoreEffect {
+    /// Bit i: may write a store reachable FROM parameter i (not just parameter i
+    /// itself — `s.items` writes through `s`).
+    params: u8,
+    /// Effects no parameter names: ALLOC_STORE | FREE_STORE | INDIRECT | UNKNOWN.
+    flags: u8,
+}
+```
+
+**Full-store granularity** is `effect.writes_nothing()` — no bits set. That is the coarse
+gate: N2 and N4 need only this.
+
+**Record / vector granularity** is the per-argument read. At a call `f(a₀ … aₙ)` a hoisted
+vector `V` survives unless some `i` has `params & (1 << i)` set *and* `aᵢ` may alias `V`.
+The first cut of `may_alias` is *same store number ⟹ assume alias*, which is sound and
+costs nothing; refining it to distinguish two vectors in one store needs points-to
+information and is deliberately left out (it buys nothing for the numeric-kernel shapes
+this targets, whose loop bodies write nothing at all).
+
+`u8` is not a guess: the widest declaration in the whole stdlib takes **5** parameters and
+none takes more than 8 (34 nullary, 231 unary, 164 binary, 64 ternary, 16 with four, 6 with
+five). The `LOFT_NO_PARAM_COUNT` lint already fires at ≥8 required parameters, and an
+overflow flag sends anything wider to the conservative answer.
+
+User functions get their effect by transitive closure over the call graph — a may-analysis,
+so the fixed point starts empty and only grows, which converges through recursion cycles.
+An unknown callee or a `CallRef` goes straight to `UNKNOWN` rather than participating.
+
+### Space, which is the binding constraint
+
+| where | cost |
+|---|---|
+| release, per definition | **2 bytes** — ~1 KB across the stdlib's 515 declarations |
+| release, per IR node / call site / store / element | **nothing** — every per-site answer is derived from the callee's field |
+| parse | one transient `Vec<StoreEffect>` of `n_defs`, dropped when the pass ends |
+| test build | 32-byte observed-op bitset + one current-op byte, `#[cfg]`'d out of release |
+
+Rejected on space: per-site caches, per-node annotations, a points-to graph, and a version
+word per vector or per record.
+
+### Where the leaf truth comes from, and why omission is loud
+
+Native ops are the leaves; every user function derives from them. Declaring a leaf wrongly
+is the one failure that corrupts the heap silently, and the declaration count is
+irreducible — ops genuinely differ, so there is no chokepoint to collapse them into. The
+cure therefore has to attack **silence**, not the site count.
+
+Declaration generalises an idea already half-present: `#impure(parent_write)` is documented
+as *"writes to a parent-side store via its first argument"* — a one-bit param mask with the
+bit hardcoded. It becomes an explicit mask naming the written parameters.
+
+The gate that makes omission loud is a **runtime witness in test builds only**. `Store`'s
+mutating entry points (`claim`, `resize`, `delete`, the `set_*` family, `copy_block*`)
+record the currently-executing opcode into a 256-bit bitset; a harness test runs the suite
+and asserts `observed ⊆ declared`. A missing declaration then fails the first time any test
+exercises that op, instead of surfacing as a corrupted read months later. The gate must also
+report the ops **no test reached** — otherwise "never observed" reads as "declared
+correctly", which is the same silence in a new place.
+
+### What this design already ruled out
+
+Each of these looked like a cheaper route and was measured or read to be wrong. They are
+recorded so the next reader does not spend the same time.
+
+- **Reusing `Store::generation` as a runtime backstop — refuted.** It is bumped in `claim`,
+  `resize` and `delete`, the bump in `resize` precedes the grow-in-place early return, and
+  the coroutine machinery already consumes it — so it reads as a free witness for "my triple
+  moved". It is not: `remove_vector` shifts elements with `copy_block` and writes the new
+  length with `set_u32_raw`, calling none of the three. A `remove` inside the loop changes
+  the length with no bump at all. Widening `generation` to cover length writes would also
+  change when suspended generators consider themselves invalidated, so it is not free
+  either.
+- **Deriving the leaf set from `#rust` template text — refuted.** Only 9 templates mention
+  `&mut s.database`, and the heaviest mutators (`OpInsertVector`, `OpAppendCopy`,
+  `OpSetVector`, `OpNewRecord`, `OpHashSet`) carry no template at all — they are special
+  cases in the emitter.
+- **Reusing the existing purity gate — refuted.** `call_purity_safe` treats an unannotated
+  native fn as conservatively unsafe, and `OpAddInt` carries no annotation, so the gate
+  rejects the very kernel P2 exists to speed up.
+- **`op_uses_stores` in `pre_eval.rs` — not this question.** It lists 17 ops, but it is a
+  *borrow-conflict* list: `OpGetVector`, a pure read, is on it.
+
+### Open
+
+`may_alias` at same-store granularity is the deliberate approximation; whether the numeric
+kernels that motivate P2 ever need better is unmeasured. The observation gate's coverage —
+how much of the op table the suite actually exercises — is unknown until it is built, and it
+bounds how much the gate is worth.
 
 ---
 
@@ -3705,7 +3832,7 @@ plan-cleanup audits:
 | Item | Section | ROADMAP row | Tier | Status |
 |---|---|---|---|---|
 | **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **unblocked** (corrected 2026-06): the two-byte escape (byte 255 → `OPERATORS[255+ext]`) gives ~242 free slots; superinstructions are escape-range ops. **Secondary** value — the debug loop runs interpreted, but bounded (library calls stay native via C71/N9; players run native), so it speeds only the maker's own glue. Worth doing because it is now cheap + low-risk. |
-| **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter **+ Native** | Open — design ready, no scheduled slot.  **Measured 2026-08-13 (loft#885): worth ~4.7x on an indexed-read kernel**, taking `vector<single>` reads from ~25x hand-written Rust to ~5x.  Ablation on the REAL generated code (`--native-emit`, hand-hoist `n_scan` only, rebuild the same way): 30.0 → 6.3 ns/iter with an identical accumulator.  Per element the current chain resolves a store **three times** — `get_vector` resolves it, then calls `length_vector` which resolves it AGAIN and re-reads a length that cannot change, then the caller resolves it a third time for `get_single`.  **Partly banked 2026-08-13, and it re-bases this row:** the third resolution existed only because the rlib's `pub fn`s were not inlinable across the no-LTO crate boundary, so generated code could not see what `get_vector` had already done.  Marking that chain `#[inline]` (§ Native vs Rust, root cause 3b) took the same kernel 33.1 → 19.5 ns/iter, ~25x Rust to ~15x — and the second resolution, the one *inside* `get_vector`, turned out to already be optimised away within the rlib (removing it by hand measured as no change).  Hoisting `(store_nr, vec_record, length)` per vector to before the loop is the whole change.  **Re-ablated against the inlined baseline 2026-08-13 — the gain survives, and it splits in two.**  Same kernel, same rustc line, `cr_call_push` left in place this time (the earlier hand-hoist had deleted it, which is N4's win, not this one), alternating single runs — medians over six rounds: baseline **18.3**, hoisting only the header triple **10.2** (1.8x), hoisting the triple *and* fusing the element read into one guarded load **7.3** (2.5x).  Identical accumulator on all 36 runs.  So ~15x hand-written Rust becomes ~5x, and a **staged** build is on the table: the header hoist alone is two thirds of the win on a log scale and changes one op's emission, while the fused read adds a further ~1.4x and has to rewrite an op *pair*.  Both stages need the same enabling analysis, which is the bulk of the work.  **Why rustc cannot do this for you, even fully inlined:** every accessor guards its load (`get_u32_raw`/`get_single` are `if rec != 0 && self.valid(..) { *addr } else { … }`), and LLVM will not hoist a conditionally-executed load out of a loop.  The baseline pays 12 guarded header loads per iteration against the hoist's 3.  A cheaper hypothesis was tested and **refuted** on the way: `Stores::store`'s `strict_stores()` guard is a `OnceLock` atomic behind a possibly-calling branch, so it looked like an optimisation barrier on the per-element path — swapping those three call sites for the plain `keys::store` measured ~6 %, inside the run-to-run spread.  **Enabling fact is an effects question, not a codegen one:** a write can REALLOCATE the backing record (the loft#886 `append_copy` bug was a stale record read after exactly that), so the hoist is only valid where no store mutation reaches the loop body — a first cut can require no call and no assignment through any collection, which is the shape hot numeric kernels have.  The sibling cost in the same report — `??`'s NaN sentinel — measured at ~0, so a non-nullable indexing form buys nothing on its own. |
+| **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter **+ Native** | Open — design ready, no scheduled slot.  **Measured 2026-08-13 (loft#885): worth ~4.7x on an indexed-read kernel**, taking `vector<single>` reads from ~25x hand-written Rust to ~5x.  Ablation on the REAL generated code (`--native-emit`, hand-hoist `n_scan` only, rebuild the same way): 30.0 → 6.3 ns/iter with an identical accumulator.  Per element the current chain resolves a store **three times** — `get_vector` resolves it, then calls `length_vector` which resolves it AGAIN and re-reads a length that cannot change, then the caller resolves it a third time for `get_single`.  **Partly banked 2026-08-13, and it re-bases this row:** the third resolution existed only because the rlib's `pub fn`s were not inlinable across the no-LTO crate boundary, so generated code could not see what `get_vector` had already done.  Marking that chain `#[inline]` (§ Native vs Rust, root cause 3b) took the same kernel 33.1 → 19.5 ns/iter, ~25x Rust to ~15x — and the second resolution, the one *inside* `get_vector`, turned out to already be optimised away within the rlib (removing it by hand measured as no change).  Hoisting `(store_nr, vec_record, length)` per vector to before the loop is the whole change.  **Re-ablated against the inlined baseline 2026-08-13 — the gain survives, and it splits in two.**  Same kernel, same rustc line, `cr_call_push` left in place this time (the earlier hand-hoist had deleted it, which is N4's win, not this one), alternating single runs — medians over six rounds: baseline **18.3**, hoisting only the header triple **10.2** (1.8x), hoisting the triple *and* fusing the element read into one guarded load **7.3** (2.5x).  Identical accumulator on all 36 runs.  So ~15x hand-written Rust becomes ~5x, and a **staged** build is on the table: the header hoist alone is two thirds of the win on a log scale and changes one op's emission, while the fused read adds a further ~1.4x and has to rewrite an op *pair*.  Both stages need the same enabling analysis, which is the bulk of the work.  **Why rustc cannot do this for you, even fully inlined:** every accessor guards its load (`get_u32_raw`/`get_single` are `if rec != 0 && self.valid(..) { *addr } else { … }`), and LLVM will not hoist a conditionally-executed load out of a loop.  The baseline pays 12 guarded header loads per iteration against the hoist's 3.  A cheaper hypothesis was tested and **refuted** on the way: `Stores::store`'s `strict_stores()` guard is a `OnceLock` atomic behind a possibly-calling branch, so it looked like an optimisation barrier on the per-element path — swapping those three call sites for the plain `keys::store` measured ~6 %, inside the run-to-run spread.  **Enabling fact is an effects question, not a codegen one:** a write can REALLOCATE the backing record (the loft#886 `append_copy` bug was a stale record read after exactly that), so the hoist is only valid where no store mutation reaches the loop body — a first cut can require no call and no assignment through any collection, which is the shape hot numeric kernels have.  That gate is designed in [§ Design: P8 — Store-effect classifier](#design-p8--store-effect-classifier), which is the bulk of this item's work and is shared with N2/N3/N4/N5.  **Stage 1 binds only `Copy` scalars and holds no `&Store` across the loop**, so a gate that is wrong there is a correctness bug but never a generated-code build failure; stage 2 holds the borrow and does not have that margin.  The sibling cost in the same report — `??`'s NaN sentinel — measured at ~0, so a non-nullable indexing form buys nothing on its own. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
 | **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
 | **P5** — `vector +=` capacity reservation (amortised growth) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Discovered via the `store_memory()` builtin while profiling the @PLN6 crystal mesh: single-element `+= [x]` reallocated the backing record on (nearly) every append, fragmenting the store into O(N) freed records (a 12 738-element build → **101 815 free blocks / ~250 MB** vs ~0.8 MB of data).  Fixed by amortised (~×2) growth in `vector::vector_append` (`src/vector.rs`): when the backing record is out of room it grows to ~2× `length+1` instead of exactly `length+1`; `Store::resize` is grow-only so in-room appends are no-ops.  Length lives in a separate field (word 1), so the trailing slack never affects `len()`/indexing/copy (length-based, shrinks to fit)/serialisation.  One shared function → both backends.  Same 12 000-element build now shows **~8 free blocks** (one trailing slack block).  Guards: `tests/scripts/124-vector-amortised-growth.loft` (cross-mode correctness + fragmentation digit-count bound).  `vector_set_size` (bulk `+= [a,b,c]`) and `insert_vector` keep exact sizing (not the hot path); a user-facing `reserve(v, n)` (wrapping the existing `OpPreAllocVector`) remains an optional opt-in follow-up. |
