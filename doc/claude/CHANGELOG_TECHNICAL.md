@@ -9,6 +9,90 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Two stores freed at the wrong time (loft#889, loft#890, 2026-08-13)
+
+**loft#890 — a lift freed what its consuming op had already released.** `br = mk_hash(n)`
+lowers to `__lift_1 = mk_hash(n); OpReplaceKeyed(__lift_1, br, tp | 0x8000)`. The bit means
+"nobody else owns this store", which is true of a bare call result and false the moment
+`scan_args` lifts it into a temp the scope sweep frees. `free_named` is a no-op only while
+the slot is still free, so the second free steals whatever store the allocator handed that
+slot in between — and the record return allocates its buffer in exactly that window, which
+is why the filed shape needed a call, a keyed container AND a record return together. With
+an integer return nothing is allocated there and the double free is invisible. The
+interpreter was right for no better reason than not reusing the slot.
+
+`scan_args` already carried the lift-site half of this rule for `OpCopyRecord` (@PLN139
+stage C), but only for the DROP — the store was "left to the ordinary sweep, which is
+null-tolerant either way", which is the part that is not true. `Scopes::mark_lift_handoff`
+now records the FREE hand-off too, and `get_free_vars` consults it. Only `OpReplaceKeyed`
+answers `moved_source_arg`: it is the one `0x8000` op whose source is a whole store a lift
+can own. Answering for `OpCopyRecord` took the free away from @PLN85's Join-return
+machinery — 3 of 54 fuzz cells SIGSEGV'd and `elem_accumulate` doubled its own source
+vector. The marker is a `Scopes` set rather than a `skip_free` stamp for the same class of
+reason: that flag is read at ALLOCATION time too, so stamping it made the lift borrow
+instead of own.
+
+**loft#889 — a collection reached through a field of a call's result.** `mk_bag(n).b_vec[0]`
+reads an element living in the bag's store, and the bag is an inline call result with no
+name, so the element typed as OWNED and nothing copied it out before `OpFreeRef`.
+`keyed_container_dep` (loft#882) is now `container_dep` and reaches THROUGH field
+projections via `projection_root_mut` to bind the ROOT call — the bag, not the `b_vec`
+projection, because that is whose store the element is in. `parse_index`'s VECTOR arm asks
+too; it had relied on the container type's own deps, which a fresh call has none of.
+
+The SUBSCRIPT asks, not the field read. `return make().rows` returns the field itself,
+which the delivery machinery already copies out (loft#877 / zt12), so binding a container
+there only adds a holder nothing releases — five of them in that one file.
+
+The binding now happens on BOTH parser passes. That is load-bearing: this dep is what tells
+`ref_return` the binding borrows, and a verdict that differs between passes is worse than
+none. Skipping pass 1 read the binding as owned and renamed it ONTO the return buffer; pass
+2 then saw the view and materialised into the buffer the binding now WAS, so
+`materialize_return_into` emitted `OpDatabase(e); OpCopyRecord(e, e)` — a copy from the
+record it had just re-minted. `e = mk_hash(n)[k] ?? d; e` answered an empty record for that
+reason before this issue existed, so loft#882's own shape had the hole one bind away.
+
+`return_projects_into_local` gained `projection_base`, which peels the binding block to its
+var: a base that is neither a var nor a call read as "rooted at nothing", and the field was
+delivered as if it owned what it points at.
+
+Guarded by `tests/store_lifetime_890_889.rs` over `tests/scripts/{889,890}-*.loft`: value,
+`LOFT_POISON=1` and `LOFT_NATIVE_LEAK_CHECK` on both backends, plus a harness control. The
+poison oracle because freed bytes are usually still intact; the leak oracle because "never
+free it" ends both use-after-frees while passing every value cell. loft#888's nightly
+poison gate was red on `877-index-a-call-result-in-return-position.loft::i877_field_of_call`
+— loft#889's cell, recorded there and invisible because the suite does not run that file
+under poison — and is green with this.
+
+`723-ncc-loop-element-bind.loft`'s leak check now measures round-over-round inside ONE
+frame: a container work-ref is one slot per SITE for the life of its frame, so two snapshots
+taken at different sites differ by that constant and say nothing about the round.
+
+### A sorted collection dropped every insert once an index existed elsewhere (2026-08-13)
+
+`s[k] = v` on a `sorted<T[k]>` local inserted nothing — `len(s)` answered 0 and every lookup
+its fallback — whenever ANY struct in the program declared an `index<T[…]>` field over the
+same element type. The struct is never constructed; declaring it is the whole input. Both
+backends.
+
+A `sorted<T[k]>` becomes an `ORDERED<T[k]>` — the by-reference twin — under exactly that
+condition, so the same source line lowers differently because of a declaration somewhere
+else entirely. `towards_set`'s insert arm listed Hash, Sorted, Index, Radix and Trie, so an
+`Ordered` collection fell past `OpSetKeyed` to the update-only `OpCopyRecord`, which copies
+into the lookup's result and therefore no-ops when the key is absent.
+
+This is loft#719's omission one function over: that issue gave `Ordered` to the REMOVAL arm
+(`towards_set_hash_remove`, directly above), where its absence had made `coll[key] = null` a
+silent no-op interpreted and a compile failure natively. Nothing compares the two lists.
+`Stores::set_keyed` has always handled `Ordered`; only the routing to it was missing.
+
+Found while building loft#889's boundary matrix: a five-collection bag promoted its own
+`sorted` field, and that one cell answered the fallback on both backends while every
+neighbouring kind was right — a lopsided matrix that is evidence of a missing arm rather
+than of the bug under investigation. Guarded by
+`tests/scripts/891-sorted-promoted-to-ordered.loft`, which fails at its first assertion on
+the previous commit.
+
 ### A keyed element read never said it borrows its container (loft#882, 2026-08-13)
 
 `v[i]` on a vector types its result with a dep naming the container, and that dep is the
@@ -19,8 +103,8 @@ freed. Every keyed read — hash, index, sorted, trie, any key arity — carried
 way out.
 
 `parse_index` propagates the container TYPE's deps (`for on in t.depend()`), and a freshly
-built collection has none to propagate. `Parser::keyed_container_dep`
-(`src/parser/fields.rs`) now names the container at the one place keyed element reads are
+built collection has none to propagate. `Parser::container_dep`
+(`src/parser/fields.rs`, then named `keyed_container_dep`) now names the container at the one place keyed element reads are
 typed: a local, parameter or field is depended on directly; an inline call that MINTS a
 container is bound to a pass-2 work-ref first, because `scopes.rs` lifts it into a
 `__lift_N` long after the materialisation decision has been made. A parameter's dep

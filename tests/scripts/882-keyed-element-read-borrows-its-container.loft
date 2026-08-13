@@ -21,13 +21,14 @@
 // proves only that it executes.  Elements are seeded `q = i + 7` and every lookup asks
 // for element 0, so each cell answers 7 — a value no `??` fallback (-1) can produce.
 //
-// TWO SHAPES ARE DELIBERATELY ABSENT, both older than this fix and both failing on
-// `2026.8.0` as well:
-//   - a keyed read through a FIELD of a call's result (`make_bag().h[k]`) — the element
-//     lives in the bag's store, and the parser cannot name the bag, which `scopes.rs`
-//     lifts long after the materialisation decision (loft#889).
-//   - a call-returned keyed collection BOUND to a local, read, and returned as a RECORD
-//     — `--native` only (loft#890).  Note this is the workaround loft#882 was filed with.
+// TWO SHAPES were deliberately absent here at first, both older than this fix and both
+// failing on `2026.8.0` as well — a keyed read through a FIELD of a call's result
+// (`make_bag().h[k]`, loft#889) and a call-returned keyed collection BOUND to a local and
+// returned as a RECORD (loft#890, the workaround loft#882 was filed with).  Both are fixed
+// and live in tests/scripts/889-* and 890-*, which is also where a third shape landed that
+// this file could have carried and did not: `e = make()[k] ?? d; e`, a keyed element bound
+// before the return, which answered an EMPTY record because the container was only named
+// on the second parser pass.
 
 struct I882H2 { q: integer, r: integer }
 struct I882H1 { q: integer, r: integer }

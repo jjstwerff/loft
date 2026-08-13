@@ -84,10 +84,33 @@ It usually looked fine, because released storage normally still holds its old co
 correct compiled and quietly wrong interpreted.
 
 Every keyed collection is fixed, for every number of key fields, with or without a `??`
-fallback. Two related shapes are still open and are worth knowing about: reading through a
-**field** of what a function returned (`make_bag().items[k]`, loft#889), and binding a
-returned keyed collection to a local before reading it when the function returns a record,
-on `--native` only (loft#890). Indexing the call directly is correct in both cases.
+fallback — and so are the three shapes around it, which were separate faults with the same
+shape:
+
+- Reading through a **field** of what a function returned (`make_bag().items[k]`). The
+  record lives in the bag's storage, and nothing named the bag, so nothing copied the
+  record out before the bag was released. This one also caught the plain `vector` field on
+  both backends.
+- Binding what a function returned to a **local** first and reading that. Two things
+  released the same storage — the collection's move and the temporary holding it — and the
+  second release stole whichever storage had been handed that slot in between. Returning a
+  record allocated in exactly that window, which is why the shape looked so narrow.
+- Binding an element to a local before returning it (`e = make()[key] ?? d; e`) answered an
+  empty record.
+
+`e = make_bag().rows[i]` and `return make().rows` are both correct on both backends now.
+
+### A `sorted` collection that quietly kept nothing
+
+`s[key] = value` on a `sorted<T[k]>` inserted **nothing** — `len(s)` stayed 0 and every
+lookup answered its fallback — if any struct anywhere in the program declared an
+`index<T[…]>` field over the same element type. The struct did not have to be used, or
+even constructed; declaring it was enough, and the collection that broke could be in a
+different file.
+
+Declaring that pair switches `sorted` to a different internal representation, and the
+insert path did not know about it, so every write went to a lookup that missed. Removal
+(`s[key] = null`) already knew; only the insert beside it did not.
 
 ### A native library that forgot to wire up a function now says so
 
