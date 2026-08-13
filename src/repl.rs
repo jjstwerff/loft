@@ -124,6 +124,50 @@ pub fn session_file_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".loft_session"))
 }
 
+thread_local! {
+    /// Set while THIS thread is running program code whose panics the REPL catches
+    /// and reports itself.  Read by the shared hook installed by [`silence_panics`].
+    static PANICS_SILENCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Suppress Rust's raw `thread panicked at …` output **on this thread** until the
+/// returned guard drops.
+///
+/// The REPL catches a program's runtime panic and reports it cleanly, so the raw
+/// backtrace is noise.  Silencing it by swapping the panic hook is wrong, though:
+/// `std::panic::set_hook` is PROCESS-global, so in any multi-threaded host — a test
+/// binary, an embedder running a session on a worker — the swap silences unrelated
+/// threads for the duration, and two threads swapping at once can leave a silencing
+/// hook installed permanently (each restores what it took, which may be the other's).
+/// A swallowed assertion message is indistinguishable from a test that failed for no
+/// reason.
+///
+/// So the hook is installed ONCE and consults a thread-local instead: the thread that
+/// asked for silence gets it, every other thread keeps the default handler. The guard
+/// restores the previous value on drop, so an unwinding panic cannot leave this thread
+/// permanently silenced either — which the old swap could, since it never restored on
+/// the panic path.
+struct PanicSilence(bool);
+
+impl Drop for PanicSilence {
+    fn drop(&mut self) {
+        PANICS_SILENCED.with(|s| s.set(self.0));
+    }
+}
+
+fn silence_panics() -> PanicSilence {
+    static INSTALL: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INSTALL.get_or_init(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !PANICS_SILENCED.with(std::cell::Cell::get) {
+                previous(info);
+            }
+        }));
+    });
+    PanicSilence(PANICS_SILENCED.with(|s| s.replace(true)))
+}
+
 /// Run the interactive `loft>` REPL.
 ///
 /// Reads inputs (one statement per line, multi-line accumulated on
@@ -154,15 +198,11 @@ pub fn run_repl<R: BufRead, W: Write>(
     // record-and-continue mode programmatic callers use.
     session.debug_stepping(true);
     writeln!(chrome, "loft REPL — :help for commands, :quit to exit")?;
-    // Silence the default panic handler for the duration of the loop: a runtime
-    // error inside `eval` is caught below and reported cleanly, so the user
-    // should not also see Rust's raw "thread panicked at …" backtrace.  Restored
-    // before returning, even if the loop exits with an I/O error.
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = run_loop(ctx, &mut session, input, chrome);
-    std::panic::set_hook(prev_hook);
-    result
+    // A runtime error inside `eval` is caught below and reported cleanly, so the
+    // user should not also see Rust's raw "thread panicked at …" backtrace.
+    // Thread-scoped, not a global hook swap — see `silence_panics`.
+    let _silence = silence_panics();
+    run_loop(ctx, &mut session, input, chrome)
 }
 
 /// @PLN16 M5a — the **file-run debugger** (`loft debug prog.loft:42`).  Loads `file`
@@ -232,16 +272,16 @@ pub fn run_file_debug<R: BufRead, W: Write>(
     }
     session.debug_stepping(true);
     session.add_file_breakpoint(file, line);
-    // Silence the raw panic handler (a resumed-run panic is caught + reported below).
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+    // A resumed-run panic is caught + reported below, so the raw handler is noise.
+    // Thread-scoped, not a global hook swap — see `silence_panics`.
+    let _silence = silence_panics();
     let _ = writeln!(
         chrome,
         "loft debugger — break at {file}:{line}.  :help for commands, :continue to run, :quit to exit"
     );
     // Auto-run the entry to the breakpoint, then hand off to the interactive loop.
     let mut pending = String::new();
-    let result = match process_line("main()", &mut session, &mut pending, &ctx, None, chrome) {
+    match process_line("main()", &mut session, &mut pending, &ctx, None, chrome) {
         Ok(_) => {
             if !session.is_debugging() {
                 let _ = writeln!(
@@ -252,9 +292,7 @@ pub fn run_file_debug<R: BufRead, W: Write>(
             run_loop(&ctx, &mut session, input, chrome)
         }
         Err(e) => Err(e),
-    };
-    std::panic::set_hook(prev_hook);
-    result
+    }
 }
 
 /// Pick the input driver: the interactive line editor when stdin is a terminal,

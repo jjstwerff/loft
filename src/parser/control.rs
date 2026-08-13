@@ -1774,11 +1774,21 @@ impl Parser {
                 // The buffer's existence was verified by the selector; re-fetch it
                 // for the copy (idempotent — nothing mutated in between). Fall back
                 // to the rename path if the copy's work-var allocation fails.
-                if let Some((buf_attr, buf_var)) = self.return_buffer()
-                    && !self.copy_borrow_tail_into_retbuf(elm, l, buf_attr, buf_var)
-                {
-                    self.ref_return(&ls, l, RetSite::BlockTail);
-                    self.nrvo_collapse_tail_set(l, &ls);
+                if let Some((buf_attr, buf_var)) = self.return_buffer() {
+                    // A buffer-bound vector fn delivers EVERY return site into the
+                    // buffer, not only its tail. `copy_borrow_tail_into_retbuf` is a
+                    // tail-only funnel, so a mid-body `return <fresh local>` would
+                    // otherwise hand back a store the caller never adopts and nothing
+                    // frees. `Rename` gets this for free from `ref_return`; this arm
+                    // asks for it directly. Idempotent — the walker rewrites only
+                    // `Return(Var(v))` with `v != buf_var`, and its own rewrite
+                    // yields `Return(Var(buf_var))` — so the fallback below, which
+                    // delivers again via `ref_return`, cannot double-deliver.
+                    self.deliver_mid_vector_returns(elm, l, buf_var);
+                    if !self.copy_borrow_tail_into_retbuf(elm, l, buf_attr, buf_var) {
+                        self.ref_return(&ls, l, RetSite::BlockTail);
+                        self.nrvo_collapse_tail_set(l, &ls);
+                    }
                 }
                 true
             }

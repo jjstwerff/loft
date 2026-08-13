@@ -9,6 +9,54 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A buffer-bound vector fn delivered only its TAIL when the tail borrowed an argument (2026-08-13)
+
+`dispatch_vector_delivery` is the one place that decides how a vector-returning function's
+result reaches the caller's `__retbuf`. `Delivery::Rename` routes through `ref_return`, which
+delivers the tail AND rewrites every mid-body `return <fresh local>` into the buffer.
+`Delivery::CopyBorrow` routes through `copy_borrow_tail_into_retbuf` — a **tail-only** funnel,
+by design and by its doc comment. So a function with an early `return <fresh local>` and a tail
+that borrows an argument delivered the tail and left the early return handing back a store of
+its own: the caller adopts the buffer, the fresh store orphans. One leaked store per
+undelivered return, every value correct.
+
+The invariant, now asserted in both arms: **a buffer-bound vector fn delivers EVERY return site
+into the buffer, not only its tail.** The `CopyBorrow` arm calls `deliver_mid_vector_returns`
+before the tail copy; `copy_borrow_tail_into_retbuf` keeps its narrower tail-only contract. The
+walk is idempotent by construction (it rewrites `Return(Var(v))` only for `v != buf_var`, and
+its own rewrite yields `Return(Var(buf_var))`), so the existing fallback — which delivers again
+via `ref_return` when the work-var allocation fails — cannot double-deliver.
+
+Boundary, mapped on a 14-cell matrix before the fix (values hand-computed, each cell asserting
+value + length + leak, both backends):
+
+| tail shape | mid-body payload | pre-fix |
+|---|---|---|
+| borrows a whole vector argument | fresh local / inline literal | **leak** |
+| borrows a struct FIELD of an argument (#415) | fresh local | **leak** |
+| a call / a fresh local / the same var | fresh local | clean |
+| branch arms (`Delivery::Materialize`) | fresh local | clean |
+| borrows an argument | a param / a call result | clean |
+
+Both leaking rows are the two sub-shapes the funnel's own comment says route to it, so the
+boundary is the `CopyBorrow` arm exactly. The leak count scales with the number of undelivered
+returns — a two-early-return function leaked ×2 — which is what pinned the mechanism rather
+than merely correlating with it. `Delivery::ForwardCopy` needs a `#native` heap-returning
+callee and is **not** covered by the matrix; it shares the tail-only shape and is the place to
+look if this recurs.
+
+Guard: `tests/scripts/midbody-return-into-borrow-tail-retbuf.loft` — both sub-shapes, a
+two-early-return function (guards the COUNT), a loop-nested return, and a caller loop proving
+the delivery clears before filling. Proven to fail on the released binary: ×9 leaked stores
+while still printing `ok`, so only `wrap.rs`'s exit-time gate catches it.
+
+Found while probing whether `OpReplaceVector`'s absence from `find_written_vars` /
+`find_field_written_vars` could give a wrong answer. It cannot today — all 9 of its occurrences
+across the stdlib and the dump corpus are masked by an `OpClearVector` or a `Value::Set` on the
+same target — but the masking is incidental, so the op is now listed in both walkers as
+hardening. That is a no-op on current behaviour, kept because the two lists are hand-maintained
+twins and nothing compares them (PERFORMANCE.md § Design: P8).
+
 ### Two nightly gates that measured the environment, not the diff (loft#888, 2026-08-13)
 
 **The leak gate went red on our own fix.** loft#876 gave a field's declared default a home on

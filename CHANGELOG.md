@@ -201,6 +201,29 @@ a store-count warning at exit that a long-running or embedded program never reac
 Binding the result first was always clean, and that is exactly what the compiler now
 writes for you.
 
+### An early `return` no longer leaks what that path built
+
+A function that answers a vector, whose LAST expression hands back one of its arguments —
+or a field of one — leaked a store for every early `return` that built something fresh:
+
+```loft
+fn pick(n: integer, other: vector<integer>) -> vector<integer> {
+  if n <= 0 { tmp: vector<integer> = [7, 8, 9]; return tmp; }
+  other
+}
+```
+
+Every answer was correct, which is what made it quiet. The only signal was a store-count
+warning at exit, and one per early return — so a caller in a loop leaked once an
+iteration, and a long-running or embedded program never sees that warning at all.
+
+A function that answers a vector fills a buffer its caller owns. When the last expression
+borrows an argument, only that last expression was being filled in; the early returns
+still handed back a vector of their own, which the caller never adopts and nobody frees.
+Every `return` in such a function now delivers into the same buffer. The same function
+written to end in a call, or in a fresh local, was always clean — which is why this hid
+for so long.
+
 ### Taking an element out of what a function just returned
 
 A function whose answer is an index into a call — `make(n)[0] ?? Cell {}`, whether it is

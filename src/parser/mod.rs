@@ -12241,7 +12241,12 @@ pub(crate) fn find_written_vars(
                 // was wrongly rejected as "never modified".
                 || def.name() == "OpHashRemove"
                 || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector";
+                || def.name() == "OpRemoveVector"
+                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
+                // return buffer. Today every emit site also writes that slot another way
+                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
+                // the omission is masked INCIDENTALLY rather than by design.
+                || def.name() == "OpReplaceVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
@@ -12369,7 +12374,12 @@ pub(crate) fn find_field_written_vars(code: &Value, data: &Data, written: &mut H
                 // `for … in &coll` loop also counts as a mutation.
                 || def.name() == "OpHashRemove"
                 || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector";
+                || def.name() == "OpRemoveVector"
+                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
+                // return buffer. Today every emit site also writes that slot another way
+                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
+                // the omission is masked INCIDENTALLY rather than by design.
+                || def.name() == "OpReplaceVector";
             let second_arg_write = def.name() == "OpCopyRecord";
             for (i, arg) in args.iter().enumerate() {
                 if i == 0 && first_arg_write {
