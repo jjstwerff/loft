@@ -3056,6 +3056,205 @@ pub fn c_binding_call_unsupported(
     }
 }
 
+/// Which of `callee`'s parameters does its body WRITE THROUGH — `fn hurt(e: E) { e.taken = … }`?
+///
+/// Answered from the callee's own emitted body, so it covers any depth of field or element
+/// write, and it stays right when the body changes. `find_field_written_vars` is the same
+/// walk `check_ref_mutations` uses to decide whether a `&` parameter was really mutated, so
+/// the two cannot disagree about what a write through a parameter IS.
+///
+/// Two kinds of parameter are excluded, both because a write through them is not lost:
+/// a `&` reference (`RefVar`) is an explicit alias, and a compiler-introduced parameter
+/// (`__retbuf` and friends) is how a return VALUE is delivered, not a caller's variable.
+fn write_through_params(data: &Data, callee: u32) -> HashSet<u16> {
+    let def = data.def(callee);
+    let mut written = HashSet::new();
+    crate::parser::find_field_written_vars(&def.code, data, &mut written);
+    let func = &def.variables;
+    written.retain(|&v| {
+        func.is_argument(v)
+            && !matches!(func.tp(v), Type::RefVar(_))
+            && !func.name(v).starts_with("__")
+    });
+    written
+}
+
+/// Is `arg` a call that hands back a COPY of a place the caller can still reach?
+///
+/// This is the difference between a write that LOSES data and one that merely writes into
+/// something nobody wanted. `first(s)` returns `E["s"]` — the dep says the value came out
+/// of the caller's `s` — so a write into the returned copy is a write the caller meant for
+/// `s` and will not find there. `mk()` returns a dep-free `E` it built itself, so a write
+/// into it loses nothing that existed before the call: pointless, but not a lost write, and
+/// warning about it would be noise.
+///
+/// A dep is only believed when it names a parameter the CALL SITE actually filled with a
+/// real variable. A function that builds its result into a caller-provided return buffer
+/// also carries a dep — `alloc_canvas(w, h, fill)` returns `Canvas["cv"]` — but `cv` is the
+/// compiler's own work-ref, not a place the program can reach, so the copy is nobody's
+/// data. Skipping `_`-prefixed names is what tells the two apart, and it is the same
+/// convention [`warn_dead_stores`] uses to recognise a synthetic.
+///
+/// A result BOUND to a local first (`e = first(s)`) arrives as a `Var` and is deliberately
+/// not matched — see [`warn_lost_temp_writes`].
+fn copies_a_reachable_place(data: &Data, func: &Function, arg: &Value) -> bool {
+    let Value::Call(fn_nr, inner_args) = arg.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.name().starts_with("n_") || *def.code() == Value::Null {
+        return false;
+    }
+    // Deps are variable numbers in the CALLEE's frame, and its parameters come first, so a
+    // dep below the argument count names the argument the caller supplied for it.
+    def.returned().depend().iter().any(|&j| {
+        inner_args
+            .get(j as usize)
+            .is_some_and(|a| matches!(a.unspan(), Value::Var(v) if !func.name(*v).starts_with('_')))
+    })
+}
+
+/// loft#894 — a write through a struct RETURNED from a function, which reaches nothing.
+///
+/// `hurt(first(s), 10.0)` and `hurt(s.es[0] ?? E {}, 10.0)` are the same types, the same
+/// call, and the same write — but the first one does nothing. Returning a struct hands back
+/// a COPY (C86), which lives in a temporary that is freed at the end of the statement, so
+/// `hurt` writes the copy and the element keeps the value it had. Passing the element
+/// directly hands over a view of it, so the same write lands.
+///
+/// Nothing at the call site distinguishes the two, which is what made this expensive
+/// downstream: dryopea lost six tests to it at once, and every one read as a bug in the
+/// thing being mutated rather than in the one-line accessor, because the read-back is
+/// simply the value from before the call.
+///
+/// Two facts have to meet for data to be lost, and the lint requires both:
+/// the callee must WRITE THROUGH the parameter ([`write_through_params`], read off its own
+/// body), and the argument must be a copy of a place the caller can still REACH
+/// ([`copies_a_reachable_place`], read off the return type's deps). Requiring the second is
+/// what keeps `hurt(mk(), …)` quiet — a write into a freshly built value loses nothing —
+/// and what keeps the builder idiom quiet, where the callee returns the value it wrote.
+///
+/// Binding the call result to a real local first (`e = first(s); hurt(e, …)`) is
+/// deliberately SILENT too: `e` is a copy the program can still read, which makes it a
+/// question about copies rather than a lost write, and [`warn_copies`] owns that.
+///
+/// `warning` tier, per the two-tier rule: ignoring it produces a wrong result. It is
+/// therefore an UNDER-approximation — it reports the shape it can prove and stays silent on
+/// a write lost through any other kind of temporary.
+pub fn warn_lost_temp_writes(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::lost_temp_writes_enabled() {
+        return;
+    }
+    let mut params: HashMap<u32, HashSet<u16>> = HashMap::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        // The file comes from the DEFINITION, not the entry file: this is a warning, and a
+        // warning gates a library's CI, so a dependency's line paired with the consumer's
+        // path would fail a consumer on a line it cannot see (loft#781).
+        let def_file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut found = Vec::new();
+        scan_lost_temp_writes(
+            data,
+            &def.variables,
+            &def.code,
+            &mut params,
+            None,
+            &mut found,
+        );
+        for (callee, param, at) in found {
+            let file = match &at {
+                Some(p) if !p.file.is_empty() => p.file.as_str(),
+                _ => def_file,
+            };
+            let (line, col) = at
+                .as_ref()
+                .map_or((def.position.line, 0), |p| (p.line, p.pos));
+            let callee_def = data.def(callee);
+            let fn_name = callee_def.original_name();
+            let param_name = callee_def.variables.name(param);
+            let msg = format!(
+                "`{fn_name}` writes to `{param_name}`, but the argument here is a value RETURNED \
+                 by a call — a temporary that is freed at the end of this statement, so the write \
+                 is LOST. Returning a struct hands back a COPY (C86); pass the element itself, or \
+                 bind the result and read it back."
+            );
+            diags.add_at_coded(
+                crate::diagnostics::Level::Warning,
+                Some("lost-write"),
+                &msg,
+                file,
+                line,
+                col,
+            );
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "pass the element itself instead of a call that returns it".to_string(),
+                condition: Some(
+                    "the write is meant to reach what the call read it from".to_string(),
+                ),
+                edit: None,
+                concept: "reference",
+                concept_ref: "@F21",
+            });
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("declare the parameter `&{param_name}` so the write is delivered"),
+                condition: Some("the accessor is meant to be written through".to_string()),
+                edit: None,
+                concept: "reference",
+                concept_ref: "@F21",
+            });
+        }
+    }
+}
+
+/// Walk `node` for calls whose argument at a write-through parameter is a `__lift_N`
+/// temporary. Collects `(callee, parameter var, position)`.
+fn scan_lost_temp_writes(
+    data: &Data,
+    func: &Function,
+    node: &Value,
+    params: &mut HashMap<u32, HashSet<u16>>,
+    at: Option<&Position>,
+    out: &mut Vec<(u32, u16, Option<Position>)>,
+) {
+    let here = node.span_pos().or(at);
+    // Matched on the BARE node, not `unspan()`: `for_each_child` hands a `Span`'s inner
+    // value straight back, so unspanning here would match the same call twice — once
+    // through its wrapper and once as its own child — and report it twice.
+    if let Value::Call(callee, args) = node {
+        let def = data.def(*callee);
+        // A user function only: an `Op*` builtin has no loft body to have written through,
+        // and its first-arg writes are exactly what `find_field_written_vars` reads.
+        if matches!(def.def_type, DefType::Function) && *def.code() != Value::Null {
+            let written = params
+                .entry(*callee)
+                .or_insert_with(|| write_through_params(data, *callee));
+            if !written.is_empty() {
+                for (i, arg) in args.iter().enumerate() {
+                    if written.contains(&(i as u16)) && copies_a_reachable_place(data, func, arg) {
+                        out.push((*callee, i as u16, here.cloned()));
+                    }
+                }
+            }
+        }
+    }
+    node.for_each_child(&mut |child| {
+        scan_lost_temp_writes(data, func, child, params, here, out);
+    });
+}
+
 pub fn superseded_fold_diagnostics(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,

@@ -1354,7 +1354,13 @@ use a separate collection or add after the loop"
     /// Compound assignments are excluded — `h.v += x` appends an ELEMENT, so the
     /// source is legitimately not the field's type, and the operator's own attribute
     /// list types it.
-    fn field_store_mismatch(&mut self, op: &str, var_nr: u16, f_type: &Type, s_type: &Type) -> bool {
+    fn field_store_mismatch(
+        &mut self,
+        op: &str,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+    ) -> bool {
         // Only a plain `=` into a non-variable target, once both types are resolved.
         // Pass 1 sees forward references as `Unknown`; pass 2 re-runs with every def
         // visible, which is where a genuine mismatch is reported (the @P279 tolerance).

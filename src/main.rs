@@ -7972,6 +7972,10 @@ fn main() {
         // one does: the hand-offs it counts are the materialised `OpCopyRecord`s, which only
         // exist once the program is scope-checked.
         loft::use_analysis::warn_double_move(&p.data, &mut p.diagnostics, &abs_file);
+        // loft#894 — the lost-temporary-write lint. Runs here for the same reason its two
+        // neighbours do: the `__lift_N` temporaries it keys on are minted by `scopes`, so
+        // they exist only once the program is scope-checked.
+        loft::use_analysis::warn_lost_temp_writes(&p.data, &mut p.diagnostics, &abs_file);
         // @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol in owned source must resolve
         // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
         // symbol is marked, so a no-op for every program today.

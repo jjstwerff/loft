@@ -330,6 +330,13 @@ twice. Counts hand-offs per source with the SAME predicate that suppresses the s
 drop, so lint and mechanism cannot drift. `warning` because ignoring it produces a wrong
 result; therefore an UNDER-approximation — silent across opposite `if` arms, a reassignment
 between the hand-offs, and a terminator, and blind to the iteration count of a loop) ·
+`LOFT_NO_LOST_TEMP_WRITE` (loft#894, the second `lost-write` shape: a call writing through a
+by-value struct parameter GIVEN a value returned by another call — `hurt(first(s), 10.0)`
+writes a copy that is freed at the end of the statement, while `hurt(s.es[0] ?? E{}, 10.0)`
+lands, and nothing at the call site said which. Needs BOTH facts to meet: the callee writes
+through that parameter (read off its own body) and the argument copies a place the caller
+can still REACH (read off the return type's deps) — the second is what keeps
+`hurt(fresh(), …)` and the write-then-return builder idiom quiet) ·
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
