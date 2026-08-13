@@ -1333,6 +1333,69 @@ use a separate collection or add after the loop"
         braced
     }
 
+    /// Does this store put a value of the wrong type into a struct FIELD (loft#893)?
+    ///
+    /// A field store is the one assignment form with no variable to re-type, so the
+    /// `change_var_type` rejection that refuses `v = make()` for a local never sees it.
+    /// The checks that DO cover fields sit further down `parse_assign_op`, behind an
+    /// early return that a `text` or collection target takes first — so `h.v = make()`
+    /// stored nothing, `h.s = 3` on a `text` field walked into `OpSetText` with an
+    /// integer and took SIGSEGV, and both went unreported.
+    ///
+    /// Answers on the pair of TYPES only, so that adding the diagnostic cannot move
+    /// codegen. `convert` is the right predicate — it is what both the constructor path
+    /// and the scalar-target check already ask — but it is a `&mut self` EMITTER, so it
+    /// is asked here in the shape-only form it already understands: a `Value::Null`
+    /// expression, which every rewriting arm guards against and no verdict depends on.
+    /// `conv_owned_result` is saved and restored around the call because a cast arm sets
+    /// it to mark an allocating conversion, and the next real conversion `take()`s it —
+    /// a probe that left it set would hand its answer to an unrelated expression.
+    ///
+    /// Compound assignments are excluded — `h.v += x` appends an ELEMENT, so the
+    /// source is legitimately not the field's type, and the operator's own attribute
+    /// list types it.
+    fn field_store_mismatch(&mut self, op: &str, var_nr: u16, f_type: &Type, s_type: &Type) -> bool {
+        // Only a plain `=` into a non-variable target, once both types are resolved.
+        // Pass 1 sees forward references as `Unknown`; pass 2 re-runs with every def
+        // visible, which is where a genuine mismatch is reported (the @P279 tolerance).
+        if op != "=" || var_nr != u16::MAX || self.first_pass {
+            return false;
+        }
+        if f_type.is_unknown() || s_type.is_unknown() || matches!(s_type, Type::Null) {
+            return false;
+        }
+        // A narrowing integer store has its OWN diagnostic further down; running
+        // `convert` here as well would report the same store twice.
+        if Self::is_narrowing_int(s_type, f_type) {
+            return false;
+        }
+        if f_type.is_equal(s_type) {
+            return false;
+        }
+        // Building a keyed collection FROM a vector of its elements is the supported
+        // idiom (`h.m = [E{…}, E{…}]` for a `hash<E[k]>` field) and is what the
+        // `OpReplaceKeyed` / keyed-append path exists to serve. The two spellings are
+        // deliberately not `is_equal`, and `convert` has no arm for the pair, so the
+        // carve-out is named here rather than widened into either of them.
+        if let Type::Vector(src_elem, _) = s_type
+            && matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+            )
+            && f_type.content().is_equal(src_elem)
+        {
+            return false;
+        }
+        let saved_owned = self.conv_owned_result.take();
+        let accepted = self.convert(&mut Value::Null, s_type, f_type);
+        self.conv_owned_result = saved_owned;
+        !accepted
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_assign_op(
         &mut self,
@@ -2121,6 +2184,19 @@ use a separate collection or add after the loop"
             }
             _ => s_type,
         };
+        // loft#893 — a wrong-typed FIELD store, reported at the one point every store
+        // form still reaches. The checks further down cover a scalar target only, and
+        // a `text` or collection target returns before them, so this is the chokepoint.
+        if self.field_store_mismatch(op, var_nr, f_type, &s_type) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
+                s_type.name(&self.data),
+                f_type.name(&self.data),
+                f_type.name(&self.data),
+            );
+        }
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
