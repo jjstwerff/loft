@@ -40,6 +40,27 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### Filling a vector is as fast written the obvious way
+
+`[for _ in 0..n { -1 }]` — a vector of `n` copies of one value — ran the full
+element-by-element build protocol, once per element, for a value that never changed.
+The other spelling, `[-1; n]`, has always claimed one element and copied it, and was
+about five times faster.
+
+Now the obvious spelling compiles to the fast one. Building a million-element vector
+went from 74.6 ms to 14.4 ms on this machine; `[-1; n]` takes 14.7 ms, so the two are
+the same code. Nothing to learn and nothing to rewrite — if you already use `[x; n]`,
+it is unchanged.
+
+This only applies when the body really is the same value every time. A body that reads
+the loop variable, or calls anything at all, still runs once per element:
+
+```loft
+[for _ in 0..n { -1 }]        // one value, copied n times
+[for i in 0..n { i * 2 }]     // n different values — unchanged
+[for _ in 0..n { next() }]    // n calls — unchanged
+```
+
 ### A program can ask its environment a question it might not answer
 
 `host_input()` reads until whoever is writing hangs up. That is right for a compute

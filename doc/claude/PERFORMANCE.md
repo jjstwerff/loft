@@ -1848,11 +1848,34 @@ Three optimisations delivered:
   unused `OpNop` slot).
 - **O8.5** Constant comprehension unrolling: `[for i in 0..N { expr(i) }]`
   unrolled at compile time when bounds and body are const-evaluable.  10k limit.
+  ⚠ **Written but never reached** — see below.
 - **`const_eval()`** module: compile-time constant folder for arithmetic, casts,
   comparisons, boolean ops across all numeric types.
 
 **Impact:** For a 20-element constant vector, eliminates 1-2 resize allocations.
-For constant comprehensions, eliminates the entire runtime loop.
+
+**O8.5's unroll has never run.** `parse_block` wraps a comprehension body in a
+`Value::Block`, and `const_eval` has no arm for one, so the fold gives up on the
+wrapper before it reaches the body — `[for i in 0..3 { 5 }]` emits a runtime loop
+today, and so does every shape the section below describes. Teaching `const_eval`
+about single-expression blocks does wake it, and that is not a free change: it
+also makes it fire in a struct-literal FIELD, where the literal-list path appends
+through the enclosing record and builds `Pair { a: …, b: … }` with six elements in
+`a` and none in `b` (loft#892's neighbourhood). Waking it therefore needs #892
+closed first, plus its own boundary matrix over the shapes above — the filtered
+form, the size limit, and the element types.
+
+**O8.5's FILL half is live (loft#884).** A comprehension whose body folds to a
+constant *without* binding the loop variable is a fill, and lowers to the repeat
+literal's one-template-plus-`OpAppendCopy` — the same machinery `[x; n]` uses, so
+`[for _ in 0..n { -1 }]` now costs what `[-1; n]` costs (measured: 74.6 ms → 14.4 ms
+for a million elements, `--native`, against `[-1; n]`'s 14.7 ms). This needs no
+const bounds, so it covers the runtime count a consumer actually writes, and it
+unwraps the body block at its own call site rather than in `const_eval`, precisely
+so it does not wake the unroll above. It declines a struct field, a captured
+collection and an indexed element for the #892 reason, and declines a filter, a
+body that reads the loop variable, and any body with a call — the gate is PURITY,
+not loop-invariance, so `[for _ in 0..n { f() }]` still calls `f()` n times.
 
 Full design: the Constant Data section below.
 
