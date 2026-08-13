@@ -253,6 +253,18 @@ pub struct State {
     pub types: HashMap<u32, u16>,
     pub library: Arc<Vec<Call>>,
     pub library_names: HashMap<String, u16>,
+    /// `#native` symbols THIS program registered a panic stub for, so
+    /// `extensions::wire_native_fns` knows which ones it may replace with an
+    /// auto-marshalled wrapper (hand-written glue must be left alone).
+    ///
+    /// Per-`State`, not a process-global: it describes the program that was just
+    /// compiled. It used to live in a `static` that every `compile::byte_code`
+    /// OVERWROTE, so in one process compiling several programs — a test binary, the
+    /// REPL loading a second file, an embedder — a compile landing between another
+    /// program's compile and its wiring replaced the set. `wire_native_fns` then hit
+    /// `!stubs.contains(sym) → continue`, skipped resolution, and left the panicking
+    /// stub in place, which surfaces much later as "native function not loaded".
+    pub native_stub_symbols: std::collections::HashSet<String>,
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: BTreeMap<u32, u32>,
     /// @PLN120 A — **scope spans**: `(start_pc, end_pc, scope_nr)` for every
@@ -580,6 +592,7 @@ impl State {
             types: HashMap::new(),
             library: Arc::new(Vec::new()),
             library_names: HashMap::new(),
+            native_stub_symbols: std::collections::HashSet::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
             scope_spans: Vec::new(),
@@ -5926,6 +5939,7 @@ impl State {
             bytecode,
             library,
             library_names: HashMap::new(),
+            native_stub_symbols: std::collections::HashSet::new(),
             stack: HashMap::new(),
             vars: HashMap::new(),
             calls: HashMap::new(),

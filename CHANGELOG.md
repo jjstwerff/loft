@@ -201,6 +201,26 @@ a store-count warning at exit that a long-running or embedded program never reac
 Binding the result first was always clean, and that is exactly what the compiler now
 writes for you.
 
+### "Native function not loaded" when the library was there all along
+
+A program that calls into a native library could fail with
+
+```
+native function not loaded: its library's native cdylib is missing or stale
+```
+
+when nothing was missing and nothing was stale — and then succeed on the next run.
+
+It only happened where one process runs more than one program: a debugger or REPL
+session that loads a second file, an embedder, a test suite. Each compile recorded which
+native functions it had stubbed, but that record was kept per PROCESS rather than per
+program, so a second compile replaced the first one's. The first program then wired
+nothing, kept its placeholder, and the placeholder is what raised — long after the
+compile that caused it, and blaming the library.
+
+The record now belongs to the program it describes. The message stays as it is: when a
+cdylib really is missing or stale, that is still what it says.
+
 ### An early `return` no longer leaks what that path built
 
 A function that answers a vector, whose LAST expression hands back one of its arguments —

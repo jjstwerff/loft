@@ -9,6 +9,57 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The `#native` stub set was a process-global that every compile overwrote (2026-08-13)
+
+`compile::byte_code` recorded which `#native` symbols it registered a panic stub for —
+the set `wire_native_fns` consults to know which stubs it may replace with an
+auto-marshalled wrapper — by *overwriting* a `static STUB_SYMBOLS`:
+
+```rust
+pub fn set_stub_symbols(syms: HashSet<String>) {
+    *STUB_SYMBOLS.lock()… = Some(syms);   // wholesale, on every compile
+}
+```
+
+In any process that compiles more than one program — a test binary, the REPL loading a
+second file, an embedder — a sibling compile landing between one program's compile and
+its wiring replaced the set. `wire_native_fns` then hit `!stubs.contains(sym) → continue`
+in **both** phases, skipped resolution for its own symbols, and left the panic stub in
+place. The failure surfaces much later, at the first call, as *"native function not
+loaded: its library's native cdylib is missing or stale"* — a message that sends the
+reader after a build problem that does not exist. Diagnosing this one burned time on
+exactly that: rebuilding cdylibs, and checking `nm -D` for undefined `libloft` symbols
+to rule out staleness (there are none — the fixture links only `loft-ffi`).
+
+**Fix: the set lives on `State`.** It describes the program that was just compiled, and
+`register_native_stubs` already had the `State` in hand (`state.static_fn(sym, stub)` on
+the line above). `STUB_SYMBOLS` and `set_stub_symbols` are deleted rather than kept
+beside the new field, so there is one home for the fact. A lock around the global would
+have been the wrong fix — it serialises the writes and still lets the last writer win.
+
+Cost measured before the fix, by worktree A/B against the preceding commit, alternating
+single RUNS with both arms pre-built (binaries *and* test binaries) so no build sat
+between them:
+
+| | `repl_session` not-pass |
+|---|---|
+| A — preceding commit | **5 / 10** |
+| B — same tree + the vector-leak and panic-hook commits | **5 / 10** |
+
+Identical rate, identical failure mode: `file_debugger_can_call_into_a_native_library`
+fails about half of all full-binary runs and passes 100 % in isolation, because it needs
+~52 sibling compiles in the process to lose the race. That is almost certainly the single
+failure behind earlier "3972/3973 curated" gate reports.
+
+`tests/native_loader.rs` already carried a `TEST_LOCK` whose comment named
+`STUB_SYMBOLS` as shared global state — a workaround that could only ever cover tests in
+that one file, and `repl_session` is a different binary.
+
+Guard: `native_loader.rs::a_sibling_compile_does_not_take_over_this_program_s_stub_set`
+reproduces the interleaving **deterministically** — compile B, compile a sibling
+declaring a *different* `#native` symbol, then wire and run B — so it fails outright on
+the old code instead of depending on thread scheduling.
+
 ### A buffer-bound vector fn delivered only its TAIL when the tail borrowed an argument (2026-08-13)
 
 `dispatch_vector_delivery` is the one place that decides how a vector-returning function's

@@ -683,17 +683,6 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
     })
 }
 
-/// Set of symbols that were registered as stubs (not hand-written glue).
-/// Only these should be replaced by auto-marshalled wrappers.
-static STUB_SYMBOLS: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
-
-/// Record which symbols are stubs (called from `register_native_stubs`).
-pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
-    *STUB_SYMBOLS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(syms);
-}
-
 /// After `load_all()` has populated `NATIVE_REGISTRY`, iterate all `#native`
 /// definitions and replace the panic stubs with auto-marshalled wrappers.
 ///
@@ -709,12 +698,14 @@ pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
 /// (indicating a registration bug).
 #[cfg(feature = "native-extensions")]
 pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
+    // THIS program's stub set (see `State::native_stub_symbols`) — cloned because
+    // `state` is mutated below while wiring.  Never a process-global: a global was
+    // overwritten by whichever compile ran last, so in a process compiling more than
+    // one program the wiring consulted a SIBLING's set and skipped its own symbols.
+    let stub_syms = state.native_stub_symbols.clone();
+
     // Phase 1: resolve any missing symbols via dlsym.
     {
-        let stub_guard = STUB_SYMBOLS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stub_syms = stub_guard.as_ref();
         let reg_guard = NATIVE_REGISTRY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -731,9 +722,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             if sym.starts_with("loft_shared_") {
                 continue;
             }
-            if let Some(stubs) = stub_syms
-                && !stubs.contains(sym)
-            {
+            if !stub_syms.contains(sym) {
                 continue;
             }
             let found = reg_guard.as_ref().is_some_and(|r| r.contains_key(sym));
@@ -742,7 +731,6 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             }
         }
         drop(reg_guard);
-        drop(stub_guard);
 
         // Resolve via dlsym (no locks held).  The guard is now keyed on the
         // *resolving library's* own `uses_v1` flag (returned by `try_dlsym`), not
@@ -785,11 +773,6 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sig_table = sigs.get_or_insert_with(HashMap::new);
 
-    let stub_guard = STUB_SYMBOLS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stub_syms = stub_guard.as_ref();
-
     // Stub symbols whose cdylib never provided them — collected so the failure is
     // reported LOUDLY at load (below), not left to surface as a generic panic at
     // first call deep in execution.
@@ -821,9 +804,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
 
         // Only replace stubs — skip hand-written glue from native::init().
-        if let Some(stubs) = stub_syms
-            && !stubs.contains(sym)
-        {
+        if !stub_syms.contains(sym) {
             continue;
         }
 

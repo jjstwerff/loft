@@ -372,8 +372,11 @@ fn register_native_stubs(state: &mut State, data: &Data) {
         };
         state.static_fn(sym, stub);
     }
-    // Store the set of stub symbols so wire_native_fns knows which to replace.
-    crate::extensions::set_stub_symbols(stub_syms);
+    // Record which symbols this program stubbed, so `wire_native_fns` knows which
+    // it may replace.  On the State, not a process-global: a global was overwritten
+    // by whichever compile ran last, and a sibling compile landing between this
+    // program's compile and its wiring made the wiring skip its own symbols.
+    state.native_stub_symbols = stub_syms;
 }
 
 /// Plan-22 02d-vii follow-up — IR-only dump that doesn't
