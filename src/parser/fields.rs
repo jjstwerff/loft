@@ -812,11 +812,18 @@ impl Parser {
                 // is only known after the key expression is parsed, so both live in one
                 // parse.  A prefix slice returns the Trie type, so the enclosing `for`
                 // iterates the scratch the call builds.
+                let dep = self.keyed_container_dep(code, &t);
                 if let Some(slice) = self.parse_trie_slice(code, &t, &key_types) {
                     elm_type = slice;
+                } else if let Some(cv) = dep {
+                    elm_type = elm_type.depending(cv);
                 }
             } else {
+                let dep = self.keyed_container_dep(code, &t);
                 self.parse_key(code, &t, &key_types);
+                if let Some(cv) = dep {
+                    elm_type = elm_type.depending(cv);
+                }
             }
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
             // key returns the null record).  `parse_key` parsed the KEY last,
@@ -832,7 +839,11 @@ impl Parser {
             for (k, _) in keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
+            let dep = self.keyed_container_dep(code, &t);
             self.parse_key(code, &t, &key_types);
+            if let Some(cv) = dep {
+                elm_type = elm_type.depending(cv);
+            }
             // @P285 — see the Hash/Radix arm above; the lookup result is nullable.
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
@@ -1922,6 +1933,61 @@ impl Parser {
             let read = Value::TupleGet(holder, i as u16);
             self.expand_one_tuple_key(read, elem_tp, prelude, out);
         }
+    }
+
+    /// loft#882 — name the container a keyed element read VIEWS INTO, so the element's
+    /// type can depend on it.
+    ///
+    /// `v[i]` on a vector has always carried that dep, and it is the whole reason the
+    /// vector shape is safe: `return_views_local` sees a borrow from a local and
+    /// `materialize_view_return` copies the element into the return buffer BEFORE the
+    /// container is freed.  A keyed read said nothing, so `return make_hash()[k]`
+    /// handed back a pointer into a store the same function freed on the way out.
+    /// (`--native` hid most of it: an empty dep list reads as OWNED there, so the
+    /// assignment lowering inserted a defensive record copy — which is why the same
+    /// program was deterministic garbage interpreted and correct natively.)
+    ///
+    /// Two container shapes need two moves.  A NAMED container — a local, a parameter,
+    /// a field — is depended on directly.  An inline call producing a FRESH container
+    /// has no name at parse time (`scopes.rs` lifts it into a `__lift_N` long after the
+    /// materialisation decision has been made), so it is bound to a work-ref here and
+    /// that is what the element depends on.  The work-ref is drawn from the pass-2-only
+    /// sequence: whether this site fires at all depends on the container's type being
+    /// resolved, which it is not on pass 1, so the shared `__ref_N` counter would
+    /// diverge between the passes (loft#848).
+    ///
+    /// Only a call that MINTS the container is bound here — a loft-defined body whose
+    /// return store is genuinely fresh.  A PROJECTION (`make_bag().h[k]`, an
+    /// `OpGetField` of a call) is deliberately left alone: the store its element lives
+    /// in belongs to the bag, not to the projection, so binding the projection names
+    /// the wrong owner — the bag's `__lift_N` then sits in an inner scope and is freed
+    /// before the materialised copy reads it, which is worse than the borrow.  Naming
+    /// the bag would need a lift the parser has already emitted past; that shape is
+    /// tracked separately.
+    ///
+    /// Returns the variable the element borrows from, if there is one to name.
+    fn keyed_container_dep(&mut self, code: &mut Value, typedef: &Type) -> Option<u16> {
+        if let Value::Var(x) = code.unspan() {
+            return Some(*x);
+        }
+        if self.first_pass {
+            return None;
+        }
+        let Value::Call(d_nr, _) = code.unspan() else {
+            return None;
+        };
+        if !self.data.def(*d_nr).is_loft_defined() {
+            return None;
+        }
+        let w = self.vars.work_refs_p2(typedef, &mut self.lexer);
+        self.vars.mark_inline_ref(w);
+        let orig = std::mem::replace(code, Value::Null);
+        *code = v_block(
+            vec![v_set(w, orig), Value::Var(w)],
+            typedef.clone().depending(w),
+            "keyed_container",
+        );
+        Some(w)
     }
 
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {

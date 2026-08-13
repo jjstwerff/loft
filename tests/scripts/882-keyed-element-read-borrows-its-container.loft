@@ -1,0 +1,149 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#882 — an element read out of a keyed collection is a VIEW into that collection's
+// store, and until this landed the compiler did not say so.
+//
+// `v[i]` on a vector has always carried a dep naming the container, which is what makes
+// `return_views_local` materialise the element into the return buffer BEFORE the
+// container is freed.  Every keyed read — hash, index, sorted, trie, any key arity —
+// carried none, so `return make_hash()[k]` handed back a pointer into a store the same
+// function freed on the way out.
+//
+// The two backends disagreed, which is why this survived: an EMPTY dep list reads as
+// OWNED by `--native`'s assignment lowering, so it inserted a defensive record copy and
+// the program was right; the interpreter aliased and read freed bytes.  The same source
+// was therefore correct natively and deterministic garbage interpreted.
+//
+// This file must be run under `LOFT_POISON=1` to be worth anything — freed bytes are
+// usually still intact, so every cell here passes on value alone whether or not the bug
+// is present.  `tests/keyed_element_borrow.rs` is what sets it; running this script bare
+// proves only that it executes.  Elements are seeded `q = i + 7` and every lookup asks
+// for element 0, so each cell answers 7 — a value no `??` fallback (-1) can produce.
+//
+// TWO SHAPES ARE DELIBERATELY ABSENT, both older than this fix and both failing on
+// `2026.8.0` as well:
+//   - a keyed read through a FIELD of a call's result (`make_bag().h[k]`) — the element
+//     lives in the bag's store, and the parser cannot name the bag, which `scopes.rs`
+//     lifts long after the materialisation decision (loft#889).
+//   - a call-returned keyed collection BOUND to a local, read, and returned as a RECORD
+//     — `--native` only (loft#890).  Note this is the workaround loft#882 was filed with.
+
+struct I882H2 { q: integer, r: integer }
+struct I882H1 { q: integer, r: integer }
+struct I882H3 { q: integer, r: integer, s: integer }
+struct I882I1 { q: integer, r: integer }
+struct I882S1 { q: integer, r: integer }
+struct I882T1 { tq: text, tr: integer }
+struct I882Vec { q: integer, r: integer }
+struct I882Tup { tk: (integer, integer), tv: integer }
+
+// Producers — each returns a container the caller never named, which is the shape that
+// makes the borrow fatal: it is lifted into a temp and freed at the callee's scope exit.
+fn i882_h2(n: integer) -> hash<I882H2[q, r]> {
+  a2: hash<I882H2[q, r]> = [];
+  for a2i in 0..n { a2[a2i + 7, 0] = I882H2 { q: a2i + 7, r: 0 }; }
+  a2
+}
+fn i882_h1(n: integer) -> hash<I882H1[q]> {
+  a1: hash<I882H1[q]> = [];
+  for a1i in 0..n { a1[a1i + 7] = I882H1 { q: a1i + 7, r: 0 }; }
+  a1
+}
+fn i882_h3(n: integer) -> hash<I882H3[q, r, s]> {
+  a3: hash<I882H3[q, r, s]> = [];
+  for a3i in 0..n { a3[a3i + 7, 0, 0] = I882H3 { q: a3i + 7, r: 0, s: 0 }; }
+  a3
+}
+fn i882_i1(n: integer) -> index<I882I1[q]> {
+  b1: index<I882I1[q]> = [];
+  for b1i in 0..n { b1[b1i + 7] = I882I1 { q: b1i + 7, r: 0 }; }
+  b1
+}
+fn i882_s1(n: integer) -> sorted<I882S1[q]> {
+  c1: sorted<I882S1[q]> = [];
+  for c1i in 0..n { c1[c1i + 7] = I882S1 { q: c1i + 7, r: 0 }; }
+  c1
+}
+fn i882_t1(n: integer) -> trie<I882T1[tq]> {
+  d1: trie<I882T1[tq]> = [];
+  for d1i in 0..n { d1["k{d1i + 7}"] = I882T1 { tq: "k{d1i + 7}", tr: d1i + 7 }; }
+  d1
+}
+fn i882_tup(n: integer) -> hash<I882Tup[tk]> {
+  e1: hash<I882Tup[tk]> = [];
+  for e1i in 0..n { e1[(e1i + 7, 0)] = I882Tup { tk: (e1i + 7, 0), tv: e1i + 7 }; }
+  e1
+}
+fn i882_vec(n: integer) -> vector<I882Vec> {
+  f1: vector<I882Vec> = [];
+  for f1i in 0..n { f1 += [I882Vec { q: f1i + 7, r: 0 }]; }
+  f1
+}
+fn i882_key() -> (integer, integer) { (7, 0) }
+
+// Every keyed KIND, not just the reported hash: the dep was missing for all of them.
+fn i882_hash(n: integer) -> I882H2 { i882_h2(n)[7, 0] ?? I882H2 { q: -1, r: -1 } }
+fn i882_index(n: integer) -> I882I1 { i882_i1(n)[7] ?? I882I1 { q: -1, r: -1 } }
+fn i882_sorted(n: integer) -> I882S1 { i882_s1(n)[7] ?? I882S1 { q: -1, r: -1 } }
+fn i882_trie(n: integer) -> I882T1 { i882_t1(n)["k7"] ?? I882T1 { tq: "", tr: -1 } }
+
+// Key ARITY is not the axis — one, two and three key fields all lost the dep.
+fn i882_one(n: integer) -> I882H1 { i882_h1(n)[7] ?? I882H1 { q: -1, r: -1 } }
+fn i882_three(n: integer) -> I882H3 { i882_h3(n)[7, 0, 0] ?? I882H3 { q: -1, r: -1, s: -1 } }
+
+// Nor is the key's PRELUDE.  A tuple-typed key operand that is not written inline binds
+// a holder first; the inline spelling does not.  The issue named prelude-emptiness as
+// the boundary — measured, both spellings were broken, so a fix keyed on it would have
+// left half the defect in place.
+fn i882_prelude(n: integer) -> I882Tup { i882_tup(n)[i882_key()] ?? I882Tup { tk: (0, 0), tv: -1 } }
+fn i882_inline(n: integer) -> I882Tup { i882_tup(n)[(7, 0)] ?? I882Tup { tk: (0, 0), tv: -1 } }
+
+// Nor is the `??`.  Removing it leaves a nullable return through a different delivery
+// arm, and that failed on BOTH backends — so the coalesce was never what selected it.
+fn i882_nullable(n: integer) -> I882H2? { i882_h2(n)[7, 0] }
+
+// Controls that were correct before and must stay correct.
+//
+// A PARAMETER's container belongs to the CALLER: the element must stay a BORROW (the
+// dep resolves to a function attribute, which is not a local), and the caller's
+// collection must read back intact rather than having been copied or wrecked.
+fn i882_param(h1c: hash<I882H2[q, r]>) -> I882H2 { h1c[7, 0] ?? I882H2 { q: -1, r: -1 } }
+// A scalar projection copies the value out before anything is freed.
+fn i882_scalar(n: integer) -> integer { i882_h2(n)[7, 0].q ?? -1 }
+// The vector sibling — the shape that has always carried the dep.  If this ever goes
+// red the harness is lying, not the fix.
+fn i882_vector(n: integer) -> I882Vec { i882_vec(n)[0] ?? I882Vec { q: -1, r: -1 } }
+
+fn i882_is(got: integer, want: integer, what: text) {
+  assert(got == want, "{what}: {got}, expected {want}");
+}
+
+fn main() {
+  i882_is(i882_hash(3).q, 7, "hash");
+  i882_is(i882_index(3).q, 7, "index");
+  i882_is(i882_sorted(3).q, 7, "sorted");
+  i882_is(i882_trie(3).tr, 7, "trie");
+  i882_is(i882_one(3).q, 7, "one key field");
+  i882_is(i882_three(3).q, 7, "three key fields");
+  i882_is(i882_prelude(3).tv, 7, "tuple key needing a prelude");
+  i882_is(i882_inline(3).tv, 7, "tuple key written inline");
+
+  nl = i882_nullable(3) ?? I882H2 { q: -9, r: -9 };
+  i882_is(nl.q, 7, "nullable return, no coalesce");
+
+  own = i882_h2(3);
+  i882_is(i882_param(own).q, 7, "parameter container");
+  // Element 1, read out of the CALLER's collection AFTER the call: a copy or a wreck
+  // shows here and nowhere else.
+  i882_is((own[8, 0] ?? I882H2 { q: -1, r: -1 }).q, 8, "the caller's collection survived");
+
+  i882_is(i882_scalar(3), 7, "scalar projection");
+  i882_is(i882_vector(3).q, 7, "vector sibling");
+
+  // Past the first element and past one store allocation, so a cell cannot pass by
+  // holding a plausible first record.
+  i882_is(i882_hash(300).q, 7, "n=300");
+
+  println("882 keyed-element borrow OK");
+}
