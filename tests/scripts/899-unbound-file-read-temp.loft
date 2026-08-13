@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `f#read(n) as vector<T>` answers the same value, and owns its store, whether the
+// result is BOUND to a local or consumed on the spot.
+//
+// The read builds its result in a temp the `#reading file` block declares. A binding
+// adopts that temp — which is why every bound form always worked — and with no
+// binding it broke three ways at once (loft#899):
+//
+//   * the temp's `main_vector<T>` wrapper was never registered, because a vector
+//     local normally gets one from the ASSIGNMENT path and this temp reaches no
+//     assignment. Codegen then emitted `OpDatabase(db_tp = u16::MAX)`, so the store
+//     was created with no type, its header was the wrong width, and the read landed
+//     one element in: `len(f#read(8) as vector<single>)` answered 1, and iterating
+//     the same expression yielded the SECOND element alone. It only showed when
+//     nothing ELSE in the file declared a `vector<T>` local, so deleting an unrelated
+//     line elsewhere changed what a read returned — c7 pins that axis.
+//   * the temp's declaration stayed INSIDE the argument expression, because the
+//     `Value::Span` wrapping it hid the hoistable preamble from `scan_args`. Native
+//     emitted it literally as a `let` statement in an argument list and rustc
+//     rejected the whole program.
+//   * nothing freed the store, since an argument is read and never adopted.
+//
+// The rows assert VALUE and LENGTH, not just the absence of a leak: a store whose
+// header is the wrong width still allocates and still frees, so a leak-only guard
+// passes on the whole wrong-value half. `tests/wrap.rs` fails the file on a
+// store-leak warning at exit, which supplies the ownership half.
+//
+// Element type is an axis, not a detail: `main_vector<integer>` is registered by the
+// stdlib whatever the program does, so an integer-element row cannot see the missing
+// registration at all. c5 and c6 carry the element types that nothing else registers.
+
+struct B { d: vector<single> }
+struct P { a: i32, b: i32 }
+
+fn r899_take(v: vector<single>) -> integer { return len(v); }
+
+fn r899_read(path: text) -> vector<single> {
+  f = file(path); f#format = LittleEndian;
+  return f#read(8) as vector<single>;
+}
+
+fn main() {
+  { f = file("r899a.bin"); f#format = LittleEndian; f += 1.5f; f += 2.5f; }
+
+  // c1 — CONTROL: bound to a local. Correct before and after; a fix that only
+  //      touched the unbound path must leave this alone.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    v = f#read(8) as vector<single>;
+    assert(len(v) == 2, "c1 len = {len(v)}, want 2"); }
+
+  // c2 — the filed shape: `len` of the unbound read. Answered 1.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    assert(len(f#read(8) as vector<single>) == 2,
+           "c2 len = {len(f#read(8) as vector<single>)}, want 2"); }
+
+  // c3 — iterating the unbound read directly. Yielded [2.5] — one element, and the
+  //      SECOND one, which is the wrong-width header showing as a wrong VALUE and
+  //      not merely a short length.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    s = ""; for e in f#read(8) as vector<single> { s += "{e} "; }
+    assert(s.trim() == "1.5 2.5", "c3 vals = [{s.trim()}], want [1.5 2.5]"); }
+
+  // c4 — as a user-function argument. This is the shape native refused to compile.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    assert(r899_take(f#read(8) as vector<single>) == 2,
+           "c4 taken = {r899_take(f#read(8) as vector<single>)}, want 2"); }
+
+  // c5 — as a struct-literal field value. `OpAppendVector` COPIES the elements, so
+  //      the literal does not adopt the temp and the caller still owns it.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    b = B { d: f#read(8) as vector<single> };
+    assert(len(b.d) == 2, "c5 len = {len(b.d)}, want 2"); }
+
+  // c6 — a STRUCT element type, whose `main_vector<P>` no other line registers.
+  { f = file("r899b.bin"); f#format = LittleEndian;
+    f += P{a:1,b:2}; f += P{a:3,b:4}; }
+  { f = file("r899b.bin"); f#format = LittleEndian;
+    assert(len(f#read(16) as vector<P>) == 2,
+           "c6 len = {len(f#read(16) as vector<P>)}, want 2"); }
+
+  // c7 — the ORDER axis. Identical to c2 except that a `vector<single>` local exists
+  //      elsewhere in this function; that alone used to register the wrapper and flip
+  //      c2's answer from 1 to 2. Both must now answer 2 for the same reason.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    assert(len(f#read(8) as vector<single>) == 2,
+           "c7 len = {len(f#read(8) as vector<single>)}, want 2"); }
+  r899_unrelated: vector<single> = [9.0f];
+  assert(len(r899_unrelated) == 1, "c7 unrelated len = {len(r899_unrelated)}, want 1");
+
+  // c8 — RETURNED from a function: ownership TRANSFERS to the caller, so this row is
+  //      the other side of the free. A fix that freed the temp unconditionally would
+  //      double-free here.
+  assert(len(r899_read("r899a.bin")) == 2,
+         "c8 len = {len(r899_read("r899a.bin"))}, want 2");
+
+  // c9 — read twice in one statement list, so a temp that leaked would leak once per
+  //      read rather than once per program.
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    assert(len(f#read(8) as vector<single>) == 2, "c9a len wrong"); }
+  { f = file("r899a.bin"); f#format = LittleEndian;
+    assert(len(f#read(8) as vector<single>) == 2, "c9b len wrong"); }
+
+  delete("r899a.bin");
+  delete("r899b.bin");
+  println("ok");
+}

@@ -225,14 +225,23 @@ and that temporary was described as borrowing the struct rather than owning its 
 storage, so it was never released. Passing the same value through a variable first was
 fine, which is why this looked like a problem with the `as` cast.
 
-One shape is still worth avoiding: the same read consumed with **no** variable at all —
-straight into `len(…)`, a `for … in` loop, a call argument, or a struct literal. That path
-answers the wrong value on the interpreter and does not compile with `--native`
-([#899](https://github.com/loft-lang/loft/issues/899)). Bind it first:
+### Reading a file works the same whether or not you name the result
 
 ```loft
-v = f#read(8) as vector<single>;     // then use `v`
+println("{len(f#read(8) as vector<single>)}");     // was 1 — there are two
 ```
+
+Using a `f#read(…) as vector<T>` on the spot — straight into `len(…)`, a `for … in` loop, a
+call argument, or a struct literal — used to disagree with the same read bound to a
+variable first. On the interpreter it answered a length one short and started one element
+in, so iterating those eight bytes yielded `2.5` alone. With `--native` the same line did
+not compile at all, reporting Rust errors against generated code. Both are fixed; a read
+now behaves identically bound or unbound, and no longer holds on to a store either way.
+
+The wrong value depended on the rest of the file, which is what made it so unpleasant:
+declaring a `vector<single>` anywhere — even on a later line, even for something entirely
+unrelated — made the read correct again, and deleting that line made it wrong. So a working
+program could start returning wrong numbers because a variable somewhere else was removed.
 
 ### Taking an element out of a keyed collection you just built
 

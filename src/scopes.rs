@@ -3912,9 +3912,14 @@ impl Scopes {
                 // construction, etc.) MUST keep their span — unwrapping them
                 // broadly regressed the closure-in-struct-field cases (`invalid
                 // fn-ref` in native codegen, @P258/@P259 territory).
+                //
+                // The A5.6 null-init preamble ([`Self::is_null_init_preamble`]) is the
+                // second shape that must survive to `scan_args`, and it is just as
+                // narrow: exactly two ops, led by an owned-heap `Set(v, Null)`.
                 let is_lift_preamble = matches!(&scanned, Value::Insert(ops)
                     if ops.first().is_some_and(|op| matches!(op,
-                        Value::Set(v, _) if function.name(*v).starts_with("__lift_"))));
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_")))
+                        || Self::is_null_init_preamble(ops, function));
                 if is_lift_preamble {
                     scanned
                 } else {
@@ -5848,12 +5853,7 @@ impl Scopes {
             }
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
-                let is_a56_hoisted = ops.len() == 2
-                    && if let Value::Set(v, val) = &ops[0] {
-                        matches!(val.as_ref(), Value::Null) && function.tp(*v).is_heap_owned()
-                    } else {
-                        false
-                    };
+                let is_a56_hoisted = Self::is_null_init_preamble(&ops, function);
                 // hoist Set(__lift_N, ...) preamble from nested scan_args.
                 // These are produced when an inner call's arguments contained
                 // inline struct-returning calls that were already lifted.
@@ -5898,9 +5898,29 @@ impl Scopes {
                         postamble.push(post);
                         continue;
                     }
+                    // loft#899 — hoisting the null-init out of the value block moves
+                    // the temp's OWNER to the enclosing scope: its declaration now
+                    // stands in that statement list, and an argument is only READ, so
+                    // no binding adopts the store the way `v = <block>` does.  Nothing
+                    // freed it, so every unbound `f#read(n) as vector<T>` leaked one
+                    // store.  Re-register it at the current scope for `get_free_vars`,
+                    // and run the same hand-off marking a lifted call-result gets so an
+                    // argument the callee MOVES from does not drop twice.
+                    let a56_owned = if is_a56_hoisted {
+                        match &ops[0] {
+                            Value::Set(v, _) => Some(*v),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     let mut it = ops.into_iter();
                     for _ in 0..n - 1 {
                         preamble.push(it.next().unwrap());
+                    }
+                    if let Some(v) = a56_owned {
+                        self.var_scope.insert(v, self.scope);
+                        self.mark_lift_handoff(v, arg_idx, transfer_copy, moved_arg);
                     }
                     let final_val = it.next().unwrap();
                     // the remaining Call may also be struct-returning
@@ -5939,6 +5959,26 @@ impl Scopes {
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// The A5.6 hoistable preamble: `Insert([Set(v, Null), value])` whose `v` OWNS a
+    /// heap store.  It is the shape the `Value::Block` arm returns for a value block
+    /// that yields an owned temp — a `#reading file` read, a `??` join — and
+    /// [`Self::scan_args`] lifts that `Set` into the enclosing statement list so the
+    /// slot's `first_def` lives OUTSIDE the argument expression.
+    ///
+    /// One home for the question, because two places ask it: `scan_args`, which does
+    /// the hoisting, and the `Value::Span` arm of [`Self::scan`], which must drop a
+    /// span that would otherwise hide this Insert from `scan_args`' `if let
+    /// Value::Insert`.  While only `scan_args` knew the shape, a span-wrapped one
+    /// stayed inside the argument: `println("{len(f#read(8) as vector<single>)}")`
+    /// left the temp's declaration in an expression slot, which native emitted
+    /// literally as a `let` statement inside an argument list — rustc "expected
+    /// expression, found `let` statement" — and which nothing then freed (loft#899).
+    fn is_null_init_preamble(ops: &[Value], function: &Function) -> bool {
+        ops.len() == 2
+            && matches!(&ops[0], Value::Set(v, val)
+                if matches!(val.as_ref(), Value::Null) && function.tp(*v).is_heap_owned())
     }
 
     /// True when `v` writes the work-ref that a `&`-argument's `OpCreateStack` then

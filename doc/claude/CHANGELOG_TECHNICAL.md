@@ -147,6 +147,53 @@ unrelated `vector<single>` local elsewhere in the file flips the answer, which i
 type-registration side effect looks like. Fixing the leak on a path whose value is wrong
 would have been polishing, so this fix stops at the field store.
 
+### An unbound `f#read(n) as vector<T>` failed three ways, from two causes (loft#899, 2026-08-13)
+
+The order-sensitivity was the tell, and it named the first cause. `gen_set_first_vector_null`
+resolves its store type by NAME — `data.name_type("main_vector<single>")` — and the read's
+temp is the one vector local that never reaches an assignment, so nothing registered the
+wrapper: every other vector local gets it from `Parser::change_var_type`, and the
+`typedef.rs` sweep that catches the remaining producers reads struct and enum-value FIELDS
+only. The lookup returned `u16::MAX`, and the emitted `OpDatabase(var, db_tp=65535)` created
+the store with no type at all. Wrong header width, so `len` answered 1 and the data started
+one element in — and any OTHER `vector<single>` in the file registered the wrapper as a side
+effect and made the same read correct, which is why a line elsewhere changed the answer.
+`objects.rs` now calls `data.vector_def` for a vector read type, the same call its
+`OpCastVectorFromText` sibling makes 800 lines down.
+
+The `debug_assert_ne!` guarding exactly this `u16::MAX` sat one line below the lookup and
+has never run: `[profile.dev.package.loft] debug-assertions = false` strips it from the
+library in both profiles. An env-gated `eprintln` in its place, swept over all 2190 corpus
+`.loft` files, found this temp to be the ONLY producer — and found no corpus file that
+covers it, which is how it shipped.
+
+The other two failures are one mechanism. The `Value::Block` arm returns a value block that
+yields an owned temp as `Insert([Set(v, Null), block])`, and `scan_args` hoists that `Set`
+into the enclosing statement list (`is_a56_hoisted`). But `scan`'s `Value::Span` arm rewraps
+the scanned argument, and its unwrap predicate recognised only the `Set(__lift_N, …)`
+preamble — so a span-wrapped null-init preamble never reached the `if let Value::Insert`
+that would hoist it, and the declaration stayed inside the argument expression. Native
+emitted it there literally: `expected expression, found let statement`, plus an E0425 for
+the `var__read_1` that no longer scoped. That arm's own comment already gave the reason the
+lift shape is unwrapped — *"the native backend would emit `Set(__lift_N, …)` inside an
+enclosing expression and fail to compile"* — for a sibling shape it did not cover. The two
+sites now share one predicate, `is_null_init_preamble`, so they cannot drift again.
+
+Hoisting alone left the store unfreed, because the hoist MOVES the owner: the declaration
+now stands in the enclosing statement list, and an argument is only read, never adopted the
+way `v = <block>` adopts. `scan_args` re-registers the temp at the current scope for
+`get_free_vars` and runs `mark_lift_handoff` on it, so an argument the callee MOVES from
+(`OpCopyRecord` with the `0x8000` flag) still does not drop twice. `return f#read(…)` is the
+other side of that and must NOT be freed; it transfers, and the guard's c8 row pins it.
+
+Element type is an axis here, not a detail. `main_vector<integer>` is registered by the
+stdlib whatever the program does, so an integer-element probe sees the leak and the native
+failure but never the wrong value. The same masking bites the regression guard itself: any
+control row that binds the read to a local registers the wrapper and disarms the very cell
+it pins, so the `vector<single>` case needs a file that declares no other vector at all
+(`899-unbound-file-read-only-vector.loft`, deliberately minimal for that reason) while the
+main guard carries the remaining seven shapes plus a `vector<P>` row.
+
 ### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
 
 `engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a
