@@ -795,6 +795,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
     // first call deep in execution.
     let mut unresolved: Vec<String> = Vec::new();
 
+    // Symbols the cdylib DOES export but registered no `#[loft_native]` bridge for
+    // (loft#886). A different failure from `unresolved` with a different fix, so it
+    // gets its own list and its own message.
+    let mut bridgeless: Vec<String> = Vec::new();
+
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if def.native.is_empty() {
@@ -839,6 +844,19 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             continue;
         }
 
+        // loft#886 — the cdylib loaded and exports the symbol, but registered no
+        // marshal bridge for it, so the call has nothing to dispatch through. That
+        // is a REGISTRATION gap in the library, not a stale build, and until now it
+        // was discovered only when the function was called: a library can ship, pass
+        // its own suite, and have a function that is dead for every consumer who
+        // exercises a path the library's tests do not. Report it at load beside the
+        // missing-cdylib report, naming the function, so the author sees it on the
+        // first run rather than in a consumer's bug report.
+        if get_bridge(sym).is_none() {
+            bridgeless.push(sym.clone());
+            continue;
+        }
+
         // Only wire if we can auto-marshal the signature.
         let sig = match compute_sig(data, d_nr) {
             Some(s) => s,
@@ -860,6 +878,99 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
     if !unresolved.is_empty() {
         report_unresolved_natives(data, &unresolved);
+    }
+    if !bridgeless.is_empty() {
+        report_bridgeless_natives(data, &bridgeless);
+    }
+}
+
+/// loft#886 — loud load-time diagnostic for `#native` symbols the cdylib exports but
+/// never registered a marshal bridge for.
+///
+/// Separate from [`report_unresolved_natives`] because the fix is different: the
+/// library is not stale, its registration is incomplete. The usual cause is a
+/// hand-maintained `loft_register_bridges!` list that drifted from the `#native`
+/// declarations — which is silent by construction, since the two lists are written in
+/// different files and nothing compares them. `loft-ffi-build`'s
+/// `generate_register_from_loft_with_bridges` derives BOTH from the `#native`
+/// annotations and cannot drift; that is the fix to name.
+///
+/// Non-fatal, for the same reason the sibling is: a declared but never-called native
+/// must still let the program run. The call-time panic in `native_auto_dispatch` is
+/// still there for anyone who ignores this.
+#[cfg(feature = "native-extensions")]
+fn report_bridgeless_natives(data: &crate::data::Data, bridgeless: &[String]) {
+    use std::collections::BTreeMap;
+    let mut by_crate: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for sym in bridgeless {
+        let krate = data
+            .native_symbol_crates
+            .get(sym)
+            .map_or("<unknown library>", String::as_str);
+        by_crate.entry(krate).or_default().push(sym.as_str());
+    }
+    for (krate, mut syms) in by_crate {
+        syms.sort_unstable();
+        eprintln!("{}", bridgeless_message(krate, &syms));
+    }
+}
+
+/// The text [`report_bridgeless_natives`] prints for one library. Split out so the
+/// message — the entire user-facing product of this diagnostic — is assertable without
+/// a cdylib whose registration is deliberately broken.
+#[cfg(feature = "native-extensions")]
+fn bridgeless_message(krate: &str, syms: &[&str]) -> String {
+    let shown = syms.iter().take(6).copied().collect::<Vec<_>>().join(", ");
+    let more = syms.len().saturating_sub(6);
+    let more_txt = if more > 0 {
+        format!(", +{more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "loft: native library '{krate}' registered no marshal bridge for {n} of its \
+         #native function(s) ({shown}{more_txt}) — the cdylib loaded and exports the \
+         symbol(s), so this is an incomplete registration, not a stale build. Calling one \
+         panics. If its `loft_register_bridges!` list is hand-written, replace it with \
+         `loft_ffi_build::generate_register_from_loft_with_bridges(\"../src\")` in the \
+         native crate's build.rs, which derives the list from the `#native` annotations \
+         and cannot drift.",
+        n = syms.len(),
+    )
+}
+
+#[cfg(all(test, feature = "native-extensions"))]
+mod bridgeless_report_tests {
+    use super::bridgeless_message;
+
+    /// The report must name the LIBRARY to fix and every function that is dead in it —
+    /// a count alone sends the author looking, which is the cost loft#886 paid.
+    #[test]
+    fn the_message_names_the_library_and_each_dead_function() {
+        let m = bridgeless_message("graphics", &["n_rasterize_text_into", "n_save_png"]);
+        assert!(m.contains("'graphics'"), "{m}");
+        assert!(m.contains("n_save_png"), "{m}");
+        assert!(m.contains("n_rasterize_text_into"), "{m}");
+        assert!(m.contains("2 of its"), "{m}");
+        // It must not read as the sibling "stale build" diagnostic: the fix is a
+        // registration, and telling the author to rebuild sends them nowhere.
+        assert!(!m.contains("rebuild the native libraries"), "{m}");
+        assert!(
+            m.contains("generate_register_from_loft_with_bridges"),
+            "{m}"
+        );
+    }
+
+    /// A long list is truncated, but the COUNT still tells the author how many are
+    /// dead — a silently shortened list reads as "these seven", not "seven of twelve".
+    #[test]
+    fn a_long_list_is_truncated_but_the_count_is_not() {
+        let syms: Vec<String> = (0..12).map(|i| format!("n_f{i}")).collect();
+        let refs: Vec<&str> = syms.iter().map(String::as_str).collect();
+        let m = bridgeless_message("big", &refs);
+        assert!(m.contains("12 of its"), "{m}");
+        assert!(m.contains("+6 more"), "{m}");
+        assert!(!m.contains("n_f7"), "only the first six are listed: {m}");
     }
 }
 
