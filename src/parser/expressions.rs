@@ -1402,6 +1402,45 @@ use a separate collection or add after the loop"
         !accepted
     }
 
+    /// True when `to` is a keyed STRUCT FIELD that shares its records with a sibling
+    /// index — two or more keyed fields over one element type, which `types.rs`
+    /// auto-links into two VIEWS of a single record set (`Field.other_indexes`).
+    ///
+    /// Such a field cannot be cleared on its own: the free walks the shared records
+    /// and the sibling is left pointing at them, so whichever view is cleared first
+    /// takes the other's elements down with it. Callers that would otherwise emit a
+    /// whole-collection replace ask here and fall back to a path that does not free
+    /// (@P305 does the same for `coll[key] = value`, which cannot maintain the
+    /// siblings either).
+    pub(crate) fn keyed_field_is_multi_indexed(&self, to: &Value) -> bool {
+        let Value::Call(gf_nr, gf_args) = to.unspan() else {
+            return false;
+        };
+        if self.data.def(*gf_nr).name() != "OpGetField" {
+            return false;
+        }
+        let Some(Value::Int(byte_off)) = gf_args.get(1) else {
+            return false;
+        };
+        let Value::Var(sv) = gf_args[0].unspan() else {
+            return false;
+        };
+        let d_nr = match self.vars.tp(*sv) {
+            Type::Reference(d, _) => *d,
+            Type::RefVar(inner) => match &**inner {
+                Type::Reference(d, _) => *d,
+                _ => u32::MAX,
+            },
+            _ => u32::MAX,
+        };
+        if d_nr == u32::MAX {
+            return false;
+        }
+        let struct_tp = self.data.def(d_nr).known_type();
+        self.database
+            .keyed_field_is_linked(struct_tp, *byte_off as u16)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_assign_op(
         &mut self,
@@ -2452,24 +2491,44 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
-        // @P307 — keyed-collection STRUCT FIELD clear: `s.h = []` where
+        // @P307 — keyed-collection STRUCT FIELD replace: `s.h = [..]` where
         // `s.h: sorted`/`hash`/`index<T[K]>`.  The vector-field branch above
-        // handles `s.v = []`; the keyed analog used to fall through to the
+        // handles `s.v = [..]`; the keyed analog used to fall through to the
         // Insert bypass with no op emitted (silent no-op + leak) AND the
         // keyed-field write was never recognised by `check_ref_mutations`
         // (rejecting a `&` param as unmodified — see find_field_written_vars).
-        // Lower the empty-literal clear to `OpClearKeyed(field, kt)` which
+        // Prefix the literal with `OpClearKeyed(field, kt)`, which
         // `remove_claims`-frees the contents and zeroes the field's claim
-        // pointer, leaving an empty collection a later `+= [..]` re-inits.
-        // Mirrors the keyed-LOCAL clear (@P302, via OpDatabase) but for the
-        // in-struct claim shape.  Non-empty / non-literal keyed-field
-        // reassignment is a separate (harder) case left to its current path.
-        if !self.first_pass
+        // pointer; the literal's element-construction ops then run on an empty
+        // collection.  Mirrors the keyed-LOCAL clear (@P302, via OpDatabase)
+        // but for the in-struct claim shape.
+        //
+        // loft#895 — this covers a NON-EMPTY literal for the same reason the
+        // vector branch above does.  Only the empty one was cleared, so
+        // `s.h = [a, b]` appended to whatever the field already held and `=`
+        // silently meant `+=`: assigning twice left four elements rather than
+        // the two just written.
+        //
+        // A MULTI-INDEXED field is excluded from the NEW half and keeps that
+        // append (loft#898).  Its records are shared with a sibling view, and
+        // `OpClearKeyed` frees the records rather than just this route to them
+        // — so clearing here would leave the sibling reading freed memory,
+        // trading a wrong length for a use-after-free.  Replacing such a
+        // group's contents needs a clear that drops one index without freeing
+        // what the other still holds, which does not exist yet.  The empty
+        // literal keeps the clear it has always emitted, exclusion or not:
+        // making that one conditional would turn `s.h = []` back into the
+        // silent no-op @P307 fixed.
+        let keyed_field_replace = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && self.is_field(to)
-            && matches!(code, Value::Insert(ls) if ls.is_empty())
-        {
+            && match &*code {
+                Value::Insert(ls) if ls.is_empty() => true,
+                Value::Insert(_) => !self.keyed_field_is_multi_indexed(to),
+                _ => false,
+            };
+        if keyed_field_replace {
             let kt = match &f_type {
                 Type::Sorted(td, key, _) => {
                     let c = self.data.def(*td).known_type();
@@ -2486,9 +2545,10 @@ use a separate collection or add after the loop"
                 _ => None,
             };
             if let Some(kt) = kt {
-                *code = Value::Insert(vec![
-                    self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]),
-                ]);
+                let clear = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
+                if let Value::Insert(ls) = code {
+                    ls.insert(0, clear);
+                }
                 return Type::Void;
             }
         }
@@ -2652,6 +2712,27 @@ use a separate collection or add after the loop"
         } else {
             None
         };
+        // loft#895 — keyed-collection LOCAL replace: `s = [a, b]` where
+        // `s: sorted`/`hash`/`index`/`radix`/`trie<T[K]>`.  The literal arrives
+        // as element-construction ops that APPEND, so without a clear in front
+        // `=` meant `+=` on a local exactly as it did on a field: assigning
+        // twice left both literals' elements.  `Set(s, Null)` is the local
+        // clear — the same lowering `s = []` takes (P193 `create_keyed`),
+        // which codegen turns into the `OpDatabase` store reset.  It also gives
+        // the slot its init when a literal is the local's FIRST assignment,
+        // which is what `create_keyed` does for the empty one.
+        //
+        // The var-RHS branch below stays separate: `s = other` deep-copies via
+        // `OpReplaceKeyed`, which clears as part of the copy.
+        if keyed_kt.is_some()
+            && matches!(code, Value::Insert(ls) if !ls.is_empty())
+        {
+            let clear = v_set(var_nr, Value::Null);
+            if let Value::Insert(ls) = code {
+                ls.insert(0, clear);
+            }
+            return Type::Void;
+        }
         if let Some(kt) = keyed_kt
             && matches!(
                 s_type,
