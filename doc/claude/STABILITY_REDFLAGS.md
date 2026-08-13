@@ -108,6 +108,33 @@ re-read the backing record after a resize. A twin gets hardened where its bug wa
 against the other line by line, and land every new boundary row in the shared `.loft`
 guard so both backends run it — a "keep the two in step" comment is not a gate.
 
+**Two owners of one store, and only one of them knows.** A `0x8000` source-free bit means
+"nobody else owns this store" — a fact about the *source expression*, decided in the parser.
+`scan_args` then lifts an inline call result into a `__lift_N` the scope sweep frees, which
+makes the bit false without telling anyone. `free_named` is a no-op only while the slot is
+still free, so the second free is silent until the allocator hands that slot to somebody
+else — and a record return allocates its buffer in exactly that window (loft#890). Two rules
+follow:
+
+- **the FREE hand-off and the DROP hand-off are separate facts** and must be recorded
+  separately. @PLN139 stage C recorded only the drop, reasoning that "the free is left to
+  the ordinary sweep, which is null-tolerant either way"; a recycled slot is what makes that
+  untrue;
+- **`skip_free` is not a free-only switch.** Both backends read it at ALLOCATION time too
+  (`is_inline_ref || is_skip_free` in `state/codegen.rs`), so stamping it to suppress a free
+  made the lift BORROW instead of own, and the append wrote into its own source — 3 of 54
+  fuzz cells SIGSEGV'd. A "somebody else already freed this" note belongs in the pass that
+  emits the free, not on the variable.
+
+**A verdict that MINTS must be pass-stable, and skipping pass 1 is not "no verdict".** It is
+the opposite verdict: `ref_return` reads a binding with no dep as OWNED and renames it onto
+the return buffer, permanently. Pass 2 then sees the borrow and materialises — into the
+buffer the binding now IS — so `materialize_return_into` emits `OpDatabase(e);
+OpCopyRecord(e, e)` and the function answers the record it just re-minted (loft#889;
+`e = make()[k] ?? d; e` had it from loft#882 onward). A parse-time site that names an owner
+has to name it on BOTH passes; the way to keep the numbering stable is a separate counter
+(`__ref_p2_N`), not a pass guard.
+
 **Would-one-fact-collapse-it?** Yes — all of the above are the OWNERSHIP_MODEL
 remedy verbatim: *return-dep empty ⇒ adopt; `{Attr(src)}` ⇒ copy* (row 102), plus
 the *return-source SET over arms* (row 99) and *one funnelled return path* (row
