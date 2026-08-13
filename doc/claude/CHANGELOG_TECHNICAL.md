@@ -9,6 +9,52 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Two nightly gates that measured the environment, not the diff (loft#888, 2026-08-13)
+
+**The leak gate went red on our own fix.** loft#876 gave a field's declared default a home on
+the schema `Field`, and a TEXT default has to intern its spelling: `Content::Str` is a raw
+`{ptr, len}` with no owning variant, so `fold_declared_default` reaches for the same
+intentional `Box::leak` that `ir_read` / `ir_schema` / `snapshot` already use for the same
+type. That leak is bounded by the SOURCE — one allocation per field that declares a text
+default, decided once at type registration, never one per read — so it belongs in
+`.github/lsan_suppressions.txt` beside its three siblings.
+
+What kept it out was purely a symbolization detail: a suppression matches by FRAME NAME, and
+the function inlined into `typedef::fill_database`, so the only name on the stack was that
+one. Suppressing `fill_database` would have blinded the gate to every allocation in the whole
+type-registration path — a real loss, since that is where schema construction allocates. So
+`fold_declared_default` now carries `#[inline(never)]` FOR the suppression, and the two must
+be kept in step: drop the attribute and the suppression silently stops matching.
+
+Both halves are measured rather than argued. Without the suppression the frame is now named
+(`#2 loft::typedef::fold_declared_default`, `#3 fill_database`); with it, the run is clean and
+LSan reports the template it used. The per-file scan over the whole corpus is **0 leaking files
+of 721**. And the gate is still live where it matters: a deliberate `Box::leak` injected into
+`fill_database` itself is still reported, with the suppression file active, owner
+`loft::typedef::fill_database` — so the new line suppresses exactly one deliberate interner
+and nothing else.
+
+**The toolchain matrix failed before running a loft op.**
+`a_private_scope_end_hook_in_a_library_runs` spawns loft to BUILD a library cdylib, which links
+`libloft.rlib`. The `Suite under <toolchain>` job only ever runs `cargo test`, which builds the
+lib into `deps/` for the test binaries and never produces the rlib
+`native_lib::find_loft_rlib` looks for — so the spawned build died on "libloft.rlib not found
+for this build". That is an environment result, and this matrix exists to detect toolchain
+drift in loft's own code.
+
+The obvious repair does not work, which is why it is recorded here rather than tried again:
+adding `cargo build --release --lib` clears "not found" and then fails `E0463: can't find crate
+for libloading`, because `cargo test` and `cargo build --lib` unify features differently, so
+the uplifted rlib's dependency set is not the one sitting in `deps/`. Both cells were run in an
+isolated target dir; cell A reproduces the CI message verbatim. The test is therefore skipped
+in that job, which is the exclusion the asan and asan-leak jobs already carry for it and for
+the same reason (loft#855). Its sibling `a_delegating_producer_binds_its_companion_cleanly`
+passes there and is deliberately NOT skipped.
+
+The third leg needed no change: the `LOFT_POISON` gate was red on
+`877-index-a-call-result-in-return-position.loft`, which is loft#882 / loft#889 / loft#890, and
+the poison sweep now runs **1870/1870** on this branch.
+
 ### Two stores freed at the wrong time (loft#889, loft#890, 2026-08-13)
 
 **loft#890 — a lift freed what its consuming op had already released.** `br = mk_hash(n)`

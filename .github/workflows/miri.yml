@@ -757,12 +757,29 @@ jobs:
       # early June 2026 was red on `pkg_config::Error` in
       # `build_script_build` for exactly this, drowning the real
       # toolchain-churn signal the matrix exists to catch.
+      #
+      # `--skip a_private_scope_end_hook_in_a_library_runs`: the SAME exclusion the
+      # asan and asan-leak jobs already carry for this test, for the same reason and
+      # not a new one (loft#855).  It spawns loft to BUILD a library cdylib, which
+      # links `libloft.rlib` — and this job only ever runs `cargo test`, which builds
+      # the lib into `deps/` for the test binaries and never produces the rlib that
+      # `native_lib::find_loft_rlib` looks for.  So the spawned build dies on
+      # "libloft.rlib not found for this build" before it can execute a single loft
+      # op: an ENVIRONMENT result, not toolchain drift, which is all this matrix
+      # exists to detect.  Adding `cargo build --release --lib` does NOT fix it —
+      # measured: it clears "not found" and then fails `E0463: can't find crate for
+      # libloading`, because `cargo test` and `cargo build --lib` unify features
+      # differently, so the uplifted rlib's dependency set is not the one in `deps/`.
+      # The sibling `a_delegating_producer_binds_its_companion_cleanly` PASSES here
+      # and so is deliberately NOT skipped — a skip for a green test would cost
+      # coverage and buy nothing.
       - name: Test (ubuntu, ${{ matrix.toolchain }})
         run: >
           cargo +${{ matrix.toolchain }} test --release --no-fail-fast
           --lib --test issues --test wrap --test strings --test frame_vars
           -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
           --skip native_rs_functions_up_to_date --skip library_suite
+          --skip a_private_scope_end_hook_in_a_library_runs
 
       # The toolchain matrix compiles GENERATED Rust in the OS temp dir; when
       # a leg fails, that generated source is the diagnosis and is otherwise

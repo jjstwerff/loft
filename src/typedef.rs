@@ -38,6 +38,15 @@ use crate::lexer::Lexer;
 ///
 /// `Value::Null` is "no default declared". An explicit `= null` is the same answer the
 /// absent-value path already writes, so folding it would change nothing.
+///
+/// `#[inline(never)]` is load-bearing, not a hint. A text default interns its spelling
+/// with the same intentional `Box::leak` as `ir_read` / `ir_schema` / `snapshot`, so it
+/// needs the same LSan suppression — and a suppression matches by FRAME NAME. Inlined,
+/// the allocating frame reads as `typedef::fill_database`, and suppressing that would
+/// blind the leak gate to every allocation in the whole type-registration path. Keeping
+/// this a real frame lets `.github/lsan_suppressions.txt` name exactly the one deliberate
+/// leak and nothing else.
+#[inline(never)]
 pub(crate) fn fold_declared_default(value: &Value) -> Option<Content> {
     match value.unspan() {
         Value::Int(i) => Some(Content::Long(i64::from(*i))),
@@ -48,7 +57,10 @@ pub(crate) fn fold_declared_default(value: &Value) -> Option<Content> {
         Value::Float(f) => Some(Content::Float(*f)),
         Value::Single(f) => Some(Content::Single(*f)),
         // `Str` is the schema's interned spelling; a declared default outlives the parse
-        // exactly like a type name does.
+        // exactly like a type name does. `Content::Str` is a raw `{ptr, len}` with no
+        // owning variant, so the spelling is interned by an intentional, BOUNDED
+        // `Box::leak` — one allocation per field that declares a text default, never one
+        // per read — exactly as the IR/schema/snapshot readers do for the same type.
         Value::Text(s) => Some(Content::Str(Str::new(Box::leak(
             s.clone().into_boxed_str(),
         )))),
