@@ -9,6 +9,52 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
+
+`engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a
+hardcoded **18084**, because the fixture it drives —
+`tools/audience-demo-50/probe_server_kernel.loft` — binds that constant. Its own comment
+said so, and named the fix: *"this one test can still collide with a concurrent
+sibling-checkout run; fixing that needs a port-arg on the fixture."*
+
+On this machine 18084 was held by **five** long-lived processes from other checkouts
+(`planet_server-a`, `planet_server-e`, `loft_native_bin`), so the test failed for someone
+else's run — every run, not intermittently.
+
+The fixture now honours `LOFT_PROBE_PORT`, defaulting to `PORT` when unset
+(`env_variable` answers `""`), so the documented demo invocation is byte-identical. The
+test passes a port from a new `free_port()` helper.
+
+`free_port()` checks **TCP and UDP**: the kernel listens on both for one number, and the
+OS picks a TCP port knowing nothing about the UDP table — a TCP-only probe would hand
+back a port whose UDP half is taken, and the fast-lane assertions would then fail for a
+reason unrelated to the code under test. `SO_REUSEADDR` is deliberately not set, since a
+port that only looks free because of address reuse is not free.
+
+Candidates come from **20000–29999 keyed on the pid**, not from `bind(":0")`. The first
+attempt did use `bind(":0")` and a full-suite run then failed
+`engine_host_placed::the_engine_host_serves_the_same_client_from_either_placement`, which
+passes 6/6 in isolation on both this tree and the preceding commit. `bind(":0")` draws
+from the OS ephemeral range (32768–60999 on Linux) — the same pool every other test's
+port probe draws from, including that one's TCP-only `free_port` — so it traded a
+collision with a *well-known* port for a collision with a *sibling test*, which is harder
+to recognise when it bites. A pid-keyed number in a quiet range separates concurrent
+checkouts and stays out of that pool.
+
+`engine_host_placed` still has its own TCP-only probe. It is latently exposed to the same
+UDP half-taken hazard; left alone here because nothing has been measured failing on it
+once the ephemeral contention is removed, and a speculative rewrite of a second test's
+networking is churn.
+
+Verified by binding: with `LOFT_PROBE_PORT=19731` the fixture listens on 19731 for both
+UDP and TCP. The test's own timing is corroboration — it now connects to the port
+`free_port()` chose, so a fixture that ignored the variable would sit on 18084 and
+`ws_connect` would spin to its 15 s deadline; it completes in ~0.12 s instead.
+
+That closes the third and last of the session's flakes, all one shape — **a fixed-name
+shared resource plus parallelism**: a process-global overwritten per compile, one temp
+path for four callers, and a well-known port. Local gate: **4079 passed, 0 failed**.
+
 ### A test helper's temp file was keyed on the pid, so its four callers shared one path (2026-08-13)
 
 `tests/introspect.rs::resolution` wrote its program to
