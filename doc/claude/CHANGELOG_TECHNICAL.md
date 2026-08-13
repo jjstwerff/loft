@@ -86,6 +86,67 @@ one has zero. Runs from `main` beside `warn_dead_stores` / `warn_double_move`, r
 Deliberately an under-approximation, per the two-tier rule: binding the result to a local
 first stays silent, because that copy is still readable and belongs to `warn_copies`.
 
+### `=` to a keyed collection appended, because only the EMPTY literal cleared (loft#895, 2026-08-13)
+
+A collection literal lowers to element-construction ops that APPEND, so the assignment has
+to put a clear in front of them. `parse_assign_op`'s vector-field arm does. The keyed arm
+did it only for `Value::Insert(ls) if ls.is_empty()` — `s.h = []`, the @P307 clear — and
+said so in place: *"Non-empty / non-literal keyed-field reassignment is a separate (harder)
+case left to its current path."* So `s.h = [a, b]` added to what the field held, and `=`
+meant `+=`.
+
+The filed scope was a struct with two keyed fields, where the second assignment read length
+4 for two elements. The matrix says that is not the boundary. Assignment ORDER is
+irrelevant — the row filed as correct fails too, 4 the other way round — and a SINGLE keyed
+field assigned twice is equally wrong, as is a keyed LOCAL, which has no struct at all. The
+pair is just the loudest witness, because `Field.other_indexes` makes two keyed fields over
+one element type two views of one record set (loft#843), so filling either fills both.
+
+Two arms now carry the clear: the field one prefixes any literal with `OpClearKeyed`, and
+the local one prefixes `Set(v, Null)` — the lowering `s = []` already takes (P193
+`create_keyed`), which codegen turns into the `OpDatabase` store reset, and which also
+gives the slot its init when a literal is the local's first assignment.
+
+A MULTI-INDEXED field is excluded and keeps the append (loft#898). `OpClearKeyed` →
+`remove_claims` frees the element RECORDS, not just this route to them: `Parts::Array |
+Ordered` hands every slot back with `owning_elem: Some(elm)` unconditionally, and a
+borrowing `Parts::Hash` does the same whenever `owns_entries` is false. So both members of
+a group free the shared records and whichever is cleared first takes the other's elements
+down with it — `h.ordered = []` leaves `h.keyed` reporting length 2 over freed memory. That
+is a use-after-free, and emitting the clear there would trade #895's wrong length for it.
+`allocation.rs:2921` already carried the marker: `// TODO prevent removing records twice via
+secondary structures`. The exclusion reuses `keyed_field_is_linked`, the same predicate
+@P305 uses to route `coll[key] = value` away from the group for the same reason.
+
+The empty literal keeps its unconditional clear either way — making that one conditional
+would restore the silent no-op @P307 fixed, so the change is strictly additive.
+
+### A field-store RHS temp was typed as the destination, so it never owned anything (loft#897, 2026-08-13)
+
+`s.v = <expr>` lowers to `Set(tmp, expr); Clear(s.v); Append(s.v, tmp)`. `tmp` was built
+with `f_type` — the destination FIELD's type, deps included. scopes.rs frees a var only
+when its deps are EMPTY (*"`dep` empty → the variable owns the value → emit `OpFreeRef`"*),
+so a temp carrying the field's dep read as a borrow of the struct and no free was ever
+emitted. Any allocating RHS then leaked for the life of the program.
+
+Nothing about the `as` cast was involved, which is what the filed scope named. A local was
+clean only because a user local carries no such dep — `LOFT_VAR_TABLE` shows both temps
+marked `OWNS`, and the difference is entirely whether something BINDS the value. The
+borrowed-Var arm two branches up already builds its temp from a dep-free
+`Type::Vector(elm, Deps::none())` for the #320 aliasing reason; this is that same choice on
+the general arm, which is the one an allocating RHS reaches.
+
+The other half of the filed scope — the same expression consumed with NO binding — is not
+an ownership question and is loft#899. `#reading file`'s temp DECLARATION is lifted into an
+expression slot there (`{ !! INSERT _read_1(5):vector<single> = null … }`), which
+`--interpret` evaluates against the wrong header (`len` answers 1; `for e in` yields the
+second element alone) and `--native` emits as a `let` inside an expression, so rustc
+rejects it. The emitted `OpReadFile(…, db_tp=78)` is byte-identical between the working and
+broken programs, so the read op is not what differs. It is also order-sensitive: an
+unrelated `vector<single>` local elsewhere in the file flips the answer, which is what a
+type-registration side effect looks like. Fixing the leak on a path whose value is wrong
+would have been polishing, so this fix stops at the field store.
+
 ### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
 
 `engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a

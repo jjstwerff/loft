@@ -188,6 +188,52 @@ It stays quiet where nothing is lost: a value the function built from scratch, t
 write-it-and-return-it builder idiom, and a result you bind to a variable first (that copy
 is still yours to read).
 
+### `=` on a hash, sorted or index now replaces it, instead of adding to it
+
+Assigning a list to a keyed collection added to whatever it already held:
+
+```loft
+h: hash<Entry[k]> = [];
+h = [Entry{k:1}, Entry{k:2}];
+h = [Entry{k:5}, Entry{k:6}];
+println("{len(h)}");     // was 4 — all four entries, keys 1, 2, 5 and 6
+```
+
+`=` now means what it says: the collection holds exactly what you assigned. `+=` still
+adds, unchanged. This applies to `hash`, `sorted` and `index`, as a local or as a struct
+field — a plain `vector` always replaced correctly, which is part of why this went
+unnoticed for so long. So did a single assignment onto a fresh `[]`, which is what most
+code does; you only saw it if you assigned the same collection twice.
+
+The loudest version was a struct holding **two** keyed collections of the same element
+type. Those two fields are deliberately two views of one set of records, so filling either
+one fills both — and the second assignment then added to a collection you thought you had
+just replaced, giving a length of 4 for two elements. That case is not fixed yet and still
+adds: clearing one view frees records the other one is still using, so the fix there needs
+an answer to who owns the shared records ([#898](https://github.com/loft-lang/loft/issues/898)).
+Until then, give each keyed collection its own element type or its own struct.
+
+### Reading a file straight into a struct field no longer leaks
+
+```loft
+b.data = f#read(8) as vector<single>;
+```
+
+held on to one store for the rest of the run. Storing any freshly-allocated value into a
+vector field did — the assignment builds a hidden temporary to hold the right-hand side,
+and that temporary was described as borrowing the struct rather than owning its own
+storage, so it was never released. Passing the same value through a variable first was
+fine, which is why this looked like a problem with the `as` cast.
+
+One shape is still worth avoiding: the same read consumed with **no** variable at all —
+straight into `len(…)`, a `for … in` loop, a call argument, or a struct literal. That path
+answers the wrong value on the interpreter and does not compile with `--native`
+([#899](https://github.com/loft-lang/loft/issues/899)). Bind it first:
+
+```loft
+v = f#read(8) as vector<single>;     // then use `v`
+```
+
 ### Taking an element out of a keyed collection you just built
 
 `return lookup(n)[key]` — reading one record straight out of a `hash`, `index`, `sorted` or
