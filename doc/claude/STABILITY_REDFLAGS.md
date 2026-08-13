@@ -85,6 +85,29 @@ Re-derivation sites (loft2 tree):
 | reassign free-strategy forest | `src/state/codegen.rs` (`gen_set_first_at_tos` region) | `is_hidden_buf_arg && owned_ref && rhs_reads_v && …` — the canonical `has_ref_params && …` forest | under-reach |
 | scan_set paired-witness | `src/scopes.rs` (`scan_set`) | emits a **runtime** store-nr comparison because the static fact is absent | re-derived → runtime |
 
+**`dep.is_empty()` also HIDES the class from one backend** (measured, loft#882). Empty
+deps mean OWNED to `--native`'s assignment lowering, so a read whose dep is *missing*
+(not absent-because-owned) gets a defensive `OpDatabase` + `OpCopyRecord` and the program
+comes out right; the interpreter aliases and reads freed bytes. The keyed-element borrow
+scored `--interpret` 6/17 boundary cells against `--native` 14/17 **on the same IR**. Two
+consequences for anyone working this cluster:
+
+- a store-lifetime matrix that is lopsided between backends is evidence of a missing dep,
+  not of a codegen bug — read the emitted Rust and look for an `OpCopyRecord` beside a
+  plain element read;
+- a `--native` PASS is not evidence the dep is present, so every ownership probe has to
+  run `--interpret` under `LOFT_POISON=1` as well. The defensive copy is also why this
+  class survives a green suite: it is a silent perf cost on one backend and a
+  use-after-free on the other.
+
+**Twins drift exactly on the input nothing tests.** `State::append_copy` and
+`codegen_runtime::OpAppendCopy` disagreed on a NEGATIVE count (`--native` clamped, the
+interpreter cast `as u32` and walked off the store until glibc aborted) and on whether to
+re-read the backing record after a resize. A twin gets hardened where its bug was
+*observed*, and an observation happens on one backend. When touching one twin, diff it
+against the other line by line, and land every new boundary row in the shared `.loft`
+guard so both backends run it — a "keep the two in step" comment is not a gate.
+
 **Would-one-fact-collapse-it?** Yes — all of the above are the OWNERSHIP_MODEL
 remedy verbatim: *return-dep empty ⇒ adopt; `{Attr(src)}` ⇒ copy* (row 102), plus
 the *return-source SET over arms* (row 99) and *one funnelled return path* (row
