@@ -11,6 +11,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -136,6 +137,167 @@ fn host_output_goes_to_stderr_on_both_backends() {
             ),
             "{backend} stderr: {stderr:?}"
         );
+    }
+}
+
+/// Run `source` with stdin held OPEN by a pipe this test keeps its end of, so
+/// the child cannot reach EOF, and return its stdout.
+///
+/// This is the shape the plain `run` harness cannot express: it writes stdin and
+/// drops it, which closes the pipe and lets even a blocking drain finish.  An
+/// absent or slow host does neither, and that is where an unbounded read waits
+/// forever (loft#891).
+///
+/// `answers` plays the host: each `(request, reply)` pair writes `reply` onto
+/// the pipe when the program `host_output`s `request`.  Driving it off the
+/// program's own requests rather than off a sleep is what makes the ORDER of
+/// reads and writes a fact instead of a race — a fixed delay feeds `--native`
+/// while rustc is still compiling, so every chunk is already queued before
+/// `main` runs and a test about splitting reads never splits one.
+///
+/// A child still running after `grace` is killed and reported as a HANG rather
+/// than left to wedge the suite — a timeout is a result here, not an accident.
+fn run_with_open_stdin(
+    backend: &str,
+    source: &str,
+    answers: &[(&str, &[u8])],
+    grace: Duration,
+) -> String {
+    let id = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("loft_host_wait_{}_{id}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("hw.loft");
+    std::fs::write(&path, source).expect("write fixture");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args([backend, path.to_str().unwrap()])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loft");
+    // Held for the whole run: dropping it is what would signal EOF.
+    let pipe = child.stdin.take().expect("stdin");
+    let requests = child.stderr.take().expect("stderr");
+    let script: Vec<(String, Vec<u8>)> = answers
+        .iter()
+        .map(|(q, a)| ((*q).to_string(), (*a).to_vec()))
+        .collect();
+    let host = std::thread::spawn(move || {
+        let mut pipe = pipe;
+        for line in std::io::BufRead::lines(std::io::BufReader::new(requests)) {
+            let Ok(line) = line else { break };
+            for (request, reply) in &script {
+                if line.trim() == request {
+                    let _ = pipe.write_all(reply);
+                    let _ = pipe.flush();
+                }
+            }
+        }
+        // Returned rather than dropped here: closing the pipe would signal the
+        // EOF whose absence is the whole point of this harness.
+        pipe
+    });
+    let deadline = std::time::Instant::now() + grace;
+    let status = loop {
+        match child.try_wait().expect("try_wait") {
+            Some(s) => break Some(s),
+            None if std::time::Instant::now() >= deadline => break None,
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    let out = child.wait_with_output().expect("wait");
+    drop(host.join());
+    let _ = std::fs::remove_dir_all(&dir);
+    match status {
+        Some(_) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        None => format!(
+            "<{backend} HUNG with stdin open; partial stdout={:?}>",
+            String::from_utf8_lossy(&out.stdout)
+        ),
+    }
+}
+
+/// A bounded `host_input(ms)` ANSWERS when nothing is listening, instead of
+/// waiting for a stream that will never end.
+///
+/// This is loft#891's case exactly: a program asks its environment an optional
+/// question, and the answer it most needs is "nobody is there".  The default
+/// form cannot give it — waiting for EOF on a pipe no one closes is a hang — so
+/// the guard is that the process *terminates* with an empty read, on both
+/// backends.
+#[test]
+fn bounded_host_input_answers_with_no_host() {
+    let source = r#"fn main() {
+  host_output("MODE?");
+  m = host_input(200);
+  println("mode=[{m}] len={m.len()}");
+}
+"#;
+    for backend in ["--interpret", "--native"] {
+        let out = run_with_open_stdin(backend, source, &[], Duration::from_secs(20));
+        assert_eq!(out, "mode=[] len=0\n", "{backend}: {out:?}");
+    }
+}
+
+/// The other half: a bounded read still SEES input from a host that stays
+/// connected.
+///
+/// An unbounded read cannot answer here either — the bytes have arrived, but
+/// waiting for EOF means waiting for the host to hang up, so a live
+/// request/response exchange never gets its reply.  Returning "" would be the
+/// worse failure of the two (a false "nobody is listening"), which is why this
+/// runs beside the test above rather than on its own.
+#[test]
+fn bounded_host_input_reads_a_host_that_stays_connected() {
+    let source = r#"fn main() {
+  host_output("MODE?");
+  m = host_input(3000);
+  println("mode=[{m}] len={m.len()}");
+}
+"#;
+    for backend in ["--interpret", "--native"] {
+        let out = run_with_open_stdin(
+            backend,
+            source,
+            &[("MODE?", b"SERVER")],
+            Duration::from_secs(20),
+        );
+        assert_eq!(out, "mode=[SERVER] len=6\n", "{backend}: {out:?}");
+    }
+}
+
+/// A multi-byte character split across two host writes arrives WHOLE.
+///
+/// A timed read can land mid-character, and handing those bytes over as they
+/// come would turn one `é` into replacement characters on both sides of the
+/// split.  The first read takes the complete prefix only; the held-back byte
+/// must not then end the next wait instantly either, or that read reports empty
+/// while the character is one byte away.
+#[test]
+fn bounded_host_input_never_splits_a_character() {
+    // Each read is announced first, so the second chunk cannot be written until
+    // the first read has already returned — the tear is guaranteed, not hoped for.
+    let source = r#"fn main() {
+  host_output("ONE?");
+  a = host_input(3000);
+  host_output("TWO?");
+  b = host_input(3000);
+  println("a=[{a}] b=[{b}] sizes={a.size()}/{b.size()}");
+}
+"#;
+    for backend in ["--interpret", "--native"] {
+        // "caf" + the two bytes of 'é', torn apart between the writes.
+        let out = run_with_open_stdin(
+            backend,
+            source,
+            &[("ONE?", b"caf\xc3"), ("TWO?", b"\xa9")],
+            Duration::from_secs(20),
+        );
+        assert_eq!(out, "a=[caf] b=[é] sizes=3/2\n", "{backend}: {out:?}");
     }
 }
 

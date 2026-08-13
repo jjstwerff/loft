@@ -40,6 +40,35 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### A program can ask its environment a question it might not answer
+
+`host_input()` reads until whoever is writing hangs up. That is right for a compute
+program reading a file on its input, but it makes one question unaskable: *is anyone
+out there?* A program that does
+
+```loft
+host_output("MODE?");
+mode = host_input();
+```
+
+got an answer in a web page whose JavaScript replies — and waited forever anywhere
+else, because nothing that is absent ever hangs up.
+
+`host_input` now takes an optional wait:
+
+```loft
+mode = host_input(200);        // "" => nobody is listening, carry on locally
+```
+
+`host_input(0)` takes whatever has already arrived and returns straight away, a
+positive number waits that many milliseconds for the first byte, and plain
+`host_input()` still reads the whole stream exactly as before. So a request and its
+reply are now a conversation you can have outside the browser too — ask, wait a
+moment, and treat silence as an answer instead of a hang.
+
+Characters are never torn in half by the wait: a read that arrives mid-character
+hands over the part that is whole and keeps the rest for the next read.
+
 ### A test that names a helper the way its library does
 
 A package whose test file defined `fn defaulted(…)` while its library had a private
