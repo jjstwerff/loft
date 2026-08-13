@@ -10059,6 +10059,21 @@ impl Parser {
     ///
     /// An ARGUMENT-rooted projection is deliberately excluded: the caller owns that
     /// store, so the view outlives the call and the dep-driven path already handles it.
+    /// What a projection's BASE really is, seen through the wrappers a base arrives in.
+    ///
+    /// `container_dep` (loft#889) binds an inline call to a work-ref and leaves a block
+    /// whose result is that ref, so the base of `make_bag().h[k]` is a Block where the
+    /// walkers expect the `Var`.  Reading it as neither a var nor a call answered "this
+    /// projection is rooted at nothing", and the field was delivered as if it owned what
+    /// it points at.
+    fn projection_base(v: &Value) -> &Value {
+        match v.unspan() {
+            Value::Block(bl) => bl.operators.last().map_or(v, Self::projection_base),
+            Value::Insert(ops) => ops.last().map_or(v, Self::projection_base),
+            other => other,
+        }
+    }
+
     fn return_projects_into_local(&self, tail: &Value) -> bool {
         let (get_field, get_vector) = (
             self.data.def_nr("OpGetField"),
@@ -10074,7 +10089,7 @@ impl Parser {
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
             Value::Call(d, args) if *d == get_field || *d == get_vector => {
-                match args.first().map(Value::unspan) {
+                match args.first().map(Self::projection_base) {
                     // Rooted at a local: freed at scope exit, so the projection dangles.
                     Some(Value::Var(base)) => !self.vars.is_argument(*base),
                     // A chained projection — recurse to find the root.

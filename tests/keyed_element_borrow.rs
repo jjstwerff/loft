@@ -103,7 +103,7 @@ fn keyed_element_is_typed_as_a_borrow() {
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
 
     assert!(
-        text.contains("keyed_container"),
+        text.contains("inline_container"),
         "the collection a keyed element is read out of must be bound to a variable the \
          element can depend on — loft#882 regressed at the naming step\n{text}"
     );
