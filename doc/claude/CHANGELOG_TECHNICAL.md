@@ -9,6 +9,83 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A field store had no type check, and two of them corrupted the heap (loft#893, 2026-08-13)
+
+A field store is the one assignment form with no variable to re-type, so
+`change_var_type`'s rejection — the one that refuses `v = make()` for a local — never saw
+it. The checks that DID cover fields are further down `parse_assign_op`, behind an early
+return that a `text` or collection target takes first, so the class went unreported.
+
+Three symptoms, one missing assertion:
+
+* `h.v = make()` on a `vector<float>` field stored nothing and leaked the source store;
+* `h.s = 3` on a `text` field carried the integer into `OpSetText` as a text handle and
+  took SIGSEGV;
+* `h.v += make()` reached the same op pair and panicked writing into the read-only
+  `CONST_STORE`.
+
+So the hole was memory safety, not only a dropped write.
+
+Enforced at the point every store form still reaches (`parse_assign_op`, where `s_type`
+settles, before any of the early returns) — which is why one check closes all three. The
+predicate is `convert`, the same one the constructor path (`handle_field`) and the
+scalar-target check already ask, plus one named carve-out: a keyed collection BUILT from a
+vector of its elements (`h.m = [E{…}]` for `hash<E[k]>`) is the supported idiom, is
+deliberately not `is_equal`, and has no `convert` arm.
+
+`convert` is a `&mut self` emitter, so it is asked in the shape-only form it already
+understands — a `Value::Null` expression, which every rewriting arm guards against and no
+verdict depends on — and `conv_owned_result` is saved and restored around the call, since
+a cast arm sets it to mark an allocating conversion and the next real conversion `take()`s
+it. A probe that left it set would hand its answer to an unrelated expression. Adding the
+diagnostic therefore cannot move codegen.
+
+**Method note.** The predicate was run as a silent probe over all 2188 `.loft` files in
+the tree before it was allowed to speak. Exactly one file hit, and it was a true positive:
+`tests/docs/13-file.loft` read a sized `f#read` straight into a `vector<single>` field,
+which LOFT.md's conversion table documents as needing an explicit `as`. It had been
+storing an EMPTY field, and the example asserted nothing about the result, so nothing
+caught it — the doc stated a rule the code never ran. Fixed to the documented spelling
+and given the two assertions that would have caught it.
+
+Known and NOT fixed here: the documented `as vector<single>` cure leaks its store when
+consumed directly by a field store or call argument (loft#897), so the doc example binds
+it to a local first.
+
+### A write through a returned struct is now reported (loft#894, 2026-08-13)
+
+`hurt(first(s), 10.0)` writes into a temporary discarded one instruction later, while
+`hurt(s.es[0] ?? E {}, 10.0)` writes through — same types, no diagnostic on either. This
+is the shape `lost-write` exists to catch and it was silent, so the analysis now covers
+its second shape. Semantics unchanged.
+
+Two facts must meet, and requiring both is what separates a LOST write from a merely
+pointless one:
+
+* the callee WRITES THROUGH the parameter — read off its own body with
+  `find_field_written_vars`, the same walk `check_ref_mutations` uses to decide whether a
+  `&` parameter was really mutated, so the two cannot disagree about what such a write is;
+* the argument COPIES A PLACE THE CALLER CAN STILL REACH — read off the return type's
+  deps, since `first(s)` returns `E["s"]` while a value built from nothing is dep-free.
+
+The second condition is the one that matters. Without it the lint fires on
+`hurt(fresh(), …)`, where a write into a freshly built value loses nothing that existed
+before the call, and on the write-then-return builder idiom, where the write is delivered
+through the return value. A dep is believed only when it names a parameter the call site
+filled with a REAL variable: a function building into a caller-supplied return buffer
+carries a dep too (`alloc_canvas(w, h, fill)` returns `Canvas["cv"]`), and that copy is
+nobody's data — the `_`-prefix test tells them apart, the same convention
+`warn_dead_stores` uses.
+
+Both exclusions were found by sweeping all 2188 `.loft` files with the lint as a probe
+before letting it speak: the first cut had two hits, both the builder idiom, and the final
+one has zero. Runs from `main` beside `warn_dead_stores` / `warn_double_move`, reusing the
+`lost-write` code rather than minting one (same fact about the same C86 copy);
+`LOFT_NO_LOST_TEMP_WRITE` opts out.
+
+Deliberately an under-approximation, per the two-tier rule: binding the result to a local
+first stays silent, because that copy is still readable and belongs to `warn_copies`.
+
 ### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
 
 `engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a

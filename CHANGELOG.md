@@ -123,6 +123,71 @@ Worth knowing if you build big arrays: `[x; n]` is currently about **five times 
 than the equivalent `[for _ in 0..n { x }]`, so it is the spelling to reach for when you
 are filling a vector with one repeated value.
 
+### Storing the wrong type into a struct field now says so
+
+Assigning a value of the wrong type to a **field** was accepted and then did nothing. The
+old value stayed, no diagnostic appeared, and the program carried on:
+
+```loft
+st.view = graphics::mat4_look_at(eye, target, up);   // `view` is a vector<float>,
+                                                     // mat4_look_at returns a Mat4
+```
+
+That compiled clean and stored nothing, so the page drew every frame through whatever the
+field held before — a picture that looks like a camera bug. The identical assignment to a
+**local** was refused, which is what made it look like a hole rather than a decision.
+
+It was also not only a lost write. A `text` field given an integer carried that number
+into the text machinery as if it were a handle and crashed the process; a `+=` in the same
+shape wrote into read-only memory and panicked.
+
+All of it is now one error, naming the field's type and the cast that would make it
+deliberate:
+
+```
+error: Cannot assign Wrap to a field of type vector<float> — use 'as vector<float>' to
+cast explicitly
+```
+
+Correct stores are untouched, including the ones where the two types genuinely differ:
+building a `hash` or `sorted` field from a vector of its elements, storing `null` into a
+nullable field, an integer into a `float` field, and integer-spelled elements in a
+`vector<float>` literal.
+
+One thing to know if you read binary files: a sized `f#read` answers a raw byte buffer, so
+reading it back into a typed vector field needs the `as` that turns those bytes into
+elements — `b.data = f#read(n * sizeof(single)) as vector<single>`. Without it the field
+was silently left EMPTY. This is what the documentation always said; now the compiler says
+it too.
+
+### A write through a struct a function returned no longer disappears in silence
+
+The same element, reached three ways — and only two of them were a mutation you could see:
+
+```loft
+hurt(first(s), 10.0);             // 0  — the write went nowhere
+hurt(s.es[0] ?? E {}, 10.0);      // 10 — landed
+for e in s.es { hurt(e, 10.0); }  // 20 — landed
+```
+
+Returning a struct hands back a **copy**, and that copy is released at the end of the
+statement — so the write lands in something nobody can read. Nothing at the call site
+distinguished the three: same types, no warning, no error. Found while giving enemies HP in
+a game, where six tests failed at once and every one of them read as a bug in the thing
+being mutated rather than in the one-line accessor.
+
+The behaviour is unchanged — value semantics for a returned struct is the rule — but the
+silence is gone:
+
+```
+warning[lost-write]: `hurt` writes to `e`, but the argument here is a value RETURNED by a
+call — a temporary that is freed at the end of this statement, so the write is LOST.
+```
+
+It stays quiet where nothing is lost: a value the function built from scratch, the
+write-it-and-return-it builder idiom, and a result you bind to a variable first (that copy
+is still yours to read).
+
 ### Taking an element out of a keyed collection you just built
 
 `return lookup(n)[key]` — reading one record straight out of a `hash`, `index`, `sorted` or
