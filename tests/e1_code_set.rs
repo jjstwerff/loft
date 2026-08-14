@@ -250,6 +250,10 @@ const CODES: &[(&str, &str)] = &[
         "fn main() { print(\"needs an installed package manifest\"); }",
     ),
     (
+        "module-name-shadowed",
+        "fn main() { print(\"needs a two-package dependency graph\"); }",
+    ),
+    (
         "persist-bind-through-field",
         "struct Inner { k: integer }\n\
          struct Outer { items: hash<Inner[k]> }\n\
@@ -276,6 +280,14 @@ const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
         // rather than deleting, since the warning is the friendlier of the two.
         "missing-return-path",
         "pre-empted by a hard error, and gated on a deprecated spelling",
+    ),
+    (
+        // loft#912 — needs TWO packages, each holding a module file of the same basename,
+        // with one depending on the other. A single source file cannot express a
+        // dependency graph. Covered instead by `tests/module_name_clash.rs`, which builds
+        // the two-package tree and asserts both load orders.
+        "module-name-shadowed",
+        "requires a two-package dependency graph",
     ),
 ];
 

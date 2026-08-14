@@ -9,6 +9,103 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A module shadowed by a dependency's same-named file now says so (loft#912, 2026-08-14)
+
+A module's basename is global across a consumer's whole dependency graph. Only the first file to
+claim a name is loaded, so adding `src/catalogue.loft` to a package whose dependency already had
+one made the LOSER's functions simply absent — reported as `Unknown function part_list` at a line
+inside a package the consumer never edited and cannot fix. Nothing in the output mentioned a
+collision, so the search went looking for a missing `pub`, a typo, or a version skew.
+
+New `advice[module-name-shadowed]` names the collision and BOTH files: *"module 'catalogue' is
+declared by two files — '…/pkg_top/src/catalogue.loft' and '…/pkg_dep/src/catalogue.loft' — … this
+`use` binds the second one"*. Both load orders are covered, so the report does not move when a
+`use` is reordered.
+
+**The resolution itself is unchanged, and that is deliberate — decided against a measurement rather
+than a preference.** The obvious fix, refusing the clash, was implemented first and then measured:
+it breaks code that builds today. `graphics` ≤ 0.4.2 and `mesh3d` both ship `math` / `mesh` /
+`scene`, and this repo's own `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while
+carrying its own copies of all three — three test binaries went red. A first sweep over
+`~/.loft/registry` alone had said the clash was extinct; it missed the fixtures, which is the axis
+that was held fixed.
+
+**Scoping module names to their package is the fix this advice is a signpost for.** Two things
+block it, both worth recording: `Data::use_add` derives a new source id from the SIZE of the name
+map (so a second key per module happens to keep the counter right, but nothing says it must), and
+`qualified_type_name` derives a DATABASE type key from a module's short name — a package-qualified
+key has to stay machine-independent, so it cannot carry the package's path. Guards:
+`tests/module_name_clash.rs`, which asserts the advice fires in both directions AND that the
+`Unknown function` symptom still follows, so a test cannot silently claim the fix that has not
+landed. It also pins the three neighbouring shapes that must stay silent: a distinct name, one
+module used from two files of one package, and a file named like a declared dependency (which the
+existing dep-shadowing guard already resolves).
+
+### `loft doc <library>` documented nothing, into the directory you were standing in (loft#911, 2026-08-14)
+
+`loft doc` reads as — and is used as — `loft doc <library>`, but its argument was a PATH only. A
+library name is not a directory, so `loft doc graphics` took the empty-manifest branch: it created
+`./graphics/doc/` wherever the user happened to stand, found no `src/` to read, and reported
+"0 API sections" for a package with 119 documented `pub fn`s. The path it printed was relative, so
+the stray tree looked like part of the project — one was swept into an unrelated repository by a
+later `git add -A`.
+
+The argument now resolves as a directory first and an installed package second, and a name that
+resolves to NEITHER is an error that creates nothing. An installed library's docs go to
+`~/.loft/doc/<name>-<version>`, because the registry copy is shared immutable cache content and the
+working directory is not loft's to write to; `-o <dir>` overrides, and the reported path is
+absolute. `loft doc graphics` now reports 1 guide and 19 API sections. Guards:
+`tests/doc_command.rs`.
+
+### A non-empty collection literal on a nullable field aborted the compiler (loft#909, 2026-08-14)
+
+`struct S { m: vector<integer>?, t: integer }` with `S { m: [5], t: 3 }` aborted with
+`Incorrect var _vec_1[65535]`, on both backends and on the published release. Whether a field
+carries a record-pointer HEADER is a question about its storage, and `Optional(τ)` shares τ's
+storage exactly — but `parse_object_field` asked it by matching the declared type against the
+collection formers without peeling the marker. The field was therefore not recognised as a
+collection: the literal built through a standalone temp instead of in place, and that temp, minted
+with a dep on the struct it sits in, is exactly the case where `build_vector_list` skips
+`vector_db`. Nothing assigned it, so it reached codegen with no live interval and no stack slot.
+
+Both halves were needed — a non-nullable field took the in-place path, and an empty literal
+returned before the temp was minted — which is why each of them rescued the program. A nullable
+KEYED field failed one step earlier still, refusing the literal outright with "Cannot assign
+vector<R> to field of type optional(hash(…))".
+
+The peel is applied at the three sites that classify a field by its layout — `parse_object_field`'s
+header prime, `handle_field`'s deep-copy dispatch, and `get_type`, whose sibling resolvers
+(`type_def_nr`, `type_elm`, `rust_type`, `element_stack_size`) all peeled already while it answered
+`u16::MAX`, the "no such type" sentinel, for every `Optional`. The nullability checks keep the
+unpeeled type: those ARE about nullability. Guard:
+`tests/scripts/909-nullable-collection-field-literal.loft`.
+
+### A bare `if` statement swallowed the `[` of the line below it (loft#910, 2026-08-14)
+
+`[` postfix-indexes a value, and a `Void` expression produced none. `if` is an expression in loft,
+so a bare `if c { … }` STATEMENT reached the postfix chain that handles `.`, `[…]` and `(…)` — and
+that chain consumed the bracket opening the next line. A function whose tail expression was a
+vector literal had that literal read as an index on the `if` above it, and indexing a `Void` fell
+to the catch-all: *"Indexing a non vector — keyed collections have no generic-constructor
+expression"*, naming a feature the program does not use and a line that is correct as written.
+
+The filed scope was a comprehension in tail-return position reading a local a bare `if` had
+mutated. None of those three is the trigger: a plain `[1, 2]` fails identically, `else` makes no
+difference, and the mutation is irrelevant. `for` and `while` never had it — they are statements
+and never reach the chain. The guard reads the subject's TYPE, so an `if` that yields a value keeps
+its index: `if c { [1,2] } else { [3,4] }[0]` is unaffected. An indexed `Void` CALL
+(`voidcall()[0]`) is still an error, so no wrong program became a silently accepted one.
+
+**A native-only defect surfaced while pinning that last row**, present on the published release
+too: `if c { [1,2] } else { [3,4] }[0]` ran correctly under `--interpret` and failed native codegen
+with "expected expression, found `let` statement". A pre-eval binding is emitted as
+`let _pre_N = <text>;`, so the text has to be one Rust expression — and an `if` that pre-declares
+its branch variables emits `let mut var__vec_1: DbRef = …; if …`. The wrap that made a statement
+sequence an expression had been written into ONE of the two lowerings that produce that prefix, so
+the other never got it. It is now enforced on the artifact instead: whatever lands in a `let`
+binding is braced if it is a statement sequence, which no producer can drift away from. Guard:
+`tests/scripts/910-statement-if-does-not-index-the-next-line.loft`, asserted on both backends.
+
 ### `loft test` refused the path it prints (loft#913, 2026-08-14)
 
 `loft test` reports its files as `tests/<name>.loft` and rejected that exact string: the argument

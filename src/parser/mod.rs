@@ -355,6 +355,16 @@ pub struct Parser {
     /// names.  `None` = no manifest above that directory.
     pkg_dep_cache:
         std::collections::HashMap<String, Option<(String, std::collections::HashSet<String>)>>,
+    /// The FILE each `use` short-name was loaded from, canonicalised (loft#912).
+    ///
+    /// A module's short name is global across the whole dependency graph, but the
+    /// file it names is not: two packages may each hold `src/catalogue.loft`.  Only
+    /// the first is ever loaded — the second `use catalogue;` finds the name taken
+    /// and imports the other package's module — so the second package's own
+    /// functions are simply absent, reported as `Unknown function` at a line in a
+    /// package the author did not write.  Keeping the path is what lets the clash be
+    /// reported as a clash, naming both files.
+    use_paths: std::collections::HashMap<String, String>,
     /// Root project's `[dependencies]` version constraints (name → req), read
     /// once from the main script's nearest-ancestor `loft.toml` (via
     /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
@@ -892,6 +902,7 @@ impl Parser {
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
+            use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
             auto_use_trigger_map: None,
@@ -9307,6 +9318,13 @@ impl Parser {
                     } else {
                         None
                     };
+                    // loft#912 — the name is taken, but by WHICH file?  If this
+                    // package has its own `<id>.loft`, the two are different modules
+                    // sharing one global name, and the import below binds the other
+                    // package's.  Say so; the resolution itself is unchanged.
+                    if self.data.use_exists(&id) {
+                        self.module_name_clash(&id);
+                    }
                     if self.data.use_exists(&id) {
                         let lib_source = self.data.get_source(&id);
                         // @PLN22 Phase 3 — register the library alias for `m::` access.
@@ -9353,6 +9371,7 @@ impl Parser {
                         let cur = &self.lexer.pos().file;
                         self.todo_files.push((cur.clone(), self.data.source));
                         self.data.use_add(&id);
+                        self.record_use_path(&id, &f);
                         // @PLN22 Phase 3 — register the library alias now that the lib's
                         // source exists (use_add set self.data.source to it).  The
                         // import itself is recorded on the second encounter (via
@@ -9407,6 +9426,7 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&dep_id);
+                    self.record_use_path(&dep_id, &f);
                     self.switch_to_dep(&f);
                 }
             } else {
@@ -9507,6 +9527,7 @@ impl Parser {
                 // work-around: the load has nothing left to do.
                 if self.is_current_source(&f) {
                     self.data.use_add(&n);
+                    self.record_use_path(&n, &f);
                     continue;
                 }
                 if std::path::Path::new(&f).exists() {
@@ -9520,6 +9541,7 @@ impl Parser {
                 let cur = self.lexer.pos().file.clone();
                 self.todo_files.push((cur, self.data.source));
                 self.data.use_add(&name);
+                self.record_use_path(&name, &f);
                 self.switch_to_dep(&f);
             }
         }
@@ -9849,6 +9871,97 @@ impl Parser {
             f = format!("{id}.loft");
         }
         f
+    }
+
+    /// Remember which FILE a `use` short-name was loaded from (loft#912).
+    ///
+    /// Called at every site that pairs `Data::use_add` with a resolved path, so the
+    /// name→file mapping cannot drift from the load it describes.  Paths are
+    /// canonicalised, because the same file is reached by different spellings (a
+    /// relative `../pkg_dep/src/x.loft` here, an absolute one there) and only the
+    /// canonical form answers "is this the same module".
+    fn record_use_path(&mut self, id: &str, f: &str) {
+        let p = std::path::Path::new(f);
+        let canonical = p
+            .canonicalize()
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        self.use_paths.insert(id.to_string(), canonical);
+    }
+
+    /// The file the CURRENT file means by `use <id>`, when that is a module of its
+    /// own package — `<its dir>/<id>.loft` or `<its dir>/lib/<id>.loft`.
+    ///
+    /// `None` when no such file exists, or when `id` is a declared dependency of the
+    /// enclosing package: a dependency name always wins over a same-named file inside
+    /// the declaring package, which is the guard `lib_path` already applies.
+    fn own_module_file(&mut self, id: &str) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        if cur_dir.is_empty() {
+            return None;
+        }
+        if self
+            .package_declared_deps(&cur_dir)
+            .is_some_and(|(_, deps)| deps.contains(id))
+        {
+            return None;
+        }
+        let sep = sep_str();
+        [
+            format!("{cur_dir}{sep}{id}.loft"),
+            format!("{cur_dir}{sep}lib{sep}{id}.loft"),
+        ]
+        .into_iter()
+        .find(|c| std::path::Path::new(c).exists())
+    }
+
+    /// Report when `use <id>` here names a DIFFERENT file from the one already loaded
+    /// under that name, so the import below binds the other package's module.
+    ///
+    /// The module namespace is flat across the dependency graph while the files are
+    /// not.  Adding `src/catalogue.loft` to a package whose dependency already has one
+    /// leaves only the first loadable, and the loser's functions are then simply
+    /// absent — reported as `Unknown function part_list` at a line inside a package
+    /// the consumer never edited and cannot fix, with nothing naming a collision
+    /// (loft#912).  This says the collision out loud, and names both files.
+    ///
+    /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
+    /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
+    /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
+    /// `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while carrying
+    /// its own copies of all three.  Scoping module names to their package is the fix
+    /// this is a signpost for; it waits on two things this cannot reach — `use_add`
+    /// deriving a new source id from the SIZE of the name map, and
+    /// `qualified_type_name` deriving a DATABASE type key from a module's short name
+    /// (a package-qualified key must stay machine-independent, so it cannot carry the
+    /// package's path).
+    fn module_name_clash(&mut self, id: &str) {
+        let Some(own) = self.own_module_file(id) else {
+            return;
+        };
+        let own_canonical = std::path::Path::new(&own)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&own))
+            .to_string_lossy()
+            .to_string();
+        let Some(loaded) = self.use_paths.get(id) else {
+            return;
+        };
+        if *loaded == own_canonical {
+            return;
+        }
+        let loaded = loaded.clone();
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "module-name-shadowed",
+            "module '{id}' is declared by two files — '{own_canonical}' and '{loaded}' — \
+             and a module's file name is shared across the whole dependency graph, so \
+             this `use` binds the second one. Rename one file and its `use` if you meant \
+             the other"
+        );
     }
 
     /// The package context owning `cur_dir`: the nearest ancestor directory

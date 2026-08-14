@@ -63,6 +63,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `needless-const-parameter` | warning | `const` on a primitive parameter that is never modified. | Drop the `const`. | M · `@F18` |
 | `slow-reference-parameter` | advice | A `&` parameter that is only read — double-indirect on every access, and field mutation already propagates without it. | Drop the `&` unless you reassign the whole binding. | C · `@F21` |
 | `not-null-deprecated` | advice | `not null` is inert — a type is non-null by default now. | Delete it, or write `T?` if the type should allow null. | M C · `@F12` `@F1` |
+| `module-name-shadowed` | advice | Two packages declare a module of the same file name, so this `use` binds the other package's file and this package's own is never loaded. | Rename one file and its `use`. | M · `@F16` |
 | `const-reevaluated` | advice | A file-scope `const` is an inlined expression, so its initialiser runs at every reference. | Compute it once in a function that caches. | C · `@F18` |
 | `digit-separator-grouping` | warning | Digit separators that are not on thousands boundaries. | Regroup in threes. | C · `@F3` |
 | `empty-braces-not-collection` | warning | An empty `{}` where a collection literal was meant. | Write `[]`. | M · `@F6` |
