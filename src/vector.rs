@@ -656,7 +656,11 @@ pub fn ordered_find(
         rec: 0,
         pos: 0,
     };
-    if sorted_rec == 0 {
+    if sorted_rec == 0 || length == 0 {
+        // An EMPTY collection has no slot to compare against, and `length - 1` below
+        // would wrap to u32::MAX and walk the binary search off the vector.  The
+        // `sorted_find` twin has always guarded this; here it was unreachable only
+        // while every caller was dead code (loft#904).
         return (0, false);
     }
     let mut found = false;
@@ -716,6 +720,130 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
     }
 }
 
+/// Step one element BACKWARDS through a slot vector, in byte offsets.
+///
+/// The byte-offset mirror of [`vector_step_rev`], which does the same walk in
+/// element indices for an inline `sorted`.  `pos == i32::MAX` or any position past
+/// the last slot is the not-yet-started sentinel and begins at the last element;
+/// `i32::MAX` is answered once the walk has passed the first.
+///
+/// Its absence is why `rev()` over an `ordered` collection walked FORWARDS: the
+/// stepper had only [`vector_next`], so the reverse bit had nothing to select
+/// (loft#904).
+pub fn vector_prev(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
+    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    if rec == 0 {
+        *pos = i32::MAX;
+        return;
+    }
+    let length = keys::store(data, stores).get_u32_raw(rec, 4) as i32;
+    if length == 0 {
+        *pos = i32::MAX;
+        return;
+    }
+    let last = 8 + (length - 1) * i32::from(size);
+    if *pos == i32::MAX || *pos > last {
+        // Not started, or an upper bound past the end — begin at the last element.
+        *pos = last;
+    } else if *pos > 8 {
+        *pos -= i32::from(size);
+    } else {
+        *pos = i32::MAX; // passed the first element
+    }
+}
+
+/// The slot stride of an `ordered` collection: it holds 4-byte record ids.
+///
+/// A hash's iteration scratch can stride 8 (`(record, offset)` pairs for arena
+/// entries, @PLN135 arc H) and reads its width out of its own header — but that
+/// scratch is only ever walked UNBOUNDED, so it never reaches the cursor
+/// arithmetic below.
+const ORDERED_STRIDE: u32 = 4;
+
+/// The `(start, finish)` cursor pair for iterating an `ordered` collection over a
+/// key range — the shared derivation both backends call, the way `tree::range_cursors`
+/// is shared for an `index`.
+///
+/// Both cursors are BYTE OFFSETS into the slot vector, which is the unit
+/// [`vector_next`] / [`vector_prev`] walk in and [`step_ordered`] returns. Deriving
+/// them as slot INDICES is what loft#904 was: `State::iterate` produced indices,
+/// the stepper read them as byte offsets, and a bounded range therefore walked from
+/// somewhere inside the vector's header — every element reading zero going forwards,
+/// a SIGSEGV going backwards. Each backend had its own copy of the derivation and
+/// they had already drifted apart, which nothing noticed because neither was ever
+/// consumed.
+///
+/// The index arithmetic mirrors the `sorted` arm (`State::iterate`, `on = 2`), which
+/// is correct and whose bound semantics loft#691 settled — a collection's kind must
+/// not change what a range means, and which of the two a program gets depends only on
+/// whether some other struct mentions a keyed collection over the element type:
+///
+/// * forward — `start` is the cursor the first step advances FROM, so one before the
+///   first element to visit (`i32::MAX`, the not-started sentinel, when that is the
+///   very first slot); `finish` is the first position NOT to visit.
+/// * reverse — `start` is one PAST the highest element to visit (anything beyond the
+///   last slot reads as not-started); `finish` is the LOWEST position to visit.
+/// * `ex` describes the UPPER bound only; the lower bound is always inclusive, which
+///   is why `from` is always searched with `true`.
+///
+/// A `finish` of 0 means NO bound in either direction — it is below every valid
+/// position, so it can never trip, and it is what the unbounded form returns. That
+/// keeps `on = 4` (a hash / radix / trie scratch, always unbounded) walking to the
+/// end unchanged.
+#[must_use]
+pub fn ordered_range_cursors(
+    data: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[Content],
+    till: &[Content],
+    ex: bool,
+    reverse: bool,
+) -> (u32, u32) {
+    if from.is_empty() && till.is_empty() {
+        return (i32::MAX as u32, 0);
+    }
+    let store = keys::store(data, stores);
+    let vec_rec = store.get_u32_raw(data.rec, data.pos);
+    let length = if vec_rec == 0 {
+        0
+    } else {
+        store.get_u32_raw(vec_rec, 4)
+    };
+    let at = |slot: u32| 8 + slot * ORDERED_STRIDE;
+    if reverse {
+        let start = if till.is_empty() {
+            length
+        } else {
+            ordered_find(data, ex, stores, keys, till).0
+        };
+        let finish = if from.is_empty() {
+            0
+        } else {
+            ordered_find(data, true, stores, keys, from).0
+        };
+        (at(start), at(finish))
+    } else {
+        let first = if from.is_empty() {
+            0
+        } else {
+            ordered_find(data, true, stores, keys, from).0
+        };
+        let last = if till.is_empty() {
+            length
+        } else {
+            let (t, cmp) = ordered_find(data, ex, stores, keys, till);
+            if ex || cmp { t } else { t + 1 }
+        };
+        let start = if first == 0 {
+            i32::MAX as u32
+        } else {
+            at(first - 1)
+        };
+        (start, at(last))
+    }
+}
+
 /// Byte offset in an iteration-scratch header holding [`scratch_tag`].
 ///
 /// The header is two words: offset 4 the element vector, offset 8 the source store,
@@ -759,7 +887,13 @@ pub fn is_scratch_header(store: &Store, scratch: &DbRef) -> bool {
 ///   sits at the header's offset 8 (`data.pos + 4`).  Yielding in that store lets the
 ///   scratch live in a different (writable) store than a read-only/exposed source — see
 ///   expose-iteration-scratch.md.
-pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> (DbRef, u32) {
+pub fn step_ordered(
+    data: &DbRef,
+    cur: u32,
+    stores: &[Store],
+    sourced: bool,
+    reverse: bool,
+) -> (DbRef, u32) {
     let store = keys::store(data, stores);
     // @PLN135 arc H — a hash's entries are SLOTS in a chunked arena, so an element is
     // `(record, offset)` and no longer a record number whose body starts at 8.  Its
@@ -776,7 +910,11 @@ pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> 
     let wide = tag & SCRATCH_MARK_MASK == SCRATCH_MARK && tag & 0xFFFF == 8;
     let stride: u16 = if wide { 8 } else { 4 };
     let mut pos = cur as i32;
-    vector_next(data, &mut pos, stride, stores);
+    if reverse {
+        vector_prev(data, &mut pos, stride, stores);
+    } else {
+        vector_next(data, &mut pos, stride, stores);
+    }
     let vector = store.get_u32_raw(data.rec, data.pos);
     let (rec, elem_pos) = if pos == i32::MAX {
         (0, 8)

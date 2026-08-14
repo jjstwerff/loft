@@ -1174,25 +1174,17 @@ pub fn OpIterate(
             pack_iter(start, finish)
         }
         3 | 4 => {
-            // C60 piece 3: Ordered iteration — `data` points at a
-            // header record whose offset-4 word is the u32-stride
-            // rec-nr vector rec-nr.  Unbounded form (from/till empty)
-            // uses the "not started" sentinel recognised by
-            // `vector_next` (i32::MAX = 0x7FFF_FFFF), NOT u32::MAX.
-            // on=4 (fresh-scratch hash/radix) shares this cursor setup.
-            if from.is_empty() && till.is_empty() {
-                pack_iter(i32::MAX as u32, 0)
-            } else if reverse {
-                let s = vector::ordered_find(&data, ex, all, keys, till).0 + u32::from(!ex);
-                let f = vector::ordered_find(&data, ex, all, keys, from).0 + 1;
-                pack_iter(s, f)
-            } else {
-                let s = vector::ordered_find(&data, true, all, keys, from).0;
-                let start = if s == 0 { u32::MAX } else { s - 1 };
-                let (t, cmp) = vector::ordered_find(&data, ex, all, keys, till);
-                let finish = if ex || cmp { t } else { t + 1 };
-                pack_iter(start, finish)
-            }
+            // C60 piece 3: Ordered iteration — `data` points at a header record whose
+            // offset-4 word is the u32-stride rec-nr vector rec-nr.  on=4
+            // (fresh-scratch hash/radix) shares this cursor setup.
+            //
+            // The derivation is shared with `State::iterate` (loft#904) — the two had
+            // their own copies of the bounded arms, expressed in SLOT INDICES where the
+            // stepper walks BYTE OFFSETS, and had already drifted apart without anything
+            // noticing, because a bounded or reverse `ordered` walk never consumed them.
+            let (start, finish) =
+                vector::ordered_range_cursors(&data, all, keys, from, till, ex, reverse);
+            pack_iter(start, finish)
         }
         _ => pack_iter(u32::MAX, u32::MAX),
     }
@@ -1288,9 +1280,24 @@ pub fn OpStep(
             // C60 piece 3: Ordered iteration over the u32-stride rec-nr scratch.
             // Shares `vector::step_ordered` with the interpreter (src/state/io.rs).
             // on=4 (fresh-scratch hash/radix) yields in the source store from the header.
-            let (elem, new_pos) = vector::step_ordered(&data, cur, all, on & 63 == 4);
+            let (elem, new_pos) = vector::step_ordered(&data, cur, all, on & 63 == 4, reverse);
             cur = new_pos;
-            elem
+            // `finish` bounds the range in the cursor's own BYTE-OFFSET unit, and 0 means
+            // no bound — see the twin in `State::step` (`src/state/io.rs`), and keep the
+            // two in step.
+            let past = finish != 0
+                && new_pos != i32::MAX as u32
+                && if reverse {
+                    new_pos < finish
+                } else {
+                    new_pos >= finish
+                };
+            if past {
+                finish = u32::MAX;
+                stores.element_reference(&data, i32::MAX)
+            } else {
+                elem
+            }
         }
         _ => stores.element_reference(&data, i32::MAX),
     };
@@ -2424,9 +2431,9 @@ pub fn OpRemove<S: IterState>(
             if cur < 8 {
                 return;
             }
-            // The rewind follows the STEPPER, not the `reverse` bit — see the twin in
-            // `State::remove` (`src/state/io.rs`), and keep the two in step.
-            let n = cur - 4;
+            // Same rewind rule as arm 0 — see the twin in `State::remove`
+            // (`src/state/io.rs`), and keep the two in step.
+            let n = if reverse { cur } else { cur - 4 };
             stores.remove_vector_at(&data, arg as u16, i64::from((cur - 8) / 4));
             state.set_cur(n);
         }

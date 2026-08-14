@@ -1207,28 +1207,25 @@ impl State {
             3 | 4 => {
                 // ordered points to the position inside the vector of references.
                 // on=4 (fresh-scratch hash/radix, source store in the header) shares the
-                // exact same cursor setup — only step()'s yield store differs.
-                if from.is_empty() && till.is_empty() {
-                    // C60 piece 3 edit E: unbounded iteration (`for e
-                    // in h { … }` with no range).  ordered_find with an
-                    // empty key returns (0, true) which collapses
-                    // start=0/finish=0, so the step protocol never
-                    // fires even once.  Set start to the "not started"
-                    // sentinel that `vector_next` recognises at
-                    // src/vector.rs:455 — it checks `*pos == i32::MAX`
-                    // (the i32 positive max, 0x7FFF_FFFF), *not*
-                    // u32::MAX.  Passing u32::MAX here casts to i32 as
-                    // -1 and falls into the "advance" branch, reading
-                    // garbage at pos=-1+size.
-                    start = i32::MAX as u32;
-                    finish = 0;
-                } else if reverse {
-                    start = vector::ordered_find(&data, true, all, &keys, &from).0 + u32::from(!ex);
-                    finish = vector::ordered_find(&data, ex, all, &keys, &till).0 + 1;
-                } else {
-                    let (s, cmp) = vector::ordered_find(&data, ex, all, &keys, &till);
-                    start = if cmp || s == 0 { s } else { s - 1 };
-                    finish = vector::ordered_find(&data, ex, all, &keys, &from).0 - u32::from(!ex);
+                // exact same cursor setup — only step()'s yield store differs, and its
+                // from/till are always empty, so it takes the unbounded answer.
+                //
+                // The derivation is shared with the native runtime (loft#904), the way
+                // `tree::range_cursors` is for an index: each backend had its own copy of
+                // the bounded arms, in SLOT INDICES where the stepper walks BYTE OFFSETS,
+                // and the two had already drifted apart — invisibly, because neither was
+                // ever consumed.
+                let (s_cur, f_cur) =
+                    vector::ordered_range_cursors(&data, all, &keys, &from, &till, ex, reverse);
+                start = s_cur;
+                finish = f_cur;
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=ordered reverse={reverse} ex={ex} start={start} \
+                         finish={finish} from_keys={} till_keys={}",
+                        from.len(),
+                        till.len()
+                    );
                 }
             }
             _ => panic!("Not implemented on {on}"),
@@ -1365,10 +1362,32 @@ impl State {
                     // in the scratch header; on=3 (co-located) yields in data.store_nr.
                     // A read-only source's dedicated scratch store is freed by the loop
                     // epilogue's OpFreeScratch, not here (covers break too).
-                    let (elem, new_pos) =
-                        vector::step_ordered(&data, cur, &self.database.allocations, on & 63 == 4);
+                    let (elem, new_pos) = vector::step_ordered(
+                        &data,
+                        cur,
+                        &self.database.allocations,
+                        on & 63 == 4,
+                        reverse,
+                    );
                     self.put_var(state_var - 8, new_pos);
-                    elem
+                    // `finish` bounds the range in the same BYTE-OFFSET unit the cursor
+                    // walks in, and 0 means no bound (it is below every valid position,
+                    // so it never trips) — which is what an unbounded walk and every
+                    // `on = 4` scratch return.  Nothing consulted it here at all, so a
+                    // bounded range ran past its end (loft#904).
+                    let past = finish != 0
+                        && new_pos != i32::MAX as u32
+                        && if reverse {
+                            new_pos < finish
+                        } else {
+                            new_pos >= finish
+                        };
+                    if past {
+                        self.put_var(state_var - 12, u32::MAX);
+                        new_ref(&data, 0, 0)
+                    } else {
+                        elem
+                    }
                 }
                 _ => panic!("Not implemented"),
             }
@@ -1496,12 +1515,8 @@ impl State {
                 if cur < 8 {
                     return;
                 }
-                // The rewind follows the STEPPER, not the `reverse` bit: this arm's
-                // `vector::step_ordered` walks forwards whatever `on & 64` says, so
-                // `rev()` over an `ordered` iterates forwards today (loft#904) and a
-                // backwards rewind would revisit and skip.  When loft#904 teaches the
-                // stepper to go backwards, this needs arm 0's `if reverse { cur }`.
-                let n = cur - 4;
+                // Same rewind rule as arm 0, one slot wide instead of one index.
+                let n = if reverse { cur } else { cur - 4 };
                 self.database
                     .remove_vector_at(&data, tp, i64::from((cur - 8) / 4));
                 self.put_var(state_var - 8, n);
