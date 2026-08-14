@@ -732,7 +732,7 @@ impl Parser {
         // release build and `Unknown record N` from `Store::valid` under debug
         // assertions.  The doc above says the record belongs to the collection and is
         // freed once; this is the flag that makes that true.
-        self.vars.mark_skip_free(found);
+        self.vars.set_skip_free(found);
         let mut ops = vec![Value::Set(found, Box::new(get_rec.clone()))];
         for (off, coll_tp, _) in &members {
             if *off == byte_off {

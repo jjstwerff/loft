@@ -2655,7 +2655,7 @@ use a separate collection or add after the loop"
                     // SIGSEGV instead, because `b.items = add(b.items, k)` in a loop then
                     // reads a record overwritten with 0xDEADBEEF.
                     if Self::yields_a_return_buffer(&self.data, &rhs_saved) {
-                        self.vars.mark_skip_free(tmp);
+                        self.vars.set_skip_free(tmp);
                     }
                     let set_tmp = v_set(tmp, rhs_saved);
                     let clear = self.clear_vector_field(to, &lhs_parent_tp);

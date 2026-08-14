@@ -2344,20 +2344,6 @@ impl Function {
         }
     }
 
-    /// Do not emit an `OpFreeRef` for `v_nr` at scope exit — this variable NAMES
-    /// storage that something else owns.
-    ///
-    /// The flag rather than an empty-deps type: deps say *what* a value borrows,
-    /// and a temp bound from a call's return buffer borrows the BUFFER, which is
-    /// not a place the deps of the assignment's destination can describe. Writing
-    /// it as a dep instead makes a borrow read as a borrow of the wrong thing —
-    /// which is how the two temps below ended up owning storage twice.
-    pub fn mark_skip_free(&mut self, v_nr: u16) {
-        if v_nr != u16::MAX && !self.is_argument(v_nr) {
-            self.variables[v_nr as usize].skip_free = true;
-        }
-    }
-
     fn mark_skip_free_by_name(&mut self, n: &str) {
         let v_nr = self.var(n);
         // A name inside the abandoned range can belong to the return-buffer ARGUMENT
