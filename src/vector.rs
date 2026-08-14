@@ -334,11 +334,22 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
             store.set_u32_raw(db.rec, db.pos, new_sorted);
             sorted_rec = new_sorted;
         }
+        // The scratch slot the constructor writes into is the one `sorted_finish` /
+        // `ordered_finish` will read the new record back out of, and at length 0 they
+        // take the "first record needs no reordering" path and read slot 0 — not
+        // `length + 1`.  Both branches only ever meet at length 0 through a
+        // collection that was EMPTIED and still holds its allocation, which
+        // `coll[key] = null` produces and `coll = []` does not (it drops the
+        // record, so the branch above claims a fresh one).  The append then landed
+        // in slot 1 while `sorted_finish` published slot 0 — the bytes of the last
+        // element removed, with its text already freed, so `x.a += [E{k:9,…}]` read
+        // back as the removed `2:null` and the new element was simply lost.
+        let slot = if length == 0 { 0 } else { length + 1 };
         // return the last record inside the allocation
         DbRef {
             store_nr: db.store_nr,
             rec: sorted_rec,
-            pos: checked_vec_pos(length + 1, size),
+            pos: checked_vec_pos(slot, size),
         }
     }
 }
@@ -433,7 +444,10 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
     keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1 + length);
 }
 
+/// `#[inline]` because a generated `--native` program links this across a crate
+/// boundary with no LTO — see [`get_vector`].
 #[must_use]
+#[inline]
 pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
     // A null vector (absent) and an unallocated/empty vector both have length 0;
     // the null sentinel is checked first so it never indexes stores[u16::MAX].
@@ -467,7 +481,25 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
     }
 }
 
+/// Read the element at `from` out of the vector `db` points at, as a `DbRef`.
+///
+/// An out-of-range index and a null vector both answer the null element (`rec: 0`),
+/// which is what makes `v[i]` a nullable read rather than a fault.
+///
+/// Keep the `#[inline]`. It is not a hint about size: a `--native` program is a
+/// SEPARATE crate that links loft's runtime rlib, and it is compiled without LTO, so a
+/// plain `pub fn` here is a real call per element that the caller cannot see into. The
+/// caller then resolves the store a second time for the element read, because nothing
+/// tells it this function already did. The whole indexed-read chain is marked inlinable
+/// for that reason — this, [`length_vector`], `keys::store` and `Stores::store` — and it
+/// is worth ~1.7x on an indexed-read kernel (loft#885, and PERFORMANCE.md § Native vs
+/// Rust root cause 3b for the measurement).
+///
+/// The `length_vector` call below is not the cost it appears to be: rustc inlines it
+/// within the rlib and drops the repeated resolution, so hoisting it by hand buys
+/// nothing.
 #[must_use]
+#[inline]
 pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     // Indexing into a null (absent) vector yields the null element, not an OOB
     // on stores[u16::MAX].  (An out-of-range index on a real vector returns the
@@ -624,7 +656,11 @@ pub fn ordered_find(
         rec: 0,
         pos: 0,
     };
-    if sorted_rec == 0 {
+    if sorted_rec == 0 || length == 0 {
+        // An EMPTY collection has no slot to compare against, and `length - 1` below
+        // would wrap to u32::MAX and walk the binary search off the vector.  The
+        // `sorted_find` twin has always guarded this; here it was unreachable only
+        // while every caller was dead code (loft#904).
         return (0, false);
     }
     let mut found = false;
@@ -684,6 +720,130 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
     }
 }
 
+/// Step one element BACKWARDS through a slot vector, in byte offsets.
+///
+/// The byte-offset mirror of [`vector_step_rev`], which does the same walk in
+/// element indices for an inline `sorted`.  `pos == i32::MAX` or any position past
+/// the last slot is the not-yet-started sentinel and begins at the last element;
+/// `i32::MAX` is answered once the walk has passed the first.
+///
+/// Its absence is why `rev()` over an `ordered` collection walked FORWARDS: the
+/// stepper had only [`vector_next`], so the reverse bit had nothing to select
+/// (loft#904).
+pub fn vector_prev(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
+    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    if rec == 0 {
+        *pos = i32::MAX;
+        return;
+    }
+    let length = keys::store(data, stores).get_u32_raw(rec, 4) as i32;
+    if length == 0 {
+        *pos = i32::MAX;
+        return;
+    }
+    let last = 8 + (length - 1) * i32::from(size);
+    if *pos == i32::MAX || *pos > last {
+        // Not started, or an upper bound past the end — begin at the last element.
+        *pos = last;
+    } else if *pos > 8 {
+        *pos -= i32::from(size);
+    } else {
+        *pos = i32::MAX; // passed the first element
+    }
+}
+
+/// The slot stride of an `ordered` collection: it holds 4-byte record ids.
+///
+/// A hash's iteration scratch can stride 8 (`(record, offset)` pairs for arena
+/// entries, @PLN135 arc H) and reads its width out of its own header — but that
+/// scratch is only ever walked UNBOUNDED, so it never reaches the cursor
+/// arithmetic below.
+const ORDERED_STRIDE: u32 = 4;
+
+/// The `(start, finish)` cursor pair for iterating an `ordered` collection over a
+/// key range — the shared derivation both backends call, the way `tree::range_cursors`
+/// is shared for an `index`.
+///
+/// Both cursors are BYTE OFFSETS into the slot vector, which is the unit
+/// [`vector_next`] / [`vector_prev`] walk in and [`step_ordered`] returns. Deriving
+/// them as slot INDICES is what loft#904 was: `State::iterate` produced indices,
+/// the stepper read them as byte offsets, and a bounded range therefore walked from
+/// somewhere inside the vector's header — every element reading zero going forwards,
+/// a SIGSEGV going backwards. Each backend had its own copy of the derivation and
+/// they had already drifted apart, which nothing noticed because neither was ever
+/// consumed.
+///
+/// The index arithmetic mirrors the `sorted` arm (`State::iterate`, `on = 2`), which
+/// is correct and whose bound semantics loft#691 settled — a collection's kind must
+/// not change what a range means, and which of the two a program gets depends only on
+/// whether some other struct mentions a keyed collection over the element type:
+///
+/// * forward — `start` is the cursor the first step advances FROM, so one before the
+///   first element to visit (`i32::MAX`, the not-started sentinel, when that is the
+///   very first slot); `finish` is the first position NOT to visit.
+/// * reverse — `start` is one PAST the highest element to visit (anything beyond the
+///   last slot reads as not-started); `finish` is the LOWEST position to visit.
+/// * `ex` describes the UPPER bound only; the lower bound is always inclusive, which
+///   is why `from` is always searched with `true`.
+///
+/// A `finish` of 0 means NO bound in either direction — it is below every valid
+/// position, so it can never trip, and it is what the unbounded form returns. That
+/// keeps `on = 4` (a hash / radix / trie scratch, always unbounded) walking to the
+/// end unchanged.
+#[must_use]
+pub fn ordered_range_cursors(
+    data: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[Content],
+    till: &[Content],
+    ex: bool,
+    reverse: bool,
+) -> (u32, u32) {
+    if from.is_empty() && till.is_empty() {
+        return (i32::MAX as u32, 0);
+    }
+    let store = keys::store(data, stores);
+    let vec_rec = store.get_u32_raw(data.rec, data.pos);
+    let length = if vec_rec == 0 {
+        0
+    } else {
+        store.get_u32_raw(vec_rec, 4)
+    };
+    let at = |slot: u32| 8 + slot * ORDERED_STRIDE;
+    if reverse {
+        let start = if till.is_empty() {
+            length
+        } else {
+            ordered_find(data, ex, stores, keys, till).0
+        };
+        let finish = if from.is_empty() {
+            0
+        } else {
+            ordered_find(data, true, stores, keys, from).0
+        };
+        (at(start), at(finish))
+    } else {
+        let first = if from.is_empty() {
+            0
+        } else {
+            ordered_find(data, true, stores, keys, from).0
+        };
+        let last = if till.is_empty() {
+            length
+        } else {
+            let (t, cmp) = ordered_find(data, ex, stores, keys, till);
+            if ex || cmp { t } else { t + 1 }
+        };
+        let start = if first == 0 {
+            i32::MAX as u32
+        } else {
+            at(first - 1)
+        };
+        (start, at(last))
+    }
+}
+
 /// Byte offset in an iteration-scratch header holding [`scratch_tag`].
 ///
 /// The header is two words: offset 4 the element vector, offset 8 the source store,
@@ -727,7 +887,13 @@ pub fn is_scratch_header(store: &Store, scratch: &DbRef) -> bool {
 ///   sits at the header's offset 8 (`data.pos + 4`).  Yielding in that store lets the
 ///   scratch live in a different (writable) store than a read-only/exposed source — see
 ///   expose-iteration-scratch.md.
-pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> (DbRef, u32) {
+pub fn step_ordered(
+    data: &DbRef,
+    cur: u32,
+    stores: &[Store],
+    sourced: bool,
+    reverse: bool,
+) -> (DbRef, u32) {
     let store = keys::store(data, stores);
     // @PLN135 arc H — a hash's entries are SLOTS in a chunked arena, so an element is
     // `(record, offset)` and no longer a record number whose body starts at 8.  Its
@@ -744,7 +910,11 @@ pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> 
     let wide = tag & SCRATCH_MARK_MASK == SCRATCH_MARK && tag & 0xFFFF == 8;
     let stride: u16 = if wide { 8 } else { 4 };
     let mut pos = cur as i32;
-    vector_next(data, &mut pos, stride, stores);
+    if reverse {
+        vector_prev(data, &mut pos, stride, stores);
+    } else {
+        vector_next(data, &mut pos, stride, stores);
+    }
     let vector = store.get_u32_raw(data.rec, data.pos);
     let (rec, elem_pos) = if pos == i32::MAX {
         (0, 8)

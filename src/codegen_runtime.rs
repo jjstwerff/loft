@@ -957,9 +957,13 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
 /// `s.database.remove_claims`).  Unlike the keyed-LOCAL clear (OpDatabase,
 /// which resets a dedicated store), a field's collection lives as a claim
 /// inside its struct's store, so `remove_claims` is the in-place free.
+///
+/// loft#898 — `tp`'s `0x8000` bit marks a SECONDARY VIEW of a linked group;
+/// `remove_claims_keyed` is the shared decode, so this stays the twin of the
+/// interpreter's `#rust` template rather than a second reading of the bit.
 pub fn OpClearKeyed(cell: &std::cell::UnsafeCell<Stores>, dest: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    stores.remove_claims(&dest, tp as u16);
+    stores.remove_claims_keyed(&dest, tp as u16);
 }
 
 /// @P305 — `coll[key] = value` insert-or-replace into a keyed collection.
@@ -1170,25 +1174,17 @@ pub fn OpIterate(
             pack_iter(start, finish)
         }
         3 | 4 => {
-            // C60 piece 3: Ordered iteration — `data` points at a
-            // header record whose offset-4 word is the u32-stride
-            // rec-nr vector rec-nr.  Unbounded form (from/till empty)
-            // uses the "not started" sentinel recognised by
-            // `vector_next` (i32::MAX = 0x7FFF_FFFF), NOT u32::MAX.
-            // on=4 (fresh-scratch hash/radix) shares this cursor setup.
-            if from.is_empty() && till.is_empty() {
-                pack_iter(i32::MAX as u32, 0)
-            } else if reverse {
-                let s = vector::ordered_find(&data, ex, all, keys, till).0 + u32::from(!ex);
-                let f = vector::ordered_find(&data, ex, all, keys, from).0 + 1;
-                pack_iter(s, f)
-            } else {
-                let s = vector::ordered_find(&data, true, all, keys, from).0;
-                let start = if s == 0 { u32::MAX } else { s - 1 };
-                let (t, cmp) = vector::ordered_find(&data, ex, all, keys, till);
-                let finish = if ex || cmp { t } else { t + 1 };
-                pack_iter(start, finish)
-            }
+            // C60 piece 3: Ordered iteration — `data` points at a header record whose
+            // offset-4 word is the u32-stride rec-nr vector rec-nr.  on=4
+            // (fresh-scratch hash/radix) shares this cursor setup.
+            //
+            // The derivation is shared with `State::iterate` (loft#904) — the two had
+            // their own copies of the bounded arms, expressed in SLOT INDICES where the
+            // stepper walks BYTE OFFSETS, and had already drifted apart without anything
+            // noticing, because a bounded or reverse `ordered` walk never consumed them.
+            let (start, finish) =
+                vector::ordered_range_cursors(&data, all, keys, from, till, ex, reverse);
+            pack_iter(start, finish)
         }
         _ => pack_iter(u32::MAX, u32::MAX),
     }
@@ -1284,9 +1280,24 @@ pub fn OpStep(
             // C60 piece 3: Ordered iteration over the u32-stride rec-nr scratch.
             // Shares `vector::step_ordered` with the interpreter (src/state/io.rs).
             // on=4 (fresh-scratch hash/radix) yields in the source store from the header.
-            let (elem, new_pos) = vector::step_ordered(&data, cur, all, on & 63 == 4);
+            let (elem, new_pos) = vector::step_ordered(&data, cur, all, on & 63 == 4, reverse);
             cur = new_pos;
-            elem
+            // `finish` bounds the range in the cursor's own BYTE-OFFSET unit, and 0 means
+            // no bound — see the twin in `State::step` (`src/state/io.rs`), and keep the
+            // two in step.
+            let past = finish != 0
+                && new_pos != i32::MAX as u32
+                && if reverse {
+                    new_pos < finish
+                } else {
+                    new_pos >= finish
+                };
+            if past {
+                finish = u32::MAX;
+                stores.element_reference(&data, i32::MAX)
+            } else {
+                elem
+            }
         }
         _ => stores.element_reference(&data, i32::MAX),
     };
@@ -2352,14 +2363,16 @@ pub fn OpRemove<S: IterState>(
     let reverse = (on & 64) != 0;
     match on & 63 {
         0 => {
-            // plain vector: arg is the element type index.
+            // vector / array: `arg` is the element type index, and
+            // `remove_vector_at` reads the layout off it.
             // Use the i64-plain accessors so the generated code, which
             // drives `var_INDEX` as a raw i64 counter (`var += 1`),
             // sees a properly sign-extended value after `set_cur(-1)`.
-            let elem_size = u32::from(stores.size(arg as u16));
             let cur_i64 = state.get_cur_i64_plain();
-            let n = if reverse { cur_i64 + 1 } else { cur_i64 - 1 };
-            vector::remove_vector(&data, elem_size, cur_i64, &mut stores.allocations);
+            // Direction decides the rewind — see the twin in `State::remove`
+            // (`src/state/io.rs`), and keep the two in step.
+            let n = if reverse { cur_i64 } else { cur_i64 - 1 };
+            stores.remove_vector_at(&data, arg as u16, cur_i64);
             state.set_cur_i64_plain(n);
         }
         1 => {
@@ -2402,12 +2415,26 @@ pub fn OpRemove<S: IterState>(
             }
         }
         2 => {
-            // sorted vector: arg is the element size in bytes
+            // sorted: inline elements, `arg` is the element type; `cur` is an index
             if cur < 0 {
                 return;
             }
-            let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, arg as u32, i64::from(cur), &mut stores.allocations);
+            let n = if reverse { cur } else { cur - 1 };
+            stores.remove_vector_at(&data, arg as u16, i64::from(cur));
+            state.set_cur(n);
+        }
+        3 => {
+            // ordered: 4-byte record-id slots, `arg` is the element type; `cur` is a
+            // BYTE offset into the slot vector (8, 12, ...).  Without this arm the
+            // native backend silently removed NOTHING while the interpreter removed
+            // correctly — one `e#remove` spelling, two answers (loft#903).
+            if cur < 8 {
+                return;
+            }
+            // Same rewind rule as arm 0 — see the twin in `State::remove`
+            // (`src/state/io.rs`), and keep the two in step.
+            let n = if reverse { cur } else { cur - 4 };
+            stores.remove_vector_at(&data, arg as u16, i64::from((cur - 8) / 4));
             state.set_cur(n);
         }
         _ => {}
@@ -2416,11 +2443,19 @@ pub fn OpRemove<S: IterState>(
 
 /// Remove a record from a hash or index collection.
 ///
+/// `tp`'s `0x8000` bit says UNLINK ONLY: the member is one a linked group's
+/// removal passes through on its way to the one that frees (loft#900).
+///
 /// Bytecode equivalent: `State::hash_remove` in `src/state/io.rs`.
 pub fn OpHashRemove(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, rec: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let raw = tp as u16;
     if rec.rec != 0 {
-        stores.remove_owned(&data, &rec, tp as u16);
+        if raw & crate::database::CLEAR_KEYED_VIEW == 0 {
+            stores.remove_owned(&data, &rec, raw);
+        } else {
+            stores.remove(&data, &rec, raw & !crate::database::CLEAR_KEYED_VIEW);
+        }
     }
 }
 
@@ -2432,28 +2467,47 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
-    // Read v_rec before resize; from points to the last existing element.
-    let v_rec_before =
-        crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
+    // A count is a TOTAL; a negative one is no vector at all, so it answers the same as
+    // zero. Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
+    let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
+    // `[x; n]` asks for n elements TOTAL and the template is already appended, so `n - 1`
+    // more are needed. `n == 0` drops the template too, and must return before the
+    // `multiply - 1` below: that subtraction is on a `u32`, so zero underflows into
+    // ~4.3 billion `copy_block`s that walk off the end of the store.
+    // Twin of `State::append_copy` (`src/state/io.rs`) — keep the two in step.
+    if multiply == 0 {
+        let store = crate::keys::mut_store(&data, &mut stores.allocations);
+        let vec_rec = store.get_u32_raw(data.rec, data.pos);
+        let len_now = store.get_u32_raw(vec_rec, 4);
+        store.set_u32_raw(vec_rec, 4, len_now.saturating_sub(1));
+        return;
+    }
+    let extra = multiply - 1;
+    if extra == 0 {
+        return; // the template alone already IS the answer
+    }
+    // Resize to accommodate `extra` additional elements.
+    vector::vector_append(&data, size, &mut stores.allocations);
+    stores.vector_set_size(&data, extra, size);
+    // Re-read the backing record AFTER the resize: growing the vector can move it, and
+    // BOTH ends of the copy live inside it. Only the destination was re-read here, so
+    // the template `from` still named the record's old home.
+    let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
     let from = DbRef {
         store_nr: data.store_nr,
-        rec: v_rec_before,
+        rec: v_rec,
         pos: 8 + (length * size - size),
     };
-    let multiply = count as u32;
-    // Resize to accommodate `multiply` additional elements.
-    vector::vector_append(&data, size, &mut stores.allocations);
-    stores.vector_set_size(&data, multiply, size);
-    // Re-read v_rec in case the resize moved the record.
-    let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
-    for i in 0..(multiply - 1) {
+    for i in 0..extra {
         let to = DbRef {
             store_nr: data.store_nr,
             rec: v_rec,
             pos: 8 + (length + i) * size,
         };
         stores.copy_block(&from, &to, size);
-        stores.copy_claims(&data, &to, ctp);
+        // The claim source is the TEMPLATE element, not the vector handle — see the
+        // twin in `State::append_copy`.
+        stores.copy_claims(&from, &to, ctp);
     }
 }
 

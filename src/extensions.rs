@@ -683,17 +683,6 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
     })
 }
 
-/// Set of symbols that were registered as stubs (not hand-written glue).
-/// Only these should be replaced by auto-marshalled wrappers.
-static STUB_SYMBOLS: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
-
-/// Record which symbols are stubs (called from `register_native_stubs`).
-pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
-    *STUB_SYMBOLS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(syms);
-}
-
 /// After `load_all()` has populated `NATIVE_REGISTRY`, iterate all `#native`
 /// definitions and replace the panic stubs with auto-marshalled wrappers.
 ///
@@ -709,12 +698,14 @@ pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
 /// (indicating a registration bug).
 #[cfg(feature = "native-extensions")]
 pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
+    // THIS program's stub set (see `State::native_stub_symbols`) — cloned because
+    // `state` is mutated below while wiring.  Never a process-global: a global was
+    // overwritten by whichever compile ran last, so in a process compiling more than
+    // one program the wiring consulted a SIBLING's set and skipped its own symbols.
+    let stub_syms = state.native_stub_symbols.clone();
+
     // Phase 1: resolve any missing symbols via dlsym.
     {
-        let stub_guard = STUB_SYMBOLS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stub_syms = stub_guard.as_ref();
         let reg_guard = NATIVE_REGISTRY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -731,9 +722,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             if sym.starts_with("loft_shared_") {
                 continue;
             }
-            if let Some(stubs) = stub_syms
-                && !stubs.contains(sym)
-            {
+            if !stub_syms.contains(sym) {
                 continue;
             }
             let found = reg_guard.as_ref().is_some_and(|r| r.contains_key(sym));
@@ -742,7 +731,6 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             }
         }
         drop(reg_guard);
-        drop(stub_guard);
 
         // Resolve via dlsym (no locks held).  The guard is now keyed on the
         // *resolving library's* own `uses_v1` flag (returned by `try_dlsym`), not
@@ -785,15 +773,15 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sig_table = sigs.get_or_insert_with(HashMap::new);
 
-    let stub_guard = STUB_SYMBOLS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stub_syms = stub_guard.as_ref();
-
     // Stub symbols whose cdylib never provided them — collected so the failure is
     // reported LOUDLY at load (below), not left to surface as a generic panic at
     // first call deep in execution.
     let mut unresolved: Vec<String> = Vec::new();
+
+    // Symbols the cdylib DOES export but registered no `#[loft_native]` bridge for
+    // (loft#886). A different failure from `unresolved` with a different fix, so it
+    // gets its own list and its own message.
+    let mut bridgeless: Vec<String> = Vec::new();
 
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
@@ -816,9 +804,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
 
         // Only replace stubs — skip hand-written glue from native::init().
-        if let Some(stubs) = stub_syms
-            && !stubs.contains(sym)
-        {
+        if !stub_syms.contains(sym) {
             continue;
         }
 
@@ -836,6 +822,19 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             // library's cdylib is missing / stale / failed to rebuild.  The panic
             // stub stays in place; record the symbol so load-time reporting names it.
             unresolved.push(sym.clone());
+            continue;
+        }
+
+        // loft#886 — the cdylib loaded and exports the symbol, but registered no
+        // marshal bridge for it, so the call has nothing to dispatch through. That
+        // is a REGISTRATION gap in the library, not a stale build, and until now it
+        // was discovered only when the function was called: a library can ship, pass
+        // its own suite, and have a function that is dead for every consumer who
+        // exercises a path the library's tests do not. Report it at load beside the
+        // missing-cdylib report, naming the function, so the author sees it on the
+        // first run rather than in a consumer's bug report.
+        if get_bridge(sym).is_none() {
+            bridgeless.push(sym.clone());
             continue;
         }
 
@@ -860,6 +859,103 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
     if !unresolved.is_empty() {
         report_unresolved_natives(data, &unresolved);
+    }
+    if !bridgeless.is_empty() {
+        report_bridgeless_natives(data, &bridgeless);
+    }
+}
+
+/// loft#886 — loud load-time diagnostic for `#native` symbols the cdylib exports but
+/// never registered a marshal bridge for.
+///
+/// Separate from [`report_unresolved_natives`] because the fix is different: the
+/// library is not stale, its registration is incomplete. The usual cause is a
+/// hand-maintained `loft_register_bridges!` list that drifted from the `#native`
+/// declarations — which is silent by construction, since the two lists are written in
+/// different files and nothing compares them. `loft-ffi-build`'s
+/// `generate_register_from_loft_with_bridges` derives BOTH from the `#native`
+/// annotations and cannot drift; that is the fix to name.
+///
+/// Non-fatal, for the same reason the sibling is: a declared but never-called native
+/// must still let the program run. The call-time panic in `native_auto_dispatch` is
+/// still there for anyone who ignores this.
+#[cfg(feature = "native-extensions")]
+fn report_bridgeless_natives(data: &crate::data::Data, bridgeless: &[String]) {
+    use std::collections::BTreeMap;
+    let mut by_crate: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for sym in bridgeless {
+        let krate = data
+            .native_symbol_crates
+            .get(sym)
+            .map_or("<unknown library>", String::as_str);
+        by_crate.entry(krate).or_default().push(sym.as_str());
+    }
+    for (krate, mut syms) in by_crate {
+        syms.sort_unstable();
+        eprintln!("{}", bridgeless_message(krate, &syms));
+    }
+}
+
+/// The text [`report_bridgeless_natives`] prints for one library. Split out so the
+/// message — the entire user-facing product of this diagnostic — is assertable without
+/// a cdylib whose registration is deliberately broken.
+#[cfg(feature = "native-extensions")]
+fn bridgeless_message(krate: &str, syms: &[&str]) -> String {
+    let shown = syms.iter().take(6).copied().collect::<Vec<_>>().join(", ");
+    let more = syms.len().saturating_sub(6);
+    let more_txt = if more > 0 {
+        format!(", +{more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "loft: native library '{krate}' registered no marshal bridge for {n} of its \
+         #native function(s) ({shown}{more_txt}) — the cdylib loaded and exports the \
+         symbol(s), so this is an incomplete registration, not a stale build. Calling one \
+         panics. If its `loft_register_bridges!` list is hand-written, replace it with \
+         `loft_ffi_build::generate_register_from_loft_with_bridges(\"../src\")` in the \
+         native crate's build.rs, which derives the list from the `#native` annotations \
+         and cannot drift.",
+        n = syms.len(),
+    )
+}
+
+#[cfg(all(test, feature = "native-extensions"))]
+mod bridgeless_report_tests {
+    use super::bridgeless_message;
+
+    /// The report must name the LIBRARY to fix and every function that is dead in it —
+    /// a count alone sends the author looking, which is the cost loft#886 paid.
+    ///
+    /// The sample symbols are invented, not borrowed from a real library: the
+    /// extraction-hygiene gate (`tests/extraction_hygiene.rs`) forbids a library's `n_*`
+    /// symbol from appearing anywhere in `src/`, and a test fixture is no exception.
+    #[test]
+    fn the_message_names_the_library_and_each_dead_function() {
+        let m = bridgeless_message("samplelib", &["n_sample_alpha", "n_sample_beta"]);
+        assert!(m.contains("'samplelib'"), "{m}");
+        assert!(m.contains("n_sample_alpha"), "{m}");
+        assert!(m.contains("n_sample_beta"), "{m}");
+        assert!(m.contains("2 of its"), "{m}");
+        // It must not read as the sibling "stale build" diagnostic: the fix is a
+        // registration, and telling the author to rebuild sends them nowhere.
+        assert!(!m.contains("rebuild the native libraries"), "{m}");
+        assert!(
+            m.contains("generate_register_from_loft_with_bridges"),
+            "{m}"
+        );
+    }
+
+    /// A long list is truncated, but the COUNT still tells the author how many are
+    /// dead — a silently shortened list reads as "these seven", not "seven of twelve".
+    #[test]
+    fn a_long_list_is_truncated_but_the_count_is_not() {
+        let syms: Vec<String> = (0..12).map(|i| format!("n_f{i}")).collect();
+        let refs: Vec<&str> = syms.iter().map(String::as_str).collect();
+        let m = bridgeless_message("big", &refs);
+        assert!(m.contains("12 of its"), "{m}");
+        assert!(m.contains("+6 more"), "{m}");
+        assert!(!m.contains("n_f7"), "only the first six are listed: {m}");
     }
 }
 

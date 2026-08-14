@@ -506,8 +506,15 @@ impl Parser {
                     };
                     let next =
                         v_block(vec![v_set(iter_var, step), ref_expr], block_tp, "iter next");
-                    self.vars
-                        .set_loop(0, self.data.def(vec_tp).known_type(), code);
+                    // The reverse bit belongs in `on` even though this loop steps its
+                    // own counter: `e#remove` reads it to decide which way to rewind
+                    // the cursor, and without it a `rev()` loop rewound FORWARD and
+                    // skipped the next element (loft#903).
+                    self.vars.set_loop(
+                        if reverse { 64 } else { 0 },
+                        self.data.def(vec_tp).known_type(),
+                        code,
+                    );
                     if reverse {
                         // Start at length; the first step gives len-1 (last element).
                         *code = v_set(
@@ -613,6 +620,7 @@ impl Parser {
         to: &Value,
         val: &Value,
         op: &str,
+        f_type: &Type,
     ) -> Option<Value> {
         if !self.first_pass && *val == Value::Null && op == "=" {
             // Partial-key lookup produces an iteration (Value::Iter), not a single record.
@@ -661,6 +669,10 @@ impl Parser {
                 let db_tp = *db_tp_val;
                 let get_args = get_args.clone();
                 let get_rec = self.cl("OpGetRecord", &get_args);
+                if let Some(group) = self.keyed_group_remove(&get_args[0], db_tp, &get_rec, f_type)
+                {
+                    return Some(group);
+                }
                 return Some(self.cl(
                     "OpHashRemove",
                     &[get_args[0].clone(), get_rec, Value::Int(db_tp)],
@@ -668,6 +680,166 @@ impl Parser {
             }
         }
         None
+    }
+
+    /// `coll[key] = null` where `coll` is one member of a LINKED COLLECTION GROUP:
+    /// the record leaves every member, and is freed exactly once (loft#900).
+    /// `None` when `coll` is not a group member, which yields the single removal.
+    ///
+    /// Two or more collections over one element type in one struct are auto-linked
+    /// into several routes to a SINGLE record set (loft#843). Removal had no owner
+    /// for those records and was wrong in both directions: spelled through a VIEW it
+    /// freed the record the primary still held (the vector kept the entry, its text
+    /// read back null), spelled through the PRIMARY it never reached the views, which
+    /// went on reporting a length over a record that was gone.
+    ///
+    /// **A removal spelled through any member removes it from the group.** Like
+    /// loft#898's clear, that is not a choice made here — `h.view += [e]` has
+    /// appended to every member since loft#843, so an operation spelled through a
+    /// view acts on the group. The alternative, dropping one index entry and leaving
+    /// the record in the primary, has no coherent successor: `h.by_k[1] = null`
+    /// followed by `h.by_k[1] = E{k:1,…}` would remove one entry and then add to the
+    /// whole group, leaving the primary holding two records under one key and nothing
+    /// able to repair it.
+    ///
+    /// The ORDER is what makes it safe. Every unlink reads the record's key out of
+    /// the record, so the free must come last and the record must stay reachable
+    /// until then: the lookup runs ONCE into a temporary, every other member unlinks
+    /// from it, and the member the removal was spelled through goes last and frees.
+    /// The temporary also keeps the key expression evaluated once, which repeating
+    /// the lookup per member would not (@PLN102 F2).
+    fn keyed_group_remove(
+        &mut self,
+        coll: &Value,
+        db_tp: i32,
+        get_rec: &Value,
+        f_type: &Type,
+    ) -> Option<Value> {
+        let (struct_tp, byte_off) = self.keyed_field_site(coll)?;
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        if members.len() < 2 {
+            return None;
+        }
+        // The record is a BORROW of the collection — `f_type` is the type the
+        // element place already resolved to, deps included — so the temporary must
+        // not be treated as owning a store and freed again at scope exit.
+        let found = self.vars.work_refs(f_type, &mut self.lexer);
+        self.change_var_type(found, f_type);
+        self.vars.mark_inline_ref(found);
+        let mut ops = vec![Value::Set(found, Box::new(get_rec.clone()))];
+        for (off, coll_tp, _) in &members {
+            if *off == byte_off {
+                continue;
+            }
+            let field = Self::keyed_field_at(coll, *off);
+            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl("OpHashRemove", &[field, Value::Var(found), Value::Int(tp)]));
+        }
+        ops.push(self.cl(
+            "OpHashRemove",
+            &[coll.clone(), Value::Var(found), Value::Int(db_tp)],
+        ));
+        Some(Value::Insert(ops))
+    }
+
+    /// `e#remove` where the iterated collection is one member of a LINKED
+    /// COLLECTION GROUP: the element leaves every member, and is freed exactly
+    /// once (loft#903).  Yields `remove` unchanged when it is not a group member.
+    ///
+    /// Same rule and same order as [`Self::keyed_group_remove`], which is the
+    /// `coll[key] = null` spelling of the identical operation — every unlink reads
+    /// the key out of the record, so each OTHER member unlinks first and the
+    /// spelled member goes last and frees.
+    ///
+    /// What differs is where the RECORD comes from. A key lookup can be hoisted
+    /// into a temporary; a loop cursor cannot, because `OpRemove` derives the
+    /// element's reference internally from the iterator state. It does not have to
+    /// be: the LOOP VARIABLE already is that reference, resolved once per
+    /// iteration and at the record's payload start for every collection kind a
+    /// group can contain (an `index` yields `new_ref(.., 8)`, an `ordered` and a
+    /// linked `array` yield the record a slot names). An inline `vector`/`sorted`
+    /// element is not a record and never joins a group, so it never reaches here.
+    fn loop_group_remove(&mut self, coll: &Value, elem_var: u16, remove: Value) -> Value {
+        let Some((struct_tp, byte_off)) = self.keyed_field_site(coll) else {
+            return remove;
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        if members.len() < 2 {
+            return remove;
+        }
+        let mut ops = Vec::new();
+        for (off, coll_tp, _) in &members {
+            if *off == byte_off {
+                continue;
+            }
+            let field = Self::keyed_field_at(coll, *off);
+            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl(
+                "OpHashRemove",
+                &[field, Value::Var(elem_var), Value::Int(tp)],
+            ));
+        }
+        ops.push(remove);
+        Value::Insert(ops)
+    }
+
+    /// The `(struct type, byte offset)` of the struct FIELD a collection expression
+    /// names, or `None` when it names something else (a local, a parameter).
+    ///
+    /// Walks a nested `OpGetField` chain rather than reading the base VARIABLE's
+    /// type, so a group one level down (`outer.inner.by_k`) resolves as well as a
+    /// bare `x.by_k` — stopping at the bare form is what left loft#898's nested case
+    /// on the unsafe path until its guard row a7 caught it.
+    fn keyed_field_site(&self, coll: &Value) -> Option<(u16, u16)> {
+        let Value::Call(gf_nr, gf_args) = coll.unspan() else {
+            return None;
+        };
+        if self.data.def(*gf_nr).name() != "OpGetField" {
+            return None;
+        }
+        let Value::Int(byte_off) = gf_args.get(1)?.unspan() else {
+            return None;
+        };
+        Some((self.holder_type(gf_args.first()?)?, *byte_off as u16))
+    }
+
+    /// The database type of the struct a field-access BASE evaluates to.
+    fn holder_type(&self, base: &Value) -> Option<u16> {
+        match base.unspan() {
+            Value::Var(v) => {
+                let d_nr = match self.vars.tp(*v).base() {
+                    Type::Reference(d, _) => *d,
+                    Type::RefVar(inner) => match inner.base() {
+                        Type::Reference(d, _) => *d,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                let tp = self.data.def(d_nr).known_type();
+                (tp != u16::MAX).then_some(tp)
+            }
+            Value::Call(nr, args) if self.data.def(*nr).name() == "OpGetField" => {
+                let outer = self.holder_type(args.first()?)?;
+                let Value::Int(off) = args.get(1)?.unspan() else {
+                    return None;
+                };
+                self.database.field_content_at(outer, *off as u16)
+            }
+            _ => None,
+        }
+    }
+
+    /// `coll` — an `OpGetField(base, off)` read — re-aimed at the sibling field at
+    /// byte offset `off`. Rebuilt by swapping the offset in the SAME call so the base
+    /// expression and its variable stay whatever the original site resolved them to.
+    fn keyed_field_at(coll: &Value, off: u16) -> Value {
+        let mut out = coll.unspan().clone();
+        if let Value::Call(_, args) = &mut out
+            && let Some(slot) = args.get_mut(1)
+        {
+            *slot = Value::Int(i32::from(off));
+        }
+        out
     }
 
     pub(crate) fn towards_set(
@@ -679,7 +851,7 @@ impl Parser {
         op: &str,
     ) -> Value {
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
-        if let Some(result) = self.towards_set_hash_remove(to, val, op) {
+        if let Some(result) = self.towards_set_hash_remove(to, val, op, f_type) {
             return result;
         }
         // @P305 — `coll[key] = value` insert-or-replace for a KEYED
@@ -716,6 +888,17 @@ impl Parser {
                 self.database.types[*db_tp as usize].parts,
                 Parts::Hash(_, _)
                     | Parts::Sorted(_, _)
+                    // `Ordered` is the by-reference twin a `sorted<T[k]>` BECOMES as soon
+                    // as anything else in the program declares an `index<T[..]>` over the
+                    // same element type — so the same source line lowers differently
+                    // because of a declaration somewhere else entirely.  Its absence here
+                    // is loft#719's omission one function over: the removal arm
+                    // (`towards_set_hash_remove`) lists it, the INSERT arm did not, so
+                    // `s[k] = v` fell through to the update-only `OpCopyRecord` on a
+                    // lookup that misses.  Every insert was silently dropped and the
+                    // collection stayed empty — in a program that never used the struct
+                    // whose second field caused the promotion.
+                    | Parts::Ordered(_, _)
                     | Parts::Index(_, _, _)
                     | Parts::Radix(_, _)
                     | Parts::Trie(_, _)
@@ -1200,15 +1383,17 @@ use #count instead"
             } else {
                 format!("{name}#index")
             };
-            *code = self.cl(
+            let coll = self.vars.loop_value(index_var).clone();
+            let remove = self.cl(
                 "OpRemove",
                 &[
                     Value::Var(self.vars.var(&state_name)),
-                    self.vars.loop_value(index_var).clone(),
+                    coll.clone(),
                     Value::Int(i32::from(on)),
                     Value::Int(i32::from(self.vars.loop_db_tp(index_var))),
                 ],
             );
+            *code = self.loop_group_remove(&coll, index_var, remove);
             *t = Type::Void;
         } else if self.lexer.has_keyword("lock") {
             // d#lock — read the lock state of the store containing a reference or vector variable.

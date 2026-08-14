@@ -148,7 +148,16 @@ fn main() {
 
   world = World { planes: [], vis: [], tick: 0, echoes: [] };
 
-  engine_host::run(PORT, TICK_INTERVAL_US,
+  // The demo binds PORT.  `LOFT_PROBE_PORT` overrides it so a harness can run this
+  // server on a port the OS just told it was free — 18084 is a well-known number on
+  // a shared machine, and a long-lived server (or another checkout) sitting on it
+  // made the test that drives this fixture fail for someone else's process.
+  // `env_variable` answers "" when unset, so the documented invocation above is
+  // unchanged.
+  port_override = env_variable("LOFT_PROBE_PORT");
+  port = if port_override == "" { PORT } else { port_override as integer ?? PORT };
+
+  engine_host::run(port, TICK_INTERVAL_US,
     fn(ev: engine_host::Event) {
       if ev.kind == 0 {
         world.planes += [Plane { cid: ev.cid, x: 0.0, y: 0.0, z: 0.0, seq: 0 }];

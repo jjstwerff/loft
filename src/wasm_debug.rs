@@ -313,7 +313,9 @@ pub fn pump() {
             return;
         };
         loop {
-            let frame = sess.state.database.host_input_native();
+            // 0 = take what is queued and return; this pump must never block the
+            // page's one thread, which is what would deliver the next frame.
+            let frame = sess.state.database.host_input_native(0);
             if frame.is_empty() {
                 break;
             }

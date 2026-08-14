@@ -27,6 +27,18 @@ leak:ir_read
 leak:ir_schema
 leak:snapshot
 
+# The SAME interner class on the PARSE side (loft#876): a field's declared TEXT default
+# (`label: text = "hi"`) folds to a `Content::Str`, which is a raw `{ptr, len}` with no
+# owning variant, so its spelling is interned by the same intentional `Box::leak`.
+# BOUNDED by the source: one allocation per field that declares a text default, decided
+# once at type registration — never one per read, and nothing here grows with runtime.
+# `typedef::fold_declared_default` carries `#[inline(never)]` FOR this line: inlined, the
+# allocating frame reads as `typedef::fill_database`, and suppressing that name would
+# blind the gate to every allocation in the whole type-registration path.  Keep the two
+# in step — dropping the attribute silently stops this suppression from matching, and the
+# benign leak reds the gate again.
+leak:fold_declared_default
+
 # The fault-path text class (@PLN102).  When a loft program raises a fault (a failed
 # `assert`, `panic`, a `raise`d OOB/DivByZero) WHILE a text is mid-construction, the
 # compiler-emitted drop of that in-flight text local never runs, so its `String` buffer

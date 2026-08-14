@@ -3282,3 +3282,86 @@ handle. That migration is mechanical for a consumer (`use lib;` → `use lib::*;
 day it lands — so it is owner-timed work, not a fix to fold into a bug. C112 is independent of it and
 forward-compatible with it: once a bare `use` stops importing, a local named after a library function
 is legal for a second reason as well.
+
+## C113 — two `index` collections over one element type and key are refused, not made to work
+
+**Catalogue:** @F9 (`index<T[keys]>`) · loft#902 · loft#843 (linked collection groups)
+
+### Question
+
+Two or more collections over one element type in one struct are auto-linked into several
+routes to a SINGLE record set (loft#843). When two of them are `index` with the same key,
+the first removal panics in `src/tree.rs` — *"Child of single-child node should be red"*.
+Should each index FIELD get its own link storage in the element record, or should the
+construct be refused?
+
+### Context
+
+An `index` is the one collection kind that keeps per-collection state **inside the element
+record**: a red-black tree's `#left_N / #right_N / #color_N` triple is appended to the
+element type when the index type is created, and `Parts::Index` records the triple's
+offset. Every other kind keeps its state in storage of its own — a hash in its table, a
+`sorted`/`ordered` in its slot list, an `array` in its slots — which is exactly why
+`hash` + `hash` and `sorted` + `sorted` are two working routes to one record set and
+`index` + `index` is not.
+
+The triple is allocated **per index TYPE**, and an index type is named after its content
+and its keys, so two fields declared `index<E[k]>` resolve to one type and therefore one
+triple. They are not two trees: they are ONE tree reached through two roots. That is why
+the FILL looked correct — both roots walk the same structure, so lengths and iteration
+agree — and why the first removal, which rebalances through one root and leaves the other
+stale, is where it comes apart.
+
+Measured scope: only `index` + `index` **with the same key** collides. A different key is
+a different type name and so its own triple (`index<E[k]>` + `index<E[n]>` fills and
+removes correctly, both routes); two `index<E[k]>` fields in different structs hold
+different record sets; and `index` beside `hash` / `sorted` / `vector` is correct as of
+loft#900.
+
+### Evaluation
+
+**Per-field link storage** would keep the construct working. The layout machinery already
+supports N triples per element type — the instance counter exists — so the storage is not
+the obstacle. The obstacle is IDENTITY: the parser resolves a collection field to a db
+type through its declared loft `Type`, and two fields with the same declared type are
+indistinguishable there. Giving them separate storage means minting a db type per FIELD,
+which changes what a schema id names — and schema ids are replayed by the native backend's
+generated `init()` (`LOFT_STRICT_SCHEMA_IDS`), serialised into the IR, and round-tripped
+through snapshots. That is a schema-identity change across four layers.
+
+**What it would buy is nothing.** A second index with the same key over the same records
+answers exactly what the first answers, in the same order. There is no query the pair
+serves that one index does not, which is what separates this from `hash` + `sorted` (two
+different orders / two different lookups over one record set — a real pairing, and the one
+DATABASE.md documents by name).
+
+**Compatibility** cuts the way it usually does, but not here. A program that declares such
+a pair today and only ever fills it does get a consistent answer — from one tree seen
+twice. It has never had a working removal, and a panic is the outcome loft's contract
+("no runtime errors, EVER") ranks worst. Refusing at the declaration converts an unfixable
+runtime panic into a compile error that names the cure.
+
+### Decision
+
+**Closed — refuse, 2026-08-14.** `Parser::reject_duplicate_index` rejects a second `index`
+field with the same element type and the same key in one structure (or enum variant),
+where the field is declared:
+
+> `'b' and 'a' are both `index<E[k]>` in the same structure — two indexes cannot share
+> records, because an index keeps its tree links in a field of the record and one field of
+> links cannot hold two trees. Give the second route a different kind (`hash` or `sorted`
+> over the same records), or index a different key.
+
+Both cures are one word and both are already correct. The refusal's SCOPE — a different
+key, a different struct, a different kind — is pinned by
+`tests/scripts/902-duplicate-index-allowed.loft`, which must stay green beside
+`902-duplicate-index-refused.loft`; a widened check that caught any of those rows would
+fail there rather than silently reject working programs.
+
+### Revisit when
+
+A consumer needs two indexes over one record set with the same key and genuinely different
+BEHAVIOUR — the only shape that would make the pair mean something. A partial-key or
+filtered index (`index<E[k]> where …`) is that shape, and it would arrive with its own
+type name anyway, so it does not reopen this: it lands as a new kind, not as two copies of
+one.

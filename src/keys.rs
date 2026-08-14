@@ -493,6 +493,26 @@ pub fn double_move_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DOUBLE_MOVE").is_none())
 }
 
+/// loft#894: the lost-temporary-write lint. Warns when a call writes through a by-value
+/// struct parameter whose argument is a value RETURNED by another call — `hurt(first(s),
+/// 10.0)`, where the returned struct is a copy that lives in a `__lift_N` temporary and is
+/// freed at the end of the statement, so the write reaches nothing. The same write through
+/// the element itself (`hurt(s.es[0] ?? E {}, …)`) lands, and nothing at the call site
+/// distinguishes the two — which is what makes it worth a diagnostic.
+///
+/// `warning` tier, per the two-tier rule: ignoring it produces a wrong result (dryopea lost
+/// six tests to one such accessor, each reading as a bug in the thing being mutated). It is
+/// therefore an UNDER-approximation — it reports only writes it can prove unobservable from
+/// the lift temporary, and stays silent when the result is bound to a real local, which is a
+/// copy the program can still read (`warn_copies`' domain).
+/// **Default ON**; `LOFT_NO_LOST_TEMP_WRITE` opts out. One cached env read. See
+/// `use_analysis::warn_lost_temp_writes`.
+#[must_use]
+pub fn lost_temp_writes_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_LOST_TEMP_WRITE").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
@@ -1203,7 +1223,11 @@ pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> 
     FREED_AT_GEN.with(|m| m.borrow().get(&(slot, want_gen)).copied())
 }
 
+/// `#[inline]` because a generated `--native` program links this across a crate
+/// boundary with no LTO, and it sits on the per-element indexed-read path —
+/// see `vector::get_vector`.
 #[must_use]
+#[inline]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
     debug_assert!(
         (r.store_nr as usize) < stores.len(),

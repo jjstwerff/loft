@@ -1207,28 +1207,25 @@ impl State {
             3 | 4 => {
                 // ordered points to the position inside the vector of references.
                 // on=4 (fresh-scratch hash/radix, source store in the header) shares the
-                // exact same cursor setup — only step()'s yield store differs.
-                if from.is_empty() && till.is_empty() {
-                    // C60 piece 3 edit E: unbounded iteration (`for e
-                    // in h { … }` with no range).  ordered_find with an
-                    // empty key returns (0, true) which collapses
-                    // start=0/finish=0, so the step protocol never
-                    // fires even once.  Set start to the "not started"
-                    // sentinel that `vector_next` recognises at
-                    // src/vector.rs:455 — it checks `*pos == i32::MAX`
-                    // (the i32 positive max, 0x7FFF_FFFF), *not*
-                    // u32::MAX.  Passing u32::MAX here casts to i32 as
-                    // -1 and falls into the "advance" branch, reading
-                    // garbage at pos=-1+size.
-                    start = i32::MAX as u32;
-                    finish = 0;
-                } else if reverse {
-                    start = vector::ordered_find(&data, true, all, &keys, &from).0 + u32::from(!ex);
-                    finish = vector::ordered_find(&data, ex, all, &keys, &till).0 + 1;
-                } else {
-                    let (s, cmp) = vector::ordered_find(&data, ex, all, &keys, &till);
-                    start = if cmp || s == 0 { s } else { s - 1 };
-                    finish = vector::ordered_find(&data, ex, all, &keys, &from).0 - u32::from(!ex);
+                // exact same cursor setup — only step()'s yield store differs, and its
+                // from/till are always empty, so it takes the unbounded answer.
+                //
+                // The derivation is shared with the native runtime (loft#904), the way
+                // `tree::range_cursors` is for an index: each backend had its own copy of
+                // the bounded arms, in SLOT INDICES where the stepper walks BYTE OFFSETS,
+                // and the two had already drifted apart — invisibly, because neither was
+                // ever consumed.
+                let (s_cur, f_cur) =
+                    vector::ordered_range_cursors(&data, all, &keys, &from, &till, ex, reverse);
+                start = s_cur;
+                finish = f_cur;
+                if trace_iter {
+                    eprintln!(
+                        "[iterate] on=ordered reverse={reverse} ex={ex} start={start} \
+                         finish={finish} from_keys={} till_keys={}",
+                        from.len(),
+                        till.len()
+                    );
                 }
             }
             _ => panic!("Not implemented on {on}"),
@@ -1365,10 +1362,32 @@ impl State {
                     // in the scratch header; on=3 (co-located) yields in data.store_nr.
                     // A read-only source's dedicated scratch store is freed by the loop
                     // epilogue's OpFreeScratch, not here (covers break too).
-                    let (elem, new_pos) =
-                        vector::step_ordered(&data, cur, &self.database.allocations, on & 63 == 4);
+                    let (elem, new_pos) = vector::step_ordered(
+                        &data,
+                        cur,
+                        &self.database.allocations,
+                        on & 63 == 4,
+                        reverse,
+                    );
                     self.put_var(state_var - 8, new_pos);
-                    elem
+                    // `finish` bounds the range in the same BYTE-OFFSET unit the cursor
+                    // walks in, and 0 means no bound (it is below every valid position,
+                    // so it never trips) — which is what an unbounded walk and every
+                    // `on = 4` scratch return.  Nothing consulted it here at all, so a
+                    // bounded range ran past its end (loft#904).
+                    let past = finish != 0
+                        && new_pos != i32::MAX as u32
+                        && if reverse {
+                            new_pos < finish
+                        } else {
+                            new_pos >= finish
+                        };
+                    if past {
+                        self.put_var(state_var - 12, u32::MAX);
+                        new_ref(&data, 0, 0)
+                    } else {
+                        elem
+                    }
                 }
                 _ => panic!("Not implemented"),
             }
@@ -1400,14 +1419,18 @@ impl State {
         }
         match on & 63 {
             0 => {
-                // vector
-                let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(
-                    &data,
-                    u32::from(self.database.size(tp)),
-                    i64::from(cur),
-                    &mut self.database.allocations,
-                );
+                // vector / array — `tp` is the ELEMENT type, and
+                // `remove_vector_at` reads the layout off it.
+                //
+                // Where the cursor lands next is decided by the DIRECTION, because
+                // the shift only touches the elements ABOVE the one removed:
+                // forward, the successor moves into slot `cur`, so the cursor must
+                // step back to `cur - 1` to visit it; backwards, the next element
+                // is `cur - 1` and it has not moved, so the cursor must STAY at
+                // `cur` — the step subtracts one either way.  Rewinding forwards
+                // (`cur + 1`) revisits the element that shifted down.
+                let n = if reverse { cur } else { cur - 1 };
+                self.database.remove_vector_at(&data, tp, i64::from(cur));
                 // iter_var (#index) is i64 on stack post-2c.  Sign-extend n
                 // (may be −1 after remove-at-index-0) and write all 8 bytes
                 // so the high word doesn't leak a stale value into the next
@@ -1476,36 +1499,26 @@ impl State {
                 }
             }
             2 => {
-                // sorted: tp is the element size in bytes (from loop_db_tp)
+                // sorted: inline elements, `tp` is the element type; `cur` is an index
                 if cur < 0 {
                     return;
                 }
-                let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(
-                    &data,
-                    u32::from(tp),
-                    i64::from(cur),
-                    &mut self.database.allocations,
-                );
+                // Same rewind rule as arm 0 — see there.
+                let n = if reverse { cur } else { cur - 1 };
+                self.database.remove_vector_at(&data, tp, i64::from(cur));
                 self.put_var(state_var - 8, n);
             }
             3 => {
-                // ordered: tp is element size (4 bytes); cur is byte offset (8, 12, ...)
-                if cur < 0 {
+                // ordered: 4-byte record-id slots, `tp` is the element type; `cur` is
+                // a BYTE offset into the slot vector (8, 12, ...), so the slot index
+                // it names is `(cur - 8) / 4`.
+                if cur < 8 {
                     return;
                 }
-                let size = u32::from(tp);
-                let n = if reverse {
-                    cur + i32::from(tp)
-                } else {
-                    cur - i32::from(tp)
-                };
-                vector::remove_vector(
-                    &data,
-                    size,
-                    i64::from((cur - 8) / i32::from(tp)),
-                    &mut self.database.allocations,
-                );
+                // Same rewind rule as arm 0, one slot wide instead of one index.
+                let n = if reverse { cur } else { cur - 4 };
+                self.database
+                    .remove_vector_at(&data, tp, i64::from((cur - 8) / 4));
                 self.put_var(state_var - 8, n);
             }
             _ => panic!("Not implemented on {on}"),
@@ -1523,11 +1536,43 @@ impl State {
 
     pub fn append_copy(&mut self) {
         let tp = self.code::<u16>();
-        let multiply = *self.get_stack::<i64>() as u32;
+        let count = *self.get_stack::<i64>();
+        // A count is a TOTAL, and a negative total is not a shorter vector — it is not a
+        // vector at all, so it clamps to zero and yields no elements. A bare `as u32`
+        // instead turns `[7; -1]` into 4 294 967 295 `copy_block`s that walk off the store
+        // until glibc aborts the process.
+        // Twin of `OpAppendCopy` (`src/codegen_runtime.rs`) — keep the two in step, or
+        // they disagree on a heap-corrupting input.
+        let multiply = count.clamp(0, i64::from(u32::MAX)) as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
+        // `[x; n]` asks for n elements TOTAL and the template is already appended, so
+        // `n - 1` more are needed. Adding `n` instead grows the vector one too far and
+        // leaves the last slot never written — `[7; 3]` then reads back as length 4 with
+        // garbage in it.
+        //
+        // `n == 0` is the same statement taken to its end: the template must go too, and
+        // the early return keeps `0..(multiply - 1)` from running on a `u32`, where zero
+        // wraps to 4 294 967 295 `copy_block`s that walk off the store and abort in
+        // glibc's allocator.
+        if multiply == 0 {
+            let store = crate::keys::mut_store(&data, &mut self.database.allocations);
+            let vec_rec = store.get_u32_raw(data.rec, data.pos);
+            let len_now = store.get_u32_raw(vec_rec, 4);
+            store.set_u32_raw(vec_rec, 4, len_now.saturating_sub(1));
+            return;
+        }
+        let extra = multiply - 1;
+        if extra == 0 {
+            return; // the template alone already IS the answer
+        }
+        vector::vector_append(&data, size, &mut self.database.allocations);
+        self.database.vector_set_size(&data, extra, size);
+        // Re-read the backing record AFTER the resize: growing the vector can move it,
+        // and both ends of the copy live inside it. Reading it once up front left the
+        // template `from` — and every destination — pointing at the record's old home.
         let v_rec =
             crate::keys::store(&data, &self.database.allocations).get_u32_raw(data.rec, data.pos);
         let from = DbRef {
@@ -1535,16 +1580,18 @@ impl State {
             rec: v_rec,
             pos: 8 + (length * size - size),
         };
-        vector::vector_append(&data, size, &mut self.database.allocations);
-        self.database.vector_set_size(&data, multiply, size);
-        for i in 0..(multiply - 1) {
+        for i in 0..extra {
             let to = DbRef {
                 store_nr: data.store_nr,
                 rec: v_rec,
                 pos: 8 + (length + i) * size,
             };
             self.database.copy_block(&from, &to, size);
-            self.database.copy_claims(&data, &to, ctp);
+            // The claim source is the TEMPLATE element, not the vector handle. `data`
+            // points at the vector's 4-byte record id, so a `text` element re-interned
+            // whatever those bytes decoded to: `["abc"; 4]` gave "abc" in element 0 and
+            // junk in every copy. Same word wrong in the `--native` twin.
+            self.database.copy_claims(&from, &to, ctp);
             self.database
                 .watch_oob_text(&to, ctp, Some(&data), "append_copy");
         }
@@ -1928,12 +1975,24 @@ impl State {
         self.put_stack(res);
     }
 
+    /// Remove one record from a keyed collection.
+    ///
+    /// `tp`'s [`CLEAR_KEYED_VIEW`] bit says UNLINK ONLY — the same convention
+    /// `OpClearKeyed` and `OpSetKeyed` use on theirs. It marks the members of a
+    /// linked collection group that the removal passes through on its way to the
+    /// one that frees (loft#900): every member must let the record go, and the
+    /// record must be freed once, after the last unlink has read its key out of it.
     pub fn hash_remove(&mut self) {
-        let tp = self.code::<u16>();
+        let raw = self.code::<u16>();
+        let tp = raw & !crate::database::CLEAR_KEYED_VIEW;
         let rec = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         if rec.rec != 0 {
-            self.database.remove_owned(&data, &rec, tp);
+            if raw & crate::database::CLEAR_KEYED_VIEW == 0 {
+                self.database.remove_owned(&data, &rec, tp);
+            } else {
+                self.database.remove(&data, &rec, tp);
+            }
         }
     }
 

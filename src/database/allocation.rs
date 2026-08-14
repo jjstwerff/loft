@@ -11,6 +11,16 @@ use crate::store::Store;
 use crate::tree;
 use crate::vector;
 
+/// `OpClearKeyed`'s `tp` operand sets this bit when the field being cleared is a
+/// SECONDARY VIEW of a linked collection group — a second route to records a
+/// sibling field owns (loft#898).
+///
+/// A flag bit on the type number rather than a new operand: `OpSetKeyed` and
+/// `OpReplaceKeyed` already carry `0x8000` on theirs, so the op's arity and both
+/// backends' emitters stay unchanged. Type numbers are dense from 0 and the
+/// schema is bounded well under 0x8000, which is what makes the top bit free.
+pub const CLEAR_KEYED_VIEW: u16 = 0x8000;
+
 /// Which keyed collection a paged working-set load is reading and filling.
 ///
 /// The only thing that differs between the two once a record is located: a `hash`
@@ -117,6 +127,12 @@ pub(super) struct OwnedChild {
     pub child: DbRef,
     pub child_tp: u16,
     pub owning_elem: Option<u32>,
+    /// This child is a SECONDARY VIEW of records a sibling field owns, so the
+    /// recursion must drop only its own spine (loft#898).  Set by the `Struct`
+    /// arm from `Field.other_indexes` — the one place the schema says which
+    /// member of a linked group is the view.  `false` everywhere else: a child
+    /// reached through a collection is an element, never a view.
+    pub borrowed: bool,
 }
 
 /// The container-level teardown a `remove_claims` walk performs AFTER recursing
@@ -225,9 +241,89 @@ impl Stores {
     /// take `&mut self` to recurse — the same shape `collect_index_nodes`
     /// already uses.
     pub(super) fn for_each_owned_child(&self, rec: &DbRef, tp: u16) -> OwnedWalk {
+        self.owned_walk(rec, tp, false)
+    }
+
+    /// What a SECONDARY VIEW of a linked collection group actually owns: its own
+    /// spine, and none of the element records (loft#898).
+    ///
+    /// The spine is per-kind, and it is exactly the `container_rec`/`extra_recs`
+    /// the owning walk already names for that kind — so this reads them from the
+    /// same layout knowledge rather than a second encoding of it:
+    ///
+    /// - `Hash` — the table record, plus its arena chunks.  A true secondary
+    ///   allocates no arena (`owns_entries` is false, which is precisely what
+    ///   makes its slots BORROWED), but the chunks are the table's own storage
+    ///   either way, so they are released and the entries are never followed.
+    /// - `Array`/`Ordered` — the slot-list block.  Its slots are 4-byte record
+    ///   numbers naming records the primary holds; dropping the list drops this
+    ///   route to them and nothing more.
+    /// - `Index` — nothing to free.  A b-tree's nodes ARE the element records
+    ///   (its links live in extra fields of each), so there is no spine block to
+    ///   release; zeroing the root pointer is the whole teardown.  The stale
+    ///   links left in the surviving records are unreachable once the root is
+    ///   gone, and a later insert rewrites them.
+    /// - `Vector`/`Sorted` — contiguous storage holds its elements INLINE, so it
+    ///   can share them with nothing and is never marked a view.  Falling back to
+    ///   the owning walk keeps a mismarked field a leak rather than a silent
+    ///   no-op that would drop the field pointer over live records.
+    fn borrowed_spine(&self, rec: &DbRef, tp: u16) -> OwnedWalk {
+        let empty = |container_rec, extra_recs| OwnedWalk {
+            children: Vec::new(),
+            container_rec,
+            extra_recs,
+            zero_field: true,
+        };
+        match &self.types[tp as usize].parts {
+            Parts::Hash(_, _) => {
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 || !self.owned_edge_in_store(rec, cur) {
+                    return empty(None, Vec::new());
+                }
+                let extra = if hash::owns_entries(self.store(rec), cur) {
+                    hash::arena_records(rec, &self.allocations)
+                } else {
+                    Vec::new()
+                };
+                empty(Some(cur), extra)
+            }
+            Parts::Array(_) | Parts::Ordered(_, _) => {
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 || !self.owned_edge_in_store(rec, cur) {
+                    return empty(None, Vec::new());
+                }
+                empty(Some(cur), Vec::new())
+            }
+            Parts::Index(_, _, _) => empty(None, Vec::new()),
+            _ => self.owned_walk(rec, tp, false),
+        }
+    }
+
+    /// The keystone above, plus the loft#898 `borrowed` mode: enumerate what a
+    /// SECONDARY VIEW of a linked collection group owns.
+    ///
+    /// Two keyed fields over one element type in one struct are two routes to a
+    /// single record set (`Field.other_indexes`, loft#843).  The records belong to
+    /// exactly ONE of them — the primary — so releasing the view must drop its own
+    /// spine (the hash table, the ordered slot list, the b-tree root) and nothing
+    /// else.  Freeing them through the view is what left the primary reading
+    /// freed memory.
+    ///
+    /// This rides the SAME per-`Parts` match rather than a walker beside it: the
+    /// spine a view drops is the same `container_rec`/`extra_recs` the owning walk
+    /// already names, so a layout change cannot move one and miss the other.  The
+    /// only difference is that a view yields no children.
+    fn owned_walk(&self, rec: &DbRef, tp: u16, borrowed: bool) -> OwnedWalk {
         let mut children = Vec::new();
         let mut container_rec = None;
         let mut extra_recs = Vec::new();
+        // A view over records a sibling owns: keep the spine teardown, drop the
+        // element walk.  Only the per-element-record kinds can be a view — a
+        // contiguous `Vector`/`Sorted` stores its elements INLINE, so it cannot
+        // share them with anything and never carries the marker.
+        if borrowed {
+            return self.borrowed_spine(rec, tp);
+        }
         match &self.types[tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 let capacity_bytes = u64::from(self.store(rec).capacity_words()) * 8;
@@ -250,6 +346,12 @@ impl Stores {
                         },
                         child_tp: f.content,
                         owning_elem: None,
+                        // loft#898 — a leading `u16::MAX` in `other_indexes` marks this
+                        // field as a SECONDARY VIEW of records a sibling field owns
+                        // (`types.rs` writes it; the JSON default-init already reads it).
+                        // Tearing the struct down must free those records ONCE, through
+                        // the primary; the view contributes only its spine.
+                        borrowed: f.other_indexes.first() == Some(&u16::MAX),
                     });
                 }
             }
@@ -283,6 +385,7 @@ impl Stores {
                             },
                             child_tp: v,
                             owning_elem: None,
+                            borrowed: false,
                         });
                     }
                     container_rec = Some(cur);
@@ -316,6 +419,7 @@ impl Stores {
                             },
                             child_tp: v,
                             owning_elem: Some(elm),
+                            borrowed: false,
                         });
                     }
                     container_rec = Some(cur);
@@ -360,6 +464,7 @@ impl Stores {
                             child: entry,
                             child_tp: v,
                             owning_elem: (!ours).then_some(entry.rec),
+                            borrowed: false,
                         });
                     }
                     if owned {
@@ -384,6 +489,7 @@ impl Stores {
                             },
                             child_tp: c,
                             owning_elem: Some(node),
+                            borrowed: false,
                         });
                     }
                     // No separate container block: index nodes ARE the records.
@@ -403,6 +509,7 @@ impl Stores {
                         },
                         child_tp: ct,
                         owning_elem: None,
+                        borrowed: false,
                     });
                     container_rec = Some(cur);
                 }
@@ -421,6 +528,7 @@ impl Stores {
                             child: *rec,
                             child_tp: vtp,
                             owning_elem: None,
+                            borrowed: false,
                         });
                     }
                 }
@@ -441,6 +549,7 @@ impl Stores {
                             },
                             child_tp: v,
                             owning_elem: Some(elm),
+                            borrowed: false,
                         });
                     }
                     container_rec = Some(cur);
@@ -464,6 +573,7 @@ impl Stores {
                             },
                             child_tp: v,
                             owning_elem: Some(elm),
+                            borrowed: false,
                         });
                     }
                     container_rec = Some(cur);
@@ -1255,7 +1365,12 @@ impl Stores {
         self.database_named(u32::MAX, name)
     }
 
+    /// `#[inline]` because generated `--native` code calls this for every element read
+    /// across a crate boundary with no LTO — see `vector::get_vector`. Inlining also
+    /// lets the `strict_stores()` check below hoist out of a loop instead of being
+    /// re-tested per element.
     #[must_use]
+    #[inline]
     pub fn store(&self, r: &DbRef) -> &Store {
         let s = &self.allocations[r.store_nr as usize];
         // @PLN130 F8 — under LOFT_STRICT_STORES the slot is never recycled, so a freed
@@ -2894,6 +3009,39 @@ impl Stores {
     When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
+        self.remove_claims_mode(rec, tp, false);
+    }
+
+    /// Release a SECONDARY VIEW of a linked collection group: drop this route to
+    /// the records, never the records (loft#898).
+    ///
+    /// Two keyed fields over one element type in one struct are two views of a
+    /// single record set, so exactly one of them owns it.  Clearing the other
+    /// through [`Self::remove_claims`] freed the shared records and left the
+    /// primary reading freed memory — a length that still says 2 over bytes that
+    /// read back as `4294967296:null`.
+    pub fn remove_claims_view(&mut self, rec: &DbRef, tp: u16) {
+        self.remove_claims_mode(rec, tp, true);
+    }
+
+    /// `OpClearKeyed`'s release, decoding the [`CLEAR_KEYED_VIEW`] bit its `tp`
+    /// operand carries.
+    ///
+    /// The bit is set by the parser, which is the only layer that can ask the
+    /// schema whether the field being cleared is a secondary view. Both backends
+    /// call THIS — the interpreter through the `#rust` template in
+    /// `default/01_code.loft`, the native generator through
+    /// `codegen_runtime::OpClearKeyed` — so the decode exists once and the two
+    /// cannot drift.
+    pub fn remove_claims_keyed(&mut self, rec: &DbRef, raw_tp: u16) {
+        self.remove_claims_mode(
+            rec,
+            raw_tp & !CLEAR_KEYED_VIEW,
+            raw_tp & CLEAR_KEYED_VIEW != 0,
+        );
+    }
+
+    fn remove_claims_mode(&mut self, rec: &DbRef, tp: u16, borrowed: bool) {
         // loft#796 — the record itself must be inside its store before anything reads
         // its fields.  The per-edge guards in `for_each_owned_child` catch a rotten
         // POINTER; this catches a rotten RECORD, which is the same fault one level up
@@ -2913,7 +3061,8 @@ impl Stores {
         if rec.store_nr == u16::MAX {
             return;
         }
-        // TODO prevent removing records twice via secondary structures
+        // A view's own text/leaf fields do not exist — it is a collection, never a
+        // scalar — so the borrowed mode only ever reaches the cascade arm below.
         match &self.types[tp as usize].parts {
             Parts::Base if tp == 5 => {
                 // Text leaf: free the string record and clear the pointer.  Not a
@@ -2968,7 +3117,7 @@ impl Stores {
             // (@P290/@P306/@P318/@P309) lived in the per-dispatcher copies of this
             // walk; reading it once removes them by construction.
             _ => {
-                let walk = self.for_each_owned_child(rec, tp);
+                let walk = self.owned_walk(rec, tp, borrowed);
                 for c in walk.children {
                     // @PLN102 heap-free audit — an `owning_elem == Some(0)` slot is an
                     // ABSENT element record (Array/Ordered/Hash/Index). Recursing into it
@@ -2980,7 +3129,7 @@ impl Stores {
                     if c.owning_elem == Some(0) {
                         continue;
                     }
-                    self.remove_claims(&c.child, c.child_tp);
+                    self.remove_claims_mode(&c.child, c.child_tp, c.borrowed);
                     if let Some(elm) = c.owning_elem {
                         self.store_mut(rec).delete(elm);
                     }

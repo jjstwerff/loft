@@ -27,6 +27,143 @@ fn format_walk_err(text: &str, at: usize, path: &[String]) -> String {
     out
 }
 
+/// The bytes stdin has handed over so far, and whether it is finished.
+///
+/// Separate from the reader thread so a caller can inspect what has arrived
+/// WITHOUT waiting for the stream to end — the distinction `host_input(0)` is
+/// built on.
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+#[derive(Default)]
+struct HostInputState {
+    /// Bytes read but not yet handed to a `host_input()` call.
+    pending: Vec<u8>,
+    /// stdin reached EOF (or failed), so `pending` will not grow again.
+    at_eof: bool,
+}
+
+/// A background drain of stdin, so that reading program input is a QUESTION
+/// rather than a commitment.
+///
+/// Reading stdin on the calling thread can only ever block until the writer
+/// closes it, which is the wrong answer for a program asking its environment
+/// something optional: an absent host never closes anything, so the program
+/// waits forever (loft#891).  A thread that drains continuously turns stdin into
+/// a buffer any call can look at, so "nothing is pending" becomes answerable.
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+struct HostInputPump {
+    state: std::sync::Mutex<HostInputState>,
+    /// Signalled when bytes arrive and when stdin ends — the two events a
+    /// waiting `host_input()` can be woken by.
+    ready: std::sync::Condvar,
+}
+
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+impl HostInputPump {
+    /// Lock the buffer, taking a poisoned lock's contents rather than panicking:
+    /// the reader thread only ever appends, so a panic elsewhere leaves the
+    /// bytes perfectly usable and refusing to read them would lose input.
+    fn lock(&self) -> std::sync::MutexGuard<'_, HostInputState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The process-wide stdin pump, started on the first `host_input()` call.
+///
+/// `None` on a target whose threads cannot start (WASI): the caller then falls
+/// back to a blocking read, which is what that target did before.  Started
+/// lazily because a program that never reads input must not have its stdin
+/// drained out from under `loft repl` or `loft debug`.
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+fn host_input_pump() -> Option<&'static std::sync::Arc<HostInputPump>> {
+    use std::sync::{Arc, OnceLock};
+    static PUMP: OnceLock<Option<Arc<HostInputPump>>> = OnceLock::new();
+    PUMP.get_or_init(|| {
+        let pump = Arc::new(HostInputPump {
+            state: std::sync::Mutex::new(HostInputState::default()),
+            ready: std::sync::Condvar::new(),
+        });
+        let worker = Arc::clone(&pump);
+        let started = std::thread::Builder::new()
+            .name("loft-host-input".to_string())
+            .spawn(move || {
+                use std::io::Read as _;
+                let mut stdin = std::io::stdin().lock();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stdin.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            worker.lock().pending.extend_from_slice(&chunk[..n]);
+                            worker.ready.notify_all();
+                        }
+                    }
+                }
+                worker.lock().at_eof = true;
+                worker.ready.notify_all();
+            })
+            .is_ok();
+        started.then_some(pump)
+    })
+    .as_ref()
+}
+
+/// How many of `buf`'s bytes are ready to hand over — the longest prefix that is
+/// complete UTF-8.
+///
+/// A read can land in the middle of a multi-byte character, and handing those
+/// bytes over separately would turn one character into replacement characters on
+/// both sides of the split.  Holding the tail back costs nothing — the next call
+/// gets it once the rest arrives.  At EOF there is no rest, so everything goes,
+/// and genuinely invalid bytes are handed over rather than buffered forever.
+///
+/// This is also what a waiting reader waits FOR, so that "some bytes arrived"
+/// can never be mistaken for "a character arrived": a truncated character left
+/// in the buffer would otherwise end every later wait instantly and report an
+/// empty read while the stream is still live — a false "nobody is listening",
+/// which is the one answer this whole channel exists to get right.
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+fn takeable_len(buf: &[u8], at_eof: bool) -> usize {
+    if at_eof {
+        return buf.len();
+    }
+    match std::str::from_utf8(buf) {
+        Ok(_) => buf.len(),
+        // A truncated final character — the remaining bytes are still coming.
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        // Malformed, not incomplete: waiting cannot repair it.
+        Err(_) => buf.len(),
+    }
+}
+
+/// Take the bytes [`takeable_len`] declares ready, leaving any partial character
+/// behind for the next call.
+#[cfg(all(
+    not(feature = "wasm"),
+    any(not(target_arch = "wasm32"), target_os = "wasi")
+))]
+fn take_utf8_prefix(buf: &mut Vec<u8>, at_eof: bool) -> String {
+    let rest = buf.split_off(takeable_len(buf, at_eof));
+    let taken = std::mem::replace(buf, rest);
+    String::from_utf8_lossy(&taken).into_owned()
+}
+
 #[allow(dead_code)]
 impl Stores {
     #[must_use]
@@ -404,28 +541,70 @@ impl Stores {
         crate::wasm::host_env_variable(name)
     }
 
-    /// Read all program input as one text — the headless input channel for a
-    /// compute program: read it, compute, print the result.  Backs the
-    /// `host_input()` stdlib function.  The source is per-target: stdin to EOF on
-    /// native and WASI; the JS host on `--html`; empty on the IDE `make wasm`
-    /// build.  Empty string when there is no input.
+    /// Read program input as one text — the headless input channel for a compute
+    /// program: read it, compute, print the result.  Backs the `host_input()`
+    /// stdlib function.  The source is per-target: stdin on native and WASI; the
+    /// JS host queue on `--html`; empty on the IDE `make wasm` build.
+    ///
+    /// `wait_ms` says how long to wait for input that has not arrived yet.  A
+    /// negative value waits for the whole stream (stdin to EOF) — the bare
+    /// `host_input()` — and `0` or more waits at most that many milliseconds for
+    /// the first byte, then hands back whatever has arrived.  A timed read is how
+    /// a program ASKS its environment something optional: with no host on the
+    /// other end of stdin the drain never ends, so only a bounded read can answer
+    /// "nobody is listening" (loft#891).
+    ///
+    /// Empty string when there is no input.  A read that stops mid-character
+    /// holds the trailing bytes back for the next call, so no timing can split a
+    /// multi-byte character into replacement characters.
     #[cfg(all(
         not(feature = "wasm"),
         any(not(target_arch = "wasm32"), target_os = "wasi")
     ))]
     #[must_use]
-    pub fn host_input_native(&mut self) -> String {
-        use std::io::Read as _;
-        let mut s = String::new();
-        let _ = std::io::stdin().read_to_string(&mut s);
-        s
+    pub fn host_input_native(&mut self, wait_ms: i64) -> String {
+        let Some(pump) = host_input_pump() else {
+            // No worker thread on this target (WASI), so the blocking drain is
+            // the only read there is and a timed request degrades to it.  That
+            // keeps the VALUE right everywhere — a target that cannot poll must
+            // not answer "nothing pending" while bytes are waiting.
+            use std::io::Read as _;
+            let mut s = String::new();
+            let _ = std::io::stdin().read_to_string(&mut s);
+            return s;
+        };
+        let mut state = pump.lock();
+        if wait_ms < 0 {
+            while !state.at_eof {
+                state = pump
+                    .ready
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        } else if takeable_len(&state.pending, state.at_eof) == 0 && !state.at_eof {
+            let wait = std::time::Duration::from_millis(wait_ms.unsigned_abs());
+            state = pump
+                .ready
+                .wait_timeout_while(state, wait, |s| {
+                    takeable_len(&s.pending, s.at_eof) == 0 && !s.at_eof
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        let at_eof = state.at_eof;
+        take_utf8_prefix(&mut state.pending, at_eof)
     }
 
-    /// `--html` build: pull the bytes the JS host set before `loft_start`, via
-    /// the `loft_io` `len`+`copy` host imports (declared in `src/lib.rs`).
+    /// `--html` build: pop one message off the JS host queue, via the `loft_io`
+    /// `len`+`copy` host imports (declared in `src/lib.rs`).
+    ///
+    /// `wait_ms` is accepted and ignored: a page reads its queue without
+    /// blocking already, and the only way to WAIT here would be to spin the one
+    /// thread the JS host needs in order to push the very message being waited
+    /// for.  So every `--html` read is the poll that `wait_ms = 0` asks for.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     #[must_use]
-    pub fn host_input_native(&mut self) -> String {
+    pub fn host_input_native(&mut self, _wait_ms: i64) -> String {
         let n = crate::loft_host_input_len();
         let mut buf = vec![0u8; n];
         if n > 0 {
@@ -437,7 +616,7 @@ impl Stores {
     /// WASM (IDE `make wasm`) build: no OS stdin, so an empty channel.
     #[cfg(feature = "wasm")]
     #[must_use]
-    pub fn host_input_native(&mut self) -> String {
+    pub fn host_input_native(&mut self, _wait_ms: i64) -> String {
         String::new()
     }
 

@@ -15,8 +15,10 @@ use std::sync::Mutex;
 mod common;
 use common::cached_default;
 
-// Native extension tests share global state (NATIVE_REGISTRY, STUB_SYMBOLS,
-// LOADED_LIBS) so they must run sequentially within this test binary.
+// Native extension tests share global state (NATIVE_REGISTRY, LOADED_LIBS) so they
+// must run sequentially within this test binary.  The stub set is NOT among them any
+// more — it lives on `State`, see
+// `a_sibling_compile_does_not_take_over_this_program_s_stub_set` below.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
@@ -757,4 +759,92 @@ fn main() {
 }
 "#,
     );
+}
+
+/// A second program compiled in the SAME PROCESS must not decide which symbols the
+/// first one is allowed to wire.
+///
+/// The stub set — the `#native` symbols a compile registered a panic stub for, and
+/// therefore the only ones `wire_native_fns` may replace — used to live in a
+/// process-global that `compile::byte_code` OVERWROTE wholesale on every compile.  So
+/// in any process that compiles more than one program (a test binary, the REPL loading
+/// a second file, an embedder), a sibling compile landing between one program's
+/// compile and its wiring replaced the set.  The wiring then hit
+/// `!stubs.contains(sym) → continue`, skipped resolution for its OWN symbols, and left
+/// the panic stub in place — surfacing much later, at the first call, as *"native
+/// function not loaded: its library's native cdylib is missing or stale"*.  That
+/// message sends the reader after a build problem that does not exist.
+///
+/// It cost `tests/repl_session.rs::file_debugger_can_call_into_a_native_library` a ~50 %
+/// failure rate: it passes alone and fails about half the time beside its 54 siblings,
+/// measured at 5/10 in a worktree A/B against the preceding commit.
+///
+/// This reproduces that interleaving DETERMINISTICALLY — compile B, compile a sibling,
+/// then wire and run B — so the guard fails outright on the old code instead of
+/// depending on thread scheduling.  The sibling declares a DIFFERENT `#native` symbol,
+/// which is the whole point: a shared set would now hold only the sibling's.
+#[test]
+fn a_sibling_compile_does_not_take_over_this_program_s_stub_set() {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let Some(lib_path) = fixture_lib_path() else {
+        eprintln!(
+            "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+        );
+        return;
+    };
+
+    // Program B — the one that gets wired and run.
+    let mut pb = Parser::new();
+    let (data, db) = cached_default();
+    pb.data = data;
+    pb.database = db;
+    pb.parse_str(
+        "pub fn ext_add_one(x: integer) -> integer;\n#native \"loft_ext_add_one\"\n",
+        "b_decl",
+        false,
+    );
+    pb.parse_str(
+        "fn main() {\n    assert(ext_add_one(41) == 42, \"ext_add_one(41) should be 42\")\n}\n",
+        "b_main",
+        false,
+    );
+    assert!(pb.diagnostics.is_empty(), "B: {:?}", pb.diagnostics.lines());
+    scopes::check(&mut pb.data);
+    let mut state_b = State::new(pb.database.clone());
+    byte_code(&mut state_b, &mut pb.data);
+
+    // The sibling compile, landing between B's compile and B's wiring.  Its stub set
+    // names a symbol B does not use, so a process-global set would no longer contain
+    // `loft_ext_add_one` and B's own wiring would skip it.
+    let mut pa = Parser::new();
+    let (data_a, db_a) = cached_default();
+    pa.data = data_a;
+    pa.database = db_a;
+    pa.parse_str(
+        "pub fn sibling_only(x: integer) -> integer;\n#native \"loft_sibling_only\"\n",
+        "a_decl",
+        false,
+    );
+    pa.parse_str("fn main() {\n    x = 1;\n}\n", "a_main", false);
+    scopes::check(&mut pa.data);
+    let mut state_a = State::new(pa.database.clone());
+    byte_code(&mut state_a, &mut pa.data);
+
+    assert!(
+        state_b.native_stub_symbols.contains("loft_ext_add_one"),
+        "B's stub set must survive a sibling compile, got {:?}",
+        state_b.native_stub_symbols
+    );
+
+    // Wire B and run it.  Pre-fix this panicked in the stub with the stale-cdylib
+    // message; the program's own `assert` is the value check.
+    extensions::load_all(&mut state_b, vec![lib_path]);
+    extensions::wire_native_fns(&mut state_b, &pb.data);
+    state_b.execute_argv("main", &pb.data, &[]);
 }

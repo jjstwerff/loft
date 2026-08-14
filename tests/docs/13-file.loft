@@ -129,12 +129,17 @@ fn main() {
  }
   // Read the count, then use it to read exactly that many floats directly
   // into a struct field. This pattern lets you serialise and deserialise
-  // structs with variable-length data cleanly.
+  // structs with variable-length data cleanly.  A sized `f#read` answers a
+  // raw byte buffer, so name the type you are reading it back as: the `as`
+  // is what turns those bytes into elements.
  {b = Buffer { };
   f = file("buffer.bin");
   f#format = LittleEndian;
   n = f#read(4) as i32;
-  b.data = f#read(n * sizeof(single));
+  floats = f#read(n * sizeof(single)) as vector<single>;
+  b.data = floats;
+  assert(len(b.data) == 4, "Read four floats back into the field.");
+  assert((b.data[0] ?? 0.0f) == 1.1f, "First float survives the round-trip.");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 

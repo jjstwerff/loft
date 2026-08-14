@@ -1,0 +1,139 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#890 — `OpReplaceKeyed`'s `0x8000` bit frees the source store, and the `__lift_N`
+// that HOLDS that source freed it a second time at scope exit.
+//
+// `br = mk_hash(n)` lowers to `__lift_1 = mk_hash(n); OpReplaceKeyed(__lift_1, br, tp |
+// 0x8000)`.  The bit means "nobody else owns this store" — true of a bare call result,
+// false the moment `scan_args` lifts it into a temp the scope sweep frees.  A second
+// free is silent while the slot stays free, and steals a live store the moment the
+// allocator hands that slot to somebody else.
+//
+// Which is why the filed scope was three axes wide: the function had to RETURN A RECORD.
+// That return allocates its buffer BETWEEN the two frees, lands on the recycled slot, and
+// the function answers freed bytes.  With an integer return nothing is allocated in the
+// window and the double free hits an already-free slot — harmless, and invisible.
+//
+// The interpreter was correct for the same reason and no better one: its allocator did
+// not reuse the slot in that window.  Both backends carry the defect; only one showed it.
+//
+// Run under `LOFT_POISON=1` — `tests/consumed_lift_double_free.rs` is what sets it.  Bare,
+// this file proves only that it executes: a freed store usually still holds its old bytes.
+// Elements are seeded `q = i + 7` and every lookup asks for element 0, so each cell
+// answers 7 — a value no `??` fallback (-1) can produce.
+
+struct I890Cell { q: integer, r: integer }
+struct I890Txt { tq: text, tr: integer }
+struct I890Bag { g: hash<I890Cell[q, r]>, n: integer }
+
+fn i890_hash(n: integer) -> hash<I890Cell[q, r]> {
+  h: hash<I890Cell[q, r]> = [];
+  for i in 0..n { h[i + 7, 0] = I890Cell { q: i + 7, r: 0 }; }
+  h
+}
+fn i890_sorted(n: integer) -> sorted<I890Cell[q]> {
+  s: sorted<I890Cell[q]> = [];
+  for i in 0..n { s[i + 7] = I890Cell { q: i + 7, r: 0 }; }
+  s
+}
+fn i890_index(n: integer) -> index<I890Cell[q]> {
+  x: index<I890Cell[q]> = [];
+  for i in 0..n { x[i + 7] = I890Cell { q: i + 7, r: 0 }; }
+  x
+}
+fn i890_trie(n: integer) -> trie<I890Txt[tq]> {
+  t: trie<I890Txt[tq]> = [];
+  for i in 0..n { t["k{i + 7}"] = I890Txt { tq: "k{i + 7}", tr: i + 7 }; }
+  t
+}
+fn i890_cell(n: integer) -> I890Cell { I890Cell { q: n + 7, r: 0 } }
+
+// Every keyed KIND — the consume is `OpReplaceKeyed`, which all of them go through.
+fn i890_bound_hash() -> I890Cell   { v = i890_hash(3);   v[7, 0] ?? I890Cell { q: -1, r: -1 } }
+fn i890_bound_sorted() -> I890Cell { v = i890_sorted(3); v[7] ?? I890Cell { q: -1, r: -1 } }
+fn i890_bound_index() -> I890Cell  { v = i890_index(3);  v[7] ?? I890Cell { q: -1, r: -1 } }
+fn i890_bound_trie() -> I890Txt    { v = i890_trie(3);   v["k7"] ?? I890Txt { tq: "", tr: -1 } }
+
+// The integer return: the same double free with nothing allocated in the window.  It was
+// always "correct" and must stay so — a fix that only moved the window would show here.
+fn i890_integer() -> integer { v = i890_hash(3); (v[7, 0] ?? I890Cell { q: -1, r: -1 }).q }
+
+// A SECOND collection built after the consume: the store that lands on the recycled slot
+// is then a live collection rather than a return buffer, so both reads must survive.
+fn i890_second_collection() -> integer {
+  v = i890_hash(3);
+  w = i890_hash(3);
+  (v[7, 0] ?? I890Cell { q: -1, r: -1 }).q + (w[8, 0] ?? I890Cell { q: -1, r: -1 }).q
+}
+
+// A REASSIGNMENT consumes a second lift into an already-owned destination.
+fn i890_reassign() -> I890Cell {
+  v = i890_hash(3);
+  v = i890_hash(9);
+  v[7, 0] ?? I890Cell { q: -1, r: -1 }
+}
+// The destination is a struct FIELD rather than a local.
+fn i890_field() -> I890Cell {
+  b = I890Bag { g: i890_hash(3), n: 1 };
+  b.g[7, 0] ?? I890Cell { q: -1, r: -1 }
+}
+
+// In a LOOP the lift is reassigned every round, so a wrong free recurs per iteration.
+fn i890_loop_record(k: integer) -> I890Cell {
+  out = I890Cell { q: -1, r: -1 };
+  for _ in 0..k { v = i890_hash(3); out = v[7, 0] ?? I890Cell { q: -1, r: -1 }; }
+  out
+}
+
+// The neighbouring consumes, which must keep their own free arrangements: `OpSetKeyed`
+// moves a record INTO an element, `OpCopyRecord` moves one into a binding.  Their sources
+// are records inside a store the site already governs, not stores of their own.
+fn i890_set_keyed() -> I890Cell {
+  outer: hash<I890Cell[q, r]> = [];
+  outer[7, 0] = i890_cell(0);
+  outer[7, 0] ?? I890Cell { q: -1, r: -1 }
+}
+fn i890_copy_record() -> I890Cell {
+  c = i890_cell(0);
+  h = i890_hash(3);
+  I890Cell { q: c.q + (h[7, 0] ?? I890Cell { q: -1, r: -1 }).q - 7, r: 0 }
+}
+
+// Controls that were correct before and must stay correct: a container built IN PLACE has
+// no lift to double-free, and a PARAMETER's container belongs to the caller.
+fn i890_built_here() -> I890Cell {
+  h: hash<I890Cell[q, r]> = [];
+  for i in 0..3 { h[i + 7, 0] = I890Cell { q: i + 7, r: 0 }; }
+  h[7, 0] ?? I890Cell { q: -1, r: -1 }
+}
+fn i890_param(h: hash<I890Cell[q, r]>) -> I890Cell { h[7, 0] ?? I890Cell { q: -1, r: -1 } }
+
+fn i890_is(got: integer, want: integer, what: text) {
+  assert(got == want, "{what}: {got}, expected {want}");
+}
+
+fn main() {
+  i890_is(i890_bound_hash().q, 7, "hash bound to a local, record return");
+  i890_is(i890_bound_sorted().q, 7, "sorted bound to a local, record return");
+  i890_is(i890_bound_index().q, 7, "index bound to a local, record return");
+  i890_is(i890_bound_trie().tr, 7, "trie bound to a local, record return");
+
+  i890_is(i890_integer(), 7, "integer return");
+  i890_is(i890_second_collection(), 15, "a second collection after the consume");
+  i890_is(i890_reassign().q, 7, "reassignment");
+  i890_is(i890_field().q, 7, "struct-field destination");
+  i890_is(i890_loop_record(4).q, 7, "loop, record return");
+
+  i890_is(i890_set_keyed().q, 7, "OpSetKeyed source");
+  i890_is(i890_copy_record().q, 7, "OpCopyRecord source");
+
+  i890_is(i890_built_here().q, 7, "container built in place");
+  own = i890_hash(3);
+  i890_is(i890_param(own).q, 7, "parameter container");
+  // Element 1, read out of the CALLER's collection AFTER the call: a copy or a wreck
+  // shows here and nowhere else.
+  i890_is((own[8, 0] ?? I890Cell { q: -1, r: -1 }).q, 8, "the caller's collection survived");
+
+  println("890 consumed-lift double free OK");
+}

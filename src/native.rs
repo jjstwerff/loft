@@ -1010,7 +1010,8 @@ fn n_host_output(stores: &mut Stores, stack: &mut DbRef) {
 
 fn n_host_input_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
-    let value = stores.host_input_native();
+    let v_wait_ms = *stores.get::<i64>(stack);
+    let value = stores.host_input_native(v_wait_ms);
     stores
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)

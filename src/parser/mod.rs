@@ -3639,10 +3639,10 @@ impl Parser {
     /// Record that this cast ALLOCATED its result, so the `as` handler hands back
     /// `should` as written instead of grafting the source's deps onto it.
     ///
-    /// @PLN99 arc C established this for `convert`'s allocating user conversions;
-    /// `cast` has the same property and never said so. `text as Struct` /
-    /// `text as vector<T>` intern the text into a NEW store, so grafting made the
-    /// result read as a view of the text it parsed. A borrow crossing a function
+    /// Call it for any cast that allocates, the same way `convert`'s allocating user
+    /// conversions do. `text as Struct` / `text as vector<T>` intern the text into a
+    /// NEW store, so grafting makes the result read as a view of the text it parsed
+    /// rather than as the fresh value it is. A borrow crossing a function
     /// return is then delivered as one, and the return-buffer machinery renames its
     /// source onto `__retbuf`: a text local retyped to the record type and sharing
     /// its slot (loft#867 — the #306 guard then SIGSEGV on the interpreter, four
@@ -12241,7 +12241,12 @@ pub(crate) fn find_written_vars(
                 // was wrongly rejected as "never modified".
                 || def.name() == "OpHashRemove"
                 || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector";
+                || def.name() == "OpRemoveVector"
+                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
+                // return buffer. Today every emit site also writes that slot another way
+                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
+                // the omission is masked INCIDENTALLY rather than by design.
+                || def.name() == "OpReplaceVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
@@ -12369,7 +12374,12 @@ pub(crate) fn find_field_written_vars(code: &Value, data: &Data, written: &mut H
                 // `for … in &coll` loop also counts as a mutation.
                 || def.name() == "OpHashRemove"
                 || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector";
+                || def.name() == "OpRemoveVector"
+                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
+                // return buffer. Today every emit site also writes that slot another way
+                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
+                // the omission is masked INCIDENTALLY rather than by design.
+                || def.name() == "OpReplaceVector";
             let second_arg_write = def.name() == "OpCopyRecord";
             for (i, arg) in args.iter().enumerate() {
                 if i == 0 && first_arg_write {

@@ -456,6 +456,10 @@ impl Stores {
     pub fn finish(&mut self) {
         let mut vectors = HashSet::new();
         let mut linked = HashSet::new();
+        // The collection types of every field that belongs to a linked GROUP —
+        // two or more collections over one element type in one struct, auto-linked
+        // by `add_field` into several routes to a SINGLE record set (loft#843).
+        let mut grouped = Vec::new();
         for t_nr in 0..self.types.len() {
             if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[t_nr].parts {
                 for f in fields {
@@ -467,10 +471,40 @@ impl Stores {
                         | Parts::Index(r, _, _) => linked.insert(r),
                         _ => false,
                     };
+                    if !f.other_indexes.is_empty() {
+                        grouped.push(f.content);
+                    }
                 }
             }
             if let Parts::Sorted(v, _) = &self.types[t_nr].parts {
                 vectors.insert(*v);
+            }
+        }
+        // loft#901 — every member of a group names its elements by a 4-byte record
+        // id: a hash slot encodes `rec.rec` (`hash::SLOT_RECORD`), an `array` /
+        // `ordered` slot stores it raw and reads it back at a hard-coded payload
+        // start, and an `index` keeps its red-black links in FIELDS of the record.
+        // None of them can express a position INSIDE a record, so an element that
+        // does not own one is unaddressable through its siblings.  Two shapes made
+        // elements that do not:
+        //
+        //   * a hash packs its entries into a shared chunk (@PLN135 arc H), so the
+        //     siblings of `hash<E[k]>` + `index<E[k]>` saw two elements at one
+        //     record id — the index kept the first and dropped the rest, a sibling
+        //     hash held the right NUMBER of slots all naming the first;
+        //   * a `sorted` stores its elements inline, so as a view it had no record
+        //     to name at all and `sorted<E[k]>` + `sorted<E[k]>` stayed empty.
+        //
+        // Both disappear once the group's element type is record-backed, which is
+        // what `linked` means: it makes `record_new` claim one record per entry
+        // instead of an arena slot, and `finish_type` below promote `vector` →
+        // `array` and `sorted` → `ordered`.  It was only ever set as a SIDE EFFECT
+        // of that promotion, so a group whose members are all keyed never set it.
+        for c in grouped {
+            let elem = self.content(c);
+            if elem != u16::MAX {
+                linked.insert(elem);
+                self.types[elem as usize].linked = true;
             }
         }
         let mut in_progress = HashSet::new();

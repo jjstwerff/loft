@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The `vector<single>` half of loft#899, which its sibling guard
+// `899-unbound-file-read-temp.loft` structurally CANNOT hold.
+//
+// The wrong value came from the read's temp having no `main_vector<T>` wrapper
+// registered, and ANY other `vector<T>` local in the file registers one — including
+// the control row a good test wants, and including the parameter of a helper the test
+// calls. So the moment that guard added `v = f#read(…)` as its control, it also fixed
+// the very cell it was pinning: on the broken compiler it passes every `vector<single>`
+// row and fails only on `vector<P>`.
+//
+// This file therefore declares NO other vector of any kind: the read below is the only
+// one in it, its element type is `single`, and it is consumed with no binding. That is
+// the filed repro exactly, and it answered `len 1` — the header of an untyped store,
+// read one element in.
+//
+// Keep it minimal. A control row, a helper taking a vector, a second element type —
+// each would re-register the wrapper and quietly retire the guard.
+
+fn main() {
+  { f = file("r899c.bin"); f#format = LittleEndian; f += 1.5f; f += 2.5f; }
+  { f = file("r899c.bin"); f#format = LittleEndian;
+    n = len(f#read(8) as vector<single>);
+    assert(n == 2, "len = {n}, want 2"); }
+  delete("r899c.bin");
+  println("ok");
+}

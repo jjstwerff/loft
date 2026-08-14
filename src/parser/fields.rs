@@ -106,7 +106,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let e_size = i32::from(self.database.size(self.data.def(enr).known_type()));
+        let e_tp = i32::from(self.data.def(enr).known_type());
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
@@ -166,7 +166,7 @@ impl Parser {
             }
         }
         let dnr = self.data.type_def_nr(&t);
-        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_size) {
+        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp) {
             return Type::Void;
         }
         let fnr = self.data.attr(dnr, &field);
@@ -709,7 +709,7 @@ impl Parser {
         None
     }
 
-    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_size: i32) -> bool {
+    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_tp: i32) -> bool {
         if field == "remove" {
             self.lexer.token("(");
             let (tps, ls) = self.parse_parameters();
@@ -718,7 +718,7 @@ impl Parser {
             if tps.len() != 1 || !self.convert(&mut cd, &tps[0], &I32) {
                 diagnostic!(self.lexer, Level::Error, "Invalid index in remove");
             }
-            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_size), cd]);
+            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
             true
         } else {
             false
@@ -747,6 +747,13 @@ impl Parser {
         self.data.definitions[self.context as usize].variables[nr as usize].uses = 0;
          */
         if let Type::Vector(etp, _) = &t {
+            // loft#889 — the same naming the keyed arms below do.  A vector read out of
+            // an inline call's FIELD (`make_bag().rows[i]`) views into the bag's store,
+            // and the bag has no name until one is bound here.
+            let dep = self.container_dep(code, &t);
+            if let Some(cv) = dep {
+                elm_type = elm_type.depending(cv);
+            }
             let iter_value = self.parse_vector_index(code, &elm_type, etp);
             // A `v[i]` read is nullable — an out-of-bounds index yields the
             // null sentinel (exactly what the OOB defensive-check warns
@@ -812,11 +819,18 @@ impl Parser {
                 // is only known after the key expression is parsed, so both live in one
                 // parse.  A prefix slice returns the Trie type, so the enclosing `for`
                 // iterates the scratch the call builds.
+                let dep = self.container_dep(code, &t);
                 if let Some(slice) = self.parse_trie_slice(code, &t, &key_types) {
                     elm_type = slice;
+                } else if let Some(cv) = dep {
+                    elm_type = elm_type.depending(cv);
                 }
             } else {
+                let dep = self.container_dep(code, &t);
                 self.parse_key(code, &t, &key_types);
+                if let Some(cv) = dep {
+                    elm_type = elm_type.depending(cv);
+                }
             }
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
             // key returns the null record).  `parse_key` parsed the KEY last,
@@ -832,7 +846,11 @@ impl Parser {
             for (k, _) in keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
+            let dep = self.container_dep(code, &t);
             self.parse_key(code, &t, &key_types);
+            if let Some(cv) = dep {
+                elm_type = elm_type.depending(cv);
+            }
             // @P285 — see the Hash/Radix arm above; the lookup result is nullable.
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
@@ -1100,11 +1118,12 @@ impl Parser {
             // First pass: type not yet resolved; suppress error until second pass.
             Type::Unknown(0)
         } else if matches!(t, Type::Never) {
-            // @P376 poison — the receiver's own error (an unknown function, an
-            // unknown struct) is already on screen, so indexing it has nothing
-            // left to say.  Without this the cascade named the index line, which
-            // is correct as written, right beside the line that is not
-            // (loft#868).  Mirrors the `Unknown | Never` recovery in `field()`.
+            // A poisoned receiver stays poisoned.  The receiver's own error (an
+            // unknown function, an unknown struct) is already on screen, so
+            // indexing it has nothing left to say — and reporting anyway names the
+            // index line, which is correct as written, right beside the line that
+            // is not (loft#868).  Mirrors the `Unknown | Never` recovery in
+            // `field()`.
             Type::Never
         } else {
             // @PLN125 arc C — a library type CAN be subscripted now, so a struct or enum
@@ -1924,6 +1943,108 @@ impl Parser {
         }
     }
 
+    /// loft#882 / loft#889 — name the container a read VIEWS INTO, so the value read out
+    /// of it can depend on it.
+    ///
+    /// A dep naming the owner is the whole reason a borrowed read is safe:
+    /// `return_views_local` sees a borrow from a local and `materialize_view_return`
+    /// copies the value into the return buffer BEFORE the container is freed.  A read
+    /// that says nothing hands back a pointer into a store the same function frees on the
+    /// way out.  (`--native` hides most of it: an empty dep list reads as OWNED there, so
+    /// the assignment lowering inserts a defensive record copy — which is why such a
+    /// program is deterministic garbage interpreted and correct natively.)
+    ///
+    /// Two container shapes need two moves.  A NAMED container — a local, a parameter, a
+    /// field — is depended on directly.  An inline call producing a FRESH container has
+    /// no name at parse time (`scopes.rs` lifts it into a `__lift_N` long after the
+    /// materialisation decision has been made), so it is bound to a work-ref here and
+    /// that is what the read depends on.  The work-ref comes from the `__ref_p2_N`
+    /// sequence, which is separate from the one `ref_return` promotes out of, so a mint
+    /// here cannot land on the name pass 1 left on the return buffer (loft#848).
+    ///
+    /// It binds on BOTH passes, and that is load-bearing rather than incidental: this
+    /// dep is what tells `ref_return` the binding borrows, and a verdict that differs
+    /// between the passes is worse than no verdict at all.  Skipping pass 1 read the
+    /// binding as owned and renamed it ONTO the return buffer; pass 2 then saw the view
+    /// and materialised — into the buffer the binding now was — so the copy read the
+    /// record it had just re-minted and `e = make().f[0]; e` answered an empty one.
+    ///
+    /// Only a call that MINTS the container is bound — a loft-defined body whose return
+    /// store is genuinely fresh.  WHICH call that is takes a step: `make_bag().h[k]` must
+    /// name the BAG, because the element lives in the bag's store and not in the `h`
+    /// projection's.  Naming the projection puts the bag in an inner scope, freed before
+    /// the materialised copy reads it — worse than the borrow.
+    ///
+    /// The SUBSCRIPT is what asks, not the field read, and that placement is what keeps
+    /// the binding to the reads that need it.  `return make().rows` returns the field
+    /// itself, which the delivery machinery already copies out (loft#877, zt12) — binding
+    /// a container there adds a holder nothing releases.  Only an element read out of the
+    /// field views into the container, and only the subscript knows that is what this is.
+    ///
+    /// Returns the variable the read borrows from, if there is one to name.
+    fn container_dep(&mut self, code: &mut Value, typedef: &Type) -> Option<u16> {
+        if let Value::Var(x) = code.unspan() {
+            return Some(*x);
+        }
+        // Reached THROUGH one or more field projections (`make_bag().h[k]`): bind the
+        // ROOT call, because the element lives in the bag's store and not in the `h`
+        // projection's.  Its type comes from the call's own return type, the only place
+        // the bag is written down by the time the subscript asks.
+        if let Some(root) = self.projection_root_mut(code) {
+            let Value::Call(d_nr, _) = root.unspan() else {
+                return None;
+            };
+            if !self.data.def(*d_nr).is_loft_defined() {
+                return None;
+            }
+            let root_tp = self.data.def(*d_nr).returned().clone();
+            return Some(self.bind_inline_container(root, &root_tp));
+        }
+        let Value::Call(d_nr, _) = code.unspan() else {
+            return None;
+        };
+        if !self.data.def(*d_nr).is_loft_defined() {
+            return None;
+        }
+        Some(self.bind_inline_container(code, typedef))
+    }
+
+    /// The innermost base of a chain of field projections, when `code` IS such a chain
+    /// rooted at a CALL.  `None` for anything else, including a chain rooted at a
+    /// variable — that root already has a name, and `parse_index` inherits its dep.
+    fn projection_root_mut<'a>(&self, code: &'a mut Value) -> Option<&'a mut Value> {
+        let get_field = self.data.def_nr("OpGetField");
+        let get_vector = self.data.def_nr("OpGetVector");
+        let Value::Call(d, args) = code.unspan_mut() else {
+            return None;
+        };
+        if *d != get_field && *d != get_vector {
+            return None;
+        }
+        let base = args.first_mut()?;
+        match base.unspan() {
+            Value::Call(bd, _) if *bd == get_field || *bd == get_vector => {
+                self.projection_root_mut(base)
+            }
+            Value::Call(_, _) => Some(base),
+            _ => None,
+        }
+    }
+
+    /// Replace `code` with `{ w = <code>; w }` and answer `w` — the work-ref that now
+    /// NAMES the container, typed `tp`.
+    fn bind_inline_container(&mut self, code: &mut Value, tp: &Type) -> u16 {
+        let w = self.vars.work_refs_p2(tp, &mut self.lexer);
+        self.vars.mark_inline_ref(w);
+        let orig = std::mem::replace(code, Value::Null);
+        *code = v_block(
+            vec![v_set(w, orig), Value::Var(w)],
+            tp.clone().depending(w),
+            "inline_container",
+        );
+        w
+    }
+
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
         // detect open-start `col[..hi]` or `col[..]` before parsing expression.
         let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
@@ -2187,6 +2308,9 @@ impl Parser {
         }
         let mut on;
         let arg;
+        // The element type, for the arms whose `arg` is a WIDTH rather than a type —
+        // `e#remove` needs the type to free what an element owns.
+        let mut elem_tp = u16::MAX;
         match self.database.types[known as usize].parts {
             Parts::Index(_, _, _) => {
                 on = 1;
@@ -2195,10 +2319,12 @@ impl Parser {
             Parts::Sorted(tp, _) => {
                 on = 2;
                 arg = self.database.size(tp);
+                elem_tp = tp;
             }
-            Parts::Ordered(_, _) => {
+            Parts::Ordered(tp, _) => {
                 on = 3;
                 arg = 4;
+                elem_tp = tp;
             }
             Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _) => {
                 // Route hash/radix iteration through the Ordered code as on=4.
@@ -2240,10 +2366,19 @@ impl Parser {
         ls.push(code.clone());
         ls.push(Value::Int(i32::from(on)));
         ls.push(Value::Int(i32::from(arg)));
-        // For Index (on & 63 == 1): store the type index so OpRemove can call
-        // database.fields(tp) and database.remove(..., tp) with the correct type.
-        // For all other collection types, arg IS the db_tp used by OpRemove.
-        let loop_db_tp = if on & 63 == 1 { known } else { arg };
+        // What `OpRemove` is handed, which is NOT always `arg`:
+        //  - Index (on 1): the COLLECTION type, so it can reach `fields()` and
+        //    `remove_owned(..., tp)`;
+        //  - Sorted / Ordered (on 2 / 3): the ELEMENT type, because removing an
+        //    element has to free what it owns and a width cannot say what that is
+        //    (loft#903).  `arg` stays the STRIDE the stepper needs.
+        //  - the rest: `arg`, which `#remove` never reads (hash iteration is
+        //    rejected at the `#remove` site).
+        let loop_db_tp = match on & 63 {
+            1 => known,
+            2 | 3 => elem_tp,
+            _ => arg,
+        };
         self.vars.set_loop(on, loop_db_tp, code);
         if add_keys {
             // loft#689 — the descriptor list is BAKED into the operand here, but the

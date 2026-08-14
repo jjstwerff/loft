@@ -180,6 +180,27 @@ carries), each a silent empty string if wrong:
 | `--native-wasm` (WASI) | WASI stdin | returns empty — **silent** |
 | `--html` | the JavaScript-supplied blob, via the `loft_io` host imports | returns empty — **silent** |
 
+**The bound: `host_input(wait_ms)` (loft#891).** Reading to EOF can only be
+answered by a host that hangs up, so the bare form cannot ask an OPTIONAL
+question — and "is anyone there?" is exactly the question a page-or-native client
+needs answered at boot. The defaulted `wait_ms` bounds the wait: `-1` (the
+default) keeps the read-the-whole-stream behaviour, `0` takes what has already
+arrived, and a positive value waits that long for the first byte. So
+`host_output("MODE?"); host_input(200)` is a request/response exchange on native
+and interpret, the way it already was on `--html`, and an empty answer means
+nobody is listening rather than a hang.
+
+On native this rests on a background drain of stdin (`HostInputPump` in
+`src/database/format.rs`), started on the first read so `loft repl` and
+`loft debug` keep their own stdin. It hands over only COMPLETE characters —
+a timed read that lands mid-character holds the tail back — because bytes split
+across two reads would otherwise become replacement characters, and a truncated
+character left in the buffer would end every later wait instantly and report an
+empty read while the stream is live. `--html` ignores `wait_ms` (a page cannot
+wait for a message its own thread must deliver, so every read there is already
+the `0` poll); `--native-wasm` has no threads, so a bounded read there falls back
+to the blocking drain rather than claim "nothing pending" it cannot verify.
+
 Every omission is silent (an empty string, not a compile error) — that is the real
 risk, and the parity gate below is its cure: it turns a missing backing into a
 loud test failure.
@@ -214,7 +235,10 @@ loud test failure.
 
 **The acceptance gate (the cure for the four silent backings).** `tests/host_input.rs`
 guards the interpreter == native byte-parity (plus the empty and UTF-8 cases) by
-feeding the same bytes on stdin. The `--html` leg — JS sets `globalThis.loftInput`,
+feeding the same bytes on stdin. Three further tests hold stdin OPEN — the state
+the plain harness cannot reach, since writing stdin and dropping it ends even a
+blocking drain — and check that a bounded read answers with no host, still reads
+a host that stays connected, and never splits a character across two reads. The `--html` leg — JS sets `globalThis.loftInput`,
 the wasm prints the same result — is proven with the Node harness recorded in
 [WEB_APPS.md](WEB_APPS.md); the WASI leg shares the native stdin backing. Extending
 the Rust gate to drive `--html` under headless Chromium (the `tests/html_wasm.rs`

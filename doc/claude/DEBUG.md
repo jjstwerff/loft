@@ -985,6 +985,26 @@ RUSTFLAGS="-C debug-assertions=on" CARGO_TARGET_DIR=target-da \
   cargo test --release --no-fail-fast
 ```
 
+**For ONE specific assert, sweep the corpus instead.**  The calibration run above
+arms every check at once, which is what you want for an inventory.  When you are
+chasing a single fault and a dead `debug_assert!` already names it, the cheaper
+move is to replace that one assert with an env-gated `eprintln!` and run it over
+every `.loft` in the tree:
+
+```bash
+find tests doc -name '*.loft' | while read f; do
+  LOFT_PROBE_X=1 LOFT_TIMEOUT=20 ./target/release/loft --interpret "$f" 2>&1 >/dev/null \
+    | grep '^PROBE-X' | sed "s|^|$f: |"
+done
+```
+
+That answers "is this one site or a CLASS?" with a measured producer set rather
+than a reading of the code, and a corpus that produces NO hits is itself the
+finding — it means nothing in the suite covers the shape, which is usually why
+the defect shipped.  Both were true of loft#899's `OpDatabase(db_tp = u16::MAX)`:
+exactly one producer, zero corpus coverage.  Remove the probe once the invariant
+is enforced at its chokepoint.
+
 **Never set `RUSTFLAGS` against the MAIN target dir.**  Cargo keeps BOTH
 flag-generations of every dep in `target/release/deps/` — including two
 `libloft_ffi-*.rlib` — and anything that sweeps `deps/` (the cdylib

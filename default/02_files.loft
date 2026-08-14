@@ -936,15 +936,29 @@ pub fn cache_dir() -> text?env#read {
   if d == "" { return null }
   return d;
 }
-// Pops the next pending host message as one text; empty when there is none.
-// The source is per-target: stdin (read once, to EOF) on native and
-// --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with
-// globalThis.loftInput before loft_start, and push live messages any time
-// with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a
-// headless compute module or a polled input loop — the inbound mirror of
-// host_output.  The engine only moves opaque bytes; the program parses them.
-pub fn host_input() -> text;
-#rust"stores.host_input_native()"
+// Reads pending host input as one text; empty when there is none.  The source
+// is per-target: stdin on native and --native-wasm (WASI); the JS host's input
+// QUEUE on --html — seed it with globalThis.loftInput before loft_start, and
+// push live messages any time with globalThis.loftPush(msg) (e.g. fetch()
+// completions).  Use for a headless compute module or a polled input loop —
+// the inbound mirror of host_output.  The engine only moves opaque bytes; the
+// program parses them.
+//
+// wait_ms says how long to wait for input that has not arrived yet.  The
+// default -1 reads the WHOLE stream, waiting for stdin to end; 0 takes what is
+// already there and returns at once; a positive value waits that many
+// milliseconds for the first byte.  Ask with a bound whenever the answer might
+// be that nobody is listening: an absent host never closes stdin, so the
+// default form waits forever for a reply that is not coming.
+//
+//   host_output("MODE?");
+//   mode = host_input(200);        // "" => no host, run locally
+//
+// On --html every read already polls (a page cannot wait for a message its own
+// thread has to deliver), and on --native-wasm, which has no threads, a bounded
+// read falls back to waiting for the whole stream.
+pub fn host_input(wait_ms: integer = -1) -> text;
+#rust"stores.host_input_native(@wait_ms)"
 #impure(host_io)
 // Sends one STRUCTURED message to the host shell — the outbound mirror of
 // host_input, distinct from user-facing print.  Per target: a line on stderr

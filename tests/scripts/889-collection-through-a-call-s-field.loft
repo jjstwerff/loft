@@ -1,0 +1,154 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#889 — a collection reached through a FIELD of a call's result is a view into a
+// store the same expression frees.
+//
+// `mk_bag(n).b_vec[0]` reads an element that lives in the bag's store, and the bag is an
+// inline call result the parser had no name for.  With nothing to depend on, the element
+// typed as OWNED: `return_views_local` saw no borrow, `materialize_view_return` never
+// copied, and the read landed on the store `OpFreeRef` had just released.
+//
+// loft#882 already named the container of a DIRECT call (`mk_hash(n)[k]`).  The fix here
+// is the same move one step out — the FIELD read names the bag — and it has to be the
+// bag: naming the `b_vec` projection instead puts the bag's temp in an inner scope, freed
+// before the materialised copy reads it, which is worse than the borrow.
+//
+// The naming happens on BOTH parser passes, and that is the load-bearing part rather than
+// an implementation detail.  The dep is what tells `ref_return` the binding borrows, so a
+// verdict that differs between the passes is worse than none: pass 1 read the binding as
+// owned and renamed it ONTO the return buffer, pass 2 then saw the view and materialised
+// into the buffer the binding now WAS — so `e = mk_bag(n).b_vec[0] ?? d; e` copied the
+// record it had just re-minted and answered an empty one.  `i889_bound` is that cell, and
+// it was already wrong for the loft#882 keyed spelling before this issue existed.
+//
+// Run under `LOFT_POISON=1` — `tests/collection_through_call_field.rs` sets it.  Bare,
+// freed bytes are usually still intact and every cell passes on value alone.  Elements
+// are seeded `q = i + 7`; the `??` fallback is -1, which no element can hold.
+
+struct I889Cell { q: integer, r: integer }
+struct I889Txt { tq: text, tr: integer }
+struct I889Bag {
+  b_vec: vector<I889Cell>,
+  b_hash: hash<I889Cell[q, r]>,
+  b_index: index<I889Cell[q]>,
+  b_trie: trie<I889Txt[tq]>,
+}
+struct I889Outer { o_bag: I889Bag, o_n: integer }
+
+fn i889_vec(n: integer) -> vector<I889Cell> {
+  v: vector<I889Cell> = [];
+  for i in 0..n { v += [I889Cell { q: i + 7, r: 0 }]; }
+  v
+}
+fn i889_hash(n: integer) -> hash<I889Cell[q, r]> {
+  h: hash<I889Cell[q, r]> = [];
+  for i in 0..n { h[i + 7, 0] = I889Cell { q: i + 7, r: 0 }; }
+  h
+}
+fn i889_index(n: integer) -> index<I889Cell[q]> {
+  x: index<I889Cell[q]> = [];
+  for i in 0..n { x[i + 7] = I889Cell { q: i + 7, r: 0 }; }
+  x
+}
+fn i889_trie(n: integer) -> trie<I889Txt[tq]> {
+  t: trie<I889Txt[tq]> = [];
+  for i in 0..n { t["k{i + 7}"] = I889Txt { tq: "k{i + 7}", tr: i + 7 }; }
+  t
+}
+fn i889_bag(n: integer) -> I889Bag {
+  I889Bag { b_vec: i889_vec(n), b_hash: i889_hash(n),
+            b_index: i889_index(n), b_trie: i889_trie(n) }
+}
+fn i889_outer(n: integer) -> I889Outer { I889Outer { o_bag: i889_bag(n), o_n: n } }
+
+// Every collection kind, reached through a field of a call's result.  The vector spelling
+// was wrong on BOTH backends; the keyed ones only interpreted, because an empty dep list
+// reads as OWNED natively and the assignment lowering's defensive copy happened to save
+// them — the same lopsided matrix loft#882 had, and the same reason it is not evidence.
+fn i889_vec_field() -> I889Cell   { i889_bag(3).b_vec[0] ?? I889Cell { q: -1, r: -1 } }
+fn i889_hash_field() -> I889Cell  { i889_bag(3).b_hash[7, 0] ?? I889Cell { q: -1, r: -1 } }
+fn i889_index_field() -> I889Cell { i889_bag(3).b_index[7] ?? I889Cell { q: -1, r: -1 } }
+fn i889_trie_field() -> I889Txt   { i889_bag(3).b_trie["k7"] ?? I889Txt { tq: "", tr: -1 } }
+
+// A field of a field: the owner is the OUTER call's result, two projections up.
+fn i889_nested() -> I889Cell { i889_outer(3).o_bag.b_vec[0] ?? I889Cell { q: -1, r: -1 } }
+fn i889_nested_keyed() -> I889Cell {
+  i889_outer(3).o_bag.b_hash[7, 0] ?? I889Cell { q: -1, r: -1 }
+}
+
+// Bound to a local and returned — the pass-stability cell described above.
+fn i889_bound() -> I889Cell {
+  e = i889_bag(3).b_vec[0] ?? I889Cell { q: -1, r: -1 };
+  e
+}
+// The loft#882 keyed spelling of the same cell, which the pass-1 skip also broke.
+fn i889_bound_keyed() -> I889Cell {
+  e = i889_hash(3)[7, 0] ?? I889Cell { q: -1, r: -1 };
+  e
+}
+// Not in return position at all, and reading two independent bags in one expression.
+fn i889_expression() -> integer {
+  (i889_bag(3).b_vec[0] ?? I889Cell { q: -1, r: -1 }).q
+    + (i889_bag(3).b_hash[8, 0] ?? I889Cell { q: -1, r: -1 }).q
+}
+// A SCALAR projection of the element copies the value out, so it never needed the dep —
+// and must not acquire one: binding a container for `mk().q` would hold a whole record
+// with nothing left to release it.
+fn i889_scalar() -> integer { (i889_bag(3).b_vec[0] ?? I889Cell { q: -1, r: -1 }).q }
+// The whole COLLECTION read out of the field rather than an element of it.
+fn i889_collection() -> integer { len(i889_bag(3).b_vec) }
+
+// A loop over the shape: the container is held in a work-ref, and a work-ref that grew
+// per round would turn this fix into a leak.
+fn i889_rounds(n: integer) -> integer {
+  s = 0;
+  for _ in 0..n { e = i889_bag(3).b_vec[0] ?? I889Cell { q: -1, r: -1 }; s += e.q; }
+  s
+}
+
+// Controls: a NAMED container, a PARAMETER, and a DIRECT call all carried the dep before.
+fn i889_named() -> I889Cell {
+  b = i889_bag(3);
+  b.b_vec[0] ?? I889Cell { q: -1, r: -1 }
+}
+fn i889_param(b: I889Bag) -> I889Cell { b.b_vec[0] ?? I889Cell { q: -1, r: -1 } }
+fn i889_direct_vec() -> I889Cell { i889_vec(3)[0] ?? I889Cell { q: -1, r: -1 } }
+fn i889_direct_hash() -> I889Cell { i889_hash(3)[7, 0] ?? I889Cell { q: -1, r: -1 } }
+
+fn i889_is(got: integer, want: integer, what: text) {
+  assert(got == want, "{what}: {got}, expected {want}");
+}
+
+fn main() {
+  i889_is(i889_vec_field().q, 7, "vector field of a call");
+  i889_is(i889_hash_field().q, 7, "hash field of a call");
+  i889_is(i889_index_field().q, 7, "index field of a call");
+  i889_is(i889_trie_field().tr, 7, "trie field of a call");
+
+  i889_is(i889_nested().q, 7, "a field of a field");
+  i889_is(i889_nested_keyed().q, 7, "a keyed field of a field");
+
+  i889_is(i889_bound().q, 7, "bound to a local, then returned");
+  i889_is(i889_bound_keyed().q, 7, "the keyed spelling, bound then returned");
+  i889_is(i889_expression(), 15, "inside an expression");
+  i889_is(i889_scalar(), 7, "scalar projection");
+  i889_is(i889_collection(), 3, "the collection itself");
+
+  // Round-over-round on ONE frame, so the per-site work-ref is born and dies inside it
+  // and the two snapshots are comparable.
+  i889_is(i889_rounds(20), 140, "a loop over the shape reads every round");
+  before = store_memory();
+  i889_is(i889_rounds(200), 1400, "and again, 200 rounds");
+  assert(store_memory() == before, "the container work-ref must not grow per round");
+
+  i889_is(i889_named().q, 7, "named container");
+  own = i889_bag(3);
+  i889_is(i889_param(own).q, 7, "parameter container");
+  // Element 1 out of the CALLER's bag AFTER the call: a copy or a wreck shows only here.
+  i889_is((own.b_vec[1] ?? I889Cell { q: -1, r: -1 }).q, 8, "the caller's bag survived");
+  i889_is(i889_direct_vec().q, 7, "direct vector call");
+  i889_is(i889_direct_hash().q, 7, "direct hash call");
+
+  println("889 collection through a call's field OK");
+}

@@ -1084,8 +1084,11 @@ fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 // par-safety analyser rejects calls to these from worker fns when the
 // first arg (the collection) is non-local (D8 R1 — full check still
 // requires "is first arg local?" analysis; today blanket-rejected).
-fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
-#rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
+// `tp` is the ELEMENT type, not its width: an `array`'s slots are 4 bytes wide
+// whatever the element measures, and the record a slot names has to be freed.
+// `remove_vector_at` is the one place that decides which layout this is.
+fn OpRemoveVector(r: vector, tp: const u16, index: integer) -> boolean;
+#rust"s.database.remove_vector_at(&@r, @tp, @index)"
 #impure(parent_write)
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
@@ -1317,8 +1320,12 @@ fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // pointer, leaving an empty collection a later `+= [..]` re-initialises.  The
 // keyed-LOCAL clear (`s = []`) goes through OpDatabase (@P302); a field is a
 // claim INSIDE its struct's store, so it needs this in-place free instead.
+//
+// loft#898 — `tp`'s 0x8000 bit marks the field a SECONDARY VIEW of a linked
+// group, whose records belong to a sibling: the release then drops this route
+// (the table / slot list / tree root) and leaves the records to their owner.
 fn OpClearKeyed(dest: reference, tp: const u16);
-#rust"s.database.remove_claims(&@dest, @tp);"
+#rust"s.database.remove_claims_keyed(&@dest, @tp);"
 // @P305 — `coll[key] = value` insert-or-replace into a keyed collection
 // (hash/sorted/index), deduped by value's key.  Updates an existing key
 // in place OR inserts a new one (the plain `OpCopyRecord` lowering could

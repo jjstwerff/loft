@@ -40,6 +40,56 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### Filling a vector is as fast written the obvious way
+
+`[for _ in 0..n { -1 }]` — a vector of `n` copies of one value — ran the full
+element-by-element build protocol, once per element, for a value that never changed.
+The other spelling, `[-1; n]`, has always claimed one element and copied it, and was
+about five times faster.
+
+Now the obvious spelling compiles to the fast one. Building a million-element vector
+went from 74.6 ms to 14.4 ms on this machine; `[-1; n]` takes 14.7 ms, so the two are
+the same code. Nothing to learn and nothing to rewrite — if you already use `[x; n]`,
+it is unchanged.
+
+This only applies when the body really is the same value every time. A body that reads
+the loop variable, or calls anything at all, still runs once per element:
+
+```loft
+[for _ in 0..n { -1 }]        // one value, copied n times
+[for i in 0..n { i * 2 }]     // n different values — unchanged
+[for _ in 0..n { next() }]    // n calls — unchanged
+```
+
+### A program can ask its environment a question it might not answer
+
+`host_input()` reads until whoever is writing hangs up. That is right for a compute
+program reading a file on its input, but it makes one question unaskable: *is anyone
+out there?* A program that does
+
+```loft
+host_output("MODE?");
+mode = host_input();
+```
+
+got an answer in a web page whose JavaScript replies — and waited forever anywhere
+else, because nothing that is absent ever hangs up.
+
+`host_input` now takes an optional wait:
+
+```loft
+mode = host_input(200);        // "" => nobody is listening, carry on locally
+```
+
+`host_input(0)` takes whatever has already arrived and returns straight away, a
+positive number waits that many milliseconds for the first byte, and plain
+`host_input()` still reads the whole stream exactly as before. So a request and its
+reply are now a conversation you can have outside the browser too — ask, wait a
+moment, and treat silence as an answer instead of a hang.
+
+Characters are never torn in half by the wait: a read that arrives mid-character
+hands over the part that is whole and keeps the rest for the next read.
+
 ### A test that names a helper the way its library does
 
 A package whose test file defined `fn defaulted(…)` while its library had a private
@@ -50,6 +100,355 @@ Two functions can share a name when they come from different files, and the gene
 Rust renames one of them to keep them apart — but one place that writes a CALL spelled
 the original name. Both spellings work now, and neither needs renaming to avoid the
 other.
+
+### `[x; n]` gives you n elements — of whatever `x` is
+
+Writing `[7; 3]` built **four** elements, and the fourth held whatever was in memory — a
+wrong length and unpredictable contents, on both backends, with nothing said about it.
+
+`[7; 0]` was worse: it crashed the process inside the system allocator, because the copy
+count wrapped around and wrote past the end of the vector. A count that came out
+**negative** — `[7; a - b]` where `b` is the larger — did the same thing.
+
+And `["abc"; 4]` gave you `"abc"` once, then junk: only the first element was really the
+text you asked for. The same went for a struct or a nested vector, and for a text field
+inside a repeated struct. The length was right and the first element was right, so it read
+as correct until something looked past it.
+
+All fixed: `[x; n]` now holds exactly `n` copies of `x` — for any `n`, including zero and
+negative, whether the count is written in the source or worked out while the program runs,
+and whatever kind of value `x` is.
+
+Worth knowing if you build big arrays: `[x; n]` is currently about **five times faster**
+than the equivalent `[for _ in 0..n { x }]`, so it is the spelling to reach for when you
+are filling a vector with one repeated value.
+
+### Storing the wrong type into a struct field now says so
+
+Assigning a value of the wrong type to a **field** was accepted and then did nothing. The
+old value stayed, no diagnostic appeared, and the program carried on:
+
+```loft
+st.view = graphics::mat4_look_at(eye, target, up);   // `view` is a vector<float>,
+                                                     // mat4_look_at returns a Mat4
+```
+
+That compiled clean and stored nothing, so the page drew every frame through whatever the
+field held before — a picture that looks like a camera bug. The identical assignment to a
+**local** was refused, which is what made it look like a hole rather than a decision.
+
+It was also not only a lost write. A `text` field given an integer carried that number
+into the text machinery as if it were a handle and crashed the process; a `+=` in the same
+shape wrote into read-only memory and panicked.
+
+All of it is now one error, naming the field's type and the cast that would make it
+deliberate:
+
+```
+error: Cannot assign Wrap to a field of type vector<float> — use 'as vector<float>' to
+cast explicitly
+```
+
+Correct stores are untouched, including the ones where the two types genuinely differ:
+building a `hash` or `sorted` field from a vector of its elements, storing `null` into a
+nullable field, an integer into a `float` field, and integer-spelled elements in a
+`vector<float>` literal.
+
+One thing to know if you read binary files: a sized `f#read` answers a raw byte buffer, so
+reading it back into a typed vector field needs the `as` that turns those bytes into
+elements — `b.data = f#read(n * sizeof(single)) as vector<single>`. Without it the field
+was silently left EMPTY. This is what the documentation always said; now the compiler says
+it too.
+
+### A write through a struct a function returned no longer disappears in silence
+
+The same element, reached three ways — and only two of them were a mutation you could see:
+
+```loft
+hurt(first(s), 10.0);             // 0  — the write went nowhere
+hurt(s.es[0] ?? E {}, 10.0);      // 10 — landed
+for e in s.es { hurt(e, 10.0); }  // 20 — landed
+```
+
+Returning a struct hands back a **copy**, and that copy is released at the end of the
+statement — so the write lands in something nobody can read. Nothing at the call site
+distinguished the three: same types, no warning, no error. Found while giving enemies HP in
+a game, where six tests failed at once and every one of them read as a bug in the thing
+being mutated rather than in the one-line accessor.
+
+The behaviour is unchanged — value semantics for a returned struct is the rule — but the
+silence is gone:
+
+```
+warning[lost-write]: `hurt` writes to `e`, but the argument here is a value RETURNED by a
+call — a temporary that is freed at the end of this statement, so the write is LOST.
+```
+
+It stays quiet where nothing is lost: a value the function built from scratch, the
+write-it-and-return-it builder idiom, and a result you bind to a variable first (that copy
+is still yours to read).
+
+### `=` on a hash, sorted or index now replaces it, instead of adding to it
+
+Assigning a list to a keyed collection added to whatever it already held:
+
+```loft
+h: hash<Entry[k]> = [];
+h = [Entry{k:1}, Entry{k:2}];
+h = [Entry{k:5}, Entry{k:6}];
+println("{len(h)}");     // was 4 — all four entries, keys 1, 2, 5 and 6
+```
+
+`=` now means what it says: the collection holds exactly what you assigned. `+=` still
+adds, unchanged. This applies to `hash`, `sorted` and `index`, as a local or as a struct
+field — a plain `vector` always replaced correctly, which is part of why this went
+unnoticed for so long. So did a single assignment onto a fresh `[]`, which is what most
+code does; you only saw it if you assigned the same collection twice.
+
+The loudest version was a struct holding **two** keyed collections of the same element
+type. Those two fields are deliberately two views of one set of records, so filling either
+one fills both — and the second assignment then added to a collection you thought you had
+just replaced, giving a length of 4 for two elements. That case is fixed too, in the same
+release; see below.
+
+### Two keyed collections over one element type no longer destroy each other's records
+
+A struct can hold several keyed collections over the same element type, and they are
+deliberately several routes to ONE set of records — filling either fills both. Emptying
+either one, however, used to free the shared records, so the other was left reporting its
+old length over memory that had already been given back:
+
+```loft
+struct H { keyed: hash<E[k]>, ordered: sorted<E[k]> }
+h.keyed = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+h.ordered = [];                     // empty the other view
+for e in h.keyed { … }              // was 4294967296:null — freed memory
+```
+
+The records now have an owner. The first-declared collection holds them; every later one
+over the same element type is a view of them, and only the owner's records are ever freed.
+
+Assigning to any of them replaces the whole set, so they always agree — which is the same
+rule adding already followed: `h.by_k += [e]` has always added to every collection in the
+group, not just the one you named. So `h.by_k = []` empties the set, and
+`h.by_k = [e]` makes the set exactly `[e]`. The alternative — letting you empty one view
+on its own — cannot work for a non-empty list, because the elements still go into the
+group: you would be left with an index that does not index most of the records it is over,
+and nothing to rebuild it with.
+
+This is also what the documented `vector<T>` + `hash<T[k]>` pairing needed — there the
+vector is the owner — and it holds for three or more collections, and for a group nested
+inside another struct.
+
+### …and removing one entry takes it out of every collection in the group
+
+Removing a single entry used to be wrong in both directions. Through the secondary
+collection it freed the record the primary still held, so the entry was still there and
+its text read back `null`:
+
+```loft
+struct H { v: vector<E>, by_k: hash<E[k]> }
+h.by_k[1] = null;                   // remove through the index
+for e in h.v { … }                  // was 1:null — the record was freed underneath
+```
+
+And through the primary it never reached the secondary, which went on reporting an entry
+over a record that was gone.
+
+The entry now leaves every collection in the group and its record is freed once, whichever
+one you spell the removal through — the same rule adding and clearing already follow. The
+alternative, dropping one index entry and leaving the record in the primary, has no
+sensible next step: `h.by_k[1] = null` followed by `h.by_k[1] = E{k:1,…}` would remove one
+entry and then add to the whole group, leaving the primary with two records under one key
+and nothing able to repair it.
+
+Two smaller things had to be right for this to work, and are fixed with it: removing an
+entry from the `vector` half of a group always removed the FIRST one regardless of which
+you asked for, and removing through the `hash` half leaked the record.
+
+### …and `e#remove` in a loop removes one element, not two
+
+`#remove` inside a `for` loop takes the element out of the group too, and it removes
+exactly one:
+
+```loft
+struct A { v: vector<E> }
+struct B { by_k: hash<E[k]> }       // anywhere in the program
+for e in a.v { if e.k == 2 { e#remove; } }
+for e in a.v { … }                  // was 1:alpha — it took gamma with it
+```
+
+That one is worth reading twice: `struct B` is a different struct, and deleting it made
+the same loop correct. A `vector<E>` is stored differently once any keyed collection over
+`E` exists, and `#remove` was measuring the elements in the wrong unit for that layout —
+so whether the loop worked depended on a declaration somewhere else entirely. The removed
+element's record is now freed as well, so a long-lived collection that is filled and
+drained no longer grows.
+
+Three more things `#remove` now gets right: it takes the element out of every collection
+in the group, the way `coll[key] = null` already did; walking backwards with
+`for e in rev(v)` no longer skips the next element (or visits one twice, on a `sorted`);
+and on a `sorted` collection that shares its records, `--native` used to remove nothing at
+all while the interpreter removed correctly. `v.remove(i)` had the same
+wrong-unit problem and is fixed with it.
+
+### Walking a `sorted` collection backwards, or over a range, when it shares its records
+
+Three ways of walking a `sorted<T[k]>` did not work once a keyed collection over the same
+element type existed anywhere in the program — which changes how the collection is stored:
+
+```loft
+for e in rev(s.a)   { … }       // walked FORWARD, silently
+for e in s.a[2..4]  { … }       // visited every element, all values zero
+for e in rev(s.a[2..4]) { … }   // crashed
+```
+
+All three now answer what the same loop answers on a collection that does *not* share its
+records — which is the point: how a collection is stored is not something you asked for,
+so it must not change what your loop means. `index` collections were unaffected and are
+unchanged.
+
+### Two `index` collections over one element type now say so, instead of crashing later
+
+Declaring two `index` fields with the same key over the same element type in one struct
+was accepted, filled fine, and then panicked deep inside the compiler on the first
+removal. An index keeps its tree links inside the element's record, so the two fields were
+never two indexes — they were one, reached two ways. It is now refused where you write it:
+
+```
+error: 'also_by_k' and 'by_k' are both 'index<E[k]>' in the same structure — two indexes
+cannot share records, because an index keeps its tree links in a field of the record and
+one field of links cannot hold two trees. Give the second route a different kind ('hash'
+or 'sorted' over the same records), or index a different key
+```
+
+Both cures work today. Two indexes on **different** keys were never affected — that is a
+genuinely useful pair (two orders over one record set) and it fills and removes correctly.
+
+### A `sorted` collection emptied entry-by-entry accepts new entries again
+
+Emptying a `sorted<T[k]>` with `coll[key] = null` and then adding to it gave back the entry
+you last removed — with its text already freed — and dropped the one you added:
+
+```loft
+s.a = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+s.a[1] = null; s.a[2] = null;       // now empty
+s.a += [E{k:9,n:"zz"}];
+for e in s.a { … }                  // was 2:null, not 9:zz
+```
+
+Emptying it with `s.a = []` was always fine, and so were `hash` and `index`. Only the
+by-removal route reached it, because that is the one that leaves the collection empty while
+it still holds its allocation.
+
+### …and the second route is actually filled, for every pair of kinds
+
+Filling either collection is supposed to fill both. For three pairings the second one
+never got the elements, and nothing said so:
+
+```loft
+struct HI { a: hash<E[k]>, b: index<E[k]> }
+z.a = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+len(z.b)                            // was 1 — the index kept the first, dropped the rest
+```
+
+`sorted` + `sorted` and `vector` + `sorted` stayed empty entirely, and `hash` + `hash`
+built the right *number* of entries with every one of them naming the first record — so a
+length check passed and every lookup but one missed. A secondary index that silently does
+not contain your records is worse than one that fails to build: every lookup through it
+answers "not found" for records that are demonstrably there, and a smoke test with a
+single element passes.
+
+All of it came from one fact. Every collection in a group finds its elements by record
+number, so each element needs a record of its own — and two shapes did not give it one: a
+`hash` normally packs its entries together for speed, and a `sorted` stores its elements
+inline. Both now switch to one record per element when the collection is part of a group,
+which is what the `vector<T>` + `hash<T[k]>` pairing already did. A collection that is
+*not* part of a group is unaffected and keeps the faster layout.
+
+One consequence worth knowing if you ever compared behaviour across files: whether a
+`sorted<T[k]>` was record-backed used to depend on whether an `index<T[..]>` over the same
+element type was declared *anywhere else in the program*, so the same two lines behaved
+differently in two files. That is gone — group membership alone decides it.
+
+### Reading a file straight into a struct field no longer leaks
+
+```loft
+b.data = f#read(8) as vector<single>;
+```
+
+held on to one store for the rest of the run. Storing any freshly-allocated value into a
+vector field did — the assignment builds a hidden temporary to hold the right-hand side,
+and that temporary was described as borrowing the struct rather than owning its own
+storage, so it was never released. Passing the same value through a variable first was
+fine, which is why this looked like a problem with the `as` cast.
+
+### Reading a file works the same whether or not you name the result
+
+```loft
+println("{len(f#read(8) as vector<single>)}");     // was 1 — there are two
+```
+
+Using a `f#read(…) as vector<T>` on the spot — straight into `len(…)`, a `for … in` loop, a
+call argument, or a struct literal — used to disagree with the same read bound to a
+variable first. On the interpreter it answered a length one short and started one element
+in, so iterating those eight bytes yielded `2.5` alone. With `--native` the same line did
+not compile at all, reporting Rust errors against generated code. Both are fixed; a read
+now behaves identically bound or unbound, and no longer holds on to a store either way.
+
+The wrong value depended on the rest of the file, which is what made it so unpleasant:
+declaring a `vector<single>` anywhere — even on a later line, even for something entirely
+unrelated — made the read correct again, and deleting that line made it wrong. So a working
+program could start returning wrong numbers because a variable somewhere else was removed.
+
+### Taking an element out of a keyed collection you just built
+
+`return lookup(n)[key]` — reading one record straight out of a `hash`, `index`, `sorted` or
+`trie` that a function just returned — handed back a pointer into storage that same
+function released on its way out. The record you got was whatever landed there next.
+
+It usually looked fine, because released storage normally still holds its old contents, and
+`--native` happened to make a defensive copy that hid it entirely. So the same program was
+correct compiled and quietly wrong interpreted.
+
+Every keyed collection is fixed, for every number of key fields, with or without a `??`
+fallback — and so are the three shapes around it, which were separate faults with the same
+shape:
+
+- Reading through a **field** of what a function returned (`make_bag().items[k]`). The
+  record lives in the bag's storage, and nothing named the bag, so nothing copied the
+  record out before the bag was released. This one also caught the plain `vector` field on
+  both backends.
+- Binding what a function returned to a **local** first and reading that. Two things
+  released the same storage — the collection's move and the temporary holding it — and the
+  second release stole whichever storage had been handed that slot in between. Returning a
+  record allocated in exactly that window, which is why the shape looked so narrow.
+- Binding an element to a local before returning it (`e = make()[key] ?? d; e`) answered an
+  empty record.
+
+`e = make_bag().rows[i]` and `return make().rows` are both correct on both backends now.
+
+### A `sorted` collection that quietly kept nothing
+
+`s[key] = value` on a `sorted<T[k]>` inserted **nothing** — `len(s)` stayed 0 and every
+lookup answered its fallback — if any struct anywhere in the program declared an
+`index<T[…]>` field over the same element type. The struct did not have to be used, or
+even constructed; declaring it was enough, and the collection that broke could be in a
+different file.
+
+Declaring that pair switches `sorted` to a different internal representation, and the
+insert path did not know about it, so every write went to a lookup that missed. Removal
+(`s[key] = null`) already knew; only the insert beside it did not.
+
+### A native library that forgot to wire up a function now says so
+
+If a library's native code exports a function but never registers the glue loft calls it
+through, that function is dead — and you only found out when something called it, deep in a
+program, possibly long after the library shipped.
+
+loft now reports it when the library loads, naming the library and each affected function,
+and tells the author how to generate the wiring so it cannot drift out of step with the
+declarations again.
 
 ### A field's default now applies when you read JSON into it
 
@@ -79,6 +478,49 @@ a store-count warning at exit that a long-running or embedded program never reac
 
 Binding the result first was always clean, and that is exactly what the compiler now
 writes for you.
+
+### "Native function not loaded" when the library was there all along
+
+A program that calls into a native library could fail with
+
+```
+native function not loaded: its library's native cdylib is missing or stale
+```
+
+when nothing was missing and nothing was stale — and then succeed on the next run.
+
+It only happened where one process runs more than one program: a debugger or REPL
+session that loads a second file, an embedder, a test suite. Each compile recorded which
+native functions it had stubbed, but that record was kept per PROCESS rather than per
+program, so a second compile replaced the first one's. The first program then wired
+nothing, kept its placeholder, and the placeholder is what raised — long after the
+compile that caused it, and blaming the library.
+
+The record now belongs to the program it describes. The message stays as it is: when a
+cdylib really is missing or stale, that is still what it says.
+
+### An early `return` no longer leaks what that path built
+
+A function that answers a vector, whose LAST expression hands back one of its arguments —
+or a field of one — leaked a store for every early `return` that built something fresh:
+
+```loft
+fn pick(n: integer, other: vector<integer>) -> vector<integer> {
+  if n <= 0 { tmp: vector<integer> = [7, 8, 9]; return tmp; }
+  other
+}
+```
+
+Every answer was correct, which is what made it quiet. The only signal was a store-count
+warning at exit, and one per early return — so a caller in a loop leaked once an
+iteration, and a long-running or embedded program never sees that warning at all.
+
+A function that answers a vector fills a buffer its caller owns. When the last expression
+borrows an argument, only that last expression was being filled in; the early returns
+still handed back a vector of their own, which the caller never adopts and nobody frees.
+Every `return` in such a function now delivers into the same buffer. The same function
+written to end in a call, or in a fresh local, was always clean — which is why this hid
+for so long.
 
 ### Taking an element out of what a function just returned
 

@@ -1774,11 +1774,21 @@ impl Parser {
                 // The buffer's existence was verified by the selector; re-fetch it
                 // for the copy (idempotent — nothing mutated in between). Fall back
                 // to the rename path if the copy's work-var allocation fails.
-                if let Some((buf_attr, buf_var)) = self.return_buffer()
-                    && !self.copy_borrow_tail_into_retbuf(elm, l, buf_attr, buf_var)
-                {
-                    self.ref_return(&ls, l, RetSite::BlockTail);
-                    self.nrvo_collapse_tail_set(l, &ls);
+                if let Some((buf_attr, buf_var)) = self.return_buffer() {
+                    // A buffer-bound vector fn delivers EVERY return site into the
+                    // buffer, not only its tail. `copy_borrow_tail_into_retbuf` is a
+                    // tail-only funnel, so a mid-body `return <fresh local>` would
+                    // otherwise hand back a store the caller never adopts and nothing
+                    // frees. `Rename` gets this for free from `ref_return`; this arm
+                    // asks for it directly. Idempotent — the walker rewrites only
+                    // `Return(Var(v))` with `v != buf_var`, and its own rewrite
+                    // yields `Return(Var(buf_var))` — so the fallback below, which
+                    // delivers again via `ref_return`, cannot double-deliver.
+                    self.deliver_mid_vector_returns(elm, l, buf_var);
+                    if !self.copy_borrow_tail_into_retbuf(elm, l, buf_attr, buf_var) {
+                        self.ref_return(&ls, l, RetSite::BlockTail);
+                        self.nrvo_collapse_tail_set(l, &ls);
+                    }
                 }
                 true
             }
@@ -10059,6 +10069,21 @@ impl Parser {
     ///
     /// An ARGUMENT-rooted projection is deliberately excluded: the caller owns that
     /// store, so the view outlives the call and the dep-driven path already handles it.
+    /// What a projection's BASE really is, seen through the wrappers a base arrives in.
+    ///
+    /// `container_dep` (loft#889) binds an inline call to a work-ref and leaves a block
+    /// whose result is that ref, so the base of `make_bag().h[k]` is a Block where the
+    /// walkers expect the `Var`.  Reading it as neither a var nor a call answered "this
+    /// projection is rooted at nothing", and the field was delivered as if it owned what
+    /// it points at.
+    fn projection_base(v: &Value) -> &Value {
+        match v.unspan() {
+            Value::Block(bl) => bl.operators.last().map_or(v, Self::projection_base),
+            Value::Insert(ops) => ops.last().map_or(v, Self::projection_base),
+            other => other,
+        }
+    }
+
     fn return_projects_into_local(&self, tail: &Value) -> bool {
         let (get_field, get_vector) = (
             self.data.def_nr("OpGetField"),
@@ -10074,7 +10099,7 @@ impl Parser {
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
             Value::Call(d, args) if *d == get_field || *d == get_vector => {
-                match args.first().map(Value::unspan) {
+                match args.first().map(Self::projection_base) {
                     // Rooted at a local: freed at scope exit, so the projection dangles.
                     Some(Value::Var(base)) => !self.vars.is_argument(*base),
                     // A chained projection — recurse to find the root.

@@ -9,6 +9,779 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Removing one entry of a linked collection group had no owner (loft#900, 2026-08-14)
+
+loft#898 gave the CLEAR an owner for a linked group's shared records; removal never got
+one, and was wrong in both directions. Through a VIEW it freed the record the primary
+still held (the vector kept the entry and its key, the text read back `null`); through the
+PRIMARY it never reached the views, which reported their old length over a freed record.
+Both backends, and the published 2026.8.0.
+
+**A removal spelled through any member removes it from the group** — the same verdict
+loft#898 reached for the clear, and for the same reason: `h.view += [e]` has appended to
+every member since loft#843, so an operation spelled through a view acts on the group. The
+alternative has no coherent successor state — `h.by_k[1] = null` then
+`h.by_k[1] = E{k:1,…}` would remove one index entry and then add to the whole group,
+leaving the primary holding two records under one key with nothing able to repair it.
+
+The ORDER is the mechanism. Every unlink reads the record's key out of the record, so the
+free must come last and the record must stay reachable until then. The parser emits the
+lookup ONCE into a work-ref temporary (marked `inline_ref`, since the record is the
+collection's, not the temporary's), then one `OpHashRemove` per other member carrying the
+`CLEAR_KEYED_VIEW` bit — the same `0x8000` convention `OpClearKeyed` and `OpSetKeyed`
+already use on their `tp`, so arity and both emitters are unchanged — and finally the
+ordinary removal on the member the source named, which frees. The temporary is also what
+keeps the key expression evaluated once (@PLN102 F2); repeating `OpGetRecord` per member
+would have re-run it.
+
+The field site is resolved by walking the `OpGetField` chain (`keyed_field_site` /
+`holder_type`) rather than by reading the base variable's type, so a group one level down
+resolves too — reading only the base var is what left loft#898's nested case on the unsafe
+path until its guard row a7 caught it.
+
+Two supporting facts had to be repaired, both pinned by guard rows:
+
+* `Stores::remove`'s `Parts::Array` arm computed its slot with BY-VALUE arithmetic
+  (`(rec.pos - 8) / size`), which is 0 for every element of a record-backed container —
+  the loft#719 defect, fixed then for `Ordered` and left for `Array`. The documented
+  `vector<T>` + `hash<T[k]>` group has an `array` primary, so every unlink through it went
+  to slot 0.
+* `remove_owned` sent a grouped hash to `hash::free_entry`, which correctly declines to
+  free a record a stride-0 table only borrows. Declining is right only while somebody else
+  frees; when the removal is spelled through that member it IS the free, so the record and
+  everything it claimed leaked. `Stores::hash_owns_entries` is the table's own answer to
+  which case it is.
+
+Matrix: 45 cells × both backends — every (primary, view, spelled-member) triple over the
+four member kinds, three-member groups, an absent key, drain-and-refill, first/middle/last
+of three, and ungrouped controls per kind.
+
+Two PRE-EXISTING defects the matrix separated out and did not fix, filed with repros:
+loft#902 (two `index` members share their red-black links, which live in fields of the
+element record — the fill "works" because both fields then describe ONE tree, and the first
+removal rebalances it into a panic) and loft#903 (`e#remove` in a loop maintains no
+sibling, and over an `array<T>` removes two elements — no group involved).
+
+### A `sorted` emptied by removal published the wrong slot on the next append (2026-08-14)
+
+`sorted_new` hands the constructor a scratch slot and `sorted_finish` / `ordered_finish`
+read the new record back out of it — at `length + 1`, except at length 0 where they take
+the "first record needs no reordering" path and read slot 0. `sorted_new`'s existing-record
+branch always answered `length + 1`, so the two disagreed at length 0.
+
+Only one thing reaches that state: a collection EMPTIED entry-by-entry
+(`coll[key] = null`), which keeps its allocation. `coll = []` drops the record, so the
+next append takes the fresh-claim branch and lands in slot 0 as expected. The append
+therefore wrote into slot 1 while `sorted_finish` published slot 0 — the bytes of the last
+element removed, with its text already freed — so `s.a += [E{k:9,…}]` read back as
+`2:null` and the new element was simply lost. `ordered_finish` inherits the slot from the
+same call, and had the same failure with the rec-id.
+
+Pre-existing on the published 2026.8.0, both backends, `sorted` and `ordered` only —
+`hash` and `index` are unaffected. Found by the loft#900 matrix's drain-and-refill cell;
+guard row b3 of `tests/scripts/900-linked-group-remove.loft`.
+
+### A linked collection group's second route was silently under-populated (loft#901, 2026-08-14)
+
+Filling one member of a linked group fills every member (loft#843). For three pair shapes
+the second route never got the elements, with no diagnostic: `hash` + `index` kept ONE
+element however many went in, `sorted` + `sorted` and `vector` + `sorted` stayed empty,
+and — not in the filed scope — `hash` + `hash` built the right NUMBER of entries with
+every one naming the first record. The filed table counted `len` only, which is exactly
+what that last case does not disturb. Both backends and the published 2026.8.0.
+
+**One fact explains all of them.** Every member names its elements by a 4-byte record id:
+a hash slot encodes `rec.rec` (`hash::SLOT_RECORD`), an `array` / `ordered` slot stores it
+raw and reads it back at a hard-coded payload start, and an `index` keeps its red-black
+links in FIELDS of the record. None can express a position INSIDE a record. Two shapes
+handed the siblings elements that do not own one:
+
+* a hash **packs its entries into a shared chunk arena** (@PLN135 arc H), so an
+  instrumented `record_finish` showed the two elements of `hash` + `index` arriving as
+  `rec=(2,15,8)` and `rec=(2,15,32)` — one record, two positions. The index's b-tree links
+  then collided in that record and it kept the first; a sibling hash encoded both slots as
+  record 15 and read both back as its payload start.
+* a `sorted` **stores its elements inline**, so as a view it has no record to name at all:
+  `insert_record`'s `Parts::Sorted` arm never receives `rec` and sorts the view's own empty
+  buffer.
+
+Both disappear once the group's element type is record-backed. `record_new` already
+refuses the arena for an element type flagged `linked`, with a comment describing this
+exact failure, and `finish_type` already promotes `vector` → `array` and `sorted` →
+`ordered` for one. The flag was only ever **set as a side effect of that promotion**, so a
+group whose members are all keyed never set it. `Stores::finish` now seeds it from group
+membership directly — a field with a non-empty `other_indexes` — which is the same
+predicate `types.rs` used to form the group, so the two cannot drift.
+
+This also removes an action-at-a-distance: whether a `sorted<T[k]>` was record-backed used
+to depend on an `index<T[..]>` declared anywhere else in the program (the loft#719 /
+loft#891 conversion), so the same source line lowered differently per file. That is what
+made loft#898's `vector` + `sorted` matrix cell vacuous rather than correct, and it is why
+`tests/scripts/901-linked-group-fill.loft` gives **every row its own element type** —
+written over a shared `E` the guard printed `901 ok` on the unfixed published build.
+
+Scope held: a collection that is not in a group is untouched, so a lone hash keeps its
+arena (guard row c3 — a fix that made every hash allocate one record per entry would pass
+every other row and silently give back @PLN135 arc H's win).
+
+Matrix: 70 cells × both backends, covering all 16 primary/view pairs in isolation, `=` vs
+`+=`, the fill spelled through the view, three-member groups, the contaminated-file
+confounder, key lookup through the view, element counts 0/1/3, `trie` in both declaration
+orders, and a clear after the fill. Gate: 3974/3974 curated + 57/57 on the four excluded
+binaries a schema change can reach, fmt + clippy clean.
+
+### A linked collection group had no owner for its records (loft#898, 2026-08-14)
+
+Two or more keyed collections over one element type in one struct are auto-linked into
+several routes to a SINGLE record set (`Field.other_indexes`, loft#843). Nothing said which
+of them OWNED that set, so `remove_claims` freed the element records through whichever was
+cleared and left the others naming freed memory — a length that still read 2 over bytes
+answering `4294967296:null`.
+
+The filed scope was wrong in three ways, all measured on a 12-cell matrix against the
+published 2026.8.0:
+
+* **`vector<T>` + `hash<T[k]>` is affected and was not in it** — the pairing DATABASE.md
+  documents by name, and the one with an unambiguous owner.
+* **Both directions are broken, one was filed.** Clearing a VIEW leaves the primary over
+  freed records; clearing the PRIMARY never resets the views, which keep their old length
+  over the same freed records. A fix for one does nothing for the other.
+* **`Parts::Array | Ordered` is not the producer the report named.** `vector` + `sorted`
+  is not a counter-example either: it never links at all, so that cell is VACUOUS rather
+  than correct, and it is recorded as such rather than counted as coverage.
+
+The ownership fact already existed in the schema and had exactly one reader. `types.rs`
+marks every member after the first with a leading `u16::MAX` on `other_indexes`; only the
+JSON default-init asked. Three pieces make it load-bearing:
+
+1. `Stores::borrowed_spine` — what a VIEW owns, per kind: the hash table record, the
+   `Ordered` slot list, and for `index` nothing at all (a b-tree's nodes ARE the element
+   records, so zeroing the root is the whole teardown). It rides the SAME per-`Parts`
+   match as `for_each_owned_child` rather than sitting beside it, because the spine a view
+   drops is the `container_rec`/`extra_recs` that walk already names — a layout change
+   cannot move one and miss the other. `OwnedChild` gained a `borrowed` flag so the
+   struct-teardown arm can mark a view field from the schema.
+2. A `0x8000` bit on `OpClearKeyed`'s `tp`, the convention `OpSetKeyed`/`OpReplaceKeyed`
+   already use, so the op's arity and both emitters are unchanged. Both backends decode it
+   in ONE place — `Stores::remove_claims_keyed` — so the interpreter's `#rust` template and
+   `codegen_runtime::OpClearKeyed` cannot drift.
+3. `Parser::keyed_group_clear`, emitted by the KEYED assign and the VECTOR assign alike:
+   the documented `vector<T>` + `hash<T[k]>` shape has the vector as record holder, so a
+   fix living only in the keyed branch would have closed half the matrix.
+   `clear_group_primary` picks the op the owner's kind needs (`OpClearVector` for a plain
+   vector, `OpClearKeyed` otherwise), because a clear may be reached from either member.
+
+**The semantics question the report left open**, and what settled it: a clear spelled
+through ANY member empties the group. Not a preference — `h.view += [e]` already appends
+to every member (loft#843), so an operation spelled through a view acts on the group, and
+`=` must match or `h.view = []` followed by `h.view += [x]` is incoherent. The filed
+report asked for view-only emptying, which cannot be made coherent for a NON-EMPTY
+literal: the elements still enter the group, so `h.view = [e]` would leave the view
+holding `e` and the primary holding `e` plus everything it had. A model that works only
+for the empty literal is not a model, and its output — an index silently not indexing its
+records — has no repair operation. Rows d1/d2 of the guard pin the `+=` fact the model
+rests on, so a future change to it fails here rather than silently invalidating the clear.
+
+The parent struct type comes from `lhs_parent_tp`, which the assign already holds. Reading
+it back off the base EXPRESSION only resolved a bare `Value::Var`, so a group one level
+down (`o.inner.by_k`) read as "not a group" and kept the unsafe clear — the cell that
+caught it is a7 in the guard.
+
+loft#895's exclusion is gone with it: the multi-index field was kept on the append
+specifically to avoid this use-after-free, so `=` now replaces on a group like every other
+keyed field. `895-keyed-assign-replaces.loft` row c15 pinned that append deliberately and
+is updated rather than left to flip silently.
+
+**Not fixed, filed:** removal (`coll[key] = null`) has the same two directions and neither
+is right (loft#900) — `Stores::remove_owned` takes no `secondary` flag, unlike the sibling
+`dedup_keyed` that already makes exactly this distinction. And a group's view is silently
+under-populated for three pair shapes (loft#901), which is why the `vector` + `sorted` cell
+above is vacuous.
+
+### A field store had no type check, and two of them corrupted the heap (loft#893, 2026-08-13)
+
+A field store is the one assignment form with no variable to re-type, so
+`change_var_type`'s rejection — the one that refuses `v = make()` for a local — never saw
+it. The checks that DID cover fields are further down `parse_assign_op`, behind an early
+return that a `text` or collection target takes first, so the class went unreported.
+
+Three symptoms, one missing assertion:
+
+* `h.v = make()` on a `vector<float>` field stored nothing and leaked the source store;
+* `h.s = 3` on a `text` field carried the integer into `OpSetText` as a text handle and
+  took SIGSEGV;
+* `h.v += make()` reached the same op pair and panicked writing into the read-only
+  `CONST_STORE`.
+
+So the hole was memory safety, not only a dropped write.
+
+Enforced at the point every store form still reaches (`parse_assign_op`, where `s_type`
+settles, before any of the early returns) — which is why one check closes all three. The
+predicate is `convert`, the same one the constructor path (`handle_field`) and the
+scalar-target check already ask, plus one named carve-out: a keyed collection BUILT from a
+vector of its elements (`h.m = [E{…}]` for `hash<E[k]>`) is the supported idiom, is
+deliberately not `is_equal`, and has no `convert` arm.
+
+`convert` is a `&mut self` emitter, so it is asked in the shape-only form it already
+understands — a `Value::Null` expression, which every rewriting arm guards against and no
+verdict depends on — and `conv_owned_result` is saved and restored around the call, since
+a cast arm sets it to mark an allocating conversion and the next real conversion `take()`s
+it. A probe that left it set would hand its answer to an unrelated expression. Adding the
+diagnostic therefore cannot move codegen.
+
+**Method note.** The predicate was run as a silent probe over all 2188 `.loft` files in
+the tree before it was allowed to speak. Exactly one file hit, and it was a true positive:
+`tests/docs/13-file.loft` read a sized `f#read` straight into a `vector<single>` field,
+which LOFT.md's conversion table documents as needing an explicit `as`. It had been
+storing an EMPTY field, and the example asserted nothing about the result, so nothing
+caught it — the doc stated a rule the code never ran. Fixed to the documented spelling
+and given the two assertions that would have caught it.
+
+Known and NOT fixed here: the documented `as vector<single>` cure leaks its store when
+consumed directly by a field store or call argument (loft#897), so the doc example binds
+it to a local first.
+
+### A write through a returned struct is now reported (loft#894, 2026-08-13)
+
+`hurt(first(s), 10.0)` writes into a temporary discarded one instruction later, while
+`hurt(s.es[0] ?? E {}, 10.0)` writes through — same types, no diagnostic on either. This
+is the shape `lost-write` exists to catch and it was silent, so the analysis now covers
+its second shape. Semantics unchanged.
+
+Two facts must meet, and requiring both is what separates a LOST write from a merely
+pointless one:
+
+* the callee WRITES THROUGH the parameter — read off its own body with
+  `find_field_written_vars`, the same walk `check_ref_mutations` uses to decide whether a
+  `&` parameter was really mutated, so the two cannot disagree about what such a write is;
+* the argument COPIES A PLACE THE CALLER CAN STILL REACH — read off the return type's
+  deps, since `first(s)` returns `E["s"]` while a value built from nothing is dep-free.
+
+The second condition is the one that matters. Without it the lint fires on
+`hurt(fresh(), …)`, where a write into a freshly built value loses nothing that existed
+before the call, and on the write-then-return builder idiom, where the write is delivered
+through the return value. A dep is believed only when it names a parameter the call site
+filled with a REAL variable: a function building into a caller-supplied return buffer
+carries a dep too (`alloc_canvas(w, h, fill)` returns `Canvas["cv"]`), and that copy is
+nobody's data — the `_`-prefix test tells them apart, the same convention
+`warn_dead_stores` uses.
+
+Both exclusions were found by sweeping all 2188 `.loft` files with the lint as a probe
+before letting it speak: the first cut had two hits, both the builder idiom, and the final
+one has zero. Runs from `main` beside `warn_dead_stores` / `warn_double_move`, reusing the
+`lost-write` code rather than minting one (same fact about the same C86 copy);
+`LOFT_NO_LOST_TEMP_WRITE` opts out.
+
+Deliberately an under-approximation, per the two-tier rule: binding the result to a local
+first stays silent, because that copy is still readable and belongs to `warn_copies`.
+
+### `=` to a keyed collection appended, because only the EMPTY literal cleared (loft#895, 2026-08-13)
+
+A collection literal lowers to element-construction ops that APPEND, so the assignment has
+to put a clear in front of them. `parse_assign_op`'s vector-field arm does. The keyed arm
+did it only for `Value::Insert(ls) if ls.is_empty()` — `s.h = []`, the @P307 clear — and
+said so in place: *"Non-empty / non-literal keyed-field reassignment is a separate (harder)
+case left to its current path."* So `s.h = [a, b]` added to what the field held, and `=`
+meant `+=`.
+
+The filed scope was a struct with two keyed fields, where the second assignment read length
+4 for two elements. The matrix says that is not the boundary. Assignment ORDER is
+irrelevant — the row filed as correct fails too, 4 the other way round — and a SINGLE keyed
+field assigned twice is equally wrong, as is a keyed LOCAL, which has no struct at all. The
+pair is just the loudest witness, because `Field.other_indexes` makes two keyed fields over
+one element type two views of one record set (loft#843), so filling either fills both.
+
+Two arms now carry the clear: the field one prefixes any literal with `OpClearKeyed`, and
+the local one prefixes `Set(v, Null)` — the lowering `s = []` already takes (P193
+`create_keyed`), which codegen turns into the `OpDatabase` store reset, and which also
+gives the slot its init when a literal is the local's first assignment.
+
+A MULTI-INDEXED field is excluded and keeps the append (loft#898). `OpClearKeyed` →
+`remove_claims` frees the element RECORDS, not just this route to them: `Parts::Array |
+Ordered` hands every slot back with `owning_elem: Some(elm)` unconditionally, and a
+borrowing `Parts::Hash` does the same whenever `owns_entries` is false. So both members of
+a group free the shared records and whichever is cleared first takes the other's elements
+down with it — `h.ordered = []` leaves `h.keyed` reporting length 2 over freed memory. That
+is a use-after-free, and emitting the clear there would trade #895's wrong length for it.
+`allocation.rs:2921` already carried the marker: `// TODO prevent removing records twice via
+secondary structures`. The exclusion reuses `keyed_field_is_linked`, the same predicate
+@P305 uses to route `coll[key] = value` away from the group for the same reason.
+
+The empty literal keeps its unconditional clear either way — making that one conditional
+would restore the silent no-op @P307 fixed, so the change is strictly additive.
+
+### A field-store RHS temp was typed as the destination, so it never owned anything (loft#897, 2026-08-13)
+
+`s.v = <expr>` lowers to `Set(tmp, expr); Clear(s.v); Append(s.v, tmp)`. `tmp` was built
+with `f_type` — the destination FIELD's type, deps included. scopes.rs frees a var only
+when its deps are EMPTY (*"`dep` empty → the variable owns the value → emit `OpFreeRef`"*),
+so a temp carrying the field's dep read as a borrow of the struct and no free was ever
+emitted. Any allocating RHS then leaked for the life of the program.
+
+Nothing about the `as` cast was involved, which is what the filed scope named. A local was
+clean only because a user local carries no such dep — `LOFT_VAR_TABLE` shows both temps
+marked `OWNS`, and the difference is entirely whether something BINDS the value. The
+borrowed-Var arm two branches up already builds its temp from a dep-free
+`Type::Vector(elm, Deps::none())` for the #320 aliasing reason; this is that same choice on
+the general arm, which is the one an allocating RHS reaches.
+
+The other half of the filed scope — the same expression consumed with NO binding — is not
+an ownership question and is loft#899. `#reading file`'s temp DECLARATION is lifted into an
+expression slot there (`{ !! INSERT _read_1(5):vector<single> = null … }`), which
+`--interpret` evaluates against the wrong header (`len` answers 1; `for e in` yields the
+second element alone) and `--native` emits as a `let` inside an expression, so rustc
+rejects it. The emitted `OpReadFile(…, db_tp=78)` is byte-identical between the working and
+broken programs, so the read op is not what differs. It is also order-sensitive: an
+unrelated `vector<single>` local elsewhere in the file flips the answer, which is what a
+type-registration side effect looks like. Fixing the leak on a path whose value is wrong
+would have been polishing, so this fix stops at the field store.
+
+### An unbound `f#read(n) as vector<T>` failed three ways, from two causes (loft#899, 2026-08-13)
+
+The order-sensitivity was the tell, and it named the first cause. `gen_set_first_vector_null`
+resolves its store type by NAME — `data.name_type("main_vector<single>")` — and the read's
+temp is the one vector local that never reaches an assignment, so nothing registered the
+wrapper: every other vector local gets it from `Parser::change_var_type`, and the
+`typedef.rs` sweep that catches the remaining producers reads struct and enum-value FIELDS
+only. The lookup returned `u16::MAX`, and the emitted `OpDatabase(var, db_tp=65535)` created
+the store with no type at all. Wrong header width, so `len` answered 1 and the data started
+one element in — and any OTHER `vector<single>` in the file registered the wrapper as a side
+effect and made the same read correct, which is why a line elsewhere changed the answer.
+`objects.rs` now calls `data.vector_def` for a vector read type, the same call its
+`OpCastVectorFromText` sibling makes 800 lines down.
+
+The `debug_assert_ne!` guarding exactly this `u16::MAX` sat one line below the lookup and
+has never run: `[profile.dev.package.loft] debug-assertions = false` strips it from the
+library in both profiles. An env-gated `eprintln` in its place, swept over all 2190 corpus
+`.loft` files, found this temp to be the ONLY producer — and found no corpus file that
+covers it, which is how it shipped.
+
+The other two failures are one mechanism. The `Value::Block` arm returns a value block that
+yields an owned temp as `Insert([Set(v, Null), block])`, and `scan_args` hoists that `Set`
+into the enclosing statement list (`is_a56_hoisted`). But `scan`'s `Value::Span` arm rewraps
+the scanned argument, and its unwrap predicate recognised only the `Set(__lift_N, …)`
+preamble — so a span-wrapped null-init preamble never reached the `if let Value::Insert`
+that would hoist it, and the declaration stayed inside the argument expression. Native
+emitted it there literally: `expected expression, found let statement`, plus an E0425 for
+the `var__read_1` that no longer scoped. That arm's own comment already gave the reason the
+lift shape is unwrapped — *"the native backend would emit `Set(__lift_N, …)` inside an
+enclosing expression and fail to compile"* — for a sibling shape it did not cover. The two
+sites now share one predicate, `is_null_init_preamble`, so they cannot drift again.
+
+Hoisting alone left the store unfreed, because the hoist MOVES the owner: the declaration
+now stands in the enclosing statement list, and an argument is only read, never adopted the
+way `v = <block>` adopts. `scan_args` re-registers the temp at the current scope for
+`get_free_vars` and runs `mark_lift_handoff` on it, so an argument the callee MOVES from
+(`OpCopyRecord` with the `0x8000` flag) still does not drop twice. `return f#read(…)` is the
+other side of that and must NOT be freed; it transfers, and the guard's c8 row pins it.
+
+Element type is an axis here, not a detail. `main_vector<integer>` is registered by the
+stdlib whatever the program does, so an integer-element probe sees the leak and the native
+failure but never the wrong value. The same masking bites the regression guard itself: any
+control row that binds the read to a local registers the wrapper and disarms the very cell
+it pins, so the `vector<single>` case needs a file that declares no other vector at all
+(`899-unbound-file-read-only-vector.loft`, deliberately minimal for that reason) while the
+main guard carries the remaining seven shapes plus a `vector<P>` row.
+
+### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
+
+`engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a
+hardcoded **18084**, because the fixture it drives —
+`tools/audience-demo-50/probe_server_kernel.loft` — binds that constant. Its own comment
+said so, and named the fix: *"this one test can still collide with a concurrent
+sibling-checkout run; fixing that needs a port-arg on the fixture."*
+
+On this machine 18084 was held by **five** long-lived processes from other checkouts
+(`planet_server-a`, `planet_server-e`, `loft_native_bin`), so the test failed for someone
+else's run — every run, not intermittently.
+
+The fixture now honours `LOFT_PROBE_PORT`, defaulting to `PORT` when unset
+(`env_variable` answers `""`), so the documented demo invocation is byte-identical. The
+test passes a port from a new `free_port()` helper.
+
+`free_port()` checks **TCP and UDP**: the kernel listens on both for one number, and the
+OS picks a TCP port knowing nothing about the UDP table — a TCP-only probe would hand
+back a port whose UDP half is taken, and the fast-lane assertions would then fail for a
+reason unrelated to the code under test. `SO_REUSEADDR` is deliberately not set, since a
+port that only looks free because of address reuse is not free.
+
+Candidates come from **20000–29999 keyed on the pid**, not from `bind(":0")`. The first
+attempt did use `bind(":0")` and a full-suite run then failed
+`engine_host_placed::the_engine_host_serves_the_same_client_from_either_placement`, which
+passes 6/6 in isolation on both this tree and the preceding commit. `bind(":0")` draws
+from the OS ephemeral range (32768–60999 on Linux) — the same pool every other test's
+port probe draws from, including that one's TCP-only `free_port` — so it traded a
+collision with a *well-known* port for a collision with a *sibling test*, which is harder
+to recognise when it bites. A pid-keyed number in a quiet range separates concurrent
+checkouts and stays out of that pool.
+
+`engine_host_placed` still has its own TCP-only probe. It is latently exposed to the same
+UDP half-taken hazard; left alone here because nothing has been measured failing on it
+once the ephemeral contention is removed, and a speculative rewrite of a second test's
+networking is churn.
+
+Verified by binding: with `LOFT_PROBE_PORT=19731` the fixture listens on 19731 for both
+UDP and TCP. The test's own timing is corroboration — it now connects to the port
+`free_port()` chose, so a fixture that ignored the variable would sit on 18084 and
+`ws_connect` would spin to its 15 s deadline; it completes in ~0.12 s instead.
+
+That closes the third and last of the session's flakes, all one shape — **a fixed-name
+shared resource plus parallelism**: a process-global overwritten per compile, one temp
+path for four callers, and a well-known port. Local gate: **4079 passed, 0 failed**.
+
+### A test helper's temp file was keyed on the pid, so its four callers shared one path (2026-08-13)
+
+`tests/introspect.rs::resolution` wrote its program to
+`temp_dir()/loft_res_<pid>.loft`, ran `loft introspect` on it, and deleted it. The pid
+is the same for every test in the binary, so all **four** call sites shared one path —
+and `why_reports_where_a_name_is_defined_and_reachable_from` alone calls it twice. On 8
+threads one call's `remove_file` landed while another's subprocess was still opening the
+file; the subprocess printed nothing and `section()` panicked with ``no `=== resolution
+===` in:``.
+
+Measured at 4/6 failing runs of the binary, and 3/6 on the preceding commit — pre-existing,
+and the second of the two flakes behind the local gate's "4077 passed, 2 failed". It passes
+100 % in isolation, because the race needs a second caller in flight.
+
+Fixed by making the path per-CALL (an `AtomicUsize` counter alongside the pid) rather than
+per-process; the pid still separates concurrent `cargo test` invocations. 8/8 clean after.
+
+The wider pattern is worth knowing when writing a test helper here: **a fixed-name shared
+resource plus parallel tests**, the same family as the hardcoded ports in
+`engine_host_udp.rs` (18084) and `multiplayer` (18099). 70 test files call
+`std::process::id()`; most already add a per-test discriminator (`{name}`, `{tag}`,
+`{port}`), and a pid-only name is only safe where exactly one caller exists.
+
+### The `#native` stub set was a process-global that every compile overwrote (2026-08-13)
+
+`compile::byte_code` recorded which `#native` symbols it registered a panic stub for —
+the set `wire_native_fns` consults to know which stubs it may replace with an
+auto-marshalled wrapper — by *overwriting* a `static STUB_SYMBOLS`:
+
+```rust
+pub fn set_stub_symbols(syms: HashSet<String>) {
+    *STUB_SYMBOLS.lock()… = Some(syms);   // wholesale, on every compile
+}
+```
+
+In any process that compiles more than one program — a test binary, the REPL loading a
+second file, an embedder — a sibling compile landing between one program's compile and
+its wiring replaced the set. `wire_native_fns` then hit `!stubs.contains(sym) → continue`
+in **both** phases, skipped resolution for its own symbols, and left the panic stub in
+place. The failure surfaces much later, at the first call, as *"native function not
+loaded: its library's native cdylib is missing or stale"* — a message that sends the
+reader after a build problem that does not exist. Diagnosing this one burned time on
+exactly that: rebuilding cdylibs, and checking `nm -D` for undefined `libloft` symbols
+to rule out staleness (there are none — the fixture links only `loft-ffi`).
+
+**Fix: the set lives on `State`.** It describes the program that was just compiled, and
+`register_native_stubs` already had the `State` in hand (`state.static_fn(sym, stub)` on
+the line above). `STUB_SYMBOLS` and `set_stub_symbols` are deleted rather than kept
+beside the new field, so there is one home for the fact. A lock around the global would
+have been the wrong fix — it serialises the writes and still lets the last writer win.
+
+Cost measured before the fix, by worktree A/B against the preceding commit, alternating
+single RUNS with both arms pre-built (binaries *and* test binaries) so no build sat
+between them:
+
+| | `repl_session` not-pass |
+|---|---|
+| A — preceding commit | **5 / 10** |
+| B — same tree + the vector-leak and panic-hook commits | **5 / 10** |
+
+Identical rate, identical failure mode: `file_debugger_can_call_into_a_native_library`
+fails about half of all full-binary runs and passes 100 % in isolation, because it needs
+~52 sibling compiles in the process to lose the race. That is almost certainly the single
+failure behind earlier "3972/3973 curated" gate reports.
+
+`tests/native_loader.rs` already carried a `TEST_LOCK` whose comment named
+`STUB_SYMBOLS` as shared global state — a workaround that could only ever cover tests in
+that one file, and `repl_session` is a different binary.
+
+Guard: `native_loader.rs::a_sibling_compile_does_not_take_over_this_program_s_stub_set`
+reproduces the interleaving **deterministically** — compile B, compile a sibling
+declaring a *different* `#native` symbol, then wire and run B — so it fails outright on
+the old code instead of depending on thread scheduling.
+
+### A buffer-bound vector fn delivered only its TAIL when the tail borrowed an argument (2026-08-13)
+
+`dispatch_vector_delivery` is the one place that decides how a vector-returning function's
+result reaches the caller's `__retbuf`. `Delivery::Rename` routes through `ref_return`, which
+delivers the tail AND rewrites every mid-body `return <fresh local>` into the buffer.
+`Delivery::CopyBorrow` routes through `copy_borrow_tail_into_retbuf` — a **tail-only** funnel,
+by design and by its doc comment. So a function with an early `return <fresh local>` and a tail
+that borrows an argument delivered the tail and left the early return handing back a store of
+its own: the caller adopts the buffer, the fresh store orphans. One leaked store per
+undelivered return, every value correct.
+
+The invariant, now asserted in both arms: **a buffer-bound vector fn delivers EVERY return site
+into the buffer, not only its tail.** The `CopyBorrow` arm calls `deliver_mid_vector_returns`
+before the tail copy; `copy_borrow_tail_into_retbuf` keeps its narrower tail-only contract. The
+walk is idempotent by construction (it rewrites `Return(Var(v))` only for `v != buf_var`, and
+its own rewrite yields `Return(Var(buf_var))`), so the existing fallback — which delivers again
+via `ref_return` when the work-var allocation fails — cannot double-deliver.
+
+Boundary, mapped on a 14-cell matrix before the fix (values hand-computed, each cell asserting
+value + length + leak, both backends):
+
+| tail shape | mid-body payload | pre-fix |
+|---|---|---|
+| borrows a whole vector argument | fresh local / inline literal | **leak** |
+| borrows a struct FIELD of an argument (#415) | fresh local | **leak** |
+| a call / a fresh local / the same var | fresh local | clean |
+| branch arms (`Delivery::Materialize`) | fresh local | clean |
+| borrows an argument | a param / a call result | clean |
+
+Both leaking rows are the two sub-shapes the funnel's own comment says route to it, so the
+boundary is the `CopyBorrow` arm exactly. The leak count scales with the number of undelivered
+returns — a two-early-return function leaked ×2 — which is what pinned the mechanism rather
+than merely correlating with it. `Delivery::ForwardCopy` needs a `#native` heap-returning
+callee and is **not** covered by the matrix; it shares the tail-only shape and is the place to
+look if this recurs.
+
+Guard: `tests/scripts/midbody-return-into-borrow-tail-retbuf.loft` — both sub-shapes, a
+two-early-return function (guards the COUNT), a loop-nested return, and a caller loop proving
+the delivery clears before filling. Proven to fail on the released binary: ×9 leaked stores
+while still printing `ok`, so only `wrap.rs`'s exit-time gate catches it.
+
+Found while probing whether `OpReplaceVector`'s absence from `find_written_vars` /
+`find_field_written_vars` could give a wrong answer. It cannot today — all 9 of its occurrences
+across the stdlib and the dump corpus are masked by an `OpClearVector` or a `Value::Set` on the
+same target — but the masking is incidental, so the op is now listed in both walkers as
+hardening. That is a no-op on current behaviour, kept because the two lists are hand-maintained
+twins and nothing compares them (PERFORMANCE.md § Design: P8).
+
+### Two nightly gates that measured the environment, not the diff (loft#888, 2026-08-13)
+
+**The leak gate went red on our own fix.** loft#876 gave a field's declared default a home on
+the schema `Field`, and a TEXT default has to intern its spelling: `Content::Str` is a raw
+`{ptr, len}` with no owning variant, so `fold_declared_default` reaches for the same
+intentional `Box::leak` that `ir_read` / `ir_schema` / `snapshot` already use for the same
+type. That leak is bounded by the SOURCE — one allocation per field that declares a text
+default, decided once at type registration, never one per read — so it belongs in
+`.github/lsan_suppressions.txt` beside its three siblings.
+
+What kept it out was purely a symbolization detail: a suppression matches by FRAME NAME, and
+the function inlined into `typedef::fill_database`, so the only name on the stack was that
+one. Suppressing `fill_database` would have blinded the gate to every allocation in the whole
+type-registration path — a real loss, since that is where schema construction allocates. So
+`fold_declared_default` now carries `#[inline(never)]` FOR the suppression, and the two must
+be kept in step: drop the attribute and the suppression silently stops matching.
+
+Both halves are measured rather than argued. Without the suppression the frame is now named
+(`#2 loft::typedef::fold_declared_default`, `#3 fill_database`); with it, the run is clean and
+LSan reports the template it used. The per-file scan over the whole corpus is **0 leaking files
+of 721**. And the gate is still live where it matters: a deliberate `Box::leak` injected into
+`fill_database` itself is still reported, with the suppression file active, owner
+`loft::typedef::fill_database` — so the new line suppresses exactly one deliberate interner
+and nothing else.
+
+**The toolchain matrix failed before running a loft op.**
+`a_private_scope_end_hook_in_a_library_runs` spawns loft to BUILD a library cdylib, which links
+`libloft.rlib`. The `Suite under <toolchain>` job only ever runs `cargo test`, which builds the
+lib into `deps/` for the test binaries and never produces the rlib
+`native_lib::find_loft_rlib` looks for — so the spawned build died on "libloft.rlib not found
+for this build". That is an environment result, and this matrix exists to detect toolchain
+drift in loft's own code.
+
+The obvious repair does not work, which is why it is recorded here rather than tried again:
+adding `cargo build --release --lib` clears "not found" and then fails `E0463: can't find crate
+for libloading`, because `cargo test` and `cargo build --lib` unify features differently, so
+the uplifted rlib's dependency set is not the one sitting in `deps/`. Both cells were run in an
+isolated target dir; cell A reproduces the CI message verbatim. The test is therefore skipped
+in that job, which is the exclusion the asan and asan-leak jobs already carry for it and for
+the same reason (loft#855). Its sibling `a_delegating_producer_binds_its_companion_cleanly`
+passes there and is deliberately NOT skipped.
+
+The third leg needed no change: the `LOFT_POISON` gate was red on
+`877-index-a-call-result-in-return-position.loft`, which is loft#882 / loft#889 / loft#890, and
+the poison sweep now runs **1870/1870** on this branch.
+
+### Two stores freed at the wrong time (loft#889, loft#890, 2026-08-13)
+
+**loft#890 — a lift freed what its consuming op had already released.** `br = mk_hash(n)`
+lowers to `__lift_1 = mk_hash(n); OpReplaceKeyed(__lift_1, br, tp | 0x8000)`. The bit means
+"nobody else owns this store", which is true of a bare call result and false the moment
+`scan_args` lifts it into a temp the scope sweep frees. `free_named` is a no-op only while
+the slot is still free, so the second free steals whatever store the allocator handed that
+slot in between — and the record return allocates its buffer in exactly that window, which
+is why the filed shape needed a call, a keyed container AND a record return together. With
+an integer return nothing is allocated there and the double free is invisible. The
+interpreter was right for no better reason than not reusing the slot.
+
+`scan_args` already carried the lift-site half of this rule for `OpCopyRecord` (@PLN139
+stage C), but only for the DROP — the store was "left to the ordinary sweep, which is
+null-tolerant either way", which is the part that is not true. `Scopes::mark_lift_handoff`
+now records the FREE hand-off too, and `get_free_vars` consults it. Only `OpReplaceKeyed`
+answers `moved_source_arg`: it is the one `0x8000` op whose source is a whole store a lift
+can own. Answering for `OpCopyRecord` took the free away from @PLN85's Join-return
+machinery — 3 of 54 fuzz cells SIGSEGV'd and `elem_accumulate` doubled its own source
+vector. The marker is a `Scopes` set rather than a `skip_free` stamp for the same class of
+reason: that flag is read at ALLOCATION time too, so stamping it made the lift borrow
+instead of own.
+
+**loft#889 — a collection reached through a field of a call's result.** `mk_bag(n).b_vec[0]`
+reads an element living in the bag's store, and the bag is an inline call result with no
+name, so the element typed as OWNED and nothing copied it out before `OpFreeRef`.
+`keyed_container_dep` (loft#882) is now `container_dep` and reaches THROUGH field
+projections via `projection_root_mut` to bind the ROOT call — the bag, not the `b_vec`
+projection, because that is whose store the element is in. `parse_index`'s VECTOR arm asks
+too; it had relied on the container type's own deps, which a fresh call has none of.
+
+The SUBSCRIPT asks, not the field read. `return make().rows` returns the field itself,
+which the delivery machinery already copies out (loft#877 / zt12), so binding a container
+there only adds a holder nothing releases — five of them in that one file.
+
+The binding now happens on BOTH parser passes. That is load-bearing: this dep is what tells
+`ref_return` the binding borrows, and a verdict that differs between passes is worse than
+none. Skipping pass 1 read the binding as owned and renamed it ONTO the return buffer; pass
+2 then saw the view and materialised into the buffer the binding now WAS, so
+`materialize_return_into` emitted `OpDatabase(e); OpCopyRecord(e, e)` — a copy from the
+record it had just re-minted. `e = mk_hash(n)[k] ?? d; e` answered an empty record for that
+reason before this issue existed, so loft#882's own shape had the hole one bind away.
+
+`return_projects_into_local` gained `projection_base`, which peels the binding block to its
+var: a base that is neither a var nor a call read as "rooted at nothing", and the field was
+delivered as if it owned what it points at.
+
+Guarded by `tests/store_lifetime_890_889.rs` over `tests/scripts/{889,890}-*.loft`: value,
+`LOFT_POISON=1` and `LOFT_NATIVE_LEAK_CHECK` on both backends, plus a harness control. The
+poison oracle because freed bytes are usually still intact; the leak oracle because "never
+free it" ends both use-after-frees while passing every value cell. loft#888's nightly
+poison gate was red on `877-index-a-call-result-in-return-position.loft::i877_field_of_call`
+— loft#889's cell, recorded there and invisible because the suite does not run that file
+under poison — and is green with this.
+
+`723-ncc-loop-element-bind.loft`'s leak check now measures round-over-round inside ONE
+frame: a container work-ref is one slot per SITE for the life of its frame, so two snapshots
+taken at different sites differ by that constant and say nothing about the round.
+
+### A sorted collection dropped every insert once an index existed elsewhere (2026-08-13)
+
+`s[k] = v` on a `sorted<T[k]>` local inserted nothing — `len(s)` answered 0 and every lookup
+its fallback — whenever ANY struct in the program declared an `index<T[…]>` field over the
+same element type. The struct is never constructed; declaring it is the whole input. Both
+backends.
+
+A `sorted<T[k]>` becomes an `ORDERED<T[k]>` — the by-reference twin — under exactly that
+condition, so the same source line lowers differently because of a declaration somewhere
+else entirely. `towards_set`'s insert arm listed Hash, Sorted, Index, Radix and Trie, so an
+`Ordered` collection fell past `OpSetKeyed` to the update-only `OpCopyRecord`, which copies
+into the lookup's result and therefore no-ops when the key is absent.
+
+This is loft#719's omission one function over: that issue gave `Ordered` to the REMOVAL arm
+(`towards_set_hash_remove`, directly above), where its absence had made `coll[key] = null` a
+silent no-op interpreted and a compile failure natively. Nothing compares the two lists.
+`Stores::set_keyed` has always handled `Ordered`; only the routing to it was missing.
+
+Found while building loft#889's boundary matrix: a five-collection bag promoted its own
+`sorted` field, and that one cell answered the fallback on both backends while every
+neighbouring kind was right — a lopsided matrix that is evidence of a missing arm rather
+than of the bug under investigation. Guarded by
+`tests/scripts/891-sorted-promoted-to-ordered.loft`, which fails at its first assertion on
+the previous commit.
+
+### A keyed element read never said it borrows its container (loft#882, 2026-08-13)
+
+`v[i]` on a vector types its result with a dep naming the container, and that dep is the
+whole reason the vector shape is safe: `return_views_local` sees a borrow from a local and
+`materialize_view_return` copies the element into the return buffer before the container is
+freed. Every keyed read — hash, index, sorted, trie, any key arity — carried none, so
+`return make_hash()[k]` handed back a pointer into a store the same function freed on the
+way out.
+
+`parse_index` propagates the container TYPE's deps (`for on in t.depend()`), and a freshly
+built collection has none to propagate. `Parser::container_dep`
+(`src/parser/fields.rs`, then named `keyed_container_dep`) now names the container at the one place keyed element reads are
+typed: a local, parameter or field is depended on directly; an inline call that MINTS a
+container is bound to a pass-2 work-ref first, because `scopes.rs` lifts it into a
+`__lift_N` long after the materialisation decision has been made. A parameter's dep
+resolves to a function attribute, so the element correctly stays a borrow.
+
+The two backends disagreed, which is why it survived: an EMPTY dep list reads as OWNED by
+`--native`'s assignment lowering, so it inserted a defensive `OpCopyRecord` and the program
+was right, while the interpreter aliased and read freed bytes. Under `LOFT_POISON=1` the
+boundary matrix scored `--interpret` 6/17 and `--native` 14/17; both are 16/17 now.
+
+The filed cause (`parse_key`'s no-prelude branch) was not the boundary: the prelude branch
+attaches `dep.clone()` — the container type's deps, which are empty — so it named the
+container no more than the other branch did, and BOTH spellings were broken. The two cells
+still red are older and separate: loft#889 (a collection reached through a field of a call's
+result) and loft#890 (a bound keyed container on `--native` when the function returns a
+record — the workaround the issue was filed with).
+
+Guarded by `tests/keyed_element_borrow.rs`, which runs under `LOFT_POISON=1` on both
+backends plus a static oracle (the container must be NAMED and the return MATERIALISED), a
+leak check and a harness control. It needs its own binary because freed bytes are usually
+still intact — the ordinary suite was green over this.
+
+### A registered native with no bridge was only found by calling it (loft#886, 2026-08-13)
+
+A cdylib can export a `#native` symbol and register no marshal bridge for it. The symbol
+resolves, wiring succeeds, and `native_auto_dispatch` panics — but only when something
+calls it, so a library can ship, pass its own suite, and carry a function that is dead for
+every consumer exercising a path its tests do not.
+
+`wire_native_fns` now collects those symbols and reports them at load
+(`report_bridgeless_natives`), separately from `report_unresolved_natives` because the fix
+differs: the library is not stale, its registration is incomplete. The message names the
+library and each dead function and points at
+`loft_ffi_build::generate_register_from_loft_with_bridges`, which derives both the register
+list and the bridge list from the `#native` annotations and cannot drift — a hand-written
+`loft_register_bridges!` lives in a different file from the declarations and nothing
+compares the two.
+
+The issue's stated cause — a non-`pub` `#native` taking a vector gets no bridge — does not
+reproduce: a 9-cell package varying visibility against parameter kind, call site and symbol
+binding is correct in every cell on both backends, and `parse_register_symbols_from_loft`
+strips an optional `pub ` and never looks at it again.
+
+### A repeat literal walked off the store on a negative count, and lost its text (2026-08-13)
+
+Two further defects in `[x; n]`, found while reading the bulk-fill path before routing a
+constant comprehension into it (loft#884).
+
+A NEGATIVE count cast `as u32`, so `[7; -1]` became 4 294 967 295 `copy_block`s that walked
+off the store until glibc aborted — the same failure `n == 0` had. A count is a TOTAL and a
+negative total is no vector at all, so it now answers empty. `--native` already clamped with
+`count.max(0)` and the interpreter did not: a heap-corrupting input on which the twins
+disagreed.
+
+The claim copy took the VECTOR HANDLE as its source instead of the template element, so a
+`text` element re-interned whatever the handle's four bytes decoded to: `["abc"; 4]` gave
+"abc" at index 0 and junk at 1, 2 and 3. Structs and nested vectors carry claims too and
+were wrong the same way. Length and element 0 were both correct, which is what made it
+invisible.
+
+The twins are also back in step on the record re-read: growing the vector can move its
+backing record and both ends of the copy live inside it — `--native` re-read it for the
+destination only, the interpreter not at all.
+
+### `[x; n]` built n+1 elements, and n=0 corrupted the heap (2026-08-12)
+
+`OpAppendCopy` receives the TOTAL a repeat literal asks for, and the template element is
+already appended by the time it runs — so it needs `n - 1` more. It added `n`:
+`vector_set_size(&data, multiply, size)` grew the vector one past the request while the
+copy loop wrote only `multiply - 1` slots, leaving the last one never initialised. `[7; 3]`
+read back as **length 4 with garbage in the last element** — a wrong length and an
+uninitialised read, silently, on both backends.
+
+`n == 0` is the same off-by-one taken to its end: `for i in 0..(multiply - 1)` on a `u32`
+wrapped to 4 294 967 295 and walked `copy_block` off the end of the store until glibc
+aborted the process (`Fatal glibc error: malloc.c:2599 (sysmalloc): assertion failed`).
+The template also has to be dropped, or a zero-length request answers length 1.
+
+The op's contract is now "the vector ends with exactly `count` copies of its last element",
+which is what the literal means, and it is total: 0 removes the template, 1 is already the
+answer, n adds `n - 1`. Fixed in BOTH twins — `State::append_copy` (`src/state/io.rs`) and
+`codegen_runtime::OpAppendCopy` — which carry separate copies of the loop.
+
+Both halves reproduce on the published `2026.8.0`. Found while measuring loft#884: the
+repeat literal is the bulk-fill path a constant comprehension would be lowered into, so it
+was read before being built on. Guarded in `tests/scripts/886-repeat-literal-count.loft`,
+including a RUNTIME count and a runtime zero — the rows no const-fold can reach — and a
+`float` element so a stride error shows as a wrong sum rather than a wrong length.
+
 ### A declared field default now reaches a cast, when it is a constant (2026-08-12)
 
 `height: float = 1.5` was honoured by a struct literal and ignored by `text as Struct`,

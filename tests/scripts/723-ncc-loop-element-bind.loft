@@ -52,6 +52,16 @@ fn ncc_other(n: integer) -> NccQ {
   NccQ { z: [n, n, n, n, n, n, n, n] }
 }
 
+/// The measured loop, in its own frame so every temporary it needs is released by the
+/// time it answers — which is what lets two calls be compared byte for byte.
+fn ncc_rounds(n: integer) {
+  for i in 0..n {
+    e = ncc_make().items[0] ?? NccP {};
+    o = ncc_other(i);
+    assert(e.a + len(o.z) == 13, "still reading both stores on round {i}");
+  }
+}
+
 fn main() {
   // The value-visible form: an allocation lands between the bind and the read.
   s = 0;
@@ -85,12 +95,17 @@ fn main() {
 
   // The fix is a dropped free, so it must not have become a leak: the loop above
   // allocates two stores per round and must give both back.
+  //
+  // Measured around a CALL, and that placement is the whole point.  The container of
+  // an inline call is held in a work-ref (loft#889), and a work-ref is one slot per
+  // SITE for the life of its frame — a constant, not growth.  Two snapshots taken in
+  // `main` around two different loops therefore differ by that constant and say
+  // nothing about the round.  Inside `ncc_rounds` the slot is born and dies with the
+  // call, so the same 200 rounds measured twice differ by exactly what one round
+  // failed to give back.
+  ncc_rounds(200);
   before = store_memory();
-  for i in 0..200 {
-    e = ncc_make().items[0] ?? NccP {};
-    o = ncc_other(i);
-    assert(e.a + len(o.z) == 13, "still reading both stores on round {i}");
-  }
+  ncc_rounds(200);
   assert(store_memory() == before, "no store leaked across 200 rounds");
 
   // And it must not have become a COPY. A borrow out of a local vector takes the

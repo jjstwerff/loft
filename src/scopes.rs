@@ -126,6 +126,11 @@ struct Scopes {
     /// loft#849 / @PLN139 — vars that no longer OWN what they hold, so their scope end must
     /// not drop it.  See [`collect_drop_transferred`].
     drop_transferred: HashSet<u16>,
+    /// loft#890 — the lifted temps whose STORE a consuming op already freed, so
+    /// `get_free_vars` must not free it again.  Scope-local on purpose: `skip_free` is a
+    /// VARIABLE flag both backends read at ALLOCATION time too, so stamping it here made
+    /// the lift borrow instead of own and the append wrote into its own source.
+    free_transferred: HashSet<u16>,
     /// loft#854 — the whole-function half of the ownership oracle, computed once
     /// for `d_nr` instead of once per question.
     ///
@@ -1087,6 +1092,22 @@ fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
     }
 }
 
+/// loft#890 — the argument index whose STORE `outer_call` frees WHOLE for itself, via
+/// the `0x8000` source-free bit on its `const u16` type parameter.
+///
+/// Only `OpReplaceKeyed` answers.  Every op carrying that bit frees SOMETHING, but only
+/// the keyed whole-collection replace frees a store that a `__lift_N` also owns: its
+/// source is a keyed collection minted by a call, which is a store of its own.
+/// `OpCopyRecord`'s move releases a RECORD inside a store whose life the append site
+/// already governs (@PLN85's Join-return machinery reads that site), so answering for it
+/// here would take the free away from the analysis that owns it.
+fn moved_source_arg(outer_call: u32, args: &[Value], data: &Data) -> Option<usize> {
+    if outer_call == u32::MAX || outer_call != data.def_nr("OpReplaceKeyed") {
+        return None;
+    }
+    matches!(args.get(2).map(Value::unspan), Some(Value::Int(tp)) if tp & 0x8000 != 0).then_some(0)
+}
+
 /// Does a copy into `dest` hand the source's OWNERSHIP over — i.e. will something else
 /// release it?  True for a field of a container whose type has a synthesized cascade.
 ///
@@ -1236,6 +1257,7 @@ fn run_scan_phase(
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
         drop_transferred: collect_drop_transferred(orig_code, orig_vars, data),
+        free_transferred: HashSet::new(),
         fn_defs: None,
     };
     let mut function = Function::copy(orig_vars);
@@ -3476,6 +3498,35 @@ impl Scopes {
         drop_hook(function, v, data)
     }
 
+    /// Record what the `__lift_N` temp `tmp` — holding argument `arg_idx` of the call
+    /// `scan_args` is lowering — no longer owns, because the call takes it over.
+    ///
+    /// Two different hand-offs, and they cost different things to get wrong:
+    ///
+    /// - the **drop** (@PLN139 stage C): a copy into a container field or a collection
+    ///   element makes the container the releaser, so running the source's own scope-end
+    ///   hook releases one resource twice.
+    /// - the **store** (loft#890): a `0x8000` move FREES the source store inside the op.
+    ///   The lift still names it, so its scope-exit `OpFreeRef` is a second free — silent
+    ///   while the slot stays free, and a stolen store the moment the allocator hands
+    ///   that slot to somebody else.  `br = mk_hash(n); br[7, 0]` in a record-returning
+    ///   function is exactly that: the return buffer is allocated between the two frees
+    ///   and lands on the recycled slot, so the function returns freed bytes.
+    fn mark_lift_handoff(
+        &mut self,
+        tmp: u16,
+        arg_idx: usize,
+        transfer_copy: bool,
+        moved_arg: Option<usize>,
+    ) {
+        if transfer_copy && arg_idx == 0 || moved_arg == Some(arg_idx) {
+            self.drop_transferred.insert(tmp);
+        }
+        if moved_arg == Some(arg_idx) {
+            self.free_transferred.insert(tmp);
+        }
+    }
+
     fn enter_scope(&mut self) -> u16 {
         self.stack.push(self.scope);
         self.scope = self.max_scope;
@@ -3861,9 +3912,14 @@ impl Scopes {
                 // construction, etc.) MUST keep their span — unwrapping them
                 // broadly regressed the closure-in-struct-field cases (`invalid
                 // fn-ref` in native codegen, @P258/@P259 territory).
+                //
+                // The A5.6 null-init preamble ([`Self::is_null_init_preamble`]) is the
+                // second shape that must survive to `scan_args`, and it is just as
+                // narrow: exactly two ops, led by an owned-heap `Set(v, Null)`.
                 let is_lift_preamble = matches!(&scanned, Value::Insert(ops)
                     if ops.first().is_some_and(|op| matches!(op,
-                        Value::Set(v, _) if function.name(*v).starts_with("__lift_"))));
+                        Value::Set(v, _) if function.name(*v).starts_with("__lift_")))
+                        || Self::is_null_init_preamble(ops, function));
                 if is_lift_preamble {
                     scanned
                 } else {
@@ -5420,6 +5476,7 @@ impl Scopes {
                 let emit = (owns || is_work_ref || inject_free)
                     && !in_ret
                     && !function.is_skip_free(v)
+                    && !self.free_transferred.contains(&v)
                     && !captured_ref;
                 if scope_debug && !emit {
                     eprintln!(
@@ -5744,6 +5801,7 @@ impl Scopes {
         // `__lift_N` temp right here, so this is the only point that knows which temp the
         // copy took: before the lift the IR still names the CALL, and after it nothing
         // records the pairing.  The copy's source is arg 0.
+        let moved_arg = moved_source_arg(outer_call, args, data);
         let transfer_copy = outer_call == data.def_nr("OpCopyRecord") && {
             let moved =
                 matches!(args.get(2).map(Value::unspan), Some(Value::Int(tp)) if tp & 0x8000 != 0);
@@ -5788,21 +5846,14 @@ impl Scopes {
                 // the same call to a named local yields `flat:vector<integer>
                 // ["__ref_1"]` and NO `OpFreeRef`.
                 function.set_skip_free(tmp);
-                if transfer_copy && arg_idx == 0 {
-                    self.drop_transferred.insert(tmp);
-                }
+                self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;
             }
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
-                let is_a56_hoisted = ops.len() == 2
-                    && if let Value::Set(v, val) = &ops[0] {
-                        matches!(val.as_ref(), Value::Null) && function.tp(*v).is_heap_owned()
-                    } else {
-                        false
-                    };
+                let is_a56_hoisted = Self::is_null_init_preamble(&ops, function);
                 // hoist Set(__lift_N, ...) preamble from nested scan_args.
                 // These are produced when an inner call's arguments contained
                 // inline struct-returning calls that were already lifted.
@@ -5847,9 +5898,29 @@ impl Scopes {
                         postamble.push(post);
                         continue;
                     }
+                    // loft#899 — hoisting the null-init out of the value block moves
+                    // the temp's OWNER to the enclosing scope: its declaration now
+                    // stands in that statement list, and an argument is only READ, so
+                    // no binding adopts the store the way `v = <block>` does.  Nothing
+                    // freed it, so every unbound `f#read(n) as vector<T>` leaked one
+                    // store.  Re-register it at the current scope for `get_free_vars`,
+                    // and run the same hand-off marking a lifted call-result gets so an
+                    // argument the callee MOVES from does not drop twice.
+                    let a56_owned = if is_a56_hoisted {
+                        match &ops[0] {
+                            Value::Set(v, _) => Some(*v),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     let mut it = ops.into_iter();
                     for _ in 0..n - 1 {
                         preamble.push(it.next().unwrap());
+                    }
+                    if let Some(v) = a56_owned {
+                        self.var_scope.insert(v, self.scope);
+                        self.mark_lift_handoff(v, arg_idx, transfer_copy, moved_arg);
                     }
                     let final_val = it.next().unwrap();
                     // the remaining Call may also be struct-returning
@@ -5858,9 +5929,7 @@ impl Scopes {
                         self.inline_struct_return(&final_val, data, outer_call, function)
                     {
                         let tmp = self.new_lift_var(function, &tp);
-                        if transfer_copy && arg_idx == 0 {
-                            self.drop_transferred.insert(tmp);
-                        }
+                        self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -5882,9 +5951,7 @@ impl Scopes {
                 // get_free_vars emits OpFreeRef(tmp) at scope exit because
                 // the dep is empty (owned).
                 let tmp = self.new_lift_var(function, &tp);
-                if transfer_copy && arg_idx == 0 {
-                    self.drop_transferred.insert(tmp);
-                }
+                self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
@@ -5892,6 +5959,26 @@ impl Scopes {
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// The A5.6 hoistable preamble: `Insert([Set(v, Null), value])` whose `v` OWNS a
+    /// heap store.  It is the shape the `Value::Block` arm returns for a value block
+    /// that yields an owned temp — a `#reading file` read, a `??` join — and
+    /// [`Self::scan_args`] lifts that `Set` into the enclosing statement list so the
+    /// slot's `first_def` lives OUTSIDE the argument expression.
+    ///
+    /// One home for the question, because two places ask it: `scan_args`, which does
+    /// the hoisting, and the `Value::Span` arm of [`Self::scan`], which must drop a
+    /// span that would otherwise hide this Insert from `scan_args`' `if let
+    /// Value::Insert`.  While only `scan_args` knew the shape, a span-wrapped one
+    /// stayed inside the argument: `println("{len(f#read(8) as vector<single>)}")`
+    /// left the temp's declaration in an expression slot, which native emitted
+    /// literally as a `let` statement inside an argument list — rustc "expected
+    /// expression, found `let` statement" — and which nothing then freed (loft#899).
+    fn is_null_init_preamble(ops: &[Value], function: &Function) -> bool {
+        ops.len() == 2
+            && matches!(&ops[0], Value::Set(v, val)
+                if matches!(val.as_ref(), Value::Null) && function.tp(*v).is_heap_owned())
     }
 
     /// True when `v` writes the work-ref that a `&`-argument's `OpCreateStack` then

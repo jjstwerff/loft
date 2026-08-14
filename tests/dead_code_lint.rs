@@ -553,3 +553,109 @@ fn a_dependency_dead_store_is_reported_against_the_dependency_file() {
         "the echoed line must be the dead store, not a `const`; output:\n{all}"
     );
 }
+
+/// loft#883 — a compile ERROR must not drag a FALSE `lost-write` along with it.
+///
+/// Every lint in this family reads the RESOLVED types and the ownership verdicts derived
+/// from them. When resolution aborts, an unresolved type carries empty deps and
+/// `ownership_of` reads empty deps as OWNED — so a borrowing `for` loop variable in an
+/// unrelated library reads as a lost write. The reported case was an ambiguous bare struct
+/// name (two libraries declaring `Slot`): the error is correct and names its own fix, and
+/// beside it came a `lost-write` pointing at correct code in a different package.
+///
+/// That matters more than an ordinary false positive: `lost-write` names loft's most
+/// expensive real bug class, so a false one teaches the reader to distrust it — and this
+/// state is unreachable by a warning-clean gate, because a green suite never aborts.
+///
+/// The positive half is asserted too: with the ambiguity removed the same library, same
+/// loop, must still compile clean, so the fix is a suppression tied to the failing compile
+/// and not a silent disabling of the lint.
+#[test]
+fn a_compile_error_does_not_emit_a_false_lost_write() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_883amb_{}_{n}", std::process::id()));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).expect("probe dirs");
+
+    // The loop-variable mutation the false warning pointed at. `lw_t` BORROWS the element,
+    // so the write persists and `lw_v` is read two lines down — nothing is lost here.
+    std::fs::write(
+        lib.join("slot883.loft"),
+        "pub struct Slot883 { idx: integer, taken: boolean }\n\
+         pub fn mutate_through_a_loop_variable() -> boolean {\n  \
+           lw_v: vector<Slot883> = [];\n  \
+           for lw_i in 0..3 { lw_v += [Slot883 { idx: lw_i, taken: false }]; }\n  \
+           lw_at = 0;\n  \
+           for lw_t in lw_v {\n    \
+             if lw_at == 1 { lw_t.taken = true; }\n    \
+             lw_at = lw_at + 1;\n  \
+           }\n  \
+           (lw_v[1] ?? Slot883 {}).taken\n}\n",
+    )
+    .expect("write lib");
+    // A second library declaring the SAME name is what makes the bare use ambiguous.
+    std::fs::write(
+        lib.join("other883.loft"),
+        "pub struct Slot883 { other: text }\n",
+    )
+    .expect("write other lib");
+
+    let run = |entry: &std::path::Path| -> String {
+        let out = Command::new(loft_bin())
+            .args(["--interpret", "--check"])
+            .arg("--lib")
+            .arg(&lib)
+            .arg(entry)
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke loft binary");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // The bug: a bare `Slot883` is ambiguous, so the compile aborts.
+    let amb = root.join("amb883.loft");
+    std::fs::write(
+        &amb,
+        "use slot883;\nuse other883;\nfn main() {\n  \
+           s = Slot883 { idx: 0, taken: false };\n  \
+           println(\"{s.idx} {mutate_through_a_loop_variable()}\");\n}\n",
+    )
+    .expect("write amb entry");
+    let all = run(&amb);
+
+    assert!(
+        all.contains("declared by more than one package"),
+        "the ambiguity error must still be reported; output:\n{all}"
+    );
+    assert!(
+        !all.contains("is mutated but its value is never read"),
+        "a failing compile must not emit a lost-write derived from unresolved types \
+         (loft#883); output:\n{all}"
+    );
+
+    // The control: same library, same loop, ambiguity removed — must compile clean, which
+    // is what proves the lint was suppressed for the error and not switched off.
+    let ok = root.join("ok883.loft");
+    std::fs::write(
+        &ok,
+        "use slot883;\nfn main() {\n  println(\"{mutate_through_a_loop_variable()}\");\n}\n",
+    )
+    .expect("write ok entry");
+    let clean = run(&ok);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        !clean.contains("is mutated but its value is never read"),
+        "the loop-variable mutation is not a lost write and must stay silent; output:\n{clean}"
+    );
+    assert!(
+        !clean.contains("error"),
+        "the unambiguous control must compile clean; output:\n{clean}"
+    );
+}

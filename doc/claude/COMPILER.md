@@ -792,6 +792,25 @@ position `>= length` (the value produced by `iterate()` for the "not started" se
 as "start at the last element", then decrements on each call, and returns `i32::MAX`
 when the beginning has been passed.
 
+**Type-3 (`ordered`) is the same protocol in BYTE OFFSETS, and it is a separate pair of
+functions for that reason alone.** An `ordered` holds 4-byte record-id slots, so its
+cursor walks `8, 12, 16, …` rather than `0, 1, 2, …`: `vector::vector_next` /
+`vector::vector_prev` are the byte-offset twins of `vector_step` / `vector_step_rev`,
+and `vector::step_ordered` picks between them on the same `on & 64`.
+
+The unit is the trap. `vector::ordered_range_cursors` is the ONE place that derives a
+range's `(start, finish)` for this arm, and it answers byte offsets — both backends had
+their own copy answering slot INDICES, which the stepper then read as byte offsets
+(loft#904: every element of a bounded range read zero, and its reverse segfaulted). It
+mirrors the type-2 index arithmetic cell for cell, because a collection's KIND must not
+change what a range means and a program gets one layout or the other purely by whether
+some other struct mentions a keyed collection over the element type.
+
+`finish == 0` means NO bound in either direction — it is below every valid position, so
+it never trips. That is what the unbounded form returns, and it is what keeps type-4 (a
+hash / spatial / trie iteration scratch, which shares `step_ordered` and is always
+unbounded) walking to its end.
+
 ### Vector comprehension machinery — `build_comprehension_code`
 
 `[for elm in v { body }]` in an array context compiles through `parse_vector_for` →

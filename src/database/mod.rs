@@ -21,7 +21,7 @@ pub mod sql_source;
 mod structures;
 mod types;
 
-pub use allocation::timeline_summary;
+pub use allocation::{CLEAR_KEYED_VIEW, timeline_summary};
 pub use descriptor::{BaseKind, Iterated, LayoutDesc, LayoutField, LayoutNode};
 pub use journal::Journal;
 pub use types::Type;

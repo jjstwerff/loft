@@ -1815,7 +1815,22 @@ impl Parser {
         self.lexer.token("in");
         let loop_nr = self.vars.start_loop();
         let mut expr = Value::Null;
+        // Bind the range bounds to THIS comprehension.  `last_range_*` is parser-wide
+        // state written by whichever range was parsed last, so it is only trustworthy
+        // in the window between clearing it and reading it back: cleared here, it is
+        // `Some` after the parse below exactly when the iterable IS a range
+        // (`parse_in_range_body` is the only writer), so a text or keyed iterable
+        // cannot inherit an earlier loop's bounds.
+        // Snapshotting BEFORE the body is parsed matters just as much — the body
+        // may contain ranges of its own, and they would otherwise be read as this
+        // comprehension's length.
+        self.last_range_from = None;
+        self.last_range_till = None;
         let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
+        let range_bounds = self
+            .last_range_from
+            .clone()
+            .zip(self.last_range_till.clone());
         let mut fill = Value::Null;
         if matches!(in_type, Type::Vector(_, _)) {
             let vec_var = self.create_unique("vector", &in_type);
@@ -1918,12 +1933,51 @@ impl Parser {
         if self.first_pass {
             return tp;
         }
+        let is_plain_local_target = !is_field && !matches!(val.unspan(), Value::Call(_, _));
+        // O8.5 (loft#884): a comprehension whose body does not vary with the loop
+        // variable IS a fill, so emit the repeat literal's one-template-plus-copy
+        // instead of the per-element record protocol.  Tried before the unroll
+        // below because a loop-invariant body would unroll to N copies of one
+        // value — the same vector, built with N times the IR.
+        //
+        // Only where the vector being built is a PLAIN LOCAL — not a struct field,
+        // not a captured collection, not an indexed element.  The container defect
+        // that first forced this narrowing is fixed (loft#892: `OpAppendCopy` was
+        // handed the enclosing record rather than the field's own handle, so
+        // `Pair { a: [0; 3], b: [0; 3] }` built `a` with seven elements and `b` with
+        // one), and `new_record` now derives one container for all three append ops.
+        //
+        // The restriction stays because the remaining question is a different one and
+        // is unmeasured: a captured target may be a KEYED collection, where "append n
+        // copies of one element" is not the same operation as n inserts — a hash or a
+        // sorted set dedups them.  Widening this to addressed containers is worth
+        // doing, but it needs that case decided and timed on its own, not inherited
+        // from a bug fix.
+        if is_plain_local_target
+            && let Some(fill) =
+                self.try_const_fill_comprehension(range_bounds.as_ref(), &body, &if_step)
+        {
+            let parent_tp = &Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
+            let (tp, ls) =
+                self.build_vector_list(val, parent_tp, elm, vec, &fill, in_t, tp, is_var, is_field);
+            *val = if !is_var && !is_field {
+                v_block(ls, tp.clone(), "Const fill comprehension")
+            } else {
+                Value::Insert(ls)
+            };
+            return tp;
+        }
         // O8.5: try const-unrolling for [for i in A..B [if cond] { expr(i) }].
         // If the range bounds are const and the body folds for every i,
         // emit a pre-computed literal vector instead of a runtime loop.
         if matches!(in_t, Type::Integer(_))
-            && let Some(unrolled) =
-                self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
+            && let Some(unrolled) = self.try_const_unroll_comprehension(
+                for_var,
+                range_bounds.as_ref(),
+                &body,
+                &if_step,
+                in_t,
+            )
         {
             let parent_tp = &Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
             let (tp, ls) = self.build_vector_list(
@@ -2414,20 +2468,88 @@ impl Parser {
         (tp, ls)
     }
 
+    /// loft#884 — recognise a comprehension that is really a FILL, and describe it
+    /// the way the repeat literal `[x; n]` is described: one template element
+    /// followed by `Value::Return(count)`, which `new_record` lowers to a single
+    /// `OpAppendCopy`.
+    ///
+    /// The test for "this is a fill" is that the body folds to a constant WITHOUT
+    /// binding the loop variable. That one check carries both halves of the
+    /// requirement: a body reading `i` cannot fold, and neither can a body that
+    /// calls anything, so `[for _ in 0..n { f() }]` still calls `f()` n times.
+    /// Loop-invariant is not enough on its own — only PURE is.
+    ///
+    /// `bounds` must be this comprehension's own range (see the snapshot in
+    /// `parse_vector_for`); `None` means the iterable was not a range, and its
+    /// length is then not `till - from`.
+    ///
+    /// Returns `None` for anything unrecognised, which just leaves the runtime
+    /// loop in place.
+    fn try_const_fill_comprehension(
+        &mut self,
+        bounds: Option<&(Value, Value)>,
+        body: &Value,
+        if_step: &Value,
+    ) -> Option<Vec<Value>> {
+        // A filter is not a fill: it decides per element how many there are.
+        if *if_step != Value::Null {
+            return None;
+        }
+        let (from, till) = bounds?;
+        // A comprehension body arrives wrapped in the block `parse_block` built for
+        // it, and `const_eval` has no arm for one — unwrap it here rather than
+        // there, because teaching the shared folder about blocks also wakes O8.5's
+        // const-UNROLL, which has never run for exactly this reason and is wrong in
+        // positions this lowering declines (loft#892).  Exactly one operator: a
+        // second one is a statement, and a statement is what a constant may not
+        // stand in for.  Position markers are not operators.
+        let expr = match body.unspan() {
+            Value::Block(bl) => {
+                let mut ops = bl
+                    .operators
+                    .iter()
+                    .filter(|o| !matches!(o.unspan(), Value::Line(_)));
+                let only = ops.next()?;
+                if ops.next().is_some() {
+                    return None;
+                }
+                only.unspan()
+            }
+            other => other,
+        };
+        let value = crate::const_eval::const_eval(expr, &self.data)?;
+        // `till - from`, with the common `0..n` needing no subtraction at all so
+        // the emitted count is the caller's own expression.
+        let count = if matches!(
+            crate::const_eval::const_eval(from, &self.data),
+            Some(Value::Int(0))
+        ) {
+            till.clone()
+        } else {
+            self.conv_op("-", till.clone(), from.clone(), I32.clone(), I32.clone())
+        };
+        Some(vec![value, Value::Return(Box::new(count))])
+    }
+
     /// O8.5: try to const-unroll a comprehension into a literal vector.
     /// Returns Some(vec of folded values) if successful, None to fall back to runtime loop.
+    ///
+    /// `bounds` is this comprehension's own range, snapshotted in
+    /// `parse_vector_for` rather than read from `last_range_*` at this point: the
+    /// body has been parsed by now, and any range inside it has already overwritten
+    /// that parser-wide state.
     fn try_const_unroll_comprehension(
         &self,
         for_var: u16,
-        _create_iter: &Value,
+        bounds: Option<&(Value, Value)>,
         body: &Value,
         if_step: &Value,
         _in_t: &Type,
     ) -> Option<Vec<Value>> {
         use crate::const_eval::{const_eval, const_eval_with_var};
-        // Extract range bounds captured during parse_in_range_body.
-        let from = const_eval(self.last_range_from.as_ref()?, &self.data)?;
-        let till = const_eval(self.last_range_till.as_ref()?, &self.data)?;
+        let (from_e, till_e) = bounds?;
+        let from = const_eval(from_e, &self.data)?;
+        let till = const_eval(till_e, &self.data)?;
         let (from_i, till_i) = match (&from, &till) {
             (Value::Int(a), Value::Int(b)) => (*a, *b),
             _ => return None,
@@ -2943,6 +3065,34 @@ impl Parser {
         } else {
             None
         };
+        // The container new elements are appended INTO — derived ONCE, because all three
+        // append ops must agree on it.  `OpNewRecord`/`OpFinishRecord` may name a struct
+        // field indirectly (enclosing record plus field number, no resolved handle
+        // needed), but `OpAppendCopy` copies WITHIN one vector, so it can only be handed
+        // that vector's own handle.  Give the copy the enclosing record instead and it
+        // appends into whichever vector that resolves to — the first vector field — so
+        // `Pair { a: [0; 3], b: [0; 3] }` builds `a` with seven elements and `b` with one
+        // (loft#892).
+        let container: Value = if let Some(target) = &vector_elem_target {
+            // The inner vector that `val`'s indexed read yields.
+            target.clone()
+        } else if let Some(target) = &cap_target {
+            // The captured collection the `OpGetDbRef` points at.
+            target.clone()
+        } else if is_field {
+            // `val` IS the field read (`OpGetField(record, pos, vector_tp)`), so it
+            // already evaluates to the field's own handle.  Unspanned, because
+            // `is_field` looks through a span and the container has to agree with the
+            // test that selected it — otherwise a spanned field read (`q.a = [7; 3]`,
+            // `q.a += [7; 3]`, `vv[i] += [7; 3]`) misses the match below, falls back to
+            // `Value::Var(u16::MAX)`, and indexes the variable table out of bounds.
+            val.unspan().clone()
+        } else {
+            Value::Var(vec)
+        };
+        // Only a struct field reached directly — not through an index, not through a
+        // capture — can use the field-numbered form.
+        let field_form = is_field && vector_elem_target.is_none() && cap_target.is_none();
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -2969,29 +3119,21 @@ impl Parser {
             };
             let known = Value::Int(i32::from(known_tp));
             if let Value::Return(multiply) = p {
-                let to = if let Value::Call(_, ps) = val {
-                    ps[0].clone()
-                } else {
-                    Value::Var(vec)
-                };
-                ls.push(self.cl("OpAppendCopy", &[to, *multiply.clone(), known]));
+                ls.push(self.cl(
+                    "OpAppendCopy",
+                    &[container.clone(), *multiply.clone(), known],
+                ));
                 continue;
             }
             let fld = Value::Int(i32::from(u16::MAX));
-            let app_v = if let Some(target) = &vector_elem_target {
-                // #246: append directly to the inner vector (the indexed read).
-                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
-            } else if let Some(target) = &cap_target {
-                // @PLN93 (#511): allocate the element INSIDE the captured collection the
-                // `OpGetDbRef` points at — `fld = u16::MAX` so `record_new` keys off `known`
-                // (the keyed db-type resolved above), the same shape as the plain-local path.
-                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
-            } else if is_field {
+            let app_v = if field_form {
                 self.new_record_field_op(val, parent_tp, "OpNewRecord")
             } else {
+                // `fld = u16::MAX` so `record_new` keys off `known` (the keyed db-type
+                // resolved above), the same shape on every addressed container.
                 self.cl(
                     "OpNewRecord",
-                    &[Value::Var(vec), known.clone(), fld.clone()],
+                    &[container.clone(), known.clone(), fld.clone()],
                 )
             };
             ls.push(v_set(elm, app_v));
@@ -3154,19 +3296,7 @@ impl Parser {
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
-            let finish = if let Some(target) = &vector_elem_target {
-                // #246: finish the direct append into the inner vector.
-                self.cl(
-                    "OpFinishRecord",
-                    &[target.clone(), Value::Var(elm), known, fld],
-                )
-            } else if let Some(target) = &cap_target {
-                // @PLN93 (#511): commit the new element into the captured collection DbRef.
-                self.cl(
-                    "OpFinishRecord",
-                    &[target.clone(), Value::Var(elm), known, fld],
-                )
-            } else if is_field {
+            let finish = if field_form {
                 let mut finish_v = self.new_record_field_op(val, parent_tp, "OpFinishRecord");
                 // Replace placeholder Var(0) with the actual elm variable.
                 if let Value::Call(_, ref mut args) = finish_v
@@ -3176,9 +3306,10 @@ impl Parser {
                 }
                 finish_v
             } else {
+                // Commit the new element into the container resolved above.
                 self.cl(
                     "OpFinishRecord",
-                    &[Value::Var(vec), Value::Var(elm), known, fld],
+                    &[container.clone(), Value::Var(elm), known, fld],
                 )
             };
             ls.push(finish);

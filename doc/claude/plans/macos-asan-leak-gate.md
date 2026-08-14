@@ -91,6 +91,27 @@ process-lifetime ureq/rustls client before exit; it is reachable-at-exit, so Lin
 it). Low value; the other classes are intentional (`Box::leak` interner), OS-owned (dyld TLS), or
 deliberately declined (@PLN102 fault-path text). See @PLN54.
 
+## A suppression names a FRAME, and inlining deletes the frame (loft#888, 2026-08-13)
+
+A name-based suppression can only match a function the optimizer left standing. loft#876's
+`typedef::fold_declared_default` interns a declared text default with the same intentional
+`Box::leak` as `ir_read`, so it wanted the same one-line suppression — but it inlined into
+`typedef::fill_database`, so that was the only loft name on the stack. The choice was then
+between suppressing a 400-line function that allocates the whole schema (blinding the gate to
+every real leak in type registration) and making the deliberate-leak site a real frame.
+
+**The rule: a site that needs a suppression carries `#[inline(never)]`, and the attribute is
+part of the suppression, not a performance hint.** Both sides say so in a comment naming the
+other, because the failure is silent in the worst direction — drop the attribute and the
+suppression simply stops matching, and a benign leak reds the gate again.
+
+**Verify a new suppression with three cells, never one.** (1) WITHOUT the file: the intended
+frame must be NAMED — that is what proves the attribute took. (2) WITH the file: clean, and
+LSan's "Suppressions used" must show the template and a count that matches what you expect.
+(3) A control: inject a `Box::leak` into the ENCLOSING function, rebuild, and confirm the scan
+still reports it with the file active. Cell 3 is the one that catches an over-broad entry, and
+it is the only cell that can — a green gate looks identical whether it is sharp or blind.
+
 ## Guardrails honored
 
 - Linux leak gate + ratchet baseline (0) unchanged; bare names are substrings of the demangled Linux

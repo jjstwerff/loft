@@ -1032,6 +1032,21 @@ impl Parser {
                     });
                 }
             }
+            // loft#899 — a `vector<T>` read builds its result in a temp DECLARED
+            // here, from the `as` cast type, with no assignment behind it.  Every
+            // other vector local gets its `main_vector<T>` wrapper registered by
+            // the assignment path (`Parser::change_var_type`); this temp reaches
+            // none of them, so without this the wrapper does not exist and
+            // `gen_set_first_vector_null` emits `OpDatabase(db_tp = u16::MAX)`.
+            // The store is then created with no type at all, so its header is the
+            // wrong width: `f#read(8) as vector<single>` answered length 1 and
+            // yielded the SECOND element alone.  It only ever surfaced when
+            // nothing ELSE in the file declared a `vector<T>` local, which is what
+            // made an unrelated declaration elsewhere change what a read returns.
+            if let Type::Vector(elm, _) = &read_type {
+                let elm = (**elm).clone();
+                self.data.vector_def(&mut self.lexer, &elm);
+            }
             let mut ls = Vec::new();
             let temp_var = if let Type::Text(_) = read_type {
                 self.vars.work_text(&mut self.lexer)

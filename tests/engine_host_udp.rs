@@ -43,6 +43,42 @@ impl Drop for Guard {
 /// Connect + upgrade; returns the stream and the `X-Loft-UDP` cookie from the
 /// 101 response head (the kernel-internal transport negotiation channel — no
 /// loft code on either side ever touches it).
+/// A port the OS has just confirmed free on **both** TCP and UDP.
+///
+/// The engine-host kernel listens on both for the same number, so a TCP-only probe
+/// would hand back a port whose UDP half is taken and the fast-lane assertions would
+/// fail for a reason that has nothing to do with the code under test.
+///
+/// Candidates come from 20000–29999 keyed on the pid, NOT from `bind(":0")`.
+/// Binding port 0 draws from the OS ephemeral range (32768–60999 on Linux), which is
+/// the same pool every other test's port probe draws from — so asking for one here
+/// would trade a collision with a *well-known* port for a collision with a *sibling
+/// test*, which is harder to recognise when it bites. A pid-keyed number in a quiet
+/// range separates concurrent checkouts and stays out of that pool.
+///
+/// `SO_REUSEADDR` is deliberately not set: a port that only appears free because of
+/// address reuse is not free.
+fn free_port() -> u16 {
+    use std::net::TcpListener;
+    let base = 20000u16 + u16::try_from(std::process::id() % 10000).unwrap_or(0);
+    for step in 0..200u16 {
+        let port = 20000 + (base - 20000 + step) % 10000;
+        // BOTH transports must be free for the SAME number: the kernel listens on
+        // TCP and UDP alike, and a TCP-only probe would hand back a port whose UDP
+        // half is taken — the fast-lane assertions would then fail for a reason that
+        // has nothing to do with the code under test.
+        let Ok(tcp) = TcpListener::bind(("127.0.0.1", port)) else {
+            continue;
+        };
+        let udp_free = UdpSocket::bind(("127.0.0.1", port)).is_ok();
+        drop(tcp);
+        if udp_free {
+            return port;
+        }
+    }
+    panic!("no port free on both TCP and UDP in 20000–29999 after 200 attempts");
+}
+
 fn ws_connect(port: u16) -> (TcpStream, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let stream = loop {
@@ -302,10 +338,13 @@ fn probe_server_poses_ride_the_fastest_path_per_client() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    // NOT offset: this connects to the external `probe_server_kernel.loft` fixture, which binds
-    // a HARDCODED 18084 — the test's port must match it.  (So this one test can still collide
-    // with a concurrent sibling-checkout run; fixing that needs a port-arg on the fixture.)
-    let port = 18084u16;
+    // Ask the OS for a port instead of naming one.  This used to be a hardcoded
+    // 18084 to match the fixture's own constant, and on a shared machine that is a
+    // well-known number: long-lived `planet_server` / `loft_native_bin` processes
+    // from other checkouts sit on it, and this test then failed for someone else's
+    // run.  The fixture now takes `LOFT_PROBE_PORT`, so the number can come from
+    // `free_port()` — which checks TCP *and* UDP, because the kernel binds both.
+    let port = free_port();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let child = Command::new(loft_bin())
         .arg("--interpret")
@@ -313,6 +352,7 @@ fn probe_server_poses_ride_the_fastest_path_per_client() {
         .arg("--lib")
         .arg(root.join("lib"))
         .arg(root.join("tools/audience-demo-50/probe_server_kernel.loft"))
+        .env("LOFT_PROBE_PORT", port.to_string())
         .current_dir(&root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
