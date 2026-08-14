@@ -7659,15 +7659,25 @@ fn main() {
                 None => (std::env::current_dir().unwrap_or_default(), None),
                 Some(t) => {
                     let as_path = std::path::PathBuf::from(&t);
+                    // Resolving a NAME needs the installed-package index, which the
+                    // `registry` feature owns — a build without it has no installed
+                    // packages to search, so the name simply does not resolve and the
+                    // error below is the honest answer.
+                    #[cfg(feature = "registry")]
+                    // `installed_packages` is sorted by (name, version), so the LAST
+                    // match is the newest installed version of that name.
+                    let installed = loft::registry_index::installed_packages()
+                        .into_iter()
+                        .rfind(|(n, _, _)| *n == t);
+                    #[cfg(not(feature = "registry"))]
+                    let installed: Option<(
+                        String,
+                        String,
+                        std::path::PathBuf,
+                    )> = None;
                     if as_path.is_dir() {
                         (as_path, None)
-                    } else if let Some((name, version, dir)) =
-                        // `installed_packages` is sorted by (name, version), so the LAST
-                        // match is the newest installed version of that name.
-                        loft::registry_index::installed_packages()
-                                .into_iter()
-                                .rfind(|(n, _, _)| *n == t)
-                    {
+                    } else if let Some((name, version, dir)) = installed {
                         // An installed package is shared, immutable cache content: its
                         // docs belong beside it in loft's own tree, not inside it.
                         (dir, Some(doc_cache_dir().join(format!("{name}-{version}"))))

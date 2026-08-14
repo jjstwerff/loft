@@ -13,6 +13,10 @@
 /// Load all pending native extension libraries.
 #[cfg(feature = "native-extensions")]
 use std::collections::HashMap;
+// Every registry this guards is itself `native-extensions`-only, so the import follows the
+// same gate — without it a `--no-default-features` build warns on an unused import, which is
+// noise in the one gate whose whole job is to be read.
+#[cfg(feature = "native-extensions")]
 use std::sync::Mutex;
 
 /// Wrapper for `*const ()` that is Send — function pointers from cdylibs are
