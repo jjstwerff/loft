@@ -245,6 +245,36 @@ group still gets it wrong in both directions
 ([#900](https://github.com/loft-lang/loft/issues/900)). Empty and refill the whole
 collection, or give each one its own element type, until that lands.
 
+### …and the second route is actually filled, for every pair of kinds
+
+Filling either collection is supposed to fill both. For three pairings the second one
+never got the elements, and nothing said so:
+
+```loft
+struct HI { a: hash<E[k]>, b: index<E[k]> }
+z.a = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+len(z.b)                            // was 1 — the index kept the first, dropped the rest
+```
+
+`sorted` + `sorted` and `vector` + `sorted` stayed empty entirely, and `hash` + `hash`
+built the right *number* of entries with every one of them naming the first record — so a
+length check passed and every lookup but one missed. A secondary index that silently does
+not contain your records is worse than one that fails to build: every lookup through it
+answers "not found" for records that are demonstrably there, and a smoke test with a
+single element passes.
+
+All of it came from one fact. Every collection in a group finds its elements by record
+number, so each element needs a record of its own — and two shapes did not give it one: a
+`hash` normally packs its entries together for speed, and a `sorted` stores its elements
+inline. Both now switch to one record per element when the collection is part of a group,
+which is what the `vector<T>` + `hash<T[k]>` pairing already did. A collection that is
+*not* part of a group is unaffected and keeps the faster layout.
+
+One consequence worth knowing if you ever compared behaviour across files: whether a
+`sorted<T[k]>` was record-backed used to depend on whether an `index<T[..]>` over the same
+element type was declared *anywhere else in the program*, so the same two lines behaved
+differently in two files. That is gone — group membership alone decides it.
+
 ### Reading a file straight into a struct field no longer leaks
 
 ```loft

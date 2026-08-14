@@ -9,6 +9,55 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A linked collection group's second route was silently under-populated (loft#901, 2026-08-14)
+
+Filling one member of a linked group fills every member (loft#843). For three pair shapes
+the second route never got the elements, with no diagnostic: `hash` + `index` kept ONE
+element however many went in, `sorted` + `sorted` and `vector` + `sorted` stayed empty,
+and — not in the filed scope — `hash` + `hash` built the right NUMBER of entries with
+every one naming the first record. The filed table counted `len` only, which is exactly
+what that last case does not disturb. Both backends and the published 2026.8.0.
+
+**One fact explains all of them.** Every member names its elements by a 4-byte record id:
+a hash slot encodes `rec.rec` (`hash::SLOT_RECORD`), an `array` / `ordered` slot stores it
+raw and reads it back at a hard-coded payload start, and an `index` keeps its red-black
+links in FIELDS of the record. None can express a position INSIDE a record. Two shapes
+handed the siblings elements that do not own one:
+
+* a hash **packs its entries into a shared chunk arena** (@PLN135 arc H), so an
+  instrumented `record_finish` showed the two elements of `hash` + `index` arriving as
+  `rec=(2,15,8)` and `rec=(2,15,32)` — one record, two positions. The index's b-tree links
+  then collided in that record and it kept the first; a sibling hash encoded both slots as
+  record 15 and read both back as its payload start.
+* a `sorted` **stores its elements inline**, so as a view it has no record to name at all:
+  `insert_record`'s `Parts::Sorted` arm never receives `rec` and sorts the view's own empty
+  buffer.
+
+Both disappear once the group's element type is record-backed. `record_new` already
+refuses the arena for an element type flagged `linked`, with a comment describing this
+exact failure, and `finish_type` already promotes `vector` → `array` and `sorted` →
+`ordered` for one. The flag was only ever **set as a side effect of that promotion**, so a
+group whose members are all keyed never set it. `Stores::finish` now seeds it from group
+membership directly — a field with a non-empty `other_indexes` — which is the same
+predicate `types.rs` used to form the group, so the two cannot drift.
+
+This also removes an action-at-a-distance: whether a `sorted<T[k]>` was record-backed used
+to depend on an `index<T[..]>` declared anywhere else in the program (the loft#719 /
+loft#891 conversion), so the same source line lowered differently per file. That is what
+made loft#898's `vector` + `sorted` matrix cell vacuous rather than correct, and it is why
+`tests/scripts/901-linked-group-fill.loft` gives **every row its own element type** —
+written over a shared `E` the guard printed `901 ok` on the unfixed published build.
+
+Scope held: a collection that is not in a group is untouched, so a lone hash keeps its
+arena (guard row c3 — a fix that made every hash allocate one record per entry would pass
+every other row and silently give back @PLN135 arc H's win).
+
+Matrix: 70 cells × both backends, covering all 16 primary/view pairs in isolation, `=` vs
+`+=`, the fill spelled through the view, three-member groups, the contaminated-file
+confounder, key lookup through the view, element counts 0/1/3, `trie` in both declaration
+orders, and a clear after the fill. Gate: 3974/3974 curated + 57/57 on the four excluded
+binaries a schema change can reach, fmt + clippy clean.
+
 ### A linked collection group had no owner for its records (loft#898, 2026-08-14)
 
 Two or more keyed collections over one element type in one struct are auto-linked into
