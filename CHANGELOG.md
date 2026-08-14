@@ -266,11 +266,48 @@ Two smaller things had to be right for this to work, and are fixed with it: remo
 entry from the `vector` half of a group always removed the FIRST one regardless of which
 you asked for, and removing through the `hash` half leaked the record.
 
-Removing entries from an `index` collection when a **second** `index` over the same element
-type sits in the same struct still panics
-([#902](https://github.com/loft-lang/loft/issues/902)) — two b-trees cannot share one set
-of links. `e#remove` inside a loop also does not yet maintain the other collections
-([#903](https://github.com/loft-lang/loft/issues/903)); use `coll[key] = null`.
+### …and `e#remove` in a loop removes one element, not two
+
+`#remove` inside a `for` loop takes the element out of the group too, and it removes
+exactly one:
+
+```loft
+struct A { v: vector<E> }
+struct B { by_k: hash<E[k]> }       // anywhere in the program
+for e in a.v { if e.k == 2 { e#remove; } }
+for e in a.v { … }                  // was 1:alpha — it took gamma with it
+```
+
+That one is worth reading twice: `struct B` is a different struct, and deleting it made
+the same loop correct. A `vector<E>` is stored differently once any keyed collection over
+`E` exists, and `#remove` was measuring the elements in the wrong unit for that layout —
+so whether the loop worked depended on a declaration somewhere else entirely. The removed
+element's record is now freed as well, so a long-lived collection that is filled and
+drained no longer grows.
+
+Three more things `#remove` now gets right: it takes the element out of every collection
+in the group, the way `coll[key] = null` already did; walking backwards with
+`for e in rev(v)` no longer skips the next element (or visits one twice, on a `sorted`);
+and on a `sorted` collection that shares its records, `--native` used to remove nothing at
+all while the interpreter removed correctly. `v.remove(i)` had the same
+wrong-unit problem and is fixed with it.
+
+### Two `index` collections over one element type now say so, instead of crashing later
+
+Declaring two `index` fields with the same key over the same element type in one struct
+was accepted, filled fine, and then panicked deep inside the compiler on the first
+removal. An index keeps its tree links inside the element's record, so the two fields were
+never two indexes — they were one, reached two ways. It is now refused where you write it:
+
+```
+error: 'also_by_k' and 'by_k' are both 'index<E[k]>' in the same structure — two indexes
+cannot share records, because an index keeps its tree links in a field of the record and
+one field of links cannot hold two trees. Give the second route a different kind ('hash'
+or 'sorted' over the same records), or index a different key
+```
+
+Both cures work today. Two indexes on **different** keys were never affected — that is a
+genuinely useful pair (two orders over one record set) and it fills and removes correctly.
 
 ### A `sorted` collection emptied entry-by-entry accepts new entries again
 

@@ -3030,6 +3030,65 @@ impl Parser {
         }
     }
 
+    /// Refuse a SECOND `index` field over the same element type and the same key
+    /// in one structure (loft#902).
+    ///
+    /// Every other collection kind keeps its own storage, so two of them over one
+    /// element type are two routes to a shared record set — the linked-collection
+    /// group loft#843 built. An `index` cannot be: a red-black tree keeps its
+    /// links in FIELDS OF THE ELEMENT RECORD, and the field triple is allocated
+    /// per index TYPE (`#left_N / #right_N / #color_N`). Two fields whose declared
+    /// type is identical resolve to that one type, so they name one set of links —
+    /// not two trees, but ONE tree reached through two roots.
+    ///
+    /// That is why the FILL looked right and only removal fell over: both roots
+    /// walked the same structure, so lengths and iteration agreed, and the first
+    /// removal rebalanced through one root and left the other stale — a panic in
+    /// `tree.rs` on the next walk, which "no runtime errors, ever" does not allow.
+    ///
+    /// It is refused rather than made to work because there is nothing to make
+    /// work: a second index with the SAME key answers exactly what the first
+    /// answers, in the same order. A different key is a different type with its
+    /// own link triple, so `index<E[k]> + index<E[n]>` is untouched and correct.
+    fn reject_duplicate_index(&mut self, d_nr: u32, a_name: &str, a_type: &Type) {
+        let Type::Index(elem, keys, _) = a_type else {
+            return;
+        };
+        for a_nr in 0..self.data.attributes(d_nr) {
+            let Type::Index(other_elem, other_keys, _) = self.data.attr_type(d_nr, a_nr) else {
+                continue;
+            };
+            if other_elem != *elem || other_keys != *keys {
+                continue;
+            }
+            let earlier = self.data.attr_name(d_nr, a_nr);
+            // The same NAME is the same field declared twice — a re-derivation
+            // (generic instantiation, a stub refilled), not two indexes.
+            if earlier == a_name {
+                continue;
+            }
+            // Spelled the way the user wrote it — `Type::show` renders an index as
+            // its debug pair (`index<E,[("k", true)]>`), which nothing reading the
+            // error would recognise as their own declaration.
+            let spelled = keys
+                .iter()
+                .map(|(k, asc)| if *asc { k.clone() } else { format!("-{k}") })
+                .collect::<Vec<_>>()
+                .join(",");
+            let shown = format!("index<{}[{spelled}]>", self.data.def(*elem).name);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "'{a_name}' and '{earlier}' are both '{shown}' in the same structure — two \
+                 indexes cannot share records, because an index keeps its tree links in a \
+                 field of the record and one field of links cannot hold two trees. Give the \
+                 second route a different kind ('hash' or 'sorted' over the same records), \
+                 or index a different key"
+            );
+            return;
+        }
+    }
+
     // @F12 — struct records (fields, `= default`, `computed`, `limit`/`not null`/`assert`)
     pub(crate) fn parse_struct(&mut self) -> bool {
         // @PLN101 — optional `value` modifier: `value struct T {…}` marks T a value (copy,
@@ -3908,6 +3967,7 @@ impl Parser {
             if let Type::Integer(ref mut spec) = a_type {
                 spec.not_null = !nullable;
             }
+            self.reject_duplicate_index(d_nr, a_name, &a_type);
             let a = self
                 .data
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);

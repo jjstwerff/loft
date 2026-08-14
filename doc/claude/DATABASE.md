@@ -943,7 +943,11 @@ refused ([`src/placement.rs`](../../src/placement.rs)).
 
 Two or more keyed collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
-fills both. **The records belong to exactly one member.** `types.rs` decides which when it
+fills both. Every combination of kinds is a valid group except **two `index` members with
+the same key**, which is refused where it is declared: an index keeps its tree links in a
+field of the element record, so a second one has nowhere to put them (loft#902, and
+[DESIGN_DECISIONS.md § C113](DESIGN_DECISIONS.md) for why it is refused rather than
+given its own storage). **The records belong to exactly one member.** `types.rs` decides which when it
 builds the group: the first-declared member is the PRIMARY, and every later one gets a
 leading `u16::MAX` on its `other_indexes` marking it a VIEW. That marker is the only place
 the ownership fact lives, and three readers now share it — the JSON default-init, the
@@ -1010,13 +1014,44 @@ and so unlinked slot 0 every time (the loft#719 defect, fixed then for `Ordered`
 stride-0 table only borrows, so the record leaked. `Stores::hash_owns_entries` is the
 table's own answer to which case that is.
 
-**Two shapes are still wrong, filed rather than fixed.** A group with two `index` members
-panics on the first removal — an `index` keeps its red-black links in FIELDS of the element
-record, and two `index` fields over one element type resolve to the same offset, so they
-describe ONE tree reached through two roots (loft#902). And `e#remove` in a loop maintains
-no sibling: `OpRemove` computes the element's record ref internally, so the parser has no
-value to hand the unlinks — and over an `array<T>` it removes two elements with no group
-involved at all (loft#903).
+### Removing one entry with `e#remove` (loft#903)
+
+`#remove` reaches an element by POSITION rather than by key, and that half had no owner:
+the cursor form kept its own arithmetic instead of `remove_owned`'s. It removed TWO
+elements of an `array<T>` (`OpRemove` was handed the ELEMENT's width where a
+record-backed container's slots are four bytes) and freed neither the record a slot
+names nor what that record owned; inside a group it maintained no other member; a
+`rev()` loop rewound the cursor the wrong way over a plain `vector` (which never put the
+reverse bit in `on`) and one slot too far over an inline `sorted`; and over an `ordered`
+the interpreter removed while `--native` removed nothing, having no arm for it.
+
+The layout question now lives in ONE place. `Stores::remove_vector_at` reads the element
+type's `linked` flag and answers both halves of it — a slot is four bytes and names a
+record to free when the type is linked, and is an inline element otherwise — so the two
+spellings that remove by index, `e#remove` and `v.remove(i)`, cannot disagree.
+`OpRemoveVector`'s operand is the element TYPE for the same reason: a width cannot say
+what an element owns. It is the by-INDEX twin of `remove_owned`, which stays the
+by-RECORD form a key lookup reaches.
+
+The group half is loft#900's sequence with one difference. A key lookup can be hoisted
+into a temporary; a loop cursor cannot, and it does not have to be — the LOOP VARIABLE
+already is the element's reference, resolved once per iteration and at the record's
+payload start for every kind a group can hold (`index` yields `new_ref(.., 8)`, `ordered`
+and a linked `array` yield the record a slot names). `Parser::loop_group_remove` emits
+one `CLEAR_KEYED_VIEW` unlink per other member from it, then the spelled member's
+`OpRemove` frees.
+
+**Two `index` members are refused (loft#902).** An `index` keeps its red-black links in
+FIELDS of the element record, and that `#left_N / #right_N / #color_N` triple is
+allocated per index TYPE — so two fields whose declared type is identical name one set of
+links: not two trees, but ONE tree reached through two roots. The fill therefore looked
+right (both roots walked the same structure) and the first removal rebalanced through one
+root, left the other stale, and panicked in `tree.rs` on the next walk. There is nothing
+to make work — a second index with the SAME key answers exactly what the first answers,
+in the same order — so `Parser::reject_duplicate_index` refuses it where the field is
+declared, naming the workaround: give the second route a different KIND, or a different
+key. A different key is a different type name and so its own link triple, and two
+`index<E[k]>` fields in different structs hold different records; both stay legal.
 
 ### Probing and Load Factor
 

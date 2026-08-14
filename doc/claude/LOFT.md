@@ -1327,6 +1327,12 @@ for v in x if v % 3 != 0 {
 }
 ```
 
+It removes exactly one element, releases what that element owned, and — when the
+collection is one member of a [linked collection group](DATABASE.md#removing-one-entry-with-eremove-loft903)
+— takes the element out of every member.  Removing while walking backwards
+(`for e in rev(c)`) is equally safe: the cursor lands on the next element in the
+direction being walked.
+
 **Mutation guard:** Appending to a collection while iterating over it is a compile error:
 
 ```
