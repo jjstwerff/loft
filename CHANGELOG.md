@@ -26,6 +26,64 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A struct field you declared with `?` can now actually be empty
+
+Writing `?` on a struct-typed field is how you say "this may be absent". Until now it did
+not do that. A field declared `maybe: Inner?` was stored exactly like a field without the
+`?`, so there was nowhere to record that nothing was there:
+
+```loft
+struct Inner { z: integer }
+struct H { maybe: Inner?, tag: integer }
+
+h = H { maybe: null, tag: 0 };
+println("{(h.maybe ?? Inner{z:-1}).z}");   // was 0  — now -1
+println("{h.maybe == null}");              // was false — now true
+
+h.maybe = Inner { z: 9 };
+h.maybe = null;                            // was ignored — now clears
+println("{h.maybe == null}");              // was false — now true
+```
+
+All three readings of that declaration disagreed with it: `??` never reached its default,
+`== null` was always false, and assigning `null` kept the value that was already there.
+A program that stored `null` to let go of something optional quietly held on to it, and a
+program that checked for `null` before using a field took the "it's there" branch every
+time. Both on both backends, and neither said anything.
+
+The field now carries a small marker saying whether it holds a value, which is the same
+representation `vector<Inner?>` elements have used for a while — so `??`, `== null`, plain
+reads and assignment all agree with each other and with what you wrote. A field with **no**
+`?` is unchanged: it cannot be absent, so it stores exactly what it did before and pays
+nothing for the marker.
+
+Two smaller things came with it. A struct literal that simply left such a field out did not
+compile at all under `--native`; it does now. And a `?` field costs 8 bytes more than it
+did — `sizeof` on a struct containing one has grown, which matters only if you were
+depending on the exact number.
+
+### A struct literal that leaves a field out will mention it
+
+Leaving a field out of a struct literal gives it that type's zero. That is documented and
+unchanged — but nothing distinguished it from someone writing the zero on purpose, and it
+goes wrong exactly where zero is a real value:
+
+```
+advice[omitted-field-zero]: `EditorInput` literal omits the field `palette_index`, which
+takes the type's zero — nothing in the declaration chose that value
+```
+
+The cure already existed and was simply hard to find: give the field a default where you
+declare it (`palette_index: integer = -1`). Adding one is additive, so callers that already
+pass the field keep working.
+
+This is advice, never an error, and it stays quiet where the code already says what it
+means: a field **with** a declared default, a nullable field, a collection or text field
+(whose zero is "empty", which is the only default you could declare anyway), and a bare
+`Thing {}` — that asks for the whole default record, and reads that way. It only speaks for
+the partial literal, where some fields were singled out and a reader cannot tell whether the
+rest were considered. `LOFT_NO_OMITTED_FIELD=1` turns it off.
+
 ### A mistyped key field says so, instead of crashing the compiler
 
 Naming a key a collection's element type does not have — a typo, or the `hash<key, Value>`

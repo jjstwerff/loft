@@ -513,6 +513,32 @@ pub fn lost_temp_writes_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_LOST_TEMP_WRITE").is_none())
 }
 
+/// loft#914: the omitted-constructor-field nudge. A struct literal that names SOME fields and
+/// leaves another out gives the omitted one its type's zero — and nothing distinguishes that
+/// from an author who wrote the zero deliberately. It is dangerous exactly where zero is a
+/// meaningful value of the field's domain: dryopea's palette index wanted `-1` for "nothing
+/// selected", got `0`, and `0` is the palette entry that erases.
+///
+/// `advice` tier, per the two-tier rule: the zero is the DOCUMENTED behaviour of an omitted
+/// field (LOFT.md § constructors, locked by `tests/scripts/06-structs.loft`), so the code is
+/// correct as written and ignoring this cannot produce a result the language did not promise.
+/// It reports a better spelling, and the spelling already exists — a declared field default
+/// (`palette_pick: integer = -1`) — which is the discoverability gap actually being closed.
+///
+/// Deliberately quiet on the two shapes that say something: a field WITH a declared default is
+/// the author stating that omitting it is fine, and a NULLABLE field's absence is a value it
+/// can hold. A bare `S {}` is also exempt — it asks for the whole default record, and a reader
+/// meeting it knows every field is defaulted; the ambiguity is only in the PARTIAL literal,
+/// where the author singled some fields out and a reader cannot tell whether the rest were
+/// considered.
+///
+/// **Default ON**; `LOFT_NO_OMITTED_FIELD` opts out. One cached env read.
+#[must_use]
+pub fn omitted_field_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OMITTED_FIELD").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft

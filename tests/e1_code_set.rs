@@ -168,6 +168,11 @@ const CODES: &[(&str, &str)] = &[
          fn main() { print(\"{f(1,true,false)}\"); }",
     ),
     (
+        "omitted-field-zero",
+        "struct S { hover: integer, palette_pick: integer }\n\
+         fn main() { s = S { hover: 3 }; print(\"{s.palette_pick}\"); }",
+    ),
+    (
         "needless-reference-parameter",
         "fn f(x: &(integer, integer)) -> integer { x.0 }\n\
          fn main() { v = (1, 2); print(\"{f(&v)}\"); }",

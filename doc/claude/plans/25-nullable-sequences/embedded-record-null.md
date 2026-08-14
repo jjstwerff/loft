@@ -5,13 +5,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Embedded-record null — the nullable-enum representation
 
-> **Part of** [@PLN25](README.md) (nullable sequences). **Status:** design (not yet
-> built). **Resolves:** finding 12's open `reference`/struct element case, finding 9
+> **Part of** [@PLN25](README.md) (nullable sequences). **Status:** BUILT for vector
+> elements and for embedded FIELDS (loft#896); a `vector<T>?` field is the remaining shape.
+> **Resolves:** finding 12's open `reference`/struct element case, finding 9
 > (nullable struct field defaults), the `field = nullable_source()` crash, **and the
 > same crash for nullable enums** (a pre-existing bug — see § The unification). **Method:**
 > written as a hypothesis under `design-protocol`; § Probes lists the falsification tests
 > to run before code. An earlier draft proposed an out-of-band validity bitmap; § Rejected
 > alternative records why the in-band discriminant wins.
+>
+> **What the build taught the design.** The invariant below held exactly as written — the
+> discriminant, the layout, the `??`/`== null`/assign glue all worked the moment the field
+> carried the type. What cost the time was upstream of any of it: the rewrite that assigns
+> that type selected on a bare `Type::Reference`, and `Row?` arrives as
+> `Optional(Reference(Row))`. So it fired on every field that CANNOT be absent and on none
+> that can. Nothing in the design was wrong; one pattern match named the complement of the
+> intended set, and the resulting breakage ("flipping struct fields tree-wide breaks field
+> reads across the stdlib") was read as the representation being immature rather than as the
+> selector being inverted — which is what kept it behind an opt-in for so long. A gate whose
+> justification is a symptom is worth re-deriving before it is trusted.
 
 ## The problem (grounded)
 

@@ -7587,6 +7587,35 @@ impl Parser {
         ]
     }
 
+    /// @PLN25 E2a.5 / loft#896 — emit "this `__nullable<S>` slot is ABSENT" against `to`, the
+    /// slot's own `OpGetField`/element ref.
+    ///
+    /// A nullable struct field or vector element is the synthetic enum stored INLINE, so
+    /// absence is discriminant `0` — not the `store_nr` null sentinel a real DbRef uses, since
+    /// an inline slot has no DbRef of its own. Emitting a `copy_ref` here instead produces
+    /// `OpCopyRecord(null, dest, …)`, which is a silent no-op on the interpreter and does not
+    /// compile at all on native (`OpCopyRecord(cell, (), …)` — `()` where a `DbRef` is
+    /// expected). The inline form of `== null` reads this same discriminant
+    /// (`operators.rs::enum_null`), which is what makes the write and the test agree.
+    ///
+    /// A present `Some` carrying a heap payload (text, nested vector) is released FIRST via
+    /// `OpClearKeyed` → `remove_claims`; without it the old payload leaks until the host store
+    /// dies. That op reads the discriminant and no-ops on an already-absent or payload-less
+    /// slot, so this is safe whatever the slot held — including a freshly allocated record,
+    /// which is why the construction path can share it with the assignment path.
+    pub(crate) fn build_nullable_set_null(&mut self, syn: u32, to: Value) -> Value {
+        let set_null = self.cl(
+            "OpSetEnum",
+            &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+        );
+        let kt = self.data.def(syn).known_type();
+        if !self.first_pass && kt != u16::MAX {
+            let free = self.cl("OpClearKeyed", &[to, Value::Int(i32::from(kt))]);
+            return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
+        }
+        set_null
+    }
+
     fn set_field_check(
         &mut self,
         d_nr: u32,

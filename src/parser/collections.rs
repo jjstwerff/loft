@@ -999,39 +999,17 @@ impl Parser {
             };
             return self.cl("OpSetDbRef", &[r, p, v]);
         }
-        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field /
-        // vector element.  The field/element is a synthetic `__nullable<S>` enum
-        // stored inline, so null is discriminant 0 (NOT the variable store_nr
-        // sentinel — an inline slot has no DbRef of its own).  `copy_ref` would
-        // emit `OpCopyRecord(null, dest, …)`: a silent no-op on the interpreter
-        // (the null source copies nothing) and a hard type error on native
-        // (`OpCopyRecord(cell, (), …)` — `()` where a DbRef is expected).  Write
-        // the discriminant at offset 0 to 0 instead; the inline form of `== null`
-        // reads exactly that (operators.rs `enum_null`).  Inert with the synthesis
-        // gate off — no `__nullable<` enums exist, so the name check never matches.
-        //
-        // A present `Some` carrying heap payload (text / nested vector) is freed
-        // first via `OpClearKeyed` (→ `remove_claims`), which reads the
-        // discriminant and no-ops on an already-null / payload-less element — so
-        // it is safe regardless of prior state.  Without it the old payload leaks
-        // until the host store is freed (@PLN25 E2 leak, was tracked in
-        // embedded-record-null.md).
+        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field / vector element.
+        // `build_nullable_set_null` carries the rationale and is shared with the CONSTRUCTION
+        // path (`H { maybe: null }`), so the two spellings of "absent" cannot drift.
         if op == "="
             && matches!(val.unspan(), Value::Null)
             && let Type::Enum(syn, true, _) = f_type
             && self.data.def(*syn).name.starts_with("__nullable<")
             && !matches!(to, Value::Var(_))
         {
-            let set_null = self.cl(
-                "OpSetEnum",
-                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
-            );
-            let kt = self.data.def(*syn).known_type();
-            if !self.first_pass && kt != u16::MAX {
-                let free = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
-                return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
-            }
-            return set_null;
+            let syn = *syn;
+            return self.build_nullable_set_null(syn, to.clone());
         }
         // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
         // `__nullable<S>` field / vector element assigned from an EXPRESSION whose

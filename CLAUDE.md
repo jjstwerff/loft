@@ -345,6 +345,15 @@ excluded; separate from complexity because a caller's burden and a reader's burd
 different fixes: a struct vs an extracted function) · `LOFT_NO_DEFAULT_HINT` (≥2 trailing
 booleans with no default — advertises default parameters, which are under-used and free to
 adopt: adding a default is additive, so existing callers keep working) ·
+`LOFT_NO_OMITTED_FIELD` (loft#914 `omitted-field-zero` ADVICE: a struct literal that names
+SOME fields and leaves another out — the omitted one takes its type's zero and nothing in the
+declaration chose it, which bites where zero is a meaningful value of the field's domain
+(dryopea's palette index wanted `-1`; `0` is the entry that erases). Advertises the DECLARED
+FIELD DEFAULT (`palette_pick: integer = -1`), the cure that already exists and was simply
+undiscoverable. `advice`, not `warning`: the zero is documented behaviour, so ignoring it
+cannot produce a result the language did not promise. Quiet on a field with a declared
+default, on a NULLABLE field (absence is a value it holds), and on a bare `S {}` — that asks
+for the whole default record; the ambiguity is only in the PARTIAL literal) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is

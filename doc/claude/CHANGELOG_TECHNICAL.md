@@ -9,6 +9,74 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `τ?` struct field is representable as absent (loft#896, 2026-08-14)
+
+A field declared `maybe: Inner?` was stored as a dense `Inner`, byte-identical to a
+non-nullable one. `OpGetField` therefore handed back a `DbRef` into the PARENT record, whose
+`rec` is never 0, so every reader saw a present-but-zeroed value: `??` never reached its
+default, `== null` was always false, and `h.maybe = null` found nothing to clear. Both
+backends, silently.
+
+**The representation was already built.** The synthetic `__nullable<S>` enum (discriminant 0 =
+absent) has shipped default-on for vector ELEMENTS for some time, and `vector<Inner?>` answers
+every cell of loft#896 correctly — which is what made it the oracle. What was wrong is the
+rewrite that assigns that type to a FIELD (`typedef.rs::synth_nullable_struct_fields`): it
+matched a bare `Type::Reference`, and `Inner?` reaches the type table as
+`Optional(Reference(Inner))`. A field written `Inner` — one that *cannot* be absent — is the
+bare `Reference`. So the arm selected the exact COMPLEMENT of its intended set, rewriting every
+dense field and never once firing for the `S?` it was written for.
+
+That inversion is also why it sat behind `LOFT_E2_FIELDS`: the gate's stated justification was
+that flipping fields tree-wide breaks stdlib field reads, which is what rewriting *dense* fields
+does. The symptom was read as the representation being immature rather than as the selector
+being backwards, and the read/construct glue the gate's comment called missing turns out to
+work — a bare `h.maybe.z` auto-unwraps.
+
+Fix: select on `Optional(Reference(S))`, drop the gate, and add the literal-`null` construction
+path (`H { maybe: null }`) — assignment already had one, so both now route through a single
+`Parser::build_nullable_set_null` and the two spellings of "absent" cannot drift.
+
+Also fixed by the type change: a struct literal that merely OMITS such a field did not compile
+under `--native`. The omitted default was `Value::Null`, which the interpreter tolerates as a
+no-op `OpCopyRecord` of a null source and native lowers to `OpCopyRecord(cell, (), …)` —
+`()` where a `DbRef` is expected. It reproduced on the released `loft 2026.8.0`.
+
+**Costs.** A `S?` field carries a discriminant, so it grows 8 bytes;
+`tests/multilib/fwd797_layout.loft`'s hand-computed sizes moved 44→52 and 52→60. A
+`vector<T>?` FIELD is `Optional(Vector)`, a different payload shape, and is unchanged — still
+wrong, and genuinely separate work.
+
+Guard: `tests/issue_896_nullable_field.rs`, 16 cells on both backends, including a dense-field
+control that fails if the selector ever again keys on anything but the `?`.
+`tests/plan25_e2_layout.rs`'s fixture declared `item: Row` and asserted the rewrite fired — it
+passed by encoding the inversion, and now declares `item: Row?` with a dense sibling beside it.
+
+### A partial struct literal names the field it left out (loft#914, 2026-08-14)
+
+New `advice[omitted-field-zero]`, default on, `LOFT_NO_OMITTED_FIELD` opts out. A literal that
+names SOME fields and leaves another out gives the omitted one its type's zero, and nothing
+distinguished that from an author writing the zero deliberately. It bites where zero is a
+meaningful value of the field's domain — dryopea's palette index wanted `-1` for "nothing
+selected", got `0`, and `0` is the entry that erases; the project carried a two-field workaround
+and a CLAUDE.md rule for it, because the cure (a declared field default) was undiscoverable.
+
+`advice`, not `warning`, per the two-tier rule: the zero is documented behaviour
+(`tests/scripts/06-structs.loft` locks it), so ignoring it cannot produce a result the language
+did not promise — and a warning would fail every library's own `LOFT_DENY_WARNINGS=1` CI on a
+common idiom, which is the trap the tiers exist to avoid.
+
+Quiet where the code already says what it means, or where the cure would be a no-op: a declared
+default; a nullable field; `reference<T>` and fn-ref fields (their omitted default is a null
+sentinel, and a fn-ref has no other default to declare); collections and `text` (their zero is
+the identity, and `= []` / `= ""` IS that zero); and a bare `S {}`, which asks for the whole
+default record and reads that way. Only the PARTIAL literal is ambiguous.
+
+The last three exemptions came from the suite rather than from reasoning —
+`issue_328_reference_field_pointer_semantics` and `p213_struct_field_default_init` each name a
+field whose absence is already the declaration's promise. Swept before it spoke: 25 hits across
+7 of ~400 corpus files, and one golden baseline moved
+(`tests/error_messages/cases/33_struct_missing_field.loft`, which produced no output at all).
+
 ### `loft test` no longer reports a green for a file it did not run (loft#916, 2026-08-14)
 
 `loft test <a> <b>` silently discarded everything after the first target. It ran `<a>`, printed

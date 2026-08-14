@@ -2943,6 +2943,11 @@ impl Parser {
             self.lexer.revert(link);
             return Type::Unknown(0);
         }
+        // The omitted-field advice is only decidable once the whole body is read, and by then
+        // the cursor sits past the closing `}` — on the next statement for a one-line literal.
+        // Keep the opening brace's position to point the caret at the literal it names
+        // (DIAGNOSTICS.md § Adding a code, step 4).
+        let literal_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
         let mut new_object = false;
         let mut in_place_var: Option<u16> = None;
@@ -3124,6 +3129,7 @@ impl Parser {
             list = std::mem::take(&mut sinks.hoists);
         }
         if !self.first_pass {
+            self.warn_omitted_fields(td_nr, &found_fields, &literal_pos);
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
@@ -3244,6 +3250,123 @@ impl Parser {
             }
         });
         val
+    }
+
+    /// Advice: this literal leaves a field out, so that field takes its type's zero.
+    ///
+    /// Reports the omission, not a fault — the zero is what an omitted field is documented to
+    /// get. What it points at is the spelling that makes the omission SAFE: a declared field
+    /// default (`palette_pick: integer = -1`), which is additive and costs existing callers
+    /// nothing. See `keys::omitted_field_lint_enabled` for why this advises rather than warns,
+    /// and for the shapes deliberately left quiet.
+    ///
+    /// Called from the literal path only. The synthesised whole-record constructions
+    /// (`default_object`, the nested-`Reference` recursion, enum-variant init) reach
+    /// `object_init` with no `found_fields` at all and were never written by an author, so
+    /// keying on a NON-empty `found_fields` keeps them out on the same test that exempts a
+    /// bare `S {}`.
+    fn warn_omitted_fields(
+        &mut self,
+        td_nr: u32,
+        found_fields: &HashSet<String>,
+        at: &crate::lexer::Position,
+    ) {
+        if self.default || found_fields.is_empty() || !crate::keys::omitted_field_lint_enabled() {
+            return;
+        }
+        let mut omitted: Vec<String> = Vec::new();
+        for a_nr in 0..self.data.attributes(td_nr) {
+            let nm = self.data.attr_name(td_nr, a_nr);
+            if found_fields.contains(&nm) {
+                continue;
+            }
+            let attr = &self.data.def(td_nr).attributes()[a_nr];
+            // A computed / constant / compiler-injected field is not the author's to write,
+            // and one carrying a declared default is the author saying the omission is fine.
+            if attr.constant || attr.hidden || attr.value != Value::Null {
+                continue;
+            }
+            let tp = self.data.attr_type(td_nr, a_nr);
+            if matches!(tp, Type::Routine(_)) {
+                continue;
+            }
+            // A nullable field is exempt: absence is a value it can hold, and the author wrote
+            // the `?` that says so. Both spellings reach here — the `Optional` marker, and the
+            // synthetic `__nullable<S>` enum a nullable struct field is rewritten to.
+            if matches!(tp, Type::Optional(_))
+                || matches!(&tp, Type::Enum(e, true, _)
+                    if self.data.def(*e).name.starts_with("__nullable<"))
+            {
+                continue;
+            }
+            // A POINTER field (`reference<T>`, the `u16::MAX` share marker) and a FN-REF field
+            // are exempt for the same reason a nullable one is: their omitted default is a null
+            // SENTINEL, not a zeroed record, so absence is what the declaration already promises
+            // and a reader gets it — and for a fn-ref there is no other default to declare. An
+            // INLINE `Reference` (a dense embedded struct) is a different thing and stays in
+            // scope: omitting one does hand back a silently zeroed record.
+            if matches!(&tp, Type::Reference(_, deps) if deps.contains(&u16::MAX))
+                || matches!(tp, Type::Function(_, _, _))
+            {
+                continue;
+            }
+            // A collection or text field is exempt, and the reason is the FIX rather than the
+            // hazard: their zero is the identity — empty — and the only default an author could
+            // declare for one (`= []`, `= ""`) IS that zero, so the advice would resolve to a
+            // no-op. A diagnostic whose cure changes nothing is worse than silence; it spends
+            // the credibility that makes the other sites worth reading. The scalars kept below
+            // are the ones where the zero is a real value of the domain and a different default
+            // is expressible — `0` is a palette index, `false` is a choice.
+            if matches!(
+                tp.base(),
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+                    | Type::Text(_)
+            ) {
+                continue;
+            }
+            omitted.push(nm);
+        }
+        if omitted.is_empty() {
+            return;
+        }
+        let type_name = self.data.def(td_nr).name().to_string();
+        let list = omitted.join("`, `");
+        let plural = if omitted.len() == 1 { "" } else { "s" };
+        let takes = if omitted.len() == 1 { "takes" } else { "take" };
+        diagnostic_at!(
+            self.lexer,
+            at,
+            Level::Advice,
+            code = "omitted-field-zero",
+            "`{type_name}` literal omits the field{plural} `{list}`, which {takes} the type's \
+             zero — nothing in the declaration chose that value"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "declare the field's default on the type (`palette_pick: integer = -1`)"
+                .to_string(),
+            condition: Some(
+                "the zero is not what an omitting caller should get — adding a default is \
+                 additive, so existing callers keep working"
+                    .to_string(),
+            ),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "write the field at this literal".to_string(),
+            condition: Some("only this one site wants a value other than the zero".to_string()),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
     }
 
     // fill the not mentioned fields with their default value
@@ -3464,6 +3587,31 @@ impl Parser {
         // OpCopyRecord a null source (the crash the representation retires).  An
         // inline `S{…}` literal already took the Some-construction path in parse_var,
         // so this fires only for an expression source.
+        // loft#896 — a LITERAL `null` in the constructor (`H { maybe: null }`).  The source is
+        // null at COMPILE time, so there is nothing to test at runtime and no source record to
+        // copy: write the absent discriminant directly, exactly as `obj.f = null` does.
+        // Without this the field-store convert reached `Null` against `__nullable<S>` and
+        // refused the one spelling the declaration exists to allow.  The value is in
+        // `found_fields`, so `object_init` will not also default it.
+        if !self.first_pass
+            && matches!(value.unspan(), Value::Null)
+            && let Type::Enum(syn, true, _) = &td
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let syn = *syn;
+            let enum_kt = i32::from(self.data.def(syn).known_type());
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            let field_ref = self.cl(
+                "OpGetField",
+                &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
+            );
+            let clear = self.build_nullable_set_null(syn, field_ref);
+            list.push(clear);
+            return;
+        }
         if !self.first_pass
             && let Type::Enum(syn, true, _) = &td
             && self.data.def(*syn).name.starts_with("__nullable<")

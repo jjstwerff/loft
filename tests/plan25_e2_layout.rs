@@ -17,9 +17,14 @@ extern crate loft;
 use loft::data::Type;
 use loft::parser::Parser;
 
+/// `item: Row?` — the `?` is the whole trigger, and it is the point of the probe. The field
+/// used to be written `item: Row`, back when the rewrite matched a bare `Reference` and so fired
+/// on exactly the fields that CANNOT be absent; this fixture passed by encoding that inversion
+/// (loft#896). A field with no `?` must stay dense, which `a_dense_field_is_not_rewritten`
+/// below now holds down.
 const SRC: &str = r#"
 struct Row { id: integer, tag: text }
-struct Box { item: Row }
+struct Box { item: Row?, dense: Row }
 
 fn test() {}
 "#;
@@ -31,9 +36,6 @@ fn nullable_some_carries_a_dense_row_payload() {
     // multi-threaded-mutation hazard we avoid here.
     unsafe {
         std::env::set_var("LOFT_E2_SYNTH", "1");
-        // Embedded NON-vector struct-field nullability (`Box.item`) is gated on
-        // its own opt-in (more immature than the vector-element path).
-        std::env::set_var("LOFT_E2_FIELDS", "1");
     }
     // Parse a real FILE (source = MAIN_SOURCE) rather than `parse_str` (which
     // leaves source at 0 = STD_SOURCE, which the scaffolding pass skips).
@@ -114,8 +116,18 @@ fn nullable_some_carries_a_dense_row_payload() {
         db.size(some),
     );
 
+    // The boundary the layout claim rests on: a field declared WITHOUT `?` keeps the dense
+    // `Row`. Checked in the same test because the gate is process-wide and this binary holds
+    // one test on purpose.
+    let dense = p.data.attr(box_d, "dense");
+    assert_ne!(dense, usize::MAX, "Box has a `dense` field");
+    let dense_ty = p.data.attr_type(box_d, dense);
+    assert!(
+        matches!(dense_ty, Type::Reference(d, _) if d == row_d),
+        "a field with no `?` stays a dense Row, got {dense_ty:?}"
+    );
+
     unsafe {
         std::env::remove_var("LOFT_E2_SYNTH");
-        std::env::remove_var("LOFT_E2_FIELDS");
     }
 }

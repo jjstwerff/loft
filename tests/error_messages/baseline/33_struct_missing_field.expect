@@ -1,3 +1,10 @@
 ==== exit: 0 ====
 ==== stdout ====
 Bob==== stderr ====
+advice[omitted-field-zero]: `Player` literal omits the field `health`, which takes the type's zero — nothing in the declaration chose that value
+  --> <cases>/33_struct_missing_field.loft:3:20
+  |
+3 |   p = Player { name: "Bob" };
+  |                    ^
+
+note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
