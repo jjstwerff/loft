@@ -9,6 +9,74 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A linked collection group had no owner for its records (loft#898, 2026-08-14)
+
+Two or more keyed collections over one element type in one struct are auto-linked into
+several routes to a SINGLE record set (`Field.other_indexes`, loft#843). Nothing said which
+of them OWNED that set, so `remove_claims` freed the element records through whichever was
+cleared and left the others naming freed memory — a length that still read 2 over bytes
+answering `4294967296:null`.
+
+The filed scope was wrong in three ways, all measured on a 12-cell matrix against the
+published 2026.8.0:
+
+* **`vector<T>` + `hash<T[k]>` is affected and was not in it** — the pairing DATABASE.md
+  documents by name, and the one with an unambiguous owner.
+* **Both directions are broken, one was filed.** Clearing a VIEW leaves the primary over
+  freed records; clearing the PRIMARY never resets the views, which keep their old length
+  over the same freed records. A fix for one does nothing for the other.
+* **`Parts::Array | Ordered` is not the producer the report named.** `vector` + `sorted`
+  is not a counter-example either: it never links at all, so that cell is VACUOUS rather
+  than correct, and it is recorded as such rather than counted as coverage.
+
+The ownership fact already existed in the schema and had exactly one reader. `types.rs`
+marks every member after the first with a leading `u16::MAX` on `other_indexes`; only the
+JSON default-init asked. Three pieces make it load-bearing:
+
+1. `Stores::borrowed_spine` — what a VIEW owns, per kind: the hash table record, the
+   `Ordered` slot list, and for `index` nothing at all (a b-tree's nodes ARE the element
+   records, so zeroing the root is the whole teardown). It rides the SAME per-`Parts`
+   match as `for_each_owned_child` rather than sitting beside it, because the spine a view
+   drops is the `container_rec`/`extra_recs` that walk already names — a layout change
+   cannot move one and miss the other. `OwnedChild` gained a `borrowed` flag so the
+   struct-teardown arm can mark a view field from the schema.
+2. A `0x8000` bit on `OpClearKeyed`'s `tp`, the convention `OpSetKeyed`/`OpReplaceKeyed`
+   already use, so the op's arity and both emitters are unchanged. Both backends decode it
+   in ONE place — `Stores::remove_claims_keyed` — so the interpreter's `#rust` template and
+   `codegen_runtime::OpClearKeyed` cannot drift.
+3. `Parser::keyed_group_clear`, emitted by the KEYED assign and the VECTOR assign alike:
+   the documented `vector<T>` + `hash<T[k]>` shape has the vector as record holder, so a
+   fix living only in the keyed branch would have closed half the matrix.
+   `clear_group_primary` picks the op the owner's kind needs (`OpClearVector` for a plain
+   vector, `OpClearKeyed` otherwise), because a clear may be reached from either member.
+
+**The semantics question the report left open**, and what settled it: a clear spelled
+through ANY member empties the group. Not a preference — `h.view += [e]` already appends
+to every member (loft#843), so an operation spelled through a view acts on the group, and
+`=` must match or `h.view = []` followed by `h.view += [x]` is incoherent. The filed
+report asked for view-only emptying, which cannot be made coherent for a NON-EMPTY
+literal: the elements still enter the group, so `h.view = [e]` would leave the view
+holding `e` and the primary holding `e` plus everything it had. A model that works only
+for the empty literal is not a model, and its output — an index silently not indexing its
+records — has no repair operation. Rows d1/d2 of the guard pin the `+=` fact the model
+rests on, so a future change to it fails here rather than silently invalidating the clear.
+
+The parent struct type comes from `lhs_parent_tp`, which the assign already holds. Reading
+it back off the base EXPRESSION only resolved a bare `Value::Var`, so a group one level
+down (`o.inner.by_k`) read as "not a group" and kept the unsafe clear — the cell that
+caught it is a7 in the guard.
+
+loft#895's exclusion is gone with it: the multi-index field was kept on the append
+specifically to avoid this use-after-free, so `=` now replaces on a group like every other
+keyed field. `895-keyed-assign-replaces.loft` row c15 pinned that append deliberately and
+is updated rather than left to flip silently.
+
+**Not fixed, filed:** removal (`coll[key] = null`) has the same two directions and neither
+is right (loft#900) — `Stores::remove_owned` takes no `secondary` flag, unlike the sibling
+`dedup_keyed` that already makes exactly this distinction. And a group's view is silently
+under-populated for three pair shapes (loft#901), which is why the `vector` + `sorted` cell
+above is vacuous.
+
 ### A field store had no type check, and two of them corrupted the heap (loft#893, 2026-08-13)
 
 A field store is the one assignment form with no variable to re-type, so

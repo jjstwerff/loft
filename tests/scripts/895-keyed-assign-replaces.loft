@@ -14,9 +14,9 @@
 // filed shape was a struct holding two keyed fields, which is only the loudest way to
 // notice — those two fields share their records by design, so filling either fills
 // both and the next assignment adds to a collection the reader believes it replaced.
-// That multi-index case is loft#898 and is NOT fixed here: its records are shared, and
-// the clear frees records rather than one route to them, so clearing one view would
-// leave the other reading freed memory. c15 pins that it is left alone deliberately.
+// That multi-index case was excluded until loft#898 gave the clear an owner for the
+// shared records; c15 covers it here, and the group's own matrix is in
+// `898-linked-group-clear.loft`.
 //
 // The controls carry the weight. A single assignment after `[]` is correct either way
 // (c1) — that is why this went unnoticed, and why every row assigns TWICE. A plain
@@ -146,15 +146,16 @@ fn main() {
   keys = ""; for e in c14 { keys += "{e.k}"; }
   assert(keys == "2", "c14 keys = {keys}, want 2");
 
-  // c15 — the multi-indexed group (loft#898) is deliberately NOT cleared here, because
-  //       the clear frees records the sibling view still points at. Pinning the append
-  //       keeps this row honest: it must be updated by whoever fixes #898, rather than
-  //       silently starting to pass.
+  // c15 — the multi-indexed group takes the replace too, now that loft#898 has given
+  //       the clear an owner: assigning through the VIEW releases that view's spine
+  //       and leaves the shared records to the primary, so the literal's two elements
+  //       replace the two already keyed rather than adding to them. This row pinned
+  //       the append (`b` = 4) while the group was excluded; the exclusion is gone.
   c15 = Group { a: [], b: [], tag: 0 };
   c15.a = [E{k:1,n:"a"}, E{k:2,n:"b"}];
   c15.b = [E{k:2,n:"b"}, E{k:1,n:"a"}];
   assert(len(c15.a) == 2, "c15 primary len = {len(c15.a)}, want 2 (#898)");
-  assert(len(c15.b) == 4, "c15 view len = {len(c15.b)}, want 4 until #898 lands");
+  assert(len(c15.b) == 2, "c15 view len = {len(c15.b)}, want 2 (#898)");
 
   println("ok");
 }

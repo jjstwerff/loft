@@ -1402,43 +1402,158 @@ use a separate collection or add after the loop"
         !accepted
     }
 
-    /// True when `to` is a keyed STRUCT FIELD that shares its records with a sibling
-    /// index — two or more keyed fields over one element type, which `types.rs`
-    /// auto-links into two VIEWS of a single record set (`Field.other_indexes`).
+    /// The `(struct type, byte offset)` of `to` when it is an
+    /// `OpGetField(base, off, ..)` read of a struct field — the pair every schema
+    /// question about that field needs. `None` for any other lvalue shape.
     ///
-    /// Such a field cannot be cleared on its own: the free walks the shared records
-    /// and the sibling is left pointing at them, so whichever view is cleared first
-    /// takes the other's elements down with it. Callers that would otherwise emit a
-    /// whole-collection replace ask here and fall back to a path that does not free
-    /// (@P305 does the same for `coll[key] = value`, which cannot maintain the
-    /// siblings either).
-    pub(crate) fn keyed_field_is_multi_indexed(&self, to: &Value) -> bool {
+    /// The struct type comes from `parent_tp`, which the assign already holds:
+    /// deriving it from the base EXPRESSION instead only resolved a bare
+    /// `Value::Var` base, so a group one level down (`o.inner.by_k`) read as "not
+    /// a group" and took the unsafe clear. The offset still comes from the call,
+    /// because it is relative to whatever struct `parent_tp` names.
+    fn field_site(&self, to: &Value, parent_tp: &Type) -> Option<(u16, u16)> {
         let Value::Call(gf_nr, gf_args) = to.unspan() else {
-            return false;
+            return None;
         };
         if self.data.def(*gf_nr).name() != "OpGetField" {
-            return false;
+            return None;
         }
         let Some(Value::Int(byte_off)) = gf_args.get(1) else {
-            return false;
+            return None;
         };
-        let Value::Var(sv) = gf_args[0].unspan() else {
-            return false;
-        };
-        let d_nr = match self.vars.tp(*sv) {
+        let d_nr = match parent_tp.base() {
             Type::Reference(d, _) => *d,
-            Type::RefVar(inner) => match &**inner {
+            Type::RefVar(inner) => match inner.base() {
                 Type::Reference(d, _) => *d,
-                _ => u32::MAX,
+                _ => return None,
             },
-            _ => u32::MAX,
+            _ => return None,
         };
-        if d_nr == u32::MAX {
-            return false;
-        }
         let struct_tp = self.data.def(d_nr).known_type();
-        self.database
-            .keyed_field_is_linked(struct_tp, *byte_off as u16)
+        if struct_tp == u16::MAX {
+            return None;
+        }
+        Some((struct_tp, *byte_off as u16))
+    }
+
+    /// The clear that must run before a whole-collection literal is built into the
+    /// keyed struct field `to` of collection type `kt` (loft#898).
+    ///
+    /// Two or more keyed fields over one element type are auto-linked by `types.rs`
+    /// into several routes to a SINGLE record set (`Field.other_indexes`). **An
+    /// operation spelled through any member acts on the group**, which is not a
+    /// choice made here — `h.view += [e]` already appends to every member, and has
+    /// since loft#843. So `=` replaces the group's whole record set whichever member
+    /// it is spelled through, and the members never disagree.
+    ///
+    /// That decides the shape: reset every VIEW's spine (its hash table, `Ordered`
+    /// slot list, or b-tree root), then clear the PRIMARY, which is the one member
+    /// that owns the records and so the one free that may happen. Views first, so no
+    /// step reads a spine naming records an earlier step already freed.
+    ///
+    /// The alternative — letting a view be emptied on its own — cannot be made
+    /// coherent for a NON-EMPTY literal: the elements must still be inserted into
+    /// the group, so `h.view = [e]` would leave the view holding `e` while the
+    /// primary holds `e` and everything it had before. A model that works only for
+    /// the empty literal is not a model, and the state it produces (an index that
+    /// silently does not index the records) has no operation that repairs it.
+    ///
+    /// An ungrouped field yields the single clear it always had.
+    fn keyed_group_clear(&mut self, to: &Value, kt: u16, parent_tp: &Type) -> Vec<Value> {
+        let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
+            return vec![self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))])];
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        if members.is_empty() {
+            return vec![self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))])];
+        }
+        let mut ops = Vec::with_capacity(members.len());
+        for (off, coll_tp, is_view) in &members {
+            if !is_view {
+                continue;
+            }
+            let field = Self::field_at(to, *off);
+            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl("OpClearKeyed", &[field, Value::Int(tp)]));
+        }
+        if let Some((off, coll_tp, _)) = members.iter().find(|(_, _, is_view)| !is_view) {
+            ops.push(self.clear_group_primary(to, *off, *coll_tp));
+        }
+        ops
+    }
+
+    /// Clear the member of a linked group that OWNS the records, picking the op its
+    /// kind needs: a plain `vector` primary takes `OpClearVector`, every keyed kind
+    /// takes `OpClearKeyed` (loft#898).
+    ///
+    /// A group's owner is whichever field was declared first, so it is as likely to
+    /// be the `vector` of the documented `vector<T>` + `hash<T[k]>` pairing as a
+    /// keyed collection — and the clear may be reached from either member's assign.
+    fn clear_group_primary(&mut self, to: &Value, off: u16, coll_tp: u16) -> Value {
+        let field = Self::field_at(to, off);
+        let is_plain_vector = matches!(
+            self.database.types[coll_tp as usize].parts,
+            Parts::Vector(_) | Parts::Array(_)
+        );
+        if is_plain_vector {
+            self.cl("OpClearVector", std::slice::from_ref(&field))
+        } else {
+            self.cl("OpClearKeyed", &[field, Value::Int(i32::from(coll_tp))])
+        }
+    }
+
+    /// The view-spine resets that must accompany freeing the records reached
+    /// through the struct field `to` (loft#898). Empty unless `to` is the PRIMARY
+    /// of a linked collection group.
+    ///
+    /// Freeing the records is only half of a primary's clear: every sibling view
+    /// still holds a spine naming them, and a view left alone reports its old
+    /// length over memory that is now free. Both the keyed clear and the VECTOR
+    /// clear need this — `vector<T>` + `hash<T[k]>` is the shape DATABASE.md
+    /// documents, and there the record holder is the vector — so it lives here
+    /// rather than in either one's branch.
+    fn keyed_sibling_view_resets(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+        let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
+            return Vec::new();
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        let mut ops = Vec::new();
+        for (off, coll_tp, is_view) in members {
+            if !is_view || off == byte_off {
+                continue;
+            }
+            let field = Self::field_at(to, off);
+            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl("OpClearKeyed", &[field, Value::Int(tp)]));
+        }
+        ops
+    }
+
+    /// `OpClearVector(to)` for a struct field, preceded by the sibling-view resets
+    /// of [`Self::keyed_sibling_view_resets`] when that vector is the record
+    /// holder of a linked collection group (loft#898).
+    ///
+    /// Every arm of the vector-field replace goes through here, so a group whose
+    /// primary is a `vector` cannot be emptied by one arm and left with live views
+    /// by another.
+    fn clear_vector_field(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+        let mut ops = self.keyed_sibling_view_resets(to, parent_tp);
+        ops.push(self.cl("OpClearVector", std::slice::from_ref(to)));
+        ops
+    }
+
+    /// `to` — an `OpGetField(var, off, struct_tp)` read — re-aimed at the sibling
+    /// field at byte offset `off`. Rebuilt by swapping the offset in the SAME call
+    /// so the base expression, its variable and the struct type all stay whatever
+    /// the original site resolved them to.
+    fn field_at(to: &Value, off: u16) -> Value {
+        let mut out = to.unspan().clone();
+        if let Value::Call(_, args) = &mut out
+            && let Some(slot) = args.get_mut(1)
+        {
+            *slot = Value::Int(i32::from(off));
+        }
+        out
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2418,13 +2533,15 @@ use a separate collection or add after the loop"
             let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
             let rhs_is_vector = matches!(s_type, Type::Vector(_, _));
             if is_empty_literal {
-                *code = Value::Insert(vec![self.cl("OpClearVector", std::slice::from_ref(to))]);
+                *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
                 return Type::Void;
             }
             if is_nonempty_literal {
-                let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                let clear = self.clear_vector_field(to, &lhs_parent_tp);
                 if let Value::Insert(ls) = code {
-                    ls.insert(0, clear);
+                    for (i, op) in clear.into_iter().enumerate() {
+                        ls.insert(i, op);
+                    }
                 }
                 return Type::Void;
             }
@@ -2461,9 +2578,10 @@ use a separate collection or add after the loop"
                     Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()
                 );
                 if owned_var_rhs {
-                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let mut ops = self.clear_vector_field(to, &lhs_parent_tp);
                     let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
-                    *code = Value::Insert(vec![clear, append]);
+                    ops.push(append);
+                    *code = Value::Insert(ops);
                 } else if matches!(code.unspan(), Value::Var(_)) {
                     // Borrowed Var: a synthetic `Set(tmp, Var(w))` would alias
                     // again (it bypasses the parse-time vector deep-copy
@@ -2477,9 +2595,12 @@ use a separate collection or add after the loop"
                         "OpAppendVector",
                         &[Value::Var(tmp), rhs_saved, rec_tp.clone()],
                     );
-                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let clear = self.clear_vector_field(to, &lhs_parent_tp);
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
-                    *code = Value::Insert(vec![init_tmp, fill_tmp, clear, append]);
+                    let mut ops = vec![init_tmp, fill_tmp];
+                    ops.extend(clear);
+                    ops.push(append);
+                    *code = Value::Insert(ops);
                 } else {
                     let rhs_saved = code.clone();
                     // Dep-free, like the borrowed-Var arm above: the temp holds the
@@ -2493,9 +2614,12 @@ use a separate collection or add after the loop"
                     let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
                     let set_tmp = v_set(tmp, rhs_saved);
-                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let clear = self.clear_vector_field(to, &lhs_parent_tp);
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
-                    *code = Value::Insert(vec![set_tmp, clear, append]);
+                    let mut ops = vec![set_tmp];
+                    ops.extend(clear);
+                    ops.push(append);
+                    *code = Value::Insert(ops);
                 }
                 return Type::Void;
             }
@@ -2518,25 +2642,18 @@ use a separate collection or add after the loop"
         // silently meant `+=`: assigning twice left four elements rather than
         // the two just written.
         //
-        // A MULTI-INDEXED field is excluded from the NEW half and keeps that
-        // append (loft#898).  Its records are shared with a sibling view, and
-        // `OpClearKeyed` frees the records rather than just this route to them
-        // — so clearing here would leave the sibling reading freed memory,
-        // trading a wrong length for a use-after-free.  Replacing such a
-        // group's contents needs a clear that drops one index without freeing
-        // what the other still holds, which does not exist yet.  The empty
-        // literal keeps the clear it has always emitted, exclusion or not:
-        // making that one conditional would turn `s.h = []` back into the
-        // silent no-op @P307 fixed.
+        // loft#898 — a MULTI-INDEXED field is no longer excluded.  Its records are
+        // shared with a sibling view, so the clear used to free what the sibling
+        // still held and the exclusion traded that use-after-free for an append
+        // (`=` silently meaning `+=` on a group).  `keyed_group_clear` now emits a
+        // clear that releases the records exactly once, through their owner, and
+        // resets the other routes to them — so the group takes the same replace
+        // every other keyed field gets.
         let keyed_field_replace = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && self.is_field(to)
-            && match &*code {
-                Value::Insert(ls) if ls.is_empty() => true,
-                Value::Insert(_) => !self.keyed_field_is_multi_indexed(to),
-                _ => false,
-            };
+            && matches!(&*code, Value::Insert(_));
         if keyed_field_replace {
             let kt = match &f_type {
                 Type::Sorted(td, key, _) => {
@@ -2554,9 +2671,11 @@ use a separate collection or add after the loop"
                 _ => None,
             };
             if let Some(kt) = kt {
-                let clear = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
+                let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
                 if let Value::Insert(ls) = code {
-                    ls.insert(0, clear);
+                    for (i, op) in clear.into_iter().enumerate() {
+                        ls.insert(i, op);
+                    }
                 }
                 return Type::Void;
             }

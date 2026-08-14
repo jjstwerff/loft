@@ -957,9 +957,13 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
 /// `s.database.remove_claims`).  Unlike the keyed-LOCAL clear (OpDatabase,
 /// which resets a dedicated store), a field's collection lives as a claim
 /// inside its struct's store, so `remove_claims` is the in-place free.
+///
+/// loft#898 — `tp`'s `0x8000` bit marks a SECONDARY VIEW of a linked group;
+/// `remove_claims_keyed` is the shared decode, so this stays the twin of the
+/// interpreter's `#rust` template rather than a second reading of the bit.
 pub fn OpClearKeyed(cell: &std::cell::UnsafeCell<Stores>, dest: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    stores.remove_claims(&dest, tp as u16);
+    stores.remove_claims_keyed(&dest, tp as u16);
 }
 
 /// @P305 — `coll[key] = value` insert-or-replace into a keyed collection.

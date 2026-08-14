@@ -1317,8 +1317,12 @@ fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // pointer, leaving an empty collection a later `+= [..]` re-initialises.  The
 // keyed-LOCAL clear (`s = []`) goes through OpDatabase (@P302); a field is a
 // claim INSIDE its struct's store, so it needs this in-place free instead.
+//
+// loft#898 — `tp`'s 0x8000 bit marks the field a SECONDARY VIEW of a linked
+// group, whose records belong to a sibling: the release then drops this route
+// (the table / slot list / tree root) and leaves the records to their owner.
 fn OpClearKeyed(dest: reference, tp: const u16);
-#rust"s.database.remove_claims(&@dest, @tp);"
+#rust"s.database.remove_claims_keyed(&@dest, @tp);"
 // @P305 — `coll[key] = value` insert-or-replace into a keyed collection
 // (hash/sorted/index), deduped by value's key.  Updates an existing key
 // in place OR inserts a new one (the plain `OpCopyRecord` lowering could

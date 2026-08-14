@@ -208,10 +208,42 @@ code does; you only saw it if you assigned the same collection twice.
 The loudest version was a struct holding **two** keyed collections of the same element
 type. Those two fields are deliberately two views of one set of records, so filling either
 one fills both — and the second assignment then added to a collection you thought you had
-just replaced, giving a length of 4 for two elements. That case is not fixed yet and still
-adds: clearing one view frees records the other one is still using, so the fix there needs
-an answer to who owns the shared records ([#898](https://github.com/loft-lang/loft/issues/898)).
-Until then, give each keyed collection its own element type or its own struct.
+just replaced, giving a length of 4 for two elements. That case is fixed too, in the same
+release; see below.
+
+### Two keyed collections over one element type no longer destroy each other's records
+
+A struct can hold several keyed collections over the same element type, and they are
+deliberately several routes to ONE set of records — filling either fills both. Emptying
+either one, however, used to free the shared records, so the other was left reporting its
+old length over memory that had already been given back:
+
+```loft
+struct H { keyed: hash<E[k]>, ordered: sorted<E[k]> }
+h.keyed = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+h.ordered = [];                     // empty the other view
+for e in h.keyed { … }              // was 4294967296:null — freed memory
+```
+
+The records now have an owner. The first-declared collection holds them; every later one
+over the same element type is a view of them, and only the owner's records are ever freed.
+
+Assigning to any of them replaces the whole set, so they always agree — which is the same
+rule adding already followed: `h.by_k += [e]` has always added to every collection in the
+group, not just the one you named. So `h.by_k = []` empties the set, and
+`h.by_k = [e]` makes the set exactly `[e]`. The alternative — letting you empty one view
+on its own — cannot work for a non-empty list, because the elements still go into the
+group: you would be left with an index that does not index most of the records it is over,
+and nothing to rebuild it with.
+
+This is also what the documented `vector<T>` + `hash<T[k]>` pairing needed — there the
+vector is the owner — and it holds for three or more collections, and for a group nested
+inside another struct.
+
+One related case is **not** fixed: removing a single entry (`coll[key] = null`) from such a
+group still gets it wrong in both directions
+([#900](https://github.com/loft-lang/loft/issues/900)). Empty and refill the whole
+collection, or give each one its own element type, until that lands.
 
 ### Reading a file straight into a struct field no longer leaks
 

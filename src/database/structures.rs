@@ -254,6 +254,56 @@ impl Stores {
         false
     }
 
+    /// loft#898 — the members of the linked collection group the keyed field at
+    /// `byte_off` belongs to, as `(byte_off, collection_tp, is_view)` per member,
+    /// INCLUDING the field itself. Empty when the field is not in a group.
+    ///
+    /// Ordering a clear needs three facts the parser cannot read off the
+    /// expression: which member owns the records, where each sibling sits in the
+    /// struct, and what type each one is. `types.rs` records all three — a
+    /// leading `u16::MAX` in `other_indexes` marks a VIEW, the rest of the list
+    /// names the other members by field number — so this reads them out in one
+    /// place rather than having the caller re-walk the schema per question.
+    #[must_use]
+    pub fn keyed_group_members(&self, struct_tp: u16, byte_off: u16) -> Vec<(u16, u16, bool)> {
+        if (struct_tp as usize) >= self.types.len() {
+            return Vec::new();
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+            &self.types[struct_tp as usize].parts
+        else {
+            return Vec::new();
+        };
+        let Some(me) = fields.iter().position(|f| f.position == byte_off) else {
+            return Vec::new();
+        };
+        if fields[me].other_indexes.is_empty() {
+            return Vec::new();
+        }
+        // The list on the field names the OTHER members; add itself to get the
+        // whole group. A `u16::MAX` entry is the view MARKER, not a field number.
+        let mut nrs: Vec<u16> = vec![me as u16];
+        nrs.extend(
+            fields[me]
+                .other_indexes
+                .iter()
+                .copied()
+                .filter(|n| *n != u16::MAX),
+        );
+        nrs.sort_unstable();
+        nrs.dedup();
+        nrs.iter()
+            .filter_map(|n| {
+                let f = fields.get(*n as usize)?;
+                Some((
+                    f.position,
+                    f.content,
+                    f.other_indexes.first() == Some(&u16::MAX),
+                ))
+            })
+            .collect()
+    }
+
     pub(super) fn field_ref(&self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
         if field == u16::MAX {
             *data

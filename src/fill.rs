@@ -2304,7 +2304,7 @@ fn replace_keyed(s: &mut State) {
 fn clear_keyed(s: &mut State) {
     let v_tp = s.code::<u16>();
     let v_dest = *s.get_stack::<DbRef>();
-    s.database.remove_claims(&v_dest, v_tp);
+    s.database.remove_claims_keyed(&v_dest, v_tp);
 }
 
 fn set_keyed(s: &mut State) {

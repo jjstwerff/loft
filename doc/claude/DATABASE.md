@@ -929,6 +929,49 @@ The layout is pinned by `tests/layout_golden.rs::placement_contract_is_pinned`; 
 any of it without bumping `placement::HASH` would let an older store be misread instead of
 refused ([`src/placement.rs`](../../src/placement.rs)).
 
+### Clearing one member of a linked group (loft#898)
+
+Two or more keyed collections over one element type in one struct are auto-linked into
+several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
+fills both. **The records belong to exactly one member.** `types.rs` decides which when it
+builds the group: the first-declared member is the PRIMARY, and every later one gets a
+leading `u16::MAX` on its `other_indexes` marking it a VIEW. That marker is the only place
+the ownership fact lives, and three readers now share it — the JSON default-init, the
+struct teardown walk, and the clear.
+
+Each member therefore releases only what it owns:
+
+| Member | What it contributes to a clear |
+|---|---|
+| a VIEW | its own SPINE — the hash table record, the `Ordered` slot list, or (for `index`) nothing at all, since a b-tree's nodes ARE the element records and zeroing the root is the whole teardown. Never a record. |
+| the PRIMARY | the records, once. |
+
+**A clear spelled through ANY member empties the group**: every view's spine is reset and
+the primary is cleared, so the members never disagree. That is not a choice the clear
+makes — an operation spelled through a view already acts on the group, since `h.view +=
+[e]` appends to every member (loft#843). Letting a view be emptied alone cannot be made
+coherent for a NON-EMPTY literal: the elements still enter the group, so `h.view = [e]`
+would leave the view holding `e` while the primary holds `e` plus everything it had, and
+nothing repairs an index that silently does not index its records.
+
+Both directions were broken and only one was filed: every member freed the shared
+records, so whichever was cleared first took the other's elements down with it (a key
+reading `4294967296`, a text reading `null`), and clearing the primary left the views
+naming freed records. The plumbing is a `0x8000` bit on
+`OpClearKeyed`'s `tp` operand — the same convention `OpSetKeyed`/`OpReplaceKeyed` already
+use — set by the parser, which is the only layer that can ask the schema. Both backends
+decode it in ONE place, `Stores::remove_claims_keyed`, so they cannot drift.
+`Stores::keyed_group_members` is the single schema query behind all of it.
+
+The clear is emitted by the KEYED assign and by the VECTOR assign, because the shape
+DATABASE.md documents by name — `vector<T>` + `hash<T[k]>` — has the vector as its record
+holder. Both route through `Parser::keyed_sibling_view_resets`.
+
+**Not covered, and filed separately: REMOVAL.** `coll[key] = null` through a group has the
+same two directions and neither is right — removing through a view frees the record the
+primary still holds, and removing through the primary leaves the view naming it.
+`Stores::remove_owned` takes no `secondary` flag, unlike its sibling `dedup_keyed`.
+
 ### Probing and Load Factor
 
 Collision resolution is **linear probing**: on collision, advance slot index by 1 (wrapping). The load factor threshold is:
@@ -1292,6 +1335,7 @@ later as a crash or as silent corruption. loft#720 was three such omissions of
 | The `is_radix` scratch selector (`parser/collections.rs`) | `for x in coll` takes the HASH builder — a bucket walk over a tree. `trie` hit this: the site names every keyed kind, so the sweep had counted it as mechanical and handled. |
 | `emit_field` (`generation/mod.rs`) | A keyed STRUCT FIELD's type id is never registered on `--native`, and its record reads as a struct with no fields (`field_type` indexes an empty list). Local-only vars still work, so it looks kind-specific rather than field-specific. |
 | `Iterated` (`database/descriptor.rs`) and its readers | The layout descriptor, `type_of(…).collection` and the lazy-store SQL deriver all match `Iterated` exhaustively, so these are compile errors — EXCEPT `ffi_deliver::collect_keyed`, which is `#[cfg(target_arch = "wasm32")]` and therefore dead on the host that compiles the audit, and `rewrite_iterated`, which closes with `_ => continue`. Check the wasm target explicitly. |
+| `Stores::borrowed_spine` (`database/allocation.rs`) | **A use-after-free, or a leak.** It answers what a SECONDARY VIEW of a linked group owns (loft#898). A kind missing from it falls through to the OWNING walk and frees the records its primary holds; a kind wrongly added with no spine leaks the block it should release. It rides the same per-`Parts` match as `for_each_owned_child` for exactly this reason — the spine a view drops is the `container_rec`/`extra_recs` that walk already names. |
 | `Stores::unservable_kind` (`database/allocation.rs`) and `collection_type_of_store`'s `is_keyed` | **A binding that reports itself healthy and answers nothing.** The paged loader serves a `hash`, a `trie` and a `spatial`, so every other kind must be refused at `store_bind_lazy`; a kind missing from the check binds, answers `null` at every lookup, and leaves `store_lazy_error` empty — whose documented meaning is "reachable, genuinely no such key" (loft#802). The refusal is a STATIC property of the pair, so it costs no I/O to give and there is no reason to defer it to a lookup. The list runs BOTH ways: a kind that becomes servable and is not removed keeps refusing a binding that would now work, which is why @PLN134 moved the trie out of it in the same change that made it pageable, and @PLN136 the spatial. |
 
 Two habits that make the class visible instead of latent:
