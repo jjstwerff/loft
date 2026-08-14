@@ -292,6 +292,22 @@ and on a `sorted` collection that shares its records, `--native` used to remove 
 all while the interpreter removed correctly. `v.remove(i)` had the same
 wrong-unit problem and is fixed with it.
 
+### Walking a `sorted` collection backwards, or over a range, when it shares its records
+
+Three ways of walking a `sorted<T[k]>` did not work once a keyed collection over the same
+element type existed anywhere in the program — which changes how the collection is stored:
+
+```loft
+for e in rev(s.a)   { … }       // walked FORWARD, silently
+for e in s.a[2..4]  { … }       // visited every element, all values zero
+for e in rev(s.a[2..4]) { … }   // crashed
+```
+
+All three now answer what the same loop answers on a collection that does *not* share its
+records — which is the point: how a collection is stored is not something you asked for,
+so it must not change what your loop means. `index` collections were unaffected and are
+unchanged.
+
 ### Two `index` collections over one element type now say so, instead of crashing later
 
 Declaring two `index` fields with the same key over the same element type in one struct
