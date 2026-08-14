@@ -1734,6 +1734,26 @@ pub(crate) fn run_tests(
     }
 
     let total = total_pass + total_fail;
+    // A `::selector` that matched NO test function must not report success. The
+    // per-file filter leaves such a file with nothing to run and skips it silently,
+    // so a mistyped or renamed test name came out as `ok. 0 passed; 0 files` — a
+    // green that means nothing, and the shape a CI job reads as "the tests I asked
+    // for passed". Only an explicit selector is checked: a directory with no tests
+    // in it is a different, legitimate zero.
+    if total_files == 0
+        && total_fail == 0
+        && let Some(ref filter) = fn_filter
+    {
+        println!(
+            "loft: no test function named {} in '{path_part}'",
+            filter
+                .iter()
+                .map(|f| format!("'{f}'"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        );
+        return 1;
+    }
     if total_fail == 0 {
         println!(
             "test result: ok. {total_pass} passed; {total_files} file{}  {scope}",

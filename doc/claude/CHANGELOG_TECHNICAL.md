@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `loft test` refused the path it prints (loft#913, 2026-08-14)
+
+`loft test` reports its files as `tests/<name>.loft` and rejected that exact string: the argument
+was joined onto `tests/` unconditionally, so pasting a failing line back asked for
+`tests/tests/<name>.loft`. Copying the path out of the output is the obvious way to iterate on one
+file, and the tool not accepting its own output is re-discovered by every new user rather than
+learned once.
+
+Measuring every spelling before fixing turned up a second break the report did not mention:
+`loft test draw::test_foo` — the selector form the code's own comment documents — resolved to
+`tests/draw::test_foo`, whose path half has no extension and matches no file. The `.loft` was
+appended to the whole argument rather than to the PATH half, so the documented form only worked
+if the caller also wrote `.loft`.
+
+`resolve_test_target` now splits the `::selector` off first, supplies the extension on the path
+half, and joins `tests/` only when the path is not already under it (nor absolute, nor reaching
+out with `..`). The doubled path could never exist, so every spelling that worked before resolves
+to the same file; four spellings that used to be errors now work. Unit tests in `src/main.rs`.
+
+**And the accidental guard it removed is replaced by a real one.** `loft test good::test_missing`
+used to fail — for the wrong reason, on the mangled path — while the correctly-spelled
+`loft test good.loft::test_missing` reported `ok. 0 passed; 0 files` and exited 0, on the published
+release too. A filter that matches nothing left every file empty and each was skipped silently. A
+selector naming no test function is now an error: it is the shape a CI job reads as "the tests I
+asked for passed". Only an explicit selector is checked — a directory with no tests is a different,
+legitimate zero. (A brace list with SOME matches still runs those and reports them; only a
+completely unmatched selector fails.)
+
 ### An empty-text assignment pushed a value nothing consumed (loft#908, 2026-08-14)
 
 Reported as "a function that reads a MISSING file and returns a struct double-frees and SIGABRTs

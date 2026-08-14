@@ -6762,20 +6762,9 @@ fn main() {
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
-            let mut test_target = "tests".to_string();
+            let mut test_target = TESTS_DIR.to_string();
             if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                // `loft test draw` → tests/draw.loft
-                // `loft test draw::test_foo` → tests/draw.loft::test_foo
-                let arg = &argv[i];
-                if arg.contains("::")
-                    || std::path::Path::new(arg.as_str())
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
-                {
-                    test_target = format!("tests/{arg}");
-                } else {
-                    test_target = format!("tests/{arg}.loft");
-                }
+                test_target = resolve_test_target(&argv[i]);
                 i += 1;
             }
             // Read loft.toml to find src/ directory, dependency paths, and native libs.
@@ -10616,9 +10605,125 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     }
 }
 
+/// Where `loft test` looks for a package's tests, and the prefix it prints.
+const TESTS_DIR: &str = "tests";
+
+/// Resolve the `[target]` of `loft test [target]` to a `--tests` argument.
+///
+/// The target names a test FILE, optionally with a `::selector` suffix
+/// (`::name`, `::{a,b}`), and every spelling of that file is accepted: bare
+/// (`draw`), with the extension (`draw.loft`), and — loft#913 — **as printed**
+/// (`tests/draw.loft`). `loft test` reports its files with the `tests/` prefix,
+/// so pasting a failing line back is the obvious way to iterate on one file; it
+/// used to be joined onto `tests/` a second time and rejected as
+/// `tests/tests/draw.loft`. Since that doubled path can never exist, accepting
+/// the prefix cannot change what any working invocation resolves to.
+///
+/// The `.loft` extension is supplied on the PATH half, not the whole argument —
+/// `draw::test_foo` used to become `tests/draw::test_foo`, whose path half
+/// (`tests/draw`) has no extension and does not exist, so the documented
+/// selector form only worked when the caller also wrote `.loft`.
+fn resolve_test_target(arg: &str) -> String {
+    let (path, selector) = match arg.split_once("::") {
+        Some((p, s)) => (p, Some(s)),
+        None => (arg, None),
+    };
+    // A path already under the tests directory (or absolute, or reaching out of
+    // the package with `..`) is used as given — only a bare test NAME is joined.
+    // Read the leading COMPONENT rather than the leading text: `components()`
+    // drops a `./` prefix and splits on the platform's separator, so this is
+    // right on Windows without a backslash rewrite (which would corrupt a Unix
+    // filename that legitimately contains one — `portable_path`'s gate).
+    let as_path = std::path::Path::new(path);
+    // `components()` keeps a leading `.` (it only drops interior ones), so skip
+    // CurDir to see what the path really starts with.
+    let first = as_path
+        .components()
+        .find(|c| !matches!(c, std::path::Component::CurDir));
+    let rooted = as_path.is_absolute()
+        || matches!(first, Some(std::path::Component::ParentDir))
+        || first.is_some_and(|c| c.as_os_str() == TESTS_DIR);
+    let mut out = String::new();
+    if !rooted {
+        out.push_str(TESTS_DIR);
+        out.push('/');
+    }
+    out.push_str(path);
+    if !std::path::Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+    {
+        out.push_str(".loft");
+    }
+    if let Some(sel) = selector {
+        out.push_str("::");
+        out.push_str(sel);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// loft#913 — every spelling of the same test file resolves to the same
+    /// `--tests` argument, INCLUDING the `tests/…` form `loft test` itself prints.
+    /// The doubled path it used to produce (`tests/tests/good.loft`) can never
+    /// exist, so these are all additions, not changes.
+    #[test]
+    fn a_test_target_resolves_the_same_however_it_is_spelled() {
+        for spelling in ["good", "good.loft", "tests/good.loft", "tests/good"] {
+            assert_eq!(
+                resolve_test_target(spelling),
+                "tests/good.loft",
+                "spelling {spelling:?}"
+            );
+        }
+        // A `./` prefix is recognised as already-rooted and passed through rather
+        // than joined — the string keeps the prefix, which names the same file.
+        assert_eq!(
+            resolve_test_target("./tests/good.loft"),
+            "./tests/good.loft"
+        );
+    }
+
+    /// The `::selector` suffix survives, and the extension is supplied on the PATH
+    /// half — `draw::test_foo` used to resolve to `tests/draw::test_foo`, whose path
+    /// half has no extension and matches no file.
+    #[test]
+    fn a_selector_keeps_its_suffix_and_still_gets_the_extension() {
+        assert_eq!(
+            resolve_test_target("good::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(
+            resolve_test_target("good.loft::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(
+            resolve_test_target("tests/good.loft::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(resolve_test_target("good::{a,b}"), "tests/good.loft::{a,b}");
+    }
+
+    /// A path that reaches outside the package is used as given: joining it under
+    /// `tests/` would silently look somewhere the caller did not name.
+    #[test]
+    fn a_path_outside_the_package_is_not_joined() {
+        assert_eq!(
+            resolve_test_target("../other/tests/x.loft"),
+            "../other/tests/x.loft"
+        );
+        assert_eq!(resolve_test_target("/abs/x.loft"), "/abs/x.loft");
+    }
+
+    /// A test file whose own name starts with `tests` is a NAME, not a directory —
+    /// only the `tests` component itself counts as already-rooted.
+    #[test]
+    fn a_name_beginning_with_tests_is_still_a_name() {
+        assert_eq!(resolve_test_target("testsuite"), "tests/testsuite.loft");
+    }
 
     // The crypto bridge manifest verbatim (loft-libs-core crypto/wasm/Cargo.toml,
     // as published in crypto 0.3.3): one `loft` path dep + the dalek/RustCrypto stack.

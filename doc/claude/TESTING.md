@@ -1797,6 +1797,12 @@ loft --tests 'file.loft::{a,b}'  # run specific test functions
 loft --tests --no-warnings    # suppress warning output
 ```
 
+Inside a package, `loft test [target]` runs `tests/` and takes the file **however you
+spell it** — `loft test draw`, `loft test draw.loft` and `loft test tests/draw.loft`
+are one target, so a path pasted out of the runner's own output works (loft#913).  A
+`::selector` combines with any of them (`loft test tests/draw.loft::test_foo`), and a
+selector that names no test function is an ERROR, not a `0 passed` success.
+
 The runner:
 1. Recursively discovers `.loft` files under the given directory (default: `.`).
    When given a single `.loft` file, runs only that file.
