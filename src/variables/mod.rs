@@ -1910,14 +1910,35 @@ impl Function {
         self.arm_consumed.contains(&var_nr)
     }
 
-    /// Remove a work-ref from the preamble registry after the one-buffer
-    /// binding substituted it out of the IR (`ref_return`'s chain leg).
-    /// Without this the orphan still gets a `Set(v, Null)` preamble and a
-    /// scope-exit free; the presence of FREES then flips the tail-`If`
-    /// emission into the discarded-statement + `Return(Null)` shape that
-    /// returns the null sentinel on native (the @P378 trap).
+    /// Retire a work-ref the one-buffer binding substituted out of the IR
+    /// (`ref_return`'s chain leg): every use now names the return buffer, so the
+    /// variable names no storage at all.  Without this the orphan still gets a
+    /// `Set(v, Null)` preamble and a scope-exit free; the presence of FREES then
+    /// flips the tail-`If` emission into the discarded-statement + `Return(Null)`
+    /// shape that returns the null sentinel on native (the @P378 trap).
+    ///
+    /// Dropping it from the registry is not the whole retirement, because a
+    /// producer other than the bare-call site can have minted it: the `inline ref
+    /// copy` projection materialiser marks its ref `inline_ref` as well, and the
+    /// null-init for THOSE is inserted from a separate sweep that has already run by
+    /// the time a return site substitutes.  `skip_free` is the flag that actually
+    /// says "names no storage" — it is what suppresses a free and what tells
+    /// `check_ref_leaks` this is a dead declaration rather than a leaked store.
+    /// Without it, a `??` over a field reached through a call tripped that assert
+    /// under `-C debug-assertions=on` (loft#906): the two parser passes materialise
+    /// such a chain at DIFFERENT sites, so pass 2's ref is always the one substituted
+    /// out, and it stayed declared, unassigned and unfreed.  The `= null` the earlier
+    /// sweep already emitted for it stays behind as a dead store.
+    ///
+    /// `skip_free` cannot mask a real leak here, and that rests on something the
+    /// compiler checks rather than on care: `substitute_work_ref` lists every `Value`
+    /// variant explicitly (no wildcard arm), so the rewrite is TOTAL — a surviving use
+    /// of `var_nr` is not possible, and a variable with no uses holds no store.
     pub fn unregister_work_ref(&mut self, var_nr: u16) {
         self.work_refs.remove(&var_nr);
+        if (var_nr as usize) < self.variables.len() {
+            self.set_skip_free(var_nr);
+        }
     }
 
     pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
