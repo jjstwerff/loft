@@ -2135,15 +2135,10 @@ fn cast_vector_from_text(s: &mut State) {
 }
 
 fn remove_vector(s: &mut State) {
-    let v_size = s.code::<u16>();
+    let v_tp = s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::remove_vector(
-        &v_r,
-        u32::from(v_size),
-        v_index,
-        &mut s.database.allocations,
-    );
+    let new_value = s.database.remove_vector_at(&v_r, v_tp, v_index);
     s.put_stack(new_value);
 }
 

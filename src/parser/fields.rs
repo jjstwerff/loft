@@ -106,7 +106,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let e_size = i32::from(self.database.size(self.data.def(enr).known_type()));
+        let e_tp = i32::from(self.data.def(enr).known_type());
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
@@ -166,7 +166,7 @@ impl Parser {
             }
         }
         let dnr = self.data.type_def_nr(&t);
-        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_size) {
+        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp) {
             return Type::Void;
         }
         let fnr = self.data.attr(dnr, &field);
@@ -709,7 +709,7 @@ impl Parser {
         None
     }
 
-    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_size: i32) -> bool {
+    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_tp: i32) -> bool {
         if field == "remove" {
             self.lexer.token("(");
             let (tps, ls) = self.parse_parameters();
@@ -718,7 +718,7 @@ impl Parser {
             if tps.len() != 1 || !self.convert(&mut cd, &tps[0], &I32) {
                 diagnostic!(self.lexer, Level::Error, "Invalid index in remove");
             }
-            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_size), cd]);
+            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
             true
         } else {
             false
@@ -2308,6 +2308,9 @@ impl Parser {
         }
         let mut on;
         let arg;
+        // The element type, for the arms whose `arg` is a WIDTH rather than a type —
+        // `e#remove` needs the type to free what an element owns.
+        let mut elem_tp = u16::MAX;
         match self.database.types[known as usize].parts {
             Parts::Index(_, _, _) => {
                 on = 1;
@@ -2316,10 +2319,12 @@ impl Parser {
             Parts::Sorted(tp, _) => {
                 on = 2;
                 arg = self.database.size(tp);
+                elem_tp = tp;
             }
-            Parts::Ordered(_, _) => {
+            Parts::Ordered(tp, _) => {
                 on = 3;
                 arg = 4;
+                elem_tp = tp;
             }
             Parts::Hash(_, _) | Parts::Radix(_, _) | Parts::Trie(_, _) => {
                 // Route hash/radix iteration through the Ordered code as on=4.
@@ -2361,10 +2366,19 @@ impl Parser {
         ls.push(code.clone());
         ls.push(Value::Int(i32::from(on)));
         ls.push(Value::Int(i32::from(arg)));
-        // For Index (on & 63 == 1): store the type index so OpRemove can call
-        // database.fields(tp) and database.remove(..., tp) with the correct type.
-        // For all other collection types, arg IS the db_tp used by OpRemove.
-        let loop_db_tp = if on & 63 == 1 { known } else { arg };
+        // What `OpRemove` is handed, which is NOT always `arg`:
+        //  - Index (on 1): the COLLECTION type, so it can reach `fields()` and
+        //    `remove_owned(..., tp)`;
+        //  - Sorted / Ordered (on 2 / 3): the ELEMENT type, because removing an
+        //    element has to free what it owns and a width cannot say what that is
+        //    (loft#903).  `arg` stays the STRIDE the stepper needs.
+        //  - the rest: `arg`, which `#remove` never reads (hash iteration is
+        //    rejected at the `#remove` site).
+        let loop_db_tp = match on & 63 {
+            1 => known,
+            2 | 3 => elem_tp,
+            _ => arg,
+        };
         self.vars.set_loop(on, loop_db_tp, code);
         if add_keys {
             // loft#689 — the descriptor list is BAKED into the operand here, but the

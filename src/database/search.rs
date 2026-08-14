@@ -717,6 +717,62 @@ impl Stores {
         }
     }
 
+    /// Remove the element at `index` from a vector-shaped container **and
+    /// release what it owned** — the by-INDEX form, which is how a loop cursor
+    /// (`e#remove`) and `v.remove(i)` both reach an element.
+    ///
+    /// [`Stores::remove_owned`] is the by-RECORD form a key lookup reaches; this
+    /// is its twin for the containers that are addressed by position.
+    ///
+    /// `elem_tp` is the ELEMENT type, and its `linked` flag is the schema's own
+    /// answer to which of the two layouts the container has:
+    ///
+    /// * not linked — a `vector`/`sorted` holds its elements INLINE, so a slot is
+    ///   as wide as an element and there is no separate record to free;
+    /// * linked — an `array`/`ordered` (what a `vector`/`sorted` becomes as soon
+    ///   as any keyed collection over the element type exists) holds 4-byte
+    ///   record ids, so a slot is FOUR bytes and the record each one names is the
+    ///   element's own.
+    ///
+    /// Handing the element's width to [`vector::remove_vector`] for the linked
+    /// layout shifted a span several slots long, so removing one element removed
+    /// its neighbour with it — and nothing freed the record (loft#903).
+    pub fn remove_vector_at(&mut self, data: &DbRef, elem_tp: u16, index: i64) -> bool {
+        if !self.is_linked(elem_tp) {
+            let size = u32::from(self.size(elem_tp));
+            return vector::remove_vector(data, size, index, &mut self.allocations);
+        }
+        if data.is_null() || index < 0 {
+            return false;
+        }
+        let vec_rec = self.store(data).get_u32_raw(data.rec, data.pos);
+        if vec_rec == 0 {
+            return false;
+        }
+        let len = self.store(data).get_u32_raw(vec_rec, 4);
+        let Ok(slot) = u32::try_from(index) else {
+            return false;
+        };
+        if slot >= len {
+            return false;
+        }
+        let rec = self.store(data).get_u32_raw(vec_rec, 8 + slot * 4);
+        // Unlink first, release the record's claims second, delete it last — the
+        // order [`Stores::remove_owned`] uses, and for the same reason: the walk
+        // reads the record's own fields, so nothing may have freed them yet.
+        let shifted = vector::remove_vector(data, 4, index, &mut self.allocations);
+        if rec != 0 {
+            let elem = DbRef {
+                store_nr: data.store_nr,
+                rec,
+                pos: RECORD_PAYLOAD,
+            };
+            self.remove_claims(&elem, elem_tp);
+            self.store_mut(data).delete(rec);
+        }
+        shifted
+    }
+
     /**
     Remove a specific record from a structure.
 

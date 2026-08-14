@@ -2356,14 +2356,16 @@ pub fn OpRemove<S: IterState>(
     let reverse = (on & 64) != 0;
     match on & 63 {
         0 => {
-            // plain vector: arg is the element type index.
+            // vector / array: `arg` is the element type index, and
+            // `remove_vector_at` reads the layout off it.
             // Use the i64-plain accessors so the generated code, which
             // drives `var_INDEX` as a raw i64 counter (`var += 1`),
             // sees a properly sign-extended value after `set_cur(-1)`.
-            let elem_size = u32::from(stores.size(arg as u16));
             let cur_i64 = state.get_cur_i64_plain();
-            let n = if reverse { cur_i64 + 1 } else { cur_i64 - 1 };
-            vector::remove_vector(&data, elem_size, cur_i64, &mut stores.allocations);
+            // Direction decides the rewind — see the twin in `State::remove`
+            // (`src/state/io.rs`), and keep the two in step.
+            let n = if reverse { cur_i64 } else { cur_i64 - 1 };
+            stores.remove_vector_at(&data, arg as u16, cur_i64);
             state.set_cur_i64_plain(n);
         }
         1 => {
@@ -2406,12 +2408,26 @@ pub fn OpRemove<S: IterState>(
             }
         }
         2 => {
-            // sorted vector: arg is the element size in bytes
+            // sorted: inline elements, `arg` is the element type; `cur` is an index
             if cur < 0 {
                 return;
             }
-            let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, arg as u32, i64::from(cur), &mut stores.allocations);
+            let n = if reverse { cur } else { cur - 1 };
+            stores.remove_vector_at(&data, arg as u16, i64::from(cur));
+            state.set_cur(n);
+        }
+        3 => {
+            // ordered: 4-byte record-id slots, `arg` is the element type; `cur` is a
+            // BYTE offset into the slot vector (8, 12, ...).  Without this arm the
+            // native backend silently removed NOTHING while the interpreter removed
+            // correctly — one `e#remove` spelling, two answers (loft#903).
+            if cur < 8 {
+                return;
+            }
+            // The rewind follows the STEPPER, not the `reverse` bit — see the twin in
+            // `State::remove` (`src/state/io.rs`), and keep the two in step.
+            let n = cur - 4;
+            stores.remove_vector_at(&data, arg as u16, i64::from((cur - 8) / 4));
             state.set_cur(n);
         }
         _ => {}

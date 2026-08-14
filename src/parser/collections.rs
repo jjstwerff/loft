@@ -506,8 +506,15 @@ impl Parser {
                     };
                     let next =
                         v_block(vec![v_set(iter_var, step), ref_expr], block_tp, "iter next");
-                    self.vars
-                        .set_loop(0, self.data.def(vec_tp).known_type(), code);
+                    // The reverse bit belongs in `on` even though this loop steps its
+                    // own counter: `e#remove` reads it to decide which way to rewind
+                    // the cursor, and without it a `rev()` loop rewound FORWARD and
+                    // skipped the next element (loft#903).
+                    self.vars.set_loop(
+                        if reverse { 64 } else { 0 },
+                        self.data.def(vec_tp).known_type(),
+                        code,
+                    );
                     if reverse {
                         // Start at length; the first step gives len-1 (last element).
                         *code = v_set(
@@ -733,6 +740,47 @@ impl Parser {
             &[coll.clone(), Value::Var(found), Value::Int(db_tp)],
         ));
         Some(Value::Insert(ops))
+    }
+
+    /// `e#remove` where the iterated collection is one member of a LINKED
+    /// COLLECTION GROUP: the element leaves every member, and is freed exactly
+    /// once (loft#903).  Yields `remove` unchanged when it is not a group member.
+    ///
+    /// Same rule and same order as [`Self::keyed_group_remove`], which is the
+    /// `coll[key] = null` spelling of the identical operation — every unlink reads
+    /// the key out of the record, so each OTHER member unlinks first and the
+    /// spelled member goes last and frees.
+    ///
+    /// What differs is where the RECORD comes from. A key lookup can be hoisted
+    /// into a temporary; a loop cursor cannot, because `OpRemove` derives the
+    /// element's reference internally from the iterator state. It does not have to
+    /// be: the LOOP VARIABLE already is that reference, resolved once per
+    /// iteration and at the record's payload start for every collection kind a
+    /// group can contain (an `index` yields `new_ref(.., 8)`, an `ordered` and a
+    /// linked `array` yield the record a slot names). An inline `vector`/`sorted`
+    /// element is not a record and never joins a group, so it never reaches here.
+    fn loop_group_remove(&mut self, coll: &Value, elem_var: u16, remove: Value) -> Value {
+        let Some((struct_tp, byte_off)) = self.keyed_field_site(coll) else {
+            return remove;
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        if members.len() < 2 {
+            return remove;
+        }
+        let mut ops = Vec::new();
+        for (off, coll_tp, _) in &members {
+            if *off == byte_off {
+                continue;
+            }
+            let field = Self::keyed_field_at(coll, *off);
+            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl(
+                "OpHashRemove",
+                &[field, Value::Var(elem_var), Value::Int(tp)],
+            ));
+        }
+        ops.push(remove);
+        Value::Insert(ops)
     }
 
     /// The `(struct type, byte offset)` of the struct FIELD a collection expression
@@ -1335,15 +1383,17 @@ use #count instead"
             } else {
                 format!("{name}#index")
             };
-            *code = self.cl(
+            let coll = self.vars.loop_value(index_var).clone();
+            let remove = self.cl(
                 "OpRemove",
                 &[
                     Value::Var(self.vars.var(&state_name)),
-                    self.vars.loop_value(index_var).clone(),
+                    coll.clone(),
                     Value::Int(i32::from(on)),
                     Value::Int(i32::from(self.vars.loop_db_tp(index_var))),
                 ],
             );
+            *code = self.loop_group_remove(&coll, index_var, remove);
             *t = Type::Void;
         } else if self.lexer.has_keyword("lock") {
             // d#lock — read the lock state of the store containing a reference or vector variable.

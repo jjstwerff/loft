@@ -1400,14 +1400,18 @@ impl State {
         }
         match on & 63 {
             0 => {
-                // vector
-                let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(
-                    &data,
-                    u32::from(self.database.size(tp)),
-                    i64::from(cur),
-                    &mut self.database.allocations,
-                );
+                // vector / array — `tp` is the ELEMENT type, and
+                // `remove_vector_at` reads the layout off it.
+                //
+                // Where the cursor lands next is decided by the DIRECTION, because
+                // the shift only touches the elements ABOVE the one removed:
+                // forward, the successor moves into slot `cur`, so the cursor must
+                // step back to `cur - 1` to visit it; backwards, the next element
+                // is `cur - 1` and it has not moved, so the cursor must STAY at
+                // `cur` — the step subtracts one either way.  Rewinding forwards
+                // (`cur + 1`) revisits the element that shifted down.
+                let n = if reverse { cur } else { cur - 1 };
+                self.database.remove_vector_at(&data, tp, i64::from(cur));
                 // iter_var (#index) is i64 on stack post-2c.  Sign-extend n
                 // (may be −1 after remove-at-index-0) and write all 8 bytes
                 // so the high word doesn't leak a stale value into the next
@@ -1476,36 +1480,30 @@ impl State {
                 }
             }
             2 => {
-                // sorted: tp is the element size in bytes (from loop_db_tp)
+                // sorted: inline elements, `tp` is the element type; `cur` is an index
                 if cur < 0 {
                     return;
                 }
-                let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(
-                    &data,
-                    u32::from(tp),
-                    i64::from(cur),
-                    &mut self.database.allocations,
-                );
+                // Same rewind rule as arm 0 — see there.
+                let n = if reverse { cur } else { cur - 1 };
+                self.database.remove_vector_at(&data, tp, i64::from(cur));
                 self.put_var(state_var - 8, n);
             }
             3 => {
-                // ordered: tp is element size (4 bytes); cur is byte offset (8, 12, ...)
-                if cur < 0 {
+                // ordered: 4-byte record-id slots, `tp` is the element type; `cur` is
+                // a BYTE offset into the slot vector (8, 12, ...), so the slot index
+                // it names is `(cur - 8) / 4`.
+                if cur < 8 {
                     return;
                 }
-                let size = u32::from(tp);
-                let n = if reverse {
-                    cur + i32::from(tp)
-                } else {
-                    cur - i32::from(tp)
-                };
-                vector::remove_vector(
-                    &data,
-                    size,
-                    i64::from((cur - 8) / i32::from(tp)),
-                    &mut self.database.allocations,
-                );
+                // The rewind follows the STEPPER, not the `reverse` bit: this arm's
+                // `vector::step_ordered` walks forwards whatever `on & 64` says, so
+                // `rev()` over an `ordered` iterates forwards today (loft#904) and a
+                // backwards rewind would revisit and skip.  When loft#904 teaches the
+                // stepper to go backwards, this needs arm 0's `if reverse { cur }`.
+                let n = cur - 4;
+                self.database
+                    .remove_vector_at(&data, tp, i64::from((cur - 8) / 4));
                 self.put_var(state_var - 8, n);
             }
             _ => panic!("Not implemented on {on}"),
