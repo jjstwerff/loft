@@ -9,6 +9,38 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An empty-text assignment pushed a value nothing consumed (loft#908, 2026-08-14)
+
+Reported as "a function that reads a MISSING file and returns a struct double-frees and SIGABRTs
+the interpreter" — `free(): invalid pointer`, `last op: OpFreeText`, on `--interpret` only, which is
+the worst direction: a consumer's gates run interpreted and the shipped native build is correct.
+
+Neither the file nor the struct is the defect. Appending the EMPTY literal to a text variable is a
+no-op — the variable has just been cleared — so `set_var`'s put dispatch skipped `OpAppendText` for
+it. It skipped only the OP, after `self.generate(value, …)` had already pushed the 16-byte const:
+the value stayed on the eval stack with nothing to take it off, and `stack.position` ran high for
+the rest of the statement. **A value is pushed if and only if an op consumes it**, and the two
+decisions sat in different places.
+
+Harmless until the statement is one ARM of an `if`/`else` — which `?? ""` over a CALL always is, the
+nullable result going into a work-ref that the presence test branches on. The arms then disagreed in
+height and `gen_if`'s arm-height equaliser (@PLN85 P2) "corrected" the taller one with an
+`OpFreeStack` whose discard walked past the frame's eval base into the LOCALS, overwriting a live
+text descriptor; freeing that at scope exit aborted. The aggregate return is what puts a live local
+under the over-discard (the hidden `__retbuf` shifts the frame), which is why the reporter's matrix
+found it needed a struct return — and why `-> integer` merely mis-tracked the stack silently.
+
+Four axes had to meet: the nullable text from a CALL, the call answering null, an EMPTY default, and
+an aggregate return. Moving any one made it correct, which is what kept it hidden.
+
+The guard now returns BEFORE the push, so push and consume are one decision;
+`gen_set_first_text` already skipped the whole `set_var` for this value, so the reassignment path
+now agrees with the first-assignment path rather than diverging from it.
+
+Guard: `tests/scripts/908-empty-text-default-does-not-strand-a-const.loft`, one axis per row and
+every row asserting a VALUE — `--native` was always correct, so a row that merely ran would read as
+a pass there. Verified to abort on the pre-fix build before shipping.
+
 ### `--native` linked a `#native` symbol by NAME, not by what implements it (loft#907, 2026-08-14)
 
 `#native "sym"` is an API id, not the name of the Rust fn behind it. A library registers its

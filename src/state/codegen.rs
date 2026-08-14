@@ -4299,6 +4299,23 @@ impl State {
         // (`emit_tuple_var_pop_put`); fn-ref slot is 20 B but stdlib
         // OpPutFnRef pops 16 B Str then the tracker compensates by
         // -4 below.
+        // loft#908 — appending the EMPTY literal to a text var is a no-op (the var
+        // has just been cleared), and the put dispatch below skips `OpAppendText`
+        // for it.  Skip the PUSH as well: the two decisions are one decision, and
+        // separating them left a 16-byte const on the eval stack with nothing to
+        // consume it, so `stack.position` ran high for the rest of the statement.
+        // Where the statement was one arm of an `if`/`else` — which `?? ""` over a
+        // CALL always is — the arms then disagreed in height and `gen_if`'s
+        // equaliser "corrected" it with an `OpFreeStack` that discarded past the
+        // frame's eval base into the LOCALS, overwriting a live text descriptor;
+        // freeing that at scope exit aborted the interpreter (`free(): invalid
+        // pointer`).  `gen_set_first_text` already skips the whole `set_var` for
+        // this value; this is the reassignment path agreeing with it.
+        if matches!(stack.function.tp(var).base(), Type::Text(_))
+            && value == &Value::Text(String::new())
+        {
+            return;
+        }
         #[cfg(debug_assertions)]
         let stack_before = stack.position;
         self.generate(value, stack, false);
@@ -4371,12 +4388,10 @@ impl State {
             Type::Boolean => stack.add_op("OpPutBool", self),
             Type::Single => stack.add_op("OpPutSingle", self),
             Type::Float => stack.add_op("OpPutFloat", self),
-            Type::Text(_) => {
-                if value == &Value::Text(String::new()) {
-                    return;
-                }
-                stack.add_op("OpAppendText", self);
-            }
+            // The empty literal never reaches here — it returned above, before the
+            // push, so that the push and the op that consumes it stay one decision
+            // (loft#908).
+            Type::Text(_) => stack.add_op("OpAppendText", self),
             Type::Vector(_, _)
             | Type::Reference(_, _)
             | Type::Enum(_, true, _)
