@@ -13,6 +13,70 @@ use std::collections::{HashMap, HashSet};
 
 use super::{Output, PreEvalEntry, narrow_int_cast};
 
+/// Is `code` a STATEMENT SEQUENCE — Rust text whose value is its tail expression,
+/// preceded by at least one statement — rather than a single expression?
+///
+/// A pre-eval binding is emitted as `let _pre_N = <code>;`, which is an expression
+/// position, so text like `let mut var_x: DbRef = DbRef::NULL; if c { … } else { … }`
+/// is a syntax error there ("expected expression, found `let` statement").  Two
+/// separate lowerings produce that prefix — an `if` whose test lifted a call, and an
+/// `if` whose branch variables must be declared before the arms — and the wrap that
+/// made the first one an expression was written into that lowering, so the second one
+/// never got it (loft#910 follow-up).  Asking the TEXT keeps the two from drifting
+/// again: whatever the producer, what lands in a `let` binding must be an expression.
+///
+/// A `;` inside braces, parens, brackets, a string or char literal, or a comment does
+/// not count — only one at depth 0, which is what separates statements.
+fn is_statement_sequence(code: &str) -> bool {
+    let b = code.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => depth -= 1,
+            // A `;` at depth 0 ends a statement — unless it is the very last
+            // character, where it is just a trailing terminator.
+            b';' if depth <= 0 => {
+                if code[i + 1..].trim().is_empty() {
+                    return false;
+                }
+                return true;
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            // `'` is a char literal (`'x'`, `'\n'`) or a lifetime (`'static`).  Only
+            // the literal has a closing quote to skip to; a lifetime is ordinary text.
+            b'\'' => {
+                let esc = b.get(i + 1) == Some(&b'\\');
+                let close = if esc { i + 3 } else { i + 2 };
+                if b.get(close) == Some(&b'\'') {
+                    i = close;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Intrinsic identity of an IR node: its address in the (frozen) IR tree.
 ///
 /// Both pre-eval walks — `collect_pre_evals` then `output_code_with_subst` —
@@ -692,6 +756,18 @@ impl Output<'_> {
         // they compare correctly against i64 expressions.  Compute a separate bind_code
         // that wraps the expression with `as i64`; the match_code (used for substitution)
         // is left unchanged so string replacement in the outer code still works.
+        // The binding is emitted into `let _pre_N = …;`, so whatever the lowering
+        // produced has to be ONE expression there.  A statement sequence becomes one by
+        // being braced; every other form is already an expression and is left alone,
+        // because a blanket brace would scope-limit a `&…` result to the block and leave
+        // the binding pointing at a dropped temporary.  Only the BINDING text is braced —
+        // `substituted` stays verbatim, because it is also the key an enclosing binding
+        // string-matches its inner pre-evals by, and a braced key matches nothing.
+        let bound = if is_statement_sequence(&substituted) {
+            format!("{{ {substituted} }}")
+        } else {
+            substituted.clone()
+        };
         let bind_code = if !substituted.is_empty() && substituted != "()" {
             if let Some(tp) = self.infer_type(IrNode::Native(arg)) {
                 if narrow_int_cast(&tp).is_some() {
@@ -710,7 +786,7 @@ impl Output<'_> {
                 {
                     // Text-returning user fn calls produce `Str`; callees
                     // expect `&str`.  Deref at the binding site.
-                    format!("&*({substituted})")
+                    format!("&*({bound})")
                 } else if matches!(tp, Type::Text(_))
                     && matches!(arg, Value::Block(b) if matches!(b.result, Type::Text(_)))
                 {
@@ -720,15 +796,15 @@ impl Output<'_> {
                     // `String`.  Callees expect `&str`, so deref at
                     // the binding site so format helpers, equality,
                     // etc. accept the value without an explicit `&`.
-                    format!("&*({substituted})")
+                    format!("&*({bound})")
                 } else {
-                    substituted.clone()
+                    bound.clone()
                 }
             } else {
-                substituted.clone()
+                bound.clone()
             }
         } else {
-            substituted.clone()
+            bound.clone()
         };
         if !substituted.is_empty() && substituted != "()" {
             // Key the binding on `arg`'s intrinsic identity so the emit walk can

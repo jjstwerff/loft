@@ -894,7 +894,18 @@ impl Parser {
         // `parse_single` (variable, literal, parenthesised expr).
         self.record_type_trace(&t);
         while self.lexer.peek_token(".")
-            || self.lexer.peek_token("[")
+            // `[` postfix-indexes a VALUE, and a `Void` subject produced none — so the
+            // bracket opens the next expression instead.  `if` is the construct that
+            // needs this said: it is an expression, so a bare `if c { … }` STATEMENT
+            // reached this chain and swallowed the `[` of the line below it.  A whole
+            // function's tail literal was read as an index on the `if`, and the
+            // resulting "Indexing a non vector — keyed collections have no
+            // generic-constructor expression" named a feature the program never used
+            // (loft#910).  `for` / `while` never had it: they are statements and never
+            // reach here.  An `if` that DOES yield a value keeps its index —
+            // `if c { [1,2] } else { [3,4] }[0]` is unaffected, because its type is a
+            // vector, not `Void`.
+            || (self.lexer.peek_token("[") && !matches!(t, Type::Void))
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
             || self.lexer.peek_token("?")
         {
