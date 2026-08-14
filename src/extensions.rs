@@ -999,6 +999,139 @@ fn report_unresolved_natives(data: &crate::data::Data, unresolved: &[String]) {
 #[cfg(not(feature = "native-extensions"))]
 pub fn wire_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
 
+/// The suffix `#[loft_native]` appends when it generates a fn's marshal bridge.
+/// The bridge for Rust fn `X` is `X__loft_bridge`, always adjacent to `X`, so a
+/// bridge's exported name names its implementation.
+#[cfg(feature = "native-extensions")]
+const BRIDGE_SUFFIX: &str = "__loft_bridge";
+
+/// Given the loft symbol a cdylib registered a bridge under, and that bridge's
+/// own exported name, answer the Rust fn that implements the symbol — but only
+/// when it is NOT the symbol itself.
+///
+/// `loft_register_bridges! { "S" => X__loft_bridge }` is a free mapping: nothing
+/// requires `X == S`. When they agree (the clean binding `loft-ffi-build`
+/// generates) the C symbol named `S` IS loft's entry point and there is nothing
+/// to redirect. When they differ, `S` names some *other* export — for the
+/// library that motivated loft#907, the same call in a raw `(ptr, count)` shape
+/// instead of loft's `(LoftStore, LoftRef)` one — and linking `S` marshals the
+/// call into the wrong function.
+///
+/// Split out from the pointer plumbing so the rule is testable without a cdylib.
+#[cfg(feature = "native-extensions")]
+fn impl_symbol_for(sym: &str, bridge_name: &str) -> Option<String> {
+    let implemented_by = bridge_name.strip_suffix(BRIDGE_SUFFIX)?;
+    (implemented_by != sym).then(|| implemented_by.to_string())
+}
+
+/// Ask the dynamic loader what the function at `ptr` is called.
+///
+/// Only an EXACT hit counts: `dladdr` reports the nearest preceding symbol when
+/// the address falls inside one, and a near miss would hand codegen a `#[link_name]`
+/// for a neighbouring function. Requiring `dli_saddr == ptr` turns that into a
+/// `None` (leave the symbol alone), which is the pre-loft#907 behaviour.
+#[cfg(all(feature = "native-extensions", unix))]
+fn exported_name_at(ptr: *const ()) -> Option<String> {
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(ptr.cast(), &raw mut info) } == 0 {
+        return None;
+    }
+    if info.dli_sname.is_null() || !std::ptr::eq(info.dli_saddr.cast_const().cast::<()>(), ptr) {
+        return None;
+    }
+    unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }
+        .to_str()
+        .ok()
+        .map(str::to_string)
+}
+
+#[cfg(all(feature = "native-extensions", not(unix)))]
+fn exported_name_at(_ptr: *const ()) -> Option<String> {
+    None
+}
+
+/// loft#907 — record, for each `#native` symbol whose library implements it
+/// under a DIFFERENT Rust name, what that name is, so `--native` links the same
+/// function `--interpret` dispatches to.
+///
+/// The interpreter's resolution is the authoritative one: it reads the library's
+/// own `loft_register_bridges_v1` table. Native codegen has no such table — it
+/// puts the `#native` string straight into a `#[link_name]` — so the two backends
+/// silently disagreed wherever a library remapped a symbol. Reading the answer off
+/// the loaded cdylib gives both backends ONE source for it.
+///
+/// Call after [`load_all`]; a symbol whose cdylib is absent, un-loadable or
+/// pre-bridge is simply left unmapped and codegen keeps linking it literally.
+#[cfg(feature = "native-extensions")]
+pub fn resolve_native_impl_symbols(data: &mut crate::data::Data) {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let sym = data.def(d_nr).native();
+        // The same gate native codegen uses to decide a symbol is a package
+        // C-ABI native: anything else (a stem/dlopen native, a shared-store or
+        // placed bridge) is not linked by name and must not be redirected.
+        if sym.is_empty()
+            || !data.native_symbol_crates.contains_key(sym)
+            || data.native_impl_symbols.contains_key(sym)
+        {
+            continue;
+        }
+        let Some(bridge) = get_bridge(sym) else {
+            continue;
+        };
+        if let Some(name) = exported_name_at(bridge)
+            && let Some(implemented_by) = impl_symbol_for(sym, &name)
+        {
+            found.push((sym.to_string(), implemented_by));
+        }
+    }
+    for (sym, implemented_by) in found {
+        data.native_impl_symbols.insert(sym, implemented_by);
+    }
+}
+
+#[cfg(not(feature = "native-extensions"))]
+pub fn resolve_native_impl_symbols(_data: &mut crate::data::Data) {}
+
+#[cfg(all(test, feature = "native-extensions"))]
+mod impl_symbol_tests {
+    use super::impl_symbol_for;
+
+    // The symbols below are invented, not borrowed from a real library: the
+    // extraction-hygiene gate (`tests/extraction_hygiene.rs`) forbids a library's
+    // `n_*` symbol from appearing anywhere in `src/`, and a test is no exception.
+
+    /// The clean binding — the library registered `S`'s bridge under `S`'s own
+    /// name — must produce NO redirection, or every native call would be
+    /// rewritten to link a name codegen already had right.
+    #[test]
+    fn a_bridge_named_after_its_own_symbol_redirects_nothing() {
+        assert_eq!(
+            impl_symbol_for("n_sample_alpha", "n_sample_alpha__loft_bridge"),
+            None
+        );
+    }
+
+    /// The loft#907 shape: the symbol the loft source declares is implemented by
+    /// a differently-named Rust fn, and THAT is what `--native` must link.
+    #[test]
+    fn a_remapped_bridge_names_the_function_to_link() {
+        assert_eq!(
+            impl_symbol_for("samplelib_alpha", "n_sample_alpha__loft_bridge").as_deref(),
+            Some("n_sample_alpha")
+        );
+    }
+
+    /// A name that is not a generated bridge says nothing about which function
+    /// implements the symbol — `dladdr` landing on some unrelated export must not
+    /// be read as a remap.
+    #[test]
+    fn a_name_that_is_not_a_bridge_yields_nothing() {
+        assert_eq!(impl_symbol_for("samplelib_alpha", "n_sample_alpha"), None);
+        assert_eq!(impl_symbol_for("samplelib_alpha", "samplelib_alpha"), None);
+    }
+}
+
 /// @PLN11 Arc N — wire the **shared-store** bridge dispatchers.  For every
 /// `#native "loft_shared_…"` definition (the marker for an auto-generated
 /// shared-store bridge), resolve the bridge symbol from the loaded cdylibs via

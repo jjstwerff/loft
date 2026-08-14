@@ -962,6 +962,14 @@ pub(crate) fn run_tests(
                 let mut native_data = clean_data.clone();
                 let mut native_state = State::new(clean_db.clone());
                 compile::byte_code(&mut native_state, &mut native_data);
+                // loft#907 — a `#native` symbol its library implements under
+                // another Rust name has to be LINKED under that name, and only
+                // the loaded cdylib's own registration says which.  The
+                // interpreted branch below loads them for dispatch; the native
+                // branch needs them for the same reason one step earlier, or a
+                // remapped symbol compiles into a call to the wrong function.
+                crate::extensions::load_all(&mut native_state, pending_native.clone());
+                crate::extensions::resolve_native_impl_symbols(&mut native_data);
                 let native_db = native_state.database;
                 // Filter to functions that can run natively (skip @IGNORE,
                 // @EXPECT_ERROR, and @EXPECT_FAIL — native can't catch panics).

@@ -9,6 +9,42 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `--native` linked a `#native` symbol by NAME, not by what implements it (loft#907, 2026-08-14)
+
+`#native "sym"` is an API id, not the name of the Rust fn behind it. A library registers its
+implementations by loft symbol — `loft_register_bridges! { "sym" => other__loft_bridge }` — and
+that table is free to name an `other` different from `sym`. `--interpret` reads the table.
+`--native` put the `#native` string straight into a `#[link_name]`, so it bound whatever else the
+cdylib happened to export under that name, and a C-ABI link matches on name alone: no error, no
+warning, a call marshalled into the wrong function.
+
+In the published `graphics` that hit **ten** functions — every store-aware one. Each has loft's
+`(LoftStore, LoftRef)` entry point at `n_<x>` and an older raw `(ptr, count)` fn under the
+`#native` name, so the arguments arrived shifted by a register. `save_png` returned `false` and
+wrote nothing under `--native` while returning `true` under `--interpret` (the reported symptom);
+`gl_upload_vertices`, `gl_upload_canvas`, `gl_upload_indices`, `gl_upload_instance_buffer`,
+`gl_update_buffer`, `gl_set_mat4`, `gl_texture_subimage`, `rasterize_text_into` and
+`audio_play_raw` were mis-marshalled the same way and had no reporter because the WebGL
+consumers run in the browser, whose `--html` host imports take the raw pair by design.
+
+**One source for the answer, read by both backends.** `extensions::resolve_native_impl_symbols`
+asks the loaded cdylibs' own registration which fn implements each symbol (`dladdr` on the
+registered bridge names it; `X__loft_bridge` sits beside `X`), and records only the entries where
+the two names differ, in `Data::native_impl_symbols`. `Data::link_symbol` is what codegen emits
+through, on both the C-ABI `#[link_name]` and the rlib `krate::sym` path. A clean binding — what
+`loft-ffi-build`'s generator produces, and the only shape it CAN produce — maps to itself and is
+untouched.
+
+Residual: a library whose cdylib is absent or predates the bridge registry cannot be resolved and
+keeps the literal name. That is not a silent wrong answer — the interpreter reports it at load
+(loft#886) and calling it panics rather than answering.
+
+Guards: `tests/lib/native_remap_pkg` is a `[native] crate` fixture in exactly this shape, exporting
+a DECOY under each `#native` name (-1000 / -2000) so a regression answers rather than fails to
+link, and the answer names which resolution path was taken;
+`native::remapped_native_symbol_resolves_to_its_implementation_on_both_backends` runs it on both.
+`native_scalar_pkg` is the clean-binding control.
+
 ### Removing one entry of a linked collection group had no owner (loft#900, 2026-08-14)
 
 loft#898 gave the CLEAR an owner for a linked group's shared records; removal never got

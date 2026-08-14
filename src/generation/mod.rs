@@ -1654,7 +1654,16 @@ extern crate loft;"
                 // AND symbol `n_load_png`).  Declare under a `__cabi_`-prefixed
                 // local alias and bind the real symbol via `#[link_name]`, so
                 // the extern never shadows the wrapper (E0428).
-                writeln!(w, "    #[link_name = \"{}\"]", def.native())?;
+                //
+                // loft#907: the linked symbol is the one the LIBRARY says
+                // implements it, which for a remapped binding is not the
+                // `#native` string.  The alias stays keyed on the `#native`
+                // string so call sites are unaffected.
+                writeln!(
+                    w,
+                    "    #[link_name = \"{}\"]",
+                    data.link_symbol(def.native())
+                )?;
                 writeln!(w, "    fn __cabi_{}({sig}){ret};", def.native())?;
             }
             writeln!(w, "}}")?;
@@ -4338,7 +4347,12 @@ extern crate loft;"
                             self.output_native_direct_call(w, def_nr, &aliased)?;
                         }
                     } else {
-                        let qualified = format!("{}::{}", krate, def.native());
+                        // rlib path (Windows / cross-compiled targets): name the
+                        // implementing fn in the package crate, which for a
+                        // remapped binding differs from the `#native` string
+                        // (loft#907).
+                        let qualified =
+                            format!("{}::{}", krate, self.data.link_symbol(def.native()));
                         self.output_native_direct_call(w, def_nr, &qualified)?;
                     }
                 } else {

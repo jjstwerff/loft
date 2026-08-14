@@ -1138,6 +1138,18 @@ lists regenerate automatically.  No manifest, no drift.  (The legacy
 `loft.toml [native.functions]` table and `generate_register_from_loft` — the
 no-bridge variant — predate this and are retained only for un-migrated libs.)
 
+**Write the CLEAN binding: let the `#native` symbol be the implementing fn's own
+name.**  The generator only emits `"S" => S__loft_bridge`, so following it gives
+you that for free.  A hand-written list can instead point `"S"` at a
+differently-named fn, and then `S` is just a binding id with some *other* export
+sitting under it — which is how loft#907 shipped: `graphics` kept an older raw
+`(ptr, count)` fn under each `#native` name and loft's real
+`(LoftStore, LoftRef)` entry point at `n_<x>`, so ten functions bound the wrong
+one under `--native` and answered without complaining.  loft now resolves through
+your registration on both backends (NATIVE.md § Which symbol a `#native` binding
+links), so a remap is no longer *wrong* — but it still costs you every consumer
+whose cdylib loft cannot load, and it is free to avoid.
+
 ### Three execution paths
 
 | Path | How native functions run |

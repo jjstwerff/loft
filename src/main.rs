@@ -8484,6 +8484,10 @@ fn main() {
     // auto-native libraries (the `loft_shared_*` symbols), a disjoint set from the
     // hand-written `#native` symbols `wire_native_fns` handles.
     extensions::wire_shared_native_fns(&mut state, &p.data);
+    // loft#907: read back which Rust fn each library says implements its
+    // `#native` symbols, so the native backend links the same one the
+    // interpreter dispatches to.  Must run before any codegen below.
+    extensions::resolve_native_impl_symbols(&mut p.data);
 
     // --check: parse + compile only, report errors and exit.
     // When combined with --native, fall through to the native pipeline

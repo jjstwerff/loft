@@ -2151,6 +2151,9 @@ codegen and the linker flags read the *same* helper so they never disagree.
   link), not `krate::sym`.  `output_native_direct_call`'s body is unchanged — its
   `transmute_copy`s are now harmless identities (the consumer has only loft's `loft_ffi`, named
   via `--extern loft_ffi`, since the cdylib's copy is sealed in the `.so`).
+- **which symbol** (loft#907): `#[link_name]` names the fn the LIBRARY says implements the
+  binding, which is not always the `#native` string.  See § Which symbol a `#native` binding
+  links, below.
 - **link** (`native_utils::add_native_extern_flags`, `target.is_none() && native_cabi_enabled()`):
   `-L native=<so dir> -l dylib=<stem> -Clink-arg=-Wl,-rpath,<so dir>`, not `--extern
   <ident>=<rlib>`.  Keyed on **`loft_ffi_fingerprint()`** (the ABI hash, matching what
@@ -2173,3 +2176,46 @@ wasm32-wasip2, and Windows still link the rlib; plus same-symbol cross-package
 disambiguation, `make install` `.so` packaging (`$ORIGIN` RPATH + copy), the
 boolean→`u8` ABI, and the `prebuilt/` + `fp == 0` resolution edges — are tracked in
 **@PLN26** ([loft-lang/plans#26](https://github.com/loft-lang/plans/issues/26)).
+
+### Which symbol a `#native` binding links (loft#907)
+
+**`#native "sym"` is an API id, not the name of the Rust fn behind it.**  A native library
+registers its implementations by loft symbol —
+`loft_register_bridges! { "sym" => other__loft_bridge }` — and nothing requires `other == sym`.
+So a `#native` string names a *binding*; only the library's own table names the *function*.
+
+The two backends used to answer that differently, and the disagreement was silent:
+
+| | how it resolved `#native "sym"` |
+|---|---|
+| `--interpret` | the loaded cdylib's `loft_register_bridges_v1` table — the library's own answer |
+| `--native` (before) | `#[link_name = "sym"]` — whatever the cdylib exports under that name |
+
+A C-ABI link matches on **name alone**, so where the two differed the call was marshalled into a
+different function with no error, no warning and no failed link.  In the published `graphics`
+that was ten functions: each store-aware one has loft's `(LoftStore, LoftRef)` entry point at
+`n_<x>` and an older raw `(ptr, count)` fn under the `#native` name, so arguments arrived shifted
+by a register — `save_png` answered `false` and wrote nothing, the WebGL upload calls uploaded
+nothing.
+
+**Both backends now read one source.**  `extensions::resolve_native_impl_symbols` runs after
+`load_all` and before any codegen, asks the loaded cdylibs which fn implements each symbol
+(`dladdr` on the registered bridge pointer names it — `#[loft_native]` emits `X__loft_bridge`
+beside `X`, so stripping the suffix gives the implementation), and records **only the differing
+entries** in `Data::native_impl_symbols`.  `Data::link_symbol` is the one accessor codegen emits
+through, on both the C-ABI `#[link_name]` and the rlib `krate::sym` path.
+
+- A **clean binding** — the loft symbol equals the implementing fn — maps to itself and nothing
+  changes.  That is the only shape `loft-ffi-build`'s generator can produce, so a library that
+  derives its registration from its `#native` annotations is clean by construction; a remap only
+  ever comes from a hand-written `loft_register_bridges!` list.
+- A cdylib that is **absent, un-loadable, or predates the bridge registry** cannot be resolved and
+  keeps the literal name.  Not a silent wrong answer: the interpreter reports the missing
+  registration at load (loft#886) and a call panics rather than answering.
+- `dladdr` is required to hit the bridge **exactly** (`dli_saddr == ptr`); it otherwise reports the
+  nearest preceding symbol, which would hand codegen a neighbouring function's name.  A near miss
+  leaves the symbol alone.
+
+Guards: `tests/lib/native_remap_pkg` is a `[native] crate` fixture in this shape which exports a
+DECOY under each `#native` name, so a regression *answers* (-1000 / -2000) instead of failing to
+link — the way this reached users.  `native_scalar_pkg` is the clean-binding control.

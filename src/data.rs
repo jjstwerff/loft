@@ -3730,6 +3730,19 @@ pub struct Data {
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
     pub native_symbol_crates: HashMap<String, String>,
+    /// loft#907 — `#native "symbol"` → the Rust fn that actually carries loft's
+    /// C-ABI for it, for the libraries where the two names DIFFER.
+    ///
+    /// A library registers its implementations by loft symbol
+    /// (`loft_register_bridges! { "S" => X__loft_bridge }`), and that mapping is
+    /// free to name an `X` other than `S`.  The interpreter follows it; native
+    /// codegen used to link the C symbol literally called `S`, so a remapped
+    /// symbol bound a *different* function — whatever else the library happened
+    /// to export under that name — and marshalled the call into it.  Filled by
+    /// [`crate::extensions::resolve_native_impl_symbols`] from the loaded
+    /// cdylibs' own registrations, so both backends resolve through one fact.
+    /// Absent key = the names agree (the common case, nothing to redirect).
+    pub native_impl_symbols: HashMap<String, String>,
     /// lib_plan-29 W1c: WASM bridge package directories — (`crate_name`,
     /// `pkg_dir`).  Populated from each loaded package's `[wasm.bridge].crate`.
     /// The `--html` driver builds `<pkg_dir>/wasm/` to a
@@ -4009,6 +4022,7 @@ impl Data {
             native_packages: Vec::new(),
             c_libraries: Vec::new(),
             native_symbol_crates: HashMap::new(),
+            native_impl_symbols: HashMap::new(),
             wasm_bridge_packages: Vec::new(),
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
@@ -5631,6 +5645,25 @@ impl Data {
         d.def_type == DefType::Struct
             && d.attributes.is_empty()
             && matches!(&d.returned, Type::Reference(r, _) if *r == d_nr)
+    }
+
+    /// The name to LINK for a `#native "sym"` binding — `sym` itself unless the
+    /// owning library implements it under another name (loft#907).
+    ///
+    /// `#native "sym"` is an API id, not a promise about the Rust fn behind it: a
+    /// library registers its implementations by loft symbol
+    /// (`loft_register_bridges! { "sym" => other_fn__loft_bridge }`) and may point
+    /// one at a differently-named fn.  The interpreter follows that table; native
+    /// codegen has to be told the same answer, or it links whatever else the cdylib
+    /// exports under `sym` and marshals the call into it — silently, since a C-ABI
+    /// link matches on name alone.  [`native_impl_symbols`](Self::native_impl_symbols)
+    /// holds only the entries where the two names differ, so the ordinary binding
+    /// borrows straight through.
+    #[must_use]
+    pub fn link_symbol<'s>(&'s self, sym: &'s str) -> &'s str {
+        self.native_impl_symbols
+            .get(sym)
+            .map_or(sym, String::as_str)
     }
 
     /// Get the corresponding number from a definition on name.
