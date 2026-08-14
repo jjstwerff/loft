@@ -2742,6 +2742,15 @@ impl Parser {
             self.expression(&mut discard);
         } else {
             let td = self.data.attr_type(td_nr, nr);
+            // @PLN25 — whether the field carries a record-pointer HEADER is a question
+            // about its storage, and `Optional(τ)` shares τ's storage exactly.  Peel the
+            // marker for that question only; the checks further down (`n_store_violation`,
+            // `convert`, the sentinel hint) read `td` itself, because those ARE about
+            // nullability.  Unpeeled, a nullable collection field was not recognised as one:
+            // it built through a standalone temp instead of in place, and that temp — minted
+            // with a dep on the struct it sits in — skipped the `vector_db` that would have
+            // defined it, so it reached codegen with no stack slot at all (loft#909).
+            let td_base = td.base().clone();
             let pos = self.field_position(td_nr, &field);
             found_fields.insert(field.clone());
             let mut value = if let Type::Vector(_, _)
@@ -2750,7 +2759,7 @@ impl Parser {
             | Type::Radix(_, _, _)
             | Type::Trie(_, _, _)
             | Type::Enum(_, true, _)
-            | Type::Index(_, _, _) = td
+            | Type::Index(_, _, _) = td_base
             {
                 // Collection/enum-big header is a 4-byte u32 record pointer.
                 // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
@@ -2775,7 +2784,7 @@ impl Parser {
                     "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
                 );
-                if matches!(td, Type::Vector(_, _)) {
+                if matches!(td_base, Type::Vector(_, _)) {
                     sinks.vector_headers.push(prime);
                 } else {
                     list.push(prime);
@@ -2810,7 +2819,7 @@ impl Parser {
             // (the `OpSetInt4(.., 0)` above zeroed the header) but steer toward
             // the canonical `[]`.
             let empty_braces = matches!(
-                td,
+                td_base,
                 Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
@@ -3442,6 +3451,11 @@ impl Parser {
     ) {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
+        // @PLN25 — how a value REACHES the field (a deep copy for a collection, a plain
+        // store otherwise) follows the field's storage, which `Optional(τ)` shares with τ.
+        // The sibling classification in `parse_object_field` peels the same way; the
+        // nullability checks at the bottom of this function keep `td` itself (loft#909).
+        let td_base = td.base().clone();
         // @PLN25 — null-source convert: a nullable struct SOURCE (a call / variable
         // of type `Reference(S)`, possibly the null sentinel) assigned to a synthetic
         // `__nullable<S>` field.  Build the `Some` variant from the source when
@@ -3478,7 +3492,7 @@ impl Parser {
             return;
         }
         if matches!(
-            td,
+            td_base,
             Type::Vector(_, _)
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
@@ -3496,7 +3510,7 @@ impl Parser {
             // expression (e.g. `C { v: build() }` where `build` returns a
             // vector).  Before this was a plain push, which left the field
             // uninitialised.
-            if let Type::Vector(ref content, _) = td {
+            if let Type::Vector(ref content, _) = td_base {
                 if !self.first_pass && !matches!(value, Value::Insert(_) | Value::Null) {
                     let pos = self
                         .database
@@ -3533,7 +3547,7 @@ impl Parser {
                 } else {
                     list.push(value.clone());
                 }
-            } else if let Some(kt) = self.keyed_field_kt(&td)
+            } else if let Some(kt) = self.keyed_field_kt(&td_base)
                 && !self.first_pass
                 && !matches!(value, Value::Insert(_) | Value::Null)
             {

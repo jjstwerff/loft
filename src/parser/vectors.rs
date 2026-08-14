@@ -3595,6 +3595,13 @@ impl Parser {
                 // passed to the write path.
                 self.vector_of(tp)
             }
+            // @PLN25 — `Optional(τ)` is a compile-time nullability marker over τ's own
+            // storage, so it names the SAME db type.  Its sibling resolvers
+            // (`type_def_nr`, `type_elm`, `rust_type`, `element_stack_size`) all peel;
+            // this one did not, so an `Optional`-typed collection answered `u16::MAX` —
+            // the "no such type" sentinel — which callers read as "not a collection"
+            // (loft#909).
+            Type::Optional(inner) => self.get_type(inner),
             _ => u16::MAX,
         }
     }
