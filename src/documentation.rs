@@ -1529,7 +1529,10 @@ pub fn render_pkg_api_text(pkg_dir: &std::path::Path) -> std::io::Result<String>
 /// # Errors
 /// Returns `Err` when files cannot be read or written.
 #[allow(clippy::too_many_lines)]
-pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
+pub fn generate_pkg_docs(
+    pkg_dir: &std::path::Path,
+    out_override: Option<&std::path::Path>,
+) -> std::io::Result<()> {
     let manifest_path = pkg_dir.join("loft.toml");
     let manifest = if manifest_path.exists() {
         crate::manifest::read_manifest(&manifest_path.to_string_lossy()).unwrap_or_default()
@@ -1545,8 +1548,10 @@ pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
     });
     let version = manifest.version.unwrap_or_else(|| "0.0.0".to_string());
 
-    // Create doc/ output directory.
-    let out_dir = pkg_dir.join("doc");
+    // Create the output directory.  A package the caller pointed at gets `doc/`
+    // beside its source; an installed library is given a destination of its own
+    // (loft#911) because its source tree is shared, immutable cache content.
+    let out_dir = out_override.map_or_else(|| pkg_dir.join("doc"), std::path::Path::to_path_buf);
     std::fs::create_dir_all(&out_dir)?;
 
     // Copy style.css from the main doc directory if it exists.
@@ -1655,9 +1660,15 @@ pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
 
     let topic_count = topics.len();
     let api_count = all_api_sections.len();
+    // The ABSOLUTE path: a relative `graphics/doc` reads like part of the project you
+    // are standing in, which is how stray doc trees ended up committed (loft#911).
+    let shown = out_dir
+        .canonicalize()
+        .unwrap_or_else(|_| out_dir.clone())
+        .display()
+        .to_string();
     println!(
-        "Generated docs for {pkg_name}: {topic_count} guide(s), {api_count} API section(s) → {}",
-        out_dir.display()
+        "Generated docs for {pkg_name}: {topic_count} guide(s), {api_count} API section(s) → {shown}"
     );
     Ok(())
 }

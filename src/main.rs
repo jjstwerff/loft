@@ -412,9 +412,12 @@ fn print_help() {
     println!(
         "  --require-signature           refuse to proceed unless the index signature verifies"
     );
-    println!("  doc [path]                    generate HTML documentation for a package");
-    println!("                                doc          — generate docs for package in cwd");
-    println!("                                doc lib/pkg  — generate docs for lib/pkg");
+    println!("  doc [path|library] [-o dir]   generate HTML documentation for a package");
+    println!("                                doc           — the package in the cwd");
+    println!("                                doc lib/pkg   — a package directory");
+    println!(
+        "                                doc graphics  — an installed library, into ~/.loft/doc"
+    );
     println!("                                output: <pkg>/doc/*.html");
 }
 
@@ -912,6 +915,16 @@ fn loft_home() -> std::path::PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".loft")
+}
+
+/// Where `loft doc <installed-library>` writes: `~/.loft/doc/<name>-<version>`.
+///
+/// An installed package lives in the immutable registry cache, so its generated docs
+/// cannot go beside its source; and the current working directory is not loft's to
+/// write to — `loft doc graphics` used to leave a `graphics/` tree in whatever repo
+/// the user was standing in, which a later `git add -A` then swept up (loft#911).
+fn doc_cache_dir() -> std::path::PathBuf {
+    loft_home().join("doc")
 }
 
 /// Order-comparable version key; non-numeric parts sort as 0.
@@ -7580,13 +7593,64 @@ fn main() {
                 std::process::exit(1);
             }
         } else if a == "doc" {
-            // PKG.8: `loft doc [path]` — generate HTML docs for a package.
-            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                std::path::PathBuf::from(&argv[i])
-            } else {
-                std::env::current_dir().unwrap_or_default()
+            // PKG.8: `loft doc [path | library] [-o <dir>]` — HTML docs for a package.
+            //
+            // loft#911 — the argument used to be a PATH only, but the command reads as
+            // (and is used as) `loft doc <library>`.  A library name is not a directory,
+            // so `loft doc graphics` took the default-manifest branch, created
+            // `./graphics/doc/` out of nothing wherever the user happened to stand, found
+            // no `src/`, and reported "0 API sections" for a package with 119 documented
+            // `pub fn`s.  Two rules close that: a name that resolves to nothing produces
+            // an ERROR and no directory, and an installed package's docs go to loft's own
+            // doc cache rather than the CWD or the immutable registry copy.
+            let mut target: Option<String> = None;
+            let mut out_override: Option<std::path::PathBuf> = None;
+            let mut j = i;
+            while let Some(arg) = argv.get(j) {
+                j += 1;
+                if arg == "-o" || arg == "--out" {
+                    match argv.get(j) {
+                        Some(dir) => {
+                            out_override = Some(std::path::PathBuf::from(dir));
+                            j += 1;
+                        }
+                        None => {
+                            eprintln!("loft doc: `{arg}` needs a directory");
+                            std::process::exit(1);
+                        }
+                    }
+                } else if !arg.starts_with('-') && target.is_none() {
+                    target = Some(arg.clone());
+                }
+            }
+            let (pkg_path, default_out) = match target {
+                None => (std::env::current_dir().unwrap_or_default(), None),
+                Some(t) => {
+                    let as_path = std::path::PathBuf::from(&t);
+                    if as_path.is_dir() {
+                        (as_path, None)
+                    } else if let Some((name, version, dir)) =
+                        // `installed_packages` is sorted by (name, version), so the LAST
+                        // match is the newest installed version of that name.
+                        loft::registry_index::installed_packages()
+                                .into_iter()
+                                .rfind(|(n, _, _)| *n == t)
+                    {
+                        // An installed package is shared, immutable cache content: its
+                        // docs belong beside it in loft's own tree, not inside it.
+                        (dir, Some(doc_cache_dir().join(format!("{name}-{version}"))))
+                    } else {
+                        eprintln!(
+                            "loft doc: `{t}` is neither a directory nor an installed package.\n\
+                             Point it at a package directory, or install the library first \
+                             (`loft install {t}`)."
+                        );
+                        std::process::exit(1);
+                    }
+                }
             };
-            if let Err(e) = loft::documentation::generate_pkg_docs(&pkg_path) {
+            let out_dir = out_override.or(default_out);
+            if let Err(e) = loft::documentation::generate_pkg_docs(&pkg_path, out_dir.as_deref()) {
                 eprintln!("Error generating docs: {e}");
                 std::process::exit(1);
             }
