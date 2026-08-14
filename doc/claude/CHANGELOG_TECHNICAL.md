@@ -9,6 +9,78 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Removing one entry of a linked collection group had no owner (loft#900, 2026-08-14)
+
+loft#898 gave the CLEAR an owner for a linked group's shared records; removal never got
+one, and was wrong in both directions. Through a VIEW it freed the record the primary
+still held (the vector kept the entry and its key, the text read back `null`); through the
+PRIMARY it never reached the views, which reported their old length over a freed record.
+Both backends, and the published 2026.8.0.
+
+**A removal spelled through any member removes it from the group** — the same verdict
+loft#898 reached for the clear, and for the same reason: `h.view += [e]` has appended to
+every member since loft#843, so an operation spelled through a view acts on the group. The
+alternative has no coherent successor state — `h.by_k[1] = null` then
+`h.by_k[1] = E{k:1,…}` would remove one index entry and then add to the whole group,
+leaving the primary holding two records under one key with nothing able to repair it.
+
+The ORDER is the mechanism. Every unlink reads the record's key out of the record, so the
+free must come last and the record must stay reachable until then. The parser emits the
+lookup ONCE into a work-ref temporary (marked `inline_ref`, since the record is the
+collection's, not the temporary's), then one `OpHashRemove` per other member carrying the
+`CLEAR_KEYED_VIEW` bit — the same `0x8000` convention `OpClearKeyed` and `OpSetKeyed`
+already use on their `tp`, so arity and both emitters are unchanged — and finally the
+ordinary removal on the member the source named, which frees. The temporary is also what
+keeps the key expression evaluated once (@PLN102 F2); repeating `OpGetRecord` per member
+would have re-run it.
+
+The field site is resolved by walking the `OpGetField` chain (`keyed_field_site` /
+`holder_type`) rather than by reading the base variable's type, so a group one level down
+resolves too — reading only the base var is what left loft#898's nested case on the unsafe
+path until its guard row a7 caught it.
+
+Two supporting facts had to be repaired, both pinned by guard rows:
+
+* `Stores::remove`'s `Parts::Array` arm computed its slot with BY-VALUE arithmetic
+  (`(rec.pos - 8) / size`), which is 0 for every element of a record-backed container —
+  the loft#719 defect, fixed then for `Ordered` and left for `Array`. The documented
+  `vector<T>` + `hash<T[k]>` group has an `array` primary, so every unlink through it went
+  to slot 0.
+* `remove_owned` sent a grouped hash to `hash::free_entry`, which correctly declines to
+  free a record a stride-0 table only borrows. Declining is right only while somebody else
+  frees; when the removal is spelled through that member it IS the free, so the record and
+  everything it claimed leaked. `Stores::hash_owns_entries` is the table's own answer to
+  which case it is.
+
+Matrix: 45 cells × both backends — every (primary, view, spelled-member) triple over the
+four member kinds, three-member groups, an absent key, drain-and-refill, first/middle/last
+of three, and ungrouped controls per kind.
+
+Two PRE-EXISTING defects the matrix separated out and did not fix, filed with repros:
+loft#902 (two `index` members share their red-black links, which live in fields of the
+element record — the fill "works" because both fields then describe ONE tree, and the first
+removal rebalances it into a panic) and loft#903 (`e#remove` in a loop maintains no
+sibling, and over an `array<T>` removes two elements — no group involved).
+
+### A `sorted` emptied by removal published the wrong slot on the next append (2026-08-14)
+
+`sorted_new` hands the constructor a scratch slot and `sorted_finish` / `ordered_finish`
+read the new record back out of it — at `length + 1`, except at length 0 where they take
+the "first record needs no reordering" path and read slot 0. `sorted_new`'s existing-record
+branch always answered `length + 1`, so the two disagreed at length 0.
+
+Only one thing reaches that state: a collection EMPTIED entry-by-entry
+(`coll[key] = null`), which keeps its allocation. `coll = []` drops the record, so the
+next append takes the fresh-claim branch and lands in slot 0 as expected. The append
+therefore wrote into slot 1 while `sorted_finish` published slot 0 — the bytes of the last
+element removed, with its text already freed — so `s.a += [E{k:9,…}]` read back as
+`2:null` and the new element was simply lost. `ordered_finish` inherits the slot from the
+same call, and had the same failure with the rec-id.
+
+Pre-existing on the published 2026.8.0, both backends, `sorted` and `ordered` only —
+`hash` and `index` are unaffected. Found by the loft#900 matrix's drain-and-refill cell;
+guard row b3 of `tests/scripts/900-linked-group-remove.loft`.
+
 ### A linked collection group's second route was silently under-populated (loft#901, 2026-08-14)
 
 Filling one member of a linked group fills every member (loft#843). For three pair shapes

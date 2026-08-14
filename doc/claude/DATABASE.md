@@ -918,12 +918,22 @@ per-entry record gave for free. Chunk sizes double only to `arena::CAP_CHUNK` an
 fixed after that, which bounds the tail waste at one partly-filled chunk instead of half
 the collection.
 
-**Two kinds of entry.** A PRIMARY hash allocates its entries from the arena. A SECONDARY
-index — a sibling field's `other_indexes` — is a second route to records the primary owns,
-and may neither move nor free them; its slots hold those record numbers, exactly as every
-slot did before. `STRIDE_FLD == 0` marks the borrowed case, and `hash::owns_entries` is the
-one place that asks. Freeing follows: an owned entry's storage returns to the arena
+**Two kinds of entry.** A hash allocates its entries from the arena. A SECONDARY index — a
+sibling field's `other_indexes` — is a second route to records the primary owns, and may
+neither move nor free them; its slots hold those record numbers, exactly as every slot did
+before. `STRIDE_FLD == 0` marks the borrowed case, and `hash::owns_entries` is the one
+place that asks. Freeing follows: an owned entry's storage returns to the arena
 (`hash::free_entry`), a borrowed one is left to its owner.
+
+A hash **in a linked group takes no arena at all** — not even as the group's primary
+(loft#901). Every member of a group names its elements by a 4-byte record id: a hash slot
+encodes `rec.rec`, an `array`/`ordered` slot stores it raw and reads it back at a
+hard-coded payload start, and an `index` keeps its links in fields of the record. None can
+express a position INSIDE a record, so a packed entry — several to a chunk, distinguished
+only by offset — is unaddressable through the siblings: they saw two elements at one
+record id and kept the first. `Type::linked` is the flag, `record_new` reads it, and
+`Stores::finish` sets it for every element type of a group (a field with a non-empty
+`other_indexes`). A collection that is not in a group is unaffected and keeps the arena.
 
 The layout is pinned by `tests/layout_golden.rs::placement_contract_is_pinned`; changing
 any of it without bumping `placement::HASH` would let an older store be misread instead of
@@ -967,10 +977,46 @@ The clear is emitted by the KEYED assign and by the VECTOR assign, because the s
 DATABASE.md documents by name — `vector<T>` + `hash<T[k]>` — has the vector as its record
 holder. Both route through `Parser::keyed_sibling_view_resets`.
 
-**Not covered, and filed separately: REMOVAL.** `coll[key] = null` through a group has the
-same two directions and neither is right — removing through a view frees the record the
-primary still holds, and removing through the primary leaves the view naming it.
-`Stores::remove_owned` takes no `secondary` flag, unlike its sibling `dedup_keyed`.
+### Removing one entry of a linked group (loft#900)
+
+Removal follows the clear's verdict: **a removal spelled through any member removes the
+entry from the group**, and its record is freed exactly once. `h.by_k[1] = null` therefore
+takes the entry out of the vector too. The alternative — dropping one index entry and
+leaving the record in the primary — has no coherent successor state: `h.by_k[1] = null`
+followed by `h.by_k[1] = E{k:1,…}` would remove one entry and then add to the whole group,
+leaving the primary holding two records under one key with nothing able to repair it.
+
+The ORDER is the mechanism, and it is what the plumbing is shaped around. Every unlink
+reads the record's key out of the record, so the free must come LAST and the record must
+stay reachable until then:
+
+1. the key lookup runs ONCE, into a parser work-ref temporary marked `inline_ref` (the
+   record belongs to the collection, not to the temporary, so nothing frees it twice);
+2. one `OpHashRemove` per OTHER member, each carrying the `CLEAR_KEYED_VIEW` bit on its
+   `tp` — the same `0x8000` convention `OpClearKeyed` and `OpSetKeyed` use, so the op's
+   arity and both emitters are unchanged. The bit means UNLINK ONLY;
+3. the ordinary removal on the member the source named, which unlinks and frees.
+
+Resolving the lookup once is also what keeps the key expression evaluated once (@PLN102
+F2). `Parser::keyed_group_remove` emits the sequence and `Parser::keyed_field_site` finds
+the struct field by walking the `OpGetField` chain, so a group one level down resolves too.
+
+Both directions were broken and only one was filed: through a VIEW the record was freed
+while the primary still held it (the vector kept the entry and its key, the text read back
+`null`), and through the PRIMARY the views were never told. Two supporting facts had to be
+repaired with it — `Stores::remove`'s `Array` arm computed its slot by BY-VALUE arithmetic
+and so unlinked slot 0 every time (the loft#719 defect, fixed then for `Ordered` only), and
+`remove_owned` sent a grouped hash to `hash::free_entry`, which declines to free a record a
+stride-0 table only borrows, so the record leaked. `Stores::hash_owns_entries` is the
+table's own answer to which case that is.
+
+**Two shapes are still wrong, filed rather than fixed.** A group with two `index` members
+panics on the first removal — an `index` keeps its red-black links in FIELDS of the element
+record, and two `index` fields over one element type resolve to the same offset, so they
+describe ONE tree reached through two roots (loft#902). And `e#remove` in a loop maintains
+no sibling: `OpRemove` computes the element's record ref internally, so the parser has no
+value to hand the unlinks — and over an `array<T>` it removes two elements with no group
+involved at all (loft#903).
 
 ### Probing and Load Factor
 

@@ -254,6 +254,27 @@ impl Stores {
         false
     }
 
+    /// The content type of the field at byte offset `byte_off` in struct /
+    /// enum-value type `struct_tp`, or `None` when there is no such field.
+    ///
+    /// The offset is what the IR carries (`OpGetField`'s second argument), so this is
+    /// how a nested field access resolves the struct it reads out of.
+    #[must_use]
+    pub fn field_content_at(&self, struct_tp: u16, byte_off: u16) -> Option<u16> {
+        if (struct_tp as usize) >= self.types.len() {
+            return None;
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+            &self.types[struct_tp as usize].parts
+        else {
+            return None;
+        };
+        fields
+            .iter()
+            .find(|f| f.position == byte_off)
+            .map(|f| f.content)
+    }
+
     /// loft#898 — the members of the linked collection group the keyed field at
     /// `byte_off` belongs to, as `(byte_off, collection_tp, is_view)` per member,
     /// INCLUDING the field itself. Empty when the field is not in a group.

@@ -240,10 +240,53 @@ This is also what the documented `vector<T>` + `hash<T[k]>` pairing needed — t
 vector is the owner — and it holds for three or more collections, and for a group nested
 inside another struct.
 
-One related case is **not** fixed: removing a single entry (`coll[key] = null`) from such a
-group still gets it wrong in both directions
-([#900](https://github.com/loft-lang/loft/issues/900)). Empty and refill the whole
-collection, or give each one its own element type, until that lands.
+### …and removing one entry takes it out of every collection in the group
+
+Removing a single entry used to be wrong in both directions. Through the secondary
+collection it freed the record the primary still held, so the entry was still there and
+its text read back `null`:
+
+```loft
+struct H { v: vector<E>, by_k: hash<E[k]> }
+h.by_k[1] = null;                   // remove through the index
+for e in h.v { … }                  // was 1:null — the record was freed underneath
+```
+
+And through the primary it never reached the secondary, which went on reporting an entry
+over a record that was gone.
+
+The entry now leaves every collection in the group and its record is freed once, whichever
+one you spell the removal through — the same rule adding and clearing already follow. The
+alternative, dropping one index entry and leaving the record in the primary, has no
+sensible next step: `h.by_k[1] = null` followed by `h.by_k[1] = E{k:1,…}` would remove one
+entry and then add to the whole group, leaving the primary with two records under one key
+and nothing able to repair it.
+
+Two smaller things had to be right for this to work, and are fixed with it: removing an
+entry from the `vector` half of a group always removed the FIRST one regardless of which
+you asked for, and removing through the `hash` half leaked the record.
+
+Removing entries from an `index` collection when a **second** `index` over the same element
+type sits in the same struct still panics
+([#902](https://github.com/loft-lang/loft/issues/902)) — two b-trees cannot share one set
+of links. `e#remove` inside a loop also does not yet maintain the other collections
+([#903](https://github.com/loft-lang/loft/issues/903)); use `coll[key] = null`.
+
+### A `sorted` collection emptied entry-by-entry accepts new entries again
+
+Emptying a `sorted<T[k]>` with `coll[key] = null` and then adding to it gave back the entry
+you last removed — with its text already freed — and dropped the one you added:
+
+```loft
+s.a = [E{k:1,n:"alpha"}, E{k:2,n:"beta"}];
+s.a[1] = null; s.a[2] = null;       // now empty
+s.a += [E{k:9,n:"zz"}];
+for e in s.a { … }                  // was 2:null, not 9:zz
+```
+
+Emptying it with `s.a = []` was always fine, and so were `hash` and `index`. Only the
+by-removal route reached it, because that is the one that leaves the collection empty while
+it still holds its allocation.
 
 ### …and the second route is actually filled, for every pair of kinds
 

@@ -1962,12 +1962,24 @@ impl State {
         self.put_stack(res);
     }
 
+    /// Remove one record from a keyed collection.
+    ///
+    /// `tp`'s [`CLEAR_KEYED_VIEW`] bit says UNLINK ONLY — the same convention
+    /// `OpClearKeyed` and `OpSetKeyed` use on theirs. It marks the members of a
+    /// linked collection group that the removal passes through on its way to the
+    /// one that frees (loft#900): every member must let the record go, and the
+    /// record must be freed once, after the last unlink has read its key out of it.
     pub fn hash_remove(&mut self) {
-        let tp = self.code::<u16>();
+        let raw = self.code::<u16>();
+        let tp = raw & !crate::database::CLEAR_KEYED_VIEW;
         let rec = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         if rec.rec != 0 {
-            self.database.remove_owned(&data, &rec, tp);
+            if raw & crate::database::CLEAR_KEYED_VIEW == 0 {
+                self.database.remove_owned(&data, &rec, tp);
+            } else {
+                self.database.remove(&data, &rec, tp);
+            }
         }
     }
 

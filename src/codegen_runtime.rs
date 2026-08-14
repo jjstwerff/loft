@@ -2420,11 +2420,19 @@ pub fn OpRemove<S: IterState>(
 
 /// Remove a record from a hash or index collection.
 ///
+/// `tp`'s `0x8000` bit says UNLINK ONLY: the member is one a linked group's
+/// removal passes through on its way to the one that frees (loft#900).
+///
 /// Bytecode equivalent: `State::hash_remove` in `src/state/io.rs`.
 pub fn OpHashRemove(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, rec: DbRef, tp: i32) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let raw = tp as u16;
     if rec.rec != 0 {
-        stores.remove_owned(&data, &rec, tp as u16);
+        if raw & crate::database::CLEAR_KEYED_VIEW == 0 {
+            stores.remove_owned(&data, &rec, raw);
+        } else {
+            stores.remove(&data, &rec, raw & !crate::database::CLEAR_KEYED_VIEW);
+        }
     }
 }
 

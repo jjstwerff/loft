@@ -334,11 +334,22 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
             store.set_u32_raw(db.rec, db.pos, new_sorted);
             sorted_rec = new_sorted;
         }
+        // The scratch slot the constructor writes into is the one `sorted_finish` /
+        // `ordered_finish` will read the new record back out of, and at length 0 they
+        // take the "first record needs no reordering" path and read slot 0 — not
+        // `length + 1`.  Both branches only ever meet at length 0 through a
+        // collection that was EMPTIED and still holds its allocation, which
+        // `coll[key] = null` produces and `coll = []` does not (it drops the
+        // record, so the branch above claims a fresh one).  The append then landed
+        // in slot 1 while `sorted_finish` published slot 0 — the bytes of the last
+        // element removed, with its text already freed, so `x.a += [E{k:9,…}]` read
+        // back as the removed `2:null` and the new element was simply lost.
+        let slot = if length == 0 { 0 } else { length + 1 };
         // return the last record inside the allocation
         DbRef {
             store_nr: db.store_nr,
             rec: sorted_rec,
-            pos: checked_vec_pos(length + 1, size),
+            pos: checked_vec_pos(slot, size),
         }
     }
 }

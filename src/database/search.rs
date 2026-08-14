@@ -608,6 +608,15 @@ impl Stores {
     /// Order matters: the claims are read out of the record's own fields, so
     /// they must be released before the record is unlinked (a vector element is
     /// shifted over by its successor) and before its block is freed.
+    /// Does the hash at `data` allocate its own entries, or only borrow records a
+    /// sibling collection holds?  False for an uninitialised table, which has
+    /// nothing to free either way.
+    fn hash_owns_entries(&self, data: &DbRef) -> bool {
+        let store = self.store(data);
+        let claim = store.get_u32_raw(data.rec, data.pos);
+        claim != 0 && hash::owns_entries(store, claim)
+    }
+
     pub fn remove_owned(&mut self, data: &DbRef, rec: &DbRef, db: u16) {
         let parts = self.types[db as usize].parts.clone();
         let content = match &parts {
@@ -679,7 +688,15 @@ impl Stores {
             // holds, and normalising to byte 8 would walk the CHUNK's first slot
             // instead.  Its storage comes back to the arena rather than to
             // `Store::delete`, which would hand the whole chunk to the free tree.
-            if matches!(parts, Parts::Hash(..)) {
+            //
+            // A hash in a LINKED GROUP has no arena — its entries are one record
+            // each, so its siblings can name them by record id (loft#901) — and
+            // `hash::free_entry` correctly declines to free a record it does not
+            // own.  Declining is the whole story only while somebody else frees:
+            // when the removal is spelled through this member it IS the free, so
+            // taking the arena path leaked the record and everything it claimed.
+            // `owns_entries` is the table's own answer to which case this is.
+            if matches!(parts, Parts::Hash(..)) && self.hash_owns_entries(data) {
                 self.remove_claims(rec, content);
                 hash::free_entry(data, rec, &mut self.allocations);
                 return;
@@ -712,7 +729,7 @@ impl Stores {
         match self.types[db as usize].parts.clone() {
             // BY-VALUE: elements sit inline in the container, so the element's
             // byte position IS its index.
-            Parts::Sorted(c, _) | Parts::Vector(c) | Parts::Array(c) => {
+            Parts::Sorted(c, _) | Parts::Vector(c) => {
                 let size = u32::from(self.types[c as usize].size);
                 vector::remove_vector(
                     data,
@@ -728,7 +745,13 @@ impl Stores {
             // Removing anything therefore shifted the wrong span from the wrong
             // place (loft#719).  The slot has to be looked up by the record it
             // names.
-            Parts::Ordered(_, _) => {
+            //
+            // `Array` reaches this the same way and needed the same answer
+            // (loft#900): it is the promoted form of a `vector<T>` sharing its
+            // records with a keyed sibling, so removing one entry of a linked
+            // group through the keyed member must unlink the vector's slot too,
+            // and by-value arithmetic sent every such removal to slot 0.
+            Parts::Ordered(_, _) | Parts::Array(_) => {
                 let vec_rec = self.store(data).get_u32_raw(data.rec, data.pos);
                 if vec_rec == 0 {
                     return;
