@@ -346,6 +346,35 @@ enum VecBind {
 }
 
 impl Parser {
+    /// Does this expression hand back a buffer the CALLER already owns, rather than
+    /// storage of its own?
+    ///
+    /// A heap-returning function writes its result into a caller-allocated return
+    /// buffer passed as a hidden trailing `__retbuf` parameter (the NRVO ABI), so
+    /// the value it answers IS that buffer — allocated once at the call site and,
+    /// inside a loop, reused across every iteration. Binding it to a temp that owns
+    /// therefore frees the buffer once per iteration while its real owner still
+    /// holds it (loft#906).
+    ///
+    /// The question is about the expression's PRODUCER, so it looks at the call and
+    /// not at the value's type: a `vector<T>` from a call and a `vector<T>` from an
+    /// allocating cast have the same type and opposite ownership.
+    ///
+    /// The test is the parameter's `hidden` FLAG, not its name. A function whose tail
+    /// promotes a work-ref to BE the buffer has that parameter RENAMED after the
+    /// variable it promoted (`fn add(v, x, out)` rather than `…, __retbuf`), so a
+    /// name test sees a retbuf on one shape of heap-returning function and not on the
+    /// other — which is half a fix, and the half that still crashes.
+    fn yields_a_return_buffer(data: &crate::data::Data, rhs: &Value) -> bool {
+        let Value::Call(d_nr, _) = rhs.unspan() else {
+            return false;
+        };
+        data.def(*d_nr)
+            .attributes()
+            .last()
+            .is_some_and(|a| a.hidden)
+    }
+
     /// @PLN10 — wrap every text-dest native called in *value position* in a
     /// scope-bound work-text temp, so its result lives in a freed local instead
     /// of the never-cleared `stores.scratch` buffer.  Replaces
@@ -2613,6 +2642,21 @@ use a separate collection or add after the loop"
                     // a local first was clean, because a user local has no such dep.
                     let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
+                    // …but a call that returns a heap value writes it into a buffer the
+                    // CALLER allocated (the hidden trailing `__retbuf` parameter), so the
+                    // value it hands back IS that buffer.  Owning it here frees it at the
+                    // temp's scope exit — which inside a loop is once per ITERATION, while
+                    // the buffer was allocated once outside — and the next iteration then
+                    // writes through freed storage.  `introspect`'s `per_iteration_frees`
+                    // names exactly this shape, and giving the temp ownership above is what
+                    // creates it.  The buffer's own owner still frees it.
+                    //
+                    // Silent in a release build; the `LOFT_POISON` gate is what makes it a
+                    // SIGSEGV instead, because `b.items = add(b.items, k)` in a loop then
+                    // reads a record overwritten with 0xDEADBEEF.
+                    if Self::yields_a_return_buffer(&self.data, &rhs_saved) {
+                        self.vars.mark_skip_free(tmp);
+                    }
                     let set_tmp = v_set(tmp, rhs_saved);
                     let clear = self.clear_vector_field(to, &lhs_parent_tp);
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);

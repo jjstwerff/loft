@@ -726,6 +726,13 @@ impl Parser {
         let found = self.vars.work_refs(f_type, &mut self.lexer);
         self.change_var_type(found, f_type);
         self.vars.mark_inline_ref(found);
+        // …and `inline_ref` is not what stops the free. A work-ref is freed at scope
+        // exit unless it is marked `skip_free`, so the temp emitted an `OpFreeRef` on
+        // the record the removal below had ALREADY freed: a double free, silent in a
+        // release build and `Unknown record N` from `Store::valid` under debug
+        // assertions.  The doc above says the record belongs to the collection and is
+        // freed once; this is the flag that makes that true.
+        self.vars.mark_skip_free(found);
         let mut ops = vec![Value::Set(found, Box::new(get_rec.clone()))];
         for (off, coll_tp, _) in &members {
             if *off == byte_off {
