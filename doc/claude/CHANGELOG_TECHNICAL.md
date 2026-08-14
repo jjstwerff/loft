@@ -9,6 +9,24 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `loft test` no longer reports a green for a file it did not run (loft#916, 2026-08-14)
+
+`loft test <a> <b>` silently discarded everything after the first target. It ran `<a>`, printed
+`test result: ok. 1 passed; 1 file`, and exited **0** — even when `<b>` held a failing test. The
+file count was the only place it showed, and that reads as correct unless you already knew how many
+you asked for. Naming two files is the natural move when a change touches two suites and the whole
+run is slow, which is exactly when nobody re-reads the count: it cost a sabotage sweep whose second
+half never executed and was reported green.
+
+A second target is now an error naming both, not a drop. One target per run is kept deliberately —
+the summary line is a single verdict over one scope, and looping would print a partial one per file,
+which misleads in a new way rather than fixing this one. Only the CONSECUTIVE leading positionals
+are examined, so a later flag's value (`--lib <dir>`) is never mistaken for a second target; that
+row is in the guard, because a rule written as "no bare token after the target" would have broken
+it. Guards: `tests/test_command_targets.rs`, asserting the EXIT CODE as well as the text — the exit
+code is what a CI job reads, and it was the half that made this dangerous rather than merely
+confusing.
+
 ### A module shadowed by a dependency's same-named file now says so (loft#912, 2026-08-14)
 
 A module's basename is global across a consumer's whole dependency graph. Only the first file to

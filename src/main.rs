@@ -6779,6 +6779,38 @@ fn main() {
             if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                 test_target = resolve_test_target(&argv[i]);
                 i += 1;
+                // loft#916 — everything after the first target used to be dropped in
+                // silence: `loft test good.loft alsogood.loft` ran the first, printed
+                // `ok … 1 file`, and exited 0 even when the second file FAILED.  A
+                // green reported for a file that did not run is the one failure mode a
+                // test runner must not have, and the file count is the only place it
+                // showed — which nobody re-reads when the point of naming two files was
+                // that the whole run is slow.
+                //
+                // One target per run: the summary line is a single verdict over one
+                // scope, and looping would print a partial one per file, which
+                // misleads in a new way rather than fixing this one.  Only the
+                // CONSECUTIVE leading positionals are examined, so a later flag's value
+                // (`--lib <dir>`) is never mistaken for a second target.
+                let extra: Vec<String> = argv[i..]
+                    .iter()
+                    .take_while(|s| !s.starts_with('-'))
+                    .cloned()
+                    .collect();
+                if !extra.is_empty() {
+                    eprintln!(
+                        "loft test: one target per run, but {} were given ({}).\n\
+                         Run them one at a time, or name a directory to run everything \
+                         under it.",
+                        extra.len() + 1,
+                        std::iter::once(argv[i - 1].clone())
+                            .chain(extra)
+                            .map(|s| format!("`{s}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    std::process::exit(1);
+                }
             }
             // Read loft.toml to find src/ directory, dependency paths, and native libs.
             let manifest_path = std::path::Path::new("loft.toml");
