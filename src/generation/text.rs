@@ -7,7 +7,7 @@
 use crate::data::{Data, Type, Value};
 use std::io::Write;
 
-use super::{Output, sanitize};
+use super::Output;
 
 /// O7: count the number of consecutive format/append ops in `ops[start..]`,
 /// skipping `Value::Line` nodes.  Used by `clear_stack_text` to emit a
@@ -34,10 +34,10 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
-            let v_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let v_nr = self.var_place(*nr);
             write!(
                 w,
-                "if var_{v_nr}.rec != 0 {{ vector::clear_vector(&var_{v_nr}, &mut stores.allocations); }}"
+                "if {v_nr}.rec != 0 {{ vector::clear_vector(&{v_nr}, &mut stores.allocations); }}"
             )?;
             return Ok(());
         }
@@ -163,7 +163,7 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
             let variables = self.data.def(self.def_nr).variables();
-            let s_nr = sanitize(variables.name(*nr));
+            let s_nr = self.var_place(*nr);
             // When the variable is a `&mut String` parameter (RefVar(Text)), the capacity
             // re-allocation assignment needs an explicit dereference; auto-deref does not
             // apply to assignment left-hand sides in Rust.
@@ -180,12 +180,12 @@ impl Output<'_> {
                 write!(
                     w,
                     "{{ let _cap = {n}_usize * 8; \
-                     if var_{s_nr}.capacity() < _cap \
-                     {{ {deref}var_{s_nr} = String::with_capacity(_cap); }} \
-                     else {{ var_{s_nr}.clear(); }} }}"
+                     if {s_nr}.capacity() < _cap \
+                     {{ {deref}{s_nr} = String::with_capacity(_cap); }} \
+                     else {{ {s_nr}.clear(); }} }}"
                 )?;
             } else {
-                write!(w, "var_{s_nr}.clear()")?;
+                write!(w, "{s_nr}.clear()")?;
             }
             return Ok(());
         }
@@ -200,11 +200,11 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             write!(
                 w,
-                "{{let c = {val_expr}; if c != 0 {{ var_{s_nr}.push(ops::to_char(c)); }} }}"
+                "{{let c = {val_expr}; if c != 0 {{ {s_nr}.push(ops::to_char(c)); }} }}"
             )?;
             return Ok(());
         }
@@ -214,7 +214,7 @@ impl Output<'_> {
     /// Use this to emit `OpAppendText` as a `+=` on the target string variable.
     pub(super) fn append_text(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
         if let [Value::Var(nr), val] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             // P222: when the RHS expression references the destination
             // variable (e.g. `s = s + s` lowers to OpAppendText(s, Var(s))
@@ -234,12 +234,12 @@ impl Output<'_> {
                 if dest_nullable {
                     write!(
                         w,
-                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); if var_{s_nr}.as_str() != loft::state::STRING_NULL {{ var_{s_nr} += &__p222_tmp; }} }}"
+                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); if {s_nr}.as_str() != loft::state::STRING_NULL {{ {s_nr} += &__p222_tmp; }} }}"
                     )?;
                 } else {
                     write!(
                         w,
-                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); var_{s_nr} += &__p222_tmp; }}"
+                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); {s_nr} += &__p222_tmp; }}"
                     )?;
                 }
                 return Ok(());
@@ -247,10 +247,10 @@ impl Output<'_> {
             if dest_nullable {
                 write!(
                     w,
-                    "{{ let __app_tmp: &str = &*({val_expr}); if var_{s_nr}.as_str() != loft::state::STRING_NULL {{ var_{s_nr} += __app_tmp; }} }}"
+                    "{{ let __app_tmp: &str = &*({val_expr}); if {s_nr}.as_str() != loft::state::STRING_NULL {{ {s_nr} += __app_tmp; }} }}"
                 )?;
             } else {
-                write!(w, "var_{s_nr} += &*({val_expr})")?;
+                write!(w, "{s_nr} += &*({val_expr})")?;
             }
             return Ok(());
         }
@@ -267,7 +267,7 @@ impl Output<'_> {
             Value::Int(token),
         ] = vals
         {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             // All text-returning calls produce either `Str` or `String` (never `&str`).
             // Wrap with `&*` so `format_text` (which expects `&str`) always gets the right type.
@@ -304,7 +304,7 @@ impl Output<'_> {
             let width_expr = self.generate_expr_buf(width)?;
             write!(
                 w,
-                "ops::format_text(&mut var_{s_nr}, {val_str}, {width_expr}, {dir}, {token})"
+                "ops::format_text(&mut {s_nr}, {val_str}, {width_expr}, {dir}, {token})"
             )?;
             return Ok(());
         }
@@ -334,13 +334,13 @@ impl Output<'_> {
             Value::Int(dir),
         ] = vals
         {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_long_with_tag({prefix}var_{s_nr}, {val_expr}, stores.take_format_fault(), {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
+                "ops::format_long_with_tag({prefix}{s_nr}, {val_expr}, stores.take_format_fault(), {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
             )?;
             return Ok(());
         }
@@ -354,7 +354,7 @@ impl Output<'_> {
         stack: bool,
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val, width, prec, dir] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
@@ -362,7 +362,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_float({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
+                "ops::format_float({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }
@@ -377,7 +377,7 @@ impl Output<'_> {
         stack: bool,
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val, width, prec, dir] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
+            let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
@@ -385,7 +385,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_single({prefix}var_{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
+                "ops::format_single({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }

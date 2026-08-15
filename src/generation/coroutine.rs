@@ -683,9 +683,6 @@ fn emit_factory_fn(
 fn persistent_default(tp: &Type) -> String {
     match tp {
         Type::Text(_) => "String::new()".to_string(),
-        Type::Boolean => "false".to_string(),
-        Type::Character => "0_u32".to_string(),
-        Type::Float | Type::Single => "0.0_f64".to_string(),
         // A heap local starts as the null reference and the body's own `OpDatabase` fills
         // it — the same initialiser the per-arm `let` used before these became fields.
         Type::Reference(_, _)
@@ -695,8 +692,16 @@ fn persistent_default(tp: &Type) -> String {
         | Type::Radix(_, _, _)
         | Type::Trie(_, _, _)
         | Type::Index(_, _, _)
-        | Type::Enum(_, true, _) => "DbRef::NULL".to_string(),
-        _ => "0_i64".to_string(),
+        | Type::Enum(_, true, _)
+        | Type::Iterator(_, _) => "DbRef::NULL".to_string(),
+        // Every remaining field type lowers to a Rust NUMBER, so the zero of whatever
+        // `rust_type` decided is a value of exactly that type.  Asking it, rather than
+        // listing the types a second time here, is the point: the second list had drifted
+        // on three arms at once — a `character` field was declared `i32` and initialised
+        // `0_u32`, a `single` field `f32` and initialised `0.0_f64`, a `boolean` field `u8`
+        // and initialised `false` — so a generator holding a local of any of those types
+        // did not compile under `--native` at all, while `--interpret` ran it.
+        other => format!("0 as {}", rust_type(other, &Context::Variable)),
     }
 }
 

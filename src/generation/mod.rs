@@ -1309,6 +1309,30 @@ impl Output<'_> {
         disambiguated_fn_ident(&self.dup_fn_names, def)
     }
 
+    /// The Rust place for loft variable `var` — the generator's struct field when the
+    /// function being emitted is a coroutine and this local persists across resumes, and a
+    /// plain `var_<name>` local otherwise.
+    ///
+    /// Every site that names a variable as somewhere to READ FROM or WRITE TO has to ask,
+    /// because a persistent local has no `let` of its own: the factory made it a field, so
+    /// spelling it as a local emits a Rust identifier that does not exist.  Appending to a
+    /// text local inside a generator did exactly that — `a = a + t` in a loop emitted
+    /// `var_a += …` against a field named `self.var_a`, and `--native` refused to compile
+    /// a program `--interpret` ran correctly.
+    ///
+    /// Outside a coroutine the map is empty and this is the bare local every site spelled
+    /// before, so routing a site through it can only add the case it was missing.
+    #[must_use]
+    pub fn var_place(&self, var: u16) -> String {
+        match self.coroutine_persistent_fields.get(&var) {
+            Some(field) => format!("self.var_{field}"),
+            None => format!(
+                "var_{}",
+                sanitize(self.data.def(self.def_nr).variables().name(var))
+            ),
+        }
+    }
+
     /// Use this before emitting indented output lines.
     /// # Errors
     /// When the output cannot be written
