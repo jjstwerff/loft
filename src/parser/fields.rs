@@ -550,6 +550,7 @@ impl Parser {
                         0,
                         &Value::Var(w),
                         &std::collections::HashSet::new(),
+                        &std::collections::HashSet::new(),
                     );
                     list.push(Value::Var(w));
                     // Mirror the unqualified-form path in parser/objects.rs:

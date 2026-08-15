@@ -23,6 +23,11 @@ pub(crate) struct FieldSinks {
     /// block directly AFTER the prelude so no field's header is cleared after
     /// its contents land.
     vector_headers: Vec<Value>,
+    /// loft#924 — byte offsets of the fields whose header `parse_object` already
+    /// zeroed in the prelude because they belong to a LINKED COLLECTION GROUP.
+    /// The field parse and `object_init` both consult it so the header is written
+    /// once, in the one place that can order it ahead of every member's fill.
+    group_primed: HashSet<u16>,
 }
 
 impl Parser {
@@ -1360,7 +1365,14 @@ impl Parser {
                 v_set(w, Value::Null),
                 self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]),
             ];
-            self.object_init(&mut list, variant_nr, 0, &Value::Var(w), &HashSet::new());
+            self.object_init(
+                &mut list,
+                variant_nr,
+                0,
+                &Value::Var(w),
+                &HashSet::new(),
+                &HashSet::new(),
+            );
             list.push(Value::Var(w));
             // #394 — `w` is a NORMAL work-ref (freed at scope end), NOT skip_free.
             // A `skip_free` here assumed the consumer ALIASES w's store (the `x = B`
@@ -2142,7 +2154,7 @@ impl Parser {
         if !self.first_pass {
             let none = HashSet::new();
             let code = Value::Var(var);
-            self.object_init(list, target, 0, &code, &none);
+            self.object_init(list, target, 0, &code, &none, &HashSet::new());
         }
         var
     }
@@ -2797,14 +2809,21 @@ impl Parser {
                 // against a sibling's prime is load-bearing (hoisting them merged two
                 // keyed fields' records — `502-keyed-slice-for-only`).  They also do
                 // not take the retarget path, so #437 does not reach them.
-                let prime = self.cl(
-                    "OpSetInt4",
-                    &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
-                );
-                if matches!(td_base, Type::Vector(_, _)) {
-                    sinks.vector_headers.push(prime);
-                } else {
-                    list.push(prime);
+                //
+                // loft#924 — a member of a LINKED COLLECTION GROUP takes neither
+                // route: `parse_object` zeroed the whole group's headers together,
+                // before any member's fill, because an insert through any one of
+                // them indexes the record into all of them.
+                if !sinks.group_primed.contains(&pos) {
+                    let prime = self.cl(
+                        "OpSetInt4",
+                        &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
+                    );
+                    if matches!(td_base, Type::Vector(_, _)) {
+                        sinks.vector_headers.push(prime);
+                    } else {
+                        list.push(prime);
+                    }
                 }
                 let info = self.type_info(&td);
                 self.cl(
@@ -3112,6 +3131,27 @@ impl Parser {
         // block right after it, before any field value; see the note in
         // `parse_object_field`.
         let prelude_len = list.len();
+        // loft#924 — a LINKED COLLECTION GROUP's headers are zeroed as one block
+        // here, whether or not the literal names the field, because every member
+        // shares one record set: `OpFinishRecord` through the field the author
+        // wrote indexes the record into the siblings too, so a sibling primed
+        // afterwards drops the spine it was just handed.  Doing it per field made
+        // the literal's field ORDER decide which member could find the records.
+        let mut group_headers = Vec::new();
+        if !self.first_pass {
+            sinks.group_primed = self.linked_group_offsets(td_nr);
+            let mut offsets: Vec<u16> = sinks.group_primed.iter().copied().collect();
+            // A `HashSet` iterates in an unspecified order and these ops land in
+            // the emitted stream, so sort them: identical source must compile to
+            // identical bytecode.
+            offsets.sort_unstable();
+            for off in offsets {
+                group_headers.push(self.cl(
+                    "OpSetInt4",
+                    &[code.clone(), Value::Int(i32::from(off)), Value::Int(0)],
+                ));
+            }
+        }
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -3135,8 +3175,11 @@ impl Parser {
         }
         self.lexer.token("}");
         // #437 splice: every vector-field header zeroed as one block, directly
-        // after the prelude and before the first field's value.
-        for (i, header) in sinks.vector_headers.drain(..).enumerate() {
+        // after the prelude and before the first field's value.  loft#924's group
+        // headers lead it — same position, same reason, and a member of a group is
+        // primed only here.
+        group_headers.append(&mut sinks.vector_headers);
+        for (i, header) in group_headers.into_iter().enumerate() {
             list.insert(prelude_len + i, header);
         }
         // #330 splice: run the hoisted self-reading field values BEFORE the
@@ -3147,7 +3190,8 @@ impl Parser {
         }
         if !self.first_pass {
             self.warn_omitted_fields(td_nr, &found_fields, &literal_pos);
-            self.object_init(&mut list, td_nr, 0, code, &found_fields);
+            let primed = std::mem::take(&mut sinks.group_primed);
+            self.object_init(&mut list, td_nr, 0, code, &found_fields, &primed);
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
             for a_nr in 0..self.data.def(td_nr).attributes().len() {
@@ -3387,6 +3431,43 @@ impl Parser {
     }
 
     // fill the not mentioned fields with their default value
+    /// loft#924 — the byte offsets of every field of `td_nr` that is a member of a
+    /// LINKED COLLECTION GROUP (`vector<E>` beside `hash<E[k]>`, or any two keyed
+    /// collections over one element type — DATABASE.md § Clearing one member).
+    ///
+    /// Their headers cannot be zeroed field-by-field. A group is several routes to
+    /// ONE record set, so `OpFinishRecord` on any member indexes the record into
+    /// every other member; a member whose 4-byte header is zeroed AFTER that
+    /// insert loses the spine it was just given, and the records stay reachable
+    /// only through whichever member the literal happened to write first. The
+    /// caller primes all of them together, ahead of any fill, and the two sites
+    /// that would otherwise prime one at a time skip what is listed here.
+    ///
+    /// Empty for a struct with no group, which leaves every other literal emitting
+    /// exactly the ops it did before.
+    fn linked_group_offsets(&mut self, td_nr: u32) -> HashSet<u16> {
+        let mut out = HashSet::new();
+        let struct_tp = self.data.def(td_nr).known_type();
+        if struct_tp == u16::MAX {
+            return out;
+        }
+        for aid in 0..self.data.attributes(td_nr) {
+            // A group member is a collection field, so ask the schema only about
+            // those — an offset read for a computed or non-stored field could
+            // collide with a real field's and prime the wrong header.
+            let tp = self.data.attr_type(td_nr, aid);
+            if !Self::is_collection_type(tp.base()) {
+                continue;
+            }
+            let nm = self.data.attr_name(td_nr, aid);
+            let off = self.database.position(struct_tp, &nm);
+            if self.database.keyed_field_is_linked(struct_tp, off) {
+                out.insert(off);
+            }
+        }
+        out
+    }
+
     pub(crate) fn object_init(
         &mut self,
         list: &mut Vec<Value>,
@@ -3394,6 +3475,7 @@ impl Parser {
         pos: u16,
         code: &Value,
         found_fields: &HashSet<String>,
+        group_primed: &HashSet<u16>,
     ) {
         for aid in 0..self.data.attributes(td_nr) {
             let tp = self.data.attr_type(td_nr, aid);
@@ -3438,15 +3520,21 @@ impl Parser {
                     | Type::Radix(_, _, _)
                     | Type::Trie(_, _, _)
             ) {
-                let prime = self.cl(
-                    "OpSetInt4",
-                    &[
-                        code.clone(),
-                        Value::Int(i32::from(pos + fld)),
-                        Value::Int(0),
-                    ],
-                );
-                list.push(prime);
+                // loft#924 — a group member's header was already zeroed with its
+                // siblings', ahead of every fill. Writing it again here is what made
+                // an OMITTED view field lose the records the primary already holds:
+                // `object_init` runs after the whole literal body.
+                if !group_primed.contains(&(pos + fld)) {
+                    let prime = self.cl(
+                        "OpSetInt4",
+                        &[
+                            code.clone(),
+                            Value::Int(i32::from(pos + fld)),
+                            Value::Int(0),
+                        ],
+                    );
+                    list.push(prime);
+                }
                 // An EMPTY collection default (`= []`) parses to `Insert([Null])`, and the
                 // zeroed header above already IS the empty collection.  Letting it through
                 // to `set_field_no_check` emitted `OpAppendVector(field, null)` — appending
@@ -3454,6 +3542,15 @@ impl Parser {
                 if matches!(&default, Value::Insert(items)
                     if items.iter().all(|i| matches!(i, Value::Null)))
                 {
+                    continue;
+                }
+                // loft#924 — likewise for a group member with NO declared default:
+                // the prelude's zeroing is its whole initialisation, and falling
+                // through writes the zero a SECOND time (`set_field_no_check` stores
+                // a keyed collection by writing its 4-byte header), now after the
+                // siblings' records went in.  That is what left an OMITTED view
+                // field empty while the primary held the records.
+                if group_primed.contains(&(pos + fld)) && default == Value::Null {
                     continue;
                 }
             }
@@ -3473,7 +3570,10 @@ impl Parser {
             if let Type::Reference(tp, _) = tp
                 && default == Value::Null
             {
-                self.object_init(list, tp, pos + fld, code, &HashSet::new());
+                // The prelude primed THIS struct's group fields; an inline nested
+                // struct's own fields are none of them, and nothing has filled them
+                // yet, so they prime here as they always did.
+                self.object_init(list, tp, pos + fld, code, &HashSet::new(), &HashSet::new());
                 continue;
             } else if default == Value::Null {
                 // @PLN116 — a BARE (non-`Optional`) enum field cannot be silently

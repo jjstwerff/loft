@@ -26,12 +26,25 @@ struct E { k: integer, v: integer }
 struct P { x: integer, y: integer, v: integer }
 struct W { name: text, v: integer }
 
+// One element type PER keyed field, which is what keeps the five fields of `S`
+// five independent collections. Two keyed collections over ONE element type in
+// one struct are auto-linked into a linked group — two routes to a single record
+// set — and this section is about each kind on its own; the group has its own
+// section further down, with its own struct.
+//
+// `h` / `so` / `ix` shared `E` until loft#924. Each member zeroed its own header
+// at its own position in the literal, so the later fills silently truncated away
+// what the earlier ones had put in the shared record set and the three read as
+// independent. They are three views of six records if the element type is shared.
+struct ESorted { k: integer, v: integer }
+struct EIndex { k: integer, v: integer }
+
 struct S {
   xs: vector<integer>,
   ys: vector<integer>?,
   h: hash<E[k]>,
-  so: sorted<E[k]>,
-  ix: index<E[k]>,
+  so: sorted<ESorted[k]>,
+  ix: index<EIndex[k]>,
 }
 
 struct G {
@@ -50,8 +63,8 @@ fn fresh() -> S {
     xs: [7, 8],
     ys: [7, 8],
     h: [E { k: 1, v: 10 }, E { k: 2, v: 20 }],
-    so: [E { k: 1, v: 10 }, E { k: 2, v: 20 }],
-    ix: [E { k: 1, v: 10 }, E { k: 2, v: 20 }],
+    so: [ESorted { k: 1, v: 10 }, ESorted { k: 2, v: 20 }],
+    ix: [EIndex { k: 1, v: 10 }, EIndex { k: 2, v: 20 }],
   }
 }
 
@@ -108,9 +121,9 @@ fn main() {
   s3 = fresh();
   s3.h = [E { k: 5, v: 50 }];
   assert(len(s3.h) == 1, "hash `= [one]` over two left len {len(s3.h)}, want 1");
-  s3.so = [E { k: 5, v: 50 }];
+  s3.so = [ESorted { k: 5, v: 50 }];
   assert(len(s3.so) == 1, "sorted `= [one]` over two left len {len(s3.so)}, want 1");
-  s3.ix = [E { k: 5, v: 50 }];
+  s3.ix = [EIndex { k: 5, v: 50 }];
   assert(len(s3.ix) == 1, "index `= [one]` over two left len {len(s3.ix)}, want 1");
 
   // `= []` empties on every kind — the empty literal is the same statement as `= null`
@@ -137,7 +150,7 @@ fn main() {
   // spine naming freed records would still count right and read wrong.
   s6 = fresh();
   s6.so = null;
-  s6.so += [E { k: 4, v: 44 }];
+  s6.so += [ESorted { k: 4, v: 44 }];
   tot = 0;
   for e in s6.so { tot += e.v; }
   assert(tot == 44, "sorted refilled after clear holds {tot}, want 44");
@@ -147,9 +160,10 @@ fn main() {
   // through their owner, and reset the other route to them: a view left holding its old
   // spine reports a length over memory that is now free.
   //
-  // Filled with `+=` rather than by a literal on purpose: a literal that fills the primary
-  // before the view field leaves the view empty (loft#924), which would make these cells
-  // pass for the wrong reason — an empty view has nothing to reset.
+  // Filled with `+=` rather than by a literal on purpose, so this section keeps testing the
+  // CLEAR and nothing else: an empty view has nothing to reset, and a literal used to leave
+  // one empty whenever the primary was written first (loft#924, now fixed and guarded by
+  // `924-group-literal-field-order.loft`).
   gp = GRP { data: [] };
   gp.data += [E { k: 1, v: 10 }, E { k: 2, v: 20 }];
   assert(len(gp.data) == 2, "the group's primary starts at {len(gp.data)}, want 2");
