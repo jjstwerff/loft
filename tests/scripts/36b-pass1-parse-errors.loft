@@ -106,21 +106,12 @@ fn test_field_type() {
   r = PEFieldT { v: "a" };
 }
 
-// `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`), so a
-// hash over a struct that has a real field named `key` is refused.  The check walks
-// struct ATTRIBUTES (`typedef::fill_all`), so it is the FIELD form that triggers it —
-// this fixture used to declare a LOCAL `h: hash<PEBadKV[pkey]> = []`, which the guard
-// never inspects, over a struct whose field had been renamed to `pkey` so there was no
-// collision left to find either.  Two independent reasons to be silent, in a file where
-// nothing could report it (loft#929, and the local-form gap is loft#932).
-struct PEBadKV {
-  key: integer,
-  value: text,
-}
-// @EXPECT_ERROR: reserved for hash
-struct PEBadKVDb {
-  h: hash<PEBadKV[key]>,
-}
+// `key` was once refused as a field name on a hash element ("reserved for hash
+// iteration").  The refusal is retired (loft#932) — the pseudo-field it named does not
+// exist, it covered `hash` but never `sorted`/`index`, and the local form it could not
+// see always ran — so there is nothing left to expect here.  What the shape does instead
+// is asserted where it can be RUN: `tests/issues.rs::issue_83_hash_value_field_named_key_works`
+// and `tests/scripts/932-key-is-an-ordinary-field-name.loft`.
 
 // --- Shadowing ---
 

@@ -440,27 +440,6 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-    // reject hash-value structs that have a field named `key`.
-    // `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`).
-    for d_nr in start_def..data.definitions() {
-        if !matches!(data.def_type(d_nr), DefType::Struct) {
-            continue;
-        }
-        for a_nr in 0..data.attributes(d_nr) {
-            if let Type::Hash(c_nr, _, _) = data.attr_type(d_nr, a_nr)
-                && data.attr(c_nr, "key") != usize::MAX
-            {
-                lexer.pos_diagnostic(
-                    Level::Error,
-                    &data.def(c_nr).position,
-                    &format!(
-                        "Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
-                        data.def(c_nr).name,
-                    ),
-                );
-            }
-        }
-    }
     // @PLN25 E2 — register the synthetic `__nullable<T>` enums + (gated) rewrite
     // embedded struct fields, BEFORE the unit-variant discriminant pass + the
     // layout loop below, so each synthetic enum is registered and laid out like

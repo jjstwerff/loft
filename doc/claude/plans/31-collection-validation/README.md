@@ -45,7 +45,7 @@ every meaningful **value-element type** through every meaningful
 
 | Shape | Result |
 |---|---|
-| `hash<Entry[key]>` insert/lookup/remove with `key` field name | ❌ caught by parser ("reserved for hash iteration") — documented restriction, not a bug |
+| `hash<Entry[key]>` insert/lookup/remove with `key` field name | ❌ caught by parser ("reserved for hash iteration") — documented restriction, not a bug. **Retired 2026-08-15 (loft#932):** the pseudo-field it reserved never existed, it covered `hash` but not `sorted`/`index` or any local, and the issue-83 panic it stood in for no longer reproduces. The shape runs on both backends — `tests/scripts/932-key-is-an-ordinary-field-name.loft` |
 | `sorted<Score[value]>` insert + iterate | ✅ output correct, then **`thread 'main' panicked at src/database/structures.rs:609:25: index out of bounds: the len is 66 but the index is 65535`** on cleanup |
 | `index<Item[name, -price]>` insert + iterate | ✅ output correct, same `index out of bounds` panic on cleanup |
 

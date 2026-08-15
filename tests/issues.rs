@@ -1946,14 +1946,29 @@ fn test() {
 }
 
 // ── Issue 83 ─────────────────────────────────────────────────────────────────
-// A struct field named `key` used as a hash-value type causes a runtime panic:
-// "Allocating a used store" (src/database/allocation.rs).
-// `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
-// the real struct field at the allocation level.
+// A struct field named `key` used as a hash-value type once panicked at runtime with
+// "Allocating a used store" (src/database/allocation.rs), and was refused at compile time
+// to keep programs away from it: "reserved for hash iteration".
+//
+// The refusal outlived the panic and is gone (loft#932).  Three facts retired it:
+//
+//  · The pseudo-field it named does not exist.  `for kv in h { kv.key }` over an element
+//    struct with no real `key` field answers "Unknown field", not a hash key — so there
+//    was nothing for a real field to collide WITH.
+//  · It only ever covered `hash`.  `sorted<Elm[key]>` and `index<Elm[key]>` over a struct
+//    with a real `key` field are exercised by `tests/scripts/146-keyed-rekey-through-view.loft`
+//    and always ran, as did every `hash<Entry[key]>` LOCAL — the refusal walked struct
+//    ATTRIBUTES, so a local's type annotation was never inspected.  `135-hash-table-rebuild…`
+//    is built on that spelling.
+//  · The panic no longer reproduces.  This test is the program it was filed for, and it
+//    now runs on both backends, which is what it asserts.
+//
+// `key` is the natural name for a key field, so the refusal cost a good spelling for a
+// hazard that had already been fixed elsewhere.
 
-// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
+// Issue 83 / S8: a field named `key` in a hash-value struct is an ordinary field.
 #[test]
-fn issue_83_hash_value_field_named_key_panics() {
+fn issue_83_hash_value_field_named_key_works() {
     code!(
         "struct Entry { key: text, count: integer }
 struct Db { data: hash<Entry[key]> }
@@ -1963,12 +1978,10 @@ fn test() {
     e = db.data[\"hello\"];
     assert(e != null, \"entry should exist\");
     assert(e.count == 1, \"count should be 1\");
+    assert(e.key == \"hello\", \"the key field reads back as itself\");
 }"
     )
-    .error(
-        "Struct 'Entry' has a field named 'key' which is reserved for hash iteration \
-— rename the field at issue_83_hash_value_field_named_key_panics:1:15",
-    );
+    .result(Value::Null);
 }
 
 // Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
@@ -2140,19 +2153,18 @@ fn issue_89_optional_ref_text_param_with_arg() {
     .result(Value::Null);
 }
 
-// ── S8 — Compile-time error when hash-value struct has field named `key` ──────
-// `key` is a pseudo-field reserved for hash iteration.  A struct with a real
-// field named `key` used as a hash value type must be rejected at compile time.
-
-// S8: hash-value struct with a `key` field must produce a compile-time error.
+// ── S8 — a hash-value struct may have a field named `key` ────────────────────
+// The compile-time refusal S8 added is retired; see `issue_83_hash_value_field_named_key_works`
+// above for what retired it (loft#932).  Kept as the declaration-only half: S8's program
+// never ran the collection, so it pins that the DECLARATION alone is accepted.
 #[test]
-fn s8_hash_value_struct_key_field_rejected() {
+fn s8_hash_value_struct_key_field_accepted() {
     code!(
         "struct Item { key: text, value: integer }
 struct Container { data: hash<Item[key]> }
 fn test() { }"
     )
-    .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
+    .result(Value::Null);
 }
 
 // ── P2-R6 — Compiler check: yield inside par() body ──────────────────────────
