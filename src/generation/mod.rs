@@ -519,13 +519,20 @@ pub struct Output<'a> {
     /// yield arm returns through, so both ends of one generator agree.
     pub yield_lazy_wrap: Option<(String, String)>,
     /// P224: when emitting a coroutine state-machine method body
-    /// (`emit_next_i64` / `emit_next_text`), each `var_nr` listed here
+    /// (`emit_next_i64` / `emit_next_text`), each `var_nr` keyed here
     /// is a function-local that lives as a struct field on the
     /// generator (so its value persists across `next_*` calls).
-    /// `Value::Var(v)` for these emits `self.var_<name>` rather than
-    /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<name> = …;`.
+    /// `Value::Var(v)` for these emits `self.var_<field>` rather than
+    /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<field> = …;`.
     /// Empty outside coroutine bodies.
-    pub coroutine_persistent_vars: HashSet<u16>,
+    ///
+    /// The VALUE is that field's name, which is usually the variable's own but not always:
+    /// two `for i in …` loops in one generator declare two variables spelling `i` and two
+    /// spelling `i#index`, and a struct cannot declare a field twice (loft#928).
+    /// `coroutine::persistent_field_names` builds the map and is the only place a field name
+    /// is derived — keeping membership and spelling in ONE lookup is what stops an emitter
+    /// from reading a field under a name the struct definition never used.
+    pub coroutine_persistent_fields: HashMap<u16, String>,
     /// Coroutine-persistent vars whose allocating initialiser has already been emitted inside
     /// the current `impl LoftCoroutine`.  A second `Set(v, Null)` on the same field is the
     /// @P302 in-place clear, which must NOT re-run `null_named` (that would orphan the store).
@@ -1148,7 +1155,7 @@ impl<'a> Output<'a> {
             yield_collect_text: false,
             yield_collect_dbref: false,
             yield_lazy_wrap: None,
-            coroutine_persistent_vars: HashSet::new(),
+            coroutine_persistent_fields: HashMap::new(),
             coroutine_allocated_vars: HashSet::new(),
             fn_ref_context: false,
             i32_literal_context: false,
@@ -1354,7 +1361,7 @@ impl Output<'_> {
             // A generator's locals live on the generator struct and are named `self.var_x`
             // inside its `next` methods. The prelude below spells a plain local, so a
             // vector that moved onto the struct is left alone rather than named wrongly.
-            if self.coroutine_persistent_vars.contains(&v) {
+            if self.coroutine_persistent_fields.contains_key(&v) {
                 continue;
             }
             self.hoist_counter += 1;

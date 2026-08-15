@@ -474,6 +474,48 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
     out
 }
 
+/// The generator struct's field name for every persistent local, made unique.
+///
+/// A generator moves its locals onto ONE struct, so unlike a function body — where a second
+/// `let mut var_i` merely shadows the first, and loft refuses the one shape where that would
+/// lose a value — two variables spelling the same name declare the field twice and the
+/// generated Rust does not compile.  Two `for i in …` loops in one generator are exactly
+/// that: each loop declares its own `i` and its own `i#index`, so four distinct variables
+/// spell two names (loft#928).
+///
+/// The first variable to claim a name keeps the bare `var_<name>`, so a generator with no
+/// duplicate emits what it emitted before; a later claimant takes the first free
+/// `var_<name>__2`, `var_<name>__3`, …  The argument fields seed the used set because they
+/// share the struct with the locals.  Testing each candidate against the names already TAKEN,
+/// rather than appending the variable number, is what keeps a suffix from colliding with a
+/// local the program really did name `i__2`.
+///
+/// This is the one derivation of a persistent field's name.  The struct definition, both
+/// factories, `drop_stores`, and every `self.var_x` read and write in `emit.rs` /
+/// `dispatch.rs` / `ref_ops.rs` all read the map it returns, and the map's KEYS are also what
+/// says a variable is persistent at all — so "is this a field" and "what is the field called"
+/// are one lookup and cannot drift apart.
+fn persistent_field_names(
+    attrs: &[crate::data::Attribute],
+    persistent: &[(u16, Type)],
+    vars: &crate::variables::Function,
+) -> std::collections::HashMap<u16, String> {
+    let mut used: std::collections::HashSet<String> =
+        attrs.iter().map(|a| sanitize(&a.name)).collect();
+    let mut out = std::collections::HashMap::with_capacity(persistent.len());
+    for (v, _) in persistent {
+        let base = sanitize(vars.name(*v));
+        let mut name = base.clone();
+        let mut n = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base}__{n}");
+            n += 1;
+        }
+        out.insert(*v, name);
+    }
+    out
+}
+
 /// Emit `drop_stores` — release the heap locals a generator still owns when its handle is
 /// freed without the generator having exhausted.
 ///
@@ -489,6 +531,7 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
 fn emit_drop_stores(
     w: &mut dyn Write,
     persistent: &[(u16, Type)],
+    fields: &std::collections::HashMap<u16, String>,
     data: &crate::data::Data,
     def_nr: u32,
 ) -> std::io::Result<()> {
@@ -510,7 +553,7 @@ fn emit_drop_stores(
                         | Type::Iterator(_, _)
                 )
         })
-        .map(|(v, _)| sanitize(vars.name(*v)))
+        .map(|(v, _)| fields[v].clone())
         .collect();
     if owned.is_empty() {
         return Ok(());
@@ -536,8 +579,7 @@ fn emit_struct_def(
     segments: &[YieldSegment],
     yield_tp: &Type,
     persistent: &[(u16, Type)],
-    data: &crate::data::Data,
-    def_nr: u32,
+    fields: &std::collections::HashMap<u16, String>,
 ) -> std::io::Result<()> {
     writeln!(w, "struct {struct_name} {{")?;
     writeln!(w, "    state: u32,")?;
@@ -549,9 +591,8 @@ fn emit_struct_def(
         writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
     }
     // P224: persistent function-locals as struct fields.
-    let var_table = data.def(def_nr).variables();
     for (v, tp) in persistent {
-        let n = sanitize(var_table.name(*v));
+        let n = &fields[v];
         let field_tp = match tp {
             Type::Text(_) => "String".to_string(),
             other => rust_type(other, &Context::Variable),
@@ -595,8 +636,7 @@ fn emit_factory_fn(
     attrs: &[crate::data::Attribute],
     segments: &[YieldSegment],
     persistent: &[(u16, Type)],
-    data: &crate::data::Data,
-    def_nr: u32,
+    fields: &std::collections::HashMap<u16, String>,
 ) -> std::io::Result<()> {
     // ForLoopBody: the entire factory is emitted by Output::emit_for_body_factory.
     if segments
@@ -622,9 +662,8 @@ fn emit_factory_fn(
         }
     }
     // P224: initialise persistent locals to default.
-    let var_table = data.def(def_nr).variables();
     for (v, tp) in persistent {
-        let n = sanitize(var_table.name(*v));
+        let n = &fields[v];
         let init = persistent_default(tp);
         writeln!(w, "        var_{n}: {init},")?;
     }
@@ -892,7 +931,7 @@ impl Output<'_> {
                 }
                 // A `__vdb_*` that became a persistent FIELD must not also get a local of the
                 // same name — the local would shadow the field and the frees would miss.
-                if self.coroutine_persistent_vars.contains(&v) {
+                if self.coroutine_persistent_fields.contains_key(&v) {
                     continue;
                 }
                 to_predeclare_vdb.push(v);
@@ -1151,7 +1190,7 @@ impl Output<'_> {
             let mut ok = true;
             op.walk(&mut |n| {
                 if let Value::Var(v) = n
-                    && !out.coroutine_persistent_vars.contains(v)
+                    && !out.coroutine_persistent_fields.contains_key(v)
                     && !fn_scope.contains(v)
                     && !vars.is_argument(*v)
                 {
@@ -1231,6 +1270,10 @@ impl Output<'_> {
 
         // P224: compute persistent locals once, share across struct + impl + factory.
         let persistent = coroutine_persistent_locals(self.data, def_nr);
+        // loft#928: and their field names with them, so every emitter spells a field the
+        // same way.  Derived here rather than at each site because a name is only unique
+        // relative to the OTHER fields on the struct.
+        let fields = persistent_field_names(&attrs, &persistent, self.data.def(def_nr).variables());
 
         // Two reasons a loop that `detect_lazy_for` accepted still cannot be lowered lazily.
         //
@@ -1316,8 +1359,7 @@ impl Output<'_> {
             &segments,
             &yield_tp,
             &persistent,
-            self.data,
-            def_nr,
+            &fields,
         )?;
 
         // ── 2. impl LoftCoroutine ────────────────────────────────────────────
@@ -1327,9 +1369,9 @@ impl Output<'_> {
         // `Output` instance and would otherwise inherit stale declared marks
         // for `__yf_*` / `__vdb_*` etc., causing E0425 in the eager-collect
         // factory path.
-        let prev_persistent = std::mem::take(&mut self.coroutine_persistent_vars);
+        let prev_persistent = std::mem::take(&mut self.coroutine_persistent_fields);
         let prev_allocated = std::mem::take(&mut self.coroutine_allocated_vars);
-        self.coroutine_persistent_vars = persistent.iter().map(|(v, _)| *v).collect();
+        self.coroutine_persistent_fields.clone_from(&fields);
         let mut newly_declared = Vec::with_capacity(persistent.len());
         for (v, _) in &persistent {
             if self.declared.insert(*v) {
@@ -1341,9 +1383,9 @@ impl Output<'_> {
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
         self.emit_next_i64(w, &attrs, &segments, &tail, has_yf, &yield_tp)?;
-        emit_drop_stores(w, &persistent, self.data, def_nr)?;
+        emit_drop_stores(w, &persistent, &fields, self.data, def_nr)?;
         writeln!(w, "}}\n")?;
-        self.coroutine_persistent_vars = prev_persistent;
+        self.coroutine_persistent_fields = prev_persistent;
         self.coroutine_allocated_vars = prev_allocated;
         for v in newly_declared {
             self.declared.remove(&v);
@@ -1362,8 +1404,7 @@ impl Output<'_> {
             &attrs,
             &segments,
             &persistent,
-            self.data,
-            def_nr,
+            &fields,
         )?;
         if has_for_body {
             self.emit_for_body_factory(
@@ -1374,7 +1415,7 @@ impl Output<'_> {
                 &segments,
                 &yield_tp,
                 &persistent,
-                def_nr,
+                &fields,
             )?;
         }
         Ok(())
@@ -1392,7 +1433,7 @@ impl Output<'_> {
         segments: &[YieldSegment],
         yield_tp: &Type,
         persistent: &[(u16, Type)],
-        def_nr: u32,
+        fields: &std::collections::HashMap<u16, String>,
     ) -> std::io::Result<()> {
         let is_text = matches!(yield_tp, Type::Text(_));
         // @P326 — for-body factory must use the DbRef channel for
@@ -1571,9 +1612,8 @@ impl Output<'_> {
         // fields but omits the persistent-locals fields that
         // `emit_struct_def` declared, producing a Rust E0063 ("missing
         // fields in initializer").
-        let var_table = self.data.def(def_nr).variables();
         for (v, tp) in persistent {
-            let n = sanitize(var_table.name(*v));
+            let n = &fields[v];
             let init = persistent_default(tp);
             writeln!(w, "        var_{n}: {init},")?;
         }
