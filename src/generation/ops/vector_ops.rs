@@ -19,7 +19,6 @@
 
 use super::{EmitCtx, OpEmitter};
 use crate::data::Value;
-use crate::generation::hoist;
 use std::io;
 
 /// The `&(vector)` operand plus the header local, or `None` when this read is not covered.
@@ -45,7 +44,10 @@ fn verify(ctx: &EmitCtx<'_, '_>) -> &'static str {
 /// Everything the pair used to do between those two — build the element `DbRef`, test its
 /// `rec` against the null element, resolve the store from it again, and re-check
 /// `rec != 0 && valid(..)` inside the getter — is decided by the bounds test already.
-/// Worth ~1.6× on top of the header hoist alone (loft#885 stage 2).
+/// Worth ~3.2× on top of the header hoist alone — more than the hoist itself, because the
+/// second store resolution it removes costs more than the arithmetic it saves
+/// (loft#885 stage 2; PERFORMANCE.md § what the fusion is worth). `LOFT_NO_ELEM_FUSE=1`
+/// emits the unfused form, which is the middle rung of that measurement.
 ///
 /// Anything else (no header, an expression instead of a variable for the vector, a getter
 /// with a different shape) emits the `#rust` template unchanged.
@@ -53,8 +55,7 @@ pub struct FusedElementReadEmitter;
 
 impl OpEmitter for FusedElementReadEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        let Some(fused) = hoist::fused_element_read(ctx.output.data, ctx.def_fn.name(), args)
-        else {
+        let Some(fused) = ctx.output.fused_element_read(ctx.def_fn.name(), args) else {
             return super::default::DefaultEmitter.emit(ctx, args);
         };
         let Some(header) = ctx.output.active_vec_header(fused.var) else {

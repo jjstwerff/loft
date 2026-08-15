@@ -411,4 +411,8 @@ mutation deny-lists in PERFORMANCE.md § Design: P8. **`LOFT_HOIST_VERIFY=1`** e
 checking form of every hoisted read (re-derives the header, panics on a stale one) — run the
 suite under it after touching the gate; **`LOFT_NO_VECTOR_HOIST=1`** emits the pre-885 form,
 which is the before-half of an A/B on one binary and the first bisect step for a
-native-only wrong answer in a vector loop. PERFORMANCE.md § Design: P2, NATIVE.md.
+native-only wrong answer in a vector loop; **`LOFT_NO_ELEM_FUSE=1`** keeps the hoisted header
+but leaves the scalar element read UNFUSED, one bisect step finer, and is the middle rung that
+showed stage 2 is worth ~3.2× on top of stage 1 (projected ~1.4×) — more than the hoist itself,
+because the second store resolution it removes costs more than the arithmetic it saves.
+PERFORMANCE.md § Design: P2, NATIVE.md.

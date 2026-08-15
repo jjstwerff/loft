@@ -495,6 +495,14 @@ pub struct Output<'a> {
     /// loft#885. The before-half of an A/B on one binary, and the first thing to try when
     /// a program answers differently under `--native` than under `--interpret`.
     pub hoist_disabled: bool,
+    /// `LOFT_NO_ELEM_FUSE=1` — keep loft#885 stage 1 (the loop-invariant header) but emit
+    /// stage 2's scalar element reads unfused, as an address and then a load.
+    ///
+    /// The middle rung of the A/B, and the reason it exists: with only `LOFT_NO_VECTOR_HOIST`
+    /// the two stages can be measured together but never apart, so what stage 2 is worth on
+    /// top of the header hoist could only be estimated. It also bisects a native-only wrong
+    /// answer in a vector loop one stage further than the all-or-nothing switch does.
+    pub elem_fuse_disabled: bool,
     /// O7: number of consecutive format/append ops following the current
     /// `OpClearStackText`/`OpClearText`.  Set by `output_block` before each
     /// op is emitted; consumed (and reset to 0) by `clear_stack_text`.
@@ -1150,6 +1158,7 @@ impl<'a> Output<'a> {
             hoist_counter: 0,
             hoist_verify: std::env::var("LOFT_HOIST_VERIFY").is_ok_and(|v| v != "0"),
             hoist_disabled: std::env::var("LOFT_NO_VECTOR_HOIST").is_ok_and(|v| v != "0"),
+            elem_fuse_disabled: std::env::var("LOFT_NO_ELEM_FUSE").is_ok_and(|v| v != "0"),
             next_format_count: 0,
             yield_collect: false,
             yield_collect_text: false,
@@ -1425,6 +1434,28 @@ impl Output<'_> {
             .iter()
             .rev()
             .find_map(|f| f.get(&var).map(String::as_str))
+    }
+
+    /// Whether this call is emitted as ONE fused element read (loft#885 stage 2) — the
+    /// shape qualifies, the enclosing loop hoisted a header for the vector, and the fusion
+    /// is not switched off by `LOFT_NO_ELEM_FUSE`.
+    ///
+    /// All three conditions live here because the emitter and the pre-eval collector have
+    /// to reach the SAME verdict: the collector hoists an inner `OpGetVector*` into a
+    /// `let _pre_N` that a fused emission ignores, so a disagreement would run the read
+    /// twice. One answer, asked twice, cannot disagree with itself.
+    #[must_use]
+    pub fn fused_element_read<'a>(
+        &self,
+        getter: &str,
+        args: &'a [Value],
+    ) -> Option<hoist::FusedRead<'a>> {
+        if self.elem_fuse_disabled {
+            return None;
+        }
+        let fused = hoist::fused_element_read(self.data, getter, args)?;
+        self.active_vec_header(fused.var)?;
+        Some(fused)
     }
 
     /// @PLN18 08-S2 — build the live-dispatch entry check for a user fn, or

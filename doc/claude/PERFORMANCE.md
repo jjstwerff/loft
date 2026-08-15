@@ -843,6 +843,13 @@ emitter lifts them, because it is the one that knows where the loop is.
   rather than approximated.
 * `src/generation/hoist.rs` is the gate, and `src/generation/ops/vector_ops.rs` the three
   emitters. All fall through to the `#rust` template for a read the gate did not cover.
+* **`LOFT_NO_ELEM_FUSE=1`** emits stage 2's scalar reads unfused while KEEPING stage 1's
+  header — the middle rung of the A/B, and one bisect step finer than the all-or-nothing
+  `LOFT_NO_VECTOR_HOIST=1` for a native-only wrong answer in a vector loop. Like its sibling
+  it is read at GENERATION time. `Output::fused_element_read` is where all three conditions
+  (shape, header present, switch off) are answered, because the emitter and the pre-eval
+  collector have to reach the same verdict — the collector hoists an inner `OpGetVector*`
+  into a `let _pre_N` that a fused emission ignores, so a disagreement runs the read twice.
 * **The pre-eval had to learn about the fusion.** `OpGetVector*` is on `op_uses_stores`, so
   the collector hoists it into a `let _pre_N` before the statement — and a fused emission
   ignores that binding, which would leave the read happening TWICE. `hoist::fused_element_read`
@@ -860,6 +867,40 @@ after    8.2   8.1   8.0   8.3   9.3   9.4   ns/iter   (median ~8.3)
 Identical accumulator (216390.88) on all twelve runs, and the two distributions do not
 overlap. **~2.25×** — against the report's hand-written Rust baseline of 1.27 ns/iter, that
 takes `vector<single>` indexed reads from ~15× to **~6.5×**.
+
+#### loft#885 stage 2: what the fusion is worth
+
+Three rungs of ONE binary, alternating, six rounds each — `LOFT_NO_VECTOR_HOIST=1` (nothing
+hoisted), `LOFT_NO_ELEM_FUSE=1` (header hoisted, element read left as an address then a load),
+and the default (both). The middle rung is why `LOFT_NO_ELEM_FUSE` exists: with only the
+all-or-nothing switch the two stages can be measured together but never apart, so what stage 2
+was worth on top of stage 1 could only be projected — and the projection was wrong by 2×.
+
+Kernel: three flat `vector<single>` columns, 10 000 elements, 3 340 sweeps — 100.2M indexed
+reads, self-timed with `ticks()` so the `rustc` compile is outside the number.
+
+```
+                ns/read (6 alternating runs)                median   min
+pre-885    42.74 43.25 43.80 43.95 44.65 46.13              43.88   42.74
+stage 1     30.95 31.17 31.18 31.25 31.35 31.48             31.21   30.95
+stage 1+2    9.12  9.22  9.63  9.64  9.69 10.32              9.64    9.12
+
+stage 1 over pre-885   1.41x
+stage 2 over stage 1   3.24x     <- projected ~1.4x
+stage 1+2 over pre-885 4.55x
+```
+
+Identical accumulator (`116879542.5`, an f64 — an f32 one saturates and stops registering the
+small terms, so it cannot witness a divergent read) on all eighteen runs, and the three
+distributions do not overlap.
+
+**Read the RATIOS, not the absolute ns.** This ran on a box shared with other agents' loft
+builds and a browser (load 6.6–9.6) and pinned to four cores, so every absolute figure is
+inflated — the alternation is what makes the comparison survive it, since drift lands on all
+three rungs equally. The kernel is also not the one the stage-1 table above used (it
+accumulates in `float` and coalesces each read), so its numbers are not comparable to that
+table's; and because that constant per-read work sits in both halves of every ratio, these are
+LOWER bounds on the code-path ratios. Re-bless on a quiet box before quoting an absolute.
 
 **The gate is an ALLOW-list, and that is the load-bearing decision.** § Design: P8 catalogues
 five hand-maintained *deny*-lists of "which op mutates" that have already drifted; a hoist
@@ -898,9 +939,13 @@ Two things worth keeping:
   Re-classifying `OpRemoveVector` as a reader on purpose confirmed both halves: unarmed the
   program answered 120, armed it panicked naming the stale header.
 
-**Still open from the issue's staging:** fusing the element read into the address computation
-(the `DbRef` → `stores.store(&db)` → `get_single` chain), measured at a further ~1.4×. It needs
-the same gate, which is now in place.
+**Stage 2 landed** — fusing the element read into the address computation (the `DbRef` →
+`stores.store(&db)` → `get_single` chain), on the gate stage 1 built. It was projected at a
+further ~1.4×; measured, it is worth **~3.2×**, which is more than stage 1 itself. The
+projection counted the loads removed and not what they cost: the stage-1 form still BUILDS a
+`DbRef`, tests its `rec` against the null element, and then resolves the store a SECOND time
+out of it inside the getter — and it is that second resolution, not the arithmetic, that
+dominates. See § loft#885 stage 2: what the fusion is worth.
 
 ### Background
 
