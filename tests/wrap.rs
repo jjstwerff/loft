@@ -911,6 +911,14 @@ fn check_diagnostics(
     for pat in &unmatched_warns {
         println!("expected warning not emitted: {pat}");
     }
+    // An `@EXPECT_ERROR` that never matched is a guard that no longer guards anything —
+    // the diagnostic it pins may have been reworded, narrowed, or removed, and the file
+    // still passes.  Reported, not failed: 56 of the 167 annotations in the tree are
+    // currently inert, so failing on them is its own sweep (loft#929).  Printing them is
+    // what keeps that number from being invisible.
+    for pat in &unmatched_errors {
+        println!("expected error not emitted: {pat}");
+    }
     // Only fail on unexpected errors or unmatched #warn patterns.
     if unexpected.is_empty() && unmatched_warns.is_empty() {
         Ok(())

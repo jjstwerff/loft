@@ -414,3 +414,26 @@ fn pe_default_reading_the_record_and_needing_a_temporary() {
   assert(p.pe_x == 1, "unreached");
 }
 
+
+// A NULLABLE vector reached no arm of the `+` dispatch and the fall-through returned the
+// LEFT operand, so `a + b` over two `vector<T>?`s answered `a` — a silent wrong value on
+// both backends.  Concatenating them is not the fix: the nullable TEXT form propagates
+// null (`null + "x"` is null) and a vector has no such lowering to be consistent with, so
+// the refusal names the discharge that already works.
+// @EXPECT_ERROR: cannot concatenate a nullable
+fn pe_nullable_vector_concat() {
+  a: vector<integer>? = [1, 2];
+  b: vector<integer>? = [3, 4, 5];
+  c = a + b;
+  assert(len(c) == 5, "unreached");
+}
+
+// The `+= elem` ambiguity guard matched `Type::Vector` unpeeled, so a nullable vector was
+// not recognised and the reader met the fall-through instead — "Variable 'v' cannot change
+// type from vector<integer>? to integer", which does not mention the cure.
+// @EXPECT_ERROR: vector `+= elem` is ambiguous
+fn pe_nullable_vector_append_bare_element() {
+  v: vector<integer>? = [];
+  v += 5;
+  assert(len(v) == 1, "unreached");
+}

@@ -2266,11 +2266,18 @@ use a separate collection or add after the loop"
         // "push one element of element-type" AND syntactically resembles
         // "concat" (RHS is vector-typed) — the parser branch order used
         // to misroute the latter.
+        //
+        // @PLN25 — matched on the target's STORAGE, so a `vector<T>?` is refused the same
+        // way and gets the same cure.  Unpeeled, the ambiguity was not recognised on a
+        // nullable vector and the reader met whatever the fall-through said instead —
+        // *"Variable 'v' cannot change type from vector<integer>? to integer"* for a
+        // local, *"No matching operator 'Add'"* for a field, neither of which mentions
+        // `+= [elem]`.
         if op == "+="
-            && let Type::Vector(elm_tp, _) = f_type
+            && let Type::Vector(elm_tp, _) = f_type.base()
             && !s_type.is_unknown()
             && (**elm_tp).is_equal(&s_type)
-            && !s_type.is_equal(f_type)
+            && !s_type.is_equal(f_type.base())
         {
             diagnostic!(
                 self.lexer,
