@@ -244,7 +244,7 @@ pub fn warm_load_program(
     script_abspath: &str,
     store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
 ) -> Option<u32> {
-    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
+    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath, &p.lib_dirs);
     let state = manifest_state(&manifest)?;
     // #310 — re-resolve the parse-time `[library] native` registrations the
     // warm load skips, BEFORE committing to the bundle: each cdylib gets the
@@ -334,7 +334,7 @@ pub fn warm_load_program(
 #[cfg(feature = "mmap")]
 pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     use std::fmt::Write as _;
-    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
+    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath, &p.lib_dirs);
 
     let mut paths: Vec<&String> = p.parsed_sources.iter().collect();
     paths.sort_unstable();

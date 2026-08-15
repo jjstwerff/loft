@@ -765,13 +765,33 @@ pub fn write_run_source_hash(profile_dir: &std::path::Path, hash: u64) {
 }
 
 /// @PLN11 arc E — the `(bundle, manifest)` paths for the whole-program cache of
-/// the script at `script_abspath`.  Keyed on the script's path so each script
-/// gets a stable slot; the manifest (every parsed source + its content hash)
-/// detects drift in any input — stdlib, lazily-loaded libs, or the script.
+/// the script at `script_abspath`, resolved against the `--lib` search path
+/// `lib_dirs`.  The manifest (every parsed source + its content hash) detects drift
+/// in any input — stdlib, lazily-loaded libs, or the script.
+///
+/// **The search path is part of the key, not just of what it resolved to** (loft#930).
+/// One script run against two library trees is two programs, and keying on the script
+/// alone made the second silently reuse the first's build.  Nothing downstream could
+/// catch it: the manifest re-validates the files the FIRST run resolved, and those are
+/// still unchanged, so the drift check passes and hands back the wrong library's code.
+/// It looked responsive — an in-place edit of the bound library did rebuild — while
+/// ignoring the flag that selects WHICH library is edited, which is what made it hard
+/// to notice.  A consumer's A/B harness compared an arm against itself and read the
+/// byte-identical output as the strongest possible pass.
 #[must_use]
-pub fn program_cache_paths(script_abspath: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+pub fn program_cache_paths(
+    script_abspath: &str,
+    lib_dirs: &[String],
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let mut h = Sha256::new();
     h.update(script_abspath.as_bytes());
+    // Length-prefixed so `["ab", "c"]` and `["a", "bc"]` cannot hash alike, and in
+    // ORDER, because the search path is ordered: the same dirs listed differently can
+    // resolve a name to a different file.
+    for dir in lib_dirs {
+        h.update(u32::try_from(dir.len()).unwrap_or(u32::MAX).to_le_bytes());
+        h.update(dir.as_bytes());
+    }
     let key: [u8; 32] = h.finalize().into();
     let base = cache_base_dir();
     let stem = format!("program-{}", hex32(&key));
@@ -896,6 +916,45 @@ fn prune_dir(base: &std::path::Path, budget_bytes: u64, ttl: std::time::Duration
 
 #[cfg(test)]
 mod tests {
+    /// loft#930 — the `--lib` search path is part of the program-cache key.  Keying on
+    /// the script path alone made one script run against two library trees reuse the
+    /// FIRST tree's build, and the drift manifest could not catch it: it re-validates the
+    /// files that run resolved, which are still unchanged.  A consumer's A/B harness
+    /// compared an arm against itself and read the identical output as a pass.
+    #[test]
+    fn the_lib_search_path_is_part_of_the_program_cache_key() {
+        let script = "/abs/path/prog.loft";
+        let (bundle1, manifest1) = super::program_cache_paths(script, &["/abs/lib1".to_string()]);
+        let (bundle2, manifest2) = super::program_cache_paths(script, &["/abs/lib2".to_string()]);
+        assert_ne!(
+            bundle1, bundle2,
+            "a different --lib must key a different bundle"
+        );
+        assert_ne!(manifest1, manifest2);
+
+        // Same script, same path → the same slot, or nothing would ever hit warm.
+        let (again, _) = super::program_cache_paths(script, &["/abs/lib1".to_string()]);
+        assert_eq!(bundle1, again, "an unchanged --lib must reuse its bundle");
+
+        // ORDER matters: the search path is ordered, so the same dirs listed differently
+        // can resolve a name to a different file.
+        let ab = super::program_cache_paths(script, &["/a".to_string(), "/b".to_string()]);
+        let ba = super::program_cache_paths(script, &["/b".to_string(), "/a".to_string()]);
+        assert_ne!(ab.0, ba.0, "search-path order must key distinctly");
+
+        // Length-prefixed, so a split cannot be forged by concatenation.
+        let split = super::program_cache_paths(script, &["/ab".to_string(), "/c".to_string()]);
+        let joined = super::program_cache_paths(script, &["/ab/c".to_string()]);
+        assert_ne!(
+            split.0, joined.0,
+            "concatenation must not collide with a split"
+        );
+
+        // And no lib dirs at all is its own key, not any of the above.
+        let none = super::program_cache_paths(script, &[]);
+        assert_ne!(none.0, bundle1);
+    }
+
     use super::*;
 
     fn sample() -> Vec<(String, String)> {

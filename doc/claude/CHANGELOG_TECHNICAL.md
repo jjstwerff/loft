@@ -9,6 +9,31 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `--lib` is part of the program-cache key (loft#930, 2026-08-15)
+
+`program_cache_paths` hashed the entry script's path and nothing else, so one script run
+against two library trees shared a cache slot and the second run silently reused the first
+tree's build.  Nothing downstream could catch it: the drift manifest re-validates the files
+the FIRST run resolved, and those are still unchanged, so the freshness check passes and
+hands back the wrong library's code.
+
+That made the tool look responsive while ignoring the flag that selects which library it is
+responding to — an in-place edit of the bound library DID rebuild, moving the tree away DID
+force re-resolution, and only the `--lib` value itself changed nothing.  A consumer's A/B
+harness (the Moros Economy planet-generator port, verifying loft against a compiled C# twin
+by running one entry script against two library trees) compared an arm against itself and
+read the byte-identical output as the strongest possible pass.
+
+The search path now feeds the key, length-prefixed and in order — order matters because the
+same dirs listed differently can resolve a name to a different file.  The cache still hits:
+repeated runs against one tree keep one manifest and stay warm (0.04 s cold → 0.01 s), and
+two trees now keep two.
+
+`loft` built in a Cargo tree disables the program cache by default, which is why this
+reproduces on an installed `loft` and needs `LOFT_PROGRAM_CACHE=1` to show up in a dev
+build — worth knowing before concluding a cache defect is fixed.
+
+
 ### 56 of 167 `@EXPECT_ERROR` annotations never fired, and the suite reported nothing (loft#929, 2026-08-15)
 
 `check_diagnostics` failed a file on *unexpected* errors and on unmatched `// #warn`
