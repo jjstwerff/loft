@@ -24,7 +24,9 @@ pub type i8 = integer limit(-128, 127) size(1);
 pub type u16 = integer limit(0, 65535) size(2);
 // -32768 – 32767, 2 bytes.
 pub type i16 = integer limit(-32768, 32767) size(2);
-// Full 32-bit integer range, 4 bytes.
+// 4-byte signed: -2_147_483_647 – 2_147_483_647.  The bottom of the 32-bit range
+// (`-2147483648`) is the null sentinel, so it is not a value an `i32` can hold — the
+// same reservation `u32` makes at the top of its range.
 pub type i32 = integer size(4);
 // 4-byte unsigned: 0 – 4_294_967_294.  size(4) forces 4-byte storage
 // and serialisation symmetric with `i32`.  Stored as Parts::Int so the

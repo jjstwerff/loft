@@ -1400,8 +1400,11 @@ use a separate collection or add after the loop"
             return false;
         }
         // A narrowing integer store has its OWN diagnostic further down; running
-        // `convert` here as well would report the same store twice.
-        if Self::is_narrowing_int(s_type, f_type) {
+        // `convert` here as well would report the same store twice.  The STORE test, to
+        // stay paired with the site that reports (loft#931) — `integer` → `i32` is a
+        // narrowing that range containment cannot see, and reading it with the narrower
+        // test here let both sites fire for one assignment.
+        if Self::is_narrowing_int_store(s_type, f_type) {
             return false;
         }
         if f_type.is_equal(s_type) {
@@ -3249,7 +3252,12 @@ use a separate collection or add after the loop"
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.
-        if op == "=" && !self.first_pass && Self::is_narrowing_int(&s_type, f_type) {
+        //
+        // The STORE test (loft#931): `integer` and `i32` share BOUNDS as well, differing
+        // in `forced_size` alone, so range containment saw nothing here either and this
+        // site — which covers both the annotated local and the field WRITE — was the last
+        // place `b.v = n` could be caught before it silently stored 705032704.
+        if op == "=" && !self.first_pass && Self::is_narrowing_int_store(&s_type, f_type) {
             let dst = self.int_type_name(f_type);
             if let Some(hint) = self.nullable_sentinel_hint(code, f_type, &dst) {
                 // The literal fits the type but lands on the reserved null

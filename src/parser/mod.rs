@@ -603,6 +603,15 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// True while the `as` handler runs the conversion for an EXPLICIT cast.
+    ///
+    /// `convert` serves both the implicit stores (a local annotation, an argument, a
+    /// field) and the body of an `as` cast, so the implicit-narrowing diagnostic it
+    /// raises has to know which one it is in.  Without that, the widened `integer` →
+    /// `i32` test (loft#931) fires on the very cast it prescribes as the cure — and on
+    /// every `f += (i as i32)` besides.  An explicit cast keeps the range-containment
+    /// rule alone; DN4 is what governs it.
+    pub(crate) in_explicit_cast: bool,
     /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
     /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
     /// `??` right operand from source, the postfix-`?` site builds the type's default
@@ -940,6 +949,7 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            in_explicit_cast: false,
             pending_default_rhs: None,
             pending_default_src: None,
             conv_owned_result: None,
@@ -2956,6 +2966,41 @@ impl Parser {
         s.min < d.min || s.max > d.max
     }
 
+    /// The narrowing test for an IMPLICIT store — a local annotation, an argument, a
+    /// field initialiser or a field write.  [`Self::is_narrowing_int`]'s range
+    /// containment plus the one pair it cannot see: `integer` → `i32`.
+    ///
+    /// Every narrow alias but `i32` is declared with a `limit(…)`, so its range is
+    /// genuinely tighter and containment catches it.  `i32` spans the whole 32-bit range,
+    /// which is the range `integer` REPORTS — the plain integer's bounds are `i32::MIN+1
+    /// ..= i32::MAX` with the 64-bit value living in an 8-byte slot the bounds do not
+    /// describe.  So the two specs differ in `forced_size` alone, `[s.min,s.max] ⊆
+    /// [d.min,d.max]` holds for a pair whose storage drops from 8 bytes to 4, and the one
+    /// alias whose NAME says "32 bits" was the one the width discipline never checked:
+    /// an `i32` field took `5000000000` and stored `705032704` with no diagnostic, on
+    /// both backends (loft#931).
+    ///
+    /// Comparing STORAGE WIDTH is what sees it, and it is a strictly wider test than
+    /// containment rather than a different one — a range that does not fit cannot have a
+    /// narrower width.  It lives here, apart from `is_narrowing_int`, because DN4's
+    /// explicit-cast rule must NOT adopt it: `as τ` is refused by DN4 whenever the value
+    /// is not provably in range, so widening that predicate would start demanding
+    /// `as i32?` at 56 sites across loft's own tests and libraries that today write
+    /// `f += (i as i32)` — and, more to the point, `as i32` is the very cure this
+    /// diagnostic prescribes.  It has to stay spellable.
+    fn is_narrowing_int_store(src: &Type, dst: &Type) -> bool {
+        if Self::is_narrowing_int(src, dst) {
+            return true;
+        }
+        let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
+            return false;
+        };
+        let Some(d_width) = d.forced_size.map(std::num::NonZeroU8::get) else {
+            return false;
+        };
+        s.byte_width(false) > d_width
+    }
+
     /// @PLAN48 P2: render an integer type with its explicit narrow alias
     /// (`i32`/`u8`/`u16`/`i8`/`i16`) so a narrowing diagnostic doesn't print
     /// the bare `integer` for both sides (they share bounds).
@@ -3232,10 +3277,17 @@ impl Parser {
         // the `is_equal` accept — the Error fails compilation, and returning via
         // `is_equal` avoids a second (generic) diagnostic from the caller's
         // `validate_convert` (which still sees integer/i32 as can_convert-compatible).
-        if !self.first_pass
-            && Self::is_narrowing_int(is_type, should)
-            && !self.int_value_fits(code, should)
-        {
+        // `null` is not a narrowing store: there is no value to lose, and whether the
+        // target may HOLD null is the separate (N-Store) nullability rule.  It reaches
+        // here typed as the full `integer` — a nullable narrow field left out of a struct
+        // literal takes its default this way — so the widened width test (loft#931) would
+        // otherwise refuse `n.c = null` and `N { t: 1 }` on an `i32?` field.
+        let narrows = if self.in_explicit_cast {
+            Self::is_narrowing_int(is_type, should)
+        } else {
+            Self::is_narrowing_int_store(is_type, should)
+        } && !self.is_null_source(code);
+        if !self.first_pass && narrows && !self.int_value_fits(code, should) {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
             diagnostic!(

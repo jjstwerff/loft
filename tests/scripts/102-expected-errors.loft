@@ -228,11 +228,14 @@ fn vc_local_element() {
 }
 
 // ── @PLAN48 P2 / @P370 — implicit integer→narrow-width narrowing is an error ──
-// The check is range containment, so it sees every narrow alias that carries a
-// `limit(…)`.  It does NOT see `integer` → `i32`, which is declared `integer size(4)`
-// with no limit and so shares the full integer's bounds — an `i32` field silently
-// truncates instead (loft#931).  These two pin the shape that IS enforced; when #931
-// lands, add the `i32` twins here.
+// The check is range containment OR a drop in storage width, so it sees every narrow
+// alias.  The width half is what sees `integer` → `i32`: that alias spans the whole
+// 32-bit range, which is the range a plain `integer` REPORTS, so containment held for a
+// pair whose storage drops 8 bytes to 4 and an `i32` field silently truncated
+// (loft#931 — `5000000000` stored `705032704`).  The `i32` twins are below.
+//
+// A plain `integer` VARIABLE is what makes these narrowing: a literal that provably fits
+// is exempt at every position, which is why each fn binds `n` first.
 
 // @EXPECT_ERROR: cannot implicitly narrow
 fn test_integer_to_u16_assign() {
@@ -249,6 +252,26 @@ fn p370_takes_u16(x: u16) -> u16 {
 fn test_integer_to_u16_arg() {
   n: integer = 5;
   assert(p370_takes_u16(n) == 5, "unreachable"); // narrowing arg — requires `as u16`
+}
+
+// The `i32` twins (loft#931).  Both annotations have sat here inert since @PLAN48 P2 on
+// an `i32` local and an `i32` argument — two of the 56 the loft#929 sweep found — because
+// the range test could not see this pair at all.
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_i32_assign() {
+  n: integer = 5;
+  x: i32 = n; // narrowing (non-literal) — requires `as i32`
+  assert(x == 5, "unreachable");
+}
+
+fn p931_takes_i32(x: i32) -> i32 {
+  x
+}
+
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_i32_arg() {
+  n: integer = 5;
+  assert(p931_takes_i32(n) == 5, "unreachable"); // narrowing arg — requires `as i32`
 }
 
 // ── @PLN25 N-Store: a nullable value stored into a non-null slot ──

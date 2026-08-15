@@ -2603,7 +2603,15 @@ impl Parser {
                     } else {
                         ctp
                     };
-                    if !self.convert(code, cast_src, &tp) && !self.cast(code, cast_src, &tp) {
+                    // An explicit cast is not an implicit store: `convert` serves both, and
+                    // the widened `integer` -> `i32` test (loft#931) must not fire on the
+                    // cast this diagnostic prescribes as its own cure.
+                    let outer_cast = self.in_explicit_cast;
+                    self.in_explicit_cast = true;
+                    let converted =
+                        self.convert(code, cast_src, &tp) || self.cast(code, cast_src, &tp);
+                    self.in_explicit_cast = outer_cast;
+                    if !converted {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
