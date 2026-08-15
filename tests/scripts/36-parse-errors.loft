@@ -107,25 +107,36 @@ fn test_key_field() {
   s.d[0].n = "b";
 }
 
-// An undefined name on the right of a comparison.  The root report is `Unknown
-// variable`; the second line is the CASCADE of it — the comparison then lowers with one
-// operand missing and the arity check names the internal opcode.  Pinned as it stands so
-// the wording cannot rot unnoticed, but `missing argument for parameter 'v1' of
-// `OpLtInt`` is an internal spelling reaching a user, and should collapse into the root
-// diagnostic (loft#934).
-// @EXPECT_ERROR: Unknown variable
+// An undefined name on the right of a comparison earns NO diagnostic of its own: the
+// only thing reported is the arity check that fires downstream, and it names an internal
+// opcode and a parameter the program never wrote.  Nothing says `PEUnknown`.  Pinned as
+// it stands so the wording cannot rot unnoticed, and filed as loft#934 — the fix is a
+// root report naming the name, with this line suppressed as its cascade.
 // @EXPECT_ERROR: missing argument for parameter 'v1' of `OpLtInt`
 fn test_undefined_enum() {
   v: PEEType = PEVal;
   v > PEUnknown;
 }
 
-// `sizeof` needs a variable or a type name.  An EMPTY `sizeof()` is the shape that
-// reports; `sizeof(<undeclared name>)` answers null with no diagnostic at all, which is
-// the fixture this used to carry and the reason its annotation never matched (loft#933).
+// `sizeof` needs a variable or a type name — two ways to get that wrong, and only the
+// empty one used to report.  A name still unresolved after pass 2 is a typo (a real
+// forward reference resolves and gets its size), but it was accepted silently and
+// `sizeof` answered `null` (loft#933).
 // @EXPECT_ERROR: Expect a variable or type after sizeof
 fn test_unknown_sizeof() {
   sizeof();
+}
+
+// @EXPECT_ERROR: Undefined type PEUnknownType — sizeof needs a variable or a declared type
+fn test_sizeof_undeclared_name() {
+  sizeof(PEUnknownType);
+}
+
+// `type_name` reads its argument the same way and was silent in the same case, rendering
+// `null` as if that were the name of a type.
+// @EXPECT_ERROR: Undefined type PEUnknownName — type_name needs a variable or a declared type
+fn test_type_name_undeclared_name() {
+  type_name(PEUnknownName);
 }
 
 // --- Loop mutation guards ---
@@ -247,7 +258,10 @@ struct PeParS {
 // hang (a regressed guard would time the suite out here).  Ranges and other
 // iterables are now materialised and run, so they are NOT errors — covered
 // by tests/scripts/22c-par-sources.loft.
+// A second diagnostic follows the refusal: `s` is not iterable, so the loop variable `x`
+// never gets a type and the body's `x.a` reads an unresolved name.
 // @EXPECT_ERROR: par(...) requires a vector
+// @EXPECT_ERROR: Unknown variable 'x'
 fn test_par_over_non_iterable() {
   s = PeParS { a: 1 };
   for x in s par(r = pe_double(x.a), 2) { print("{r}"); }

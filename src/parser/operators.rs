@@ -964,8 +964,16 @@ impl Parser {
             // is wrapped under step 1.13.
             let chain_pos = self.lexer.pos().clone();
             let mut wrap_chain = false;
-            if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
-                diagnostic!(self.lexer, Level::Error, "Unknown variable");
+            if !self.first_pass
+                && t.is_unknown()
+                && let Value::Var(nr) = code
+            {
+                // Name it, like every sibling site does (`objects.rs` reports `Unknown
+                // variable 'x' — did you mean 'y'?`).  A bare "Unknown variable" leaves
+                // the reader to find which of the line's names is the unresolved one
+                // (loft#934).
+                let name = self.vars.name(*nr).to_string();
+                diagnostic!(self.lexer, Level::Error, "Unknown variable '{name}'");
             }
             if self.lexer.has_token(".") {
                 wrap_chain = true;

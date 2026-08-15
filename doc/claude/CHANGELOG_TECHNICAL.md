@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `sizeof` and `type_name` answered null for an undeclared name (loft#933, 2026-08-15)
+
+Both intrinsics read their argument the same way: take the identifier, look it up, and — when
+the def exists but is still `DefType::Unknown` after pass 2 — mark the argument *found* and
+return.  `*val` keeps its `Null` initialiser, so `sizeof(NoSuchType)` answered `null` and
+`type_name(NoSuchType)` rendered `null` as if that were a type's name.  Neither said anything,
+and the null flowed on as a value.
+
+A name still unresolved after pass 2 is not a forward reference — those resolve in
+`resolve_deferred_unknowns` and take the branch below with a real size (verified: a struct
+declared after its use, and a type named only in an earlier signature, both answer correctly).
+It is a typo, and it is the likeliest way to reach either intrinsic wrongly.  Both now report
+`Undefined type <name> — sizeof/type_name needs a variable or a declared type`, still marked
+found so the expression path adds no cascade.
+
+`src/parser/operators.rs`'s bare `Unknown variable` also names its variable now, matching every
+sibling site (`Unknown variable 'x' — did you mean 'y'?`).  Half of loft#934; the other half —
+an undefined comparison operand whose ONLY report is `missing argument for parameter 'v1' of
+`OpLtInt`` — is pinned in `36-parse-errors.loft` and left open.
+
+
 ### `--lib` is part of the program-cache key (loft#930, 2026-08-15)
 
 `program_cache_paths` hashed the entry script's path and nothing else, so one script run

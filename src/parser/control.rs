@@ -12926,7 +12926,18 @@ impl Parser {
             let d_nr = self.data.def_nr(&id);
             if d_nr != u32::MAX && self.data.def_type(d_nr) != DefType::EnumValue {
                 if !self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
+                    // Still unresolved after pass 2, so this is not a forward reference:
+                    // those resolve in `resolve_deferred_unknowns` and take the branch
+                    // below with a real size.  It is a typo.  Accepting it silently left
+                    // `*val` at its `Null` initialiser, so `sizeof(NoSuchType)` answered
+                    // `null` and that null flowed on as a value (loft#933).  Still marked
+                    // `found`, so the expression path below adds no cascade.
                     found = true;
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Undefined type {id} — sizeof needs a variable or a declared type"
+                    );
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
@@ -12991,7 +13002,16 @@ impl Parser {
             let d_nr = self.data.def_nr(&id);
             if d_nr != u32::MAX && self.data.def_type(d_nr) != DefType::EnumValue {
                 if !self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
+                    // Same unresolved-name case `parse_size` handles above, and it was
+                    // silent here for the same reason: `*val` kept its `Null` initialiser,
+                    // so `type_name(NoSuchType)` rendered `null` as if that were the name
+                    // of a type (loft#933).
                     found = true;
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Undefined type {id} — type_name needs a variable or a declared type"
+                    );
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
