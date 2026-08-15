@@ -39,6 +39,11 @@ loft debug prog.loft:12 [--lib dir]      # STOP at line 12: read/edit the live f
 cargo run --bin gendoc                   # regenerate doc/*.html
 make ci                                  # fmt → clippy → test (full local gate)
 make test                                # clippy + test → result.txt
+make check-rlib                          # 1s pre-flight: is libloft.rlib current? RUN IT
+                                         #   BEFORE any suite you drove with `cargo build
+                                         #   --bin loft` — that never rebuilds the lib rlib,
+                                         #   and the native tests link it (`make ci` refuses
+                                         #   on it; a bare `cargo test` does not)
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make speed                               # what got slower/faster — a REPORT, never a gate
 make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=

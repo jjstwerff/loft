@@ -9,6 +9,39 @@ each cycle pays the compile + test-startup cost and discovers
 only one failure at a time.  Run a single `--no-fail-fast`
 pass and read the captured failures once.
 
+### Before the suite: `make check-rlib` (one second)
+
+The tests link a built `libloft.rlib`, and **nothing in an ordinary edit loop
+rebuilds one**.  `cargo build --bin loft` refreshes the binary and leaves every rlib
+behind.  So a session that iterates on the compiler with `--bin loft` drifts, and the
+drift is invisible until a gate runs.
+
+There are **three** of them, one per link target, and they drift independently:
+
+| rlib | linked by | cure |
+|---|---|---|
+| `target/release/libloft.rlib` | `--native`, the cdylib tests | `cargo build --release --lib` |
+| `target/wasm32-unknown-unknown/release/libloft.rlib` | `--html` | `cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random` |
+| `target/wasm32-wasip2/release/libloft.rlib` | the wasm library suite | `cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random` |
+
+Refreshing the native one does nothing for the other two — which is how a re-run that
+fixed three native failures still went red on `moros_editor_html_smoke` and
+`wasm_library_suite` alone, a second full cycle later.
+
+It does not fail like a compile error.  It surfaces roughly nine minutes in, as a
+handful of tests failing for what look like unrelated reasons — `libloft.rlib not
+found for this build`, a cdylib mtime that did not advance, a `--html` build
+panicking — each naming a file that is present when you go and look.  The cost is a
+whole cycle, every time.
+
+`make ci` refuses on it up front (via `ci-guard`, beside the concurrent-gate
+refusal).  **A bare `cargo test --release` does not**, so run the check yourself
+before one:
+
+```bash
+make check-rlib          # all three, each with its own cure; skips a target that isn't installed
+```
+
 ### Preferred shape — background + peek + wait
 
 ```bash
