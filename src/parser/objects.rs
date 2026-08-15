@@ -2339,7 +2339,9 @@ impl Parser {
     // Iterator for
     // <for> ::= <identifier> 'in' <range> '{' <block>
     pub(crate) fn iter_for(&mut self, val: &mut Value, append_value: &mut u16) -> Type {
-        if let Some(id) = self.lexer.has_identifier() {
+        if let Some(src_id) = self.lexer.has_identifier() {
+            // loft#915 — the name this loop BINDS; its companions hang off it too.
+            let id = self.vars.loop_binding(&src_id);
             // Create {id}#index first (always needed, regardless of type).
             let index_var = self.create_var(&format!("{id}#index"), &I32);
             self.vars.defined(index_var);
@@ -2357,7 +2359,11 @@ impl Parser {
             };
             let var_tp = self.for_type(&in_type);
             *append_value = self.create_unique("val", &Type::Unknown(0));
-            let for_var = self.create_var(&id, &var_tp);
+            let for_var = self.create_loop_var(&id, &var_tp);
+            // The body reads the name the program wrote (loft#915).
+            if id != src_id {
+                self.vars.set_name(&src_id, for_var);
+            }
             self.vars.defined(for_var);
             let if_step = if self.lexer.has_token("if") {
                 let mut if_expr = Value::Null;

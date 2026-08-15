@@ -11646,6 +11646,16 @@ impl Parser {
         self.vars.unique(name, var_type, &mut self.lexer)
     }
 
+    /// Create the variable a `for` loop binds — keyed by the LOOP, not by the name, so a
+    /// second loop over one name is a second variable (loft#915).  `name` comes from
+    /// [`crate::variables::Function::loop_binding`].
+    fn create_loop_var(&mut self, name: &str, var_type: &Type) -> u16 {
+        if self.context == u32::MAX {
+            return u16::MAX;
+        }
+        self.vars.loop_variable(name, var_type, &mut self.lexer)
+    }
+
     fn var_usages(&mut self, vnr: u16, plus: bool) {
         // @P387 — a captured-var number can arrive from a DIFFERENT var table
         // (a capturing lambda passed as a fn-value records its captures, which

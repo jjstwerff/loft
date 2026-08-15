@@ -26,6 +26,22 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Two `for` loops in one function can share a name
+
+`for i in names { … }` followed by `for i in 0..3 { … }` used to be a compile error —
+the second loop was handed the first loop's variable, so the name could only ever hold
+one type per function. Consumers worked around it by prefixing every loop variable with
+something per-function (`wt_i`, `tslr_w`), which carries no meaning and is what a reader
+meets first in every loop.
+
+Each `for` now binds its own variable, so two loops can spell the name the same way at any
+element types. Reading the variable after the loop still works and still gives the last
+loop's value, so nothing that relied on that changes.
+
+Nested loops are the exception — `for i { for i { } }` is still rejected, because the inner
+binding would take over `i` for the rest of the outer body — and so is a loop variable that
+lands on a plain local you already have, which the compiler names and tells you how to fix.
+
 ### A struct field you declared with `?` can now actually be empty
 
 Writing `?` on a struct-typed field is how you say "this may be absent". Until now it did

@@ -488,6 +488,10 @@ impl Parser {
         w_d_nr
     }
 
+    /// `elem_var` is the spelling the PROGRAM gave the loop variable, not the name the
+    /// loop binds — the two differ from the second loop over a name onward (loft#915), and
+    /// what this matches is a token the programmer wrote (`a.method()`), so it is the
+    /// source spelling that decides the form and that a diagnostic must quote.
     pub(crate) fn parse_parallel_worker(
         &mut self,
         elem_var: &str,

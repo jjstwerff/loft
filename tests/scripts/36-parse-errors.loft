@@ -211,7 +211,7 @@ fn test_add_to_outer_loop() {
 
 // --- Shadowing and if-expression errors ---
 
-// @EXPECT_ERROR: loop variable 'x' has type integer but was previously used as float
+// @EXPECT_ERROR: loop variable 'x' shadows a local named 'x'
 fn test_shadow_different_type() {
   x = 1.5;
   v = [1, 2, 3];

@@ -935,7 +935,10 @@ fn test() { assert(double(3) == 6, \"ok\"); }"
 
 #[test]
 fn shadow_different_type() {
-    // Error when a for-loop variable reuses a name with a different type.
+    // A for-loop variable landing on a plain local is rejected whatever the two types
+    // are — loft#915 folded the differing-type case into the one shadow diagnostic, since
+    // a loop no longer inherits any binding and the type comparison had nothing left to
+    // decide.  Reported on PASS 1, at the loop.
     code!(
         "fn test() {
     x = 1.5;
@@ -943,8 +946,12 @@ fn shadow_different_type() {
     for x in v { }
 }"
     )
-    .error("loop variable 'x' has type integer but was previously used as float at shadow_different_type:4:17")
-    .warning("Variable x is never read at shadow_different_type:2:8");
+    .error(
+        "loop variable 'x' shadows a local named 'x' — rename the loop \
+         variable (e.g. loop_x) or drop the outer `x` if it was a dead \
+         placeholder; loft does not block-scope loop variables at \
+         shadow_different_type:4:17",
+    );
 }
 
 #[test]

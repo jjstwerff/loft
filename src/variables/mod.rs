@@ -226,6 +226,15 @@ pub struct Function {
     /// re-resolves to a pass-1 var of a different TYPE in `add_variable`
     /// (#320's frame-drift: an integer-typed `__ncc_N` holding a DbRef).
     unique: HashMap<String, u16>,
+    /// Per-name counters for [`Function::loop_binding`] — how many `for` loops in this
+    /// function have already bound each source name.
+    ///
+    /// Counting occurrences in PARSE ORDER is what makes the extra bindings pass-stable.
+    /// The sequence reads no type and consults no table, so pass 2 regenerates it exactly
+    /// and `add_variable` re-finds each loop's slot under the same key; a verdict that
+    /// MINTS has to come out identical on both passes or every slot number after it
+    /// shifts.  Cleared by `append`, beside `unique`, for that reason.
+    loop_binds: HashMap<String, u16>,
     pub(crate) current_loop: u16,
     loops: Vec<Iterator>,
     variables: Vec<Variable>,
@@ -421,6 +430,7 @@ impl Function {
             name: name.to_string(),
             file: file.to_string(),
             unique: HashMap::new(),
+            loop_binds: HashMap::new(),
             current_loop: u16::MAX,
             loops: Vec::new(),
             work_text: 0,
@@ -565,6 +575,8 @@ impl Function {
         self.logging = other.logging;
         self.unique.clear();
         other.unique.clear();
+        self.loop_binds.clear();
+        other.loop_binds.clear();
         self.loops.clear();
         self.loops.append(&mut other.loops);
         self.variables.clear();
@@ -612,6 +624,7 @@ impl Function {
             file: other.file.clone(),
             current_loop: u16::MAX,
             unique: HashMap::new(),
+            loop_binds: HashMap::new(),
             loops: other.loops.clone(),
             variables: other.variables.clone(),
             annotated: other.annotated.clone(),
@@ -841,12 +854,24 @@ impl Function {
         self.loops[self.current_loop as usize].counter
     }
 
+    /// How many loops out `variable` names, counting from the innermost — the depth
+    /// `#break` / `#continue` jump.
+    ///
+    /// Matched on the BINDING the name currently denotes, not on the spelling: two `for i`
+    /// loops in one function are two variables and only one of them is bound to `i` here
+    /// (loft#915).  Comparing names would walk past a loop whose variable is `i#1` and
+    /// answer the chain length, which is a jump out of the wrong loop.
     pub fn loop_nr(&self, variable: &str) -> u16 {
-        let mut c = self.current_loop;
+        // An unbound name matches nothing: `u16::MAX` is also the "no variable yet"
+        // placeholder `start_loop` leaves on a loop still being parsed.
+        let target = self.var(variable);
+        let mut c = if target == u16::MAX {
+            u16::MAX
+        } else {
+            self.current_loop
+        };
         let mut nr = 0;
-        while c != u16::MAX
-            && self.variables[self.loops[c as usize].variable as usize].name != variable
-        {
+        while c != u16::MAX && self.loops[c as usize].variable != target {
             c = self.loops[c as usize].inside;
             nr += 1;
         }
@@ -1316,6 +1341,75 @@ impl Function {
     /// Remove a name→variable mapping.
     pub fn remove_name(&mut self, name: &str) {
         self.names.remove(name);
+    }
+
+    /// The name the `for` loop now being parsed binds its variable under (loft#915).
+    ///
+    /// A loop variable stays a function-scoped local — `i` after the loop still reads the
+    /// value the loop left, which programs rely on — but each LOOP gets its own binding,
+    /// so a second loop may spell one name at a different element type instead of
+    /// re-typing the first loop's slot.  That is also what keeps loft#690 fixed by
+    /// construction rather than by diagnostic: the second loop can no longer inherit the
+    /// first's type, dep or storage, which is what made it read B's records through A's
+    /// layout.
+    ///
+    /// The FIRST loop to use a name binds the name itself, so a program with no repeat
+    /// spells every loop variable exactly as it did before — dumps, the debugger frame and
+    /// every diagnostic are untouched.  A second loop over the same name binds `i#1`, a
+    /// third `i#2`.  The suffix is on the NAME and not only on a lookup key because the
+    /// native backend names a local `var_<name>`, and two locals spelling one name declare
+    /// it twice — the same constraint loft#928 hit for a generator's fields.  `#` cannot
+    /// occur in a loft identifier, so a suffixed name cannot collide with a variable the
+    /// program declared itself.
+    ///
+    /// `_` and `$` are exempt: both already take a fresh slot per loop through `unique`,
+    /// and both must keep working across different element types in one function.
+    pub fn loop_binding(&mut self, id: &str) -> String {
+        if id == "_" || id == "$" {
+            return id.to_string();
+        }
+        let ctr = self.loop_binds.entry(id.to_string()).or_insert(0);
+        let nr = *ctr;
+        *ctr += 1;
+        if nr == 0 {
+            id.to_string()
+        } else {
+            format!("{id}#{nr}")
+        }
+    }
+
+    /// Add a `for` loop's variable under `name`, keyed for cross-pass identity by the
+    /// LOOP rather than by the name (loft#915).
+    ///
+    /// `add_variable` reuses by name, and that is what normally gives one variable one slot
+    /// across both parser passes.  A loop variable cannot use its own name as that key: the
+    /// name is re-pointed at every loop that binds it, so `names["i"]` ends pass 1 holding
+    /// the LAST loop's slot, and pass 2's FIRST loop would then be handed it — a text
+    /// binding reusing an integer one, which is the shape the whole split exists to stop.
+    ///
+    /// The key is `<name>#bind`.  `name` is already unique per loop (`loop_binding` gives
+    /// the second `for i` the name `i#1`), nothing re-points a `#`-suffixed name, and `#`
+    /// cannot occur in a loft identifier — so the key denotes exactly this loop on both
+    /// passes.
+    pub fn loop_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
+        // Binding the name is part of creating the loop's variable, on BOTH the create and
+        // the reuse path.  Pass 2 opens with the name pointing wherever pass 1 left it —
+        // at the LAST loop that bound it — so a reuse that only answered the slot number
+        // would leave this loop's body reading the last loop's variable.
+        let key = format!("{name}#bind");
+        if let Some(nr) = self.names.get(&key) {
+            let nr = *nr;
+            if self.variables[nr as usize].type_def.is_unknown() {
+                self.trace_type_change(nr, type_def, "loop_variable(reuse)");
+                self.variables[nr as usize].type_def = type_def.clone();
+            }
+            self.names.insert(name.to_string(), nr);
+            return nr;
+        }
+        let v = self.new_var(name, type_def, lexer);
+        self.names.insert(name.to_string(), v);
+        self.names.insert(key, v);
+        v
     }
 
     pub fn unique(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {

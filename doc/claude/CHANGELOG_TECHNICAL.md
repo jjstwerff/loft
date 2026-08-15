@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `for` loop binds its own variable, so two loops may reuse a name (loft#915, 2026-08-15)
+
+A loop variable was an ordinary function-scoped local: `add_variable` resolved it by name, so
+a second `for` over the same name was handed the FIRST loop's slot — old var, old type, old
+dep. That is why two loops in one function could not reuse a name at different element types,
+and it is the mechanism behind loft#690's corruption (the second body read B's records through
+A's layout, `m=8589934636` for a sum of 3), which had been answered with a diagnostic.
+
+Each loop now binds its own variable. `Function::loop_binding` names them: the first loop to
+use a name binds the name itself — so a program with no repeat spells every loop variable
+exactly as it did before, dumps and debugger frames included — and a second binds `i#1`, a
+third `i#2`. The suffix is on the NAME and not merely on a lookup key because the native
+backend names a local `var_<name>` and two locals spelling one name declare it twice, the same
+constraint loft#928 hit for a generator's fields.
+
+**The cross-pass identity key is separate from the name** (`Function::loop_variable`, key
+`<name>#bind`). A loop variable cannot key on its own name: the name is re-pointed at each loop
+that binds it, so `names["i"]` ends pass 1 holding the LAST loop's slot and pass 2's FIRST loop
+would be handed it — a text binding reusing an integer one, which is the shape the split exists
+to stop. The occurrence counter reads no type and consults no table, so pass 2 regenerates the
+same sequence and every slot number holds.
+
+`i` after the loop still reads what the last loop left, so nothing that read it before changes.
+The companions (`#index`, `#next`, `#count`, `#iter_state`) are keyed off the binding rather
+than the spelling, and `iter_op` derives that base from the variable the name resolves to, so
+`i#index` in the second loop finds the second loop's counter. `loop_nr` — which `#break` and
+`#continue` jump on — matches the loop by BINDING instead of by name, since comparing names
+would walk past a loop whose variable is `i#1` and answer the chain length.
+
+**Two diagnostics folded into one.** loft#690's *"loop variable 'i' has type text but was
+previously used as integer"* is gone: the corruption it reported is unreachable by
+construction, and the local collision it also covered no longer needs a type comparison to
+state — any non-loop binding of the name is the shadow, whatever its type. The C61 shadow
+diagnostic now owns that case and fires on PASS 1 for every type pairing, where the type
+diagnostic reached the differing-kind case only on pass 2.
+
+Still rejected: a loop variable landing on a plain function local, and nested same-name loops
+(the inner binding would take over the name for the rest of the outer body).
+
+Guard: `tests/scripts/915-loop-variable-per-loop.loft` — 13 hand-computed cells on both
+backends, covering the filed shape, the after-loop read, `#index` / `#count` / `#first` /
+`#break`, loft#690's two-struct shape, three loops under one name, text loops, comprehensions,
+`_`, nesting, and per-function independence.
+
+
 ### A loop that writes no store reads its vectors through one derived header (loft#885, 2026-08-15)
 
 `v[i]` re-derives three facts per element on `--native`: which store holds the vector, which

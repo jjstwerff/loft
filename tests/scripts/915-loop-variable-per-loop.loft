@@ -1,0 +1,150 @@
+// @TITLE: a `for` loop binds its own variable, so two loops may reuse a name
+//
+// loft#915 — a loop variable stays function-scoped (`i` after the loop still reads what
+// the loop left), but each LOOP gets its own binding.  Two loops in one function may
+// therefore spell one name at different element types, which is what dryopea was paying
+// a per-function prefix on 122 of its 131 loops to avoid.
+//
+// Every cell's expected value is hand-computed and asserted, with distinctive numbers so
+// a wrong cell cannot look like a right one.  The rejections that must STILL fire —
+// nested same-name loops and a loop variable landing on a plain local — are pinned in
+// `36-parse-errors.loft` and `tests/parse_errors.rs`.
+struct Aa { av: integer }
+struct Bb { bv: text }
+
+// c1 — two loops, one name, two element types (the filed shape).
+fn c1_two_types() -> text {
+    r = "";
+    for i in ["p", "q"] { r += i; }
+    for i in 0..3 { r += "{i}"; }
+    r
+}
+
+// c2 — the leak: `i` after TWO same-named loops reads the LAST loop's value.
+fn c2_outlives_two() -> integer {
+    last = 0;
+    for i in 0..2 { last = i; }
+    for i in 10..14 { last = i; }
+    assert(last == 13, "c2 inner {last}");
+    i
+}
+
+// c3 — #index companion, one per loop.
+fn c3_index() -> text {
+    r = "";
+    v = ["a", "b"];
+    for i in v { r += "{i}{i#index}"; }
+    for i in 0..2 { r += "-{i}{i#index}"; }
+    r
+}
+
+// c4 — #count / #first on the second loop.
+fn c4_count() -> text {
+    r = "";
+    for i in 0..2 { r += "{i#count}"; }
+    for i in ["x", "y", "z"] { r += "{i#count}{i#first}"; }
+    r
+}
+
+// c5 — #break out of the second loop only (loop_nr resolves by binding).
+fn c5_break() -> integer {
+    t = 0;
+    for i in 0..3 { t += i; }
+    for i in ["a", "b", "c", "d"] {
+        if i == "c" { i#break; }
+        t += 100;
+    }
+    t
+}
+
+// c6 — #690's original shape: two struct element types under one name.
+fn c6_struct_types() -> text {
+    r = "";
+    as_a = [Aa { av: 7 }, Aa { av: 8 }];
+    as_b = [Bb { bv: "m" }, Bb { bv: "n" }];
+    for e in as_a { r += "{e.av}"; }
+    for e in as_b { r += e.bv; }
+    r
+}
+
+// c7 — three loops, one name, three types.
+fn c7_three() -> text {
+    r = "";
+    for k in 0..2 { r += "{k}"; }
+    for k in ["s"] { r += k; }
+    for k in [Aa { av: 5 }] { r += "{k.av}"; }
+    r
+}
+
+// c8 — text loop twice (the #next companion).
+fn c8_text() -> text {
+    r = "";
+    for c in "ab" { r += "{c}"; }
+    for c in "cd" { r += "{c}"; }
+    r
+}
+
+// c9 — comprehension form twice under one name, two element types.
+fn c9_comprehension() -> text {
+    xs = [for n in 0..3 { n * 2 }];
+    ys = [for n in ["u", "v"] { n + "!" }];
+    "{xs[0]}{xs[1]}{xs[2]}{ys[0]}{ys[1]}"
+}
+
+// c10 — `_` twice, unchanged behaviour.
+fn c10_discard() -> integer {
+    t = 0;
+    for _ in 0..3 { t += 1; }
+    for _ in ["a", "b"] { t += 10; }
+    t
+}
+
+// c11 — nested loops with DIFFERENT names still work, inner and outer #index.
+fn c11_nested() -> text {
+    r = "";
+    for o in 0..2 {
+        for n in ["x", "y"] { r += "{o}{n}{n#index}"; }
+    }
+    r
+}
+
+// c12 — same name in two DIFFERENT functions is independent (the counter is
+// per function, so both are the first loop of their own function).
+fn c12_helper() -> integer {
+    for z in 100..102 { }
+    z
+}
+fn c12_other() -> text {
+    r = "";
+    for z in ["deep"] { r += z; }
+    r
+}
+
+fn main() {
+    a1 = c1_two_types();
+    assert(a1 == "pq012", "c1 got {a1}");
+    a2 = c2_outlives_two();
+    assert(a2 == 13, "c2 got {a2}");
+    a3 = c3_index();
+    assert(a3 == "a0b1-00-11", "c3 got {a3}");
+    a4 = c4_count();
+    assert(a4 == "010true1false2false", "c4 got {a4}");
+    a5 = c5_break();
+    assert(a5 == 203, "c5 got {a5}");
+    a6 = c6_struct_types();
+    assert(a6 == "78mn", "c6 got {a6}");
+    a7 = c7_three();
+    assert(a7 == "01s5", "c7 got {a7}");
+    a8 = c8_text();
+    assert(a8 == "abcd", "c8 got {a8}");
+    a9 = c9_comprehension();
+    assert(a9 == "024u!v!", "c9 got {a9}");
+    a10 = c10_discard();
+    assert(a10 == 23, "c10 got {a10}");
+    a11 = c11_nested();
+    assert(a11 == "0x00y11x01y1", "c11 got {a11}");
+    a12 = c12_helper();
+    assert(a12 == 101, "c12 got {a12}");
+    a12b = c12_other();
+    assert(a12b == "deep", "c12b got {a12b}");
+}

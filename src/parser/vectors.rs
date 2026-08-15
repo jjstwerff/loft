@@ -1808,10 +1808,14 @@ impl Parser {
         block: bool,
         parent_tp: &Type,
     ) -> Type {
-        let Some(id) = self.lexer.has_identifier() else {
+        let Some(src_id) = self.lexer.has_identifier() else {
             diagnostic!(self.lexer, Level::Error, "Expect variable after for");
             return Type::Null;
         };
+        // loft#915 — the name this comprehension's loop BINDS.  Its variable and its
+        // `#index` / `#next` companions all hang off it, so a second comprehension over
+        // the same name in one function shares nothing with the first.
+        let id = self.vars.loop_binding(&src_id);
         self.lexer.token("in");
         let loop_nr = self.vars.start_loop();
         let mut expr = Value::Null;
@@ -1850,7 +1854,11 @@ impl Parser {
             self.vars.defined(iv);
             (iv, None)
         };
-        let for_var = self.create_var(&id, &var_tp);
+        let for_var = self.create_loop_var(&id, &var_tp);
+        // The body reads the name the program wrote (loft#915).
+        if id != src_id {
+            self.vars.set_name(&src_id, for_var);
+        }
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {
             let mut if_expr = Value::Null;

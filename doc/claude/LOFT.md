@@ -2532,6 +2532,22 @@ Rename the loop variable (the message suggests `loop_x`) or drop the dead outer
 local.  The compiler reports this up front with a fix hint; there is no codegen
 panic or hidden workaround to remember.
 
+Two *loops* may share a name freely, at any element types — each `for` binds its
+own variable, so nothing is carried from one to the next:
+
+```loft
+fn g() {
+  for i in ["a", "b"] { println(i); }
+  for i in 0..3 { println("{i}"); }   // fine — a different variable
+  println("{i}");                      // 2 — the last loop's value
+}
+```
+
+Reading the variable after the loop still works, and reads what the *last* loop
+that bound the name left there.  Nested loops are the exception: `for i { for i
+{ } }` is rejected, because the inner binding would take over `i` for the rest of
+the outer body.
+
 ### Hash collections: name the key (local or struct field)
 
 A hash (and `sorted` / `index`) needs its key spelled out, because a bare `[]`

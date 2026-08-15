@@ -16520,15 +16520,18 @@ fn pln87_l7_heap_reference_live_across_reassign() {
 /// the real diagnostic.  The parse must now diagnose cleanly instead of panicking;
 /// this test would panic inside `parse_str` before the fix.
 ///
-/// loft#825 — what it diagnoses CLEANLY has since moved one step upstream, and this
-/// test is where the move is visible.  It used to answer "Unknown field Pt.roads",
-/// which is the stale binding's CONSEQUENCE: the field is missing only because `t`
-/// still carries the first loop's type, and no amount of work on `Rt` fixes it.  The
-/// loop-variable conflict now runs on both passes, so the diagnostic names `t` and
-/// the rename that resolves it.  The field error never happens — the parse stops at
-/// the conflict, one pass earlier than the field access it would have caused.
+/// loft#825 — what it diagnoses CLEANLY moved one step upstream: it used to answer
+/// "Unknown field Pt.roads", which is the stale binding's CONSEQUENCE, and then named
+/// the loop-variable conflict itself.
+///
+/// loft#915 removed the conflict rather than reporting it — `t` in the second loop is
+/// its own variable carrying `Rt`, so `t.roads` resolves and the program COMPILES.  That
+/// is what this now pins, and it is the same guarantee from the other side: the field
+/// read only works if the second loop failed to inherit the first's type, so a
+/// regression to a shared binding fails this test as "Unknown field Pt.roads" — the
+/// error the whole chain started from.
 #[test]
-fn loop_var_reuse_different_type_diagnoses_not_panics() {
+fn loop_var_reuse_different_type_binds_per_loop() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     // `t` is a `Pt` in the first loop and an `Rt` in the second; `t.roads` in the
@@ -16547,16 +16550,9 @@ fn main() {
         false,
     );
     assert!(
-        p.diagnostics.level() >= loft::diagnostics::Level::Error,
-        "expected a compile error for invalid same-name loop-var reuse, got: {:?}",
-        p.diagnostics.lines()
-    );
-    assert!(
-        p.diagnostics
-            .lines()
-            .iter()
-            .any(|l| { l.contains("loop variable 't'") && l.contains("Rt") && l.contains("Pt") }),
-        "expected the loop-variable conflict to name 't' and both element types, got: {:?}",
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "each loop binds its own `t`, so `t.roads` resolves against `Rt` and this must \
+         compile; a shared binding shows up here as \"Unknown field Pt.roads\".  Got: {:?}",
         p.diagnostics.lines()
     );
 }
@@ -18037,7 +18033,7 @@ fn issue_689_range_is_refused_on_an_unordered_collection() {
 }
 
 /// loft#690 — a `for` loop whose variable name is already bound to a DIFFERENT type
-/// must be rejected, not silently reuse the earlier binding.
+/// must not silently reuse the earlier binding.
 ///
 /// The reuse check existed but compared with `Type::is_same`, which answers "same KIND
 /// of type": it reports any two `Reference`s as the same whatever struct they name.  So
@@ -18045,59 +18041,62 @@ fn issue_689_range_is_refused_on_an_unordered_collection() {
 /// second loop the FIRST binding — old var, old type, old dep — and the body read B's
 /// records through A's layout.  No diagnostic and no crash, just wrong numbers.
 ///
-/// This asserts the DIAGNOSTIC rather than values on purpose: whether the corruption is
-/// *visible* depends on the two layouts.  Two structs with identical fields returned the
-/// right answer while still being undefined, so a value test would have passed on three
-/// of the four shapes below and proved almost nothing.
+/// loft#915 removed the inheritance instead of reporting it: each loop binds its OWN
+/// variable, so there is no earlier binding for the second loop to take, and these
+/// programs now COMPILE.  What is asserted is therefore the stronger property the
+/// diagnostic only approximated — the second loop's variable really carries the SECOND
+/// element type.  Each body below reads a field that exists only on its own struct, so
+/// a leaked binding is an "unknown field" error rather than a silent wrong number, which
+/// is what made a value test unconvincing here (two structs with identical fields
+/// returned the right answer while still being undefined).  The value half, on both
+/// backends, is `tests/scripts/915-loop-variable-per-loop.loft` cell c6.
 #[test]
-fn issue_690_loop_variable_may_not_change_type() {
-    let rejected = [
+fn issue_690_loop_variable_binds_its_own_type() {
+    let per_loop_binding = [
         (
             "two struct types",
-            "struct A690 { k: integer, v: integer }\n\
-             struct B690 { k: text, v: integer }\n\
-             fn main() { a: vector<A690> = [A690{k:1,v:10}]; b: vector<B690> = [B690{k:\"x\",v:1}];\n\
-             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+            "struct A690 { k: integer, av: integer }\n\
+             struct B690 { k: text, bv: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,av:10}]; b: vector<B690> = [B690{k:\"x\",bv:1}];\n\
+             n = 0; for r in a { n += r.av; } for r in b { n += r.bv; } println(\"{n}\"); }\n",
         ),
         (
-            "two structs with IDENTICAL fields — still different types",
-            "struct A690 { k: integer, v: integer }\n\
-             struct C690 { k: integer, v: integer }\n\
-             fn main() { a: vector<A690> = [A690{k:1,v:10}]; c: vector<C690> = [C690{k:2,v:20}];\n\
-             n = 0; for r in a { n += r.v; } for r in c { n += r.v; } }\n",
+            "two structs with IDENTICAL layouts — still different types",
+            "struct A690 { k: integer, av: integer }\n\
+             struct C690 { k: integer, cv: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,av:10}]; c: vector<C690> = [C690{k:2,cv:20}];\n\
+             n = 0; for r in a { n += r.av; } for r in c { n += r.cv; } println(\"{n}\"); }\n",
         ),
         (
             "two enum types",
             "enum E690 { Red, Green }\n\
              enum F690 { Up, Down }\n\
              fn main() { a: vector<E690> = [E690.Red]; b: vector<F690> = [F690.Up];\n\
-             n = 0; for r in a { n += 1; } for r in b { n += 1; } }\n",
+             n = 0; for r in a { if r == E690.Red { n += 1; } } \
+             for r in b { if r == F690.Up { n += 1; } } println(\"{n}\"); }\n",
         ),
         (
             "nested vectors of different element structs",
-            "struct A690 { v: integer }\n\
-             struct B690 { v: integer }\n\
-             fn main() { a: vector<vector<A690>> = [[A690{v:1}]]; \
-             b: vector<vector<B690>> = [[B690{v:2}]];\n\
-             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+            "struct A690 { av: integer }\n\
+             struct B690 { bv: integer }\n\
+             fn main() { a: vector<vector<A690>> = [[A690{av:1}]]; \
+             b: vector<vector<B690>> = [[B690{bv:2}]];\n\
+             n = 0; for r in a { for e in r { n += e.av; } } \
+             for r in b { for e in r { n += e.bv; } } println(\"{n}\"); }\n",
         ),
     ];
-    for (label, src) in rejected {
-        let src_path = std::env::temp_dir().join("loft_i690_rejected.loft");
+    for (label, src) in per_loop_binding {
+        let src_path = std::env::temp_dir().join("loft_i690_per_loop.loft");
         std::fs::write(&src_path, src).unwrap();
         let mut p = Parser::new();
         p.parse_dir("default", true, false).unwrap();
         p.parse(src_path.to_str().unwrap(), false);
         let lines = p.diagnostics.lines().join("\n");
         assert!(
-            p.diagnostics.level() >= loft::diagnostics::Level::Error,
-            "#690 ({label}): reusing a loop variable at a different type must be an error, \
-             not a silent reinterpretation.  Diagnostics: {lines}"
-        );
-        assert!(
-            lines.contains("loop variable 'r'") && lines.contains("previously used as"),
-            "#690 ({label}): the diagnostic must name the variable and the earlier type, \
-             got: {lines}"
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#690 ({label}): each loop binds its own variable, so the second loop's field \
+             read resolves against the SECOND type and this must compile.  Diagnostics: \
+             {lines}"
         );
         let _ = std::fs::remove_file(&src_path);
     }
