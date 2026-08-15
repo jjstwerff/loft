@@ -483,16 +483,15 @@ fn undefined_enum() {
 
 #[test]
 fn unknown_sizeof() {
-    // Same shape as undefined_enum — `C` is undeclared, the parser
-    // synthesises a placeholder local that the UPPER_CASE-without-
-    // const sweep then flags (P246 follow-up).
+    // Nearly the shape of undefined_enum — `C` is undeclared, so the parser synthesises a
+    // placeholder local for it.  The difference is that `sizeof` errors out before the
+    // placeholder reaches the body, so nothing in the emitted code names it, and the
+    // UPPER_CASE sweep no longer speaks about it (loft#921): the advice says "this is a
+    // local variable", and a name that never became one is exactly what it must not claim.
+    // The two errors below are the whole diagnosis of this line.
     code!("fn test() { sizeof(C); }")
         .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
-        .error("Unknown variable 'C' at unknown_sizeof:1:20")
-        .advice(
-            "Variable 'C' is UPPER_CASE — that style is reserved for constants \
-             at unknown_sizeof:1:22",
-        );
+        .error("Unknown variable 'C' at unknown_sizeof:1:20");
 }
 
 #[test]

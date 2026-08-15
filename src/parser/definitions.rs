@@ -1654,15 +1654,17 @@ impl Parser {
                 let fn_name = self.data.definitions[ctx].name();
                 self.vars.debug_dead_store_dump(fn_name, body, &self.data);
             }
+            let body = self.data.definitions[self.context as usize].code().clone();
             if !is_stub {
-                let body = self.data.definitions[self.context as usize].code().clone();
                 self.vars.test_used(&mut self.lexer, &self.data, &body);
             }
             // P246 follow-up — UPPER_CASE locals without `const`
             // violate the "UPPER_CASE means immutable constant"
             // convention.  Run once per function in the second pass
-            // (after const_param flags are settled).
-            self.vars.warn_upper_case_locals(&mut self.lexer);
+            // (after const_param flags are settled).  Takes the body for the
+            // same reason `test_used` does: a name the code never mentions is
+            // a pass-1 placeholder, not a local of this function.
+            self.vars.warn_upper_case_locals(&mut self.lexer, &body);
             // Plan-07 phase 4e.2 — undefended fault-site warning.
             // Walks this function's body looking for fault-prone op
             // calls (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
@@ -1671,7 +1673,6 @@ impl Parser {
             // skip pattern applies.  Silenceable via
             // `LOFT_NO_WARN_RUNTIME=1` env var.  Second-pass only —
             // first pass doesn't have the swap-pass results yet.
-            let body = self.data.definitions[self.context as usize].code.clone();
             self.warn_undefended_fault_sites(&body);
             // @PLN87 P3 (W4) — a `&` on a heap struct param that is never reassigned
             // has no effect (field mutation propagates regardless).

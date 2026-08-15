@@ -2160,8 +2160,8 @@ impl Function {
     /// arguments (the `const T` parameter modifier already handles
     /// const-ness on parameters), `_`-prefixed names, and synthetic
     /// names containing `#`.
-    pub fn warn_upper_case_locals(&self, lexer: &mut Lexer) {
-        for var in &self.variables {
+    pub fn warn_upper_case_locals(&self, lexer: &mut Lexer, body: &Value) {
+        for (nr, var) in self.variables.iter().enumerate() {
             if var.argument
                 || var.const_binding
                 || var.value_const
@@ -2171,6 +2171,21 @@ impl Function {
                 continue;
             }
             if !is_upper_case_name(&var.name) {
+                continue;
+            }
+            // A variable the emitted body never NAMES is a pass-1 leftover, not a local —
+            // the same peel `test_used` takes, and it was missing here (loft#921).  A
+            // constant used ABOVE its own `const NAME = …` cannot resolve in pass 1, so
+            // the name is parked as a placeholder variable; pass 2 has the declaration
+            // and pastes the constant's value, leaving that placeholder unread.  The
+            // stale entry then advised that a CONSTANT is a local variable — the one
+            // message whose whole job is to say a name is *not* a constant — and it fired
+            // only when the declaration sat below the use, so the same constant advised
+            // or stayed silent depending on where in the file it was declared.
+            //
+            // It cannot silence a real UPPER_CASE local: `reads_var` counts `Set` TARGETS
+            // too, so `FOO = 1;` names `FOO` whether or not anything reads it back.
+            if u16::try_from(nr).is_ok_and(|n| !body.reads_var(n)) {
                 continue;
             }
             lexer.to(var.source);
