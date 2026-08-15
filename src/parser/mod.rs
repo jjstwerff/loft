@@ -440,6 +440,12 @@ pub struct Parser {
     /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
     /// set is complete, so `parse_function` reproduces the promoted type.
     par_worker_defs: std::collections::HashSet<u32>,
+    /// loft#918 — every `(function, tail variable)` whose promotion pass 1 could not
+    /// decide: the tail is a bare local, the function returns `text` / `text?`, and the
+    /// local's type is still `Unknown` because it was bound to a call declared lower in
+    /// the file.  Consumed by `promote_late_text_buffers` between the passes, where the
+    /// callee exists — the same late-derivation slot `reserve_late_return_buffers` uses.
+    late_text_tails: Vec<(u32, u16)>,
     /// @PLN125 — every bound-method stub built on pass 1, as
     /// `(stub, the interface method it stands in for, the holder that replaced `Self`)`.
     /// Consumed by `refresh_bound_method_stubs` between the passes, where a forward-
@@ -883,6 +889,7 @@ impl Parser {
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
+            late_text_tails: Vec::new(),
             bound_method_stubs: Vec::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -1644,6 +1651,7 @@ impl Parser {
         // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
         // buffers below and before the H5 snapshot.
         self.refresh_bound_method_stubs();
+        self.promote_late_text_buffers();
         self.reserve_late_return_buffers();
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
@@ -1805,6 +1813,60 @@ impl Parser {
     fn refresh_bound_method_stubs(&mut self) {
         for (stub_nr, child_nr, holder_nr) in std::mem::take(&mut self.bound_method_stubs) {
             self.set_bound_stub_signature(stub_nr, child_nr, holder_nr);
+        }
+    }
+
+    /// loft#918 — give a text-returning function the hidden work buffer its returned
+    /// local needs, for the locals whose type pass 1 could not know.
+    ///
+    /// `text_return` promotes a returned text local into a hidden `&text` out-param, and
+    /// it decides that from the local's TYPE.  A local bound to a call declared lower in
+    /// the file has no type in pass 1 — the callee is not registered yet — so the
+    /// promotion happened on pass 2 alone: the signature grew one argument after pass 2
+    /// had already lowered calls against the old one.  With the caller below the callee
+    /// that is "only" the H5 divergence; with the caller above it, the call really does
+    /// pass one argument too few.
+    ///
+    /// Here, between the passes, every declaration exists, so the same promotion lands
+    /// before any caller is lowered — and pass 2 finds the attribute already there and
+    /// takes `classify_text_dep`'s `Attr` branch, which is exactly the state a pass-1
+    /// promotion leaves behind.  `reserve_late_return_buffers` settles the heap return
+    /// buffer (#675) in this slot for the same reason.
+    fn promote_late_text_buffers(&mut self) {
+        let buf_tp = Type::RefVar(Box::new(Type::Text(crate::data::Deps::none())));
+        for (d, v) in std::mem::take(&mut self.late_text_tails) {
+            let def = self.data.def(d);
+            if !matches!(self.data.def_type(d), DefType::Function)
+                || *def.code() == Value::Null
+                || def.is_operator()
+                || !def.rust().is_empty()
+                || !def.native().is_empty()
+                || def.name().starts_with("n___lambda_")
+            {
+                continue;
+            }
+            // The declared return had to stay text for the promotion to apply, and the
+            // local had to stay a local: a name that resolved to a parameter, or one an
+            // earlier candidate already promoted, is served by its own attribute.
+            if !matches!(def.returned().base(), Type::Text(_)) {
+                continue;
+            }
+            let vars = def.variables();
+            if !vars.exists(v) || vars.is_argument(v) {
+                continue;
+            }
+            let name = vars.name(v).to_string();
+            if def.attr_names.contains_key(&name) {
+                continue;
+            }
+            let a = self
+                .data
+                .add_attribute(&mut self.lexer, d, &name, buf_tp.clone());
+            self.data.definitions[d as usize].attributes[a].hidden = true;
+            let f = &mut self.data.definitions[d as usize].variables;
+            f.set_type(v, buf_tp.clone());
+            f.become_argument(v);
+            f.mark_used(v);
         }
     }
 
@@ -8356,6 +8418,21 @@ impl Parser {
             let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
             *code = self.cl("OpEqInt", &[disc, Value::Int(0)]);
             return Type::Boolean;
+        }
+        // loft#918 — no operator matched, and one of the operands has no type YET:
+        // `w_t + "!"` where `w_t` was bound to a call whose callee is declared lower in
+        // the file.  On pass 1 that is a deferral, not a reject — pass 2 has the callee
+        // and resolves the operand — and rejecting it here ended the parse before the
+        // pass that would have accepted the program.
+        //
+        // The deferral at the top of this function is deliberately narrower (it fires
+        // only when EVERY operand is unknown) because it also suppresses the `possible`
+        // loop, which one known operand can still steer.  Here the loop has already run
+        // and found nothing, so there is no resolution left to steer — only a message to
+        // hold back.  A genuinely unresolvable operand reaches this same site on pass 2,
+        // where the reject fires with the type it really has.
+        if self.first_pass && types.iter().any(Type::is_unknown) {
+            return Type::Unknown(0);
         }
         // generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));

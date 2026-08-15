@@ -1469,6 +1469,24 @@ impl Parser {
             || matches!(self.data.def(self.context).returned(),
                 Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"));
         if generic_promote_ok && context == "return from block" {
+            // loft#918 — pass 1 cannot type a local bound to a call whose callee is
+            // declared LOWER in the file: the call has nothing to resolve against there,
+            // so the local reads `Unknown` and the text work-buffer promotion below never
+            // fires.  Pass 2 types it `text` and promotes, which grows the signature after
+            // callers were lowered — the H5 cross-pass divergence, and with the caller
+            // declared above the callee a genuine arity mismatch.
+            //
+            // Record the tail here; `promote_late_text_buffers` settles it between the
+            // passes, where every declaration exists.  Same treatment #675 gave the heap
+            // return buffer in `reserve_late_return_buffers`.
+            if self.first_pass
+                && matches!(self.data.def(self.context).returned().base(), Type::Text(_))
+                && let Some(v) = Self::tail_bare_var(l)
+                && self.vars.tp(v).is_unknown()
+                && !self.vars.is_argument(v)
+            {
+                self.late_text_tails.push((self.context, v));
+            }
             // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
             // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
             // the type-keyed branches below (which match `t`) all miss it — the default
@@ -9267,6 +9285,23 @@ impl Parser {
     /// outer local / param returned by the block) — a genuine borrow to keep.
     fn block_defines_var(l: &[Value], v: u16) -> bool {
         l.iter().any(|op| Self::stmt_defines_var(op, v))
+    }
+
+    /// loft#918 — the variable a block hands back, when its tail is nothing but a
+    /// name: `… ; w_t }` and `… ; return w_t; }` both answer `w_t`.
+    ///
+    /// Both spellings reach the same promotion, so both must be recognised — the
+    /// explicit `return` form types as `Never` rather than as the variable, which is
+    /// why the caller cannot read the tail's TYPE to find it.
+    fn tail_bare_var(l: &[Value]) -> Option<u16> {
+        let mut node = l.last()?;
+        loop {
+            match node.unspan() {
+                Value::Var(v) => return Some(*v),
+                Value::Return(inner) => node = inner,
+                _ => return None,
+            }
+        }
     }
 
     fn stmt_defines_var(op: &Value, v: u16) -> bool {

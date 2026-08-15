@@ -9372,10 +9372,12 @@ fn run() -> integer {
     // comparison chain, so the non-associative-comparison guard also fires here.
     .error(
         "comparison operators do not chain — `>` follows another comparison, which would compare a boolean to the next operand; parenthesise (e.g. `(a == b) == c`) or combine with `&&` (e.g. `a < b && b < c`) at quality_6d_keyed_collection_constructor_hint:3:23",
-    )
-    .error(
-        "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
     );
+    // loft#918 — a THIRD error, "No matching operator '<' on 'unknown' and 'boolean'",
+    // used to trail these two.  An unmatched operator with an untyped operand now defers
+    // on pass 1, and pass 1 already reported the two errors above, so pass 2 never runs
+    // and the cascade line is gone.  Nothing is lost: those two name both halves of what
+    // is wrong here, and the dropped line named a type the author never wrote.
 }
 
 /// @PLN102 — a unary `-` on a value whose type is only resolved on the SECOND
@@ -9450,12 +9452,15 @@ fn pln102_all_unknown_deferral_still_reports_undefined_callee() {
     .error("missing argument for parameter 'v2' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2");
 }
 
-/// @PLN102 — the deferral is deliberately limited to the case where NO operand
-/// carries type information.  One KNOWN operand is enough to steer resolution, and
-/// keeping it on the resolving path is what preserves this diagnostic: the operands
-/// here are `unknown` and `boolean`, so the mismatch is still reported instead of
-/// being deferred into silence.  Widening the guard to "ANY operand unknown" would
-/// lose it.
+/// @PLN102 — the deferral at the TOP of `call_op` is deliberately limited to the case
+/// where no operand carries type information: one known operand is enough to steer
+/// resolution, so the operator search still runs here.
+///
+/// loft#918 added a second, later deferral — at the reject site, after that search has
+/// found nothing — and this is where the difference shows.  The mismatch is still
+/// reported, and now names the type the operand really has (`float`, resolved on pass 2)
+/// rather than the `unknown` pass 1 saw.  What must NOT happen is the diagnostic
+/// disappearing, which is what this test guards.
 #[test]
 fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
     code!(
@@ -9465,7 +9470,7 @@ fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
 fn f() -> float { 1.0 }"
     )
     .error(
-        "No matching operator '<' on 'unknown' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
+        "No matching operator '<' on 'float' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
     );
 }
 
