@@ -1453,8 +1453,13 @@ check-rlib:  ## One-second pre-flight: is target/release/libloft.rlib present an
 	@# not fail like a compile error: it surfaces ~9 minutes in as a handful of native tests
 	@# failing for what look like unrelated reasons — `libloft.rlib not found for this
 	@# build`, a cdylib mtime that did not advance, a `native_scripts` sweep going red — each
-	@# naming a file that is present when you go and look.  Same family as the concurrent-gate
-	@# hazard `ci-guard` refuses below, and the same cost.
+	@# naming a file that is present when you go and look.
+	@#
+	@# This target REPORTS; it is not wired into `ci`.  `make ci` builds all three itself
+	@# (beside the wasm builds it already ran), because a gate that refuses on a condition
+	@# it could satisfy is friction on every run after every edit, and friction is what
+	@# gets a check switched off.  Reach for this before a BARE `cargo test --release`,
+	@# which builds no rlib of its own and is where the drift actually bites.
 	@# Keyed on the SOURCES, not on `deps/`.  A from-source tree usually has no
 	@# `deps/libloft-<hash>.rlib` at all — only the bare uplifted one — so comparing the
 	@# two finds nothing and reports "current" on a tree that is anything but.  What is
@@ -1492,7 +1497,7 @@ check-rlib:  ## One-second pre-flight: is target/release/libloft.rlib present an
 	echo "libloft.rlib: present and current (native + wasm)"
 
 .PHONY: ci-guard
-ci-guard: check-rlib
+ci-guard:
 	@# REFUSE to start while another gate is running in this tree, BEFORE the
 	@# truncation below — because two concurrent runs do not merely interleave,
 	@# they FAKE FAILURES in each other and both reports become fiction:
@@ -1586,6 +1591,7 @@ ci: ci-guard
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	$(MAKE) --no-print-directory label-guard-test >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
+	cargo build --release --lib >> result.txt 2>&1 && \
 	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random >> result.txt 2>&1 && \
 	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random >> result.txt 2>&1 && \

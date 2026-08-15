@@ -346,26 +346,54 @@ enum VecBind {
 }
 
 impl Parser {
-    /// Does this expression hand back a buffer the CALLER already owns, rather than
-    /// storage of its own?
-    ///
-    /// A heap-returning function writes its result into a caller-allocated return
-    /// buffer passed as a hidden trailing `__retbuf` parameter (the NRVO ABI), so
-    /// the value it answers IS that buffer — allocated once at the call site and,
-    /// inside a loop, reused across every iteration. Binding it to a temp that owns
-    /// therefore frees the buffer once per iteration while its real owner still
-    /// holds it (loft#906).
+    /// Does this expression hand back storage it did NOT allocate — so a temp bound
+    /// to it only NAMES that storage and must not free it?
     ///
     /// The question is about the expression's PRODUCER, so it looks at the call and
     /// not at the value's type: a `vector<T>` from a call and a `vector<T>` from an
     /// allocating cast have the same type and opposite ownership.
     ///
-    /// The test is the parameter's `hidden` FLAG, not its name. A function whose tail
-    /// promotes a work-ref to BE the buffer has that parameter RENAMED after the
-    /// variable it promoted (`fn add(v, x, out)` rather than `…, __retbuf`), so a
-    /// name test sees a retbuf on one shape of heap-returning function and not on the
-    /// other — which is half a fix, and the half that still crashes.
-    fn yields_a_return_buffer(data: &crate::data::Data, rhs: &Value) -> bool {
+    /// There are two ways to be handed something you do not own, and the ownership
+    /// fact lives in a different place for each.
+    ///
+    /// **A return buffer** (loft#906). A heap-returning function writes its result
+    /// into a caller-allocated buffer passed as a hidden trailing `__retbuf`
+    /// parameter (the NRVO ABI), so the value it answers IS that buffer — allocated
+    /// once at the call site and, inside a loop, reused across every iteration.
+    /// Binding it to a temp that owns therefore frees the buffer once per iteration
+    /// while its real owner still holds it. The test is the parameter's `hidden`
+    /// FLAG, not its name: a function whose tail promotes a work-ref to BE the
+    /// buffer has that parameter RENAMED after the variable it promoted (`fn add(v,
+    /// x, out)` rather than `…, __retbuf`), so a name test sees a retbuf on one
+    /// shape of heap-returning function and not on the other — which is half a fix,
+    /// and the half that still crashes.
+    ///
+    /// **A view of something else's record** (loft#939). `src.items` answers a
+    /// projection into `src`'s record, and the synthetic `Set(tmp, src.items)` this
+    /// arm builds after the fact bypasses the parse-time vector deep-copy lowering
+    /// — the same reason the borrowed-`Var` arm below builds its temp by
+    /// element-append instead — so the temp ALIASES that record rather than copying
+    /// out of it. Freeing it at scope exit frees the record's owner: the caller's
+    /// argument, or a local that outlives the temp's inner scope.
+    ///
+    /// The fact is the RHS type's own `deps`, which is what the parser already uses
+    /// to answer owns-vs-borrows mid-parse (see [`VecBind::CopyOwnedField`]) —
+    /// non-empty deps mean the value names storage reached through something else.
+    /// It is read from the TYPE rather than from a list of projection opcodes
+    /// because a list is a second copy of the same fact, and the projection op a
+    /// later change forgets to add to it is exactly the one that then corrupts in
+    /// silence. Both the wrapper and the peeled type are asked, so a `vector<T>?`
+    /// (`Optional(Vector(…))`) cannot hide its deps behind the `?`.
+    ///
+    /// The two arms do not overlap: a return buffer's dep is on a HIDDEN parameter
+    /// and does not reach the RHS type as a borrow, which is why the first arm
+    /// exists and why neither subsumes the other.
+    ///
+    /// [`VecBind::CopyOwnedField`]: VecBind::CopyOwnedField
+    fn borrows_its_storage(data: &crate::data::Data, rhs: &Value, rhs_tp: &Type) -> bool {
+        if !rhs_tp.depend().is_empty() || !rhs_tp.base().depend().is_empty() {
+            return true;
+        }
         let Value::Call(d_nr, _) = rhs.unspan() else {
             return false;
         };
@@ -2718,19 +2746,21 @@ use a separate collection or add after the loop"
                     // a local first was clean, because a user local has no such dep.
                     let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
-                    // …but a call that returns a heap value writes it into a buffer the
-                    // CALLER allocated (the hidden trailing `__retbuf` parameter), so the
-                    // value it hands back IS that buffer.  Owning it here frees it at the
-                    // temp's scope exit — which inside a loop is once per ITERATION, while
-                    // the buffer was allocated once outside — and the next iteration then
-                    // writes through freed storage.  `introspect`'s `per_iteration_frees`
-                    // names exactly this shape, and giving the temp ownership above is what
-                    // creates it.  The buffer's own owner still frees it.
+                    // …but that is only true when the RHS ALLOCATED what it hands
+                    // back.  Where it hands back storage someone else owns — a
+                    // return buffer the caller allocated, or a projection into a
+                    // record the temp merely names — the `Set` below aliases that
+                    // storage, and owning it here frees it at the temp's scope exit
+                    // while its real owner is still live.  Inside a loop that scope
+                    // exit is once per ITERATION (loft#906); across a call it is the
+                    // caller's argument (loft#939).  The real owner still frees it.
                     //
-                    // Silent in a release build; the `LOFT_POISON` gate is what makes it a
-                    // SIGSEGV instead, because `b.items = add(b.items, k)` in a loop then
-                    // reads a record overwritten with 0xDEADBEEF.
-                    if Self::yields_a_return_buffer(&self.data, &rhs_saved) {
+                    // Silent in a release build until the slot is REUSED, which is
+                    // what turns it from a dangling read into a wrong answer: the
+                    // `LOFT_POISON` gate makes the loop shape a SIGSEGV instead,
+                    // because `b.items = add(b.items, k)` then reads a record
+                    // overwritten with 0xDEADBEEF.
+                    if Self::borrows_its_storage(&self.data, &rhs_saved, &s_type) {
                         self.vars.set_skip_free(tmp);
                     }
                     let set_tmp = v_set(tmp, rhs_saved);

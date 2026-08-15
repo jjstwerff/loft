@@ -40,10 +40,11 @@ cargo run --bin gendoc                   # regenerate doc/*.html
 make ci                                  # fmt → clippy → test (full local gate)
 make test                                # clippy + test → result.txt
 make check-rlib                          # 1s pre-flight: is libloft.rlib current? RUN IT
-                                         #   BEFORE any suite you drove with `cargo build
-                                         #   --bin loft` — that never rebuilds the lib rlib,
-                                         #   and the native tests link it (`make ci` refuses
-                                         #   on it; a bare `cargo test` does not)
+                                         #   BEFORE a bare `cargo test` — `cargo build
+                                         #   --bin loft` never rebuilds the lib rlib the
+                                         #   native tests link, and a bare `cargo test`
+                                         #   builds no rlib either (`make ci` builds all
+                                         #   three itself, so it needs no pre-flight)
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make speed                               # what got slower/faster — a REPORT, never a gate
 make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=

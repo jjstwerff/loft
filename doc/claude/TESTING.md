@@ -34,9 +34,10 @@ found for this build`, a cdylib mtime that did not advance, a `--html` build
 panicking — each naming a file that is present when you go and look.  The cost is a
 whole cycle, every time.
 
-`make ci` refuses on it up front (via `ci-guard`, beside the concurrent-gate
-refusal).  **A bare `cargo test --release` does not**, so run the check yourself
-before one:
+`make ci` builds all three itself, beside the wasm builds it already ran, so it
+needs no pre-flight — a gate that refused on something it could build would be
+friction after every edit, and that is how a check gets switched off.  **A bare
+`cargo test --release` builds none of them**, so run the check yourself before one:
 
 ```bash
 make check-rlib          # all three, each with its own cure; skips a target that isn't installed

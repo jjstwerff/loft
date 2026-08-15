@@ -913,6 +913,16 @@ tree-tracked block stores its LLRB free-list pointers at **offset 4 — exactly
 where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 `@P317`) is the hardest to pin; these levers cut the time dramatically:
 
+> **Start with `LOFT_STRICT_STORES=1` for a PREMATURE free** — a callee freeing a
+> store its caller still holds, which surfaces as a field the program never wrote
+> reading back as another record's data.  It names the access and the free.
+> `LOFT_UAF` is the row that *sounds* like the one for this and is not: it scans the
+> LIVE FRAME only, so a cross-frame premature free reports nothing while the same run
+> emits unrelated same-frame noise (loft#939 — the report reads as "no detector sees
+> it", which is what sends you off building one).
+
+
+
 | Lever | What it does | Use when |
 |---|---|---|
 | `LOFT_STORE_GUARD=1` | Reports each block-confined vector store that is scoped (and freed) later than the block it is confined to — the lifetime model under-freeing (Goal E).  Read-only, off by default.  Confinement is the least-common-ancestor of every reference's scope-path, with escape exclusions (return/yield/break, block-result, tuple-element, dep-aliasing) and loop-internal reuse excluded — adversarially hardened by `plans/2-vector-store-watermark/probes/cluster-I/`. | "Does a program hold more heap than the source implies?"  Drive the store-lifetime fix until it is silent corpus-wide, then promote to a `debug_assertions` assert.  See [GOALS.md Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth). |
