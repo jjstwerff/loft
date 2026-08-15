@@ -39,6 +39,12 @@ struct G {
   tr: trie<W[name]>,
 }
 
+// Two routes to ONE record set: `lookup` is a view over `data`'s records.
+struct GRP {
+  data: vector<E>,
+  lookup: hash<E[k]>,
+}
+
 fn fresh() -> S {
   S {
     xs: [7, 8],
@@ -135,6 +141,33 @@ fn main() {
   tot = 0;
   for e in s6.so { tot += e.v; }
   assert(tot == 44, "sorted refilled after clear holds {tot}, want 44");
+
+  // A LINKED group — two routes to one record set. An operation spelled through ANY member
+  // acts on the group (loft#898), so `= null` has to release those records exactly once,
+  // through their owner, and reset the other route to them: a view left holding its old
+  // spine reports a length over memory that is now free.
+  //
+  // Filled with `+=` rather than by a literal on purpose: a literal that fills the primary
+  // before the view field leaves the view empty (loft#924), which would make these cells
+  // pass for the wrong reason — an empty view has nothing to reset.
+  gp = GRP { data: [] };
+  gp.data += [E { k: 1, v: 10 }, E { k: 2, v: 20 }];
+  assert(len(gp.data) == 2, "the group's primary starts at {len(gp.data)}, want 2");
+  assert(len(gp.lookup) == 2, "the group's view starts at {len(gp.lookup)}, want 2");
+
+  gp.lookup = null;
+  assert(len(gp.lookup) == 0, "`= null` through the view left it at {len(gp.lookup)}, want 0");
+  assert(len(gp.data) == 0, "`= null` through the view left the primary at {len(gp.data)}, want 0");
+  gp.data += [E { k: 3, v: 30 }];
+  assert(len(gp.data) == 1, "refill after the view clear left primary {len(gp.data)}, want 1");
+  assert(len(gp.lookup) == 1, "refill after the view clear left view {len(gp.lookup)}, want 1");
+  assert(gp.lookup[3].v == 30, "the refilled record reads {gp.lookup[3].v} through the view, want 30");
+
+  gp.data = null;
+  assert(len(gp.data) == 0, "`= null` through the primary left it at {len(gp.data)}, want 0");
+  assert(len(gp.lookup) == 0, "`= null` through the primary left the view at {len(gp.lookup)}, want 0");
+  gp.data += [E { k: 4, v: 40 }];
+  assert(gp.lookup[4].v == 40, "after the primary clear the view reads {gp.lookup[4].v}, want 40");
 
   // Clear and refill in a loop: the field must not grow, and must not leak.
   s7 = fresh();
