@@ -3365,3 +3365,76 @@ BEHAVIOUR — the only shape that would make the pair mean something. A partial-
 filtered index (`index<E[k]> where …`) is that shape, and it would arrive with its own
 type name anyway, so it does not reopen this: it lands as a new kind, not as two copies of
 one.
+
+## C114 — a keyed collection is refused as a vector ELEMENT, not given an element form
+
+`vector<hash<E[k]>>` — and the same with `sorted` / `index` / `spatial` / `trie` — parsed,
+and did nothing else that worked.
+
+### What was actually there
+
+The type could be declared and only declared. Every route to putting something in it
+failed, each in a different way:
+
+* a literal element typed as the CONTENT struct — `vh += [[E{k:1,v:10}]]` answered
+  *"cannot store `vector<E>` elements in a `vector<hash<E,["k"]>>`"*, and there is no
+  other spelling for a keyed literal;
+* appending a keyed LOCAL (`h: hash<E[k]> = []; vh += [h]`) walked off the type table and
+  panicked the compiler;
+* `--native` never got that far. `emit_type_creation` has arms for `Struct` / `EnumValue`
+  / `Enum` / `Vector`, and a keyed kind reached as a vector's CONTENT matched none of
+  them, so the generated `init()` referenced a `t{N}` no line ever bound and rustc refused
+  the program (E0425).
+
+The interpreter's tolerance is what made it look like a feature: `len(vh)` answered `0`
+and the program ran.
+
+### Why not implement it
+
+The obvious repair — give `emit_type_creation` a keyed arm — creates the keyed type at the
+CONTAINER's position rather than its own, and a keyed type is created once. That moves
+every runtime id after it, for **every program with a keyed field**, which is precisely
+the loft#739 hazard the schema-id check exists to catch. So the cheap fix is not cheap; it
+trades a refusal for a silent id drift across the whole language.
+
+And the element form is the real question underneath. A keyed collection is a record set
+with a spine; a vector element is a slot. Giving one an element form means deciding what a
+vector of them OWNS, what a copy of the vector does to the spines, and what
+`borrowed_spine` should free — the same lifetime surface loft#898 needed for a group. That
+is a feature with a design, not a missing arm.
+
+### Compatibility
+
+Nothing to keep. No program could fill one, so no program depends on the behaviour; a
+sweep of `default/`, `lib/`, `tests/` and `doc/` found no declaration of the shape outside
+the issue that reported it. The refusal converts a compiler panic and a rustc error into a
+compile error that names the cure — the same trade [C113](#c113--two-index-collections-over-one-element-type-and-key-are-refused-not-made-to-work) makes.
+
+### Decision
+
+**Closed — refuse, 2026-08-15 (loft#923 leg A).** The `"vector"` arm of
+`Parser::sub_type_inner` — the one chokepoint every inline `vector<…>` element resolves
+through, so local, parameter, return, field and nested all reach it — rejects a keyed
+element where it is written:
+
+> a `hash` cannot be a vector ELEMENT — a keyed collection has no element form anything
+> can write, so `vector<hash<…>>` could only ever be declared and stay empty. Hold it in a
+> struct and make a vector of THAT: the extra record is what the element would have been
+> anyway.
+
+The message names the KIND rather than `Type::name`, because a keyed type's registered
+name carries its key list in the schema's spelling (`sorted<E,[("k", true)]>`) and that is
+not what the author wrote. All five kinds are covered by
+`tests/parse_errors.rs::every_keyed_kind_is_refused_as_a_vector_element` — naming three of
+five is how loft#922's field-replace path left `spatial` and `trie` broken.
+
+The prescribed cure is verified on both backends, not just asserted: a `struct Box { by_k:
+hash<E[k]> }` in a `vector<Box>` fills, looks up and reads back identically under
+`--interpret` and `--native`.
+
+### Revisit when
+
+A consumer wants a vector of keyed collections and the struct wrapper is measurably in the
+way — which means the wrapper's extra record is the cost being complained about. That is a
+layout question with an answer (an inline element region), and it arrives with the
+ownership rules `borrowed_spine` would need, not as a new arm in the emitter.

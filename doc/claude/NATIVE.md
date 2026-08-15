@@ -155,6 +155,24 @@ where the compiler recorded `main_vector<vector<integer(-32768, 32767)>>`,
 losing the narrow element type and minting an extra type; and `short<0,true>`
 lands one late behind the same nested-vector shape.
 
+**A `vector<τ?>` element used to be one of them (loft#923).** `Optional(τ)`
+shares τ's storage exactly — the compiler's own table holds `vector<integer?>`
+and `vector<integer>` as ONE type — but `emit_field_inner` tested the element
+type without peeling the `Optional`, so a `vector<vector<integer>?>` field
+missed the nested-vector arm and fell through to the generic path. There
+`type_def_nr` resolves an `Optional` to the generic `vector` def and reads
+whatever `known_type` was assigned last, so the emitted `db.vector(<that>)`
+MINTED a type the program never named and moved every id after it. The peel now
+happens once, at the top of the vector arm, beside the peel the FIELD's own type
+already had. The lesson generalises: any test on an element type in this emitter
+is a question about STORAGE, and `Optional` is not part of the answer.
+
+A keyed collection in that position is a different story — `vector<hash<E[k]>>`
+had no element type created at all, so `init()` named a binding no line made and
+rustc refused the program. It is now refused where it is declared instead
+(loft#923 leg A): nothing could fill one, so there was no working program to
+keep. See [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).
+
 `LOFT_TRACE_MINT=1` is the companion instrument: it narrates every
 collection-type lookup as `hit=<nr>` or `MINT=<nr>` with caller frames, so
 diffing a working run against a broken one shows the extra mint.

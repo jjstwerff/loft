@@ -4397,10 +4397,18 @@ fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Each of these carries a differently-shaped nested narrow vector, and each
     // drifted by a different amount before the fix.
+    //
+    // loft#923 added the fourth: a `vector<τ?>` ELEMENT drifted for the same
+    // reason one level up. The emitter tested the element type without peeling
+    // its `Optional`, so a `vector<vector<integer>?>` missed the nested-vector
+    // arm and the generic path minted a type the program never named. It belongs
+    // in THIS list rather than beside its own script, because a drift is invisible
+    // to the program's output and only this env makes it fail.
     for script in [
         "tests/scripts/184-nested-narrow-int-vector.loft",
         "tests/scripts/624-nested-narrow-width.loft",
         "tests/scripts/432-untyped-vector-literal-arg.loft",
+        "tests/scripts/923-nullable-vector-element-schema.loft",
     ] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
             .arg("--native")

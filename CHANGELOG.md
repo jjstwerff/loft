@@ -429,6 +429,69 @@ One consequence worth knowing if you ever compared behaviour across files: wheth
 element type was declared *anywhere else in the program*, so the same two lines behaved
 differently in two files. That is gone — group membership alone decides it.
 
+### …and building the pair with a `{…}` literal fills it too, whichever field you write first
+
+Everything above is about the collections once they exist. Building them in one literal
+had its own hole, and which field you happened to write first decided whether you hit it:
+
+```loft
+struct S { data: vector<E>, lookup: hash<E[k]> }
+
+a = S { data: [E{k:1,v:10}, E{k:2,v:20}] };              // len(a.lookup) was 0
+b = S { data: [E{k:1,v:10}, E{k:2,v:20}], lookup: [] };  // len(b.lookup) was 0
+c = S { lookup: [], data: [E{k:1,v:10}, E{k:2,v:20}] };  // len(c.lookup) was 2
+```
+
+The records were all there — `a.data[0].k` read `1` — but `a.lookup[1]` answered null,
+which is exactly what a key that was never inserted answers. The two spellings of "not
+found" are indistinguishable to the caller, so the fault read as missing DATA and sent you
+to the insert.
+
+A collection field is a small header, and each one used to be cleared at its own position
+in the literal. Since putting a record in through one member also files it under the
+others, a member written *after* the one holding the records wiped the index it had just
+been given — and a member you left out was cleared later still. The whole group is now
+cleared once, up front, before any of it is filled. All three lines above read `2`.
+
+One thing follows from this that is worth knowing. If you fill **two** members in one
+literal, you now add to the group **twice**:
+
+```loft
+struct HS { by_k: hash<E[k]>, by_v: sorted<E[v]> }
+s = HS { by_k: [E{k:1,v:10}], by_v: [E{k:2,v:20}] };
+len(s.by_k)                          // 2 — one record set, holding both
+```
+
+That is the same thing `s.by_k += …; s.by_v += …` has always done, and it is what "two
+routes to one set of records" means. If you wanted two independent collections, give them
+different element types — sharing one element type is what makes them a pair.
+
+### A vector of keyed collections says so at the declaration, instead of failing later
+
+`vector<hash<E[k]>>` used to parse. It could not do anything else: putting an element in
+by literal was a type error, putting one in from a variable crashed the compiler, and
+compiling the program natively failed with an error from `rustc`. Only the "declare it and
+never fill it" path worked, and that one silently reported length 0.
+
+It is now refused where you write it, with the shape that does work:
+
+```
+a `hash` cannot be a vector ELEMENT — a keyed collection has no element form anything
+can write, so `vector<hash<…>>` could only ever be declared and stay empty. Hold it in
+a struct and make a vector of THAT: the extra record is what the element would have
+been anyway.
+```
+
+```loft
+struct Box { by_k: hash<E[k]> }
+boxes: vector<Box> = [];
+boxes += [Box { by_k: [E{k:1, v:10}] }];
+boxes[0].by_k[1].v                        // 10
+```
+
+`sorted`, `index`, `spatial` and `trie` all say the same thing. Nothing changes for
+`vector<vector<T>>`, which was never affected.
+
 ### Reading a file straight into a struct field no longer leaks
 
 ```loft

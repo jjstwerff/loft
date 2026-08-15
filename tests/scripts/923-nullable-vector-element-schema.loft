@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `vector<τ?>` ELEMENT registers the same type the compiler holds, so the
+// schema the generated `init()` rebuilds agrees with the ids baked into the
+// emitted ops.
+//
+// It did not. `Optional(τ)` shares τ's storage exactly, and the compiler's table
+// keeps `vector<integer?>` and `vector<integer>` as ONE type — but the field
+// emitter tested the element type WITHOUT peeling the `Optional`, so a
+// `vector<vector<integer>?>` missed the nested-vector arm and fell through to
+// the generic path. There `type_def_nr` resolves an `Optional` to the generic
+// `vector` def, whose `known_type` is whatever registered last, and the emitted
+// `db.vector(<that>)` MINTED a type the program never named. Every runtime id
+// from that point sat one above the compile-time id baked into the ops, so an id
+// could name a different type in the generated program than in the compiler that
+// baked it (loft#923 leg B, reported by loft#739's guard).
+//
+// Run this file under `LOFT_STRICT_SCHEMA_IDS=1` to make the drift fatal rather
+// than a report — that is the oracle this guard is built around, and the values
+// below are the second half: a drifted id can still read plausibly.
+
+struct Ent { k: integer, v: integer }
+
+struct Holder {
+  nullable: vector<vector<integer>?>,
+  plain: vector<vector<integer>>,
+}
+
+fn main() {
+  // The declared-only shape is the one that drifted. Nothing fills it, so no
+  // value can reveal the fault — only the id agreement can.
+  untouched: vector<vector<integer>?> = [];
+  assert(len(untouched) == 0, "a declared-only nullable-element vector has len {len(untouched)}, want 0");
+
+  a: vector<vector<integer>?> = [];
+  a += [[1, 2]];
+  a += [[3]];
+  assert(len(a) == 2, "outer len {len(a)}, want 2");
+  assert(len(a[0] ?? []) == 2, "first element len {len(a[0] ?? [])}, want 2");
+  assert((a[0] ?? [])[1] == 2, "first element reads {(a[0] ?? [])[1]}, want 2");
+  assert(len(a[1] ?? []) == 1, "second element len {len(a[1] ?? [])}, want 1");
+  assert((a[1] ?? [])[0] == 3, "second element reads {(a[1] ?? [])[0]}, want 3");
+
+  // A STRUCT element, so the drift has a record layout to get wrong rather than
+  // a scalar width that happens to survive naming the wrong type.
+  b: vector<vector<Ent>?> = [];
+  b += [[Ent { k: 1, v: 10 }, Ent { k: 2, v: 20 }]];
+  assert(len(b) == 1, "struct-element outer len {len(b)}, want 1");
+  assert(len(b[0] ?? []) == 2, "struct-element inner len {len(b[0] ?? [])}, want 2");
+  assert((b[0] ?? [])[1].v == 20, "struct element reads {(b[0] ?? [])[1].v}, want 20");
+
+  // One level deeper: the nullable element is not the outermost layer.
+  c: vector<vector<vector<integer>?>> = [];
+  c += [[[7, 8]]];
+  assert(len(c[0][0] ?? []) == 2, "three-deep inner len {len(c[0][0] ?? [])}, want 2");
+  assert((c[0][0] ?? [])[1] == 8, "three-deep reads {(c[0][0] ?? [])[1]}, want 8");
+
+  // As struct FIELDS, beside the non-nullable spelling of the same shape: the
+  // two must register ONE type, and the plain one must keep working.
+  h = Holder { nullable: [], plain: [] };
+  h.nullable += [[9]];
+  h.plain += [[6, 5]];
+  assert(len(h.nullable) == 1, "field: nullable outer len {len(h.nullable)}, want 1");
+  assert((h.nullable[0] ?? [])[0] == 9, "field: nullable reads {(h.nullable[0] ?? [])[0]}, want 9");
+  assert(len(h.plain[0]) == 2, "field: plain inner len {len(h.plain[0])}, want 2");
+  assert(h.plain[0][1] == 5, "field: plain reads {h.plain[0][1]}, want 5");
+
+  // CONTROL: the non-nullable spelling never drifted and must not start.
+  d: vector<vector<integer>> = [];
+  d += [[4, 5]];
+  assert(len(d[0]) == 2, "control inner len {len(d[0])}, want 2");
+  assert(d[0][1] == 5, "control reads {d[0][1]}, want 5");
+
+  println("923 ok");
+}

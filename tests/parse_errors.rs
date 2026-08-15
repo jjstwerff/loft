@@ -2793,3 +2793,70 @@ fn keyed_collection_unknown_key_field_lists_the_fields_when_it_cannot_suggest() 
              keyed_collection_unknown_key_field_lists_the_fields_when_it_cannot_suggest:2:11",
         );
 }
+
+/// loft#923 — a KEYED collection cannot be a vector ELEMENT, and the refusal
+/// lands where it is declared.
+///
+/// Every route to using one failed. A literal element types as the CONTENT
+/// struct, so `vh += [[E{…}]]` was a type error; appending a keyed LOCAL walked
+/// off the type table; and `--native` never got that far, because the element
+/// type was never created and the generated `init()` named a binding no line
+/// made (rustc E0425). So the type could be declared, and only declared — which
+/// is why it is refused rather than given storage, the same call
+/// DESIGN_DECISIONS C113 makes for two `index` members over one key.
+///
+/// The message names the KIND rather than `Type::name`: a keyed type's
+/// registered name carries its key list in the schema's spelling
+/// (`sorted<E,[("k", true)]>`), which is not what the author wrote.
+#[test]
+fn keyed_collection_as_a_vector_element_is_refused() {
+    code!("struct Ent { k: integer, v: integer }\nfn test() { vh: vector<hash<Ent[k]>> = []; }")
+        .error(
+            "a `hash` cannot be a vector ELEMENT — a keyed collection has no element form \
+             anything can write, so `vector<hash<…>>` could only ever be declared and stay \
+             empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+             the element would have been anyway. at \
+             keyed_collection_as_a_vector_element_is_refused:2:39",
+        );
+}
+
+/// Every keyed kind, not just the one that was reported: `spatial` and `trie`
+/// reach the same dead end, and a rule that names three of five kinds is how
+/// loft#922's field-replace path left two of them broken.
+#[test]
+fn every_keyed_kind_is_refused_as_a_vector_element() {
+    code!("struct Ent { k: integer, v: integer }\nfn test() { vh: vector<sorted<Ent[k]>> = []; }")
+        .error(
+            "a `sorted` cannot be a vector ELEMENT — a keyed collection has no element form \
+             anything can write, so `vector<sorted<…>>` could only ever be declared and stay \
+             empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+             the element would have been anyway. at \
+             every_keyed_kind_is_refused_as_a_vector_element:2:41",
+        );
+    code!("struct Ent { k: integer, v: integer }\nfn test() { vh: vector<index<Ent[k]>> = []; }")
+        .error(
+            "a `index` cannot be a vector ELEMENT — a keyed collection has no element form \
+             anything can write, so `vector<index<…>>` could only ever be declared and stay \
+             empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+             the element would have been anyway. at \
+             every_keyed_kind_is_refused_as_a_vector_element:2:40",
+        );
+    code!(
+        "struct Pt { x: integer, y: integer }\nfn test() { vh: vector<spatial<Pt[x, y]>> = []; }"
+    )
+    .error(
+        "a `spatial` cannot be a vector ELEMENT — a keyed collection has no element form \
+             anything can write, so `vector<spatial<…>>` could only ever be declared and stay \
+             empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+             the element would have been anyway. at \
+             every_keyed_kind_is_refused_as_a_vector_element:2:44",
+    );
+    code!("struct Wd { nm: text, v: integer }\nfn test() { vh: vector<trie<Wd[nm]>> = []; }")
+        .error(
+            "a `trie` cannot be a vector ELEMENT — a keyed collection has no element form \
+             anything can write, so `vector<trie<…>>` could only ever be declared and stay \
+             empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+             the element would have been anyway. at \
+             every_keyed_kind_is_refused_as_a_vector_element:2:39",
+        );
+}

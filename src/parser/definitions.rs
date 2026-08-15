@@ -2708,6 +2708,48 @@ impl Parser {
                         // default) as a no-op, for back-compat with existing source.
                         self.has_deprecated_not_null();
                         self.lexer.closing_angle();
+                        // loft#923 — a KEYED collection is not a vector element, and
+                        // saying so here is the whole of it: this is the one
+                        // chokepoint every `vector<…>` element passes through.
+                        //
+                        // Nothing could ever fill one. A literal element types as the
+                        // CONTENT struct ("cannot store vector<E> elements in a
+                        // vector<hash<E,[\"k\"]>>"), and appending a keyed LOCAL walked
+                        // off the type table. `--native` did not even get that far: the
+                        // element type was never created, so the generated `init()`
+                        // named a binding no line made and rustc refused the program.
+                        // So it could be declared, and only declared.
+                        //
+                        // Refused where it is written rather than given storage, the
+                        // same call DESIGN_DECISIONS C113 makes for two `index`
+                        // members over one key — and the cure named below is a real
+                        // one that costs nothing the element would not have cost.
+                        //
+                        // Named by its KIND, not by `Type::name`: a keyed type's
+                        // registered name carries its key list in the schema's own
+                        // spelling (`sorted<E,[("k", true)]>`), which is not what the
+                        // author wrote and not something to hand back to them.
+                        let kind = match tp.base() {
+                            Type::Hash(_, _, _) => Some("hash"),
+                            Type::Sorted(_, _, _) => Some("sorted"),
+                            Type::Index(_, _, _) => Some("index"),
+                            Type::Radix(_, _, _) => Some("spatial"),
+                            Type::Trie(_, _, _) => Some("trie"),
+                            _ => None,
+                        };
+                        if let Some(kind) = kind {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `{kind}` cannot be a vector ELEMENT — a keyed \
+                                 collection has no element form anything can write, so \
+                                 `vector<{kind}<…>>` could only ever be declared and \
+                                 stay empty. Hold it in a struct and make a vector of \
+                                 THAT: the extra record is what the element would have \
+                                 been anyway."
+                            );
+                            return Some(Type::Unknown(0));
+                        }
                         // @PLN25 storage-vs-access-nullability: DENSE by default; the
                         // leading `?` (`vector<?S>`) opts in to a nullable element,
                         // synthesising the `__nullable<S>` enum.

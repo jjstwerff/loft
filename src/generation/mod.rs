@@ -3486,6 +3486,17 @@ extern crate loft;"
         let nullable = nullable || matches!(typedef, Type::Optional(_));
         let typedef = typedef.base();
         if let Type::Vector(c, _) = typedef {
+            // loft#923 — peel the ELEMENT's `Optional` for the same reason line 3487
+            // peels the field's: `Optional(τ)` shares τ's storage exactly, and the
+            // compiler's own table holds `vector<τ?>` and `vector<τ>` as ONE type.
+            // Unpeeled, a `vector<vector<integer>?>` field missed the nested-vector
+            // arm below and fell through to the generic path, where
+            // `type_def_nr(Type::Optional)` resolves to the generic `vector` def and
+            // its `known_type` is whatever registered last — `db.vector(t7)`, an
+            // element type the program never named. That MINTS a type, so every
+            // runtime id from there on sat one above the compile-time id baked into
+            // the emitted ops, and loft#739's guard reported the drift.
+            let c: &Type = c.base();
             // when the element `Type::Integer` carries a
             // `forced_size` annotation that `vector_narrow_width`
             // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
@@ -3496,7 +3507,7 @@ extern crate loft;"
             // The wrapper's `main_vector<T>` struct field would end up
             // with 8-byte stride even though `fill_database` narrowed
             // the actual runtime Parts, corrupting reads/writes.
-            if let Type::Integer(spec) = &**c
+            if let Type::Integer(spec) = c
                 && let Some(n) = spec.vector_narrow_width()
             {
                 let name = match n {
@@ -3539,7 +3550,7 @@ extern crate loft;"
             // `known_type` is `u16::MAX` → emits `db.vector(u16::MAX)`
             // which panics in `Stores::field`'s parent-tracking when the
             // wrapper struct is registered.
-            if matches!(**c, Type::Function(_, _, _)) {
+            if matches!(c, Type::Function(_, _, _)) {
                 let narrow = self.stores.name("int<0,false>");
                 if narrow != u16::MAX {
                     // @P353: an empty `vector<fn(…)>` literal registers its
@@ -3569,7 +3580,7 @@ extern crate loft;"
             // `db.vector(db.vector(<inner>))` so the runtime database
             // registers the nested layers in the same order, regardless of
             // which other types happened to register `vector<X>` first.
-            if matches!(&**c, Type::Vector(_, _)) {
+            if matches!(c, Type::Vector(_, _)) {
                 // loft#742 — prefer the content id `fill_database` RECORDED for
                 // this field over anything re-derived from the loft `Type`.
                 //

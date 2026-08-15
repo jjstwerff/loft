@@ -1053,6 +1053,31 @@ declared, naming the workaround: give the second route a different KIND, or a di
 key. A different key is a different type name and so its own link triple, and two
 `index<E[k]>` fields in different structs hold different records; both stay legal.
 
+### Constructing a group with a literal (loft#924)
+
+**A group's members are all zeroed together, before any of them is filled.** A collection
+field is a 4-byte header, and `parse_object` writes the group's headers as ONE block in
+the literal's prelude — the treatment #437 already gives plain vector fields, and for the
+same reason. `Parser::linked_group_offsets` names them; the two sites that otherwise
+prime one field at a time (the field parse, and `object_init` for a field the literal
+leaves out) skip whatever the prelude covered.
+
+Per-field priming cannot work here, and the reason is the group's own rule. `OpFinishRecord`
+through the member the author names indexes the record into every sibling, so a member
+whose header is written AFTER that insert drops the spine it was just handed. The result
+was decided by the ORDER the fields were written in: `S { data: […], lookup: [] }` left
+`lookup` empty while `data` held the records, `S { lookup: [], data: […] }` did not, and
+an OMITTED member was zeroed later still — by the default-init that runs once the body is
+read, so it lost them too. Every keyed lookup then answered null for a record that was
+there, which is indistinguishable from a key that was never inserted.
+
+The corollary is worth stating because it surprises: **a literal that names TWO members
+adds to the group twice.** `HS { by_k: [a], by_v: [b] }` puts two records in one set and
+both members see both — the same thing `h.by_k += [a]; h.by_v += [b]` has always done.
+Three in-tree fixtures had been reading the truncation as independence (`502`, `922` and
+`85`), which is a fair signal of how easily two keyed fields over one element type are
+written without meaning a group; there is no diagnostic for it yet (loft#926).
+
 ### Probing and Load Factor
 
 Collision resolution is **linear probing**: on collision, advance slot index by 1 (wrapping). The load factor threshold is:
