@@ -1465,6 +1465,41 @@ use a separate collection or add after the loop"
         Some((struct_tp, *byte_off as u16))
     }
 
+    /// The database collection-type id behind a KEYED type — `sorted` / `hash` / `index` /
+    /// `spatial` / `trie` — or `None` for anything else, including a keyed type whose
+    /// element record has no runtime type yet (pass 1).
+    ///
+    /// One list of the keyed kinds, because a site that names four of the five reads as a
+    /// complete rule and is not one: the field-replace site named three, so `spatial` and
+    /// `trie` fields silently kept the whole-collection-assign defect the site exists to
+    /// fix (loft#922).  Peel the `?` before calling — an `Optional(τ)` collection lays out
+    /// exactly like `τ`.
+    fn keyed_type_id(&mut self, tp: &Type) -> Option<u16> {
+        match tp {
+            Type::Sorted(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.sorted(c, key))
+            }
+            Type::Hash(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.hash(c, key))
+            }
+            Type::Index(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.index(c, key))
+            }
+            Type::Radix(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.spatial(c, key))
+            }
+            Type::Trie(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.trie(c, key))
+            }
+            _ => None,
+        }
+    }
+
     /// The clear that must run before a whole-collection literal is built into the
     /// keyed struct field `to` of collection type `kt` (loft#898).
     ///
@@ -2567,7 +2602,6 @@ use a separate collection or add after the loop"
             && matches!(f_type.base(), Type::Vector(_, _))
             && self.is_field(to)
         {
-            let field_is_nullable = matches!(f_type, Type::Optional(_));
             let f_type = f_type.base();
             // loft#917 — `q.xs = null` on a `vector<T>?` field emitted a discarded null
             // sentinel: the field kept its records (leaking them) and kept its length, so
@@ -2578,7 +2612,15 @@ use a separate collection or add after the loop"
             // issue (`q.xs == null` still answering false) waits on that representation.
             // Freeing what the field holds is the part the write side owns, and it is
             // strictly better than dropping the statement.
-            if field_is_nullable && matches!(s_type, Type::Null) {
+            //
+            // loft#922 — and it does NOT depend on the `?`.  Under the null model only the
+            // SCALAR default flips to non-null: a heap type stays nullable, so `vector<T>`
+            // and `vector<T>?` are one type with one layout, and (N-Store) has nothing to
+            // say about a `null` reaching either.  Gating the clear on the `?` therefore
+            // split one type's behaviour in two — the declared-nullable field cleared while
+            // the identical field spelled without the `?` dropped the statement in silence,
+            // keeping the records it was told to release.
+            if matches!(s_type, Type::Null) {
                 *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
                 return Type::Void;
             }
@@ -2717,36 +2759,37 @@ use a separate collection or add after the loop"
         // clear that releases the records exactly once, through their owner, and
         // resets the other routes to them — so the group takes the same replace
         // every other keyed field gets.
-        let keyed_field_replace = !self.first_pass
+        //
+        // loft#922 — `s.h = null` takes the same clear, for the same reason the vector
+        // field above does: a keyed field holds a claim pointer with no spelling for
+        // *absent* that is not *empty*, so releasing what it holds is the closest honest
+        // meaning the storage has, and dropping the statement left the field holding
+        // records the author had said to let go.
+        //
+        // The kinds are all five, not the three this selector used to name: `spatial`
+        // (Radix) and the text-keyed trie fell out of the match and so kept the whole
+        // @P307/loft#895 defect this branch exists to fix — on a `spatial` field `=` still
+        // meant `+=` (a one-element literal over one element read back as two) and `= []`
+        // still did nothing at all.  The keyed-LOCAL path below already lists all five.
+        let keyed_field_write = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && self.is_field(to)
-            && matches!(&*code, Value::Insert(_));
-        if keyed_field_replace {
-            let kt = match &f_type {
-                Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.sorted(c, key))
-                }
-                Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.hash(c, key))
-                }
-                Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.index(c, key))
-                }
-                _ => None,
-            };
-            if let Some(kt) = kt {
-                let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
-                if let Value::Insert(ls) = code {
+            && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
+        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type.base()) {
+            let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
+            match code {
+                // A literal: run the clear FIRST, so the element-construction ops that
+                // follow build into an empty collection instead of appending to the old one.
+                Value::Insert(ls) => {
                     for (i, op) in clear.into_iter().enumerate() {
                         ls.insert(i, op);
                     }
                 }
-                return Type::Void;
+                // `= null`: the clear is the whole statement.
+                _ => *code = Value::Insert(clear),
             }
+            return Type::Void;
         }
         // @P292 / @P394 — `local_v = other_var_v` where the RHS is a bare vector
         // Var read (not a fresh-storage Block / Call / slice).  The standard Set
@@ -2878,33 +2921,14 @@ use a separate collection or add after the loop"
         // `size(tp)` bytes there corrupts the store (the failure mode of the
         // first attempt).  `s = []` (empty literal) and first-declaration
         // go through `create_keyed` above and are unaffected.
+        //
+        // @PLN48 — a Radix (spatial) reassignment deep-copies through the same
+        // `OpReplaceKeyed` as the other keyed kinds; `copy_claims_radix_body` backs it.
+        // Replaces the old @P295 "not yet supported" gate.  All five kinds come from
+        // `keyed_type_id`, the one list, so this site and the FIELD site above cannot
+        // drift apart again (loft#922).
         let keyed_kt = if !self.first_pass && op == "=" && var_nr != u16::MAX {
-            match &f_type {
-                Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.sorted(c, key))
-                }
-                Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.hash(c, key))
-                }
-                Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.index(c, key))
-                }
-                // @PLN48 — Radix reassignment (return/pass a spatial) now deep-copies
-                // via OpReplaceKeyed like the other keyed kinds; copy_claims_radix_body
-                // backs it.  Replaces the old @P295 "not yet supported" gate.
-                Type::Radix(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.spatial(c, key))
-                }
-                Type::Trie(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.trie(c, key))
-                }
-                _ => None,
-            }
+            self.keyed_type_id(f_type)
         } else {
             None
         };

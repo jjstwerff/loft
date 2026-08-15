@@ -3236,6 +3236,26 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
+            } else if self.is_null_source(p) && Self::is_collection_type(in_t.base()) {
+                // A `null` ELEMENT of a collection-typed element (`vector<vector<T>?>`,
+                // and the keyed kinds) is the EMPTY collection — the same rule a `null`
+                // reaching a collection FIELD takes (loft#922), because the slot is the
+                // same: a 4-byte record id where `0` already means "no records".
+                //
+                // Without this arm the element fell to the generic `set_field` below,
+                // which wrote what `convert` had made of the `null`: a REFERENCE sentinel
+                // (`OpNullRefSentinel`, a 16-byte DbRef with `store_nr = u16::MAX`), the
+                // right null for a vector VARIABLE, whose slot is a DbRef.  Writing it
+                // through the element's 4-byte setter aborted the compiler with an
+                // internal assertion — `expected 8B on stack but … pushed 16B` — so
+                // `vv += [null]` never reached a diagnostic, let alone a value.
+                //
+                // Telling this empty from an absent element is the same open question
+                // the FIELD has, and has one home: loft#917's reader half.
+                ls.push(self.cl(
+                    "OpSetInt4",
+                    &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+                ));
             } else if let Some(op) = self.narrow_elm_set(in_t, elm, p) {
                 // @PLN25 item 2 / #624 — narrow integer element write, shared with
                 // the slice-materialise site.  The fallback (an element outside the

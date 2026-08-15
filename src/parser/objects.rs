@@ -66,6 +66,23 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
+    /// Is this IR node the value a source-level `null` becomes?
+    ///
+    /// Two spellings reach a store site: the bare `Value::Null` the parser starts with, and
+    /// the typed sentinel `convert` rewrites it into once it knows the target type — for a
+    /// heap target that is `OpNullRefSentinel()`.  A site that must recognise "the author
+    /// wrote `null` here" has to accept both, because which one arrives depends on whether
+    /// the target's type was resolved before the value was.
+    pub(crate) fn is_null_source(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Null => true,
+            Value::Call(d, args) => {
+                args.is_empty() && self.data.def(*d).name() == "OpNullRefSentinel"
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn is_collection_type(tp: &Type) -> bool {
         matches!(
             tp,

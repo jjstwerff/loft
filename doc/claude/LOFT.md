@@ -2567,6 +2567,26 @@ The one unsupported form is a **generic-constructor expression**
 (`h = hash<Entry[name]>()`) or a bare untyped `h = []` — neither names the key.
 Use the annotation (`h: hash<Entry[name]> = []`) or a field declaration instead.
 
+#### Assigning to the collection ITSELF, not to a key
+
+`h[k] = null` removes ONE element.  Assigning to the **field** replaces the whole
+collection, on every kind (`vector`, `hash`, `sorted`, `index`, `spatial`, `trie`):
+
+```loft
+t.data = [Entry { name: "y", value: 2 }];  // REPLACES — the old contents are freed
+t.data = [];                               // empties it
+t.data = null;                             // empties it too (see below)
+t.data += [Entry { name: "z", value: 3 }]; // `+=` is the one that APPENDS
+```
+
+`= null` empties the collection rather than making it absent: a collection field holds
+a record id / claim pointer where `0` already means *no records*, and nothing in that
+encoding is left to mean *absent* rather than *empty*.  So `c == null` answers `false`
+even straight after `c = null` — **test emptiness with `len(c) == 0`**
+([loft#917](https://github.com/loft-lang/loft/issues/917) tracks the reader half).  The
+`?` makes no difference here: only the SCALAR default flips to non-null, so `vector<T>`
+and `vector<T>?` are one type with one layout and take the same clear.
+
 ### Generics: single type variable
 
 Only one type variable `<T>` is allowed, inferred from the first argument.
