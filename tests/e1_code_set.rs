@@ -173,6 +173,13 @@ const CODES: &[(&str, &str)] = &[
          fn main() { s = S { hover: 3 }; print(\"{s.palette_pick}\"); }",
     ),
     (
+        "linked-group-double-fill",
+        "struct E { k: integer, v: integer }\n\
+         struct S { by_k: hash<E[k]>, by_v: sorted<E[v]> }\n\
+         fn main() { s = S { by_k: [E { k: 1, v: 10 }], by_v: [E { k: 2, v: 20 }] }; \
+         print(\"{len(s.by_k)}\"); }",
+    ),
+    (
         "needless-reference-parameter",
         "fn f(x: &(integer, integer)) -> integer { x.0 }\n\
          fn main() { v = (1, 2); print(\"{f(&v)}\"); }",

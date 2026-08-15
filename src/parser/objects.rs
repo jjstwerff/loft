@@ -28,6 +28,11 @@ pub(crate) struct FieldSinks {
     /// The field parse and `object_init` both consult it so the header is written
     /// once, in the one place that can order it ahead of every member's fill.
     group_primed: HashSet<u16>,
+    /// loft#926 — collection fields this literal gives RECORDS to, as opposed to the
+    /// `field: []` that every construction of a linked group writes.  Only a member
+    /// actually handed records can surprise the author about which set they landed in,
+    /// so this, not `found_fields`, is what the advice counts.
+    filled_collections: HashSet<String>,
 }
 
 impl Parser {
@@ -2782,6 +2787,21 @@ impl Parser {
             let td_base = td.base().clone();
             let pos = self.field_position(td_nr, &field);
             found_fields.insert(field.clone());
+            // loft#926 — is this collection field being given records, or is it the
+            // `field: []` that constructing a linked group writes for every member?  An
+            // empty literal is exactly two tokens, so the question is answered by looking
+            // at them and putting the cursor straight back.  Scoped to a collection field
+            // with the advice enabled, so no other parse meets the lookahead.
+            if crate::keys::linked_group_lint_enabled()
+                && Self::collection_element(&td_base).is_some()
+            {
+                let before = self.lexer.link();
+                let empty = self.lexer.has_token("[") && self.lexer.has_token("]");
+                self.lexer.revert(before);
+                if !empty {
+                    sinks.filled_collections.insert(field.clone());
+                }
+            }
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
@@ -3190,6 +3210,7 @@ impl Parser {
         }
         if !self.first_pass {
             self.warn_omitted_fields(td_nr, &found_fields, &literal_pos);
+            self.advise_linked_group_fill(td_nr, &sinks.filled_collections, &literal_pos);
             let primed = std::mem::take(&mut sinks.group_primed);
             self.object_init(&mut list, td_nr, 0, code, &found_fields, &primed);
             // emit all field constraint checks after construction completes.
@@ -3326,6 +3347,134 @@ impl Parser {
     /// `object_init` with no `found_fields` at all and were never written by an author, so
     /// keying on a NON-empty `found_fields` keeps them out on the same test that exempts a
     /// bare `S {}`.
+    /// The element type a collection field holds records of, or `None` for a field that is
+    /// not a collection.
+    ///
+    /// This is the key a linked group is formed on, so it has to name types the way
+    /// `Stores::finish_type` does: a keyed kind carries its element as a definition number
+    /// already, while a `vector` carries a whole `Type` and only a record element (a struct,
+    /// or the `__nullable<S>` enum a nullable vector holds) can be shared with a sibling.
+    fn collection_element(tp: &Type) -> Option<u32> {
+        match tp {
+            Type::Sorted(e, _, _)
+            | Type::Index(e, _, _)
+            | Type::Hash(e, _, _)
+            | Type::Radix(e, _, _)
+            | Type::Trie(e, _, _) => Some(*e),
+            Type::Vector(inner, _) => match inner.as_ref() {
+                Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether this collection kind is KEYED, which is what makes a group form at all — a
+    /// pair of plain `vector` fields over one element type stays two collections.
+    fn is_keyed_collection(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        )
+    }
+
+    /// Advise when ONE literal fills two members of a linked collection group (loft#926).
+    ///
+    /// See [`crate::keys::linked_group_lint_enabled`] for why this fires at the literal
+    /// rather than at the declaration, and why it advises rather than warns. The short of
+    /// it: a declaration that forms a group is usually deliberate and fills one member, so
+    /// speaking there would be noise on correct code; a literal handing each member its own
+    /// records is the shape that only makes sense if the author thinks they are independent.
+    fn advise_linked_group_fill(
+        &mut self,
+        td_nr: u32,
+        filled: &HashSet<String>,
+        at: &crate::lexer::Position,
+    ) {
+        if self.default || filled.len() < 2 || !crate::keys::linked_group_lint_enabled() {
+            return;
+        }
+        // Element def -> the members declared over it, in DECLARATION order, so the member
+        // named as holding the records is the same one whichever literal is being read.
+        let mut groups: Vec<(u32, Vec<(String, bool)>)> = Vec::new();
+        for a_nr in 0..self.data.attributes(td_nr) {
+            let tp = self.data.attr_type(td_nr, a_nr);
+            let Some(elem) = Self::collection_element(&tp) else {
+                continue;
+            };
+            let entry = (
+                self.data.attr_name(td_nr, a_nr),
+                Self::is_keyed_collection(&tp),
+            );
+            match groups.iter_mut().find(|(e, _)| *e == elem) {
+                Some((_, members)) => members.push(entry),
+                None => groups.push((elem, vec![entry])),
+            }
+        }
+        for (_, members) in &groups {
+            // A group needs a keyed member; two plain vectors over one element type are
+            // two collections and always were.
+            if members.len() < 2 || !members.iter().any(|(_, keyed)| *keyed) {
+                continue;
+            }
+            let given: Vec<&String> = members
+                .iter()
+                .map(|(nm, _)| nm)
+                .filter(|nm| filled.contains(*nm))
+                .collect();
+            let ([holder], rest) = given.split_at(1.min(given.len())) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+            let others = rest
+                .iter()
+                .map(|nm| format!("`{nm}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (route, own, fills) = if rest.len() == 1 {
+                ("is a second route", "a collection of its own", "both")
+            } else {
+                (
+                    "are second routes",
+                    "collections of their own",
+                    "all of them",
+                )
+            };
+            diagnostic_at!(
+                self.lexer,
+                at,
+                Level::Advice,
+                code = "linked-group-double-fill",
+                "{others} {route} to `{holder}`'s records, not {own} — this literal fills \
+                 {fills}, so one record set ends up holding everything they were given"
+            );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "give each field its own element type so they stay independent".to_string(),
+                condition: Some("the fields were meant to be two separate collections".to_string()),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "fill the group once, through one member".to_string(),
+                condition: Some(
+                    "the fields were meant as two routes to one record set".to_string(),
+                ),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
+        }
+    }
+
     fn warn_omitted_fields(
         &mut self,
         td_nr: u32,

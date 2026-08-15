@@ -943,8 +943,10 @@ refused ([`src/placement.rs`](../../src/placement.rs)).
 
 Two or more keyed collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
-fills both. Every combination of kinds is a valid group except **two `index` members with
-the same key**, which is refused where it is declared: an index keeps its tree links in a
+fills both. `trie` and `spatial` join on the same terms as the rest: they were missing
+from the test that FORMS a group, which did not refuse the pairing but silently built a
+second, independent collection (loft#927). Every combination of kinds is a valid group
+except **two `index` members with the same key**, which is refused where it is declared: an index keeps its tree links in a
 field of the element record, so a second one has nowhere to put them (loft#902, and
 [DESIGN_DECISIONS.md § C113](DESIGN_DECISIONS.md) for why it is refused rather than
 given its own storage). **The records belong to exactly one member.** `types.rs` decides which when it
@@ -952,6 +954,13 @@ builds the group: the first-declared member is the PRIMARY, and every later one 
 leading `u16::MAX` on its `other_indexes` marking it a VIEW. That marker is the only place
 the ownership fact lives, and three readers now share it — the JSON default-init, the
 struct teardown walk, and the clear.
+
+Because the group is auto-formed, a struct literal that gives RECORDS to two members
+reads as two collections and behaves as one. That is documented behaviour, so it is not
+an error — but it is almost never what the author meant, and the `linked-group-double-fill`
+advice names it at the literal ([DIAGNOSTICS.md](DIAGNOSTICS.md), `LOFT_NO_LINKED_GROUP`
+opts out). It stays quiet on `field: []`, which is how every group is constructed, and on
+a literal that fills one member — the two deliberate shapes.
 
 Each member therefore releases only what it owns:
 

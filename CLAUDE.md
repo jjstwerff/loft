@@ -361,6 +361,13 @@ undiscoverable. `advice`, not `warning`: the zero is documented behaviour, so ig
 cannot produce a result the language did not promise. Quiet on a field with a declared
 default, on a NULLABLE field (absence is a value it holds), and on a bare `S {}` — that asks
 for the whole default record; the ambiguity is only in the PARTIAL literal) ·
+`LOFT_NO_LINKED_GROUP` (loft#926 `linked-group-double-fill` ADVICE: one struct literal
+gives RECORDS to two members of a linked collection group — two keyed collections over one
+element type are two routes to a SINGLE record set, so both end up holding everything and
+nothing at the literal says so. Quiet on a member written `[]`, which is how every group is
+constructed, and quiet when only one member is filled — those are the deliberate uses.
+`advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
+produce a result the language did not promise; what is wrong is the author's model) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is

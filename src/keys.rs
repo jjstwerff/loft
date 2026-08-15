@@ -539,6 +539,30 @@ pub fn omitted_field_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_OMITTED_FIELD").is_none())
 }
 
+/// loft#926 — one struct literal filling TWO members of a linked collection group.
+///
+/// Two collection fields over one element type, at least one of them keyed, are auto-linked:
+/// two routes to a SINGLE record set, where filling either fills both (DATABASE.md § Clearing
+/// one member of a linked group). That is documented and deliberate, so the DECLARATION says
+/// nothing — a program that means it fills one member and reads through both.
+///
+/// The literal filling a second member is where the author's model is demonstrably the other
+/// one: giving each member its own records only makes sense for independent collections, and
+/// these are not. Three of loft's own fixtures had written exactly that and were relying on a
+/// defect to hide it (loft#924) — with that defect fixed they behave as the group they are,
+/// and two of the three had meant the collections to be independent.
+///
+/// `advice` rather than `warning` by the tier rule: the result IS what the language promises,
+/// so ignoring it cannot produce a result the language did not document. What is wrong is the
+/// author's model, which is what an advice line is for.
+///
+/// **Default ON**; `LOFT_NO_LINKED_GROUP` opts out. One cached env read.
+#[must_use]
+pub fn linked_group_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_LINKED_GROUP").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft

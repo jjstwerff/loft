@@ -38,11 +38,15 @@
 // member at all, a4 has no hash or index one.
 //
 // The controls carry the scope. c1 pins that a plain `vector` as the SECOND field is
-// NOT linked — only index-typed fields are, and widening that would make two
-// independent vectors alias. c2 pins the same for a `trie` second field. c3 pins a
-// LONE hash, which must keep packing its entries into the arena (@PLN135 arc H): a
-// fix that made every hash allocate one record per entry would pass every row above
-// and silently give back that plan's win.
+// NOT linked — the group forms off the KEYED field being declared, and widening that
+// to any collection would make two independent vectors alias. c2 is the other side of
+// that same rule: a `trie` second field IS keyed, so it joins the group. It used to
+// read 0 here, and this file pinned that as the scope — which was the defect, not the
+// boundary: a trie was simply missing from the test that forms a group, so the pairing
+// compiled and silently gave two independent collections (loft#927). c3 pins a LONE
+// hash, which must keep packing its entries into the arena (@PLN135 arc H): a fix that
+// made every hash allocate one record per entry would pass every row above and
+// silently give back that plan's win.
 
 struct E1 { k: integer, n: text }
 struct E2 { k: integer, n: text }
@@ -124,11 +128,11 @@ fn main() {
   assert(len(c1.a) == 2, "c1 hash len = {len(c1.a)}, want 2");
   assert(len(c1.b) == 0, "c1 vector len = {len(c1.b)}, want 0 — a plain vector is not auto-linked");
 
-  // ---- c2: nor is a trie, which is not an index-typed field ---------------------
+  // ---- c2: a trie IS a group member, like every other keyed kind ---------------
   c2 = ST { a: [], b: [] };
   c2.a = [E8{k:1,n:"alpha"}, E8{k:2,n:"beta"}];
   assert(len(c2.a) == 2, "c2 sorted len = {len(c2.a)}, want 2");
-  assert(len(c2.b) == 0, "c2 trie len = {len(c2.b)}, want 0 — a trie second field is not auto-linked");
+  assert(len(c2.b) == 2, "c2 trie len = {len(c2.b)}, want 2 — a trie joins the group");
 
   // ---- c3: a lone hash keeps its arena — it has no sibling to be addressed by ---
   c3 = LoneH { a: [], tag: 7 };
