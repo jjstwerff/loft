@@ -2552,15 +2552,39 @@ use a separate collection or add after the loop"
         // - RHS type is non-Vector (e.g. `b.data = f#read(...)` where f#read
         //   returns text) — preserve the historical silent no-op rather than
         //   emit a type-mismatched OpAppendVector.
+        //
+        // loft#917 — `.base()` peels the `?`.  A `vector<T>?` field is
+        // `Optional(Vector(...))`, which this selector did not match, so the whole
+        // replace was skipped and `q.xs = [9]` left the literal's element-construction
+        // ops appending to what the field already held: `=` silently meant `+=`, and
+        // assigning `[9]` over `[7, 8]` read back as three elements on both backends.
+        // An `Optional(τ)` field lays out exactly like `τ` (@PLN25 slice (b)), so the
+        // replace it needs is the same one — the `?` is about what the field may hold,
+        // not about how it is stored.
         if !self.first_pass
             && op == "="
             && var_nr == u16::MAX
-            && matches!(f_type, Type::Vector(_, _))
+            && matches!(f_type.base(), Type::Vector(_, _))
             && self.is_field(to)
         {
+            let field_is_nullable = matches!(f_type, Type::Optional(_));
+            let f_type = f_type.base();
+            // loft#917 — `q.xs = null` on a `vector<T>?` field emitted a discarded null
+            // sentinel: the field kept its records (leaking them) and kept its length, so
+            // the clear the author asked for did not happen at all.  What the storage can
+            // express today is exactly the empty vector — a vector field holds a record id
+            // and `0` means "no records", with no room left to say *absent* rather than
+            // *empty* — so `= null` does what `= []` does, and the reader half of this
+            // issue (`q.xs == null` still answering false) waits on that representation.
+            // Freeing what the field holds is the part the write side owns, and it is
+            // strictly better than dropping the statement.
+            if field_is_nullable && matches!(s_type, Type::Null) {
+                *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
+                return Type::Void;
+            }
             let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());
             let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
-            let rhs_is_vector = matches!(s_type, Type::Vector(_, _));
+            let rhs_is_vector = matches!(s_type.base(), Type::Vector(_, _));
             if is_empty_literal {
                 *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
                 return Type::Void;
