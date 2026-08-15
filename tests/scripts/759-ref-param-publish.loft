@@ -108,7 +108,11 @@ fn main() {
 
   // The filed instance: two appends through a `&File` whose callee rebinds,
   // then a plain read-back that shares none of the fix's code path.
-  p = "test_loft_759_ref_param.bin";
+  // The scratch name carries a per-run suffix: `tests/ref_param_publish.rs` drives this
+  // same file five ways while `wrap::loft_suite` sweeps it too, and cargo runs those
+  // binaries in parallel — on one fixed name they raced over `delete`/read-back and the
+  // read reported a null first record.  Unset (a bare run, and loft_suite's) is "".
+  p = "test_loft_759_ref_param{env_variable("LOFT_759_SUFFIX")}.bin";
   delete(p);
   w = file(p);
   w#format = LittleEndian;

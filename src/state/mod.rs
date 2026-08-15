@@ -1926,6 +1926,11 @@ impl State {
         let needed_words = top.div_ceil(8) + 1;
         let store = self.database.store_mut(&self.stack_cur);
         store.grow_words(needed_words);
+        // loft#935 — the buffer grew; the RECORD the stack lives in has to grow
+        // with it. Without this every frame byte above the initial claim is
+        // outside record 1, which `Store::valid` reports under debug assertions
+        // and a release build simply writes.
+        store.extend_primary_to_store_end();
         self.stack_cap_bytes = store.byte_capacity() as u32;
     }
 

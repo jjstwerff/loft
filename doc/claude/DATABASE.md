@@ -503,6 +503,36 @@ probe (@PLN123 B2, where compaction borrows a scratch slot on every load), and
 `slot_recycling_tests` in `src/database/mod.rs` pins both halves so the
 asymmetry stays recorded.
 
+### The value stack lives in ONE record, and that record has to grow with it
+
+Store index `0` is the interpreter's value stack. It is a single claimed
+record — `PRIMARY`, record 1 — and every frame slot is addressed as
+`(0, 1, pos)`. Frame writes go straight through `addr_mut`; they never call
+`claim`, so the normal growth path never runs and `State::ensure_stack` is what
+extends the buffer when a program nests deeply enough.
+
+**Growing the buffer is only half of it.** `Store::grow_words` extends the
+allocation; record 1's header still claims the size it was born with (1000 words
+= 8000 bytes), so every stack byte above that mark sits outside the record that
+owns it. `ensure_stack` therefore calls `Store::extend_primary_to_store_end`
+after every growth — the store's only record spans the whole store, which is the
+invariant `State::new` established and nothing since maintained (loft#935).
+
+`Store::resize` is the wrong tool here and must stay unused on this store: its
+fallback is claim-copy-delete, which RELOCATES the record. Record 1 IS the
+running stack, so moving it moves every live frame out from under the
+interpreter.
+
+The failure this caused is worth remembering for its shape rather than its
+cause: a consumer added a `vector<Struct>` local to a ~700-line dispatcher and
+got `realloc(): invalid next size` — a glibc heap abort — in a *different* test
+file, one that never called the edited code. The enclosing function's size was
+never the defect; it was what made the frame big enough to cross the initial
+claim. That is also why the shape resisted every attempt to shrink it: the axis
+it needed was stack DEPTH, and a matrix that varies the expression while holding
+the function fixed cannot reach it. `tests/scripts/935-stack-store-growth.loft`
+is the depth axis in fifteen lines.
+
 ### Constant store (`CONST_STORE`)
 
 Store index `1` is reserved for compile-time constant data:
