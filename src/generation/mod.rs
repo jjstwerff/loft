@@ -3215,9 +3215,17 @@ extern crate loft;"
         // the bare def name, so the generated `db.structure(...)` matches the
         // interpreter's table and two same-named library structs don't
         // collide in generated code either.
+        //
+        // `{name:?}` writes the literal, rather than pasting the name between two typed
+        // quotes: a registered name is not always an identifier.  A synthetic wrapper over
+        // a KEYED collection carries its key list — `main_vector<hash<E,["k"]>>` — and the
+        // quotes in it closed the Rust string early, so `vector<hash<E[k]>>` (with or
+        // without a `?`) aborted `--native` with four rustc errors from one line of
+        // generated code, while `--interpret` ran it.  Debug-formatting escapes them and
+        // leaves every ordinary name byte-identical.
         let reg_name = &self.stores.types[type_id as usize].name;
         if matches!(def.def_type(), DefType::Struct) {
-            writeln!(w, "    let t{type_id} = db.structure(\"{reg_name}\", 0);")?;
+            writeln!(w, "    let t{type_id} = db.structure({reg_name:?}, 0);")?;
         } else if def.def_type() == DefType::EnumValue && !def.attributes().is_empty() {
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
@@ -3232,10 +3240,10 @@ extern crate loft;"
                 .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
             writeln!(
                 w,
-                "    let t{type_id} = db.structure(\"{reg_name}\", {enum_value});"
+                "    let t{type_id} = db.structure({reg_name:?}, {enum_value});"
             )?;
         } else if def.def_type() == DefType::Enum {
-            writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name())?;
+            writeln!(w, "    let t{type_id} = db.enumerate({:?});", def.name())?;
         } else if def.def_type() == DefType::Vector {
             // prefer the actual registered Parts::Vector
             // content from `stores.types[type_id]` — that's what
