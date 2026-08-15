@@ -9064,10 +9064,19 @@ impl Parser {
                         .returned
                         .depend()
                         .contains(&(a_nr as u16));
+                // A slot the caller DID write, whose expression already errored, is not a
+                // missing argument.  Such an expression is poisoned to `Never` by the site
+                // that reported it (@P376's rule), and it lowers to `Value::Null` because
+                // there is no value to lower — which is exactly what this check reads as
+                // "nothing supplied".  Reporting it again names an internal opcode and a
+                // parameter the program never wrote: `v > PEUnknown` answered
+                // "missing argument for parameter 'v1' of `OpLtInt`" (loft#934).
+                let already_errored = matches!(all_types.get(a_nr), Some(Type::Never));
                 if !self.first_pass
                     && default == Value::Null
                     && !matches!(tp, Type::Optional(_))
                     && !promoted
+                    && !already_errored
                 {
                     let fname = self.data.def(d_nr).display_name().to_string();
                     diagnostic!(

@@ -1835,6 +1835,15 @@ impl Function {
     /// → `T`) `as` is the right instrument, which is what it was written for.
     fn reject_retype(&self, var_nr: u16, type_def: &Type, data: &Data, lexer: &mut Lexer) {
         let var_tp = &self.variables[var_nr as usize].type_def;
+        // `Never` is the POISON an already-reported expression leaves behind (@P376), not
+        // a type the author wrote — there is no source spelling for it, so "cannot change
+        // type from integer to never; use a new variable name or cast with 'as'" advertises
+        // a cure (`as never`) that cannot be written and buries the root error under it.
+        // `y: integer = qqq` earned both lines; only the first one is the author's
+        // (loft#934).
+        if matches!(type_def, Type::Never) || matches!(var_tp, Type::Never) {
+            return;
+        }
         let widened_to_nullable = matches!(type_def, Type::Optional(_))
             && !matches!(var_tp, Type::Optional(_))
             && var_tp.is_equal(type_def.base());

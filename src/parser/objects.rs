@@ -526,6 +526,62 @@ impl Parser {
                 // that never gets adopted is still `Unknown` in pass 2, where the
                 // same site reports "Field of unknown variable".
                 t = Type::Unknown(0);
+                // ...but a stub used as a BARE VALUE has no such downstream site, and
+                // that was the one consumer with nobody to report it (loft#934).  Every
+                // other one does: `Zzz {…}` says "unknown type", `Zzz.x` says "Field of
+                // unknown variable", `y: Zzz` and `sizeof(Zzz)` say "Undefined type".
+                // A bare `y = Zzz` said NOTHING, and the value it produced was whatever
+                // the slot happened to hold — `fn f() -> integer { Zzz }` returned
+                // uninitialised memory on `--interpret` and `0` on `--native`, while
+                // `if Zzz {…}` silently took the else arm and `--native` handed the user
+                // a raw rustc `expected bool, found ()`.
+                //
+                // Only for a stub pass 1 registered on SPECULATION — a name that merely
+                // LOOKED like a type (`objects.rs`'s CamelCase test).  A stub from a
+                // written `y: Zzz` annotation is already reported by
+                // `resolve_deferred_unknown`, so reporting here too is one typo, two
+                // errors.  And only when no `.` follows: that is the field/qualifier
+                // form, which has its own report.
+                //
+                // The `Unknown(0)` above is what the assignment's @P376 poison keys on,
+                // so the root error lands and the cascade it used to hide behind
+                // ("missing argument for parameter 'v1' of `OpLtInt`" — an internal
+                // opcode name reaching the user) stays suppressed.
+                if !self.first_pass
+                    && self.speculative_type_refs.contains(&dnr)
+                    && !self.lexer.peek_token(".")
+                {
+                    let suggestion = self.suggest_type_name(name).or_else(|| {
+                        let candidates: Vec<&str> = (0..self.vars.count())
+                            .filter(|&v| self.vars.is_defined(v) && !self.vars.tp(v).is_unknown())
+                            .map(|v| self.vars.name(v))
+                            .collect();
+                        crate::diagnostics::suggest_similar(name, &candidates)
+                            .map(std::string::ToString::to_string)
+                    });
+                    if let Some(s) = suggestion {
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            code = "unknown-variable",
+                            "Unknown variable '{name}' — did you mean '{s}'?"
+                        );
+                    } else {
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "Unknown variable '{name}'"
+                        );
+                    }
+                    // Now that the root error is reported, poison the type so nothing
+                    // downstream re-reports it — the same `Never` @P376 uses on an
+                    // errored assignment RHS.  `Unknown(0)` is what the arity check
+                    // reads as "no argument supplied", which is where
+                    // "missing argument for parameter 'v1' of `OpLtInt`" came from.
+                    t = Type::Never;
+                }
             } else {
                 t = Type::Null;
             }
