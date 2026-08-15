@@ -4693,10 +4693,18 @@ impl Data {
             // pointer, not inline bytes — it cannot cause an infinite-size
             // cycle, and skipping it here is exactly what makes
             // `reference<Self>` legal.
+            //
+            // The FIELD's own deps are what says "reference", not anything about the
+            // child type: `def_referenced` records that a struct has been CONSTRUCTED
+            // somewhere (`build_object_ops` and the object literals set it), so gating
+            // the recursion on it silenced the cycle report for every cyclic struct a
+            // program actually uses — the only ones anybody writes.  `struct PENode {
+            // next: PENode }` then reached layout validation instead, and the reader got
+            // `type layout: PENode: field 'next' has no position (u16::MAX)` in place of
+            // "contains itself — use reference<PENode> to break the cycle".
             if let Type::Reference(child_nr, deps) = &a_type
                 && !deps.contains(&u16::MAX)
                 && self.def_type(*child_nr) == DefType::Struct
-                && !self.def_referenced(*child_nr)
                 && self.has_value_cycle(*child_nr, visiting)
             {
                 visiting.remove(&d_nr);

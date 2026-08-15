@@ -18280,3 +18280,40 @@ fn i815_reachable_set_is_closed_under_calls() {
         missing.join("\n  ")
     );
 }
+
+// A struct that contains ITSELF by value is reported as such — the diagnostic names the
+// type and the cure (`reference<T>`).  `Data::has_value_cycle` used to skip recursing into
+// a child the program had CONSTRUCTED anywhere (`def_referenced`), which is every cyclic
+// type a real program writes: the report went silent and the reader met the internal
+// layout validator instead — `type layout: PENode: field 'next' has no position
+// (u16::MAX)`, with no source position and no cure.  The `@EXPECT_ERROR: contains itself`
+// fixture in `tests/scripts/36-parse-errors.loft` was meant to catch that and had itself
+// gone inert (loft#929).
+#[test]
+fn a_struct_containing_itself_by_value_says_so() {
+    code!(
+        "struct PENode { val: integer, next: PENode }
+fn test() {
+    _n = PENode { val: 1 };
+}"
+    )
+    .error(
+        "Struct 'PENode' contains itself (directly or indirectly) — use reference<PENode> \
+to break the cycle at a_struct_containing_itself_by_value_says_so:1:16",
+    );
+}
+
+// The other direction of the same rule: `reference<T>` is the documented cure, so a
+// self-reference THROUGH it stays legal.  Removing the `def_referenced` gate must not
+// start reporting the shape the diagnostic recommends.
+#[test]
+fn a_reference_self_field_is_not_a_cycle() {
+    code!(
+        "struct RefNode { val: integer, next: reference<RefNode> }
+fn test() {
+    n = RefNode { val: 7 };
+    assert(n.val == 7, \"reference<Self> field is legal\");
+}"
+    )
+    .result(Value::Null);
+}
