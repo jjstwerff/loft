@@ -239,7 +239,11 @@ fn the_fused_shape_is_recognised() {
     // it for the fallback would evaluate it twice.
     let nested = Value::Call(
         data.def_nr("OpGetVectorNullable"),
-        vec![vec_read("OpGetVectorNullable"), Value::Int(4), Value::Var(7)],
+        vec![
+            vec_read("OpGetVectorNullable"),
+            Value::Int(4),
+            Value::Var(7),
+        ],
     );
     assert!(
         read("OpGetInt", nested).is_none(),
