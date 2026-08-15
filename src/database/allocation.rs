@@ -294,6 +294,18 @@ impl Stores {
                 }
                 empty(Some(cur), Vec::new())
             }
+            // A trie / spatial view drops the TREE and keeps its leaves, because the
+            // leaves are the primary's element records.  One block: the owning arms free
+            // exactly `cur` beside the leaves they walk, so the tree's interior nodes
+            // live inside it and this releases the whole spine (loft#927 — these became
+            // reachable as views the moment a trie could join a group at all).
+            Parts::Radix(_, _) | Parts::Trie(_, _) => {
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return empty(None, Vec::new());
+                }
+                empty(Some(cur), Vec::new())
+            }
             Parts::Index(_, _, _) => empty(None, Vec::new()),
             _ => self.owned_walk(rec, tp, false),
         }
