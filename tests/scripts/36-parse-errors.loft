@@ -1,14 +1,42 @@
 // Copyright (c) 2022-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Compile-time error detection tests.
+// Compile-time error detection tests — the PASS-2 half.
+//
+// `Parser::parse` runs pass 2 only when pass 1 finished clean, and every diagnostic here
+// is emitted by `!first_pass` code.  A single pass-1 error in this file would silence all
+// of them and their annotations would assert nothing — which is exactly what happened for
+// 24 of them (loft#929).  The pass-1 errors that used to share this file live in
+// 36b-pass1-parse-errors.loft.  Keep the split: nothing here may report during pass 1.
 
-// --- Type errors ---
+// --- Argument / return / branch type errors ---
+//
+// The message shape is `expected <wanted>, got <actual> on <where>` — it names the type
+// that arrived, which the older "should be <wanted> on <where>" wording did not.
 
-// @EXPECT_ERROR: should be integer on call to
+// @EXPECT_ERROR: expected integer, got boolean on argument 1 of call to pe_def
 fn test_wrong_parameter() {
   pe_def(true);
 }
 fn pe_def(i: integer) {}
+
+// @EXPECT_ERROR: expected integer, got text on return
+fn pe_wrong_ret(a: integer) -> integer {
+  if a > 4 { return "a" }
+  2
+}
+
+// @EXPECT_ERROR: Expect expression after return
+fn pe_empty_ret(a: integer) -> integer {
+  if a > 4 { return }
+  1
+}
+
+// @EXPECT_ERROR: expected integer, got text on else
+fn test_wrong_if() {
+  if 1 > 0 { 2 } else { "a" };
+}
+
+// --- Unknown names ---
 
 // @EXPECT_ERROR: Unknown variable 'a'
 fn test_unknown_var() {
@@ -27,56 +55,8 @@ fn test_use_before_define() {
   a = 1;
 }
 
-// @EXPECT_ERROR: should be integer on return
-fn pe_wrong_ret(a: integer) -> integer {
-  if a > 4 { return "a" }
-  2
-}
-
-// @EXPECT_ERROR: Expect expression after return
-fn pe_empty_ret(a: integer) -> integer {
-  if a > 4 { return }
-  1
-}
-
-// @EXPECT_ERROR: Expect no expression after return
-fn pe_wrong_void(a: integer) {
-  if a > 4 { return 12 }
-}
-
-// @EXPECT_ERROR: Cannot break outside a loop
-fn test_wrong_break() {
-  break;
-}
-
-// @EXPECT_ERROR: Cannot continue outside a loop
-fn test_wrong_continue() {
-  continue;
-}
-
-// @EXPECT_ERROR: Double attribute
-fn test_double_field(a: integer, b: integer, a: integer) {
-  if a > b {}
-}
-
-// @EXPECT_ERROR: No matching operator '+'
-fn test_wrong_plus() {
-  r = 1 + "a";
-}
-
-// @EXPECT_ERROR: should be integer on else
-fn test_wrong_if() {
-  if 1 > 0 { 2 } else { "a" };
-}
-
 enum PEType {
   PEV1,
-}
-
-// @EXPECT_ERROR: cannot change type
-fn test_wrong_assign() {
-  a = 1;
-  a = PEType.PEV1;
 }
 
 // @EXPECT_ERROR: Unknown cast
@@ -84,43 +64,7 @@ fn test_wrong_cast() {
   PEType.PEV1 as float;
 }
 
-// @EXPECT_ERROR: Undefined type V
-fn test_undefined_type(v: V) -> V {
-  v
-}
-
-// @EXPECT_ERROR: Undefined type V
-fn test_undefined_return(v: integer) -> V {
-  v
-}
-
-// @EXPECT_ERROR: Undefined type V
-fn test_undefined_as(v: integer) -> integer {
-  v as V
-}
-
-// @EXPECT_ERROR: Indexing a non vector
-fn test_index_non_indexable() {
-  v = 5;
-  v[1];
-}
-
-// @EXPECT_ERROR: did you mean 'text'
-fn test_string_type_undefined() {
-  x: string = "hello";
-}
-
-struct PEBadKV {
-  pkey: integer,
-  value: text,
-}
-
-// @EXPECT_ERROR: reserved for hash
-fn test_hash_key_field_clash() {
-  h: hash<PEBadKV[pkey]> = [];
-}
-
-// --- Boolean/enum type errors ---
+// --- Boolean/enum argument errors ---
 
 enum PEEType {
   PEVal,
@@ -129,18 +73,13 @@ enum PENext {
   PEVal2,
 }
 
-// @EXPECT_ERROR: should be PEEType on call to
+// @EXPECT_ERROR: expected PEEType, got boolean on argument 1 of call to pe_typed_fn
 fn test_wrong_boolean() {
   pe_typed_fn(true);
 }
 fn pe_typed_fn(t: PEEType) {}
 
-// @EXPECT_ERROR: No matching operator '=='
-fn test_wrong_compare() {
-  PEEType.PEVal == PENext.PEVal2;
-}
-
-// @EXPECT_ERROR: should be PENext on call to
+// @EXPECT_ERROR: expected PENext, got PEEType on argument 1 of call to pe_next_fn
 fn test_mixed_enums() {
   pe_next_fn(PEEType.PEVal);
 }
@@ -148,16 +87,7 @@ fn pe_next_fn(v: PENext) -> PENext {
   v
 }
 
-// --- Field and key errors ---
-
-struct PEFieldT {
-  v: u8,
-}
-
-// @EXPECT_ERROR: Cannot assign text to field
-fn test_field_type() {
-  r = PEFieldT { v: "a" };
-}
+// --- Key errors ---
 
 struct PEKeyT {
   n: text,
@@ -177,21 +107,26 @@ fn test_key_field() {
   s.d[0].n = "b";
 }
 
+// An undefined name on the right of a comparison.  The root report is `Unknown
+// variable`; the second line is the CASCADE of it — the comparison then lowers with one
+// operand missing and the arity check names the internal opcode.  Pinned as it stands so
+// the wording cannot rot unnoticed, but `missing argument for parameter 'v1' of
+// `OpLtInt`` is an internal spelling reaching a user, and should collapse into the root
+// diagnostic (loft#934).
 // @EXPECT_ERROR: Unknown variable
+// @EXPECT_ERROR: missing argument for parameter 'v1' of `OpLtInt`
 fn test_undefined_enum() {
   v: PEEType = PEVal;
   v > PEUnknown;
 }
 
+// `sizeof` needs a variable or a type name.  An EMPTY `sizeof()` is the shape that
+// reports; `sizeof(<undeclared name>)` answers null with no diagnostic at all, which is
+// the fixture this used to carry and the reason its annotation never matched (loft#933).
 // @EXPECT_ERROR: Expect a variable or type after sizeof
 fn test_unknown_sizeof() {
-  sizeof(PEUnknownType);
+  sizeof();
 }
-
-fn pe_helper_fn() {}
-
-// @EXPECT_ERROR: Undefined type
-fn pe_bad_param(v: pe_helper_fn) {}
 
 // --- Loop mutation guards ---
 
@@ -209,62 +144,12 @@ fn test_add_to_outer_loop() {
   }
 }
 
-// --- Shadowing and if-expression errors ---
-
-// @EXPECT_ERROR: loop variable 'x' shadows a local named 'x'
-fn test_shadow_different_type() {
-  x = 1.5;
-  v = [1, 2, 3];
-  for x in v {}
-}
+// --- If-expression errors ---
 
 // @EXPECT_ERROR: If-expression produces a value but has no else
 fn test_if_expr_without_else() {
   x = if true { 42 };
   println("{x}");
-}
-
-// --- Type cycles ---
-
-struct PENode {
-  val: integer,
-  next: PENode,
-}
-
-// @EXPECT_ERROR: contains itself
-fn test_type_cycle_self() {
-  _n = PENode { val: 1 };
-}
-
-struct PECycA {
-  val: integer,
-  b: PECycB,
-}
-struct PECycB {
-  val: integer,
-  a: PECycA,
-}
-
-// @EXPECT_ERROR: 'PECycA' contains itself
-// @EXPECT_ERROR: 'PECycB' contains itself
-fn test_type_cycle_indirect() {
-  _a = PECycA { val: 1 };
-}
-
-// --- spatial not implemented ---
-
-struct PEPoint {
-  x: integer,
-  y: integer,
-}
-struct PEWorld {
-  pts: spatial<PEPoint>,
-}
-
-// @PLN48 S2: spatial<T[x, y]> works now; a spatial WITHOUT its coordinate keys errors.
-// @EXPECT_ERROR: spatial<T[x, y]> needs coordinate key fields
-fn test_spatial_needs_keys() {
-  _w = PEWorld { pts: [] };
 }
 
 // --- Yield inside par() rejected (P2-R6) ---
@@ -289,7 +174,10 @@ struct PEIdxDb {
   pe_map: index<PEIdxElm[pe_id, -pe_cat]>,
 }
 
+// Two diagnostics, one statement: the assignment is refused, and the partial-key READ
+// it was written against is separately named as a for-loop iterator rather than a value.
 // @EXPECT_ERROR: Cannot assign null to a partial-key lookup
+// @EXPECT_ERROR: a keyed partial-key match is a `for`-loop iterator, not a value
 fn test_partial_key_null_assign() {
   db = PEIdxDb { pe_map: [
     PEIdxElm { pe_id: 1, pe_cat: "a", pe_score: 10 },
@@ -373,9 +261,10 @@ fn pe_capturing(x: integer) -> fn(integer) -> integer {
     return n + x;
   };
 }
+// The refusal is the first line; the body's `f(10)` then reads a worker binding that was
+// never established, which is the cascade.
 // @EXPECT_ERROR: cannot return a capturing closure
+// @EXPECT_ERROR: Field of unknown variable
 fn test_par_capturing_closure() {
   for i in 0..3 par(f = pe_capturing(i), 2) { print("{f(10)}"); }
 }
-
-// --- Return path warnings ---

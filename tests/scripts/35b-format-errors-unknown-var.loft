@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Format-string errors reported as `Unknown variable` — a PASS-2 diagnostic, so it
+// needs a file with no pass-1 error in it.  The parser skips pass 2 the moment pass 1
+// reports an error (`Parser::parse`), and `known_var_or_type` only speaks when
+// `!first_pass`; sharing a file with 35-format-errors.loft's `Unexpected formatting
+// type` (pass 1) is what kept both of these silently unasserted (loft#929).
+
+// A bare unknown specifier has no width digits in front of it, so the parser reads
+// `z` as the WIDTH EXPRESSION — a name, and an undefined one.  (With digits, as in
+// `{n:5z}`, the specifier grammar owns the `z` and says so directly; that twin lives
+// in 35-format-errors.loft.)
+// @EXPECT_ERROR: Unknown variable 'z'
+fn test_bare_specifier_z() {
+  n = 42;
+  s = "{n:z}";
+}
+
+// A name interpolated BEFORE its assignment is undefined at the point it is read —
+// the format string does not defer the lookup to the end of the block.
+// @EXPECT_ERROR: Unknown variable 'cd'
+fn test_format_use_before_assign() {
+  s = "{cd}";
+  cd = 5;
+}

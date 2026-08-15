@@ -1,0 +1,178 @@
+// Copyright (c) 2022-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// The PASS-1 half of 36-parse-errors.loft.
+//
+// `Parser::parse` runs pass 2 only when pass 1 finished without an error, so one pass-1
+// error silences every `!first_pass` diagnostic in the same file.  Keeping the two kinds
+// in one file is what left 24 of that file's `@EXPECT_ERROR` annotations asserting
+// nothing while the suite stayed green (loft#929).  Everything here reports during
+// pass 1 — the lexer's own errors, the type/definition checks, and `typedef::fill_all`.
+
+// --- Statement-form errors ---
+
+// @EXPECT_ERROR: Expect no expression after return
+fn pe_wrong_void(a: integer) {
+  if a > 4 { return 12 }
+}
+
+// @EXPECT_ERROR: Cannot break outside a loop
+fn test_wrong_break() {
+  break;
+}
+
+// @EXPECT_ERROR: Cannot continue outside a loop
+fn test_wrong_continue() {
+  continue;
+}
+
+// @EXPECT_ERROR: Double attribute
+fn test_double_field(a: integer, b: integer, a: integer) {
+  if a > b {}
+}
+
+// @EXPECT_ERROR: No matching operator '+'
+fn test_wrong_plus() {
+  r = 1 + "a";
+}
+
+enum PEType {
+  PEV1,
+}
+
+// @EXPECT_ERROR: cannot change type
+fn test_wrong_assign() {
+  a = 1;
+  a = PEType.PEV1;
+}
+
+// --- Undefined types ---
+//
+// One annotation for three sites: an undefined type name is reported ONCE per name
+// (`resolve_deferred_unknowns` collects them), so three `V` signatures earn one
+// diagnostic, not three.  The three shapes stay because each is a different position
+// the resolver has to reach — parameter, return, and cast.
+
+// @EXPECT_ERROR: Undefined type V
+fn test_undefined_type(v: V) -> V {
+  v
+}
+
+fn test_undefined_return(v: integer) -> V {
+  v
+}
+
+fn test_undefined_as(v: integer) -> integer {
+  v as V
+}
+
+// @EXPECT_ERROR: Indexing a non vector
+fn test_index_non_indexable() {
+  v = 5;
+  v[1];
+}
+
+// @EXPECT_ERROR: did you mean 'text'
+fn test_string_type_undefined() {
+  x: string = "hello";
+}
+
+fn pe_helper_fn() {}
+
+// @EXPECT_ERROR: Undefined type
+fn pe_bad_param(v: pe_helper_fn) {}
+
+// --- Boolean/enum type errors ---
+
+enum PEEType {
+  PEVal,
+}
+enum PENext {
+  PEVal2,
+}
+
+// @EXPECT_ERROR: No matching operator '=='
+fn test_wrong_compare() {
+  PEEType.PEVal == PENext.PEVal2;
+}
+
+// --- Field errors ---
+
+struct PEFieldT {
+  v: u8,
+}
+
+// @EXPECT_ERROR: Cannot assign text to field
+fn test_field_type() {
+  r = PEFieldT { v: "a" };
+}
+
+// `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`), so a
+// hash over a struct that has a real field named `key` is refused.  The check walks
+// struct ATTRIBUTES (`typedef::fill_all`), so it is the FIELD form that triggers it —
+// this fixture used to declare a LOCAL `h: hash<PEBadKV[pkey]> = []`, which the guard
+// never inspects, over a struct whose field had been renamed to `pkey` so there was no
+// collision left to find either.  Two independent reasons to be silent, in a file where
+// nothing could report it (loft#929, and the local-form gap is loft#932).
+struct PEBadKV {
+  key: integer,
+  value: text,
+}
+// @EXPECT_ERROR: reserved for hash
+struct PEBadKVDb {
+  h: hash<PEBadKV[key]>,
+}
+
+// --- Shadowing ---
+
+// @EXPECT_ERROR: loop variable 'x' shadows a local named 'x'
+fn test_shadow_different_type() {
+  x = 1.5;
+  v = [1, 2, 3];
+  for x in v {}
+}
+
+// --- Type cycles ---
+//
+// Reported by `typedef::fill_all`'s cycle walk.  `reference<T>` is the cure and stays
+// legal — the positives live in tests/issues.rs.
+
+struct PENode {
+  val: integer,
+  next: PENode,
+}
+
+// @EXPECT_ERROR: contains itself
+fn test_type_cycle_self() {
+  _n = PENode { val: 1 };
+}
+
+struct PECycA {
+  val: integer,
+  b: PECycB,
+}
+struct PECycB {
+  val: integer,
+  a: PECycA,
+}
+
+// @EXPECT_ERROR: 'PECycA' contains itself
+// @EXPECT_ERROR: 'PECycB' contains itself
+fn test_type_cycle_indirect() {
+  _a = PECycA { val: 1 };
+}
+
+// --- spatial without its coordinate keys ---
+
+struct PEPoint {
+  x: integer,
+  y: integer,
+}
+struct PEWorld {
+  pts: spatial<PEPoint>,
+}
+
+// @PLN48 S2: spatial<T[x, y]> works now; a spatial WITHOUT its coordinate keys errors.
+// @EXPECT_ERROR: spatial<T[x, y]> needs coordinate key fields
+fn test_spatial_needs_keys() {
+  _w = PEWorld { pts: [] };
+}

@@ -166,7 +166,7 @@ pub(crate) fn run_tests(
         ignore_file: bool,
         /// Per-function `@IGNORE`: `fn_name` → true.
         ignore_fn: std::collections::HashSet<String>,
-        /// File-level `@EXPECT_ERROR` substrings — parse errors containing any pass.
+        /// File-level `@EXPECT_ERROR` substrings — every one must match an error.
         expect_errors: Vec<String>,
         /// Per-function `@EXPECT_ERROR`: `fn_name` → required substrings.
         expect_errors_fn: std::collections::HashMap<String, Vec<String>>,
@@ -750,6 +750,30 @@ pub(crate) fn run_tests(
             // File-level @EXPECT_ERROR: if set but no errors matched, fail.
             if has_expect_error && file_result.errors.is_empty() {
                 println!("  FAIL  {display_name}  (expected parse error but file parsed cleanly)");
+                dir_fail += 1;
+                total_files += 1;
+                continue;
+            }
+            // …and EVERY substring must match one, the same bar `@EXPECT_WARNING` below
+            // already holds itself to.  While one matching error satisfied all of them, a
+            // file with three annotations and one live diagnostic passed, so an
+            // expectation could be reworded out of existence and nothing would say so —
+            // the `loft test` side of loft#929, where the same shape left 56 of the
+            // harness's 167 annotations inert.
+            let unmatched_expect: Vec<&str> = ann
+                .expect_errors
+                .iter()
+                .filter(|sub| !file_result.errors.iter().any(|e| e.contains(sub.as_str())))
+                .map(String::as_str)
+                .collect();
+            if !unmatched_expect.is_empty() {
+                for e in &file_result.errors {
+                    println!("  {e}");
+                }
+                println!(
+                    "  FAIL  {display_name}  (expected error never emitted: {})",
+                    unmatched_expect.join("; ")
+                );
                 dir_fail += 1;
                 total_files += 1;
                 continue;

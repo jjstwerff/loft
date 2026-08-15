@@ -109,12 +109,22 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     for l in p.diagnostics.lines() {
         println!("{l}");
     }
-    if !p.diagnostics.is_empty() {
+    // Run the check whenever the file DECLARES something, not only when the parser said
+    // something.  Gating on `!p.diagnostics.is_empty()` was the second way an expectation
+    // went inert: a file whose diagnostics disappeared entirely never reached
+    // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
+    // were never looked at (loft#929).
+    if !p.diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
         check_diagnostics(
             &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,
+            true,
         )?;
     }
     scopes::check(&mut p.data);
@@ -867,6 +877,7 @@ fn check_diagnostics(
     expected_warns: &[String],
     expected_errors: &[String],
     expected_ann_warnings: &[String],
+    final_pass: bool,
 ) -> std::io::Result<()> {
     let mut unmatched_warns: Vec<&str> = expected_warns.iter().map(String::as_str).collect();
     let mut unmatched_errors: Vec<&str> = expected_errors.iter().map(String::as_str).collect();
@@ -911,16 +922,35 @@ fn check_diagnostics(
     for pat in &unmatched_warns {
         println!("expected warning not emitted: {pat}");
     }
-    // An `@EXPECT_ERROR` that never matched is a guard that no longer guards anything —
-    // the diagnostic it pins may have been reworded, narrowed, or removed, and the file
-    // still passes.  Reported, not failed: 56 of the 167 annotations in the tree are
-    // currently inert, so failing on them is its own sweep (loft#929).  Printing them is
-    // what keeps that number from being invisible.
-    for pat in &unmatched_errors {
-        println!("expected error not emitted: {pat}");
+    // An `@EXPECT_ERROR` / `@EXPECT_WARNING` that never matched is a guard that no longer
+    // guards anything — the diagnostic it pins may have been reworded, narrowed, or
+    // removed, and the file still passed.  Both used to be collected and then DROPPED,
+    // and 56 of the 167 `@EXPECT_ERROR` annotations in the tree were inert when that was
+    // measured (loft#929).  Failing on them is what stops the guard rotting again.
+    //
+    // The commonest way one goes inert is not a reworded message: `Parser::parse` runs
+    // pass 2 only when pass 1 finished clean, so ONE pass-1 error silences every
+    // `!first_pass` diagnostic in the same file.  A file therefore asserts pass-1 errors
+    // OR pass-2 errors, never both — see the 102/102b and 36/36b pairs.
+    //
+    // Reported on the FINAL check only: before it, a diagnostic still to come reads as
+    // one that will never arrive.
+    if final_pass {
+        for pat in &unmatched_errors {
+            println!("expected error not emitted: {pat}");
+        }
+        for pat in &unmatched_ann_warns {
+            println!("expected @EXPECT_WARNING not emitted: {pat}");
+        }
     }
-    // Only fail on unexpected errors or unmatched #warn patterns.
-    if unexpected.is_empty() && unmatched_warns.is_empty() {
+    // An unmatched expectation only condemns the file on the FINAL check.  The parse-time
+    // call runs before the post-scope-check lints have spoken, and `894-lost-write-through
+    // -returned-struct.loft`'s `@EXPECT_WARNING` names one of those — failing there would
+    // report a diagnostic as missing while it was still to come.
+    if unexpected.is_empty()
+        && unmatched_warns.is_empty()
+        && (!final_pass || (unmatched_errors.is_empty() && unmatched_ann_warns.is_empty()))
+    {
         Ok(())
     } else {
         Err(Error::from(std::io::ErrorKind::InvalidData))
@@ -1112,12 +1142,22 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 )
             )
         });
-    if !p.diagnostics.is_empty() {
+    // Run the check whenever the file DECLARES something, not only when the parser said
+    // something.  Gating on `!p.diagnostics.is_empty()` was the second way an expectation
+    // went inert: a file whose diagnostics disappeared entirely never reached
+    // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
+    // were never looked at (loft#929).
+    if !p.diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
         check_diagnostics(
             &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,
+            had_errors,
         )?;
     }
     // Only skip execution when the file actually has unresolved parse errors.
@@ -1126,6 +1166,19 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     if had_errors {
         println!("  ok (errors consumed)");
         return Ok(());
+    }
+    // The whole-program lints, in the same window `src/main.rs` runs them: on the parsed
+    // IR, after `Parser::parse` and BEFORE `scopes::check`.  Until now they ran only in
+    // the CLI, so this suite could neither confirm one of their warnings nor catch a false
+    // positive from one — `894-lost-write-through-returned-struct.loft` carried an
+    // `@EXPECT_WARNING` for a diagnostic the harness had no way to produce (loft#929).
+    // Same precondition as the CLI: an aborting error means resolution did not finish, so
+    // every ownership verdict derived from it is known-bad.
+    let mut diagnostics = std::mem::take(&mut p.diagnostics);
+    if diagnostics.level() < loft::diagnostics::Level::Error {
+        loft::use_analysis::warn_dead_stores(&p.data, &mut diagnostics, &path);
+        loft::use_analysis::warn_double_move(&p.data, &mut diagnostics, &path);
+        loft::use_analysis::warn_lost_temp_writes(&p.data, &mut diagnostics, &path);
     }
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.
@@ -1157,6 +1210,23 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             std::panic::resume_unwind(payload);
         }
     };
+
+    for l in diagnostics.lines() {
+        println!("{l}");
+    }
+    if !diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
+        check_diagnostics(
+            &diagnostics.lines(),
+            &expected,
+            &exp_errors,
+            &exp_ann_warns,
+            true,
+        )?;
+    }
 
     // Discover all zero-parameter user functions as entry points.
     let all_fns = entry_point_names(&p_data, start_def);

@@ -544,7 +544,13 @@ pervasive):
   params/casts are full-width registers, no storage sentinel), and the sentinel
   reservation is now a **store-only** check (`Parser::nullable_sentinel_hint`)
   applied at exactly the two field-store sites.  Regression
-  `tests/scripts/389-narrow-sentinel-rejected.loft` (`@EXPECT_ERROR`).
+  `tests/scripts/389-narrow-sentinel-rejected.loft` — which @PLN25 F2 then made
+  moot without anyone noticing: a plain narrow integer is NON-null under DN1, so
+  it uses the FULL width and `nullable_sentinel_hint` returns early, and the
+  file's `@EXPECT_ERROR` matched nothing from then on (loft#929).  It now pins
+  the rule from the value side (`255` stored and read back), plus the half F2
+  left open — a NULLABLE narrow still spends its top value on the sentinel, so
+  `U8Q { x: 255 }` reads back null with no diagnostic.
 - **Runtime, dev-only, for computed values.**  A non-null value computed at runtime
   (e.g. `f() as u8 == 255`) can still collide; the nullable set ops route through
   `Stores::set_byte_nullable` / `set_short_nullable`, which detect the collision and

@@ -9,6 +9,75 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### 56 of 167 `@EXPECT_ERROR` annotations never fired, and the suite reported nothing (loft#929, 2026-08-15)
+
+`check_diagnostics` failed a file on *unexpected* errors and on unmatched `// #warn`
+patterns.  It collected unmatched `@EXPECT_ERROR` and `@EXPECT_WARNING` substrings and then
+DROPPED them, so an expectation whose diagnostic had been reworded, narrowed or removed kept
+passing.  A third of that guard family was inert.
+
+**The dominant cause was not message drift.**  `Parser::parse` runs pass 2 only when pass 1
+finished clean, and a large share of loft's diagnostics are emitted by `!first_pass` code —
+`Unknown variable`, the const/`&` checks, match exhaustiveness, the @PLN25 N-Store family, the
+type-mismatch messages.  One pass-1 error therefore silences every pass-2 diagnostic in the
+same file, and an annotation for one of those can never match however correct its wording.
+Two files held 52 of the 56 for exactly this reason.  Error fixtures are now split by pass —
+`102`/`102b`, `36`/`36b`, `35`/`35b` — and TESTING.md records the rule.
+
+The rest triaged into reword (the argument/return/branch messages became `expected X, got Y
+on …`; the `&`-vector concat refusal was rephrased), tier (the whole N-Store family reports at
+`warning`, not error — `@EXPECT_WARNING` now), over-count (three `Undefined type V` signatures
+earn ONE diagnostic), delete (a tuple in a struct field is supported since Plan-06, so its
+refusal is gone), and blocked-by-a-neighbour (three tuple fixtures sourced their nullable from
+`s as integer`, which now errors `text-parse-may-fail` on the line before, so the N-Store check
+was never reached — they source it from division instead).
+
+Two guards had gone inert without any annotation being wrong:
+
+* `389-narrow-sentinel-rejected.loft` asserted the pre-@PLN25-F2 rule.  F2 made a plain narrow
+  integer non-null and full-range, so `nullable_sentinel_hint` returns early and there was no
+  error left to expect.  It now pins the rule from the value side, plus the half F2 left open
+  (a NULLABLE narrow still spends its top value on the sentinel: `U8Q { x: 255 }` reads back
+  null, silently).
+* `894-lost-write-through-returned-struct.loft` expected a diagnostic **the harness could not
+  produce**: `warn_lost_temp_writes` and its two neighbours ran only in `src/main.rs`.  They now
+  run in `run_test` in the same window, so the suite can both confirm one of their warnings and
+  catch a false positive from one.
+
+Both holes are closed: unmatched expectations are fatal, and the check runs even when a file
+produced NO diagnostics — the second way an expectation went unlooked-at.  `loft test`
+(`src/test_runner.rs`) had the weaker form of the same hole, where any single matching error
+satisfied every `@EXPECT_ERROR` in the file; each substring must now match one, the bar
+`@EXPECT_WARNING` already held.
+
+Three defects surfaced that the inert guards had been hiding, filed with repros: an `i32`
+struct field silently truncates a 64-bit integer (loft#931 — `i32` is the one narrow alias
+declared without a `limit(…)`, so the range-containment narrowing test cannot see it), the
+reserved-`key` hash guard covers a struct field but not a local (loft#932), and
+`sizeof(<undeclared name>)` answers null with no diagnostic (loft#933).  A fourth, an
+unresolved comparison operand cascading into `missing argument for parameter 'v1' of
+`OpLtInt``, is pinned in the fixture and filed as loft#934.
+
+### A struct that contains itself says so, even when the program uses it (loft#929, 2026-08-15)
+
+`Data::has_value_cycle` skipped recursing into a child struct that `def_referenced` marked.
+That flag records that a struct has been CONSTRUCTED somewhere (`build_object_ops` and the
+object literals set it) — it says nothing about whether the FIELD is a reference.  So the cycle
+report fired only for a cyclic type nothing instantiates, and every cyclic type a real program
+writes fell through to the layout validator instead:
+
+```
+Error: type layout: PENode: field 'next' has no position (u16::MAX)
+```
+
+in place of *"Struct 'PENode' contains itself (directly or indirectly) — use reference<PENode>
+to break the cycle"*.  The field's own deps are what say "reference" (the `u16::MAX` share
+marker), and that test was already there; the extra condition only suppressed the good message.
+Verified across the shapes the rule separates: `reference<Self>`, mutual A/B, mutual broken by a
+`reference`, plain nesting, `vector<Self>`, and a cyclic type never constructed.  The
+`@EXPECT_ERROR: contains itself` fixture that should have caught this had itself gone inert.
+
+
 ### A `for` loop binds its own variable, so two loops may reuse a name (loft#915, 2026-08-15)
 
 A loop variable was an ordinary function-scoped local: `add_variable` resolved it by name, so

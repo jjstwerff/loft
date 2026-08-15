@@ -1112,9 +1112,52 @@ continue.  Full closure record at
 | Annotation | Scope | Effect |
 |---|---|---|
 | `// #warn <text>` | File | Warning must appear; missing → fail |
-| `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` is expected |
-| `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` is expected |
+| `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` must appear; missing → fail |
+| `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` must appear; missing → fail |
 | `// @EXPECT_FAIL: <text>` | Per-function (before `fn`) or file header | Runtime panic is tolerated |
+
+**Every expectation must match.**  `@EXPECT_ERROR` and `@EXPECT_WARNING` used to be
+collected and then dropped, so an annotation whose diagnostic had been reworded, narrowed
+or removed kept passing.  When that was measured, **56 of the 167 `@EXPECT_ERROR`
+annotations in the tree were inert** (loft#929).  Both are now fatal, and the check runs
+even when the file produced NO diagnostics at all — the other way an expectation went
+unlooked-at.
+
+### An error fixture asserts ONE pass, never both
+
+`Parser::parse` runs pass 2 only when pass 1 finished without an error:
+
+```rust
+let lvl = self.lexer.diagnostics().level();
+if lvl != Level::Error && lvl != Level::Fatal { /* pass 2 */ }
+```
+
+A large share of loft's diagnostics are emitted by `!first_pass` code — `Unknown variable`,
+the const/`&` checks, match exhaustiveness, the @PLN25 N-Store family, the type-mismatch
+messages.  **One pass-1 error therefore silences every pass-2 diagnostic in the same
+file**, and an `@EXPECT_ERROR` for one of those can never match, however correct its
+wording.  That, not message drift, was the cause of most of the 56.
+
+So a fixture holds pass-1 errors OR pass-2 errors.  The split is visible in the naming:
+
+| Pass 2 (needs a clean pass 1) | Pass 1 (aborts before pass 2) |
+|---|---|
+| `102-expected-errors.loft` | `102b-pass1-expected-errors.loft` |
+| `36-parse-errors.loft` | `36b-pass1-parse-errors.loft` |
+| `35b-format-errors-unknown-var.loft` | `35-format-errors.loft` |
+
+Pass 1 emits the lexer's own errors (`Misplaced '_' in number literal`), the definition
+and type checks (name conflicts, camel-case, `Undefined type`), and everything
+`typedef::fill_all` reports (type cycles, the reserved-`key` hash guard).  When a new
+`@EXPECT_ERROR` does not fire, check which half it landed in before rewording it.
+
+### Whole-program lints run here too
+
+`warn_dead_stores`, `warn_double_move` and `warn_lost_temp_writes` run in `run_test` in the
+same window `src/main.rs` uses — after `Parser::parse`, before `scopes::check`.  Until
+loft#929 they ran only in the CLI, so this suite could neither confirm one of their
+warnings nor catch a false positive from one: `894-lost-write-through-returned-struct.loft`
+carried an `@EXPECT_WARNING` for a diagnostic the harness had no way to produce.
 
 **Annotation placement rules** (same as `test_runner.rs`):
 - An annotation directly before a `fn` line (no blank lines between) binds to that function.

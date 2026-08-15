@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// The PASS-1 half of 102-expected-errors.loft.
+//
+// `Parser::parse` runs pass 2 only when pass 1 finished without an error, and a large
+// share of loft's diagnostics are emitted by `!first_pass` code (`Unknown variable`, the
+// const/ref checks, match exhaustiveness, the N-Store family, …).  So ONE pass-1 error
+// silences every pass-2 diagnostic in the same file — and an `@EXPECT_ERROR` for one of
+// those can never match.  That is what made 25 of this pair's annotations inert while the
+// suite stayed green (loft#929).
+//
+// The rule this split enforces: a file asserts pass-1 errors OR pass-2 errors, never both.
+// Everything here is reported during pass 1 — the lexer's own errors, and the definition
+// checks that run before any body is re-parsed.
+
+// ── L11 digit-separator placement (lexer) ──────────────────────
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_doubled() {
+  x = 1__0;
+  assert(x == 10, "unreached");
+}
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_trailing() {
+  x = 1_ + 0;
+  assert(x == 1, "unreached");
+}
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_after_hex_prefix() {
+  x = 0x_F;
+  assert(x == 15, "unreached");
+}
+
+// ── @PLN22 Phase 1 — a bare variant defining an untyped variable is an error ──
+enum PLN22Dir {
+  PLN22North,
+  PLN22South,
+}
+
+// @EXPECT_ERROR: bare variant 'PLN22North' has no type here
+fn test_pln22_bare_variant_no_context() {
+  d = PLN22North; // no type context — must write `PLN22Dir.PLN22North`
+  assert(d is PLN22North, "unreachable");
+}
+
+// ── @PLN22 Phase 2 — prelude shadowing allows `enum E` etc., but a built-in
+// type-keyword (`integer`, `vector`, …) is NEVER shadowable: it stays a hard
+// error so the language's own types can't be silently re-pointed. ──
+// @EXPECT_ERROR: conflicts with a type
+struct integer {
+  pln22_field: i32,
+}
+
+// A bodyless stdlib forward-decl (`type iterator;`) is `DefType::Type` with an
+// Unknown returned type.  Before the adopt-branch `DefType::Unknown` guard,
+// `struct iterator` was silently swallowed (adopted) instead of rejected.
+// @EXPECT_ERROR: conflicts with a type
+struct iterator {
+  pln22_field: i32,
+}
+
+// `enum`/`type` reusing a keyed-collection keyword used to PANIC in
+// `complete_definition` (re-`set_returned` on an already-typed builtin) because
+// the completion call ran on `self.first_pass` without the `!conflict` guard.
+// (The keyed-collection keywords are lowercase, so the camel-case check also
+// fires first — annotate both diagnostics.)
+// @EXPECT_ERROR: Expect enum definitions to be in camel case style
+// @EXPECT_ERROR: conflicts with a type
+enum hash {
+  Pln22A,
+  Pln22B,
+}
+
+// @EXPECT_ERROR: Expect type definitions to be in camel case style
+// @EXPECT_ERROR: conflicts with a type
+type sorted = integer;
+
+// ── @PLN25 DN6 (N-Join) — the inferred null-start widen ──
+// The widen (`a = null; a = 5` ⇒ `integer?`, accepted — see 25-null-join.loft) applies ONLY
+// to an INFERRED local (`var_tp == null` is the inferred marker). An ANNOTATED non-null
+// scalar still REJECTS a stored `null` — the explicit non-null contract wins.
+// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
+fn test_annotated_nonnull_rejects_null() {
+  a: integer = null;
+  a = 5;
+  assert(a == 5, "unreached");
+}
+
+// DN6 soundness boundary: the widen is INLINE-scalar only. `text` is the one heap-backed
+// scalar — its Null slot cannot be retroactively widened to a text? heap-ref slot — so an
+// inferred text null-start is NOT widened; it must annotate `s: text? = null`.
+// (Guard: if `Text` were ever added to the DN6 widen set this would start ACCEPTING.)
+// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
+fn test_inferred_text_null_start_not_widened() {
+  s = null;
+  s = "hi";
+  assert(s == "hi", "unreached");
+}
+
+// ── Nullable vector operators ──────────────────────────────────
+
+// A NULLABLE vector reached no arm of the `+` dispatch and the fall-through returned the
+// LEFT operand, so `a + b` over two `vector<T>?`s answered `a` — a silent wrong value on
+// both backends.  Concatenating them is not the fix: the nullable TEXT form propagates
+// null (`null + "x"` is null) and a vector has no such lowering to be consistent with, so
+// the refusal names the discharge that already works.
+// @EXPECT_ERROR: cannot concatenate a nullable
+fn pe_nullable_vector_concat() {
+  a: vector<integer>? = [1, 2];
+  b: vector<integer>? = [3, 4, 5];
+  c = a + b;
+  assert(len(c) == 5, "unreached");
+}
+
+// The `+= elem` ambiguity guard matched `Type::Vector` unpeeled, so a nullable vector was
+// not recognised and the reader met the fall-through instead — "Variable 'v' cannot change
+// type from vector<integer>? to integer", which does not mention the cure.
+// @EXPECT_ERROR: vector `+= elem` is ambiguous
+fn pe_nullable_vector_append_bare_element() {
+  v: vector<integer>? = [];
+  v += 5;
+  assert(len(v) == 1, "unreached");
+}

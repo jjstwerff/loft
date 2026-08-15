@@ -1608,6 +1608,12 @@ sets cwd to the package root for fixture paths, and honours
 `@EXPECT_FAIL` / `@EXPECT_ERROR` / `@EXPECT_WARNING` / `@IGNORE` /
 `@ARGS` annotations.
 
+**Every `@EXPECT_ERROR` substring must match an error**, not just one of them.
+While any single matching error satisfied the whole set, a file with three
+annotations and one live diagnostic passed — so an expectation could be reworded
+out of existence and the run stayed green (loft#929).  `@EXPECT_WARNING` already
+held itself to that bar; the two now agree.
+
 ### Layout
 
 ```

@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Format string error tests: bad specifiers, use-before-assign.
-
-// @EXPECT_ERROR: Unknown variable 'z'
-fn test_bare_specifier_z() {
-  n = 42;
-  s = "{n:z}";
-}
+// Format string error tests: bad format specifiers.
+//
+// Every diagnostic here is emitted on PASS 1, which is what lets them share a file:
+// the parser skips pass 2 once pass 1 has reported an error, so a pass-2-only
+// diagnostic in this file could never fire.  The two format errors that ARE pass-2
+// only (`{n:z}` and use-before-assign, both reported as `Unknown variable`) live in
+// 35b-format-errors-unknown-var.loft for exactly that reason — loft#929.
 
 // @EXPECT_ERROR: Unexpected formatting type: z
 fn test_width_then_unknown_z() {
@@ -46,10 +46,4 @@ fn test_float_literal_bad_specifier() {
 fn test_float_var_bad_specifier() {
   f = 3.14;
   s = "{f:5z}";
-}
-
-// @EXPECT_ERROR: Unknown variable 'cd'
-fn test_format_use_before_assign() {
-  s = "{cd}";
-  cd = 5;
 }
