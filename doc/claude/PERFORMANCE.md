@@ -3900,6 +3900,22 @@ so on an installed binary setting it changes nothing, while on a from-source bui
 it recovers most (not all) of what rule 4 gave up.  A measurable win from setting it
 is therefore itself a signal that the program cache was disabled.
 
+**`loft test` engages it too, and there it pays per FILE** (loft#925).  A suite
+builds one parser per test file — deliberately, so one file's definitions cannot
+leak into the next — and each of those parsers used to re-parse `default/` from
+scratch.  For a directory of N test files that is N cold stdlib parses of a
+directory that provably did not change between them.  `src/test_runner.rs` now asks
+`warm_load_stdlib` first and falls through to the cold parse on a miss, exactly as
+`main.rs` does; on a 21-file synthetic that is 2.33 s → 1.86 s.  The control matters
+for reading that number: before the change, setting `LOFT_STDLIB_CACHE=1` on a
+`loft test` run did **nothing at all**, because the runner never called the API.
+
+What remains is the larger half of loft#925 and is NOT this cache: a `use`d LIBRARY
+is still compiled once per test file (~0.09 s per file per 30-module library on the
+same synthetic, and ~470 ms × 67 files for the consumer that reported it).  That
+needs a per-invocation compiled-library cache, which the per-file parser isolation
+makes a design question rather than a wiring one.
+
 ### Invalidation
 
 `build_signature()` folds together:

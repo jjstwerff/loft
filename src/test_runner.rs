@@ -609,13 +609,24 @@ pub(crate) fn run_tests(
                 sandbox_policy_seen = true;
                 p.set_sandbox_config(policy);
             }
-            if p.parse_dir(&(default_dir.to_string() + "default"), true, false)
-                .is_err()
-            {
-                println!("  FAIL  {display_name}  (cannot load default library)");
-                dir_fail += 1;
-                total_files += 1;
-                continue;
+            // loft#925 — warm-load the stdlib instead of re-parsing `default/` for
+            // every test file.  A suite builds ONE parser per file (each test file is
+            // its own program, and must stay that way — a shared parser would let one
+            // file's definitions leak into the next), so the stdlib parse was paid
+            // once per file for a directory that cannot have changed between them.
+            // The bundle is the same one `loft <program>` already loads, keyed on the
+            // stdlib directory, so this reuses a cache the run has usually warmed
+            // already rather than adding one.  A miss falls through to the cold parse
+            // exactly as before.
+            let stdlib_dir = default_dir.to_string() + "default";
+            if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir) {
+                if p.parse_dir(&stdlib_dir, true, false).is_err() {
+                    println!("  FAIL  {display_name}  (cannot load default library)");
+                    dir_fail += 1;
+                    total_files += 1;
+                    continue;
+                }
+                loft::startup_cache::save_stdlib_cache(&p, &stdlib_dir);
             }
             let start_def = p.data.definitions();
             let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

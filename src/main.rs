@@ -10765,6 +10765,14 @@ const TESTS_DIR: &str = "tests";
 /// `draw::test_foo` used to become `tests/draw::test_foo`, whose path half
 /// (`tests/draw`) has no extension and does not exist, so the documented
 /// selector form only worked when the caller also wrote `.loft`.
+///
+/// A target that IS a directory keeps its name (loft#925). `loft test` already
+/// runs a whole directory — that is what the no-argument form does — but naming
+/// one had `.loft` appended to it, so `loft test tests` asked for `tests.loft`
+/// and `loft test tests/unit` for `tests/unit.loft`, neither of which exists.
+/// The subset-of-a-suite invocation therefore looked unsupported, and the
+/// consumer who tried to cut a standalone reproducer for the per-file library
+/// recompile could not get one to run at all.
 fn resolve_test_target(arg: &str) -> String {
     let (path, selector) = match arg.split_once("::") {
         Some((p, s)) => (p, Some(s)),
@@ -10791,9 +10799,16 @@ fn resolve_test_target(arg: &str) -> String {
         out.push('/');
     }
     out.push_str(path);
-    if !std::path::Path::new(path)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+    // A DIRECTORY names itself — `loft test tests/unit` runs that directory, the
+    // same way the no-argument form runs `tests/`.  Checked on the JOINED path so
+    // both `loft test unit` and `loft test tests/unit` see the same thing, and only
+    // when there is no `::selector` (a selector names a function inside one FILE, so
+    // a directory there is a mistake worth leaving to the existing report).
+    let names_a_dir = selector.is_none() && std::path::Path::new(&out).is_dir();
+    if !names_a_dir
+        && !std::path::Path::new(path)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
     {
         out.push_str(".loft");
     }
@@ -10807,6 +10822,32 @@ fn resolve_test_target(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// loft#925 — a target that IS a directory names itself; only a test FILE
+    /// gets `.loft` appended.  `loft test tests` used to ask for `tests.loft`, so
+    /// running a subset of a suite looked unsupported even though the no-argument
+    /// form runs a directory already.
+    ///
+    /// Anchored on real directories of THIS repo (`cargo test` runs at the repo
+    /// root), so the cell exercises the filesystem probe rather than a mock of it —
+    /// and on a name that is deliberately NOT a directory, which is what keeps the
+    /// probe from swallowing the ordinary file case.
+    #[test]
+    fn a_directory_target_keeps_its_name() {
+        assert_eq!(resolve_test_target("tests/scripts"), "tests/scripts");
+        assert_eq!(resolve_test_target("tests/docs"), "tests/docs");
+        // Not a directory → still a test file, extension supplied as before.
+        assert_eq!(
+            resolve_test_target("tests/no_such_dir"),
+            "tests/no_such_dir.loft"
+        );
+        // A `::selector` names a function inside one FILE, so the directory probe
+        // is skipped and the existing report handles the mistake.
+        assert_eq!(
+            resolve_test_target("tests/scripts::test_one"),
+            "tests/scripts.loft::test_one"
+        );
+    }
 
     /// loft#913 — every spelling of the same test file resolves to the same
     /// `--tests` argument, INCLUDING the `tests/…` form `loft test` itself prints.
