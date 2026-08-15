@@ -1552,6 +1552,41 @@ fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut SipHash
     }
 }
 
+/// The development hang guard's ceiling, in executed operations (loft#919).
+///
+/// The interpreter counts operations under debug assertions and panics with the last
+/// sixteen — the instrument that names the loop a hang is spinning in. A count cannot
+/// tell a long run from a hung one, so the ceiling sits far above anything the project's
+/// own suite executes and is worth roughly a minute of debug-assertion interpretation:
+/// long enough that reaching it means something is wrong, short enough to beat the
+/// 300-second test watchdog and report which ops rather than just "timed out".
+pub const DEFAULT_MAX_OPS: u64 = 4_000_000_000;
+
+/// `LOFT_MAX_OPS=<count|0>` — raise, lower, or switch off that ceiling.
+///
+/// `0` removes it (a genuinely long run then relies on `LOFT_TIMEOUT`). An unparseable
+/// value is reported and the default is kept: a typo in a limit must not silently remove
+/// the limit, the same rule `LOFT_MEMORY_LIMIT` follows.
+#[must_use]
+pub fn max_ops() -> u64 {
+    static MAX: OnceLock<u64> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        let Ok(v) = std::env::var("LOFT_MAX_OPS") else {
+            return DEFAULT_MAX_OPS;
+        };
+        match v.trim().parse::<u64>() {
+            Ok(n) => n,
+            Err(_) => {
+                eprintln!(
+                    "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
+                     keeping the default {DEFAULT_MAX_OPS}"
+                );
+                DEFAULT_MAX_OPS
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod p355_large_str {
     use super::Str;

@@ -4974,7 +4974,11 @@ impl State {
         }
         self.put_stack(u32::MAX);
         #[cfg(debug_assertions)]
-        let mut step = 0;
+        let mut step: u64 = 0;
+        // loft#919 — read the ceiling once, outside the loop: the guard runs on every
+        // op, and an env lookup per op would dominate a debug-assertions run.
+        #[cfg(debug_assertions)]
+        let max_ops = crate::keys::max_ops();
         #[cfg(debug_assertions)]
         let mut trail_pos = [u32::MAX; 16usize];
         #[cfg(debug_assertions)]
@@ -5102,10 +5106,22 @@ impl State {
             {
                 step += 1;
             }
+            // loft#919 — a development hang guard, not a correctness one: a count cannot
+            // tell a long run from a hung one, and the only signal it had for the former
+            // was the wording of the latter.  Two tests of the library suite legitimately
+            // ran past the old 100M ceiling, so the debug-assertions gate read as "known
+            // red" for a reason that was never about those tests — and a gate read that
+            // way stops being run.  The ceiling now clears the project's own suite with
+            // room to spare, says what it observed rather than what it suspects, and
+            // names the way to change it.
             #[cfg(debug_assertions)]
-            if step >= 100_000_000 {
+            if max_ops != 0 && step >= max_ops {
                 use std::fmt::Write as _;
-                let mut msg = String::from("Too many operations (infinite loop?). Last 16 ops:\n");
+                let mut msg = format!(
+                    "ran {max_ops} operations without finishing — this is a development \
+                     guard against a hung program, not a limit on how long a program may \
+                     run.  Raise or remove it with LOFT_MAX_OPS=<count|0>.  Last 16 ops:\n"
+                );
                 for i in 0..16usize {
                     let idx = (trail_head + i) % 16;
                     if trail_pos[idx] == u32::MAX {

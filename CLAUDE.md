@@ -63,6 +63,13 @@ that filled the heap, with a one-store-vs-many breakdown that tells a runaway le
 repeat-run harness for a corruption repro, cap the process too (`ulimit -v`) — the runaway is not
 necessarily the process the kernel kills. TESTING.md § Store-memory ceiling.
 
+**Under debug assertions a third bound applies:** the interpreter stops after `LOFT_MAX_OPS`
+operations (default 4e9, `0` = off) and prints the last sixteen ops as `function+offset: OpName` —
+reach for it, set LOW, when hunting a hang, because it names the loop a timeout can only time out
+in. Absent from every release build. It is a count, so it cannot tell a long run from a hung one:
+at 100M it was tripping legitimate library tests and reporting them as infinite loops, which read
+the debug-assertions gate as known-red (loft#919). TESTING.md § Hang guard.
+
 For any multi-failure refactor, start `find_problems.sh --bg` before editing (detached
 `cargo test --release --no-fail-fast` → `/tmp/loft_problems.txt`).
 

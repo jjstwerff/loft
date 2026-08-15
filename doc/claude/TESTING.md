@@ -1017,6 +1017,35 @@ the reader to the wrong file costs more than one that stays quiet, so the report
 prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
 denser per-run table.
 
+## Hang guard (`LOFT_MAX_OPS`)
+
+The third sibling, and the only one that is **debug-assertions only**. The
+interpreter counts executed operations and, on reaching the ceiling, panics with the
+last sixteen ops — each resolved to `function+offset: OpName`. That trail is the
+whole value of it: a timeout tells you a run did not finish, this tells you which
+loop it did not finish in.
+
+A count cannot tell a long run from a hung one, which is the trap loft#919 walked
+into. The ceiling was 100M ops, two tests of the library suite legitimately execute
+more than that, and the only signal the guard had for "this is long" was the wording
+it uses for "this is hung" — so the debug-assertions gate read as *known red* for a
+reason that was never about those tests, and a gate read that way stops being run.
+
+| Mechanism | Default | How |
+|---|---|---|
+| Any interpreter run, debug assertions ON | **on, 4e9 ops** | roughly a minute of debug-assertion interpretation |
+| Debug assertions OFF (every release build) | **off** | the counter does not exist |
+| Env var | — | `LOFT_MAX_OPS=<count>`, or `0` to remove it |
+
+The default clears the project's own suite with room to spare — set it *low*
+(`LOFT_MAX_OPS=50000000`) when you are hunting a hang and want the trail sooner. An
+unparseable value is reported and the default is **kept**, the same rule
+`LOFT_MEMORY_LIMIT` follows.
+
+Implementation: `crate::keys::max_ops` (one cached env read) read once outside the
+dispatch loop in `src/state/mod.rs`; the trail is the `trail_pos` / `trail_op` ring
+beside it.
+
 ## Execution timeout (`LOFT_TIMEOUT` / `--timeout`)
 
 Guards against hangs that would wedge `cargo test` or `find_problems.sh`.  The
