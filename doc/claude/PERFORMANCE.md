@@ -832,8 +832,22 @@ emitter lifts them, because it is the one that knows where the loop is.
   out-of-range one, `i64::MIN`, a null or an empty vector all fall back into `get_vector` /
   `vec_get_or_raise_runtime` — so what those answer, and the `IndexOutOfBounds` /
   `NegativeIndex` raise the non-nullable form owes, keep exactly one definition.
-* `src/generation/hoist.rs` is the gate, and `src/generation/ops/vector_ops.rs` the two
-  emitters. Both fall through to the `#rust` template for a read the gate did not cover.
+* **Stage 2 fuses the element read into the address**, so a scalar read of a hoisted element
+  is ONE load. `vector::get_elem_hoisted::<T, VERIFY>` does the bounds test and the typed
+  load, and nothing between them: no element `DbRef` built, no `rec == 0` test against the
+  null element, no second store resolution from that `DbRef`, and no `rec != 0 && valid(..)`
+  re-check inside the getter — the bounds test decided all of it. Covers `OpGetInt` /
+  `OpGetSingle` / `OpGetFloat`, whose `Store` bodies are all
+  `if rec != 0 && valid(..) { *addr } else { <sentinel> }`; a getter with another shape
+  (`OpGetBoolean` masks, `OpGetByte` re-bases, `OpGetCharacter` decodes) is left unfused
+  rather than approximated.
+* `src/generation/hoist.rs` is the gate, and `src/generation/ops/vector_ops.rs` the three
+  emitters. All fall through to the `#rust` template for a read the gate did not cover.
+* **The pre-eval had to learn about the fusion.** `OpGetVector*` is on `op_uses_stores`, so
+  the collector hoists it into a `let _pre_N` before the statement — and a fused emission
+  ignores that binding, which would leave the read happening TWICE. `hoist::fused_element_read`
+  is the one definition of the fused shape and both sides ask it, so they cannot disagree
+  about which reads are folded.
 
 **Measured on the issue's kernel** (three flat `vector<single>` columns, 10M indexed reads),
 alternating single runs of one binary with `LOFT_NO_VECTOR_HOIST=1` for the before-half:

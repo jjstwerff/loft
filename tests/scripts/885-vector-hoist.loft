@@ -71,6 +71,21 @@ fn edges(v: vector<integer>) -> integer {
   s
 }
 
+// The three element types whose read fuses into ONE load (integer above, plus these
+// two). Each has its own null sentinel, so a fused read that got the sentinel wrong
+// would answer the default instead of the value — which the `?? -1` cells catch.
+fn sum_singles(v: vector<single>, n: integer) -> single {
+  s: single = 0.0f;
+  for i in 0..n { s = s + (v[i] ?? -1.0f); }
+  s
+}
+
+fn sum_floats(v: vector<float>, n: integer) -> float {
+  s = 0.0;
+  for i in 0..n { s = s + (v[i] ?? -1.0); }
+  s
+}
+
 // A read-only callee keeps the loop liftable — what a call DOES decides, not that
 // it is a call.
 fn twice(a: integer) -> integer { a * 2 }
@@ -155,6 +170,14 @@ fn main() {
   assert(edges(base) == 573, "edges reads {edges(base)}, want 573");
 
   assert(sum_via_call(base) == 120, "sum_via_call reads {sum_via_call(base)}, want 120");
+
+  // The other two fused element types, in range and one past the end.
+  sv: vector<single> = [1.5f, 2.5f, 3.5f];
+  assert(sum_singles(sv, 3) == 7.5f, "singles read {sum_singles(sv, 3)}, want 7.5");
+  assert(sum_singles(sv, 4) == 6.5f, "singles overrun reads {sum_singles(sv, 4)}, want 6.5");
+  fv: vector<float> = [1.25, 2.25, 3.25];
+  assert(sum_floats(fv, 3) == 6.75, "floats read {sum_floats(fv, 3)}, want 6.75");
+  assert(sum_floats(fv, 4) == 5.75, "floats overrun reads {sum_floats(fv, 4)}, want 5.75");
 
   // ---- loops that must keep re-deriving.
   // Each result is bound BEFORE it is asserted on: these functions mutate, and an

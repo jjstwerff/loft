@@ -195,6 +195,58 @@ fn main() {{ }}"
     }
 }
 
+/// Stage 2 recognises `OpGet<scalar>(OpGetVector*(Var(v), size, i), fld)` as one load.
+///
+/// The emitter and the pre-eval collector both ask `fused_element_read`, and they have to
+/// agree: if the collector hoists the inner read into a `let _pre_N` that the emitter then
+/// folds away, the read happens twice. So what is pinned here is the SHAPE — which getters
+/// qualify, and that a vector operand which is not a plain variable does not.
+#[test]
+fn the_fused_shape_is_recognised() {
+    let data = parse("fn main() { }");
+    let vec_read = |elem_op: &str| {
+        Value::Call(
+            data.def_nr(elem_op),
+            vec![Value::Var(3), Value::Int(4), Value::Var(7)],
+        )
+    };
+    let read = |getter: &str, inner: Value| {
+        hoist::fused_element_read(&data, getter, &[inner, Value::Int(0)]).map(|f| f.var)
+    };
+
+    for getter in ["OpGetInt", "OpGetSingle", "OpGetFloat"] {
+        for elem_op in ["OpGetVector", "OpGetVectorNullable"] {
+            assert_eq!(
+                read(getter, vec_read(elem_op)),
+                Some(3),
+                "{getter} over {elem_op} must fuse, naming the vector variable"
+            );
+        }
+    }
+
+    // A getter whose body is not a plain typed load stays unfused rather than approximated.
+    for getter in ["OpGetBoolean", "OpGetByte", "OpGetCharacter", "OpGetText"] {
+        if data.def_nr(getter) == u32::MAX {
+            continue;
+        }
+        assert!(
+            read(getter, vec_read("OpGetVector")).is_none(),
+            "{getter} has a different shape and must not fuse"
+        );
+    }
+
+    // A vector operand that is an EXPRESSION has no header to read against, and re-emitting
+    // it for the fallback would evaluate it twice.
+    let nested = Value::Call(
+        data.def_nr("OpGetVectorNullable"),
+        vec![vec_read("OpGetVectorNullable"), Value::Int(4), Value::Var(7)],
+    );
+    assert!(
+        read("OpGetInt", nested).is_none(),
+        "an indexed read of an indexed read must not fuse"
+    );
+}
+
 /// A `par` arm and a `yield` run code this walk is not looking at.
 #[test]
 fn concurrency_and_suspension_decline() {

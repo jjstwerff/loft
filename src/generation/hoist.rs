@@ -133,6 +133,76 @@ pub fn hoistable_vectors(
     found
 }
 
+/// The typed getters an element read can be fused INTO, with the Rust type each reads and
+/// the null sentinel its `#rust` template answers at the absent element.
+///
+/// All three are `if rec != 0 && valid(..) { *addr } else { <sentinel> }` in `Store`, which
+/// is what makes one fused load able to stand for the pair. A getter with a different shape
+/// — `OpGetBoolean` masks, `OpGetByte` re-bases, `OpGetCharacter` decodes — is left out
+/// rather than approximated; it keeps the unfused emission.
+const FUSABLE_GETTERS: [(&str, &str, &str); 3] = [
+    ("OpGetInt", "i64", "i64::MIN"),
+    ("OpGetSingle", "f32", "f32::NAN"),
+    ("OpGetFloat", "f64", "f64::NAN"),
+];
+
+/// An element read the emitter can collapse into ONE load: a scalar getter reading field
+/// `fld` out of `vector[index]`, where the vector is a plain variable.
+pub struct FusedRead<'a> {
+    /// The vector operand — always a `Value::Var`, so it re-emits without side effects.
+    pub vector: &'a Value,
+    pub var: u16,
+    pub size: &'a Value,
+    pub index: &'a Value,
+    pub fld: &'a Value,
+    /// Rust type of the load, e.g. `"f32"`.
+    pub rust_type: &'static str,
+    /// What the getter answers at an absent element, e.g. `"f32::NAN"`.
+    pub absent: &'static str,
+}
+
+/// Recognise `OpGet<scalar>(OpGetVector*(Var(v), size, index), fld)`, given the outer
+/// getter's op NAME.
+///
+/// The ONE definition of the fused shape: the emitter and the pre-eval collector both ask
+/// here, so the pre-eval cannot hoist an inner read that the emitter then folds away (which
+/// would leave the read happening twice). Answers `None` for every other shape — including
+/// an indexed read whose vector operand is an expression rather than a variable.
+///
+/// The caller still has to confirm the vector HAS a hoisted header; this only reports shape.
+#[must_use]
+pub fn fused_element_read<'a>(
+    data: &Data,
+    getter: &str,
+    args: &'a [Value],
+) -> Option<FusedRead<'a>> {
+    let [inner, fld] = args else { return None };
+    let (_, rust_type, absent) = FUSABLE_GETTERS
+        .iter()
+        .find(|(name, _, _)| *name == getter)?;
+    let Value::Call(elem_op, elem_args) = inner.unspan() else {
+        return None;
+    };
+    if !is_element_address(data, *elem_op) {
+        return None;
+    }
+    let [vector, size, index] = &elem_args[..] else {
+        return None;
+    };
+    let Value::Var(var) = vector.unspan() else {
+        return None;
+    };
+    Some(FusedRead {
+        vector,
+        var: *var,
+        size,
+        index,
+        fld,
+        rust_type,
+        absent,
+    })
+}
+
 /// How many parameters `d_nr` declares, as [`call_writes_store`] counts them.
 ///
 /// Exposed for the test that pins where a native op's parameters live. The verdict "this

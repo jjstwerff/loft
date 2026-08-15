@@ -637,6 +637,53 @@ pub fn get_vector_hoisted<const VERIFY: bool>(
     }
 }
 
+/// One indexed element read against an already-derived [`VecHeader`]: the bounds test and
+/// the typed load, with no `DbRef` built between them (loft#885 stage 2).
+///
+/// [`get_vector_hoisted`] removes the store resolution and the length load; this removes what
+/// was left — building the element `DbRef`, testing its `rec` for the null element, resolving
+/// the store a second time from it, and the `rec != 0 && valid(..)` guard inside the typed
+/// getter, which had already been decided by the bounds test. What remains is one comparison
+/// and one load.
+///
+/// `absent` is the getter's own null sentinel (`f32::NAN`, `i64::MIN`, …), so an index the
+/// fast path refuses answers exactly what the unfused pair answered. Off the fast path this
+/// routes back through [`get_vector`], which is what keeps negative indices addressing from
+/// the end rather than reading `absent`.
+///
+/// # Panics
+///
+/// Under `VERIFY`, when the header no longer describes `db`. Never in the emitted default.
+#[must_use]
+#[inline]
+pub fn get_elem_hoisted<T: Copy, const VERIFY: bool>(
+    h: &VecHeader,
+    db: &DbRef,
+    size: u32,
+    from: i64,
+    fld: u32,
+    absent: T,
+    stores: &[Store],
+) -> T {
+    if from >= 0 && from < i64::from(h.len) {
+        if VERIFY {
+            assert_eq!(
+                *h,
+                vec_header(db, stores),
+                "hoisted vector header is stale — the loop wrote the vector it was hoisted for"
+            );
+        }
+        return *stores[h.store_nr as usize]
+            .addr::<T>(h.rec, checked_vec_pos(from as u32, size) + fld);
+    }
+    let elem = get_vector(db, size, from, stores);
+    if elem.rec == 0 {
+        absent
+    } else {
+        *keys::store(&elem, stores).addr::<T>(elem.rec, elem.pos + fld)
+    }
+}
+
 pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> bool {
     if db.is_null() {
         return false; // nothing to remove from a null (absent) vector

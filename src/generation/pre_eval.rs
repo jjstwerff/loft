@@ -612,6 +612,20 @@ impl Output<'_> {
             return Ok(());
         }
         if let Value::Call(d_nr, vals) = v {
+            // loft#885 stage 2 — a scalar read of a hoisted vector element emits as ONE
+            // call, so its inner `OpGetVector*` must NOT be hoisted into a `let _pre_N`:
+            // the fused emission ignores that binding, and the read would then happen
+            // twice.  Both sides ask `fused_element_read`, so they cannot disagree about
+            // which shape is fused.  Only the index and the field can still hold work.
+            if let Some(fused) = crate::generation::hoist::fused_element_read(
+                self.data,
+                self.data.def(*d_nr).name(),
+                vals,
+            ) && self.active_vec_header(fused.var).is_some()
+            {
+                self.collect_pre_evals_inner(fused.index, result)?;
+                return self.collect_pre_evals_inner(fused.fld, result);
+            }
             let def_fn = self.data.def(*d_nr);
             if def_fn.rust().is_empty() {
                 // User-defined function: pre-eval any Block or nested user-fn arguments

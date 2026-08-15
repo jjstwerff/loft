@@ -19,6 +19,16 @@ So the emitter lifts them: `let __vh_N = vector::vec_header(…)` lands before t
 read becomes a bounds test plus address arithmetic. **~2× on the issue's kernel**, taking
 `vector<single>` indexed reads from ~15× hand-written Rust to ~6.5×.
 
+A scalar read of a hoisted element then fuses into ONE load (`vector::get_elem_hoisted`):
+the bounds test, then the value, with no element `DbRef` built, no `rec == 0` test, no second
+store resolution and no `rec != 0 && valid(..)` re-check between them — the bounds test
+decided all of it. Covers `OpGetInt` / `OpGetSingle` / `OpGetFloat`, the getters whose `Store`
+bodies are a plain guarded load; the masking / re-basing / decoding ones stay unfused. That
+also meant teaching the pre-eval collector about the fusion: `OpGetVector*` is on
+`op_uses_stores`, so it was being hoisted into a `let _pre_N` that the fused emission
+ignores — which would have run the read twice. `hoist::fused_element_read` is the one
+definition of the shape, and the emitter and the collector both ask it.
+
 Only an index in range for the hoisted length takes the fast path — a negative index, an
 out-of-range one, `i64::MIN`, a null or an empty vector all fall back into `get_vector` /
 `vec_get_or_raise_runtime`, so those answers and the `IndexOutOfBounds` / `NegativeIndex`

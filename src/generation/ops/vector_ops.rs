@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // loft#885 — indexed reads through a loop-invariant vector header
 
-//! The two element-address ops, emitted against a header the enclosing loop already
-//! derived when [`crate::generation::hoist`] proved the loop writes no store.
+//! Indexed reads emitted against a header the enclosing loop already derived, once
+//! [`crate::generation::hoist`] proved the loop writes no store.
 //!
-//! Both emitters fall back to the `#rust` template the moment there is no header for the
-//! vector being read, which is every read outside such a loop — so the shape that changes
-//! is exactly the one the analysis vouched for.
+//! Two element-address ops (`v[i]` as an address, raising and nullable) plus the scalar
+//! getters, which fuse the address and the load into one call rather than building a `DbRef`
+//! between them. Every emitter falls back to the `#rust` template the moment there is no
+//! header for the vector being read, which is every read outside such a loop — so the shape
+//! that changes is exactly the one the analysis vouched for.
 //!
 //! The runtime helpers keep the fast path to an in-range index and route everything else
 //! (negative, out of range, `i64::MIN`, a null or empty vector) back into `get_vector` /
@@ -17,6 +19,7 @@
 
 use super::{EmitCtx, OpEmitter};
 use crate::data::Value;
+use crate::generation::hoist;
 use std::io;
 
 /// The `&(vector)` operand plus the header local, or `None` when this read is not covered.
@@ -33,6 +36,44 @@ fn verify(ctx: &EmitCtx<'_, '_>) -> &'static str {
         "true"
     } else {
         "false"
+    }
+}
+
+/// `OpGetInt` / `OpGetSingle` / `OpGetFloat` — a scalar read of `v[i]` inside a loop that
+/// hoisted `v`'s header, emitted as ONE load: the bounds test, then the value.
+///
+/// Everything the pair used to do between those two — build the element `DbRef`, test its
+/// `rec` against the null element, resolve the store from it again, and re-check
+/// `rec != 0 && valid(..)` inside the getter — is decided by the bounds test already.
+/// Worth ~1.6× on top of the header hoist alone (loft#885 stage 2).
+///
+/// Anything else (no header, an expression instead of a variable for the vector, a getter
+/// with a different shape) emits the `#rust` template unchanged.
+pub struct FusedElementReadEmitter;
+
+impl OpEmitter for FusedElementReadEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        let Some(fused) = hoist::fused_element_read(ctx.output.data, ctx.def_fn.name(), args)
+        else {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        };
+        let Some(header) = ctx.output.active_vec_header(fused.var) else {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        };
+        let (header, ty, absent) = (header.to_string(), fused.rust_type, fused.absent);
+        let verify = verify(ctx);
+        write!(
+            ctx.w,
+            "vector::get_elem_hoisted::<{ty}, {verify}>(&{header}, &("
+        )?;
+        ctx.emit(fused.vector)?;
+        write!(ctx.w, "), (")?;
+        ctx.emit(fused.size)?;
+        write!(ctx.w, ") as u32, ")?;
+        ctx.emit(fused.index)?;
+        write!(ctx.w, ", (")?;
+        ctx.emit(fused.fld)?;
+        write!(ctx.w, ") as u32, {absent}, &stores.allocations)")
     }
 }
 

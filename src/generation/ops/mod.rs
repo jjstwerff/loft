@@ -318,6 +318,9 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // loft#885 — indexed reads inside a loop that writes no store are emitted against a
     // header the loop derived once.  Both emitters delegate to the `#rust` template for
     // every read the analysis did not cover, which is every read outside such a loop.
+    for name in ["OpGetInt", "OpGetSingle", "OpGetFloat"] {
+        r.insert(name, Box::new(vector_ops::FusedElementReadEmitter));
+    }
     r.insert("OpGetVector", Box::new(vector_ops::OpGetVectorEmitter));
     r.insert(
         "OpGetVectorNullable",
