@@ -148,6 +148,24 @@ fn ws_recv(stream: &TcpStream) -> String {
 /// `engine_host::run` takes closures, and closures do not cross a process
 /// boundary — so the loop is inverted. That is not a workaround; it is what the
 /// `turn()` surface exists for, and it reads about the same.
+///
+/// loft#937 — the loop stops on the CONJUNCTION of "`bye` arrived" and "a tick
+/// came due", not on `bye` alone. The transcript this consumer prints is compared
+/// between placements verbatim, so every fact in it has to be one both placements
+/// are REQUIRED to agree on. Stopping the moment `bye` landed made
+/// `ticks-positive` a sample of how fast the exchange happened to run instead: on
+/// an idle machine both crossed a 5 ms tick boundary, and under parallel suite
+/// load one could finish the whole three-message exchange inside a single
+/// interval and report `false` against its sibling's `true`. Waiting for the tick
+/// costs at most one interval and turns the sample into the guarantee the
+/// assertion already assumed it was.
+///
+/// `TURN_BUDGET` is the backstop for the other direction: a kernel whose tick
+/// never comes due must fail the assertion, not hang the suite until
+/// `LOFT_TIMEOUT`. It is deliberately far above the ~5 ms wait — a turn is a
+/// pump plus a drain, so even at a microsecond each the budget outlasts the
+/// interval by orders of magnitude, and reaching it means the tick is genuinely
+/// broken.
 fn consumer_source(port: u16) -> String {
     format!(
         "use engine_host;\n\
@@ -156,6 +174,8 @@ fn consumer_source(port: u16) -> String {
          \x20   println(\"ready\");\n\
          \x20   tick_count = 0;\n\
          \x20   msg_count = 0;\n\
+         \x20   saw_bye = false;\n\
+         \x20   turns = 0;\n\
          \x20   while alive() {{\n\
          \x20       t = turn(64);\n\
          \x20       if !t.running {{ break; }}\n\
@@ -165,10 +185,12 @@ fn consumer_source(port: u16) -> String {
          \x20               msg_count += 1;\n\
          \x20               println(\"got {{ev.payload}}\");\n\
          \x20               broadcast(\"echo:{{ev.payload}}#{{msg_count}}\");\n\
-         \x20               if ev.payload == \"bye\" {{ stop(); }}\n\
+         \x20               if ev.payload == \"bye\" {{ saw_bye = true; }}\n\
          \x20           }}\n\
          \x20       }}\n\
          \x20       if t.tick {{ tick_count += 1; }}\n\
+         \x20       turns += 1;\n\
+         \x20       if saw_bye && (tick_count > 0 || turns > 2000000) {{ stop(); }}\n\
          \x20   }}\n\
          \x20   println(\"closed ticks-positive={{tick_count > 0}} seen={{msg_count}}\");\n\
          }}\n"

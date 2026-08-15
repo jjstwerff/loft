@@ -2998,23 +2998,41 @@ impl Parser {
         if had_else {
             self.vars.restore_write_state(&write_state);
             self.vars.clear_write_state();
+            // A bare-`null` THEN arm has no type of its own — it adopts the sibling's,
+            // whatever the sibling turns out to be.  Marked BEFORE the sibling is
+            // parsed, because parsing it is what makes that type available.
+            if matches!(true_type, Type::Null | Type::Never) {
+                true_type = Type::Unknown(0);
+            }
             if self.lexer.has_token("if") {
-                self.parse_if(&mut false_code);
-            } else {
-                if matches!(true_type, Type::Null | Type::Never) {
-                    true_type = Type::Unknown(0);
-                }
-                false_type = self.parse_block("else", &mut false_code, &true_type);
+                // loft#936 — an `else if` CHAIN is a sibling like any other.  Its
+                // result type used to be discarded here, so `if a { null } else if b
+                // { null } else { [n] }` left the whole chain typed by its untyped
+                // first arm and answered `null` for EVERY input — the value arm was
+                // unreachable, on both backends and on released 2026.8.0.  A THEN arm
+                // that already names the merged type keeps `false_type` at `Void`
+                // exactly as before; nothing downstream reads the chain's type there.
+                let chain_type = self.parse_if(&mut false_code);
                 if true_type == Type::Unknown(0) {
-                    if let Value::Block(bl) = &mut true_code {
-                        let p = bl.operators.len() - 1;
-                        if !is_block_divergent(&bl.operators) {
-                            bl.operators[p] = self.null(&false_type);
-                        }
-                        bl.result = false_type.clone();
-                    }
-                    true_type = false_type.clone();
+                    false_type = chain_type;
                 }
+            } else {
+                false_type = self.parse_block("else", &mut false_code, &true_type);
+            }
+            if true_type == Type::Unknown(0) {
+                if let Value::Block(bl) = &mut true_code {
+                    let p = bl.operators.len() - 1;
+                    if !is_block_divergent(&bl.operators) {
+                        // loft#936 — `null_value`, not `null`: the arm's null travels
+                        // to the merge on the eval stack, so a COLLECTION arm needs the
+                        // DbRef sentinel.  `null`'s catch-all answers a bare
+                        // `Value::Null`, which pushes nothing, and the join then read an
+                        // uninitialised 12-byte slot as a live reference.
+                        bl.operators[p] = self.null_value(&false_type);
+                    }
+                    bl.result = false_type.clone();
+                }
+                true_type = false_type.clone();
             }
         } else {
             self.vars.restore_write_state(&write_state);
@@ -3026,7 +3044,7 @@ impl Parser {
                         "If-expression produces a value but has no else clause; add an else branch or make the body a statement"
                     );
                 }
-                false_code = v_block(vec![self.null(&true_type)], true_type.clone(), "else");
+                false_code = v_block(vec![self.null_value(&true_type)], true_type.clone(), "else");
             }
         }
         self.vars.restore_write_state(&write_state);
@@ -3901,16 +3919,24 @@ impl Parser {
         }
 
         // A `null` arm lowers to the result type's null sentinel — `parse_if`
-        // (~line 1250) and `build_scalar_chain` do the same.  Now that
+        // and `build_scalar_chain` do the same.  Now that
         // result_type is final, convert bare-null (and block-trailing-null) arm
         // bodies, and keep `arm.tp` in step so the guarded-binding block wrapper
         // (below) declares the right result type.  Without this a `null` arm
         // pushes nothing and the if-chain join reads an unwritten, value-sized
         // slot (interp stack underflow / native lost value) — the #365 family.
+        //
+        // loft#936 — `null_value`, not `null`.  `null` doubles as a VARIABLE's
+        // default-init, where a collection must be an allocated empty store, so
+        // its catch-all answers a bare `Value::Null` for the whole collection
+        // family — which is the very "pushes nothing" this paragraph forbids.
+        // `match n { 0 => null, _ => [n] }` therefore left the ARMS at different
+        // eval-stack depths and `gives(3)` read back an empty vector on
+        // `--interpret` while `--native` answered `[3]`.
         let base = if matches!(result_type, Type::Void | Type::Null) {
             Value::Null
         } else {
-            let typed_null = self.null(&result_type);
+            let typed_null = self.null_value(&result_type);
             for arm in &mut arms {
                 let null_body = match &arm.code {
                     Value::Null => true,
@@ -7794,7 +7820,7 @@ impl Parser {
         let fallback = if has_wildcard {
             arms.pop().unwrap().code
         } else {
-            self.null(&result_type)
+            self.null_value(&result_type)
         };
         let mut chain = chain_pattern_arms(arms, fallback, &result_type);
         // @PLN85 — a bare `[]` arm (`_ => []`) lowers to a `null` of the result type, which the
@@ -8094,7 +8120,7 @@ impl Parser {
         let fallback = if has_wildcard {
             arms.pop().unwrap().code
         } else {
-            self.null(&result_type)
+            self.null_value(&result_type)
         };
         let chain = chain_pattern_arms(arms, fallback, &result_type);
 
@@ -8138,14 +8164,20 @@ impl Parser {
         // join then reads an unwritten, value-sized slot — interp stack underflow
         // ("No elements left on the stack"), native a lost value.  Convert each
         // bare-null arm to the result type's typed null sentinel, the same
-        // transform `parse_if` applies to a null branch (~line 1250) and the
-        // fallback gets just below.  `self.null` is a no-op (returns
+        // transform `parse_if` applies to a null branch and the
+        // fallback gets just below.  `null_value` is a no-op (returns
         // `Value::Null`) for Void/Unknown result types, so a statement-style
         // match is untouched.  Compute the typed null once (it's the same for
         // every arm — `result_type` is fixed), releasing the `&mut self` borrow
         // before mutating `arms`.
+        //
+        // loft#936 — `null_value` and not `null`, at every branch-MERGE slot in
+        // this file.  `null` also supplies a VARIABLE's default-init, where a
+        // collection has to be an allocated empty store, so its catch-all
+        // answers a bare `Value::Null` for the entire collection family and
+        // silently reintroduces the no-push this paragraph exists to prevent.
         if arms.iter().any(|a| matches!(a.1, Value::Null)) {
-            let typed_null = self.null(result_type);
+            let typed_null = self.null_value(result_type);
             for arm in &mut arms {
                 if matches!(arm.1, Value::Null) {
                     arm.1 = typed_null.clone();
@@ -8156,7 +8188,7 @@ impl Parser {
             let (_, arm_code, _, _) = arms.pop().unwrap();
             arm_code
         } else {
-            self.null(result_type)
+            self.null_value(result_type)
         };
 
         let mut chain = fallback;
@@ -11550,7 +11582,7 @@ impl Parser {
             // a no-op (`n_store_violation` returns `false`).
             self.n_store_violation(&t, &r_type, "the return value", None);
             if t == Type::Null {
-                v = self.null_return(&r_type);
+                v = self.null_value(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }

@@ -4698,8 +4698,7 @@ impl Scopes {
             // present arm's work-ref placeholder orphaned on the null path.  When
             // a null arm is reachable, do NOT SET-suppress a Reference/Enum work-
             // ref source — hand it to the standard work-ref free path so the
-            // orphan is freed.  Vector sources are unaffected (their backing is
-            // NRVO-delivered, not orphaned).  See `return_has_null_arm`.
+            // orphan is freed.  See `return_has_null_arm`.
             let null_sentinel_nr = data.def_nr("OpNullRefSentinel");
             if return_has_null_arm(expr, null_sentinel_nr) {
                 // @PLN85 P4-records: a record source with a reachable NULL arm
@@ -4717,6 +4716,31 @@ impl Scopes {
                         Type::Reference(_, _) | Type::Enum(_, true, _)
                     ) {
                         null_arm_record_sources.push(v);
+                    }
+                }
+                // loft#936 — a COLLECTION source is the same runtime join, one
+                // level down.  `_vec_N` is a VIEW into a backing record
+                // (`vector<T>["__vdb_N"]`), so it is the BACKING var that owns
+                // the store and that `get_free_vars` suppresses (via
+                // `backs_return_source`).  That suppression is only correct on
+                // the arm that actually delivers the store: on the null arm the
+                // caller gets the sentinel and the entry-allocated backing
+                // record is owned by nobody — one orphan per CALL, so a loop
+                // calling such a function leaked until the 65,535-slot store
+                // table was exhausted.  `OpFreeRefIfDistinct` compares
+                // `store_nr`, and the view shares the backing record's store, so
+                // the delivering arm still transfers it untouched.
+                for &v in &sources {
+                    if !crate::parser::vectors::is_collection(function.tp(v)) {
+                        continue;
+                    }
+                    for d in function.tp(v).depend() {
+                        if d != v
+                            && !function.is_argument(d)
+                            && !null_arm_record_sources.contains(&d)
+                        {
+                            null_arm_record_sources.push(d);
+                        }
                     }
                 }
             }

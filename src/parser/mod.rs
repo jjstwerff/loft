@@ -12152,27 +12152,32 @@ impl Parser {
         }
     }
 
-    /// loft#793 — the null a `return` DELIVERS for `tp`: `null()`, plus the
-    /// store-pointer sentinel for every remaining DbRef-backed heap type (the
-    /// collections, and a struct-enum — whose payload is a record, not the
-    /// `255` discriminator a plain enum uses).
+    /// loft#793/loft#936 — the null a VALUE POSITION delivers for `tp`:
+    /// `null()`, plus the store-pointer sentinel for every remaining
+    /// DbRef-backed heap type (the collections, and a struct-enum — whose
+    /// payload is a record, not the `255` discriminator a plain enum uses).
+    ///
+    /// A value position is anywhere the null travels on the eval stack rather
+    /// than into a declared slot: a `return`, and the arm of an `if`/`match`
+    /// whose sibling arm decides the merged type.
     ///
     /// Separate from `null()` because that one also supplies a variable's
     /// DEFAULT-INIT, and the two want different answers here: a collection
     /// LOCAL must start as an ALLOCATED empty store, because a later write
     /// (`w: vector<single> = f#read(16) as vector<single>`) fills that store in
-    /// place and the sentinel's `store_nr` indexes nothing.  A RETURN has no
-    /// slot to fill — the value travels back as a DbRef — so there the
-    /// sentinel is the only thing that can mean null.
+    /// place and the sentinel's `store_nr` indexes nothing.  A value in flight
+    /// has no slot to fill — it travels as a DbRef — so there the sentinel is
+    /// the only thing that can mean null.
     ///
-    /// Untreated, `return null` from a `-> vector<T>?` / `-> StructEnum?` fn
-    /// pushed nothing (or a 4-byte discriminator) where the caller read a
-    /// 12-byte DbRef, so the interpreter's `OpReturn` handed back whatever the
-    /// eval stack held: the caller saw a stale ref as NON-null and freed it a
-    /// second time ("refused free of out-of-range store", sometimes a SIGSEGV).
-    /// Native was already right, so the two backends disagreed on a bare
-    /// `return null`.
-    pub fn null_return(&mut self, tp: &Type) -> Value {
+    /// Untreated, `null()`'s catch-all answers a bare `Value::Null`, which
+    /// pushes NOTHING where the consumer reads a 12-byte DbRef, so the
+    /// interpreter hands on whatever the eval stack held: the consumer saw an
+    /// uninitialised ref as NON-null and freed it ("refused free of
+    /// out-of-range store", sometimes a SIGSEGV).  Native was already right, so
+    /// the two backends disagreed — on a bare `return null` (#793), and on
+    /// `if n == 0 { null } else { [n] }`, where the null arm is parsed BEFORE
+    /// the sibling that names the type and so is back-patched here (#936).
+    pub fn null_value(&mut self, tp: &Type) -> Value {
         match tp.base() {
             Type::Vector(_, _)
             | Type::Sorted(_, _, _)

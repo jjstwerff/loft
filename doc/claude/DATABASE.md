@@ -686,6 +686,36 @@ narrow question second, so `??` saw a present value and answered with the fresh
 record's uninitialised bytes. **Use `rec == 0` for "is this readable"; reserve
 `is_null()` for "is this the absent-value sentinel" specifically.**
 
+#### A null in flight is not a null in a slot
+
+The parser has two helpers for "the null of type τ", and picking the wrong one is
+silent on every scalar and corrupting on every collection:
+
+| helper | for | a collection's answer |
+|---|---|---|
+| `Parser::null(tp)` | a VARIABLE's default-init — a declared slot the value lands in | `Value::Null` (nothing) — the slot is an allocated empty store already |
+| `Parser::null_value(tp)` | a VALUE POSITION — the null travels on the eval stack | `OpNullRefSentinel()` — a 12-byte `DbRef` with `store_nr == u16::MAX` |
+
+The split is real: a collection LOCAL must start as an ALLOCATED empty store,
+because a later write (`w: vector<single> = f#read(16) as vector<single>`) fills
+that store in place and the sentinel's `store_nr` indexes nothing. A value in
+flight has no slot to fill, so there the sentinel is the only thing that can mean
+null.
+
+**Every branch-MERGE slot is a value position, exactly as a `return` is** — the
+arms of an `if` or a `match` all push into one join, and an arm that pushes
+NOTHING leaves the join reading an unwritten, value-sized slot: an uninitialised
+`DbRef` the interpreter then treats as a live reference (loft#936), or a lost
+value on `--native`. Arm ORDER is what made this look cosmetic rather than
+systemic: the SECOND arm is parsed with its sibling's type already in hand and
+converts correctly, so only a `null` written FIRST reached the back-patch that
+asked the wrong helper.
+
+`null_value` peels `Optional` and delegates to `null` for everything outside the
+DbRef-backed family (the collections and a struct-enum, whose payload is a record
+rather than the `255` discriminator a plain enum uses), so it is strictly the
+safer default at any site that is not a declared slot.
+
 ### Key
 
 ```rust
