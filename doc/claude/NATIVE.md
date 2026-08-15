@@ -80,6 +80,29 @@ writing and the `n9_generated_fill_matches_src` test enforces byte-exact match.
 - **Pre-eval extension:** `needs_pre_eval` now covers `Value::Insert` and `Value::Iter`;
   `collect_pre_evals_inner` handles `Value::Return`.
 
+### Loop-invariant vector headers (loft#885)
+
+A loop the emitter can prove writes **no store** derives each vector's
+`(store_nr, record, length)` once, immediately before the loop, and reads its elements
+against that triple instead of re-deriving all three per element. Worth ~2× on an
+indexed-read kernel; the measurement, the design and the reason `rustc` cannot do it for us
+are in [PERFORMANCE.md § Design: P2](PERFORMANCE.md) → *Shipped: the NATIVE half*.
+
+Where it lives: `src/generation/hoist.rs` (the gate), `src/generation/ops/vector_ops.rs`
+(the two emitters, both falling through to the `#rust` template when the gate declined),
+`Output::begin_vector_hoist` (the prelude), and `vector::vec_header` /
+`vector::get_vector_hoisted` / `Stores::vec_get_hoisted_or_raise_runtime` (the runtime).
+Interpreter emission is untouched.
+
+Two switches, both read at GENERATION time:
+
+* **`LOFT_HOIST_VERIFY=1`** emits the checking form of every hoisted read — it re-derives
+  the header and panics if the loop moved the vector under it. This is the gate on the
+  gate; run it over the suite after touching `hoist.rs`.
+* **`LOFT_NO_VECTOR_HOIST=1`** emits the pre-loft#885 form, so one binary carries both
+  halves of an A/B. It is also the first bisect step for a `--native`-only wrong answer in
+  a loop that indexes a vector.
+
 ### Native→interpreter fallback, and `LOFT_REQUIRE_NATIVE` (efficiency-work aid)
 
 A default `loft <file>` run prefers native but **degrades to the interpreter** rather

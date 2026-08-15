@@ -36,6 +36,7 @@ pub mod misc_ops;
 pub mod parallel;
 pub mod ref_ops;
 pub mod text_ops;
+pub mod vector_ops;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -313,6 +314,15 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     ] {
         r.insert(name, Box::new(parallel::ParallelBufRenameEmitter));
     }
+
+    // loft#885 — indexed reads inside a loop that writes no store are emitted against a
+    // header the loop derived once.  Both emitters delegate to the `#rust` template for
+    // every read the analysis did not cover, which is every read outside such a loop.
+    r.insert("OpGetVector", Box::new(vector_ops::OpGetVectorEmitter));
+    r.insert(
+        "OpGetVectorNullable",
+        Box::new(vector_ops::OpGetVectorNullableEmitter),
+    );
 
     // Phase 10 step 10.3 — integer comparison emitter family.
     // Closes P200 read-side: the default `@v1 == @v2` template

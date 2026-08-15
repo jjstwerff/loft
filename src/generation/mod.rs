@@ -12,6 +12,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
+pub mod hoist;
 pub(crate) mod ops;
 mod pre_eval;
 mod text;
@@ -474,6 +475,26 @@ pub struct Output<'a> {
     /// Stack of enclosing loop scope ids, innermost last.
     /// Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
     pub loop_stack: Vec<u16>,
+    /// loft#885 — vector headers hoisted out of the enclosing loops, innermost last:
+    /// variable → the Rust local holding its [`crate::vector::VecHeader`]. An indexed read
+    /// of a variable listed here skips the store resolution and the length load; every
+    /// other read emits unchanged. One frame is pushed per `Value::Loop`, so a frame is
+    /// popped exactly where the local it names goes out of scope.
+    pub vec_headers: Vec<HashMap<u16, String>>,
+    /// Per-definition memo behind [`hoist::may_write_store`], shared across every loop in
+    /// the program so the call-graph walk runs once per callee.
+    pub hoist_cache: HashMap<u32, bool>,
+    /// Names the hoisted headers of the function being emitted (`__vh_1`, `__vh_2`, …).
+    pub hoist_counter: u32,
+    /// `LOFT_HOIST_VERIFY=1` — emit the CHECKING form of every hoisted read, which
+    /// re-derives the header and panics when the loop moved the vector under it. Costs
+    /// exactly the loads the hoist removed, so it is a gate to run the suite under, not a
+    /// production default. See [`hoist`].
+    pub hoist_verify: bool,
+    /// `LOFT_NO_VECTOR_HOIST=1` — emit every indexed read the way it was emitted before
+    /// loft#885. The before-half of an A/B on one binary, and the first thing to try when
+    /// a program answers differently under `--native` than under `--interpret`.
+    pub hoist_disabled: bool,
     /// O7: number of consecutive format/append ops following the current
     /// `OpClearStackText`/`OpClearText`.  Set by `output_block` before each
     /// op is emitted; consumed (and reset to 0) by `clear_stack_text`.
@@ -1117,6 +1138,11 @@ impl<'a> Output<'a> {
             reachable: HashSet::new(),
             dup_fn_names: HashSet::new(),
             loop_stack: Vec::new(),
+            vec_headers: Vec::new(),
+            hoist_cache: HashMap::new(),
+            hoist_counter: 0,
+            hoist_verify: std::env::var("LOFT_HOIST_VERIFY").is_ok_and(|v| v != "0"),
+            hoist_disabled: std::env::var("LOFT_NO_VECTOR_HOIST").is_ok_and(|v| v != "0"),
             next_format_count: 0,
             yield_collect: false,
             yield_collect_text: false,
@@ -1295,6 +1321,79 @@ impl Output<'_> {
         self.witness_vars.clear();
         self.predeclared.clear();
         self.next_format_count = 0;
+        self.vec_headers.clear();
+        self.hoist_counter = 0;
+    }
+
+    /// loft#885 — open a loop with the headers of the vectors it only reads.
+    ///
+    /// Emits `{ let __vh_N = vector::vec_header(…);` per hoistable vector and answers
+    /// whether that wrapper block was opened, which [`Self::end_vector_hoist`] closes. The
+    /// wrapper is what makes the prelude legal wherever a loop can appear — a loop is an
+    /// expression in Rust, and a bare `let` before one would not be.
+    ///
+    /// A vector already covered by an enclosing loop's prelude is skipped: the enclosing
+    /// header is still current, because the promise that let it be hoisted covers this
+    /// loop too.
+    fn begin_vector_hoist(
+        &mut self,
+        w: &mut dyn Write,
+        lp: &crate::data::Block,
+    ) -> std::io::Result<bool> {
+        let mut frame: HashMap<u16, String> = HashMap::new();
+        let candidates = if self.hoist_disabled {
+            Vec::new()
+        } else {
+            hoist::hoistable_vectors(lp, self.data, self.def_nr, &mut self.hoist_cache)
+        };
+        let mut lines: Vec<String> = Vec::new();
+        for v in candidates {
+            if self.vec_headers.iter().any(|f| f.contains_key(&v)) {
+                continue;
+            }
+            // A generator's locals live on the generator struct and are named `self.var_x`
+            // inside its `next` methods. The prelude below spells a plain local, so a
+            // vector that moved onto the struct is left alone rather than named wrongly.
+            if self.coroutine_persistent_vars.contains(&v) {
+                continue;
+            }
+            self.hoist_counter += 1;
+            let name = format!("__vh_{}", self.hoist_counter);
+            let var = sanitize(self.data.def(self.def_nr).variables().name(v));
+            lines.push(format!(
+                "let {name} = vector::vec_header(&(var_{var}), &stores.allocations);"
+            ));
+            frame.insert(v, name);
+        }
+        let opened = !lines.is_empty();
+        if opened {
+            writeln!(w, "{{ //loft#885 loop-invariant vector headers")?;
+            for line in lines {
+                self.indent(w)?;
+                writeln!(w, "{line}")?;
+            }
+            self.indent(w)?;
+        }
+        self.vec_headers.push(frame);
+        Ok(opened)
+    }
+
+    /// Close what [`Self::begin_vector_hoist`] opened.
+    fn end_vector_hoist(&mut self, w: &mut dyn Write, opened: bool) -> std::io::Result<()> {
+        self.vec_headers.pop();
+        if opened {
+            write!(w, " }}")?;
+        }
+        Ok(())
+    }
+
+    /// The Rust local holding `var`'s hoisted header, when an enclosing loop derived one.
+    #[must_use]
+    pub fn active_vec_header(&self, var: u16) -> Option<&str> {
+        self.vec_headers
+            .iter()
+            .rev()
+            .find_map(|f| f.get(&var).map(String::as_str))
     }
 
     /// @PLN18 08-S2 — build the live-dispatch entry check for a user fn, or

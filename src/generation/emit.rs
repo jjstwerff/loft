@@ -359,6 +359,7 @@ impl Output<'_> {
         match code {
             Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false, false)?,
             Value::Loop(lp) => {
+                let hoisted = self.begin_vector_hoist(w, lp)?;
                 self.loop_stack.push(lp.scope);
                 writeln!(w, "'l{}: loop {{ //{}_{}", lp.scope, lp.name, lp.scope)?;
                 for v in &lp.operators {
@@ -371,6 +372,7 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(w, "}} /*{}_{}*/", lp.name, lp.scope)?;
                 self.loop_stack.pop();
+                self.end_vector_hoist(w, hoisted)?;
             }
             Value::Set(var, to) => self.output_set(w, *var, to)?,
             Value::If(test, true_v, false_v) => self.output_if(w, test, true_v, false_v)?,

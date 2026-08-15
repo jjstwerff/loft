@@ -1,0 +1,195 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A loop reads the same elements whether or not the emitter derived the vector's
+// header once up front.
+//
+// `v[i]` re-derives three things per element: which store holds the vector, which
+// record its elements live in, and how long it is. All three are loop-invariant in
+// a loop that writes no store, and none of them can be lifted by the Rust compiler
+// — every store load is guarded (`if rec != 0 && valid(..)`) and LLVM will not
+// speculate a conditional load out of a loop. So the native emitter lifts them
+// itself when it can prove the loop writes nothing, which is worth ~2x on an
+// indexed-read kernel (loft#885, PERFORMANCE.md § Design: P2).
+//
+// The proof obligation is one-sided: a loop that DOES write must keep re-deriving,
+// because a write can move the record (`resize` relocates the record it grows) or
+// change the length (`remove` rewrites it in place) — and a lifted triple then
+// addresses memory the vector no longer owns. Half the cases below are therefore
+// loops that must NOT be lifted; they are the ones a wrong gate breaks.
+//
+// Every cell asserts a VALUE, not just a length: a stale header answers the right
+// number of elements out of the wrong record.
+//
+// `LOFT_NO_VECTOR_HOIST=1` emits the pre-loft#885 form, so this file run under it
+// is the before-half of its own comparison. `LOFT_HOIST_VERIFY=1` emits the form
+// that re-derives the header at every lifted read and panics on a mismatch.
+
+// ---------- loops that MUST keep the same answer while being lifted
+
+fn sum_indexed(v: vector<integer>, n: integer) -> integer {
+  s = 0;
+  for i in 0..n { s = s + (v[i] ?? -1); }
+  s
+}
+
+fn sum_len(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..len(v) { s = s + (v[i] ?? -1); }
+  s
+}
+
+fn sum_iterated(v: vector<integer>) -> integer {
+  s = 0;
+  for x in v { s = s + x; }
+  s
+}
+
+// Three vectors in one loop: each gets its own header, and mixing them up would
+// read the wrong column rather than the wrong count.
+fn weave(a: vector<integer>, b: vector<integer>, c: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..3 { s = s * 10 + (a[i] ?? 0) + (b[i] ?? 0) * 2 + (c[i] ?? 0) * 3; }
+  s
+}
+
+struct P { x: integer, y: integer }
+
+// Elements that are RECORDS: the header supplies the address, the field read is
+// untouched.
+fn sum_fields(v: vector<P>) -> integer {
+  s = 0;
+  for i in 0..3 { s = s + (v[i].x ?? 0) * 10 + (v[i].y ?? 0); }
+  s
+}
+
+// Indices the fast path must refuse: negative ones address from the end, and an
+// out-of-range one is the absent element, not a fault.
+fn edges(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..3 { s = s + (v[i - 3] ?? -7) * 10 + (v[i + 3] ?? -9); }
+  s
+}
+
+// A read-only callee keeps the loop liftable — what a call DOES decides, not that
+// it is a call.
+fn twice(a: integer) -> integer { a * 2 }
+
+fn sum_via_call(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..len(v) { s = s + twice(v[i] ?? 0); }
+  s
+}
+
+// ---------- loops that must NOT be lifted, one write shape each
+
+// Growing the vector being read: both the length and the record can move.
+fn grow_while_reading(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..6 { s = s + (v[i] ?? -1); v += [100 + i]; }
+  s
+}
+
+// `remove` changes the length with no reallocation at all — the shape that has no
+// runtime witness to fall back on.
+fn shrink_while_reading(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..4 { s = s + (v[i] ?? -1); v.remove(0); }
+  s
+}
+
+// The store is never touched; the VARIABLE comes to name a different vector.
+fn rebind_while_reading(v: vector<integer>, w: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..3 { s = s + (v[i] ?? -1); v = w; }
+  s
+}
+
+// The write is one call deep, so the analysis has to follow the call.
+fn append_to(t: vector<integer>, x: integer) { t += [x]; }
+
+fn callee_grows_it(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..5 { s = s + (v[i] ?? -1); append_to(v, 100 + i); }
+  s
+}
+
+// The outer loop only reads; the write is in the inner one. Neither may lift.
+fn inner_loop_grows_it(v: vector<integer>) -> integer {
+  s = 0;
+  for i in 0..3 {
+    for j in 0..1 { v += [j]; }
+    s = s + (v[i] ?? -1);
+  }
+  s
+}
+
+fn main() {
+  base: vector<integer> = [10, 20, 30];
+
+  // ---- lifted loops
+  assert(sum_indexed(base, 3) == 60, "sum_indexed reads {sum_indexed(base, 3)}, want 60");
+  // Past the end inside a lifted loop: the absent element, once per overrun.
+  assert(sum_indexed(base, 5) == 58, "overrun reads {sum_indexed(base, 5)}, want 58");
+  assert(sum_len(base) == 60, "sum_len reads {sum_len(base)}, want 60");
+  assert(sum_iterated(base) == 60, "sum_iterated reads {sum_iterated(base)}, want 60");
+
+  empty: vector<integer> = [];
+  assert(sum_indexed(empty, 3) == -3, "empty reads {sum_indexed(empty, 3)}, want -3");
+  assert(sum_len(empty) == 0, "empty len-loop reads {sum_len(empty)}, want 0");
+  assert(sum_iterated(empty) == 0, "empty iteration reads {sum_iterated(empty)}, want 0");
+
+  one: vector<integer> = [7];
+  assert(sum_indexed(one, 1) == 7, "single reads {sum_indexed(one, 1)}, want 7");
+
+  a: vector<integer> = [1, 2, 3];
+  b: vector<integer> = [4, 5, 6];
+  c: vector<integer> = [7, 8, 9];
+  // i=0: 1+8+21 = 30 | i=1: 300+2+10+24 = 336 | i=2: 3360+3+12+27 = 3402
+  assert(weave(a, b, c) == 3402, "weave reads {weave(a, b, c)}, want 3402");
+
+  pts: vector<P> = [P { x: 1, y: 2 }, P { x: 3, y: 4 }, P { x: 5, y: 6 }];
+  assert(sum_fields(pts) == 102, "sum_fields reads {sum_fields(pts)}, want 102");
+
+  // v[-3..-1] are 10, 20, 30; v[3..5] are all absent.
+  assert(edges(base) == 573, "edges reads {edges(base)}, want 573");
+
+  assert(sum_via_call(base) == 120, "sum_via_call reads {sum_via_call(base)}, want 120");
+
+  // ---- loops that must keep re-deriving.
+  // Each result is bound BEFORE it is asserted on: these functions mutate, and an
+  // assert message that called one again would run the mutation a second time.
+  g: vector<integer> = [10, 20, 30];
+  // 10+20+30 then the appended 100, 101, 102 — only reachable if the length is re-read.
+  grown = grow_while_reading(g);
+  g_len = len(g);
+  assert(grown == 363, "grow reads {grown}, want 363");
+  assert(g_len == 9, "grow left {g_len} elements, want 9");
+
+  s4: vector<integer> = [10, 20, 30, 40];
+  // 10, then 30 (0 was dropped), then absent twice: 10+30-1-1.
+  shrunk = shrink_while_reading(s4);
+  s4_len = len(s4);
+  assert(shrunk == 38, "shrink reads {shrunk}, want 38");
+  assert(s4_len == 0, "shrink left {s4_len} elements, want 0");
+
+  r: vector<integer> = [10, 20, 30];
+  other: vector<integer> = [7, 8, 9];
+  // 10 from the original, then 8 and 9 from the one it was rebound to.
+  rebound = rebind_while_reading(r, other);
+  assert(rebound == 27, "rebind reads {rebound}, want 27");
+
+  k: vector<integer> = [10, 20, 30];
+  deep = callee_grows_it(k);
+  k_len = len(k);
+  assert(deep == 261, "callee-grow reads {deep}, want 261");
+  assert(k_len == 8, "callee-grow left {k_len} elements, want 8");
+
+  n: vector<integer> = [10, 20, 30];
+  nested = inner_loop_grows_it(n);
+  n_len = len(n);
+  assert(nested == 60, "inner-grow reads {nested}, want 60");
+  assert(n_len == 6, "inner-grow left {n_len} elements, want 6");
+
+  println("ok");
+}

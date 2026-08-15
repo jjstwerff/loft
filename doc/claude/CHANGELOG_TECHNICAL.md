@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A loop that writes no store reads its vectors through one derived header (loft#885, 2026-08-15)
+
+`v[i]` re-derives three facts per element on `--native`: which store holds the vector, which
+record its elements live in, and how long it is. All three are loop-invariant in a loop that
+writes no store, and `rustc` cannot lift any of them — every store load is guarded
+(`if rec != 0 && valid(..)`) and LLVM will not speculate a conditional load out of a loop.
+So the emitter lifts them: `let __vh_N = vector::vec_header(…)` lands before the loop and each
+read becomes a bounds test plus address arithmetic. **~2× on the issue's kernel**, taking
+`vector<single>` indexed reads from ~15× hand-written Rust to ~6.5×.
+
+Only an index in range for the hoisted length takes the fast path — a negative index, an
+out-of-range one, `i64::MIN`, a null or an empty vector all fall back into `get_vector` /
+`vec_get_or_raise_runtime`, so those answers and the `IndexOutOfBounds` / `NegativeIndex`
+raise keep one definition. The interpreter is untouched.
+
+The gate (`src/generation/hoist.rs`) is an **allow-list**, deliberately: PERFORMANCE.md
+§ Design: P8 catalogues five hand-maintained deny-lists of "which op mutates" that have
+already drifted, and an omission in one of those would be a silent wrong read. Here an op
+missing from the list costs the optimisation instead. An op qualifies by being named as a
+reader/constant, or by declaring at least one parameter with **every parameter a plain
+runtime scalar** — where `const` disqualifies, because a `const` parameter is a slot number
+or type id, and that is the channel `OpDatabase`, `OpCoroutineNext` and `OpFreeText` reach
+state through despite scalar signatures. The walk follows calls, so `for i in 0..len(v)`
+still hoists; `CallRef`, `par` and `yield` decline.
+
+Two switches, both read at generation time: `LOFT_HOIST_VERIFY=1` emits the checking form of
+every hoisted read (re-derives the header, panics on a mismatch) and `LOFT_NO_VECTOR_HOIST=1`
+emits the pre-885 form. Guards: `tests/hoist_gate.rs`, `tests/scripts/885-vector-hoist.loft`.
+
 ### A `τ?` struct field is representable as absent (loft#896, 2026-08-14)
 
 A field declared `maybe: Inner?` was stored as a dense `Inner`, byte-identical to a

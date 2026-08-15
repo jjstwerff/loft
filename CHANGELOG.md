@@ -98,6 +98,28 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### Reading a vector in a loop is about twice as fast
+
+`v[i]` has to work out three things before it can read anything: which store the vector
+lives in, which record holds its elements, and how long it is. In a loop that only *reads*,
+none of those can change — but every one of them was worked out again for every single
+element, and the Rust compiler could not lift them out for us.
+
+Now the compiled backend works them out once, before the loop:
+
+```loft
+for j in 0..n {
+  ax = qx - (sx[j] ?? 0.0f);      // ~19 ns per iteration before
+  ay = qy - (sy[j] ?? 0.0f);      // ~8.5 ns after
+  az = qz - (sz[j] ?? 0.0f);
+}
+```
+
+Nothing to change in your code, and nothing to be careful about: the moment anything in the
+loop can write to a collection — appending, removing, clearing, assigning, or calling
+something that does — the loop goes back to working it out per element, because then it
+genuinely can change. The interpreter is unaffected.
+
 ### Filling a vector is as fast written the obvious way
 
 `[for _ in 0..n { -1 }]` — a vector of `n` copies of one value — ran the full

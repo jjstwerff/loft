@@ -394,3 +394,14 @@ caller — one probe inverted from `100 % app_bit` to `99.5 % lib_grind` under
 `LOFT_NO_NATIVE_LIBS=1`. The report says so whenever a library was called.
 Prefer `make profile`, which picks the instrument. Off costs nothing (the
 sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.
+
+**Vector-header hoist (loft#885, `--native` only, both switches read at GENERATION time):**
+a loop the emitter proves writes NO store derives each vector's `(store_nr, record, length)`
+once before the loop, so an element read is a bounds test plus address arithmetic (~2×).
+The gate (`src/generation/hoist.rs`) is an ALLOW-list on purpose — an op missing from it
+costs the optimisation, never correctness, which is the opposite of the five drifted
+mutation deny-lists in PERFORMANCE.md § Design: P8. **`LOFT_HOIST_VERIFY=1`** emits the
+checking form of every hoisted read (re-derives the header, panics on a stale one) — run the
+suite under it after touching the gate; **`LOFT_NO_VECTOR_HOIST=1`** emits the pre-885 form,
+which is the before-half of an A/B on one binary and the first bisect step for a
+native-only wrong answer in a vector loop. PERFORMANCE.md § Design: P2, NATIVE.md.
