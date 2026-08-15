@@ -1574,15 +1574,14 @@ pub fn max_ops() -> u64 {
         let Ok(v) = std::env::var("LOFT_MAX_OPS") else {
             return DEFAULT_MAX_OPS;
         };
-        match v.trim().parse::<u64>() {
-            Ok(n) => n,
-            Err(_) => {
-                eprintln!(
-                    "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
-                     keeping the default {DEFAULT_MAX_OPS}"
-                );
-                DEFAULT_MAX_OPS
-            }
+        if let Ok(n) = v.trim().parse::<u64>() {
+            n
+        } else {
+            eprintln!(
+                "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
+                 keeping the default {DEFAULT_MAX_OPS}"
+            );
+            DEFAULT_MAX_OPS
         }
     })
 }
