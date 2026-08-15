@@ -6302,6 +6302,13 @@ fn main() {
     // loft would write is never used and its shim's surface is not the relevant one.
     let mut html_host_provided = false;
     let mut tests_dir: Option<String> = None;
+    // loft#925 — whether `tests_dir` came from the `loft test` SUBCOMMAND, and
+    // whether that subcommand was given a target of its own.  A target written
+    // after a flag (`loft test --lib src tests/t1.loft`) is not a leading
+    // positional, so it lands in `file_name` and the run falls back to the whole
+    // `tests/` directory; these two say which case a leftover positional is.
+    let mut test_subcommand = false;
+    let mut test_target_given = false;
     // Plan-08 phase 01: --introspect mode collects per-section
     // selectors, output paths, and filters into one Options bundle.
     // The flag itself only toggles the mode; sub-flags accumulate
@@ -6776,8 +6783,10 @@ fn main() {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
             let mut test_target = TESTS_DIR.to_string();
+            test_subcommand = true;
             if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                 test_target = resolve_test_target(&argv[i]);
+                test_target_given = true;
                 i += 1;
                 // loft#916 — everything after the first target used to be dropped in
                 // silence: `loft test good.loft alsogood.loft` ran the first, printed
@@ -7742,6 +7751,33 @@ fn main() {
     if let Some(path_opt) = generate_log_config {
         handle_generate_log_config(path_opt.as_deref());
         return;
+    }
+
+    // loft#925 — a target written AFTER a flag is still the target.
+    //
+    // `loft test`'s own parse takes only a LEADING positional, so
+    // `loft test --lib src tests/t1.loft` left the target at its `tests/` default
+    // and the path fell through to `file_name` — which the `--tests` dispatch below
+    // never reads.  The whole suite ran, and reported `21 passed; 21 files` for a
+    // run that had been asked for ONE.  That is loft#916's failure mode exactly (a
+    // green over a scope nobody asked for), surviving in the ordering its fix did
+    // not cover, and it is what stopped loft#925's reporter cutting a standalone
+    // repro: every invocation they tried ran everything.
+    //
+    // A leftover positional is therefore adopted as the target when none was given,
+    // and refused when one was — the same either/or the leading-positional check
+    // makes, so the two orderings cannot disagree about what two targets mean.
+    if test_subcommand && !file_name.is_empty() {
+        if test_target_given {
+            eprintln!(
+                "loft test: one target per run, but two were given (`{}`, `{file_name}`).\n\
+                 Run them one at a time, or name a directory to run everything under it.",
+                tests_dir.as_deref().unwrap_or(TESTS_DIR)
+            );
+            std::process::exit(1);
+        }
+        tests_dir = Some(resolve_test_target(&file_name));
+        file_name.clear();
     }
 
     // Handle --tests before requiring an input file

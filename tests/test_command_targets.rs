@@ -145,3 +145,82 @@ fn one_target_still_works_in_every_spelling() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// loft#925 — a target written AFTER a flag is the target, not a dropped argument.
+///
+/// `loft test` reads only a LEADING positional, so `loft test --lib src good.loft`
+/// left the target at its `tests/` default and the path fell through to the
+/// script-file slot, which the `--tests` dispatch never reads. Both files ran and
+/// the run reported on both — a green (or a red) over a scope nobody asked for,
+/// which is loft#916's failure mode surviving in the ordering its fix did not
+/// reach. It is also what stopped loft#925's reporter cutting a standalone repro:
+/// every invocation they tried ran the whole suite.
+///
+/// The failing file is the oracle. If the named target were still being dropped,
+/// `--lib` + `good.loft` would run `alsogood.loft` too and exit non-zero — so this
+/// row cannot pass by accident.
+#[test]
+fn a_target_after_a_flag_is_the_target() {
+    let root = fixture("afterflag");
+
+    let (code, out) = run(&root, &["test", "--no-warnings", "good.loft"]);
+    assert_eq!(
+        code, 0,
+        "a target after a flag must run only that file:\n{out}"
+    );
+    assert!(
+        out.contains("1 file"),
+        "and the run must be scoped to it, not to the directory:\n{out}"
+    );
+    assert!(
+        !out.contains("THIS TEST FAILS ON PURPOSE"),
+        "the file that was NOT named must not run:\n{out}"
+    );
+
+    // The same ordering with a flag that TAKES A VALUE: `--lib`'s value is a bare
+    // token, so a rule that adopted any trailing positional would swallow it and
+    // treat the directory as the test target.
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    let (code, out) = run(
+        &root,
+        &["test", "--lib", src.to_str().unwrap(), "good.loft"],
+    );
+    assert_eq!(
+        code, 0,
+        "a flag with a value must not eat the target:\n{out}"
+    );
+    assert!(
+        out.contains("1 file"),
+        "and the target after it still scopes the run:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Two targets split by a flag are two targets. The leading-positional check could
+/// not see this pair at all, so it is the ordering where a dropped file was silent
+/// even after loft#916 — and the refusal must name BOTH, exactly as the adjacent
+/// spelling does.
+#[test]
+fn two_targets_separated_by_a_flag_are_refused() {
+    let root = fixture("split");
+    let (code, out) = run(
+        &root,
+        &["test", "good.loft", "--no-warnings", "alsogood.loft"],
+    );
+    assert_ne!(code, 0, "two targets must not exit 0:\n{out}");
+    assert!(
+        out.contains("one target per run"),
+        "the refusal must say what is wrong:\n{out}"
+    );
+    assert!(
+        out.contains("good.loft") && out.contains("alsogood.loft"),
+        "both targets must be named:\n{out}"
+    );
+    assert!(
+        !out.contains("test result: ok."),
+        "no green may be printed for a run that did not happen:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
