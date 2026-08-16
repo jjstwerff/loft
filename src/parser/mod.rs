@@ -1552,6 +1552,56 @@ impl Parser {
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
         }
+        self.parse_main(filename, None, default)
+    }
+
+    /// loft#925 — parse `content` through the whole-program path of
+    /// [`parse`](Self::parse), as if it were the file at `filename`.
+    ///
+    /// Everything else is identical: `filename` decides the source directory,
+    /// the owning package, and therefore how a `use` inside `content` resolves.
+    /// The file itself is never read and need not exist.
+    ///
+    /// This is not [`parse_source`](Self::parse_source), which is the REPL /
+    /// `--script` entry and skips the between-pass promotions a program parse
+    /// runs (`reserve_late_return_buffers` and the rest) — a base parsed that
+    /// way would hand its libraries on in a state no ordinary parse produces.
+    pub fn parse_as(&mut self, filename: &str, content: &str, default: bool) -> bool {
+        self.parse_main(filename, Some(content), default)
+    }
+
+    /// loft#925 — start this parser from `base`, an already-completed parse of
+    /// the stdlib plus a set of libraries, so the program parsed next binds
+    /// those libraries instead of loading them again.
+    ///
+    /// What travels is what a `use` of an already-loaded library would otherwise
+    /// have produced: the definitions and the database schema (the pair a warm
+    /// stdlib load restores), the file each short name was loaded from — which
+    /// is what lets a module-name clash still be reported as a clash — and the
+    /// native / placed-library registrations a manifest read queued.  Everything
+    /// else is per-program and is left at its fresh value, `own_lib` and
+    /// `database.source_dir` among them, so the program's own file still decides
+    /// them.
+    ///
+    /// The parse-time side maps (`complexity`, `field_read_counts`, the sandbox
+    /// designations) deliberately do NOT travel: they drive diagnostics that the
+    /// base parse has already emitted, and copying them would emit each one a
+    /// second time.  The caller carries the base's diagnostics instead.
+    pub fn seed_from(&mut self, base: &Parser) {
+        self.data = base.data.clone();
+        self.data.freeze_uses();
+        self.database.install_schema(base.database.types.clone());
+        self.use_paths.clone_from(&base.use_paths);
+        self.pending_native_libs
+            .clone_from(&base.pending_native_libs);
+        self.native_lib_regs.clone_from(&base.native_lib_regs);
+        self.pending_native_compile
+            .clone_from(&base.pending_native_compile);
+        self.pending_placed_libs
+            .clone_from(&base.pending_placed_libs);
+    }
+
+    fn parse_main(&mut self, filename: &str, content: Option<&str>, default: bool) -> bool {
         // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
@@ -1591,7 +1641,7 @@ impl Parser {
                 .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
         }
         self.vars.logging = false;
-        self.lexer.switch(filename);
+        Self::load_main_file(&mut self.lexer, filename, content);
         self.first_pass = true;
         self.pending_imports.clear();
         self.applied_imports.clear();
@@ -1680,7 +1730,7 @@ impl Parser {
             }
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
-            self.lexer.switch(filename);
+            Self::load_main_file(&mut self.lexer, filename, content);
             self.parse_file();
             self.resolve_deferred_unknowns();
             // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
@@ -1717,6 +1767,16 @@ impl Parser {
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// Point the lexer at the parse's own entry — the file at `filename`, or
+    /// `content` claiming to be that file.  Both passes go through here, so a
+    /// caller supplying content gets it on both.
+    fn load_main_file(lexer: &mut Lexer, filename: &str, content: Option<&str>) {
+        match content {
+            Some(text) => lexer.parse_string(text, filename),
+            None => lexer.switch(filename),
+        }
     }
 
     /// H5 (two-pass name-stability contract): assert pass 2 reproduced pass 1's

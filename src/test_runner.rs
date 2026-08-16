@@ -108,6 +108,181 @@ fn coverage_path(src: &str, test_file: &str, root: Option<&std::path::Path>) -> 
     Some(crate::portable_path::portable(rel))
 }
 
+/// loft#925 — what is known about one group of test files: those that open with
+/// exactly the same `use` region and search the same library path.
+enum BaseSlot {
+    /// Exactly one file has asked so far, and it parsed for itself.  A base is
+    /// only worth building once a second file wants the same libraries.
+    Once,
+    /// The group's shared parse, or `None` when it could not be built.
+    ///
+    /// Boxed because a `TestBase` owns a whole `Parser`, and this enum sits in a
+    /// map with one entry per group — most of them `Once`.
+    Shared(Option<Box<TestBase>>),
+}
+
+/// loft#925 — a completed parse of the stdlib plus one group's libraries,
+/// shared by every test file that opens with exactly that `use` region.
+struct TestBase {
+    parser: Parser,
+    /// Definition count after the stdlib and before the libraries — the boundary
+    /// a per-file parse would have captured for itself, recorded here because a
+    /// seeded file never loads the stdlib on its own.
+    stdlib_defs: u32,
+    /// What the library parse reported.  The per-file parse no longer sees the
+    /// library sources, so these are carried forward and reported against every
+    /// file in the group — which is where they appeared before.
+    diagnostics: Vec<String>,
+}
+
+/// loft#925 — the leading `use` region of a test file, verbatim, or `None` when
+/// this file has to be parsed the ordinary way.
+///
+/// Verbatim rather than interpreted: the text collected here becomes the base's
+/// whole source, so the parser is the one deciding what those lines mean, and a
+/// group key of the same text is a group whose libraries are the same set by
+/// construction.  Re-deriving the meaning here would be a second answer to a
+/// question the parser already answers.
+///
+/// A leading file directive (`#cwd`) is part of the region rather than a reason
+/// to give up.  It has to be — every one of the 81 test files in the consumer
+/// that reported this opens with one, so refusing it would have made the whole
+/// change do nothing for the case that motivated it.  Carrying it VERBATIM is
+/// also what keeps the "let the parser decide" rule: whatever a directive means,
+/// the base means the same, where deciding here that `#cwd` cannot matter would
+/// be a judgement to re-check every time a directive is added.  A directive the
+/// parser rejects makes the base error out, and an erroring base is refused.
+///
+/// `None` for everything not plainly an optional directive followed by complete
+/// `use` statements — a `use` sharing its line with code, an unterminated
+/// statement, a directive after a `use`, or no `use` at all.  A file with no
+/// `use` may still load libraries through the auto-`use` pre-scan, which fires
+/// only when a file writes none, so that is not an empty group: it is a file
+/// that must parse for itself.
+fn leading_use_region(source: &str) -> Option<String> {
+    let mut region = String::new();
+    let mut pending = String::new();
+    let mut saw_use = false;
+    for raw in source.lines() {
+        let line = raw.trim();
+        if !pending.is_empty() {
+            // Continuation of a `use` that has not reached its `;` yet.
+        } else if line.is_empty() || line.starts_with("//") {
+            continue;
+        } else if line.starts_with('#') {
+            // The parser reads the directive at the very top of the file, before
+            // anything else, so anywhere else it is not one.
+            if saw_use || !region.is_empty() {
+                return None;
+            }
+            region.push_str(line);
+            region.push('\n');
+            continue;
+        } else if !(line == "use" || line.starts_with("use ") || line.starts_with("use\t")) {
+            break; // first definition — the use region ends here
+        }
+        if !pending.is_empty() {
+            pending.push(' ');
+        }
+        pending.push_str(line);
+        let Some(end) = pending.find(';') else {
+            continue; // keep reading: `use lib::(a,\n b);`
+        };
+        // Nothing but a comment may follow the `;` — otherwise the line holds
+        // code the base must not contain.
+        let tail = pending[end + 1..].trim();
+        if !tail.is_empty() && !tail.starts_with("//") {
+            return None;
+        }
+        region.push_str(&pending[..=end]);
+        region.push('\n');
+        pending.clear();
+        saw_use = true;
+    }
+    if !pending.is_empty() {
+        return None; // ran out of file mid-statement
+    }
+    saw_use.then_some(region)
+}
+
+/// loft#925 — parse `use_region` on its own, so the libraries it names are
+/// parsed once for the whole group instead of once per test file.
+///
+/// `base_file` is a path in the test files' own directory that is never read:
+/// it is what decides the source directory and the owning package, and both
+/// must be the ones a test file beside it would get.
+///
+/// `None` — parse the group's files the ordinary way — whenever the base cannot
+/// stand in for that: no stdlib, a panic, or any error-level diagnostic.  An
+/// error belongs to the file the reader is being shown, so it is left to be
+/// re-emitted by that file's own parse rather than replayed out of a base.
+fn build_test_base(
+    default_dir: &str,
+    lib_dirs: &[String],
+    base_file: &str,
+    use_region: &str,
+) -> Option<Box<TestBase>> {
+    let built = build_test_base_inner(default_dir, lib_dirs, base_file, use_region);
+    // `LOFT_TEST_BASE_REPORT=1` — say whether the sharing engaged, and for which
+    // libraries.  Off by default and on stderr: a run has nothing to report here,
+    // and a suite that got slower is the only reason to ask.  It is also what
+    // keeps the equivalence guard honest — a sharing that quietly stopped
+    // happening would leave that guard passing against itself.
+    if std::env::var("LOFT_TEST_BASE_REPORT").is_ok_and(|v| v == "1" || v == "true") {
+        let libs = use_region.replace('\n', " ");
+        let libs = libs.trim();
+        if built.is_some() {
+            eprintln!("loft: test base shared — {libs}");
+        } else {
+            eprintln!("loft: test base refused — {libs}");
+        }
+    }
+    built
+}
+
+fn build_test_base_inner(
+    default_dir: &str,
+    lib_dirs: &[String],
+    base_file: &str,
+    use_region: &str,
+) -> Option<Box<TestBase>> {
+    let mut p = Parser::new();
+    p.lib_dirs = lib_dirs.to_vec();
+    let stdlib_dir = default_dir.to_string() + "default";
+    if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir)
+        && p.parse_dir(&stdlib_dir, true, false).is_err()
+    {
+        return None;
+    }
+    let stdlib_defs = p.data.definitions();
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        p.parse_as(base_file, use_region, false);
+    }));
+    if parsed.is_err() {
+        return None;
+    }
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
+        return None;
+    }
+    // Only what the LIBRARY SOURCES said travels.  A diagnostic positioned at the
+    // base file is one about the use region itself — a module-name clash, say —
+    // and every file in the group writes that same region and re-emits it at its
+    // own line.  Carrying it too would print it twice, the second time against a
+    // file name that exists nowhere.
+    let diagnostics = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.file != base_file)
+        .map(loft::diagnostics::DiagEntry::to_string_compact)
+        .collect();
+    Some(Box::new(TestBase {
+        parser: p,
+        stdlib_defs,
+        diagnostics,
+    }))
+}
+
 fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
     if program_relative
         && !source_dir.is_empty()
@@ -169,16 +344,22 @@ pub(crate) fn run_tests(
         /// File-level `@EXPECT_ERROR` substrings — every one must match an error.
         expect_errors: Vec<String>,
         /// Per-function `@EXPECT_ERROR`: `fn_name` → required substrings.
-        expect_errors_fn: std::collections::HashMap<String, Vec<String>>,
+        ///
+        /// Ordered, like the two maps below it, because the run REPORTS the
+        /// function names it satisfied — and a hash map's iteration order is
+        /// randomised per process, so the same green run printed its list in a
+        /// different order every time.  A report a reader diffs across runs has
+        /// to be stable.
+        expect_errors_fn: std::collections::BTreeMap<String, Vec<String>>,
         /// File-level `@EXPECT_WARNING` substrings — all must appear in warnings.
         expect_warnings: Vec<String>,
         /// Per-function `@EXPECT_WARNING`: `fn_name` → required substrings.
-        expect_warnings_fn: std::collections::HashMap<String, Vec<String>>,
+        expect_warnings_fn: std::collections::BTreeMap<String, Vec<String>>,
         /// File-level `@EXPECT_FAIL` substrings — every function is expected to
         /// panic with a message containing one of these.
         expect_fail_file: Vec<String>,
         /// Per-function `@EXPECT_FAIL`: `fn_name` → required substrings.
-        expect_fail_fn: std::collections::HashMap<String, Vec<String>>,
+        expect_fail_fn: std::collections::BTreeMap<String, Vec<String>>,
         /// Extra --lib dirs from @ARGS.
         extra_lib_dirs: Vec<String>,
         /// --project from @ARGS.
@@ -551,9 +732,33 @@ pub(crate) fn run_tests(
     // the per-test `catch_unwind` closure.
     let profile = std::cell::RefCell::new(loft::profiler::Totals::default());
 
+    // loft#925 — the library parse, shared across the test files that ask for
+    // exactly the same libraries.
+    //
+    // A suite builds one parser per test file, and the `use`d library was loaded
+    // into each of them from source — twice over, since both parse passes re-run
+    // the use region.  That cost is proportional to the library and paid once per
+    // file, so a suite pays the PRODUCT of its size and its library's: dryopea's
+    // 67 files spent ~31 s of a ~145 s run re-compiling one unchanged library.
+    //
+    // Keyed on (directory, lib search path, use region) — every input the library
+    // parse reads — so a file only ever starts from a base holding the libraries
+    // it actually named.  A base carrying MORE than that would resolve names the
+    // file cannot see, which is a silently wrong compile, not a slow one.
+    //
+    // `Shared(None)` records a group whose base could not be built; those files parse
+    // the ordinary way, so a refusal costs speed and nothing else.  `LOFT_NO_TEST_BASE=1`
+    // refuses every group — the opt-out half of an A/B on one binary.
+    let no_base = std::env::var("LOFT_NO_TEST_BASE").is_ok_and(|v| v == "1" || v == "true");
+
     for (dir_path, files) in &dirs {
         let mut dir_pass = 0u32;
         let mut dir_fail = 0u32;
+        // Per DIRECTORY, and dropped with it.  A base holds a whole parsed program,
+        // and it could never have been reused across directories anyway: the base
+        // file has to sit beside the test files, because that is what decides the
+        // source directory and the owning package a `use` resolves against.
+        let mut bases: BTreeMap<(Vec<String>, String), BaseSlot> = BTreeMap::new();
 
         for file_path in files {
             let abs_file = file_path
@@ -605,9 +810,53 @@ pub(crate) fn run_tests(
             // the same silence-reads-as-coverage shape as the backend scope below.
             // Designation must be set BEFORE parsing: `def_sandbox` forms during the
             // parse, and admission reads what the parse recorded.
-            if let Some(policy) = sandbox_policy_for(&abs_file) {
+            let sandboxed = if let Some(policy) = sandbox_policy_for(&abs_file) {
                 sandbox_policy_seen = true;
                 p.set_sandbox_config(policy);
+                true
+            } else {
+                false
+            };
+            // loft#925 — start from the group's shared parse of stdlib + libraries
+            // when there is one.  Skipped under a `[sandbox]` policy: admission reads
+            // what the PARSE recorded about designated functions, and those side maps
+            // belong to the parse that produced them, so a shared base would quietly
+            // stop checking the library — the one failure mode worse than the 31 s.
+            let mut base_diagnostics: Vec<String> = Vec::new();
+            let mut seeded: Option<u32> = None;
+            if !no_base
+                && !sandboxed
+                && let Some(region) = leading_use_region(&source)
+            {
+                let key = (p.lib_dirs.clone(), region);
+                match bases.entry(key) {
+                    // First file with this use region: parse it the ordinary way.
+                    // A base only pays off when it is shared, and building one here
+                    // would DOUBLE the cost of `loft test <one-file>` — the tight
+                    // inner loop of development, and a group of one by definition.
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(BaseSlot::Once);
+                    }
+                    // A second file wants the same libraries, so the parse is worth
+                    // sharing: build it now and hand it to this file and every later
+                    // one.  The group pays one ordinary parse plus one base.
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if matches!(slot.get(), BaseSlot::Once) {
+                            let base_file = std::path::Path::new(&abs_file)
+                                .with_file_name("__loft_test_base.loft")
+                                .to_string_lossy()
+                                .into_owned();
+                            let (libs, region) = slot.key();
+                            let built = build_test_base(default_dir, libs, &base_file, region);
+                            slot.insert(BaseSlot::Shared(built));
+                        }
+                        if let BaseSlot::Shared(Some(base)) = slot.get() {
+                            p.seed_from(&base.parser);
+                            base_diagnostics.clone_from(&base.diagnostics);
+                            seeded = Some(base.stdlib_defs);
+                        }
+                    }
+                }
             }
             // loft#925 — warm-load the stdlib instead of re-parsing `default/` for
             // every test file.  A suite builds ONE parser per file (each test file is
@@ -618,17 +867,31 @@ pub(crate) fn run_tests(
             // stdlib directory, so this reuses a cache the run has usually warmed
             // already rather than adding one.  A miss falls through to the cold parse
             // exactly as before.
-            let stdlib_dir = default_dir.to_string() + "default";
-            if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir) {
-                if p.parse_dir(&stdlib_dir, true, false).is_err() {
-                    println!("  FAIL  {display_name}  (cannot load default library)");
-                    dir_fail += 1;
-                    total_files += 1;
-                    continue;
+            //
+            // A seeded file skips it outright: the base holds the same stdlib, so
+            // loading the bundle here would decode it only to have `seed_from`
+            // discard it — which is most of what a seeded file still paid.
+            let start_def = if let Some(stdlib_defs) = seeded {
+                stdlib_defs
+            } else {
+                let stdlib_dir = default_dir.to_string() + "default";
+                if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir) {
+                    if p.parse_dir(&stdlib_dir, true, false).is_err() {
+                        println!("  FAIL  {display_name}  (cannot load default library)");
+                        dir_fail += 1;
+                        total_files += 1;
+                        continue;
+                    }
+                    loft::startup_cache::save_stdlib_cache(&p, &stdlib_dir);
                 }
-                loft::startup_cache::save_stdlib_cache(&p, &stdlib_dir);
-            }
-            let start_def = p.data.definitions();
+                // The stdlib boundary.  Everything past it belongs to the program
+                // under test: the native codegen range below emits it, and the
+                // coverage tally counts it.  A library the test file `use`s is part
+                // of that program however it got here, so a base must not move this
+                // line — which is why a seeded file takes the boundary the BASE
+                // recorded before its own libraries went in.
+                p.data.definitions()
+            };
             let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 p.parse(&abs_file, false);
             }));
@@ -659,7 +922,9 @@ pub(crate) fn run_tests(
             // giving a diagnostic its stable identity silently turned it into a build
             // break.  Anything unrecognised still counts as an error: a diagnostic this
             // cannot classify must not be quietly dropped.
-            for line in p.diagnostics.lines() {
+            // The base's diagnostics first: they came from the library sources,
+            // which a cold parse read before it reached the test file.
+            for line in base_diagnostics.into_iter().chain(p.diagnostics.lines()) {
                 match loft::diagnostics::compact_level(&line) {
                     Some(loft::diagnostics::Level::Warning) => {
                         file_result.warnings.push(line.clone());

@@ -114,6 +114,27 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
 
+### `loft test` stops recompiling your library once per test file
+
+A suite of test files that all `use` the same library used to compile that library
+again for every one of them — twice for each, in fact, since the parser reads a file
+twice. Nothing was shared between the files, so the cost was the *product* of how many
+test files you have and how big your library is: a new module slowed down every test
+file, and a new test file re-paid for every module.
+
+```
+20 test files over a 25-module library     1.32 s  ->  0.43 s
+20 test files over a 50-module library     2.44 s  ->  0.81 s
+dryopea's real suite (81 files, 1161 tests)  238 s  ->   209 s
+```
+
+Test files that open with the same `use` lines now share one parse of those libraries.
+Nothing to change in your code, and nothing about what a run reports changes — each
+file is still compiled on its own, still sees only the libraries it named, and still
+raises exactly the diagnostics it did before. Running a *single* file is untouched:
+sharing needs a second file to share with, so `loft test one_file.loft` costs what it
+always did.
+
 ### Reading a vector in a loop is about twice as fast
 
 `v[i]` has to work out three things before it can read anything: which store the vector

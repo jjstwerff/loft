@@ -2007,6 +2007,32 @@ recursive walk.
 | `--native` | Compile to native Rust instead of interpreting (with `--tests`) |
 | `--no-warnings` | Suppress warning diagnostics in test output |
 
+### The shared library base (loft#925)
+
+Each test file is its own program with its own parser — a shared one would let one
+file's definitions leak into the next — so a `use`d library used to be loaded from
+source once per file, and twice at that, since both parse passes re-run the use
+region.  A suite therefore paid the PRODUCT of its file count and its library's
+size.
+
+Files are now grouped by their leading `use` region (a `#cwd` directive included,
+verbatim), the region is parsed once per group, and every file after the first
+starts from a copy of that parse.  dryopea's 81-file suite: 238 s → 209 s, output
+byte-identical.  See [PERFORMANCE.md](PERFORMANCE.md) for the numbers and the
+three decisions that carry the win.
+
+| Env var | Effect |
+|---|---|
+| `LOFT_NO_TEST_BASE=1` | Parse every file's libraries for itself, as before.  The control half of an A/B on ONE binary, and what `tests/test_base_equivalence.rs` compares against — a run whose output differs from it is a bug in the sharing. |
+| `LOFT_TEST_BASE_REPORT=1` | Name on stderr each `use` region that got a shared base, or was refused one.  Reach for it when a suite did not get faster; it is also what keeps the equivalence guard from silently comparing a run to itself. |
+
+A group of ONE file never builds a base — the base is built when a second file asks
+for the same region — so `loft test <one-file>` costs exactly what it did.  A base
+is also refused outright under a `[sandbox]` policy (admission reads what the parse
+recorded about designated functions) and whenever the region's own parse raises an
+error (the error belongs to the file the reader is shown, so it is left to that
+file's own parse to re-emit).
+
 ---
 
 ## Debug boundary checks (debug builds only)

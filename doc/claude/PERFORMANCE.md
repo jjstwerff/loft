@@ -3910,14 +3910,15 @@ directory that provably did not change between them.  `src/test_runner.rs` now a
 for reading that number: before the change, setting `LOFT_STDLIB_CACHE=1` on a
 `loft test` run did **nothing at all**, because the runner never called the API.
 
-What remains is the larger half of loft#925 and is NOT this cache: a `use`d LIBRARY
-is still compiled once per test file.  That needs a per-invocation compiled-library
-cache, which the per-file parser isolation makes a design question rather than a
-wiring one.
+### The shared library base (loft#925)
 
-**Measured, on a standalone synthetic** (best of 3, idle box; the generator is on
-loft#925).  A package of M modules behind an aggregator, N test files that all
-`use` it, beside a control package whose N test files `use` nothing:
+The larger half was NOT that cache: a `use`d LIBRARY was loaded from source once
+per test file — *twice* per file, because both parse passes re-run the use region,
+`Data::reset` having cleared the loaded-library map between them.
+
+**Measured before the fix** (best of 3, idle box; the generator is on loft#925).  A
+package of M modules behind an aggregator, N test files that all `use` it, beside a
+control package whose N test files `use` nothing:
 
 | N (M = 25) | `use` | control |   | M (N = 20) | per file |
 |---|---|---|---|---|---|
@@ -3927,23 +3928,61 @@ loft#925).  A package of M modules behind an aggregator, N test files that all
 | 20 | 1.36 s | 0.45 s |   | | |
 
 Dead linear in N with **zero amortization** — marginal 0.068 s/file against the
-control's 0.022 s/file — and the per-file cost is proportional to library size, so a
-suite pays the **product** of the two.  That is what makes it superlinear in project
-growth: a new module slows every test file, a new test file re-pays for every module.
+control's 0.022 s/file — and the per-file cost proportional to library size, so a
+suite paid the **product** of the two.  That is what made it superlinear in project
+growth: a new module slowed every test file, a new test file re-paid for every module.
+
+**What it does now.**  Files are grouped by their leading `use` region *verbatim* —
+the text, not an interpretation of it, so the parser stays the authority on what
+those lines mean and a shared key is a shared library set by construction.  The
+second file of a group triggers one parse of that region alone (`Parser::parse_as`,
+the whole-program path fed a string instead of a file), and every file in the group
+then starts from a copy of it: `Data` cloned, the schema re-installed, plus the
+`use`-path and native-registration state a `use` would have produced.  `Data`
+carries a `preloaded_uses` map that `reset` re-seeds, which is the one mechanism
+that makes a `use` of an already-loaded library a no-op instead of a file read.
+
+**After** (same box, same generator):
+
+| N (M = 25) | before | after |   | M (N = 20) | before | after |
+|---|---|---|---|---|---|---|
+| 1 | 0.07 s | 0.06 s |   | 10 modules | 0.80 s | 0.23 s |
+| 20 | 1.32 s | 0.43 s |   | 25 modules | 1.32 s | 0.43 s |
+| 40 | 2.68 s | 0.74 s |   | 50 modules | 2.44 s | 0.81 s |
+
+The marginal per-file cost drops from 0.068 s to 0.0155 s and stops tracking the
+library — 3.0× at 25 modules, 3.6× at 40 files.  On the consumer that reported it
+(dryopea: 81 test files, 1161 tests, one group) the suite went **238 s → 209 s**,
+i.e. the ~31 s the issue predicted, with byte-identical output.
+
+Three decisions are load-bearing and easy to undo by accident:
+
+- **A group of one gets no base.**  The base is built when a SECOND file asks for
+  the same region; before that the file parses exactly as it always did.  Building
+  eagerly doubled `loft test <one-file>` (0.07 s → 0.13 s) — the tight inner loop of
+  development, and a group of one by definition.
+- **A seeded file skips the stdlib warm load.**  The base already holds the stdlib,
+  so loading the bundle per file only decoded it for `seed_from` to discard —
+  that redundant decode was most of what a seeded file still paid (it is the
+  difference between the 3.0× above and the 1.5× without it).
+- **A leading `#cwd` is part of the region, not a reason to refuse one.**  All 81
+  of dryopea's test files open with it; a scanner that gave up there measured
+  perfectly on the synthetic and saved the reporting consumer nothing.
+
+`LOFT_NO_TEST_BASE=1` turns the sharing off — the control half of an A/B on one
+binary, and what the equivalence guard in `tests/test_base_equivalence.rs` compares
+against.  `LOFT_TEST_BASE_REPORT=1` says on stderr which regions got a shared base,
+which is how that guard knows it is not comparing a run to itself.
+
+Not covered, and still open: repeated `loft test <one-file>` invocations, which
+need a keyed on-disk bundle whose key covers every library source plus the resolved
+dependency graph (loft#930 is the reminder of what an incomplete key costs).
 
 Two things had made this un-reproducible outside the reporting consumer, both worth
 knowing when cutting a suite-shaped benchmark: `loft test` refuses multiple file
 arguments (loft#916 — the suite form is a DIRECTORY, which only became nameable when
 `resolve_test_target` stopped appending `.loft` to one), and a package needs
 `[library] entry = …` or its own `src/` is not a library its tests can `use`.
-
-The recommended shape is to group test files by their ordered `use` list — one group
-in every consumer that has hit this — build each group's base parser (stdlib + libs)
-once, and start each file from an **in-memory clone**.  That captures the whole win
-above and needs no invalidation story.  A keyed on-disk bundle would additionally
-help the `loft test <one-file>` inner loop, but its key must cover every library
-source plus the resolved dependency graph; loft#930 is the recent reminder of what an
-incomplete key costs.
 
 ### Invalidation
 

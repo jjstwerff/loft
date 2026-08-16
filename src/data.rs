@@ -3654,6 +3654,20 @@ pub struct Data {
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
     use_names: HashMap<String, u16>,
+    /// loft#925 — libraries already parsed into this `Data` before the program
+    /// parse begins, re-seeded into `use_names` by every [`reset`](Self::reset).
+    ///
+    /// A `use <lib>` loads the library's file only when `use_names` does not
+    /// already name it, and `reset` runs at the start of each parse AND between
+    /// the two passes — so ordinarily every pass re-parses every library from
+    /// disk.  A caller that has already parsed a set of libraries records them
+    /// here (see [`freeze_uses`](Self::freeze_uses)); their `use` then resolves
+    /// to the definitions that are already present and no file is read.
+    ///
+    /// Empty for every ordinary parse, which is what keeps this inert: only a
+    /// caller that deliberately seeded a base — `loft test`, sharing one library
+    /// parse across the test files that `use` exactly it — ever fills it.
+    preloaded_uses: HashMap<String, u16>,
     /// Every import that has been applied, so [`rebuild_indices`](Self::rebuild_indices)
     /// can replay it.
     ///
@@ -4006,6 +4020,7 @@ impl Data {
             lazy_drivers: LazyDriverCache::default(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
+            preloaded_uses: HashMap::new(),
             applied: Vec::new(),
             ambiguous: HashMap::new(),
             unknown_key_fields: Vec::new(),
@@ -4035,6 +4050,25 @@ impl Data {
         self.use_names.clear();
         self.source = STD_SOURCE;
         self.use_names.insert("std".to_string(), STD_SOURCE);
+        // loft#925 — a library parsed before this program's parse began stays
+        // named, so its `use` binds what is already here instead of reading the
+        // file again.  No-op unless a caller called `freeze_uses`.
+        for (lib, &src) in &self.preloaded_uses {
+            self.use_names.insert(lib.clone(), src);
+        }
+    }
+
+    /// loft#925 — declare every library currently loaded to be part of the
+    /// PRELOADED base, so the parses that follow reuse it instead of re-reading
+    /// its files.
+    ///
+    /// Called once, on a `Data` whose parse is complete, by a caller that will
+    /// hand copies of it to several program parses.  The libraries named here
+    /// must actually be present in `definitions`: this only stops the loader,
+    /// it does not supply anything.
+    pub fn freeze_uses(&mut self) {
+        self.preloaded_uses = self.use_names.clone();
+        self.preloaded_uses.remove("std"); // `reset` seeds it unconditionally
     }
 
     /// @PLN12 phase 02 — transactional rollback for the REPL statement parser.

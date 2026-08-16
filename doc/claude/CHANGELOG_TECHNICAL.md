@@ -9,6 +9,62 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `loft test` shares one library parse across the files that `use` it (loft#925, 2026-08-16)
+
+`run_tests` builds one `Parser` per test file, deliberately — a shared one would let one
+file's definitions leak into the next.  Each of those parsers loaded the `use`d library from
+source, and **twice**: `Parser::parse` runs two passes, `Data::reset` clears `use_names`
+between them, and an unnamed library is one `use` re-reads.  A suite therefore paid the
+PRODUCT of its file count and its library's size — measured at 0.068 s/file against a
+no-`use` control's 0.022 s/file, with the per-file cost proportional to the module count.
+
+Three pieces:
+
+- `Data::preloaded_uses` + `Data::freeze_uses`.  `reset` re-seeds `use_names` from it, so a
+  `use` of an already-parsed library takes the `use_exists` branch — a pending import against
+  definitions that are already present — instead of `switch_to_dep`.  This is the whole
+  mechanism; everything else is plumbing around it.  Empty for every ordinary parse.
+- `Parser::parse_as` — `parse` refactored so the entry can be a STRING claiming a filename,
+  the two `lexer.switch` sites going through one `load_main_file`.  Not `parse_source`, which
+  skips the between-pass promotions (`reserve_late_return_buffers` and friends): a base built
+  that way would hand its libraries on in a state no ordinary parse produces.
+- `Parser::seed_from` — `data` cloned, `database.install_schema`, plus `use_paths` and the
+  native/placed-library registrations a manifest read queued.  The parse-time side maps
+  (`complexity`, `field_read_counts`, the sandbox designations) deliberately do NOT travel:
+  they drive diagnostics the base already emitted, and copying them would emit each twice.
+  The runner carries the base's diagnostic LINES instead — minus the ones positioned at the
+  base file itself, which every group member re-emits from its own `use` line.
+
+`test_runner` groups files by `(directory, lib search path, leading use region)` — the region
+VERBATIM, so the parser stays the authority on what those lines mean and one key is one
+library set by construction.  The base is built when a SECOND file asks for it; a seeded file
+skips the stdlib warm load (the base holds it, and decoding the bundle only for `seed_from`
+to discard was most of what a seeded file still paid) and takes `start_def` from the base's
+recorded stdlib boundary, so the native codegen range and the coverage tally keep counting
+the library as part of the program under test.
+
+Refused, falling back to the ordinary parse: under a `[sandbox]` policy (admission reads what
+the parse recorded about designated functions), on a base parse that panics or errors, and on
+any region that is not plainly an optional `#cwd` plus complete `use` statements.  `#cwd` is
+IN the region rather than a reason to give up — all 81 of dryopea's test files open with one,
+so refusing it made the change measure perfectly on a synthetic and do nothing for the case
+that motivated it.
+
+Measured: 20 files / 25 modules 1.32 s → 0.43 s, 40 files 2.68 s → 0.74 s, 20 files / 50
+modules 2.44 s → 0.81 s; dryopea's 81-file, 1161-test suite 238 s → 209 s with byte-identical
+output.  `loft test <one-file>` unchanged (0.07 s → 0.06 s).
+
+`LOFT_NO_TEST_BASE=1` is the opt-out and `LOFT_TEST_BASE_REPORT=1` names the shared regions.
+`tests/test_base_equivalence.rs` compares a whole run against the opt-out over a package with
+four groups across two libraries — proved able to fail by dropping the carried diagnostics
+(turns `@EXPECT_WARNING` and `--deny-warnings` green) and by dropping the region from the key
+(a file resolves a library it never named).
+
+Also here: the per-function `@EXPECT_ERROR` / `@EXPECT_WARNING` / `@EXPECT_FAIL` maps are
+`BTreeMap`s.  They are iterated to REPORT the function names a file satisfied, and hash order
+is randomised per process, so the same green run printed that list in a different order every
+time — which makes a run's output undiffable, and this change is verified by diffing runs.
+
 ### `sizeof` and `type_name` answered null for an undeclared name (loft#933, 2026-08-15)
 
 Both intrinsics read their argument the same way: take the identifier, look it up, and — when
