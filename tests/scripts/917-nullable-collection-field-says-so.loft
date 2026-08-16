@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#917 — a `?` on a COLLECTION field is a promise the storage cannot keep, and until
+// the `Some` layout exists (shared with loft#938) the declaration is where that is
+// answerable.  The asserts below are the REASON the warning exists: each one states the
+// wrong answer the field actually gives, so if a later layout change makes `== null` work,
+// they fail and this file is the thing that says the warning can go.
+//
+// @EXPECT_WARNING: field `vec` is declared `?`
+// @EXPECT_WARNING: field `hsh` is declared `?`
+// @EXPECT_WARNING: field `srt` is declared `?`
+
+struct Row { k: integer, v: integer }
+
+// SUBJECT — every collection kind, all three warn.
+struct Holder {
+  vec: vector<integer>?,
+  hsh: hash<Row[k]>?,
+  srt: sorted<Row[k]>?,
+}
+
+// QUIET — a scalar `?` field and a struct `?` field read back as null correctly
+// (loft#896 fixed the struct half), so neither may warn.
+struct Fine {
+  txt: text?,
+  num: integer?,
+  inr: Row?,
+}
+
+// QUIET — the field is a plain vector whose ELEMENT is nullable.  The field itself is not
+// `Optional`, so `Vector(Optional(..))` must stay silent — loft#923's shape.
+struct Elems {
+  ve: vector<vector<integer>?>,
+}
+
+fn main() {
+  h = Holder { vec: null, hsh: null, srt: null };
+  // The wrong answers the warning is about: constructed with `null`, read back present.
+  assert(!(h.vec == null), "917: a vector field cannot read back as null");
+  assert(!(h.hsh == null), "917: a hash field cannot read back as null");
+  assert(!(h.srt == null), "917: a sorted field cannot read back as null");
+
+  // …and why `null` cannot simply be read off the stored zero: `[]` writes the SAME zero,
+  // so a fix that tested the record id would newly answer `[] == null` as true.
+  e = Holder { vec: [], hsh: null, srt: null };
+  assert(len(e.vec ?? []) == 0, "917: an empty vector field is the same zero as null");
+
+  // The documented workaround, which is what the fix line advertises.
+  assert(len(h.vec ?? []) == 0, "917: len() == 0 is the absence test that works");
+
+  f = Fine { txt: null, num: null, inr: null };
+  assert(f.txt == null, "917: a text field still reads back as null");
+  assert(f.num == null, "917: an integer field still reads back as null");
+  assert(f.inr == null, "917: a struct field still reads back as null (loft#896)");
+
+  n = Elems { ve: [] };
+  assert(len(n.ve) == 0, "917: a nullable ELEMENT is not a nullable field");
+
+  println("917 ok");
+}
