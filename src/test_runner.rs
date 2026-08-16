@@ -946,6 +946,15 @@ pub(crate) fn run_tests(
                 }
             }
 
+            // The two parser passes emit each diagnostic twice, so every warning and advice
+            // reached the reader doubled.  A line carries its own position, so two identical
+            // lines are the same finding said twice — never two findings (loft#948).
+            {
+                let mut seen = HashSet::new();
+                file_result.warnings.retain(|l| seen.insert(l.clone()));
+                let mut seen = HashSet::new();
+                file_result.advice.retain(|l| seen.insert(l.clone()));
+            }
             let has_fn_errors = !ann.expect_errors_fn.is_empty();
             let has_fn_warnings = !ann.expect_warnings_fn.is_empty();
             let all_warnings = file_result
@@ -1014,7 +1023,21 @@ pub(crate) fn run_tests(
                     println!("  {e}");
                 }
                 if !no_warnings {
-                    for w in &file_result.warnings {
+                    // ADVICE prints here too, chained exactly as the success path below
+                    // chains it.  Dropping it on the failure path silenced it in the one
+                    // case where it is worth most: a diagnostic that explains a build break
+                    // is only useful in the run that breaks (loft#948).
+                    //
+                    // `module-name-shadowed` is the case that was filed.  Two packages
+                    // sharing a module file name resolve to one file, so the loser's
+                    // functions are simply absent — reported as `Unknown function part_list`
+                    // at a line inside a DEPENDENCY the consumer never edited.  The advice
+                    // naming both files was produced all along and thrown away here, so the
+                    // output that reached the author named neither the collision nor the fix
+                    // (rename your own new file).  It printed only when the shadow happened
+                    // to resolve and the build survived — the case a reader can already work
+                    // out (loft#912's original diagnosis-by-elimination).
+                    for w in file_result.warnings.iter().chain(file_result.advice.iter()) {
                         println!("  {w}");
                     }
                 }

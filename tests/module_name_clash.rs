@@ -224,3 +224,145 @@ fn a_file_named_like_a_declared_dependency_is_not_a_clash() {
         diag.join("\n")
     );
 }
+
+/// loft#948 — the shadowing file declares something ELSE, so the collision BREAKS the build.
+///
+/// This is the case #912 was filed about and the only one a person cannot work out from the
+/// output: the errors name a line inside a DEPENDENCY the consumer never edited, the missing
+/// function is `pub`, the dependency is green on its own, and the cure — rename your own new
+/// file — follows from nothing printed.
+///
+/// The advice was produced all along; `loft test` collected it and dropped it on the failure
+/// path, printing only errors and warnings. So it appeared exactly when the build SURVIVED
+/// and vanished when it did not.
+///
+/// Driven through the BINARY rather than `Parser::parse`, and that is load-bearing: the
+/// shadowing file is never imported, so nothing reaches it by following `use` edges. It is
+/// loaded because building the package reads every file under `src/` — which is why the
+/// collision happens at all, and why this has to be tested at the `loft test` surface where
+/// the output was being dropped.
+#[test]
+fn the_clash_is_reported_even_when_it_breaks_the_build() {
+    let root = std::env::temp_dir().join(format!("loft_948_fatal_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dep = root.join("pkg_dep");
+    let top = root.join("pkg_top");
+    std::fs::create_dir_all(dep.join("src")).expect("mkdir dep");
+    std::fs::create_dir_all(top.join("src")).expect("mkdir top");
+    std::fs::create_dir_all(top.join("tests")).expect("mkdir tests");
+
+    std::fs::write(
+        dep.join("loft.toml"),
+        "[package]\nname = \"pkg_dep\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_dep.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/catalogue.loft"),
+        "pub fn part_list() -> integer { 41 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/pkg_dep.loft"),
+        "use catalogue::*;\npub fn dep_answer() -> integer { part_list() + 1 }\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        top.join("loft.toml"),
+        "[package]\nname = \"pkg_top\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_top.loft\"\n\n\
+         [dependencies]\npkg_dep = { path = \"../pkg_dep\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("src/pkg_top.loft"),
+        "use pkg_dep::*;\npub fn top_answer() -> integer { dep_answer() }\n",
+    )
+    .unwrap();
+    // Declares something else entirely and is imported by nobody, so the dependency's
+    // `part_list` simply goes missing.
+    std::fs::write(
+        top.join("src/catalogue.loft"),
+        "pub fn top_unrelated() -> text { \"x\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("tests/answer.loft"),
+        "use pkg_top::*;\nfn main() { assert(top_answer() == 42, \"answer\"); }\n",
+    )
+    .unwrap();
+
+    let mut bin = std::env::current_exe().expect("test binary path");
+    bin.pop();
+    if bin.ends_with("deps") {
+        bin.pop();
+    }
+    let out = std::process::Command::new(bin.join("loft"))
+        .arg("test")
+        .current_dir(&top)
+        .env("LOFT_TIMEOUT", "300")
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("invoke loft test");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("Unknown function part_list"),
+        "the scaffold no longer reproduces the collision at all:\n{all}"
+    );
+    assert!(
+        all.contains("module-name-shadowed"),
+        "the collision is unreported in exactly the case that is fatal — the reader gets \
+         `Unknown function` against a dependency's source and nothing naming the cause:\n{all}"
+    );
+    assert!(
+        all.contains("catalogue.loft") && all.contains("Rename one file"),
+        "the advice must name both files and the cure:\n{all}"
+    );
+}
+
+/// loft#948 — two files of ONE package are not this collision, so they must stay quiet.
+///
+/// `tests/<pkg>.loft` beside `src/<pkg>.loft` is an ordinary layout — two of this repo's own
+/// fixtures use it — and the `use` binds the one the author meant. The advice is about a name
+/// "shared across the whole dependency graph"; firing it where there is nothing to fix is how
+/// a diagnostic teaches people to skip the ones where there is.
+#[test]
+fn a_same_package_basename_collision_is_not_advised() {
+    let root = std::env::temp_dir().join(format!("loft_948_same_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("pkg_solo");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir src");
+    std::fs::create_dir_all(pkg.join("tests")).expect("mkdir tests");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"pkg_solo\"\nversion = \"0.1.0\"\nentry = \"src/pkg_solo.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/pkg_solo.loft"),
+        "pub fn solo_answer() -> integer { 42 }\n",
+    )
+    .unwrap();
+    // Named after its own package — the shape that used to draw a rename it must not draw.
+    std::fs::write(
+        pkg.join("tests/pkg_solo.loft"),
+        "use pkg_solo;\nfn main() { assert(solo_answer() == 42, \"solo\"); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("tests/pkg_solo.loft").to_string_lossy(), false);
+    let lines = p.diagnostics.lines().to_vec();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        !lines.iter().any(|l| l.contains("module-name-shadowed")),
+        "two files of ONE package drew a cross-package collision advice:\n{lines:#?}"
+    );
+}

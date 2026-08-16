@@ -9,6 +9,45 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The module-shadow advice reaches the run it explains (loft#948, 2026-08-17)
+
+`Advice[module-name-shadowed]` (loft#912) fired where the collision was HARMLESS and stayed
+silent where it broke the build — the one case a reader cannot diagnose from the output.
+
+Three findings, in the order they were established:
+
+**The advice was produced all along.** The measurement that settled it holds the shadowing
+file fixed and changes only whether the dependency CALLS the shadowed function:
+
+| dependency calls it? | build | advices printed |
+|---|---|---|
+| no | compiles | 4 |
+| yes | **errors** | **0** |
+
+So detection was never the problem. `test_runner.rs`'s parse-error branch printed
+`unexpected_errors` and `file_result.warnings` — and not `file_result.advice`, which the
+success path a few lines below chains in. A diagnostic that explains a build break is only
+useful in the run that breaks; it now prints on both paths.
+
+**The doubling was real.** Both parser passes emit each diagnostic, so every warning and
+advice reached the reader twice. A line carries its own position, so two identical lines are
+one finding said twice — deduped.
+
+**And one false positive had to go with it.** `tests/<pkg>.loft` beside `src/<pkg>.loft` drew
+a rename that fixes nothing: the `use` binds the file the author meant, and two of this repo's
+own fixtures use that layout. The advice is about a name *"shared across the whole dependency
+graph"*, so it is now suppressed when both files resolve to the same nearest `loft.toml`.
+Making a diagnostic prominent and leaving it firing where there is nothing to fix is how one
+teaches people to skip the cases where there is.
+
+Guards: `tests/module_name_clash.rs` gains the fatal case and the same-package control. The
+fatal one drives the BINARY rather than `Parser::parse`, and that is load-bearing — the
+shadowing file is imported by nobody, so nothing reaches it by following `use` edges. It is
+loaded because building the package reads every file under `src/`, which is both why the
+collision happens and why it has to be tested at the `loft test` surface where the output was
+dropped.
+
+
 ### A nullable collection return can have a return buffer — opt-in (loft#938, 2026-08-17)
 
 **`LOFT_NULLABLE_RETBUF=1`, OFF by default.** Built and validated far enough to be a basis,

@@ -10276,6 +10276,17 @@ impl Parser {
             return;
         }
         let loaded = loaded.clone();
+        // Both files in ONE package is not the collision this is about.  The text says it —
+        // "shared across the whole dependency graph" — and the case that costs a person a
+        // diagnosis is a CONSUMER's new file shadowing a DEPENDENCY's.  Two files inside one
+        // package are the author's own, the `use` binds the one they meant, and nothing
+        // breaks: `tests/<pkg>.loft` beside `src/<pkg>.loft` is an ordinary layout that two
+        // of this repo's own fixtures use, and telling that author to rename a file is
+        // advice they should ignore (loft#948).  A diagnostic that fires where there is
+        // nothing to fix teaches people to skip the ones where there is.
+        if Self::same_package(&own_canonical, &loaded) {
+            return;
+        }
         diagnostic!(
             self.lexer,
             Level::Advice,
@@ -10285,6 +10296,30 @@ impl Parser {
              this `use` binds the second one. Rename one file and its `use` if you meant \
              the other"
         );
+    }
+
+    /// Do these two files belong to the same package — the same nearest `loft.toml`?
+    ///
+    /// Answered by walking up from each, which is the same rule `package_declared_deps` uses
+    /// to decide what package a directory is in. A path with no manifest above it (a bare
+    /// script) is in no package and so shares one with nothing.
+    fn same_package(a: &str, b: &str) -> bool {
+        let root = |p: &str| -> Option<std::path::PathBuf> {
+            let mut dir = std::path::Path::new(p).canonicalize().ok()?;
+            if dir.is_file() {
+                dir = dir.parent()?.to_path_buf();
+            }
+            loop {
+                if dir.join("loft.toml").exists() {
+                    return Some(dir);
+                }
+                dir = dir.parent()?.to_path_buf();
+            }
+        };
+        match (root(a), root(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
     }
 
     /// The package context owning `cur_dir`: the nearest ancestor directory
