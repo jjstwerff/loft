@@ -866,12 +866,27 @@ impl Stores {
         // whole-store freed: refuse loudly so the wrong-free site surfaces
         // instead of corrupting the entire runtime.
         if al == 0 && self.stack_store_at_zero {
+            // Name the PC that attempted it.  `rec`/`pos`/`var` are routinely
+            // 0/0/'' here — the wrong free comes from a temp, so they identify
+            // nothing, and three attempts on loft#920 were sent down the wrong
+            // path by a message that named no site.  The PC resolves to a loft
+            // function and line through the same table the crash report uses.
             eprintln!(
                 "loft: BUG (#306): refused to free the stack store (#0) \
-                 (rec={}, pos={}, var='{name}') — a stack-record ref was \
+                 (rec={}, pos={}, var='{name}', pc={}) — a stack-record ref was \
                  treated as an owned heap store",
-                db.rec, db.pos,
+                db.rec, db.pos, self.alloc_pc,
             );
+            // Record it as a free site even though the free was REFUSED: the
+            // refusal keeps store 0 alive, but whatever produced this ref is
+            // still wrong, and a later strict-stores access report naming this
+            // PC is what ties the two halves together.  Returning before the
+            // `strict_note_free` below meant `LOFT_STRICT_STORES=1` — the
+            // instrument this fault's own message recommends — could never see
+            // the one free that matters.
+            if crate::keys::strict_stores() {
+                crate::keys::strict_note_free(al, self.alloc_pc, name);
+            }
             return;
         }
         // @PLN130 F8 — remember WHERE a store died, so a later access through a stale

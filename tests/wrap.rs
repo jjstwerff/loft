@@ -1099,6 +1099,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     // process so crashes print the last-executed opcode + PC.
     loft::crash_report::install("wrap");
     println!("run {entry:?}");
+    // `loft_suite` runs the whole corpus in ONE process, so a fault that depends
+    // on accumulated arena state (loft#920) has to be attributed to the script
+    // that triggered it.  The line above goes to stdout while every runtime
+    // complaint goes to stderr, and the two are buffered independently — reading
+    // an interleaving of them names the wrong script.  `LOFT_TRACE_SCRIPT=1` puts
+    // the marker on the SAME stream as the complaint, where the order is real.
+    if std::env::var_os("LOFT_TRACE_SCRIPT").is_some() {
+        eprintln!("run {entry:?}");
+    }
     let source = std::fs::read_to_string(&entry)?;
     let expected = expected_warnings(&source);
     let (exp_errors, exp_ann_warns) = expected_annotations(&source);
