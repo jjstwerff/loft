@@ -10953,6 +10953,17 @@ impl Parser {
         if ctx.jo_arm_skip.contains(&v) {
             return RetPromotion::SkipDelivered;
         }
+        if crate::keys::trace_ret_promotion() {
+            eprintln!(
+                "[retpromo] fn={} v={} name={} ret={:?} plain={} buf={:?}",
+                self.data.def(self.context).name(),
+                v,
+                self.vars.name(v),
+                ctx.ret,
+                ctx.is_plain_fn,
+                self.return_buffer(),
+            );
+        }
         let n = self.vars.name(v);
         let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
         // A1b (@PLN90 W1, gated) — the tail borrows a temporary subject the fn

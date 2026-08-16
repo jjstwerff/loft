@@ -607,6 +607,26 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
 }
 
+/// `LOFT_TRACE_RETPROMO=1` — name every candidate the return-buffer promotion classifies,
+/// with the function, the variable and the declared return type.
+///
+/// Return promotion decides whether a heap return is delivered into the caller's hidden
+/// `__retbuf` or left as the callee's own store, and it is invisible from the outside: the
+/// only symptoms are a leak, or a store freed twice. Reconstructing it from IR has now cost
+/// two sessions.
+///
+/// The line that mattered for loft#938 was the ABSENCE of one. A nullable collection return
+/// printed nothing at all, which says the pass never ran for it — a different bug from the
+/// pass running and deciding wrong, and not a distinction the IR shows. Reach for it before
+/// reading a callee's body: no output means a gate upstream of the classifier.
+///
+/// Off by default; one cached env read.
+#[must_use]
+pub fn trace_ret_promotion() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_RETPROMO").is_some())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
