@@ -866,16 +866,36 @@ impl Stores {
         // whole-store freed: refuse loudly so the wrong-free site surfaces
         // instead of corrupting the entire runtime.
         if al == 0 && self.stack_store_at_zero {
-            // Name the PC that attempted it.  `rec`/`pos`/`var` are routinely
+            // Count it before printing: stderr is where this went to die.  A test harness
+            // reads the counter and fails the script that raised it (loft#920).
+            crate::keys::note_stack_free_refusal();
+            // Name the SITE that attempted it.  `rec`/`pos`/`var` are routinely
             // 0/0/'' here — the wrong free comes from a temp, so they identify
             // nothing, and three attempts on loft#920 were sent down the wrong
-            // path by a message that named no site.  The PC resolves to a loft
-            // function and line through the same table the crash report uses.
+            // path by a message that named no site.  A bare `pc=` was not enough
+            // either: it is a position in the WHOLE bytecode stream, stdlib
+            // included, and `introspect` prints only the user file's, so nothing
+            // a reader has in hand can resolve it.  Resolve it here through the
+            // same published span table the crash report uses.
+            let at = crate::crash_report::source_loc_for_pc(self.alloc_pc).map_or_else(
+                || format!("pc={}", self.alloc_pc),
+                |p| format!("{}:{}:{} (pc={})", p.file, p.line, p.pos, self.alloc_pc),
+            );
+            // The source position is the NEAREST recorded span at or before the pc, and
+            // the span map is sparse — inside the stdlib it can name a line several
+            // statements away.  The opcode is exact, so print both: the line orients the
+            // reader, the op says what actually ran.
+            let op = crate::crash_report::last_op_name();
+            let op = if op.is_empty() {
+                String::new()
+            } else {
+                format!(", op={op}")
+            };
             eprintln!(
                 "loft: BUG (#306): refused to free the stack store (#0) \
-                 (rec={}, pos={}, var='{name}', pc={}) — a stack-record ref was \
+                 (rec={}, pos={}, var='{name}', at {at}{op}) — a stack-record ref was \
                  treated as an owned heap store",
-                db.rec, db.pos, self.alloc_pc,
+                db.rec, db.pos,
             );
             // Record it as a free site even though the free was REFUSED: the
             // refusal keeps store 0 alive, but whatever produced this ref is

@@ -121,6 +121,24 @@ fn op_name_of(op: u8) -> &'static str {
         .unwrap_or("")
 }
 
+/// The name of the opcode that was dispatching on this thread, or `""` if no table has
+/// been published yet.
+///
+/// The signal handler is not the only reader that needs this. A runtime invariant
+/// breach reported from deep inside the store layer — `BUG (#306)`, a strict-store
+/// violation — has a `pc` and nothing else, and a bare `pc` is a position in the WHOLE
+/// bytecode stream (stdlib included) that no tool a reader has in hand can resolve.
+/// Naming the op turns "something freed store 0" into "this op freed store 0", which is
+/// the difference between a report and a lead (loft#920).
+#[must_use]
+pub fn last_op_name() -> &'static str {
+    let op = LAST_CTX.with(|c| c.get().op_code);
+    OP_NAMES
+        .get()
+        .and_then(|v| v.get(op as usize).copied())
+        .unwrap_or("")
+}
+
 /// Used by the installer to ensure we only install once per process.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);

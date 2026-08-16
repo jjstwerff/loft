@@ -1146,6 +1146,30 @@ pub fn strict_store_violations() -> usize {
     STRICT_VIOLATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Every `BUG (#306)` refusal this process has made — a whole-store free aimed at the
+/// eval-stack store, which the allocator refuses so the runtime survives to report it.
+///
+/// Counted UNCONDITIONALLY, unlike [`strict_store_violations`], because the refusal is
+/// not an opt-in instrument: it is the runtime saying a store-ownership invariant was
+/// broken, and the guard is the only thing standing between that and the eval stack.
+/// It printed to stderr and nothing read it, so a suite could go green through nine of
+/// them while the nightly poison gate died of the consequences (loft#920) — the counter
+/// is what lets a test harness FAIL on one instead of scrolling past it.
+///
+/// One relaxed add on a path that must never execute; free when it does not.
+static STACK_FREE_REFUSALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Record a refused whole-store free of the eval-stack store. See [`stack_free_refusals`].
+pub fn note_stack_free_refusal() {
+    STACK_FREE_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many stack-store free refusals this process has made.
+#[must_use]
+pub fn stack_free_refusals() -> usize {
+    STACK_FREE_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
 /// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
 /// fields for an out-of-bounds pointer and report the op that produced it (pc/line +

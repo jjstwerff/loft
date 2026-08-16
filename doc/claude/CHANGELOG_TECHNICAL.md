@@ -9,6 +9,57 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A coroutine's yielded record is borrowed, not owned (loft#920 partial, 2026-08-16)
+
+`collect_iterator_subject` materialises a `match <iterator<T>>` subject by pulling the
+coroutine into a buffer.  The pulled value lands in `stream_x`, typed with the ELEMENT type.
+For a **struct-enum** element that makes it a record ref — and the ref points into the
+coroutine's own frame, which lives in the STACK store.  The append below deep-copies it
+(`OpCopyRecord`) so the buffer owns its copy, but nothing said `stream_x` does not, and the
+loop-scope exit emitted `OpFreeRef(_stream_x_1)` on every pull:
+
+```
+loop {#stream pull_3
+  _stream_x_1(3):ref(Tok) = OpCoroutineNext(_stream_gen_1(2), 12i32);
+  …
+    OpCopyRecord(_stream_x_1(3), OpGetField(_stream_elm_1(3), 0i32, 78i32), 78i32);
+  OpFreeRef(_stream_x_1(3));          <-- whole-store free of a stack-record ref
+}
+```
+
+Only the store-0 guard kept that from taking every live frame with it; what reached the user
+was `BUG (#306)`.  The sibling `stream_elm` was already marked `skip_free` for the identical
+reason one line below, with a comment saying so.
+
+`skip_free` is ONE bit for every free kind, so the mark is gated on the record case: a `text`
+element's `stream_x` holds a String the caller DOES own (`OpFreeText`), and marking it would
+trade the wrong free for a leak of one string per yield.  A scalar emits no free at all.
+Verified both directions — the leak detector fires on a known-leaking control and stays
+silent here, on both backends.
+
+**The previous attribution was wrong, and the instrument is why.**  loft#920 was recorded
+against `tests/scripts/75-native-stub.loft`; the refusals actually came from
+`35p-iterator-match.loft`, which reproduces **alone**, on `--interpret`, with no harness and
+no `catch_unwind` — so the "mid-execution unwind leaves a live state" theory it was filed
+under had nothing to do with it.  The message carried a bare `pc=`, which is a position in
+the WHOLE bytecode stream (stdlib included) while `introspect` prints only the user file's,
+so no reader could resolve it.  It now names `file:line:col` (via the published span table)
+AND the dispatching opcode — the span map is sparse and can point several statements away,
+the op is exact, so both are printed.  That pair turned three failed attempts into one
+reduction.
+
+**And the gate that let it live.**  `35p-iterator-match.loft` raised this on every suite run
+for as long as it existed and scored PASS each time: the refusal keeps the store alive, so
+nothing the script asserts can notice, and the report went to stderr where nothing read it.
+`Stores::free_named` now counts refusals unconditionally (`keys::stack_free_refusals`) and
+`tests/wrap.rs` fails any script that raises one.  Corpus run: 3 refusals before, 0 after,
+and no other script trips it.
+
+**Not closed.**  The nightly poison gate's SIGSEGV survives this fix — `OpLengthVector`,
+reached during `917-nullable-collection-field-says-so.loft`, which is clean standalone.  That
+is latent corruption from an earlier script surfacing there, a second mechanism, and it does
+not reproduce under `LOFT_STRICT_STORES=1` (strict mode changes free/reuse and masks it).
+
 ### A tuple's record shape does not depend on how its type was reached (loft#943, 2026-08-16)
 
 Two defects, one report, because a vector literal of tuples needs both fixed.

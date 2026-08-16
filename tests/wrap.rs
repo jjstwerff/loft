@@ -1274,6 +1274,14 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     } else {
         // Run each function with catch_unwind so one failure doesn't abort the rest.
         let mut failures: Vec<String> = Vec::new();
+        // Part A2 — stack-store free gate (loft#920).  A `BUG (#306)` refusal means the
+        // program emitted a whole-store free aimed at the eval-stack store; only the
+        // allocator's guard kept it from taking every live frame.  It went to stderr and
+        // nothing read it, so `35p-iterator-match.loft` raised one on EVERY run of the
+        // suite for as long as it existed and still scored PASS — the refusal keeps the
+        // store alive, so nothing the script itself asserts can notice.  Snapshot the
+        // process-wide counter here and compare after the run.
+        let refusals_before = loft::keys::stack_free_refusals();
         for name in &fns {
             if std::env::var("LOFT_TEST_VERBOSE").is_ok() {
                 eprintln!("  running {path}::{name}");
@@ -1366,6 +1374,18 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 failures.len(),
                 fns.len(),
                 failures.join("; ")
+            )));
+        }
+        // Part A2 — see the snapshot above.  Reported even when every assertion passed,
+        // because passing is exactly what a refused free lets a script keep doing.
+        let refused = loft::keys::stack_free_refusals() - refusals_before;
+        if refused > 0 {
+            return Err(Error::other(format!(
+                "{path}: {refused} stack-store free refusal(s) (`BUG (#306)`) — the \
+                 program emitted a whole-store free of the eval-stack store and only the \
+                 allocator's guard stopped it.  The stderr line names the op and the \
+                 nearest source span; the cause is a variable holding a BORROWED record \
+                 ref that scope cleanup treated as owning a heap store."
             )));
         }
         // Part B — leak gate: a heap store left unfreed at program exit is a

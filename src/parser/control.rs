@@ -4532,6 +4532,25 @@ impl Parser {
         self.vars.defined(done);
         let x = self.create_unique("stream_x", elm_tp);
         self.vars.defined(x);
+        // A RECORD-valued yield hands back a DbRef into the coroutine's own frame, which
+        // lives in the STACK store — `x` names it, and the append below deep-copies it into
+        // the buffer (`OpCopyRecord`), so the buffer owns the copy and `x` owns nothing.
+        // Scope cleanup did not know that and emitted `OpFreeRef(_stream_x_1)` at the end of
+        // every pull iteration, whole-store freeing a stack-record ref: `BUG (#306)` on each
+        // run of `match <iterator<StructEnum>>`, and only the store-0 guard stopped it from
+        // taking the eval stack with it (loft#920).  Same fact as `elm` below, one step
+        // earlier in the same loop.
+        //
+        // Gated on the record case rather than set for every element type: `skip_free` is one
+        // bit for all free kinds, and a `text` element's `x` holds a String the caller DOES
+        // own — suppressing its `OpFreeText` would trade this wrong free for a leak of one
+        // string per yield.  A scalar emits no free at all, so it never reaches either.
+        if matches!(
+            elm_tp.base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) {
+            self.vars.set_skip_free(x);
+        }
         let ed_nr = self.data.type_def_nr(elm_tp);
         let elm = self.create_unique("stream_elm", &Type::Reference(ed_nr, Deps::none()));
         self.vars.defined(elm);
