@@ -2735,7 +2735,41 @@ impl Parser {
         declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
-        let mut p = Value::Var(elm);
+        // `elm` is offered as an in-place construction target so a struct element
+        // builds straight into the slot `OpNewRecord` carved out (`parse_object`
+        // takes that path whenever it is handed a `Var` that owns a store).  A
+        // TUPLE element is not built as one record — `emit_tuple_set_ops` writes
+        // each member at its own offset — so offering the slot lets the tuple
+        // literal's FIRST member consume it: `[(S { … }, k)]` wrote S's fields
+        // directly into the element and then handed that valueless statement list
+        // to `OpCopyRecord` as its SOURCE.  Only the first member could ever fail
+        // this way, because `(a, b, …)` parses member 0 into the caller's value and
+        // every later member into a fresh one (loft#942).
+        // Peel `Rewritten` first: a literal in RETURN position gets its element type
+        // from the function's return type and arrives wrapped (the unwrap below runs
+        // only AFTER the element is parsed, which is too late to decide this).
+        let elem_is_tuple = {
+            let mut t: &Type = in_t;
+            while let Type::Rewritten(inner) = t {
+                t = inner;
+            }
+            matches!(t.base(), Type::Tuple(_))
+        };
+        // A `(`-leading element is a parenthesised expression or a tuple literal, and
+        // `(a, b, …)` parses member 0 into the caller's value while every later member
+        // gets a fresh one.  Offering the slot therefore lets the FIRST member consume
+        // it, and the type cannot tell us to stop: in return position the element type
+        // is inferred FROM this literal, so it is still `Unknown` when member 0 is
+        // seeded and only resolves by member 1 — which is exactly why the first member
+        // was the only one that ever failed.  Keying on the token instead is decidable
+        // at the one moment the decision has to be made.  A parenthesised struct
+        // literal `[(S { … })]` loses the in-place build and takes the allocate-then-
+        // copy path every non-first member already takes; it stays correct.
+        let mut p = if elem_is_tuple || self.lexer.peek_token("(") {
+            Value::Null
+        } else {
+            Value::Var(elm)
+        };
         // #247: isolate THIS element's capturing-lambda signal.  A capturing
         // lambda makes `emit_lambda_code` set `last_closure_work_var` (and emit
         // a Block, not a bare FnRef); a non-capturing lambda / non-lambda leaves

@@ -9,6 +9,46 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A tuple vector element is not offered the element slot (loft#942, 2026-08-16)
+
+`parse_item` seeds the element expression with `Value::Var(elm)` — the slot `OpNewRecord`
+carved out of the container — so a struct element builds straight into it; `parse_object`
+takes that in-place path whenever it is handed a `Var` that owns a store.  A TUPLE element is
+not built as one record: `emit_tuple_set_ops` writes each member at its own offset.  Offering
+the slot let the tuple literal's FIRST member consume it, so `[(S { … }, k)]` wrote S's fields
+directly into the element and then handed that valueless statement list to `OpCopyRecord` as
+its SOURCE:
+
+```
+_elm_1 = OpNewRecord(v, 81, 65535);
+OpCopyRecord({ !! INSERT                      <-- a statement list, no value
+    OpSetInt(_elm_1, 0, 11); OpSetInt(_elm_1, 8, 22)
+  }, OpGetField(_elm_1, 0, 78), 78);
+```
+
+Only the FIRST member could fail this way: `(a, b, …)` parses member zero into the caller's
+value (`vectors.rs:409`) and every later member into a fresh one, which is the whole reason
+`vector<(integer, S)>` was correct while `vector<(S, integer)>` was not.
+
+One defect, four filed symptoms — each construction path corrupts differently: reading an
+element back panicked in `allocation.rs` using the tuple's SECOND member value as a record
+index (`--native` refused the generated Rust with E0308), a 2+ element literal aborted the
+compiler with `Incorrect var _elm_1[56] versus 40`, a single `+=` silently zeroed the struct's
+fields, and a second `+=` SIGSEGV'd.
+
+**The guard keys on the `(` token, not on the element type.**  A literal in RETURN position
+infers its element type from itself, so the type is still `Unknown` when member zero is seeded
+and only resolves by member one — instrumenting the seed showed the guard firing 4× for a
+declared local but only 2× in return position.  A type-keyed attempt therefore fixed every
+other row and turned the return-position abort into a SILENTLY EMPTY vector, which is why the
+regression guard asserts lengths as well as values.  A `(`-leading element that is not a tuple
+(`[(S { … })]`) gives up the in-place build and takes the allocate-then-copy path every
+non-first member already takes; the unparenthesised `[S { … }]` common case is untouched.
+
+Not fixed, and separate: a vector literal of tuples cannot have its element type INFERRED
+(`v = [(7, 8)]` fails with "cannot build this record — its type never resolved" for every
+tuple shape including ones with no struct at all, on the released binary too).
+
 ### A destructured tuple element is a value the binding owns (loft#941, 2026-08-16)
 
 A tuple return wider than 8B lands in a synthetic `__tuple<…>` record held by a work-ref

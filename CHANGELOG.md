@@ -26,6 +26,25 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A vector of tuples that start with a struct
+
+Pairing a record with a number and keeping a list of them is an ordinary thing to want:
+
+```loft
+scores: vector<(Player, integer)> = [(Player { id: 1, name: "ana" }, 50)];
+```
+
+Written that way round it did not work, and it went wrong differently depending on what you
+did with it — reading one back crashed, two or more in the same literal refused to compile,
+and building the list with `+=` gave you back a player whose fields were all zero, with no
+message at all. Writing the number first (`vector<(integer, Player)>`) worked fine, which made
+the whole thing look like several unrelated bugs.
+
+It was one: the first thing inside the brackets was being built directly into the list's own
+slot, which is right for `[Player { … }]` but not for a tuple, where each part has its own
+place in the element. Both orders now work, and so do three-part tuples and tuples of two
+structs.
+
 ### Taking a collection out of a tuple return, in a loop
 
 A function can hand back several things at once, and the natural way to use one is to
