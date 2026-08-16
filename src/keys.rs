@@ -563,6 +563,35 @@ pub fn linked_group_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_LINKED_GROUP").is_none())
 }
 
+/// loft#940 — a library's free function that no bare call can reach.
+///
+/// A call `f(x, …)` resolves the METHOD spelling `t_<type-of-x>_f` before the free `n_f`
+/// (`Data::find_fn`), and a method lives in its receiver type's shared, global attribute
+/// table. So a library's `fn f(x: τ, …)` is unreachable by its bare name whenever the stdlib
+/// declares `f(both: τ, …)` / `f(self: τ, …)` — from a consumer that imported it, from the
+/// library's own other modules, and from the declaring file itself.
+///
+/// The DEFINITION stays legal, which is @PLN102 C97: a library's names are module-scoped, so
+/// `mylib::f` still reaches it and the stdlib can grow without breaking a shipped library.
+/// What C97 left silent is that the bare name then belongs to the stdlib — the author writes
+/// a function, every unqualified call goes somewhere else, and nothing says so.
+///
+/// `warning` rather than `advice` by the tier rule: ignoring it produces a WRONG RESULT, not
+/// merely a worse spelling. The reporter's `clamp` differed from the stdlib's only where
+/// `lo > hi`, so the port ran the wrong function everywhere and agreed with the right one
+/// almost everywhere; the published `regex::find(pattern, input)` has the stdlib's exact
+/// arity and argument types, so a bare `find(p, i)` type-checks and answers the wrong thing.
+///
+/// The same-named free function on a DIFFERENT receiver type stays quiet — arg-type dispatch
+/// keeps it reachable, which is the case `tests/scripts/06-function.loft` exercises.
+///
+/// **Default ON**; `LOFT_NO_SHADOWED_BY_METHOD` opts out. One cached env read.
+#[must_use]
+pub fn shadowed_by_method_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft

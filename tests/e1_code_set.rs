@@ -271,6 +271,10 @@ const CODES: &[(&str, &str)] = &[
          struct Outer { items: hash<Inner[k]> }\n\
          fn main() { o = Outer { items: [] }; store_persist_bind(o.items, \"loft_trig.store\"); }",
     ),
+    (
+        "shadowed-by-method",
+        "fn main() { print(\"needs the same fn in a LIBRARY — in main this is the C95 error\"); }",
+    ),
 ];
 
 /// @PLN131 — codes with no MINIMAL trigger, each with why.
@@ -300,6 +304,14 @@ const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
         // the two-package tree and asserts both load orders.
         "module-name-shadowed",
         "requires a two-package dependency graph",
+    ),
+    (
+        // loft#940 — fires only for a LIBRARY source (@PLN102 C97 module-scoping). The same
+        // definition in a single main file is the C95 hard error "Cannot redefine 'clamp'",
+        // which pre-empts it, so no one-file program can reach this warning. Covered instead
+        // by `tests/imports.rs`, which has the lib-dir harness.
+        "shadowed-by-method",
+        "fires only in a library source; in main the C95 error pre-empts it",
     ),
 ];
 

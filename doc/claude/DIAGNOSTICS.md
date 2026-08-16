@@ -49,6 +49,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `redundant-null-negation` | warning | `!x` on a non-null value — `!` tests presence, so it is always false. | Compare the value (`x == 0`) if that is what you meant. | C · `@F1` |
 | `dead-assignment` | warning | A local is overwritten before it is read. | Delete the assignment, or read it before the next. | C · `@F100` |
 | `never-read` | warning | A local or parameter is never read. | Delete it — for a parameter, that changes the signature. | C · `@F100` |
+| `shadowed-by-method` | warning | A library's free function is unreachable by its bare name: a same-named METHOD on its first argument's type takes the call (`find_fn` resolves `t_<τ>_f` before `n_f`), from the declaring file, the library's other modules, and any consumer that imported it. The definition stays legal — @PLN102 C97 module-scopes it — so `lib::f` still reaches it (loft#940). | Rename it, or call it qualified as `<package>::f(…)`. | C C · `@F16` |
 | `upper-case-local` | advice | An UPPER_CASE local — that style is reserved for constants. | Declare it `const`, or rename to lower_case. | C M · `@F18` |
 | `unreachable-code` | warning | Statements after a terminator can never run. | Delete them. | M · `@F16` |
 | `unreachable-match-arm` | warning | A match arm an earlier arm already matches. | Delete the arm. | M · `@F29` |

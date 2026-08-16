@@ -4990,6 +4990,76 @@ impl Data {
                 self.def(o_nr).position
             );
         }
+        // loft#940 — the C97 residual on the FREE-function side, and the only silent corner of
+        // the three. `find_fn` resolves the METHOD spelling `t_<sig>_<name>` before the free
+        // `n_<name>`, and it reaches that spelling through the STDLIB row from every source —
+        // so a library's `fn f(x: τ, …)` is unreachable by its bare name not just from the
+        // consumer that imported it, but from the library's own other modules and from the
+        // declaring file itself. C97 keeps the DEFINITION legal on purpose (module-scoped, so
+        // the stdlib can grow without breaking a shipped library) and `mylib::f` still reaches
+        // it; what it left unsaid is that the bare name now belongs to the stdlib. The MAIN
+        // spelling of this clash is the C95 error above and the `both:`/`self` spelling is the
+        // shared-attribute-table error below — this corner only needed a voice.
+        if scoped
+            && !shadows_a_method
+            && !(is_both || is_self)
+            && crate::keys::shadowed_by_method_lint_enabled()
+            && let Some(arg) = arguments.first()
+        {
+            let tn = self.type_def_nr(&arg.typedef);
+            if tn != u32::MAX {
+                let sig = Self::sig_type_name(&self.def(tn).name, &arg.typedef);
+                let m_nr = self.def_nr(&format!("t_{}{}_{fn_name}", sig.len(), sig));
+                if m_nr != u32::MAX {
+                    // The package short-name for the qualified-call fix line. `use_names`
+                    // may hold an alias beside the real name for one source, so take the
+                    // lexicographic minimum rather than whichever the hash order offers —
+                    // a diagnostic that changes wording run to run is not a contract.
+                    let lib = self
+                        .use_names
+                        .iter()
+                        .filter(|(_, s)| **s == self.source)
+                        .map(|(n, _)| n.clone())
+                        .min()
+                        .unwrap_or_default();
+                    diagnostic!(
+                        lexer,
+                        Level::Warning,
+                        code = "shadowed-by-method",
+                        "`{fn_name}` is also a method on `{sig}` (defined at {}), and a call \
+                         `{fn_name}(<{sig}>, …)` resolves the method — so this function is \
+                         unreachable by its bare name, here and in anything that imports it",
+                        self.def(m_nr).position
+                    );
+                    lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: format!("rename it — the bare name `{fn_name}` is taken"),
+                        condition: Some(
+                            "the two are different functions, so callers want to say which"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "module-scoped names",
+                        concept_ref: "@F16",
+                    });
+                    lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: if lib.is_empty() {
+                            format!("call it qualified — `<package>::{fn_name}(…)`")
+                        } else {
+                            format!("call it qualified — `{lib}::{fn_name}(…)`")
+                        },
+                        condition: Some(
+                            "the name is deliberate and every call site can spell the package"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "qualified calls",
+                        concept_ref: "@F16",
+                    });
+                }
+            }
+        }
         let mut d_nr = own(self, &name); // C97: a library's mangled name is scoped to its own source
         if d_nr != u32::MAX {
             // Name WHERE the winner lives, exactly as the shadowing branch above does.

@@ -374,6 +374,18 @@ nothing at the literal says so. Quiet on a member written `[]`, which is how eve
 constructed, and quiet when only one member is filled — those are the deliberate uses.
 `advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
 produce a result the language did not promise; what is wrong is the author's model) ·
+`LOFT_NO_SHADOWED_BY_METHOD` (loft#940 `shadowed-by-method` WARNING: a LIBRARY's free
+`fn f(x: τ, …)` that no bare call can reach, because `find_fn` resolves the method
+spelling `t_<τ>_f` before the free `n_f` and reaches it through the stdlib row from
+every source — so the shadow covers the declaring file and the library's own other
+modules, not just a consumer, and `pub` is not the axis. @PLN102 C97 keeps the
+DEFINITION legal on purpose (module-scoped, so the stdlib can grow without breaking a
+shipped library) and `lib::f` still reaches it; the silence was the defect. `warning`,
+not advice: the published `regex::find(pattern, input)` has the stdlib's exact arity and
+argument types, so a bare `find(p, i)` type-checks and answers the wrong thing. Quiet
+where the same name is a method on ANOTHER receiver type — arg-type dispatch keeps that
+one reachable — and quiet for a collision with a stdlib FREE function, which the import
+outranks) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is
