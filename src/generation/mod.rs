@@ -12,6 +12,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
+pub mod hoist;
 pub(crate) mod ops;
 mod pre_eval;
 mod text;
@@ -474,6 +475,34 @@ pub struct Output<'a> {
     /// Stack of enclosing loop scope ids, innermost last.
     /// Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
     pub loop_stack: Vec<u16>,
+    /// loft#885 — vector headers hoisted out of the enclosing loops, innermost last:
+    /// variable → the Rust local holding its [`crate::vector::VecHeader`]. An indexed read
+    /// of a variable listed here skips the store resolution and the length load; every
+    /// other read emits unchanged. One frame is pushed per `Value::Loop`, so a frame is
+    /// popped exactly where the local it names goes out of scope.
+    pub vec_headers: Vec<HashMap<u16, String>>,
+    /// Per-definition memo behind [`hoist::may_write_store`], shared across every loop in
+    /// the program so the call-graph walk runs once per callee.
+    pub hoist_cache: HashMap<u32, bool>,
+    /// Names the hoisted headers of the function being emitted (`__vh_1`, `__vh_2`, …).
+    pub hoist_counter: u32,
+    /// `LOFT_HOIST_VERIFY=1` — emit the CHECKING form of every hoisted read, which
+    /// re-derives the header and panics when the loop moved the vector under it. Costs
+    /// exactly the loads the hoist removed, so it is a gate to run the suite under, not a
+    /// production default. See [`hoist`].
+    pub hoist_verify: bool,
+    /// `LOFT_NO_VECTOR_HOIST=1` — emit every indexed read the way it was emitted before
+    /// loft#885. The before-half of an A/B on one binary, and the first thing to try when
+    /// a program answers differently under `--native` than under `--interpret`.
+    pub hoist_disabled: bool,
+    /// `LOFT_NO_ELEM_FUSE=1` — keep loft#885 stage 1 (the loop-invariant header) but emit
+    /// stage 2's scalar element reads unfused, as an address and then a load.
+    ///
+    /// The middle rung of the A/B, and the reason it exists: with only `LOFT_NO_VECTOR_HOIST`
+    /// the two stages can be measured together but never apart, so what stage 2 is worth on
+    /// top of the header hoist could only be estimated. It also bisects a native-only wrong
+    /// answer in a vector loop one stage further than the all-or-nothing switch does.
+    pub elem_fuse_disabled: bool,
     /// O7: number of consecutive format/append ops following the current
     /// `OpClearStackText`/`OpClearText`.  Set by `output_block` before each
     /// op is emitted; consumed (and reset to 0) by `clear_stack_text`.
@@ -498,13 +527,20 @@ pub struct Output<'a> {
     /// yield arm returns through, so both ends of one generator agree.
     pub yield_lazy_wrap: Option<(String, String)>,
     /// P224: when emitting a coroutine state-machine method body
-    /// (`emit_next_i64` / `emit_next_text`), each `var_nr` listed here
+    /// (`emit_next_i64` / `emit_next_text`), each `var_nr` keyed here
     /// is a function-local that lives as a struct field on the
     /// generator (so its value persists across `next_*` calls).
-    /// `Value::Var(v)` for these emits `self.var_<name>` rather than
-    /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<name> = …;`.
+    /// `Value::Var(v)` for these emits `self.var_<field>` rather than
+    /// `var_<name>`; `Value::Set(v, _)` emits `self.var_<field> = …;`.
     /// Empty outside coroutine bodies.
-    pub coroutine_persistent_vars: HashSet<u16>,
+    ///
+    /// The VALUE is that field's name, which is usually the variable's own but not always:
+    /// two `for i in …` loops in one generator declare two variables spelling `i` and two
+    /// spelling `i#index`, and a struct cannot declare a field twice (loft#928).
+    /// `coroutine::persistent_field_names` builds the map and is the only place a field name
+    /// is derived — keeping membership and spelling in ONE lookup is what stops an emitter
+    /// from reading a field under a name the struct definition never used.
+    pub coroutine_persistent_fields: HashMap<u16, String>,
     /// Coroutine-persistent vars whose allocating initialiser has already been emitted inside
     /// the current `impl LoftCoroutine`.  A second `Set(v, Null)` on the same field is the
     /// @P302 in-place clear, which must NOT re-run `null_named` (that would orphan the store).
@@ -1117,12 +1153,18 @@ impl<'a> Output<'a> {
             reachable: HashSet::new(),
             dup_fn_names: HashSet::new(),
             loop_stack: Vec::new(),
+            vec_headers: Vec::new(),
+            hoist_cache: HashMap::new(),
+            hoist_counter: 0,
+            hoist_verify: std::env::var("LOFT_HOIST_VERIFY").is_ok_and(|v| v != "0"),
+            hoist_disabled: std::env::var("LOFT_NO_VECTOR_HOIST").is_ok_and(|v| v != "0"),
+            elem_fuse_disabled: std::env::var("LOFT_NO_ELEM_FUSE").is_ok_and(|v| v != "0"),
             next_format_count: 0,
             yield_collect: false,
             yield_collect_text: false,
             yield_collect_dbref: false,
             yield_lazy_wrap: None,
-            coroutine_persistent_vars: HashSet::new(),
+            coroutine_persistent_fields: HashMap::new(),
             coroutine_allocated_vars: HashSet::new(),
             fn_ref_context: false,
             i32_literal_context: false,
@@ -1276,6 +1318,30 @@ impl Output<'_> {
         disambiguated_fn_ident(&self.dup_fn_names, def)
     }
 
+    /// The Rust place for loft variable `var` — the generator's struct field when the
+    /// function being emitted is a coroutine and this local persists across resumes, and a
+    /// plain `var_<name>` local otherwise.
+    ///
+    /// Every site that names a variable as somewhere to READ FROM or WRITE TO has to ask,
+    /// because a persistent local has no `let` of its own: the factory made it a field, so
+    /// spelling it as a local emits a Rust identifier that does not exist.  Appending to a
+    /// text local inside a generator did exactly that — `a = a + t` in a loop emitted
+    /// `var_a += …` against a field named `self.var_a`, and `--native` refused to compile
+    /// a program `--interpret` ran correctly.
+    ///
+    /// Outside a coroutine the map is empty and this is the bare local every site spelled
+    /// before, so routing a site through it can only add the case it was missing.
+    #[must_use]
+    pub fn var_place(&self, var: u16) -> String {
+        match self.coroutine_persistent_fields.get(&var) {
+            Some(field) => format!("self.var_{field}"),
+            None => format!(
+                "var_{}",
+                sanitize(self.data.def(self.def_nr).variables().name(var))
+            ),
+        }
+    }
+
     /// Use this before emitting indented output lines.
     /// # Errors
     /// When the output cannot be written
@@ -1295,6 +1361,101 @@ impl Output<'_> {
         self.witness_vars.clear();
         self.predeclared.clear();
         self.next_format_count = 0;
+        self.vec_headers.clear();
+        self.hoist_counter = 0;
+    }
+
+    /// loft#885 — open a loop with the headers of the vectors it only reads.
+    ///
+    /// Emits `{ let __vh_N = vector::vec_header(…);` per hoistable vector and answers
+    /// whether that wrapper block was opened, which [`Self::end_vector_hoist`] closes. The
+    /// wrapper is what makes the prelude legal wherever a loop can appear — a loop is an
+    /// expression in Rust, and a bare `let` before one would not be.
+    ///
+    /// A vector already covered by an enclosing loop's prelude is skipped: the enclosing
+    /// header is still current, because the promise that let it be hoisted covers this
+    /// loop too.
+    fn begin_vector_hoist(
+        &mut self,
+        w: &mut dyn Write,
+        lp: &crate::data::Block,
+    ) -> std::io::Result<bool> {
+        let mut frame: HashMap<u16, String> = HashMap::new();
+        let candidates = if self.hoist_disabled {
+            Vec::new()
+        } else {
+            hoist::hoistable_vectors(lp, self.data, self.def_nr, &mut self.hoist_cache)
+        };
+        let mut lines: Vec<String> = Vec::new();
+        for v in candidates {
+            if self.vec_headers.iter().any(|f| f.contains_key(&v)) {
+                continue;
+            }
+            // A generator's locals live on the generator struct and are named `self.var_x`
+            // inside its `next` methods. The prelude below spells a plain local, so a
+            // vector that moved onto the struct is left alone rather than named wrongly.
+            if self.coroutine_persistent_fields.contains_key(&v) {
+                continue;
+            }
+            self.hoist_counter += 1;
+            let name = format!("__vh_{}", self.hoist_counter);
+            let var = sanitize(self.data.def(self.def_nr).variables().name(v));
+            lines.push(format!(
+                "let {name} = vector::vec_header(&(var_{var}), &stores.allocations);"
+            ));
+            frame.insert(v, name);
+        }
+        let opened = !lines.is_empty();
+        if opened {
+            writeln!(w, "{{ //loft#885 loop-invariant vector headers")?;
+            for line in lines {
+                self.indent(w)?;
+                writeln!(w, "{line}")?;
+            }
+            self.indent(w)?;
+        }
+        self.vec_headers.push(frame);
+        Ok(opened)
+    }
+
+    /// Close what [`Self::begin_vector_hoist`] opened.
+    fn end_vector_hoist(&mut self, w: &mut dyn Write, opened: bool) -> std::io::Result<()> {
+        self.vec_headers.pop();
+        if opened {
+            write!(w, " }}")?;
+        }
+        Ok(())
+    }
+
+    /// The Rust local holding `var`'s hoisted header, when an enclosing loop derived one.
+    #[must_use]
+    pub fn active_vec_header(&self, var: u16) -> Option<&str> {
+        self.vec_headers
+            .iter()
+            .rev()
+            .find_map(|f| f.get(&var).map(String::as_str))
+    }
+
+    /// Whether this call is emitted as ONE fused element read (loft#885 stage 2) — the
+    /// shape qualifies, the enclosing loop hoisted a header for the vector, and the fusion
+    /// is not switched off by `LOFT_NO_ELEM_FUSE`.
+    ///
+    /// All three conditions live here because the emitter and the pre-eval collector have
+    /// to reach the SAME verdict: the collector hoists an inner `OpGetVector*` into a
+    /// `let _pre_N` that a fused emission ignores, so a disagreement would run the read
+    /// twice. One answer, asked twice, cannot disagree with itself.
+    #[must_use]
+    pub fn fused_element_read<'a>(
+        &self,
+        getter: &str,
+        args: &'a [Value],
+    ) -> Option<hoist::FusedRead<'a>> {
+        if self.elem_fuse_disabled {
+            return None;
+        }
+        let fused = hoist::fused_element_read(self.data, getter, args)?;
+        self.active_vec_header(fused.var)?;
+        Some(fused)
     }
 
     /// @PLN18 08-S2 — build the live-dispatch entry check for a user fn, or
@@ -1654,7 +1815,16 @@ extern crate loft;"
                 // AND symbol `n_load_png`).  Declare under a `__cabi_`-prefixed
                 // local alias and bind the real symbol via `#[link_name]`, so
                 // the extern never shadows the wrapper (E0428).
-                writeln!(w, "    #[link_name = \"{}\"]", def.native())?;
+                //
+                // loft#907: the linked symbol is the one the LIBRARY says
+                // implements it, which for a remapped binding is not the
+                // `#native` string.  The alias stays keyed on the `#native`
+                // string so call sites are unaffected.
+                writeln!(
+                    w,
+                    "    #[link_name = \"{}\"]",
+                    data.link_symbol(def.native())
+                )?;
                 writeln!(w, "    fn __cabi_{}({sig}){ret};", def.native())?;
             }
             writeln!(w, "}}")?;
@@ -3206,9 +3376,17 @@ extern crate loft;"
         // the bare def name, so the generated `db.structure(...)` matches the
         // interpreter's table and two same-named library structs don't
         // collide in generated code either.
+        //
+        // `{name:?}` writes the literal, rather than pasting the name between two typed
+        // quotes: a registered name is not always an identifier.  A synthetic wrapper over
+        // a KEYED collection carries its key list — `main_vector<hash<E,["k"]>>` — and the
+        // quotes in it closed the Rust string early, so `vector<hash<E[k]>>` (with or
+        // without a `?`) aborted `--native` with four rustc errors from one line of
+        // generated code, while `--interpret` ran it.  Debug-formatting escapes them and
+        // leaves every ordinary name byte-identical.
         let reg_name = &self.stores.types[type_id as usize].name;
         if matches!(def.def_type(), DefType::Struct) {
-            writeln!(w, "    let t{type_id} = db.structure(\"{reg_name}\", 0);")?;
+            writeln!(w, "    let t{type_id} = db.structure({reg_name:?}, 0);")?;
         } else if def.def_type() == DefType::EnumValue && !def.attributes().is_empty() {
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
@@ -3223,10 +3401,10 @@ extern crate loft;"
                 .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
             writeln!(
                 w,
-                "    let t{type_id} = db.structure(\"{reg_name}\", {enum_value});"
+                "    let t{type_id} = db.structure({reg_name:?}, {enum_value});"
             )?;
         } else if def.def_type() == DefType::Enum {
-            writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name())?;
+            writeln!(w, "    let t{type_id} = db.enumerate({:?});", def.name())?;
         } else if def.def_type() == DefType::Vector {
             // prefer the actual registered Parts::Vector
             // content from `stores.types[type_id]` — that's what
@@ -3469,6 +3647,17 @@ extern crate loft;"
         let nullable = nullable || matches!(typedef, Type::Optional(_));
         let typedef = typedef.base();
         if let Type::Vector(c, _) = typedef {
+            // loft#923 — peel the ELEMENT's `Optional` for the same reason line 3487
+            // peels the field's: `Optional(τ)` shares τ's storage exactly, and the
+            // compiler's own table holds `vector<τ?>` and `vector<τ>` as ONE type.
+            // Unpeeled, a `vector<vector<integer>?>` field missed the nested-vector
+            // arm below and fell through to the generic path, where
+            // `type_def_nr(Type::Optional)` resolves to the generic `vector` def and
+            // its `known_type` is whatever registered last — `db.vector(t7)`, an
+            // element type the program never named. That MINTS a type, so every
+            // runtime id from there on sat one above the compile-time id baked into
+            // the emitted ops, and loft#739's guard reported the drift.
+            let c: &Type = c.base();
             // when the element `Type::Integer` carries a
             // `forced_size` annotation that `vector_narrow_width`
             // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
@@ -3479,7 +3668,7 @@ extern crate loft;"
             // The wrapper's `main_vector<T>` struct field would end up
             // with 8-byte stride even though `fill_database` narrowed
             // the actual runtime Parts, corrupting reads/writes.
-            if let Type::Integer(spec) = &**c
+            if let Type::Integer(spec) = c
                 && let Some(n) = spec.vector_narrow_width()
             {
                 let name = match n {
@@ -3522,7 +3711,7 @@ extern crate loft;"
             // `known_type` is `u16::MAX` → emits `db.vector(u16::MAX)`
             // which panics in `Stores::field`'s parent-tracking when the
             // wrapper struct is registered.
-            if matches!(**c, Type::Function(_, _, _)) {
+            if matches!(c, Type::Function(_, _, _)) {
                 let narrow = self.stores.name("int<0,false>");
                 if narrow != u16::MAX {
                     // @P353: an empty `vector<fn(…)>` literal registers its
@@ -3552,7 +3741,7 @@ extern crate loft;"
             // `db.vector(db.vector(<inner>))` so the runtime database
             // registers the nested layers in the same order, regardless of
             // which other types happened to register `vector<X>` first.
-            if matches!(&**c, Type::Vector(_, _)) {
+            if matches!(c, Type::Vector(_, _)) {
                 // loft#742 — prefer the content id `fill_database` RECORDED for
                 // this field over anything re-derived from the loft `Type`.
                 //
@@ -4338,7 +4527,12 @@ extern crate loft;"
                             self.output_native_direct_call(w, def_nr, &aliased)?;
                         }
                     } else {
-                        let qualified = format!("{}::{}", krate, def.native());
+                        // rlib path (Windows / cross-compiled targets): name the
+                        // implementing fn in the package crate, which for a
+                        // remapped binding differs from the `#native` string
+                        // (loft#907).
+                        let qualified =
+                            format!("{}::{}", krate, self.data.link_symbol(def.native()));
                         self.output_native_direct_call(w, def_nr, &qualified)?;
                     }
                 } else {

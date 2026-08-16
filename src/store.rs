@@ -425,6 +425,42 @@ impl Store {
         self.resize_store(words);
     }
 
+    /// loft#935 — after [`grow_words`], make the PRIMARY record span the store
+    /// it grew into.
+    ///
+    /// The interpreter's value stack lives inside record 1 of store #0, claimed
+    /// once at `State::new` and then written directly: the frame slots bypass
+    /// `claim`, so `grow_words` is what extends the buffer when a program nests
+    /// deeply enough. It extends the BUFFER only, and record 1's header still
+    /// claims the size it was born with — so every stack byte above that mark
+    /// sits outside the record that is supposed to own it. `Store::valid` says
+    /// so under debug assertions (`Fld 8004 is outside of record 1 size 8000`),
+    /// and in a release build the same bytes are simply written to a region the
+    /// store's own accounting believes nobody holds.
+    ///
+    /// The invariant this restores is the one `State::new` established and
+    /// nothing since maintained: **record 1 of the stack store spans the whole
+    /// store**. It is the store's only record — nothing else ever claims there —
+    /// so extending the header to the buffer's end cannot overlap anything.
+    ///
+    /// `Store::resize` is deliberately NOT used: it falls back to
+    /// claim-copy-delete, which RELOCATES the record. Every live frame is
+    /// addressed as `(0, 1, pos)`, so moving record 1 would move the running
+    /// stack out from under the interpreter.
+    ///
+    /// Grow-only, and a no-op on a store whose primary is already at its
+    /// extent, so it is safe to call after every growth.
+    pub fn extend_primary_to_store_end(&mut self) {
+        let span = self.size - PRIMARY;
+        let claimed: i32 = *self.addr::<i32>(PRIMARY, 0);
+        // A negative header means record 1 is a FREE block — an uninitialised or
+        // reset store, which the stack store never is once `State::new` has
+        // claimed it. Leave it alone rather than forging a live header.
+        if claimed > 0 && (claimed as u32) < span {
+            *self.addr_mut::<i32>(PRIMARY, 0) = span as i32;
+        }
+    }
+
     /// Raw base pointer to the store's memory buffer.
     #[must_use]
     pub fn base_ptr(&self) -> *mut u8 {

@@ -440,27 +440,6 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-    // reject hash-value structs that have a field named `key`.
-    // `key` is a reserved pseudo-field for hash iteration (`for kv in h { kv.key }`).
-    for d_nr in start_def..data.definitions() {
-        if !matches!(data.def_type(d_nr), DefType::Struct) {
-            continue;
-        }
-        for a_nr in 0..data.attributes(d_nr) {
-            if let Type::Hash(c_nr, _, _) = data.attr_type(d_nr, a_nr)
-                && data.attr(c_nr, "key") != usize::MAX
-            {
-                lexer.pos_diagnostic(
-                    Level::Error,
-                    &data.def(c_nr).position,
-                    &format!(
-                        "Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
-                        data.def(c_nr).name,
-                    ),
-                );
-            }
-        }
-    }
     // @PLN25 E2 — register the synthetic `__nullable<T>` enums + (gated) rewrite
     // embedded struct fields, BEFORE the unit-variant discriminant pass + the
     // layout loop below, so each synthetic enum is registered and laid out like
@@ -702,31 +681,36 @@ fn report_unknown_key_fields(data: &mut Data, lexer: &mut Lexer) {
 /// synthetic enum is registered (`register_enum_db`) and laid out like any
 /// hand-written enum.
 ///
-/// Two arms with DIFFERENT maturity (called unconditionally; each arm gated):
-/// - **Embedded-field rewrite** (`item: Row` → `__nullable<Row>`) — gated on
-///   `LOFT_E2_FIELDS`, non-stdlib only.  Immature: a plain `b.item.id` read does
-///   not auto-unwrap the enum, so flipping struct fields tree-wide breaks field
-///   reads across the stdlib + libraries.
-/// - **Registration sweep** — unconditional; lays out every `__nullable<S>`
-///   enum the VECTOR-element path (`e2_nullable_elem`, gated on `LOFT_E2_SYNTH`)
-///   created at parse time.  A no-op when none exist (gate off).
+/// Two arms:
+/// - **Embedded-field rewrite** (`item: Row?` → `__nullable<Row>`).  Selects on the `?` the
+///   author wrote — a field with no `?` cannot be absent and stays dense, so it needs no
+///   discriminant and pays for none.
+/// - **Registration sweep** — lays out every `__nullable<S>` enum the VECTOR-element path
+///   (`e2_nullable_elem`, gated on `LOFT_E2_SYNTH`) created at parse time.  A no-op when
+///   none exist (gate off).
 fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &mut Lexer) {
-    // @PLN25 — embedded NON-vector struct-field nullability (`item: Row` →
-    // `__nullable<Row>`) is DEFERRED behind an opt-in (`LOFT_E2_FIELDS`): unlike
-    // the nullable-SEQUENCE work (`vector<S>` elements, shipped default-on), the
-    // field access/construct glue is incomplete — a plain `b.item.id` read does
-    // not auto-unwrap the enum, so flipping every struct field tree-wide breaks
-    // field reads across the stdlib + libraries.  The registration loop below
-    // (which lays out the `__nullable<S>` enums the VECTOR path creates) always
-    // runs.  Trigger to lift this: the field read/construct auto-unwrap glue.
-    if std::env::var("LOFT_E2_FIELDS").is_ok() {
+    // @PLN25 E2a.2 / loft#896 — an embedded struct-typed field written `item: Row?`
+    // becomes the synthetic `__nullable<Row>` enum, so "absent" is discriminant `0`
+    // and has somewhere to live.  A field typed `item: Row` stays DENSE: it cannot be
+    // absent, so it needs no discriminant and pays for none.
+    //
+    // The `?` in the source is the whole trigger, and it reaches here as the
+    // `Optional` WRAPPER — `Optional(Reference(Row))`.  Matching a bare `Reference`
+    // instead selected the exact complement of that set (every NON-nullable struct
+    // field, since `nullable` is a legacy flag that is true by default), which is why
+    // this arm sat behind an opt-in: rewriting dense fields tree-wide does break field
+    // reads across the stdlib, and it never once fired for the `S?` it was written for.
+    //
+    // A field VECTOR `items: vector<Row?>` is rewritten at the vector-type chokepoint
+    // (`sub_type`'s `vector` arm), so by here its content is already the enum — not an
+    // `Optional` — and falls through.  Keyed collections, primitives, fn-refs are out
+    // of scope: only a heap-typed field stores its payload inline with no room for
+    // absence.
+    {
         for host in 0..data.definitions() {
-            // Stdlib stays dense (this arm is immature); synthetic hosts (tuples,
-            // fn-ref, and our own `__nullable<T>` variants) are skipped so the
-            // rewrite never recurses into generated layouts.
-            if data.def(host).source == crate::data::STD_SOURCE
-                || data.def(host).synthetic.is_some()
-            {
+            // Synthetic hosts (tuples, fn-ref, and our own `__nullable<T>` variants)
+            // are skipped so the rewrite never recurses into generated layouts.
+            if data.def(host).synthetic.is_some() {
                 continue;
             }
             if !(matches!(data.def_type(host), DefType::Struct)
@@ -735,17 +719,14 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
                 continue;
             }
             for a_nr in 0..data.attributes(host) {
-                // Skip the per-variant `constant` markers and `not null` fields.
-                if data.def(host).attributes[a_nr].constant || !data.attr_nullable(host, a_nr) {
+                // Skip the per-variant `constant` markers.
+                if data.def(host).attributes[a_nr].constant {
                     continue;
                 }
-                // Rewrite an EMBEDDED non-vector struct field `item: Row` → the
-                // synthetic `__nullable<Row>` enum.  A field VECTOR `items:
-                // vector<Row>` is rewritten at the vector-type chokepoint
-                // (`sub_type` `vector` arm), so by here its content is already
-                // the enum — not a `Reference` — and falls through.  Keyed
-                // collections, primitives, fn-refs out of scope.
-                let Type::Reference(struct_d, _) = data.attr_type(host, a_nr) else {
+                let Type::Optional(inner) = data.attr_type(host, a_nr) else {
+                    continue;
+                };
+                let Type::Reference(struct_d, _) = *inner else {
                     continue;
                 };
                 if data.def_type(struct_d) != DefType::Struct

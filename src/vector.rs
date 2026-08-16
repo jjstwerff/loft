@@ -541,6 +541,149 @@ pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     }
 }
 
+/// The part of a vector's identity that a loop cannot change while nothing writes to
+/// it: which store holds it, which record its elements live in, and how many there are.
+///
+/// Reading one element out of a vector normally re-derives all three (resolve the store,
+/// load the container slot, load the length) and every one of those loads is guarded, so
+/// LLVM will not hoist them out of a loop even fully inlined — see PERFORMANCE.md
+/// § Native vs Rust root cause 3c. The native emitter therefore derives this triple ONCE
+/// before a loop whose body provably cannot write a store, and each element read inside
+/// becomes bounds check + address arithmetic ([`get_vector_hoisted`]).
+///
+/// A header is only meaningful for as long as that promise holds. `loft::generation::hoist`
+/// is the one place that decides it, and `LOFT_HOIST_VERIFY=1` at GENERATION time emits
+/// the checking form of every hoisted read, which re-derives the triple and asserts it
+/// still matches — so a gate that lets a mutation through fails loudly under one suite run
+/// instead of reading a stale record. The switch is at generation time rather than run time
+/// because the check costs exactly the loads the hoist removed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VecHeader {
+    pub store_nr: u16,
+    pub rec: u32,
+    pub len: u32,
+}
+
+/// Derive [`VecHeader`] for the vector `db` points at.
+///
+/// A null, unallocated or empty vector answers `len: 0`, which makes every fast-path
+/// bounds test in [`get_vector_hoisted`] fail — so those cases route to `get_vector` and
+/// keep its exact answer without needing a marker of their own.
+#[must_use]
+#[inline]
+pub fn vec_header(db: &DbRef, stores: &[Store]) -> VecHeader {
+    if db.is_null() || db.rec == 0 || db.pos == 0 {
+        return VecHeader {
+            store_nr: db.store_nr,
+            rec: 0,
+            len: 0,
+        };
+    }
+    let store = keys::store(db, stores);
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let len = if v_rec == 0 {
+        0
+    } else {
+        store.get_u32_raw(v_rec, 4)
+    };
+    VecHeader {
+        store_nr: db.store_nr,
+        rec: v_rec,
+        len,
+    }
+}
+
+/// [`get_vector`] with the store resolution, the container-slot load and the length load
+/// supplied by an already-derived [`VecHeader`].
+///
+/// Only an index that is in range for the hoisted length takes the fast path. Everything
+/// else — a negative index, an out-of-range one, `i64::MIN`, a null or empty vector —
+/// falls through to `get_vector` itself, so there is no second definition of what those
+/// answer.
+///
+/// `VERIFY` is the `LOFT_HOIST_VERIFY=1` form: it re-derives the header and panics if the
+/// loop moved the vector under it. It is a const parameter rather than a `debug_assert!`
+/// because loft's own library is built with debug assertions off, so a guard written that
+/// way could never fire.
+///
+/// # Panics
+///
+/// Under `VERIFY`, when the header no longer describes `db` — that is the whole point of
+/// the switch. Never in the emitted default (`VERIFY == false`).
+#[must_use]
+#[inline]
+pub fn get_vector_hoisted<const VERIFY: bool>(
+    h: &VecHeader,
+    db: &DbRef,
+    size: u32,
+    from: i64,
+    stores: &[Store],
+) -> DbRef {
+    if from >= 0 && from < i64::from(h.len) {
+        if VERIFY {
+            assert_eq!(
+                *h,
+                vec_header(db, stores),
+                "hoisted vector header is stale — the loop wrote the vector it was hoisted for"
+            );
+        }
+        DbRef {
+            store_nr: h.store_nr,
+            rec: h.rec,
+            pos: checked_vec_pos(from as u32, size),
+        }
+    } else {
+        get_vector(db, size, from, stores)
+    }
+}
+
+/// One indexed element read against an already-derived [`VecHeader`]: the bounds test and
+/// the typed load, with no `DbRef` built between them (loft#885 stage 2).
+///
+/// [`get_vector_hoisted`] removes the store resolution and the length load; this removes what
+/// was left — building the element `DbRef`, testing its `rec` for the null element, resolving
+/// the store a second time from it, and the `rec != 0 && valid(..)` guard inside the typed
+/// getter, which had already been decided by the bounds test. What remains is one comparison
+/// and one load.
+///
+/// `absent` is the getter's own null sentinel (`f32::NAN`, `i64::MIN`, …), so an index the
+/// fast path refuses answers exactly what the unfused pair answered. Off the fast path this
+/// routes back through [`get_vector`], which is what keeps negative indices addressing from
+/// the end rather than reading `absent`.
+///
+/// # Panics
+///
+/// Under `VERIFY`, when the header no longer describes `db`. Never in the emitted default.
+#[must_use]
+#[inline]
+pub fn get_elem_hoisted<T: Copy, const VERIFY: bool>(
+    h: &VecHeader,
+    db: &DbRef,
+    size: u32,
+    from: i64,
+    fld: u32,
+    absent: T,
+    stores: &[Store],
+) -> T {
+    if from >= 0 && from < i64::from(h.len) {
+        if VERIFY {
+            assert_eq!(
+                *h,
+                vec_header(db, stores),
+                "hoisted vector header is stale — the loop wrote the vector it was hoisted for"
+            );
+        }
+        return *stores[h.store_nr as usize]
+            .addr::<T>(h.rec, checked_vec_pos(from as u32, size) + fld);
+    }
+    let elem = get_vector(db, size, from, stores);
+    if elem.rec == 0 {
+        absent
+    } else {
+        *keys::store(&elem, stores).addr::<T>(elem.rec, elem.pos + fld)
+    }
+}
+
 pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> bool {
     if db.is_null() {
         return false; // nothing to remove from a null (absent) vector

@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Expected-error tests extracted from mixed files so normal tests
 // in those files can run.  Each error fn has @EXPECT_ERROR before it.
+//
+// This file holds the PASS-2 half.  `Parser::parse` runs pass 2 only when pass 1
+// finished clean, and most diagnostics here are emitted by `!first_pass` code — so a
+// single pass-1 error anywhere in the file would silence all of them, and their
+// annotations would assert nothing.  That is what happened: 25 of these were inert
+// while the suite stayed green (loft#929).  The pass-1 errors that used to share this
+// file live in 102b-pass1-expected-errors.loft.  Keep the split: nothing here may
+// report during pass 1.
 
 // ── Shared definitions needed by error fns ──────────────────────
 
@@ -32,26 +40,6 @@ fn vec_sum(r: vector<integer>) -> integer {
   total
 }
 
-// ── L11 digit-separator placement errors ───────────────────────
-
-// @EXPECT_ERROR: Misplaced '_' in number literal
-fn test_digit_separator_doubled() {
-  x = 1__0;
-  assert(x == 10, "unreached");
-}
-
-// @EXPECT_ERROR: Misplaced '_' in number literal
-fn test_digit_separator_trailing() {
-  x = 1_ + 0;
-  assert(x == 1, "unreached");
-}
-
-// @EXPECT_ERROR: Misplaced '_' in number literal
-fn test_digit_separator_after_hex_prefix() {
-  x = 0x_F;
-  assert(x == 15, "unreached");
-}
-
 // ── Empty comprehension body (was a compiler panic — control.rs:624 underflow
 //    + data.rs:4453 Unknown-definition; now a clean diagnostic) ──────────────
 
@@ -78,10 +66,10 @@ fn test_vector_concat_method_receiver() {
   assert((v + [9]).len() == 4, "concat method receiver");
 }
 
-// @EXPECT_ERROR: cannot replace a `&` vector parameter
 // A `&vector` ref grows the caller's vector in place; reassigning it to a concat
 // (`out = a + x`) used to silently DROP the first operand `a` (appending only the
 // trailing parts).  Now rejected — append with `out += …` instead.
+// @EXPECT_ERROR: cannot build a concatenation directly into the `&` vector parameter
 fn ref_vector_replace(out: &vector<integer>, a: vector<integer>, x: vector<integer>) {
   out = a + x;
 }
@@ -108,7 +96,10 @@ fn test_match_type_mismatch() {
   match d { North => "text", _ => 42 };
 }
 
-// @EXPECT_ERROR: match on Direction is not exhaustive
+// A repeated arm is not an exhaustiveness failure — the `_` covers the rest, so the match
+// IS exhaustive and what is wrong is the second `North`, which can never be reached.  The
+// annotation asked for the exhaustiveness error and so matched nothing.
+// @EXPECT_WARNING: unreachable arm: North already matched
 fn test_match_duplicate_arm() {
   d = Direction.North;
   match d { North => "first", North => "second", _ => "other" };
@@ -236,8 +227,36 @@ fn vc_local_element() {
   x[0] = 9;
 }
 
-// ── @PLAN48 P2 / @P370 — implicit integer→i32 narrowing is an error ──
+// ── @PLAN48 P2 / @P370 — implicit integer→narrow-width narrowing is an error ──
+// The check is range containment OR a drop in storage width, so it sees every narrow
+// alias.  The width half is what sees `integer` → `i32`: that alias spans the whole
+// 32-bit range, which is the range a plain `integer` REPORTS, so containment held for a
+// pair whose storage drops 8 bytes to 4 and an `i32` field silently truncated
+// (loft#931 — `5000000000` stored `705032704`).  The `i32` twins are below.
+//
+// A plain `integer` VARIABLE is what makes these narrowing: a literal that provably fits
+// is exempt at every position, which is why each fn binds `n` first.
 
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_u16_assign() {
+  n: integer = 5;
+  x: u16 = n; // narrowing (non-literal) — requires `as u16`
+  assert(x == 5, "unreachable");
+}
+
+fn p370_takes_u16(x: u16) -> u16 {
+  x
+}
+
+// @EXPECT_ERROR: cannot implicitly narrow
+fn test_integer_to_u16_arg() {
+  n: integer = 5;
+  assert(p370_takes_u16(n) == 5, "unreachable"); // narrowing arg — requires `as u16`
+}
+
+// The `i32` twins (loft#931).  Both annotations have sat here inert since @PLAN48 P2 on
+// an `i32` local and an `i32` argument — two of the 56 the loft#929 sweep found — because
+// the range test could not see this pair at all.
 // @EXPECT_ERROR: cannot implicitly narrow
 fn test_integer_to_i32_assign() {
   n: integer = 5;
@@ -245,89 +264,49 @@ fn test_integer_to_i32_assign() {
   assert(x == 5, "unreachable");
 }
 
-fn p370_takes_i32(x: i32) -> i32 {
+fn p931_takes_i32(x: i32) -> i32 {
   x
 }
 
 // @EXPECT_ERROR: cannot implicitly narrow
 fn test_integer_to_i32_arg() {
   n: integer = 5;
-  assert(p370_takes_i32(n) == 5, "unreachable"); // narrowing arg — requires `as i32`
+  assert(p931_takes_i32(n) == 5, "unreachable"); // narrowing arg — requires `as i32`
 }
 
-// ── @PLN22 Phase 1 — a bare variant defining an untyped variable is an error ──
-enum PLN22Dir {
-  PLN22North,
-  PLN22South,
-}
+// ── @PLN25 N-Store: a nullable value stored into a non-null slot ──
+// These are WARNINGS, not errors: the store is defined (the slot holds null), so the
+// program still has the meaning loft documents — the developer is told the null lands
+// there rather than being stopped.  They sit in the `warning` tier because ignoring one
+// does produce a wrong result, which is what gates a library's CI.  The accept twins
+// live in 25-division-nullable.loft / 25-index-nullable.loft / 25-tuple-nstore.loft.
+//
+// The source of the nullable is DIVISION (`a / b` types `integer?` — the divisor may be
+// zero).  It used to be `s as integer`, which now errors `text-parse-may-fail` on the
+// line BEFORE the store, so the N-Store diagnostic was never reached and its annotation
+// asserted nothing.
 
-// @EXPECT_ERROR: bare variant 'PLN22North' has no type here
-fn test_pln22_bare_variant_no_context() {
-  d = PLN22North; // no type context — must write `PLN22Dir.PLN22North`
-  assert(d is PLN22North, "unreachable");
-}
-
-// ── @PLN22 Phase 2 — prelude shadowing allows `enum E` etc., but a built-in
-// type-keyword (`integer`, `vector`, …) is NEVER shadowable: it stays a hard
-// error so the language's own types can't be silently re-pointed. ──
-// @EXPECT_ERROR: conflicts with a type
-struct integer {
-  pln22_field: i32,
-}
-
-// A bodyless stdlib forward-decl (`type iterator;`) is `DefType::Type` with an
-// Unknown returned type.  Before the adopt-branch `DefType::Unknown` guard,
-// `struct iterator` was silently swallowed (adopted) instead of rejected.
-// @EXPECT_ERROR: conflicts with a type
-struct iterator {
-  pln22_field: i32,
-}
-
-// `enum`/`type` reusing a keyed-collection keyword used to PANIC in
-// `complete_definition` (re-`set_returned` on an already-typed builtin) because
-// the completion call ran on `self.first_pass` without the `!conflict` guard.
-// (The keyed-collection keywords are lowercase, so the camel-case check also
-// fires first — annotate both diagnostics.)
-// @EXPECT_ERROR: Expect enum definitions to be in camel case style
-// @EXPECT_ERROR: conflicts with a type
-enum hash {
-  Pln22A,
-  Pln22B,
-}
-
-// @EXPECT_ERROR: Expect type definitions to be in camel case style
-// @EXPECT_ERROR: conflicts with a type
-type sorted = integer;
-
-// @PLN25 DN3: integer `/` types `integer?` (the divisor may be zero → null at runtime), so an
-// UNDEFENDED result stored into a non-null return is a violation — the developer must guard
-// (`if b != 0`), discharge (`a / b ?? d`), or declare the return `integer?`. The accept twins
-// live in 25-division-nullable.loft.
-// @EXPECT_ERROR: nullable `integer?` cannot be stored
+// @EXPECT_WARNING: a nullable `integer?` is stored into the return value
 fn test_undefended_division_into_nonnull(a: integer, b: integer) -> integer {
   a / b
 }
 
-// @PLN25 index flip: `v[i]` types `τ?` (OOB → null) for a not-provably-fit index, so an
-// UNDEFENDED element stored into a non-null return is a violation — the developer must guard
-// (`if i < len(v)`), discharge (`v[i] ?? d`), or declare the return `integer?`. The accept twins
-// (const / iter-var / guard / `??` / honest `τ?`) live in 25-index-nullable.loft.
-// @EXPECT_ERROR: nullable `integer?` cannot be stored
+// @PLN25 index flip: `v[i]` types `τ?` (OOB → null) for a not-provably-fit index.
+// @EXPECT_WARNING: a nullable `integer?` is stored into the return value
 fn test_undefended_index_into_nonnull(v: vector<integer>, i: integer) -> integer {
   v[i]
 }
 
 // @PLN25 (N-Store) tuples: a tuple stores ELEMENT-WISE, so an un-discharged `τ?` (or a
-// bare `null`) element cannot slip into a non-null element slot of a tuple RETURN (the
-// synthetic `__tuple<…>` rewrite) or a tuple FIELD. The accept twins (discharged /
-// declared-`τ?`-element / nested) live in 25-tuple-nstore.loft.
-// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the return value
-fn test_tuple_return_undischarged_elem(s: text) -> (integer, integer) {
-  tr_q = s as integer;
+// bare `null`) element is reported per SLOT of a tuple RETURN (the synthetic
+// `__tuple<…>` rewrite) or a tuple FIELD.
+// @EXPECT_WARNING: a nullable `integer?` is stored into element 0 of the return value
+fn test_tuple_return_undischarged_elem(a: integer, b: integer) -> (integer, integer) {
+  tr_q = a / b;
   (tr_q, 1)
 }
 
-// @EXPECT_ERROR: `null` cannot be stored into element 0 of the return value
+// @EXPECT_WARNING: `null` is stored into element 0 of the return value
 fn test_tuple_return_null_elem() -> (integer, integer) {
   (null, 2)
 }
@@ -336,39 +315,17 @@ struct TupleFieldBox {
   t: (integer, integer),
 }
 
-// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the field
-fn test_tuple_field_undischarged_elem(s: text) -> integer {
-  tf_q = s as integer;
+// @EXPECT_WARNING: a nullable `integer?` is stored into element 0 of the field
+fn test_tuple_field_undischarged_elem(a: integer, b: integer) -> integer {
+  tf_q = a / b;
   tf_b = TupleFieldBox { t: (tf_q, 1) };
   tf_b.t.1
 }
 
-// @EXPECT_ERROR: cannot be stored into element 0 of element 0 of the return value
-fn test_tuple_nested_undischarged_elem(s: text) -> ((integer, integer), integer) {
-  tn_q = s as integer;
+// @EXPECT_WARNING: is stored into element 0 of element 0 of the return value
+fn test_tuple_nested_undischarged_elem(a: integer, b: integer) -> ((integer, integer), integer) {
+  tn_q = a / b;
   ((tn_q, 1), 2)
-}
-
-// @PLN25 DN6 (N-Join): the inferred null-start widen (`a = null; a = 5` ⇒ `integer?`,
-// accepted — see 25-null-join.loft) applies ONLY to an INFERRED local (`var_tp == null`
-// is the inferred marker). An ANNOTATED non-null scalar still REJECTS a stored `null` —
-// the explicit non-null contract wins; declare it `integer?` to allow null.
-// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
-fn test_annotated_nonnull_rejects_null() {
-  a: integer = null;
-  a = 5;
-  assert(a == 5, "unreached");
-}
-
-// @PLN25 DN6 soundness boundary: the widen is INLINE-scalar only. `text` is the one
-// heap-backed scalar — its Null slot cannot be retroactively widened to a text? heap-ref
-// slot — so an inferred text null-start is NOT widened; it must annotate `s: text? = null`.
-// (Guard: if `Text` were ever added to the DN6 widen set this would start ACCEPTING.)
-// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
-fn test_inferred_text_null_start_not_widened() {
-  s = null;
-  s = "hi";
-  assert(s == "hi", "unreached");
 }
 
 // @PLN25/DN1: a NON-null return with a missing code path is a compile error — the else path
@@ -413,4 +370,3 @@ fn pe_default_reading_the_record_and_needing_a_temporary() {
   p = Pe698 { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }
-

@@ -157,13 +157,12 @@ fn index_kind() {
   // three keys — and assert the two fields kept their own contents. That worked
   // only because the link was one-directional, and it is exactly the behaviour
   // loft#843 changed.
+  // `i` and `s` are two routes to ONE record set (both are keyed on `EntK`), so
+  // the records go in ONCE, through either member — filling both would put six in.
+  // The literal named both until loft#924, and read as three only because each
+  // member zeroed its own header at its own position and truncated the other's.
   b = IBox {
     i: [
-      EntK { k: 3, name: "gamma" },
-      EntK { k: 1, name: "alpha" },
-      EntK { k: 2, name: "beta" },
-    ],
-    s: [
       EntK { k: 3, name: "gamma" },
       EntK { k: 1, name: "alpha" },
       EntK { k: 2, name: "beta" },
@@ -176,8 +175,6 @@ fn index_kind() {
     "ordered sibling '{sorted_names(c.s)}'"
   );
   c = IBox { i: [
-    EntK { k: 9, name: "delta" },
-  ], s: [
     EntK { k: 9, name: "delta" },
   ] };
   assert(c.i[9].name == "delta" && c.s.len() == 1 && c.s[9].name == "delta", "index after-reassign");

@@ -218,10 +218,9 @@ impl Output<'_> {
                 } else {
                     String::new()
                 };
-                let place = if self.coroutine_persistent_vars.contains(&var) {
-                    format!("self.var_{name}")
-                } else {
-                    format!("var_{name}")
+                let place = match self.coroutine_persistent_fields.get(&var) {
+                    Some(field) => format!("self.var_{field}"),
+                    None => format!("var_{name}"),
                 };
                 write!(w, "{{ let _old_{name}: DbRef = {place}; ")?;
                 self.output_set_inner(w, var, to)?;
@@ -242,8 +241,10 @@ impl Output<'_> {
         // field directly so the value survives across `next_*` calls.
         // The same Var/Set pair would otherwise produce a state-arm-scoped
         // `let mut var_X = …` shadow that arm 1+ cannot see.
-        if self.coroutine_persistent_vars.contains(&var) {
-            let name = sanitize(variables.name(var));
+        if let Some(field) = self.coroutine_persistent_fields.get(&var) {
+            // The struct's own spelling for this field, not the variable's name — two
+            // `for i in …` loops in one generator put two `i`s on the struct (loft#928).
+            let name = field.clone();
             // A heap local's DECLARATION arrives as `Set(v, Null)` — what the non-persisted
             // path lowers to `let mut var_x: DbRef = DbRef::NULL`.  As a field it needs no
             // declaration (the factory already initialised it), but the IR still carries the

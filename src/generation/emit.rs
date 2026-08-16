@@ -227,12 +227,14 @@ impl Output<'_> {
                 let var = node.var_nr();
                 let variables = self.data.def(self.def_nr).variables();
                 let var_name = sanitize(variables.name(var));
-                if self.coroutine_persistent_vars.contains(&var) {
-                    // P224: read from the coroutine struct field.
+                if let Some(field) = self.coroutine_persistent_fields.get(&var) {
+                    // P224: read from the coroutine struct field, under the name the struct
+                    // definition gave it — which is the variable's own only where no other
+                    // field already claimed that spelling (loft#928).
                     if matches!(variables.tp(var), Type::Text(_)) {
-                        return write!(w, "&self.var_{var_name}");
+                        return write!(w, "&self.var_{field}");
                     }
-                    return write!(w, "self.var_{var_name}");
+                    return write!(w, "self.var_{field}");
                 } else if variables.is_argument(var) {
                     if let Type::RefVar(inner) = variables.tp(var) {
                         // By-ref argument: holds &mut T — dereference to read.
@@ -359,6 +361,7 @@ impl Output<'_> {
         match code {
             Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false, false)?,
             Value::Loop(lp) => {
+                let hoisted = self.begin_vector_hoist(w, lp)?;
                 self.loop_stack.push(lp.scope);
                 writeln!(w, "'l{}: loop {{ //{}_{}", lp.scope, lp.name, lp.scope)?;
                 for v in &lp.operators {
@@ -371,6 +374,7 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(w, "}} /*{}_{}*/", lp.name, lp.scope)?;
                 self.loop_stack.pop();
+                self.end_vector_hoist(w, hoisted)?;
             }
             Value::Set(var, to) => self.output_set(w, *var, to)?,
             Value::If(test, true_v, false_v) => self.output_if(w, test, true_v, false_v)?,

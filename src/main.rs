@@ -412,9 +412,12 @@ fn print_help() {
     println!(
         "  --require-signature           refuse to proceed unless the index signature verifies"
     );
-    println!("  doc [path]                    generate HTML documentation for a package");
-    println!("                                doc          — generate docs for package in cwd");
-    println!("                                doc lib/pkg  — generate docs for lib/pkg");
+    println!("  doc [path|library] [-o dir]   generate HTML documentation for a package");
+    println!("                                doc           — the package in the cwd");
+    println!("                                doc lib/pkg   — a package directory");
+    println!(
+        "                                doc graphics  — an installed library, into ~/.loft/doc"
+    );
     println!("                                output: <pkg>/doc/*.html");
 }
 
@@ -912,6 +915,16 @@ fn loft_home() -> std::path::PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".loft")
+}
+
+/// Where `loft doc <installed-library>` writes: `~/.loft/doc/<name>-<version>`.
+///
+/// An installed package lives in the immutable registry cache, so its generated docs
+/// cannot go beside its source; and the current working directory is not loft's to
+/// write to — `loft doc graphics` used to leave a `graphics/` tree in whatever repo
+/// the user was standing in, which a later `git add -A` then swept up (loft#911).
+fn doc_cache_dir() -> std::path::PathBuf {
+    loft_home().join("doc")
 }
 
 /// Order-comparable version key; non-numeric parts sort as 0.
@@ -6289,6 +6302,13 @@ fn main() {
     // loft would write is never used and its shim's surface is not the relevant one.
     let mut html_host_provided = false;
     let mut tests_dir: Option<String> = None;
+    // loft#925 — whether `tests_dir` came from the `loft test` SUBCOMMAND, and
+    // whether that subcommand was given a target of its own.  A target written
+    // after a flag (`loft test --lib src tests/t1.loft`) is not a leading
+    // positional, so it lands in `file_name` and the run falls back to the whole
+    // `tests/` directory; these two say which case a leftover positional is.
+    let mut test_subcommand = false;
+    let mut test_target_given = false;
     // Plan-08 phase 01: --introspect mode collects per-section
     // selectors, output paths, and filters into one Options bundle.
     // The flag itself only toggles the mode; sub-flags accumulate
@@ -6762,21 +6782,44 @@ fn main() {
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
-            let mut test_target = "tests".to_string();
+            let mut test_target = TESTS_DIR.to_string();
+            test_subcommand = true;
             if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                // `loft test draw` → tests/draw.loft
-                // `loft test draw::test_foo` → tests/draw.loft::test_foo
-                let arg = &argv[i];
-                if arg.contains("::")
-                    || std::path::Path::new(arg.as_str())
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
-                {
-                    test_target = format!("tests/{arg}");
-                } else {
-                    test_target = format!("tests/{arg}.loft");
-                }
+                test_target = resolve_test_target(&argv[i]);
+                test_target_given = true;
                 i += 1;
+                // loft#916 — everything after the first target used to be dropped in
+                // silence: `loft test good.loft alsogood.loft` ran the first, printed
+                // `ok … 1 file`, and exited 0 even when the second file FAILED.  A
+                // green reported for a file that did not run is the one failure mode a
+                // test runner must not have, and the file count is the only place it
+                // showed — which nobody re-reads when the point of naming two files was
+                // that the whole run is slow.
+                //
+                // One target per run: the summary line is a single verdict over one
+                // scope, and looping would print a partial one per file, which
+                // misleads in a new way rather than fixing this one.  Only the
+                // CONSECUTIVE leading positionals are examined, so a later flag's value
+                // (`--lib <dir>`) is never mistaken for a second target.
+                let extra: Vec<String> = argv[i..]
+                    .iter()
+                    .take_while(|s| !s.starts_with('-'))
+                    .cloned()
+                    .collect();
+                if !extra.is_empty() {
+                    eprintln!(
+                        "loft test: one target per run, but {} were given ({}).\n\
+                         Run them one at a time, or name a directory to run everything \
+                         under it.",
+                        extra.len() + 1,
+                        std::iter::once(argv[i - 1].clone())
+                            .chain(extra)
+                            .map(|s| format!("`{s}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    std::process::exit(1);
+                }
             }
             // Read loft.toml to find src/ directory, dependency paths, and native libs.
             let manifest_path = std::path::Path::new("loft.toml");
@@ -7591,13 +7634,74 @@ fn main() {
                 std::process::exit(1);
             }
         } else if a == "doc" {
-            // PKG.8: `loft doc [path]` — generate HTML docs for a package.
-            let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
-                std::path::PathBuf::from(&argv[i])
-            } else {
-                std::env::current_dir().unwrap_or_default()
+            // PKG.8: `loft doc [path | library] [-o <dir>]` — HTML docs for a package.
+            //
+            // loft#911 — the argument used to be a PATH only, but the command reads as
+            // (and is used as) `loft doc <library>`.  A library name is not a directory,
+            // so `loft doc graphics` took the default-manifest branch, created
+            // `./graphics/doc/` out of nothing wherever the user happened to stand, found
+            // no `src/`, and reported "0 API sections" for a package with 119 documented
+            // `pub fn`s.  Two rules close that: a name that resolves to nothing produces
+            // an ERROR and no directory, and an installed package's docs go to loft's own
+            // doc cache rather than the CWD or the immutable registry copy.
+            let mut target: Option<String> = None;
+            let mut out_override: Option<std::path::PathBuf> = None;
+            let mut j = i;
+            while let Some(arg) = argv.get(j) {
+                j += 1;
+                if arg == "-o" || arg == "--out" {
+                    match argv.get(j) {
+                        Some(dir) => {
+                            out_override = Some(std::path::PathBuf::from(dir));
+                            j += 1;
+                        }
+                        None => {
+                            eprintln!("loft doc: `{arg}` needs a directory");
+                            std::process::exit(1);
+                        }
+                    }
+                } else if !arg.starts_with('-') && target.is_none() {
+                    target = Some(arg.clone());
+                }
+            }
+            let (pkg_path, default_out) = match target {
+                None => (std::env::current_dir().unwrap_or_default(), None),
+                Some(t) => {
+                    let as_path = std::path::PathBuf::from(&t);
+                    // Resolving a NAME needs the installed-package index, which the
+                    // `registry` feature owns — a build without it has no installed
+                    // packages to search, so the name simply does not resolve and the
+                    // error below is the honest answer.
+                    #[cfg(feature = "registry")]
+                    // `installed_packages` is sorted by (name, version), so the LAST
+                    // match is the newest installed version of that name.
+                    let installed = loft::registry_index::installed_packages()
+                        .into_iter()
+                        .rfind(|(n, _, _)| *n == t);
+                    #[cfg(not(feature = "registry"))]
+                    let installed: Option<(
+                        String,
+                        String,
+                        std::path::PathBuf,
+                    )> = None;
+                    if as_path.is_dir() {
+                        (as_path, None)
+                    } else if let Some((name, version, dir)) = installed {
+                        // An installed package is shared, immutable cache content: its
+                        // docs belong beside it in loft's own tree, not inside it.
+                        (dir, Some(doc_cache_dir().join(format!("{name}-{version}"))))
+                    } else {
+                        eprintln!(
+                            "loft doc: `{t}` is neither a directory nor an installed package.\n\
+                             Point it at a package directory, or install the library first \
+                             (`loft install {t}`)."
+                        );
+                        std::process::exit(1);
+                    }
+                }
             };
-            if let Err(e) = loft::documentation::generate_pkg_docs(&pkg_path) {
+            let out_dir = out_override.or(default_out);
+            if let Err(e) = loft::documentation::generate_pkg_docs(&pkg_path, out_dir.as_deref()) {
                 eprintln!("Error generating docs: {e}");
                 std::process::exit(1);
             }
@@ -7647,6 +7751,33 @@ fn main() {
     if let Some(path_opt) = generate_log_config {
         handle_generate_log_config(path_opt.as_deref());
         return;
+    }
+
+    // loft#925 — a target written AFTER a flag is still the target.
+    //
+    // `loft test`'s own parse takes only a LEADING positional, so
+    // `loft test --lib src tests/t1.loft` left the target at its `tests/` default
+    // and the path fell through to `file_name` — which the `--tests` dispatch below
+    // never reads.  The whole suite ran, and reported `21 passed; 21 files` for a
+    // run that had been asked for ONE.  That is loft#916's failure mode exactly (a
+    // green over a scope nobody asked for), surviving in the ordering its fix did
+    // not cover, and it is what stopped loft#925's reporter cutting a standalone
+    // repro: every invocation they tried ran everything.
+    //
+    // A leftover positional is therefore adopted as the target when none was given,
+    // and refused when one was — the same either/or the leading-positional check
+    // makes, so the two orderings cannot disagree about what two targets mean.
+    if test_subcommand && !file_name.is_empty() {
+        if test_target_given {
+            eprintln!(
+                "loft test: one target per run, but two were given (`{}`, `{file_name}`).\n\
+                 Run them one at a time, or name a directory to run everything under it.",
+                tests_dir.as_deref().unwrap_or(TESTS_DIR)
+            );
+            std::process::exit(1);
+        }
+        tests_dir = Some(resolve_test_target(&file_name));
+        file_name.clear();
     }
 
     // Handle --tests before requiring an input file
@@ -8484,6 +8615,10 @@ fn main() {
     // auto-native libraries (the `loft_shared_*` symbols), a disjoint set from the
     // hand-written `#native` symbols `wire_native_fns` handles.
     extensions::wire_shared_native_fns(&mut state, &p.data);
+    // loft#907: read back which Rust fn each library says implements its
+    // `#native` symbols, so the native backend links the same one the
+    // interpreter dispatches to.  Must run before any codegen below.
+    extensions::resolve_native_impl_symbols(&mut p.data);
 
     // --check: parse + compile only, report errors and exit.
     // When combined with --native, fall through to the native pipeline
@@ -10612,9 +10747,166 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     }
 }
 
+/// Where `loft test` looks for a package's tests, and the prefix it prints.
+const TESTS_DIR: &str = "tests";
+
+/// Resolve the `[target]` of `loft test [target]` to a `--tests` argument.
+///
+/// The target names a test FILE, optionally with a `::selector` suffix
+/// (`::name`, `::{a,b}`), and every spelling of that file is accepted: bare
+/// (`draw`), with the extension (`draw.loft`), and — loft#913 — **as printed**
+/// (`tests/draw.loft`). `loft test` reports its files with the `tests/` prefix,
+/// so pasting a failing line back is the obvious way to iterate on one file; it
+/// used to be joined onto `tests/` a second time and rejected as
+/// `tests/tests/draw.loft`. Since that doubled path can never exist, accepting
+/// the prefix cannot change what any working invocation resolves to.
+///
+/// The `.loft` extension is supplied on the PATH half, not the whole argument —
+/// `draw::test_foo` used to become `tests/draw::test_foo`, whose path half
+/// (`tests/draw`) has no extension and does not exist, so the documented
+/// selector form only worked when the caller also wrote `.loft`.
+///
+/// A target that IS a directory keeps its name (loft#925). `loft test` already
+/// runs a whole directory — that is what the no-argument form does — but naming
+/// one had `.loft` appended to it, so `loft test tests` asked for `tests.loft`
+/// and `loft test tests/unit` for `tests/unit.loft`, neither of which exists.
+/// The subset-of-a-suite invocation therefore looked unsupported, and the
+/// consumer who tried to cut a standalone reproducer for the per-file library
+/// recompile could not get one to run at all.
+fn resolve_test_target(arg: &str) -> String {
+    let (path, selector) = match arg.split_once("::") {
+        Some((p, s)) => (p, Some(s)),
+        None => (arg, None),
+    };
+    // A path already under the tests directory (or absolute, or reaching out of
+    // the package with `..`) is used as given — only a bare test NAME is joined.
+    // Read the leading COMPONENT rather than the leading text: `components()`
+    // drops a `./` prefix and splits on the platform's separator, so this is
+    // right on Windows without a backslash rewrite (which would corrupt a Unix
+    // filename that legitimately contains one — `portable_path`'s gate).
+    let as_path = std::path::Path::new(path);
+    // `components()` keeps a leading `.` (it only drops interior ones), so skip
+    // CurDir to see what the path really starts with.
+    let first = as_path
+        .components()
+        .find(|c| !matches!(c, std::path::Component::CurDir));
+    let rooted = as_path.is_absolute()
+        || matches!(first, Some(std::path::Component::ParentDir))
+        || first.is_some_and(|c| c.as_os_str() == TESTS_DIR);
+    let mut out = String::new();
+    if !rooted {
+        out.push_str(TESTS_DIR);
+        out.push('/');
+    }
+    out.push_str(path);
+    // A DIRECTORY names itself — `loft test tests/unit` runs that directory, the
+    // same way the no-argument form runs `tests/`.  Checked on the JOINED path so
+    // both `loft test unit` and `loft test tests/unit` see the same thing, and only
+    // when there is no `::selector` (a selector names a function inside one FILE, so
+    // a directory there is a mistake worth leaving to the existing report).
+    let names_a_dir = selector.is_none() && std::path::Path::new(&out).is_dir();
+    if !names_a_dir
+        && !std::path::Path::new(path)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+    {
+        out.push_str(".loft");
+    }
+    if let Some(sel) = selector {
+        out.push_str("::");
+        out.push_str(sel);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// loft#925 — a target that IS a directory names itself; only a test FILE
+    /// gets `.loft` appended.  `loft test tests` used to ask for `tests.loft`, so
+    /// running a subset of a suite looked unsupported even though the no-argument
+    /// form runs a directory already.
+    ///
+    /// Anchored on real directories of THIS repo (`cargo test` runs at the repo
+    /// root), so the cell exercises the filesystem probe rather than a mock of it —
+    /// and on a name that is deliberately NOT a directory, which is what keeps the
+    /// probe from swallowing the ordinary file case.
+    #[test]
+    fn a_directory_target_keeps_its_name() {
+        assert_eq!(resolve_test_target("tests/scripts"), "tests/scripts");
+        assert_eq!(resolve_test_target("tests/docs"), "tests/docs");
+        // Not a directory → still a test file, extension supplied as before.
+        assert_eq!(
+            resolve_test_target("tests/no_such_dir"),
+            "tests/no_such_dir.loft"
+        );
+        // A `::selector` names a function inside one FILE, so the directory probe
+        // is skipped and the existing report handles the mistake.
+        assert_eq!(
+            resolve_test_target("tests/scripts::test_one"),
+            "tests/scripts.loft::test_one"
+        );
+    }
+
+    /// loft#913 — every spelling of the same test file resolves to the same
+    /// `--tests` argument, INCLUDING the `tests/…` form `loft test` itself prints.
+    /// The doubled path it used to produce (`tests/tests/good.loft`) can never
+    /// exist, so these are all additions, not changes.
+    #[test]
+    fn a_test_target_resolves_the_same_however_it_is_spelled() {
+        for spelling in ["good", "good.loft", "tests/good.loft", "tests/good"] {
+            assert_eq!(
+                resolve_test_target(spelling),
+                "tests/good.loft",
+                "spelling {spelling:?}"
+            );
+        }
+        // A `./` prefix is recognised as already-rooted and passed through rather
+        // than joined — the string keeps the prefix, which names the same file.
+        assert_eq!(
+            resolve_test_target("./tests/good.loft"),
+            "./tests/good.loft"
+        );
+    }
+
+    /// The `::selector` suffix survives, and the extension is supplied on the PATH
+    /// half — `draw::test_foo` used to resolve to `tests/draw::test_foo`, whose path
+    /// half has no extension and matches no file.
+    #[test]
+    fn a_selector_keeps_its_suffix_and_still_gets_the_extension() {
+        assert_eq!(
+            resolve_test_target("good::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(
+            resolve_test_target("good.loft::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(
+            resolve_test_target("tests/good.loft::test_one"),
+            "tests/good.loft::test_one"
+        );
+        assert_eq!(resolve_test_target("good::{a,b}"), "tests/good.loft::{a,b}");
+    }
+
+    /// A path that reaches outside the package is used as given: joining it under
+    /// `tests/` would silently look somewhere the caller did not name.
+    #[test]
+    fn a_path_outside_the_package_is_not_joined() {
+        assert_eq!(
+            resolve_test_target("../other/tests/x.loft"),
+            "../other/tests/x.loft"
+        );
+        assert_eq!(resolve_test_target("/abs/x.loft"), "/abs/x.loft");
+    }
+
+    /// A test file whose own name starts with `tests` is a NAME, not a directory —
+    /// only the `tests` component itself counts as already-rooted.
+    #[test]
+    fn a_name_beginning_with_tests_is_still_a_name() {
+        assert_eq!(resolve_test_target("testsuite"), "tests/testsuite.loft");
+    }
 
     // The crypto bridge manifest verbatim (loft-libs-core crypto/wasm/Cargo.toml,
     // as published in crypto 0.3.3): one `loft` path dep + the dalek/RustCrypto stack.

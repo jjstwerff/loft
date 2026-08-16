@@ -1,4 +1,4 @@
-// @EXPECT_WARNING: negate the power
+// @EXPECT_WARNING: the leading `-` binds to `x` as a sign (tighter than `**`)
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //

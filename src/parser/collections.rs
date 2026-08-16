@@ -726,6 +726,13 @@ impl Parser {
         let found = self.vars.work_refs(f_type, &mut self.lexer);
         self.change_var_type(found, f_type);
         self.vars.mark_inline_ref(found);
+        // …and `inline_ref` is not what stops the free. A work-ref is freed at scope
+        // exit unless it is marked `skip_free`, so the temp emitted an `OpFreeRef` on
+        // the record the removal below had ALREADY freed: a double free, silent in a
+        // release build and `Unknown record N` from `Store::valid` under debug
+        // assertions.  The doc above says the record belongs to the collection and is
+        // freed once; this is the flag that makes that true.
+        self.vars.set_skip_free(found);
         let mut ops = vec![Value::Set(found, Box::new(get_rec.clone()))];
         for (off, coll_tp, _) in &members {
             if *off == byte_off {
@@ -992,39 +999,17 @@ impl Parser {
             };
             return self.cl("OpSetDbRef", &[r, p, v]);
         }
-        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field /
-        // vector element.  The field/element is a synthetic `__nullable<S>` enum
-        // stored inline, so null is discriminant 0 (NOT the variable store_nr
-        // sentinel — an inline slot has no DbRef of its own).  `copy_ref` would
-        // emit `OpCopyRecord(null, dest, …)`: a silent no-op on the interpreter
-        // (the null source copies nothing) and a hard type error on native
-        // (`OpCopyRecord(cell, (), …)` — `()` where a DbRef is expected).  Write
-        // the discriminant at offset 0 to 0 instead; the inline form of `== null`
-        // reads exactly that (operators.rs `enum_null`).  Inert with the synthesis
-        // gate off — no `__nullable<` enums exist, so the name check never matches.
-        //
-        // A present `Some` carrying heap payload (text / nested vector) is freed
-        // first via `OpClearKeyed` (→ `remove_claims`), which reads the
-        // discriminant and no-ops on an already-null / payload-less element — so
-        // it is safe regardless of prior state.  Without it the old payload leaks
-        // until the host store is freed (@PLN25 E2 leak, was tracked in
-        // embedded-record-null.md).
+        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field / vector element.
+        // `build_nullable_set_null` carries the rationale and is shared with the CONSTRUCTION
+        // path (`H { maybe: null }`), so the two spellings of "absent" cannot drift.
         if op == "="
             && matches!(val.unspan(), Value::Null)
             && let Type::Enum(syn, true, _) = f_type
             && self.data.def(*syn).name.starts_with("__nullable<")
             && !matches!(to, Value::Var(_))
         {
-            let set_null = self.cl(
-                "OpSetEnum",
-                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
-            );
-            let kt = self.data.def(*syn).known_type();
-            if !self.first_pass && kt != u16::MAX {
-                let free = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
-                return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
-            }
-            return set_null;
+            let syn = *syn;
+            return self.build_nullable_set_null(syn, to.clone());
         }
         // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
         // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
@@ -1227,7 +1212,15 @@ impl Parser {
         is_first: bool,
         loop_var: u16,
     ) {
-        let count_var = format!("{name}#count");
+        // Named after the BINDING `name` denotes, not after the spelling — see `iter_op`
+        // (loft#915).  `loop_var` is that binding: loft#794 already routes the counter to
+        // the loop `name` iterates rather than the loop being parsed.
+        let base = if loop_var == u16::MAX {
+            name.to_string()
+        } else {
+            self.vars.name(loop_var).to_string()
+        };
+        let count_var = format!("{base}#count");
         let count = if self.vars.name_exists(&count_var) {
             self.vars.var(&count_var)
         } else {
@@ -1254,6 +1247,18 @@ impl Parser {
             self.file_op(code, t, index_var);
             return;
         }
+        // A loop's companion locals (`#index`, `#next`, `#iter_state`, `#count`) are named
+        // after the BINDING, not after the spelling that reached them: two `for i` loops in
+        // one function are two bindings (`i`, `i#1`) and each carries its own set
+        // (loft#915).  `index_var` is what `name` resolves to right here, so its own name
+        // is the base — the same base the loop used when it created them.  `name` stays the
+        // source spelling, which is what a diagnostic must quote.
+        let base = if index_var == u16::MAX {
+            name.to_string()
+        } else {
+            self.vars.name(index_var).to_string()
+        };
+        let base = base.as_str();
         // detect #fields for compile-time field iteration.
         if self.lexer.has_keyword("fields") {
             let var = self.vars.var(name);
@@ -1292,7 +1297,7 @@ use #count instead"
                 );
                 *t = Type::Unknown(0);
             } else {
-                let i_name = &format!("{name}#index");
+                let i_name = &format!("{base}#index");
                 if self.vars.name_exists(i_name) {
                     let v = self.vars.var(i_name);
                     *t = self.vars.tp(v).clone();
@@ -1308,7 +1313,7 @@ use #count instead"
                 }
             }
         } else if self.lexer.has_keyword("next") {
-            let n_name = format!("{name}#next");
+            let n_name = format!("{base}#next");
             if self.vars.name_exists(&n_name) {
                 let v = self.vars.var(&n_name);
                 *t = self.vars.tp(v).clone();
@@ -1374,14 +1379,14 @@ use #count instead"
             }
             let on = self.vars.loop_on(index_var);
             let state_name = if on & 63 >= 1 && on & 63 <= 3 {
-                let state_key = format!("{name}#iter_state");
+                let state_key = format!("{base}#iter_state");
                 if self.vars.name_exists(&state_key) {
                     state_key
                 } else {
-                    format!("{name}#index")
+                    format!("{base}#index")
                 }
             } else {
-                format!("{name}#index")
+                format!("{base}#index")
             };
             let coll = self.vars.loop_value(index_var).clone();
             let remove = self.cl(
@@ -1879,9 +1884,14 @@ use #count instead"
     /// `Some(true)` on success.
     /// Parse a single `field: value` entry in an object literal.
     /// Returns false if no identifier found or `:` missing (caller handles revert).
+    /// `id` is the name this loop BINDS (`Function::loop_binding`), `src_id` the name the
+    /// program wrote.  They differ only from the second loop over a name onward, and the
+    /// two are read for different questions: companions and the binding itself are keyed
+    /// off `id`, while the shadow guards ask what `src_id` denotes right now.
     pub(crate) fn parse_for_iter_setup(
         &mut self,
         id: &str,
+        src_id: &str,
         in_type: &Type,
         expr: Value,
     ) -> (u16, Option<u16>, u16, Value, Value, Value) {
@@ -1898,90 +1908,62 @@ use #count instead"
             self.vars.defined(iv);
             (iv, None)
         };
-        // error if the loop variable reuses a name with a different type.
-        // Same-type reuse is idiomatic in loft (flat variable scoping).
-        // `_` is exempt — it's the universal "unused" name and must work
-        // across different element types within the same function.
+        // A loop variable that lands on a name the function already uses for something
+        // else is rejected, in two shapes that both silently produced wrong values.
         //
-        // loft#690 — this compares with `is_equal`, NOT `is_same`.  `is_same` answers
-        // "same KIND of type": it reports ANY two `Reference`s as the same whatever
-        // struct they name, so `for r in as_a { … }  for r in as_b { … }` over two
-        // different structs slipped through.  `add_variable` then handed the second
-        // loop the FIRST binding — old var, old type, old dep — and the body read B's
-        // records through A's layout: no diagnostic, no crash, just wrong numbers
-        // (`m=8589934636` for a sum of 3).  `is_equal` compares the struct a
-        // `Reference` names while keeping the looseness that matters here — differing
-        // integer ranges, text deps, and fn-ref capture lists still count as the same
-        // type, so same-struct reuse stays idiomatic.
+        //   * Outer-local shadow (`x = 5; for x in …`) — the loop clobbers `x`, whatever
+        //     the two types are.  Caught on PASS 1: the prior binding is unambiguously a
+        //     plain local, because a preceding loop's binding carries `was_loop_var`.
+        //   * Nested same-name loops (`for i { for i { … } }`) — the inner loop re-points
+        //     `i` at its own variable for the body and never restores it, so the outer
+        //     loop's remaining body would read the inner one.  Caught on PASS 2, via the
+        //     active-loop chain.
         //
-        // loft#825 — this runs on BOTH passes, and that is what makes it reach the reader.
-        // Pass 2 alone was too late: the stale binding this names is the reason the BODY
-        // stops type-checking, and the body's own complaint fires on pass 1, where an Error
-        // ends the parse before pass 2 begins.  `for p in floats { s = s + p.0 }  for p in
-        // pairs { n = n + p.0 }` reported *"Variable 'n' cannot change type from integer to
-        // float"* — the wrong variable, on a cure (rename `n`) that renames the symptom and
-        // reproduces the error under the new name, while the fix the reader needs (rename
-        // `p`) was never mentioned.  The verdict is pass-stable by construction: both types
-        // must be resolved for it to fire, so pass 1 can only stay silent where pass 2 still
-        // speaks, never contradict it.  A pass-1 Error skips pass 2, so it cannot double up.
-        let existing_var = self.vars.var(id);
+        // Both ask what the SOURCE spelling denotes right now.  `_` is exempt: it is the
+        // universal discard and must work across element types in one function.
+        //
+        // SEQUENTIAL same-name loops are legal, and loft#915 is why they need no check:
+        // each loop binds its own variable, so the second inherits no type, dep or storage
+        // from the first.  That replaces loft#690's diagnostic — *"loop variable 'i' has
+        // type text but was previously used as integer"* — which existed because
+        // `add_variable` handed the second loop the FIRST binding and its body then read
+        // B's records through A's layout (`m=8589934636` for a sum of 3).  The corruption
+        // is now unreachable by construction rather than by report, so the diagnostic is
+        // gone and the shape it rejected compiles.  The local collision it ALSO covered is
+        // the case above, which no longer needs a type comparison to state: any non-loop
+        // binding of the name is the shadow, whatever its type.
+        let existing_var = self.vars.var(src_id);
         if id != "_"
             && existing_var != u16::MAX
-            && self.vars.is_defined(existing_var)
-            && !self.vars.var_type(existing_var).is_equal(&var_tp)
-            && !self.vars.var_type(existing_var).is_unknown()
-            && !var_tp.is_unknown()
-            // text_return converts text variables to RefVar(Text) work buffers
-            // for the return path.  When a for-loop variable was converted this
-            // way, the iterator still writes into it as text — this is correct
-            // (the work buffer IS the variable) so suppress the mismatch.
+            && self.first_pass
+            && !self.vars.was_loop_var(existing_var)
+            && !self.vars.is_active_loop_var(existing_var)
+            // `text_return` converts text variables to `RefVar(Text)` work buffers for the
+            // return path.  A loop variable converted this way IS the work buffer, so the
+            // iterator writing into it is correct, not a shadow.
             && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
         {
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "loop variable '{id}' has type {} but was previously used as {}",
-                var_tp.name(&self.data),
-                self.vars.var_type(existing_var).name(&self.data)
+                "loop variable '{src_id}' shadows a local named '{src_id}' — \
+                 rename the loop variable (e.g. loop_{src_id}) or drop the \
+                 outer `{src_id}` if it was a dead placeholder; loft does \
+                 not block-scope loop variables"
             );
         }
-        // C61: reject two classes of shadow that both produce silent wrong
-        // values today:
-        //   * Nested same-name loops (`for i { for i { } }`) — the inner
-        //     iterator rewrites the outer's `#index` companion, detected
-        //     on pass 2 via the active-loop chain.
-        //   * Outer-local shadow (`x = 5; for x in …`) — the loop
-        //     silently clobbers `x`; detected on pass 1 via the
-        //     `was_loop_var` flag.  A plain local's slot has never served
-        //     as a loop variable, so the prior binding is unambiguously a
-        //     local.
-        // Sequential same-name loops stay legal because the prior slot
-        // carries `was_loop_var = true`.  `_` is exempt.
-        if id != "_" && existing_var != u16::MAX {
-            if !self.first_pass && self.vars.is_active_loop_var(existing_var) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "loop variable '{id}' shadows the enclosing loop's '{id}' — \
-                     rename the inner loop variable (e.g. inner_{id}); loft does \
-                     not support nested same-name loops"
-                );
-            } else if self.first_pass
-                && !self.vars.was_loop_var(existing_var)
-                && !self.vars.is_active_loop_var(existing_var)
-                && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
-                && (self.vars.var_type(existing_var).is_same(&var_tp)
-                    || self.vars.var_type(existing_var).is_unknown())
-            {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "loop variable '{id}' shadows a local named '{id}' — \
-                     rename the loop variable (e.g. loop_{id}) or drop the \
-                     outer `{id}` if it was a dead placeholder; loft does \
-                     not block-scope loop variables"
-                );
-            }
+        if id != "_"
+            && existing_var != u16::MAX
+            && !self.first_pass
+            && self.vars.is_active_loop_var(existing_var)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "loop variable '{src_id}' shadows the enclosing loop's '{src_id}' — \
+                 rename the inner loop variable (e.g. inner_{src_id}); loft does \
+                 not support nested same-name loops"
+            );
         }
         // loft#762 — `_` gets its OWN slot per loop.
         //
@@ -2001,8 +1983,14 @@ use #count instead"
         let for_var = if id == "_" {
             self.create_unique("_", &var_tp)
         } else {
-            self.create_var(id, &var_tp)
+            self.create_loop_var(id, &var_tp)
         };
+        // Point the source spelling at THIS loop's binding, and leave it there: the body
+        // reads `i` as this loop's variable, and so does the code after the loop, which is
+        // the value `i` held before loop variables were split per loop (loft#915).
+        if id != src_id {
+            self.vars.set_name(src_id, for_var);
+        }
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {
             let mut if_expr = Value::Null;
@@ -2082,7 +2070,7 @@ use #count instead"
         } else {
             self.lexer.has_identifier()
         };
-        if let Some(id) = id_opt {
+        if let Some(src_id) = id_opt {
             // @P345: a loop variable's type is fully determined by the
             // iterable's element type, so an annotation is always redundant
             // (and unsupported).  Catch `for i: T in …` here and emit one
@@ -2092,7 +2080,7 @@ use #count instead"
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "loop variable '{id}' is type-inferred from the iterable — remove the ': <type>' annotation (write `for {id} in …`)"
+                    "loop variable '{src_id}' is type-inferred from the iterable — remove the ': <type>' annotation (write `for {src_id} in …`)"
                 );
                 // Recover: skip the (possibly compound) annotation up to `in`
                 // so the loop body still parses and no spurious token cascade
@@ -2105,6 +2093,11 @@ use #count instead"
                     self.lexer.cont();
                 }
             }
+            // loft#915 — the name this loop BINDS.  Every variable this loop mints (the
+            // loop variable and its `#index` / `#next` companions) is keyed off it, so a
+            // second `for i` in the same function shares nothing with the first; the body
+            // still reads `i`, which `parse_for_iter_setup` re-points.
+            let id = self.vars.loop_binding(&src_id);
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
@@ -2114,7 +2107,7 @@ use #count instead"
                 let struct_def_nr = self.fields_of;
                 self.fields_of = u32::MAX;
                 self.vars.finish_loop(loop_nr);
-                self.parse_field_iteration(&id, struct_def_nr, &expr, code);
+                self.parse_field_iteration(&id, &src_id, struct_def_nr, &expr, code);
                 return;
             }
             let mut fill = Value::Null;
@@ -2251,6 +2244,7 @@ use #count instead"
                     self.parse_parallel_for_loop(
                         code,
                         &id,
+                        &src_id,
                         &mat_in_type,
                         &Value::Var(mat_var),
                         combined_fill,
@@ -2274,6 +2268,7 @@ use #count instead"
                     self.parse_parallel_for_loop(
                         code,
                         &id,
+                        &src_id,
                         &mat_in_type,
                         &Value::Var(mat_var),
                         combined_fill,
@@ -2285,6 +2280,7 @@ use #count instead"
                 self.parse_parallel_for_loop(
                     code,
                     &id,
+                    &src_id,
                     &in_type,
                     &expr,
                     fill,
@@ -2294,7 +2290,7 @@ use #count instead"
                 return;
             }
             let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
-                self.parse_for_iter_setup(&id, &in_type, expr);
+                self.parse_for_iter_setup(&id, &src_id, &in_type, expr);
             // loft#762 — `_` names THIS loop's binding while its body is parsed, and
             // the outer one again afterwards, so a later `_ = call()` keeps its own
             // slot instead of retyping the loop's.
@@ -2312,7 +2308,7 @@ use #count instead"
             {
                 self.record_decl(
                     pos,
-                    id.chars().count() as u16,
+                    src_id.chars().count() as u16,
                     crate::resolution::Resolution::Local {
                         fn_def: self.context,
                         var_nr: for_var,
@@ -3160,10 +3156,14 @@ use #count instead"
     // Desugar `for a in vec par(b = worker(a), N) { body }` into an
     // index-based loop over the `parallel_for` result vector.
     #[allow(clippy::too_many_arguments)]
+    /// `elem_var` is the name this loop BINDS, `src_elem_var` the name the program wrote
+    /// — they differ from the second loop over a name onward (loft#915).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_parallel_for_loop(
         &mut self,
         code: &mut Value,
         elem_var: &str,
+        src_elem_var: &str,
         in_type: &Type,
         vec_expr: &Value,
         fill: Value,
@@ -3231,6 +3231,11 @@ use #count instead"
         // performs the actual Var→accessor rewrite after body parse,
         // once `idx_var` exists.
         let elem_var_nr = self.create_var(elem_var, &elem_tp);
+        // The body reads the name the program wrote; point it at this loop's binding
+        // and leave it there, the same as the sequential form (loft#915).
+        if elem_var != src_elem_var {
+            self.vars.set_name(src_elem_var, elem_var_nr);
+        }
         self.vars.defined(elem_var_nr);
         if matches!(elem_tp, Type::Integer(_)) {
             self.vars.in_use(elem_var_nr, true);
@@ -3304,7 +3309,7 @@ use #count instead"
             if let Some(d_var_nrs) = destructure_var_nrs.as_ref() {
                 self.parse_destructure_par_worker(&elem_tp, d_var_nrs)
             } else {
-                self.parse_parallel_worker(elem_var, &elem_tp)
+                self.parse_parallel_worker(src_elem_var, &elem_tp)
             };
         // loft#808 — the one place BOTH worker-resolution shapes converge, so it is
         // where "this def is a par worker" is recorded.  A pure-value tuple return
@@ -4576,9 +4581,13 @@ use #count instead"
     }
 
     /// Compile-time unroll `for f in s#fields` into one block per field.
+    ///
+    /// `loop_var_name` is the name this loop BINDS, `src_var_name` the name the program
+    /// wrote — they differ from the second loop over a name onward (loft#915).
     fn parse_field_iteration(
         &mut self,
         loop_var_name: &str,
+        src_var_name: &str,
         struct_def_nr: u32,
         source_expr: &Value,
         code: &mut Value,
@@ -4586,6 +4595,9 @@ use #count instead"
         let field_def_nr = self.data.def_nr("StructField");
         let field_type = Type::Reference(field_def_nr, crate::data::Deps::none());
         let loop_var = self.create_var(loop_var_name, &field_type);
+        if loop_var_name != src_var_name {
+            self.vars.set_name(src_var_name, loop_var);
+        }
         self.vars.defined(loop_var);
 
         let mut body = Value::Null;

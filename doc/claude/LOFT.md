@@ -167,7 +167,8 @@ u8    // integer limit(0, 255)              — 1 byte unsigned
 i8    // integer limit(-128, 127)           — 1 byte signed
 u16   // integer limit(0, 65535)            — 2 bytes unsigned
 i16   // integer limit(-32768, 32767)       — 2 bytes signed
-i32   // integer (explicit 32-bit)          — 4 bytes signed
+i32   // integer (explicit 32-bit)          — 4 bytes signed, -2147483647..=2147483647
+      //                                      (i32::MIN is the null sentinel, not a value)
 u32   // integer limit(0, 4_294_967_294)    — 4 bytes unsigned (post-2a)
 ```
 
@@ -813,7 +814,8 @@ do by looking up the pair in this table:
 | Integer → `single`                 | Implicit      | `[1, 2]` is a valid `vector<single>` |
 | `float` → `single`                 | Explicit `as` | NARROWING (64→32-bit loses precision).  A bare decimal literal is `float`; write a **`single` literal** with the `f` suffix (`1.0f`) or cast (`x as single`).  This is enforced element-wise: a `vector<single>` literal must be `[1.0f, 2.0f]` or `[a as single, …]` — `[1.0, 2.0]` (float literals) is a compile error ("would lose precision"), never a silent truncation |
 | `i32` / narrow int → `integer`     | Implicit      | widening; a 4-byte `i32` (or `u8`/`u16`/`i8`/`i16`) widens into the 8-byte `integer` with no loss |
-| `integer` → `i32` / `u8`/`u16`/`i8`/`i16` | Explicit `as` at storage sites | NARROWING — a plain `integer` is 64-bit; writing one into a narrow **struct field** (or other narrow storage) requires `as` ("cannot implicitly narrow integer to u16 … cast explicitly").  A **constant that provably fits** the target is exempt (`x: i32 = 5`, `f(200)`).  Note the rule binds where the value is *stored*, not at local annotations: `m: i32 = n` with a runtime `n` currently compiles and `m` silently keeps the full 64-bit value.  (@PLAN48 / @P370) |
+| `integer` → `u8`/`u16`/`i8`/`i16`/`u32`/`i32` | Explicit `as` at storage sites | NARROWING — a plain `integer` is 64-bit; writing one into a narrow **struct field**, local, parameter or return (any narrow storage) requires `as` ("cannot implicitly narrow integer to u16 … cast explicitly").  A **constant that provably fits** the target is exempt (`x: u16 = 5`, `f(200)`).  The check is range containment **or a drop in storage width**, so it covers every narrow alias — including `i32`, which the range half cannot see (see the row below).  (@PLAN48 / @P370 / loft#931) |
+| `integer` → `i32` — why it needs the width half | Explicit `as` | `i32` spans the whole 32-bit range, which is the range a plain `integer` *reports*: the 64-bit value lives in an 8-byte slot the bounds do not describe.  So the two specs differ in `forced_size` alone and `[s.min,s.max] ⊆ [d.min,d.max]` holds for a pair whose storage drops 8 → 4 — the one alias whose NAME says "32 bits" was the one range containment never checked, and an `i32` field took `5000000000` and stored `705032704` in silence, on both backends (loft#931, fixed).  The **implicit** stores compare storage width; an **explicit** `as i32` keeps the range rule alone, so it stays spellable as the cure this diagnostic prescribes |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
 | `text` → integer / float / single  | Explicit `as` — **a PARSE, types `τ?`** | `"42" as integer` is a fallible parse, so it types **`integer?`** (`float?` / `single?`), not `integer`. A non-numeric text yields `null`. You MUST discharge before storing into non-null: `"42" as integer ?? 0`, `s as integer?` (keep it nullable), or `match`. This is `(N-Parse)` — a bad parse is a reachable fault, exactly like `÷0` and out-of-bounds indexing (§ @PLN25). Contrast the *numeric* casts above (`float`→`integer`, width narrowing), which reinterpret an existing number rather than parse text |
 | Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |
@@ -2532,6 +2534,22 @@ Rename the loop variable (the message suggests `loop_x`) or drop the dead outer
 local.  The compiler reports this up front with a fix hint; there is no codegen
 panic or hidden workaround to remember.
 
+Two *loops* may share a name freely, at any element types — each `for` binds its
+own variable, so nothing is carried from one to the next:
+
+```loft
+fn g() {
+  for i in ["a", "b"] { println(i); }
+  for i in 0..3 { println("{i}"); }   // fine — a different variable
+  println("{i}");                      // 2 — the last loop's value
+}
+```
+
+Reading the variable after the loop still works, and reads what the *last* loop
+that bound the name left there.  Nested loops are the exception: `for i { for i
+{ } }` is rejected, because the inner binding would take over `i` for the rest of
+the outer body.
+
 ### Hash collections: name the key (local or struct field)
 
 A hash (and `sorted` / `index`) needs its key spelled out, because a bare `[]`
@@ -2566,6 +2584,26 @@ field, a field default. Standing alone with no such type in view it builds a
 The one unsupported form is a **generic-constructor expression**
 (`h = hash<Entry[name]>()`) or a bare untyped `h = []` — neither names the key.
 Use the annotation (`h: hash<Entry[name]> = []`) or a field declaration instead.
+
+#### Assigning to the collection ITSELF, not to a key
+
+`h[k] = null` removes ONE element.  Assigning to the **field** replaces the whole
+collection, on every kind (`vector`, `hash`, `sorted`, `index`, `spatial`, `trie`):
+
+```loft
+t.data = [Entry { name: "y", value: 2 }];  // REPLACES — the old contents are freed
+t.data = [];                               // empties it
+t.data = null;                             // empties it too (see below)
+t.data += [Entry { name: "z", value: 3 }]; // `+=` is the one that APPENDS
+```
+
+`= null` empties the collection rather than making it absent: a collection field holds
+a record id / claim pointer where `0` already means *no records*, and nothing in that
+encoding is left to mean *absent* rather than *empty*.  So `c == null` answers `false`
+even straight after `c = null` — **test emptiness with `len(c) == 0`**
+([loft#917](https://github.com/loft-lang/loft/issues/917) tracks the reader half).  The
+`?` makes no difference here: only the SCALAR default flips to non-null, so `vector<T>`
+and `vector<T>?` are one type with one layout and take the same clear.
 
 ### Generics: single type variable
 

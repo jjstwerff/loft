@@ -467,6 +467,147 @@ coexist.
 
 ---
 
+## Manifest-less resolution — a bare script takes the latest release
+
+**Status: DESIGN, not built.** The behaviour below is the target; the
+"Where it stands today" table says what actually runs.
+
+A script with no `loft.toml` is loft's `python script.py` case: one file, a
+`use`, run it. It should mean *"the newest release of that library"*, every run,
+with no ceremony and no files left behind.
+
+### The invariant
+
+> **Nothing a program produces by RUNNING may change which version a later run
+> resolves.** A version is fixed only by an explicit act — `loft install`,
+> `loft update`, `loft pin` — and that act writes exactly one declaration, beside
+> the thing it governs. Where no declaration is in force, `use <pkg>` means *the
+> newest release*, re-decided on every run.
+
+The invariant is about **write**, not about state: the extracted-package cache
+under `~/.loft/registry/` is written by running and that is fine, because it can
+only make a resolution *faster*, never *different*. A lockfile is the opposite —
+it is the declaration itself, so producing one as a side effect of a run makes a
+program's meaning depend on its own history.
+
+That is what decides every case, including the untested ones: **read the
+declaration that governs this PROGRAM; never write one on its behalf.**
+
+### Why "latest" is the right default, not a convenience
+
+Because a published library that breaks a working consumer is a **bug**, not a
+version bump — [COMPATIBILITY.md](COMPATIBILITY.md) covers `use`d libraries by
+name, and evolution is additive. Under that promise, pinning is for reproducing a
+*build*, not for hiding from breakage; there is nothing to hide from. A default
+that pins would be treating the library ecosystem as untrustworthy, which is the
+opposite of the commitment the project makes about it.
+
+Two honest qualifications, and they shape the design rather than defeat it:
+
+- **The promise binds at contract 1, which is not reached yet.** Until then a
+  library genuinely can regress. The mitigation is that loft is *statically
+  typed and compiled against*: a removed or re-signatured `pub fn` is a compile
+  error naming the call site, not a wrong answer at run time. The failure mode
+  of "latest" is therefore loud, and the escape is one command (`loft pin`).
+- **A data break is silent where an API break is loud.** `data_compatible_with`
+  in the index exists for exactly this, and it is why a program that reads
+  *stored* data is the one shape that should carry a declaration. The docs say
+  so plainly rather than leaving it to be discovered.
+
+### The three scopes
+
+Which declaration governs is a property of the program, so it is answered once:
+
+| Scope | Detected by | Governs |
+|---|---|---|
+| **Package** | nearest ancestor `loft.toml` from the script | that root's `loft.lock` + the manifest's constraints |
+| **Pinned script** | `<script>.loft.lock` beside the script | that sidecar |
+| **Bare** | neither | nothing — newest release, every run |
+
+The cwd plays no part. Today it does, and that is the defect: the same script run
+from two directories resolves two different ways.
+
+### Failure paths — what has to keep working
+
+Enumerated first, because this is where the design earns its shape:
+
+1. **Offline, bare script, package already in the cache.** Must resolve to the
+   newest version already extracted under `~/.loft/registry/`, not fail. This is
+   the path the stray lockfile accidentally covers today, so removing the write
+   without adding it would be a regression — see the probe below.
+2. **Offline, bare script, nothing cached.** Fails, and the message says the
+   package is not cached and that a network run would fetch it.
+3. **Steady state must be silent.** `[registry] resolving <pkg>` on every run of
+   every bare script is noise; it prints only when bytes are actually fetched
+   ([GOALS.md](GOALS.md) — loft is noticed in its absence).
+4. **Index staleness is bounded, not fatal.** The 1-hour TTL plus conditional GET
+   already does this; when the refresh fails, the cached index is used and the run
+   continues.
+5. **A transitive dep of a bare `use`** is resolved by the library's own manifest
+   constraint, unchanged. "Latest" applies to what the *program* named, not to
+   what its libraries pinned.
+6. **`loft install` / `loft update` / `loft pin` still write.** They are the
+   explicit acts; the invariant restricts running, not the verbs whose job is to
+   declare.
+7. **`loft install <pkg>@<version>` in a directory that is not a package.**
+   Today its pin is honoured only through the cwd lockfile leg this design
+   deletes, so it would become a file nothing reads — an explicit pin silently
+   ignored, which is worse than the defect being fixed. The verb must therefore
+   *create the declaration it needs*: write `loft.toml` alongside the lock and
+   say so. That makes the directory a package, the walk-up finds it, and the
+   scope table decides the rest — no special case.
+
+### The change
+
+1. **One function answers the scope.** `resolution_scope(script) -> Scope`
+   (`Package{root}` | `PinnedScript{sidecar}` | `Bare`), consulted by every probe.
+   Today the policy IS the probe order, and three probes each re-derive their own
+   lockfile path independently — `probe_sidecar_lockfile` (beside the script),
+   `probe_project_lockfile` (project root), `probe_registry_installed` (**cwd**).
+   Omitting the rule at one of them is silent: a different version loads, nothing
+   errors.
+2. **Delete the cwd lockfile leg.** `probe_registry_installed` reading
+   `cwd/loft.lock` is what makes resolution depend on where you stood. A project's
+   lock is already found by the walk-up; a script's by the sidecar.
+3. **`probe_auto_install` in `Bare` scope writes no lockfile** —
+   `skip_lockfile: true`, which already exists for the cache-internal case.
+4. **`Bare` scope gains a cache fallback** before it gives up: newest extracted
+   `~/.loft/registry/<pkg>-<version>/` satisfying the script's toolchain floor.
+   This is what makes failure path 1 work, and it is the piece that must land
+   *with* the change, not after it.
+5. **Quieten the steady state**: the `[registry] resolving` line moves behind
+   "actually downloading".
+6. **`loft install` declares.** In a directory with no `loft.toml` it writes one
+   (name from the directory, the requested package under `[dependencies]`)
+   before writing the lock — failure path 7. `loft install` with no argument in
+   such a directory keeps refusing, as it does now; there is nothing to install.
+
+### Re-assertion sites — the brittleness, counted now
+
+`N = 3` probes must agree on which lockfile governs, and disagreement is silent.
+That is the whole reason step 1 is a function returning a value rather than a
+comment describing an order: it collapses `N` to 1. Step 2 removes one site
+outright. If the implementation ends up re-deriving the scope inside a probe, the
+design has failed its own prediction.
+
+### Where it stands today (measured, `time` 0.1.0–0.3.0 in the registry)
+
+| Probe | Result |
+|---|---|
+| Bare script, first run | Resolves **newest** (0.3.0) ✅ — and writes `./loft.lock` |
+| Same script, second run | Reads that lock — **pinned forever**, never upgrades ❌ |
+| Same script, different cwd | Re-resolves **and drops a second `loft.lock`** there ❌ |
+| Bare script, offline, 4 versions extracted | **Fails to resolve** ❌ |
+| Cost of re-resolving each run (cache warm) | **~10 ms** (0.07 s vs 0.06 s pinned) ✅ |
+
+The cost row is the claim most worth having measured: re-deciding on every run is
+what the design asks for, and it is close to free because the index is cached and
+the version pick is in memory. The trade this design makes is not speed — it is
+that two machines running the same bare script on different days can get different
+versions, and the answer to that is `loft pin <script>`, which already ships.
+
+---
+
 ## `loft install` flow
 
 Driver: `loft install` (no args, in a directory with `loft.toml`)

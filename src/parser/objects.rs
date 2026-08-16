@@ -23,6 +23,16 @@ pub(crate) struct FieldSinks {
     /// block directly AFTER the prelude so no field's header is cleared after
     /// its contents land.
     vector_headers: Vec<Value>,
+    /// loft#924 — byte offsets of the fields whose header `parse_object` already
+    /// zeroed in the prelude because they belong to a LINKED COLLECTION GROUP.
+    /// The field parse and `object_init` both consult it so the header is written
+    /// once, in the one place that can order it ahead of every member's fill.
+    group_primed: HashSet<u16>,
+    /// loft#926 — collection fields this literal gives RECORDS to, as opposed to the
+    /// `field: []` that every construction of a linked group writes.  Only a member
+    /// actually handed records can surprise the author about which set they landed in,
+    /// so this, not `found_fields`, is what the advice counts.
+    filled_collections: HashSet<String>,
 }
 
 impl Parser {
@@ -66,6 +76,23 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
+    /// Is this IR node the value a source-level `null` becomes?
+    ///
+    /// Two spellings reach a store site: the bare `Value::Null` the parser starts with, and
+    /// the typed sentinel `convert` rewrites it into once it knows the target type — for a
+    /// heap target that is `OpNullRefSentinel()`.  A site that must recognise "the author
+    /// wrote `null` here" has to accept both, because which one arrives depends on whether
+    /// the target's type was resolved before the value was.
+    pub(crate) fn is_null_source(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Null => true,
+            Value::Call(d, args) => {
+                args.is_empty() && self.data.def(*d).name() == "OpNullRefSentinel"
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn is_collection_type(tp: &Type) -> bool {
         matches!(
             tp,
@@ -499,6 +526,62 @@ impl Parser {
                 // that never gets adopted is still `Unknown` in pass 2, where the
                 // same site reports "Field of unknown variable".
                 t = Type::Unknown(0);
+                // ...but a stub used as a BARE VALUE has no such downstream site, and
+                // that was the one consumer with nobody to report it (loft#934).  Every
+                // other one does: `Zzz {…}` says "unknown type", `Zzz.x` says "Field of
+                // unknown variable", `y: Zzz` and `sizeof(Zzz)` say "Undefined type".
+                // A bare `y = Zzz` said NOTHING, and the value it produced was whatever
+                // the slot happened to hold — `fn f() -> integer { Zzz }` returned
+                // uninitialised memory on `--interpret` and `0` on `--native`, while
+                // `if Zzz {…}` silently took the else arm and `--native` handed the user
+                // a raw rustc `expected bool, found ()`.
+                //
+                // Only for a stub pass 1 registered on SPECULATION — a name that merely
+                // LOOKED like a type (`objects.rs`'s CamelCase test).  A stub from a
+                // written `y: Zzz` annotation is already reported by
+                // `resolve_deferred_unknown`, so reporting here too is one typo, two
+                // errors.  And only when no `.` follows: that is the field/qualifier
+                // form, which has its own report.
+                //
+                // The `Unknown(0)` above is what the assignment's @P376 poison keys on,
+                // so the root error lands and the cascade it used to hide behind
+                // ("missing argument for parameter 'v1' of `OpLtInt`" — an internal
+                // opcode name reaching the user) stays suppressed.
+                if !self.first_pass
+                    && self.speculative_type_refs.contains(&dnr)
+                    && !self.lexer.peek_token(".")
+                {
+                    let suggestion = self.suggest_type_name(name).or_else(|| {
+                        let candidates: Vec<&str> = (0..self.vars.count())
+                            .filter(|&v| self.vars.is_defined(v) && !self.vars.tp(v).is_unknown())
+                            .map(|v| self.vars.name(v))
+                            .collect();
+                        crate::diagnostics::suggest_similar(name, &candidates)
+                            .map(std::string::ToString::to_string)
+                    });
+                    if let Some(s) = suggestion {
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            code = "unknown-variable",
+                            "Unknown variable '{name}' — did you mean '{s}'?"
+                        );
+                    } else {
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "Unknown variable '{name}'"
+                        );
+                    }
+                    // Now that the root error is reported, poison the type so nothing
+                    // downstream re-reports it — the same `Never` @P376 uses on an
+                    // errored assignment RHS.  `Unknown(0)` is what the arity check
+                    // reads as "no argument supplied", which is where
+                    // "missing argument for parameter 'v1' of `OpLtInt`" came from.
+                    t = Type::Never;
+                }
             } else {
                 t = Type::Null;
             }
@@ -1343,7 +1426,14 @@ impl Parser {
                 v_set(w, Value::Null),
                 self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]),
             ];
-            self.object_init(&mut list, variant_nr, 0, &Value::Var(w), &HashSet::new());
+            self.object_init(
+                &mut list,
+                variant_nr,
+                0,
+                &Value::Var(w),
+                &HashSet::new(),
+                &HashSet::new(),
+            );
             list.push(Value::Var(w));
             // #394 — `w` is a NORMAL work-ref (freed at scope end), NOT skip_free.
             // A `skip_free` here assumed the consumer ALIASES w's store (the `x = B`
@@ -2125,7 +2215,7 @@ impl Parser {
         if !self.first_pass {
             let none = HashSet::new();
             let code = Value::Var(var);
-            self.object_init(list, target, 0, &code, &none);
+            self.object_init(list, target, 0, &code, &none, &HashSet::new());
         }
         var
     }
@@ -2305,7 +2395,9 @@ impl Parser {
     // Iterator for
     // <for> ::= <identifier> 'in' <range> '{' <block>
     pub(crate) fn iter_for(&mut self, val: &mut Value, append_value: &mut u16) -> Type {
-        if let Some(id) = self.lexer.has_identifier() {
+        if let Some(src_id) = self.lexer.has_identifier() {
+            // loft#915 — the name this loop BINDS; its companions hang off it too.
+            let id = self.vars.loop_binding(&src_id);
             // Create {id}#index first (always needed, regardless of type).
             let index_var = self.create_var(&format!("{id}#index"), &I32);
             self.vars.defined(index_var);
@@ -2323,7 +2415,11 @@ impl Parser {
             };
             let var_tp = self.for_type(&in_type);
             *append_value = self.create_unique("val", &Type::Unknown(0));
-            let for_var = self.create_var(&id, &var_tp);
+            let for_var = self.create_loop_var(&id, &var_tp);
+            // The body reads the name the program wrote (loft#915).
+            if id != src_id {
+                self.vars.set_name(&src_id, for_var);
+            }
             self.vars.defined(for_var);
             let if_step = if self.lexer.has_token("if") {
                 let mut if_expr = Value::Null;
@@ -2742,15 +2838,39 @@ impl Parser {
             self.expression(&mut discard);
         } else {
             let td = self.data.attr_type(td_nr, nr);
+            // @PLN25 — whether the field carries a record-pointer HEADER is a question
+            // about its storage, and `Optional(τ)` shares τ's storage exactly.  Peel the
+            // marker for that question only; the checks further down (`n_store_violation`,
+            // `convert`, the sentinel hint) read `td` itself, because those ARE about
+            // nullability.  Unpeeled, a nullable collection field was not recognised as one:
+            // it built through a standalone temp instead of in place, and that temp — minted
+            // with a dep on the struct it sits in — skipped the `vector_db` that would have
+            // defined it, so it reached codegen with no stack slot at all (loft#909).
+            let td_base = td.base().clone();
             let pos = self.field_position(td_nr, &field);
             found_fields.insert(field.clone());
+            // loft#926 — is this collection field being given records, or is it the
+            // `field: []` that constructing a linked group writes for every member?  An
+            // empty literal is exactly two tokens, so the question is answered by looking
+            // at them and putting the cursor straight back.  Scoped to a collection field
+            // with the advice enabled, so no other parse meets the lookahead.
+            if crate::keys::linked_group_lint_enabled()
+                && Self::collection_element(&td_base).is_some()
+            {
+                let before = self.lexer.link();
+                let empty = self.lexer.has_token("[") && self.lexer.has_token("]");
+                self.lexer.revert(before);
+                if !empty {
+                    sinks.filled_collections.insert(field.clone());
+                }
+            }
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Radix(_, _, _)
             | Type::Trie(_, _, _)
             | Type::Enum(_, true, _)
-            | Type::Index(_, _, _) = td
+            | Type::Index(_, _, _) = td_base
             {
                 // Collection/enum-big header is a 4-byte u32 record pointer.
                 // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
@@ -2771,14 +2891,21 @@ impl Parser {
                 // against a sibling's prime is load-bearing (hoisting them merged two
                 // keyed fields' records — `502-keyed-slice-for-only`).  They also do
                 // not take the retarget path, so #437 does not reach them.
-                let prime = self.cl(
-                    "OpSetInt4",
-                    &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
-                );
-                if matches!(td, Type::Vector(_, _)) {
-                    sinks.vector_headers.push(prime);
-                } else {
-                    list.push(prime);
+                //
+                // loft#924 — a member of a LINKED COLLECTION GROUP takes neither
+                // route: `parse_object` zeroed the whole group's headers together,
+                // before any member's fill, because an insert through any one of
+                // them indexes the record into all of them.
+                if !sinks.group_primed.contains(&pos) {
+                    let prime = self.cl(
+                        "OpSetInt4",
+                        &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
+                    );
+                    if matches!(td_base, Type::Vector(_, _)) {
+                        sinks.vector_headers.push(prime);
+                    } else {
+                        list.push(prime);
+                    }
                 }
                 let info = self.type_info(&td);
                 self.cl(
@@ -2810,7 +2937,7 @@ impl Parser {
             // (the `OpSetInt4(.., 0)` above zeroed the header) but steer toward
             // the canonical `[]`.
             let empty_braces = matches!(
-                td,
+                td_base,
                 Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
@@ -2934,6 +3061,11 @@ impl Parser {
             self.lexer.revert(link);
             return Type::Unknown(0);
         }
+        // The omitted-field advice is only decidable once the whole body is read, and by then
+        // the cursor sits past the closing `}` — on the next statement for a one-line literal.
+        // Keep the opening brace's position to point the caret at the literal it names
+        // (DIAGNOSTICS.md § Adding a code, step 4).
+        let literal_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
         let mut new_object = false;
         let mut in_place_var: Option<u16> = None;
@@ -3081,6 +3213,27 @@ impl Parser {
         // block right after it, before any field value; see the note in
         // `parse_object_field`.
         let prelude_len = list.len();
+        // loft#924 — a LINKED COLLECTION GROUP's headers are zeroed as one block
+        // here, whether or not the literal names the field, because every member
+        // shares one record set: `OpFinishRecord` through the field the author
+        // wrote indexes the record into the siblings too, so a sibling primed
+        // afterwards drops the spine it was just handed.  Doing it per field made
+        // the literal's field ORDER decide which member could find the records.
+        let mut group_headers = Vec::new();
+        if !self.first_pass {
+            sinks.group_primed = self.linked_group_offsets(td_nr);
+            let mut offsets: Vec<u16> = sinks.group_primed.iter().copied().collect();
+            // A `HashSet` iterates in an unspecified order and these ops land in
+            // the emitted stream, so sort them: identical source must compile to
+            // identical bytecode.
+            offsets.sort_unstable();
+            for off in offsets {
+                group_headers.push(self.cl(
+                    "OpSetInt4",
+                    &[code.clone(), Value::Int(i32::from(off)), Value::Int(0)],
+                ));
+            }
+        }
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -3104,8 +3257,11 @@ impl Parser {
         }
         self.lexer.token("}");
         // #437 splice: every vector-field header zeroed as one block, directly
-        // after the prelude and before the first field's value.
-        for (i, header) in sinks.vector_headers.drain(..).enumerate() {
+        // after the prelude and before the first field's value.  loft#924's group
+        // headers lead it — same position, same reason, and a member of a group is
+        // primed only here.
+        group_headers.append(&mut sinks.vector_headers);
+        for (i, header) in group_headers.into_iter().enumerate() {
             list.insert(prelude_len + i, header);
         }
         // #330 splice: run the hoisted self-reading field values BEFORE the
@@ -3115,7 +3271,10 @@ impl Parser {
             list = std::mem::take(&mut sinks.hoists);
         }
         if !self.first_pass {
-            self.object_init(&mut list, td_nr, 0, code, &found_fields);
+            self.warn_omitted_fields(td_nr, &found_fields, &literal_pos);
+            self.advise_linked_group_fill(td_nr, &sinks.filled_collections, &literal_pos);
+            let primed = std::mem::take(&mut sinks.group_primed);
+            self.object_init(&mut list, td_nr, 0, code, &found_fields, &primed);
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
             for a_nr in 0..self.data.def(td_nr).attributes().len() {
@@ -3237,7 +3396,289 @@ impl Parser {
         val
     }
 
+    /// Advice: this literal leaves a field out, so that field takes its type's zero.
+    ///
+    /// Reports the omission, not a fault — the zero is what an omitted field is documented to
+    /// get. What it points at is the spelling that makes the omission SAFE: a declared field
+    /// default (`palette_pick: integer = -1`), which is additive and costs existing callers
+    /// nothing. See `keys::omitted_field_lint_enabled` for why this advises rather than warns,
+    /// and for the shapes deliberately left quiet.
+    ///
+    /// Called from the literal path only. The synthesised whole-record constructions
+    /// (`default_object`, the nested-`Reference` recursion, enum-variant init) reach
+    /// `object_init` with no `found_fields` at all and were never written by an author, so
+    /// keying on a NON-empty `found_fields` keeps them out on the same test that exempts a
+    /// bare `S {}`.
+    /// The element type a collection field holds records of, or `None` for a field that is
+    /// not a collection.
+    ///
+    /// This is the key a linked group is formed on, so it has to name types the way
+    /// `Stores::finish_type` does: a keyed kind carries its element as a definition number
+    /// already, while a `vector` carries a whole `Type` and only a record element (a struct,
+    /// or the `__nullable<S>` enum a nullable vector holds) can be shared with a sibling.
+    fn collection_element(tp: &Type) -> Option<u32> {
+        match tp {
+            Type::Sorted(e, _, _)
+            | Type::Index(e, _, _)
+            | Type::Hash(e, _, _)
+            | Type::Radix(e, _, _)
+            | Type::Trie(e, _, _) => Some(*e),
+            Type::Vector(inner, _) => match inner.as_ref() {
+                Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether this collection kind is KEYED, which is what makes a group form at all — a
+    /// pair of plain `vector` fields over one element type stays two collections.
+    fn is_keyed_collection(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        )
+    }
+
+    /// Advise when ONE literal fills two members of a linked collection group (loft#926).
+    ///
+    /// See [`crate::keys::linked_group_lint_enabled`] for why this fires at the literal
+    /// rather than at the declaration, and why it advises rather than warns. The short of
+    /// it: a declaration that forms a group is usually deliberate and fills one member, so
+    /// speaking there would be noise on correct code; a literal handing each member its own
+    /// records is the shape that only makes sense if the author thinks they are independent.
+    fn advise_linked_group_fill(
+        &mut self,
+        td_nr: u32,
+        filled: &HashSet<String>,
+        at: &crate::lexer::Position,
+    ) {
+        if self.default || filled.len() < 2 || !crate::keys::linked_group_lint_enabled() {
+            return;
+        }
+        // Element def -> the members declared over it, in DECLARATION order, so the member
+        // named as holding the records is the same one whichever literal is being read.
+        let mut groups: Vec<(u32, Vec<(String, bool)>)> = Vec::new();
+        for a_nr in 0..self.data.attributes(td_nr) {
+            let tp = self.data.attr_type(td_nr, a_nr);
+            let Some(elem) = Self::collection_element(&tp) else {
+                continue;
+            };
+            let entry = (
+                self.data.attr_name(td_nr, a_nr),
+                Self::is_keyed_collection(&tp),
+            );
+            match groups.iter_mut().find(|(e, _)| *e == elem) {
+                Some((_, members)) => members.push(entry),
+                None => groups.push((elem, vec![entry])),
+            }
+        }
+        for (_, members) in &groups {
+            // A group needs a keyed member; two plain vectors over one element type are
+            // two collections and always were.
+            if members.len() < 2 || !members.iter().any(|(_, keyed)| *keyed) {
+                continue;
+            }
+            let given: Vec<&String> = members
+                .iter()
+                .map(|(nm, _)| nm)
+                .filter(|nm| filled.contains(*nm))
+                .collect();
+            let ([holder], rest) = given.split_at(1.min(given.len())) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+            let others = rest
+                .iter()
+                .map(|nm| format!("`{nm}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (route, own, fills) = if rest.len() == 1 {
+                ("is a second route", "a collection of its own", "both")
+            } else {
+                (
+                    "are second routes",
+                    "collections of their own",
+                    "all of them",
+                )
+            };
+            diagnostic_at!(
+                self.lexer,
+                at,
+                Level::Advice,
+                code = "linked-group-double-fill",
+                "{others} {route} to `{holder}`'s records, not {own} — this literal fills \
+                 {fills}, so one record set ends up holding everything they were given"
+            );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "give each field its own element type so they stay independent".to_string(),
+                condition: Some("the fields were meant to be two separate collections".to_string()),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "fill the group once, through one member".to_string(),
+                condition: Some(
+                    "the fields were meant as two routes to one record set".to_string(),
+                ),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
+        }
+    }
+
+    fn warn_omitted_fields(
+        &mut self,
+        td_nr: u32,
+        found_fields: &HashSet<String>,
+        at: &crate::lexer::Position,
+    ) {
+        if self.default || found_fields.is_empty() || !crate::keys::omitted_field_lint_enabled() {
+            return;
+        }
+        let mut omitted: Vec<String> = Vec::new();
+        for a_nr in 0..self.data.attributes(td_nr) {
+            let nm = self.data.attr_name(td_nr, a_nr);
+            if found_fields.contains(&nm) {
+                continue;
+            }
+            let attr = &self.data.def(td_nr).attributes()[a_nr];
+            // A computed / constant / compiler-injected field is not the author's to write,
+            // and one carrying a declared default is the author saying the omission is fine.
+            if attr.constant || attr.hidden || attr.value != Value::Null {
+                continue;
+            }
+            let tp = self.data.attr_type(td_nr, a_nr);
+            if matches!(tp, Type::Routine(_)) {
+                continue;
+            }
+            // A nullable field is exempt: absence is a value it can hold, and the author wrote
+            // the `?` that says so. Both spellings reach here — the `Optional` marker, and the
+            // synthetic `__nullable<S>` enum a nullable struct field is rewritten to.
+            if matches!(tp, Type::Optional(_))
+                || matches!(&tp, Type::Enum(e, true, _)
+                    if self.data.def(*e).name.starts_with("__nullable<"))
+            {
+                continue;
+            }
+            // A POINTER field (`reference<T>`, the `u16::MAX` share marker) and a FN-REF field
+            // are exempt for the same reason a nullable one is: their omitted default is a null
+            // SENTINEL, not a zeroed record, so absence is what the declaration already promises
+            // and a reader gets it — and for a fn-ref there is no other default to declare. An
+            // INLINE `Reference` (a dense embedded struct) is a different thing and stays in
+            // scope: omitting one does hand back a silently zeroed record.
+            if matches!(&tp, Type::Reference(_, deps) if deps.contains(&u16::MAX))
+                || matches!(tp, Type::Function(_, _, _))
+            {
+                continue;
+            }
+            // A collection or text field is exempt, and the reason is the FIX rather than the
+            // hazard: their zero is the identity — empty — and the only default an author could
+            // declare for one (`= []`, `= ""`) IS that zero, so the advice would resolve to a
+            // no-op. A diagnostic whose cure changes nothing is worse than silence; it spends
+            // the credibility that makes the other sites worth reading. The scalars kept below
+            // are the ones where the zero is a real value of the domain and a different default
+            // is expressible — `0` is a palette index, `false` is a choice.
+            if matches!(
+                tp.base(),
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+                    | Type::Text(_)
+            ) {
+                continue;
+            }
+            omitted.push(nm);
+        }
+        if omitted.is_empty() {
+            return;
+        }
+        let type_name = self.data.def(td_nr).name().to_string();
+        let list = omitted.join("`, `");
+        let plural = if omitted.len() == 1 { "" } else { "s" };
+        let takes = if omitted.len() == 1 { "takes" } else { "take" };
+        diagnostic_at!(
+            self.lexer,
+            at,
+            Level::Advice,
+            code = "omitted-field-zero",
+            "`{type_name}` literal omits the field{plural} `{list}`, which {takes} the type's \
+             zero — nothing in the declaration chose that value"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "declare the field's default on the type (`palette_pick: integer = -1`)"
+                .to_string(),
+            condition: Some(
+                "the zero is not what an omitting caller should get — adding a default is \
+                 additive, so existing callers keep working"
+                    .to_string(),
+            ),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: "write the field at this literal".to_string(),
+            condition: Some("only this one site wants a value other than the zero".to_string()),
+            edit: None,
+            concept: "struct records",
+            concept_ref: "@F12",
+        });
+    }
+
     // fill the not mentioned fields with their default value
+    /// loft#924 — the byte offsets of every field of `td_nr` that is a member of a
+    /// LINKED COLLECTION GROUP (`vector<E>` beside `hash<E[k]>`, or any two keyed
+    /// collections over one element type — DATABASE.md § Clearing one member).
+    ///
+    /// Their headers cannot be zeroed field-by-field. A group is several routes to
+    /// ONE record set, so `OpFinishRecord` on any member indexes the record into
+    /// every other member; a member whose 4-byte header is zeroed AFTER that
+    /// insert loses the spine it was just given, and the records stay reachable
+    /// only through whichever member the literal happened to write first. The
+    /// caller primes all of them together, ahead of any fill, and the two sites
+    /// that would otherwise prime one at a time skip what is listed here.
+    ///
+    /// Empty for a struct with no group, which leaves every other literal emitting
+    /// exactly the ops it did before.
+    fn linked_group_offsets(&mut self, td_nr: u32) -> HashSet<u16> {
+        let mut out = HashSet::new();
+        let struct_tp = self.data.def(td_nr).known_type();
+        if struct_tp == u16::MAX {
+            return out;
+        }
+        for aid in 0..self.data.attributes(td_nr) {
+            // A group member is a collection field, so ask the schema only about
+            // those — an offset read for a computed or non-stored field could
+            // collide with a real field's and prime the wrong header.
+            let tp = self.data.attr_type(td_nr, aid);
+            if !Self::is_collection_type(tp.base()) {
+                continue;
+            }
+            let nm = self.data.attr_name(td_nr, aid);
+            let off = self.database.position(struct_tp, &nm);
+            if self.database.keyed_field_is_linked(struct_tp, off) {
+                out.insert(off);
+            }
+        }
+        out
+    }
+
     pub(crate) fn object_init(
         &mut self,
         list: &mut Vec<Value>,
@@ -3245,6 +3686,7 @@ impl Parser {
         pos: u16,
         code: &Value,
         found_fields: &HashSet<String>,
+        group_primed: &HashSet<u16>,
     ) {
         for aid in 0..self.data.attributes(td_nr) {
             let tp = self.data.attr_type(td_nr, aid);
@@ -3289,15 +3731,21 @@ impl Parser {
                     | Type::Radix(_, _, _)
                     | Type::Trie(_, _, _)
             ) {
-                let prime = self.cl(
-                    "OpSetInt4",
-                    &[
-                        code.clone(),
-                        Value::Int(i32::from(pos + fld)),
-                        Value::Int(0),
-                    ],
-                );
-                list.push(prime);
+                // loft#924 — a group member's header was already zeroed with its
+                // siblings', ahead of every fill. Writing it again here is what made
+                // an OMITTED view field lose the records the primary already holds:
+                // `object_init` runs after the whole literal body.
+                if !group_primed.contains(&(pos + fld)) {
+                    let prime = self.cl(
+                        "OpSetInt4",
+                        &[
+                            code.clone(),
+                            Value::Int(i32::from(pos + fld)),
+                            Value::Int(0),
+                        ],
+                    );
+                    list.push(prime);
+                }
                 // An EMPTY collection default (`= []`) parses to `Insert([Null])`, and the
                 // zeroed header above already IS the empty collection.  Letting it through
                 // to `set_field_no_check` emitted `OpAppendVector(field, null)` — appending
@@ -3305,6 +3753,15 @@ impl Parser {
                 if matches!(&default, Value::Insert(items)
                     if items.iter().all(|i| matches!(i, Value::Null)))
                 {
+                    continue;
+                }
+                // loft#924 — likewise for a group member with NO declared default:
+                // the prelude's zeroing is its whole initialisation, and falling
+                // through writes the zero a SECOND time (`set_field_no_check` stores
+                // a keyed collection by writing its 4-byte header), now after the
+                // siblings' records went in.  That is what left an OMITTED view
+                // field empty while the primary held the records.
+                if group_primed.contains(&(pos + fld)) && default == Value::Null {
                     continue;
                 }
             }
@@ -3324,7 +3781,10 @@ impl Parser {
             if let Type::Reference(tp, _) = tp
                 && default == Value::Null
             {
-                self.object_init(list, tp, pos + fld, code, &HashSet::new());
+                // The prelude primed THIS struct's group fields; an inline nested
+                // struct's own fields are none of them, and nothing has filled them
+                // yet, so they prime here as they always did.
+                self.object_init(list, tp, pos + fld, code, &HashSet::new(), &HashSet::new());
                 continue;
             } else if default == Value::Null {
                 // @PLN116 — a BARE (non-`Optional`) enum field cannot be silently
@@ -3442,6 +3902,11 @@ impl Parser {
     ) {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
+        // @PLN25 — how a value REACHES the field (a deep copy for a collection, a plain
+        // store otherwise) follows the field's storage, which `Optional(τ)` shares with τ.
+        // The sibling classification in `parse_object_field` peels the same way; the
+        // nullability checks at the bottom of this function keep `td` itself (loft#909).
+        let td_base = td.base().clone();
         // @PLN25 — null-source convert: a nullable struct SOURCE (a call / variable
         // of type `Reference(S)`, possibly the null sentinel) assigned to a synthetic
         // `__nullable<S>` field.  Build the `Some` variant from the source when
@@ -3450,6 +3915,31 @@ impl Parser {
         // OpCopyRecord a null source (the crash the representation retires).  An
         // inline `S{…}` literal already took the Some-construction path in parse_var,
         // so this fires only for an expression source.
+        // loft#896 — a LITERAL `null` in the constructor (`H { maybe: null }`).  The source is
+        // null at COMPILE time, so there is nothing to test at runtime and no source record to
+        // copy: write the absent discriminant directly, exactly as `obj.f = null` does.
+        // Without this the field-store convert reached `Null` against `__nullable<S>` and
+        // refused the one spelling the declaration exists to allow.  The value is in
+        // `found_fields`, so `object_init` will not also default it.
+        if !self.first_pass
+            && matches!(value.unspan(), Value::Null)
+            && let Type::Enum(syn, true, _) = &td
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let syn = *syn;
+            let enum_kt = i32::from(self.data.def(syn).known_type());
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            let field_ref = self.cl(
+                "OpGetField",
+                &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
+            );
+            let clear = self.build_nullable_set_null(syn, field_ref);
+            list.push(clear);
+            return;
+        }
         if !self.first_pass
             && let Type::Enum(syn, true, _) = &td
             && self.data.def(*syn).name.starts_with("__nullable<")
@@ -3478,7 +3968,7 @@ impl Parser {
             return;
         }
         if matches!(
-            td,
+            td_base,
             Type::Vector(_, _)
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
@@ -3496,7 +3986,7 @@ impl Parser {
             // expression (e.g. `C { v: build() }` where `build` returns a
             // vector).  Before this was a plain push, which left the field
             // uninitialised.
-            if let Type::Vector(ref content, _) = td {
+            if let Type::Vector(ref content, _) = td_base {
                 if !self.first_pass && !matches!(value, Value::Insert(_) | Value::Null) {
                     let pos = self
                         .database
@@ -3533,7 +4023,7 @@ impl Parser {
                 } else {
                     list.push(value.clone());
                 }
-            } else if let Some(kt) = self.keyed_field_kt(&td)
+            } else if let Some(kt) = self.keyed_field_kt(&td_base)
                 && !self.first_pass
                 && !matches!(value, Value::Insert(_) | Value::Null)
             {
@@ -3601,7 +4091,16 @@ impl Parser {
             // which re-checks against the resolved type and passes.  Two
             // mutually-referential types cannot dodge this by reordering:
             // whichever is declared first names the other before it exists.
-            if !self.first_pass || !(exp_tp.is_unknown() || td.is_unknown()) {
+            // loft#944 — `is_unknown()` answers for a bare `Unknown` (and a vector of one),
+            // not for an unresolved member nested inside a wrapper, so a tuple FIELD
+            // (`struct W { t: (integer, Q) }` with `Q` below) slipped past this very guard
+            // and aborted in pass 1 with `(integer, unknown(0))` vs `(integer, unknown(708))`
+            // — one type printed twice, because both spellings render the unresolved member
+            // the same way.  Ask the recursive question the guard always meant.
+            if !self.first_pass
+                || !(crate::data::Data::type_has_unresolved(exp_tp)
+                    || crate::data::Data::type_has_unresolved(&td))
+            {
                 // A FIELD STORE: a literal that fits the type but lands on the
                 // reserved null sentinel of a nullable narrow field is rejected
                 // here too (not just on `obj.f = …`), so `U8N { x: 255 }` doesn't

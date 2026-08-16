@@ -213,7 +213,6 @@ Messages that describe the problem but don't suggest the fix:
 | `"Cannot modify const parameter '{}'"` | Add: `"; remove 'const' from the parameter or use a local copy"` |
 | `"match on {} is not exhaustive — missing: {}"` | Add: `"; add the missing variants or a '_ =>' wildcard"` |
 | `"Cannot add elements to '{}' while it is being iterated"` | Add: `"; collect additions in a separate variable and append after the loop"` |
-| `"loop variable '{}' has type {} but was previously used as {}"` | Add: `"; use a different name for the loop variable"` |
 
 **Step 5 — Improve error recovery after token failures**
 

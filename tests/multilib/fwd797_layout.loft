@@ -26,13 +26,17 @@ fn main() {
     assert(o.o_tail == 88, "field of the host that had to wait for F797Sess");
 
     // Sizes, hand-computed.  F797Roofs and F797Walls are one 8-byte integer each;
-    // a `vector<T>` field stores a 4-byte record id, not the elements.  So
-    // F797Sess = 8 (s_before) + 8 (s_roofs) + 8 (s_middle) + 4 (s_many) + 8
-    // (s_maybe) + 8 (s_after) = 44, and F797Outer inlines that plus its own
-    // integer = 52.  A field dropped from the layout shrinks these; reading the
+    // a `vector<T>` field stores a 4-byte record id, not the elements.  `s_maybe`
+    // is `F797Roofs?`, which is the synthetic `__nullable<F797Roofs>` enum — a
+    // discriminant plus the dense payload, 16 bytes rather than 8, because a
+    // nullable field has to have somewhere to record that it is ABSENT (loft#896;
+    // a dense `F797Roofs` there reads as present-and-zeroed forever).  So
+    // F797Sess = 8 (s_before) + 8 (s_roofs) + 8 (s_middle) + 4 (s_many) + 16
+    // (s_maybe) + 8 (s_after) = 52, and F797Outer inlines that plus its own
+    // integer = 60.  A field dropped from the layout shrinks these; reading the
     // values back cannot catch that on its own, because the read follows whatever
     // offsets the layout ended up with.
     assert(sizeof(F797Roofs) == 8, "F797Roofs is one integer");
-    assert(sizeof(F797Sess) == 44, "every F797Sess field has storage");
-    assert(sizeof(F797Outer) == 52, "F797Outer inlines a whole F797Sess plus a tail");
+    assert(sizeof(F797Sess) == 52, "every F797Sess field has storage");
+    assert(sizeof(F797Outer) == 60, "F797Outer inlines a whole F797Sess plus a tail");
 }

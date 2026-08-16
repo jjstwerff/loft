@@ -38,11 +38,27 @@ fn probe() -> PathBuf {
 }
 
 /// Run `file` on `backend` with extra env; return `(ok, stdout, stderr)`.
+///
+/// `LOFT_759_SUFFIX` names the scratch file the probe's `&File` cell writes, and it
+/// has to differ per RUN. The probe is driven from two test binaries at once — the
+/// five cells here, plus `wrap::loft_suite`, which sweeps every `tests/scripts/*.loft`
+/// — and cargo runs those binaries in parallel. On one hardcoded name they raced:
+/// one process `delete`d the file while another was reading its first record back, and
+/// the cell reported `file: first record null, want 4242` as if the publish had failed.
+/// A `Mutex` cannot reach it (the collision is cross-PROCESS), so the name carries the
+/// distinction instead. The default is empty, so a bare `loft` run of the probe — and
+/// `loft_suite`'s — keeps the original filename.
 fn run(backend: &str, file: &PathBuf, env: &[(&str, &str)]) -> (bool, String, String) {
+    let suffix = format!(
+        "_{}_{}",
+        backend.trim_start_matches('-'),
+        env.iter().map(|(k, _)| *k).collect::<Vec<_>>().join("_")
+    );
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
         .arg(file)
         .env("LOFT_TIMEOUT", "180")
+        .env("LOFT_759_SUFFIX", suffix)
         .env("LOFT_NO_CACHE", "1");
     for (k, v) in env {
         cmd.env(k, v);

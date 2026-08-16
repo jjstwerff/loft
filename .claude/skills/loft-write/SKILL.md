@@ -716,24 +716,21 @@ never a codegen panic or silent corruption, on either backend:
   disjoint blocks: `if … { x = 1 }  if … { x = "hi" }` →
   `Variable 'x' cannot change type from integer to text`.  Re-assigning the *same*
   type is fine (`x = 1; x = 2`).
-- **A loop variable reused with a different element type (@P344)** →
-  `for i in [1,2,3] {…}` then `for i in ["a","b"] {…}` in the same function →
-  `loop variable 'i' has type text but was previously used as integer`.  Same
-  element type is fine (`[1,2,3]` then `[4,5,6]`); the same name in a *different*
-  function is fine.  Two same-function loops over different types → distinct names
-  (`for n in nums {…}  for s in strs {…}`).
 - **A loop variable named like an existing local** →
   `loop variable 'x' shadows a local named 'x' — rename the loop variable
   (e.g. loop_x)`.  Rename it, or drop the dead outer local.
+- **Nested same-name loops** → `for i { for i { … } }` is rejected: the inner
+  binding would take over `i` for the rest of the outer body.
 - **Loop variables are inference-only (@P345)** — `for i: integer in …` does not
   parse (`loop variable 'i' is type-inferred from the iterable — remove the
   ': <type>' annotation`).  Drop the annotation.
 
-This is accepted-as-intended (CAVEATS.md § P344); true per-loop scoping is a
-deferred resolver change, **not** a bug to work around.  The zero-cost habit:
-**descriptive, distinct names** (`fib_i`, `mb_x`) — it sidesteps every case above
-and reads better anyway.  (You do *not* need names unique across the whole file;
-the constraint is per-function.)
+**`for` loops are the exception to the one-type-per-name rule** (loft#915): each
+`for` binds its own variable, so two loops in one function may reuse a name at
+different element types — `for i in ["a","b"] {…}` then `for i in 0..3 {…}`
+compiles.  Reading the variable after the loop still works and gives the *last*
+loop's value.  You therefore do **not** need per-function loop-variable prefixes;
+short names (`i`, `e`, `n`) are fine and read better.
 
 **Unused variable = warning, not an error** — the program still runs (exit 0).
 Use `_` for an unused loop variable to keep the build warning-clean.
@@ -1009,7 +1006,6 @@ when-to-reach-for-which:
 |--------------|-----|
 | `Too few parameters on n_<fn>` | Per-function name collision — give the loop/local a name distinct from the function's params; avoid `for` in `const vector<T>` recursive fns |
 | `Variable <x> is never read` | A **warning** (program still runs, exit 0) — use the variable, or name an unused loop var `_` |
-| `loop variable 'i' has type … but was previously used as …` | Two same-function loops over different element types share one name — give them distinct names |
 | `Indexing a non vector` | You indexed a scalar (`x = 5; x[0]`) — index a vector/collection, not a single value |
 | `Not implemented operation = for type null` | A local named `null` (a literal keyword) — rename it |
 | `Cannot iterate a hash directly` | Track aggregate separately |
@@ -1038,7 +1034,7 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 
 ## Pre-flight checklist
 
-- [ ] All loop variables are unique across the entire file
+- [ ] No loop variable shares a name with a plain local in the same function (loops may share names with each other)
 - [ ] No nested `fn` definitions — helpers live at file scope
 - [ ] Hash collections are struct fields, not standalone locals
 - [ ] No `arr[lo..hi]` passed as `vector<T>` argument

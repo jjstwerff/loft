@@ -39,6 +39,12 @@ loft debug prog.loft:12 [--lib dir]      # STOP at line 12: read/edit the live f
 cargo run --bin gendoc                   # regenerate doc/*.html
 make ci                                  # fmt → clippy → test (full local gate)
 make test                                # clippy + test → result.txt
+make check-rlib                          # 1s pre-flight: is libloft.rlib current? RUN IT
+                                         #   BEFORE a bare `cargo test` — `cargo build
+                                         #   --bin loft` never rebuilds the lib rlib the
+                                         #   native tests link, and a bare `cargo test`
+                                         #   builds no rlib either (`make ci` builds all
+                                         #   three itself, so it needs no pre-flight)
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make speed                               # what got slower/faster — a REPORT, never a gate
 make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=
@@ -62,6 +68,13 @@ that filled the heap, with a one-store-vs-many breakdown that tells a runaway le
 `LOFT_MEMORY_LIMIT=<2G|512M|0>` overrides it; ordinary runs are never capped. When writing a
 repeat-run harness for a corruption repro, cap the process too (`ulimit -v`) — the runaway is not
 necessarily the process the kernel kills. TESTING.md § Store-memory ceiling.
+
+**Under debug assertions a third bound applies:** the interpreter stops after `LOFT_MAX_OPS`
+operations (default 4e9, `0` = off) and prints the last sixteen ops as `function+offset: OpName` —
+reach for it, set LOW, when hunting a hang, because it names the loop a timeout can only time out
+in. Absent from every release build. It is a count, so it cannot tell a long run from a hung one:
+at 100M it was tripping legitimate library tests and reporting them as infinite loops, which read
+the debug-assertions gate as known-red (loft#919). TESTING.md § Hang guard.
 
 For any multi-failure refactor, start `find_problems.sh --bg` before editing (detached
 `cargo test --release --no-fail-fast` → `/tmp/loft_problems.txt`).
@@ -345,6 +358,46 @@ excluded; separate from complexity because a caller's burden and a reader's burd
 different fixes: a struct vs an extracted function) · `LOFT_NO_DEFAULT_HINT` (≥2 trailing
 booleans with no default — advertises default parameters, which are under-used and free to
 adopt: adding a default is additive, so existing callers keep working) ·
+`LOFT_NO_OMITTED_FIELD` (loft#914 `omitted-field-zero` ADVICE: a struct literal that names
+SOME fields and leaves another out — the omitted one takes its type's zero and nothing in the
+declaration chose it, which bites where zero is a meaningful value of the field's domain
+(dryopea's palette index wanted `-1`; `0` is the entry that erases). Advertises the DECLARED
+FIELD DEFAULT (`palette_pick: integer = -1`), the cure that already exists and was simply
+undiscoverable. `advice`, not `warning`: the zero is documented behaviour, so ignoring it
+cannot produce a result the language did not promise. Quiet on a field with a declared
+default, on a NULLABLE field (absence is a value it holds), and on a bare `S {}` — that asks
+for the whole default record; the ambiguity is only in the PARTIAL literal) ·
+`LOFT_NO_LINKED_GROUP` (loft#926 `linked-group-double-fill` ADVICE: one struct literal
+gives RECORDS to two members of a linked collection group — two keyed collections over one
+element type are two routes to a SINGLE record set, so both end up holding everything and
+nothing at the literal says so. Quiet on a member written `[]`, which is how every group is
+constructed, and quiet when only one member is filled — those are the deliberate uses.
+`advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
+produce a result the language did not promise; what is wrong is the author's model) ·
+`LOFT_NO_NULLABLE_COLLECTION` (loft#917 `nullable-collection-field` WARNING: a `?` on a
+COLLECTION field — `vector`/`hash`/`sorted`/`index`/`radix`/`trie` — promises an absence the
+storage cannot hold. The field is a 4-byte RECORD ID and starts zeroed, so `H { xs: null }`
+and `H { xs: [] }` lower to the identical `OpSetInt4(h, off, 0)`, while `xs == null` lowers
+to `OpVectorIsNull`, a test of the *store_nr* sentinel a field read never produces — the
+guard takes the present branch every time. Not repairable under the field's own declaration:
+a distinct absent marker changes the STORED format of every existing collection field
+(compatibility forbids it), record id zero already means `[]` so an in-band reading would
+newly answer `[] == null` true, and the `__nullable` enum #896 built for structs needs a
+`Some` layout for a 4-byte non-record payload — the open half, shared with loft#938. Wider
+than the filed `vector<T>?`: `hash<E[k]>?` and `sorted<E[k]>?` fail identically. Quiet on
+scalar/struct `?` fields, which work, and on a nullable ELEMENT `vector<vector<T>?>`) ·
+`LOFT_NO_SHADOWED_BY_METHOD` (loft#940 `shadowed-by-method` WARNING: a LIBRARY's free
+`fn f(x: τ, …)` that no bare call can reach, because `find_fn` resolves the method
+spelling `t_<τ>_f` before the free `n_f` and reaches it through the stdlib row from
+every source — so the shadow covers the declaring file and the library's own other
+modules, not just a consumer, and `pub` is not the axis. @PLN102 C97 keeps the
+DEFINITION legal on purpose (module-scoped, so the stdlib can grow without breaking a
+shipped library) and `lib::f` still reaches it; the silence was the defect. `warning`,
+not advice: the published `regex::find(pattern, input)` has the stdlib's exact arity and
+argument types, so a bare `find(p, i)` type-checks and answers the wrong thing. Quiet
+where the same name is a method on ANOTHER receiver type — arg-type dispatch keeps that
+one reachable — and quiet for a collision with a stdlib FREE function, which the import
+outranks) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is
@@ -378,3 +431,18 @@ caller — one probe inverted from `100 % app_bit` to `99.5 % lib_grind` under
 `LOFT_NO_NATIVE_LIBS=1`. The report says so whenever a library was called.
 Prefer `make profile`, which picks the instrument. Off costs nothing (the
 sampler rides the existing per-op debug branch); armed costs +7–11 %. PERFORMANCE.md § Profiling.
+
+**Vector-header hoist (loft#885, `--native` only, both switches read at GENERATION time):**
+a loop the emitter proves writes NO store derives each vector's `(store_nr, record, length)`
+once before the loop, so an element read is a bounds test plus address arithmetic (~2×).
+The gate (`src/generation/hoist.rs`) is an ALLOW-list on purpose — an op missing from it
+costs the optimisation, never correctness, which is the opposite of the five drifted
+mutation deny-lists in PERFORMANCE.md § Design: P8. **`LOFT_HOIST_VERIFY=1`** emits the
+checking form of every hoisted read (re-derives the header, panics on a stale one) — run the
+suite under it after touching the gate; **`LOFT_NO_VECTOR_HOIST=1`** emits the pre-885 form,
+which is the before-half of an A/B on one binary and the first bisect step for a
+native-only wrong answer in a vector loop; **`LOFT_NO_ELEM_FUSE=1`** keeps the hoisted header
+but leaves the scalar element read UNFUSED, one bisect step finer, and is the middle rung that
+showed stage 2 is worth ~3.2× on top of stage 1 (projected ~1.4×) — more than the hoist itself,
+because the second store resolution it removes costs more than the arithmetic it saves.
+PERFORMANCE.md § Design: P2, NATIVE.md.

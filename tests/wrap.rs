@@ -109,12 +109,22 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     for l in p.diagnostics.lines() {
         println!("{l}");
     }
-    if !p.diagnostics.is_empty() {
+    // Run the check whenever the file DECLARES something, not only when the parser said
+    // something.  Gating on `!p.diagnostics.is_empty()` was the second way an expectation
+    // went inert: a file whose diagnostics disappeared entirely never reached
+    // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
+    // were never looked at (loft#929).
+    if !p.diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
         check_diagnostics(
             &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,
+            true,
         )?;
     }
     scopes::check(&mut p.data);
@@ -289,6 +299,39 @@ fn loft_suite() -> std::io::Result<()> {
         })
         .collect();
     files.sort();
+    // `LOFT_SCRIPT_FIRST` / `LOFT_SCRIPT_LAST` — run only a WINDOW of the sorted corpus.
+    //
+    // The instrument for a fault that only appears in the whole-corpus run: one script
+    // corrupts the store table and a LATER, innocent one dies of it, so the question is
+    // "which earlier script?" and the only way to ask it is to run a subset. Without this
+    // the answer had to be guessed — loft#920 was attributed to the wrong script twice.
+    //
+    // A window rather than a limit, because both ends move: shrink `LAST` to find the
+    // script that DIES, then raise `FIRST` to find the earliest one whose presence still
+    // kills it. Indices are into the sorted list and are printed on every run, so a bisect
+    // step is a number rather than a filename. Pin the order with
+    // `LOFT_HASH_SEED=0x0123456789abcdef` — allocation order is what decides where latent
+    // corruption surfaces.
+    let idx_env = |k: &str, dflt: usize| -> usize {
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(dflt)
+    };
+    let first = idx_env("LOFT_SCRIPT_FIRST", 0);
+    let last = idx_env("LOFT_SCRIPT_LAST", files.len());
+    if first != 0 || last != files.len() {
+        eprintln!(
+            "loft_suite: window [{first}, {last}) of {} scripts — NOT a full run",
+            files.len()
+        );
+        files = files
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| *i >= first && *i < last)
+            .map(|(_, p)| p)
+            .collect();
+    }
     // Scripts with dedicated #[ignore] wrappers are skipped here to keep
     // loft_suite green while the feature is under development.
     let skip: HashSet<&str> = ignored_scripts();
@@ -867,6 +910,7 @@ fn check_diagnostics(
     expected_warns: &[String],
     expected_errors: &[String],
     expected_ann_warnings: &[String],
+    final_pass: bool,
 ) -> std::io::Result<()> {
     let mut unmatched_warns: Vec<&str> = expected_warns.iter().map(String::as_str).collect();
     let mut unmatched_errors: Vec<&str> = expected_errors.iter().map(String::as_str).collect();
@@ -911,8 +955,35 @@ fn check_diagnostics(
     for pat in &unmatched_warns {
         println!("expected warning not emitted: {pat}");
     }
-    // Only fail on unexpected errors or unmatched #warn patterns.
-    if unexpected.is_empty() && unmatched_warns.is_empty() {
+    // An `@EXPECT_ERROR` / `@EXPECT_WARNING` that never matched is a guard that no longer
+    // guards anything — the diagnostic it pins may have been reworded, narrowed, or
+    // removed, and the file still passed.  Both used to be collected and then DROPPED,
+    // and 56 of the 167 `@EXPECT_ERROR` annotations in the tree were inert when that was
+    // measured (loft#929).  Failing on them is what stops the guard rotting again.
+    //
+    // The commonest way one goes inert is not a reworded message: `Parser::parse` runs
+    // pass 2 only when pass 1 finished clean, so ONE pass-1 error silences every
+    // `!first_pass` diagnostic in the same file.  A file therefore asserts pass-1 errors
+    // OR pass-2 errors, never both — see the 102/102b and 36/36b pairs.
+    //
+    // Reported on the FINAL check only: before it, a diagnostic still to come reads as
+    // one that will never arrive.
+    if final_pass {
+        for pat in &unmatched_errors {
+            println!("expected error not emitted: {pat}");
+        }
+        for pat in &unmatched_ann_warns {
+            println!("expected @EXPECT_WARNING not emitted: {pat}");
+        }
+    }
+    // An unmatched expectation only condemns the file on the FINAL check.  The parse-time
+    // call runs before the post-scope-check lints have spoken, and `894-lost-write-through
+    // -returned-struct.loft`'s `@EXPECT_WARNING` names one of those — failing there would
+    // report a diagnostic as missing while it was still to come.
+    if unexpected.is_empty()
+        && unmatched_warns.is_empty()
+        && (!final_pass || (unmatched_errors.is_empty() && unmatched_ann_warns.is_empty()))
+    {
         Ok(())
     } else {
         Err(Error::from(std::io::ErrorKind::InvalidData))
@@ -1061,6 +1132,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     // process so crashes print the last-executed opcode + PC.
     loft::crash_report::install("wrap");
     println!("run {entry:?}");
+    // `loft_suite` runs the whole corpus in ONE process, so a fault that depends
+    // on accumulated arena state (loft#920) has to be attributed to the script
+    // that triggered it.  The line above goes to stdout while every runtime
+    // complaint goes to stderr, and the two are buffered independently — reading
+    // an interleaving of them names the wrong script.  `LOFT_TRACE_SCRIPT=1` puts
+    // the marker on the SAME stream as the complaint, where the order is real.
+    if std::env::var_os("LOFT_TRACE_SCRIPT").is_some() {
+        eprintln!("run {entry:?}");
+    }
     let source = std::fs::read_to_string(&entry)?;
     let expected = expected_warnings(&source);
     let (exp_errors, exp_ann_warns) = expected_annotations(&source);
@@ -1104,12 +1184,22 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 )
             )
         });
-    if !p.diagnostics.is_empty() {
+    // Run the check whenever the file DECLARES something, not only when the parser said
+    // something.  Gating on `!p.diagnostics.is_empty()` was the second way an expectation
+    // went inert: a file whose diagnostics disappeared entirely never reached
+    // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
+    // were never looked at (loft#929).
+    if !p.diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
         check_diagnostics(
             &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,
+            had_errors,
         )?;
     }
     // Only skip execution when the file actually has unresolved parse errors.
@@ -1118,6 +1208,19 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     if had_errors {
         println!("  ok (errors consumed)");
         return Ok(());
+    }
+    // The whole-program lints, in the same window `src/main.rs` runs them: on the parsed
+    // IR, after `Parser::parse` and BEFORE `scopes::check`.  Until now they ran only in
+    // the CLI, so this suite could neither confirm one of their warnings nor catch a false
+    // positive from one — `894-lost-write-through-returned-struct.loft` carried an
+    // `@EXPECT_WARNING` for a diagnostic the harness had no way to produce (loft#929).
+    // Same precondition as the CLI: an aborting error means resolution did not finish, so
+    // every ownership verdict derived from it is known-bad.
+    let mut diagnostics = std::mem::take(&mut p.diagnostics);
+    if diagnostics.level() < loft::diagnostics::Level::Error {
+        loft::use_analysis::warn_dead_stores(&p.data, &mut diagnostics, &path);
+        loft::use_analysis::warn_double_move(&p.data, &mut diagnostics, &path);
+        loft::use_analysis::warn_lost_temp_writes(&p.data, &mut diagnostics, &path);
     }
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.
@@ -1149,6 +1252,23 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             std::panic::resume_unwind(payload);
         }
     };
+
+    for l in diagnostics.lines() {
+        println!("{l}");
+    }
+    if !diagnostics.is_empty()
+        || !expected.is_empty()
+        || !exp_errors.is_empty()
+        || !exp_ann_warns.is_empty()
+    {
+        check_diagnostics(
+            &diagnostics.lines(),
+            &expected,
+            &exp_errors,
+            &exp_ann_warns,
+            true,
+        )?;
+    }
 
     // Discover all zero-parameter user functions as entry points.
     let all_fns = entry_point_names(&p_data, start_def);
@@ -1187,6 +1307,14 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     } else {
         // Run each function with catch_unwind so one failure doesn't abort the rest.
         let mut failures: Vec<String> = Vec::new();
+        // Part A2 — stack-store free gate (loft#920).  A `BUG (#306)` refusal means the
+        // program emitted a whole-store free aimed at the eval-stack store; only the
+        // allocator's guard kept it from taking every live frame.  It went to stderr and
+        // nothing read it, so `35p-iterator-match.loft` raised one on EVERY run of the
+        // suite for as long as it existed and still scored PASS — the refusal keeps the
+        // store alive, so nothing the script itself asserts can notice.  Snapshot the
+        // process-wide counter here and compare after the run.
+        let refusals_before = loft::keys::stack_free_refusals();
         for name in &fns {
             if std::env::var("LOFT_TEST_VERBOSE").is_ok() {
                 eprintln!("  running {path}::{name}");
@@ -1279,6 +1407,18 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 failures.len(),
                 fns.len(),
                 failures.join("; ")
+            )));
+        }
+        // Part A2 — see the snapshot above.  Reported even when every assertion passed,
+        // because passing is exactly what a refused free lets a script keep doing.
+        let refused = loft::keys::stack_free_refusals() - refusals_before;
+        if refused > 0 {
+            return Err(Error::other(format!(
+                "{path}: {refused} stack-store free refusal(s) (`BUG (#306)`) — the \
+                 program emitted a whole-store free of the eval-stack store and only the \
+                 allocator's guard stopped it.  The stderr line names the op and the \
+                 nearest source span; the cause is a variable holding a BORROWED record \
+                 ref that scope cleanup treated as owning a heap store."
             )));
         }
         // Part B — leak gate: a heap store left unfreed at program exit is a

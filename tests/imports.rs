@@ -171,6 +171,109 @@ fn pln102_c97_library_may_define_a_stdlib_name() {
     );
 }
 
+/// loft#940 — C97 keeps the definition legal, and says so out loud.
+///
+/// The C97 test above asserts the half that must not error. This asserts the half that
+/// must not be SILENT: the author wrote a function, every bare call goes somewhere else,
+/// and until now nothing said which. Pinned on the same fixture so the two halves cannot
+/// drift apart — a change that made the definition an error again would fail the test
+/// above, and one that dropped the warning fails this one.
+#[test]
+fn issue940_a_library_fn_a_stdlib_method_shadows_says_so() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}c97_shadow_main.loft"), false);
+    scopes::check(&mut p.data);
+    let msgs = p.diagnostics.lines().join("\n");
+    assert!(
+        msgs.contains("shadowed-by-method") && msgs.contains("`clamp`"),
+        "a library `clamp` the stdlib methods on `float` must warn that its bare name is \
+         taken; got: {msgs:?}"
+    );
+}
+
+/// loft#940 — the boundary, read off RESULTS rather than off the diagnostic text.
+///
+/// A warning about where a call goes is only as good as the claim underneath it, so every
+/// row here reads the value the call actually produced. The two SUBJECT rows show the
+/// author's function losing its bare name; the two QUIET rows show the exemptions still
+/// resolving to the library, which is what stops the lint from being "any shared name".
+///
+/// `private` is the row the filed report did not have: the reporter saw a CONSUMER call go
+/// wrong, and the shadow is decided by the receiver type's method table, which the
+/// library's OWN bare calls consult too. `issue940lib::floor_mod(7, 3)` is written to
+/// answer 4 and answers the stdlib's 1 — so a library can be broken against itself, with
+/// no consumer involved. Visibility is not the axis either: that function is not `pub`.
+#[test]
+fn issue940_the_shadow_boundary_holds_on_both_backends() {
+    let s = sep_str();
+    let main = format!("tests{s}lib{s}issue940_main.loft");
+    let libs = format!("tests{s}lib");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stdout.contains("bare=0 qualified=10 private=1 free=903 own=8"),
+            "{backend}: the shadow boundary moved — bare/private must reach the STDLIB \
+             (0, 1) while qualified reaches the library (10) and the two exempt shapes \
+             stay reachable bare (903, 8); got stdout {stdout:?} stderr {stderr:?}"
+        );
+        // Exactly the two shadowed definitions speak. Counting matters: the lint fires at
+        // the DECLARATION, so a duplicate would mean it runs once per parse pass, and a
+        // third would mean an exemption stopped exempting.
+        let warned = stderr.matches("shadowed-by-method").count();
+        assert_eq!(
+            warned, 2,
+            "{backend}: expected the two shadowed definitions (`clamp`, `floor_mod`) to \
+             warn once each and the two exempt ones (`sum_of`, `find`) to stay quiet; \
+             got {warned} in {stderr:?}"
+        );
+        assert!(
+            !stderr.contains("`sum_of`") && !stderr.contains("`find`"),
+            "{backend}: an exempt shape warned — a stdlib FREE function of the same name \
+             is outranked by the import, and a method on ANOTHER receiver type never \
+             takes this call; got {stderr:?}"
+        );
+    }
+}
+
+/// loft#940 — `LOFT_NO_SHADOWED_BY_METHOD` silences it, and silences only it.
+#[test]
+fn issue940_the_lint_has_an_opt_out() {
+    let s = sep_str();
+    let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(format!("tests{s}lib"))
+        .arg(format!("tests{s}lib{s}issue940_main.loft"))
+        .env("LOFT_ERRORS", "compact")
+        .env("LOFT_TIMEOUT", "180")
+        .env("LOFT_NO_SHADOWED_BY_METHOD", "1")
+        .output()
+        .expect("failed to invoke the loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("shadowed-by-method"),
+        "LOFT_NO_SHADOWED_BY_METHOD must silence the lint; got {stderr:?}"
+    );
+    assert!(
+        stdout.contains("bare=0 qualified=10 private=1 free=903 own=8"),
+        "the opt-out is a DIAGNOSTIC switch — resolution must be untouched; got {stdout:?}"
+    );
+}
+
 /// @PLN13 C101 — `std`/`core` are reserved package names (a library may not claim a
 /// language-namespace name), and `std::name` is the stdlib's qualified form — the escape
 /// hatch that still reaches a stdlib symbol shadowed by a user def or a `use lib::*`.

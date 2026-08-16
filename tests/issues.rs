@@ -1946,14 +1946,29 @@ fn test() {
 }
 
 // ── Issue 83 ─────────────────────────────────────────────────────────────────
-// A struct field named `key` used as a hash-value type causes a runtime panic:
-// "Allocating a used store" (src/database/allocation.rs).
-// `key` is a pseudo-field used by hash iteration (`kv.key`) and conflicts with
-// the real struct field at the allocation level.
+// A struct field named `key` used as a hash-value type once panicked at runtime with
+// "Allocating a used store" (src/database/allocation.rs), and was refused at compile time
+// to keep programs away from it: "reserved for hash iteration".
+//
+// The refusal outlived the panic and is gone (loft#932).  Three facts retired it:
+//
+//  · The pseudo-field it named does not exist.  `for kv in h { kv.key }` over an element
+//    struct with no real `key` field answers "Unknown field", not a hash key — so there
+//    was nothing for a real field to collide WITH.
+//  · It only ever covered `hash`.  `sorted<Elm[key]>` and `index<Elm[key]>` over a struct
+//    with a real `key` field are exercised by `tests/scripts/146-keyed-rekey-through-view.loft`
+//    and always ran, as did every `hash<Entry[key]>` LOCAL — the refusal walked struct
+//    ATTRIBUTES, so a local's type annotation was never inspected.  `135-hash-table-rebuild…`
+//    is built on that spelling.
+//  · The panic no longer reproduces.  This test is the program it was filed for, and it
+//    now runs on both backends, which is what it asserts.
+//
+// `key` is the natural name for a key field, so the refusal cost a good spelling for a
+// hazard that had already been fixed elsewhere.
 
-// Issue 83 / S8: field named `key` in a hash-value struct must be rejected at compile time.
+// Issue 83 / S8: a field named `key` in a hash-value struct is an ordinary field.
 #[test]
-fn issue_83_hash_value_field_named_key_panics() {
+fn issue_83_hash_value_field_named_key_works() {
     code!(
         "struct Entry { key: text, count: integer }
 struct Db { data: hash<Entry[key]> }
@@ -1963,12 +1978,10 @@ fn test() {
     e = db.data[\"hello\"];
     assert(e != null, \"entry should exist\");
     assert(e.count == 1, \"count should be 1\");
+    assert(e.key == \"hello\", \"the key field reads back as itself\");
 }"
     )
-    .error(
-        "Struct 'Entry' has a field named 'key' which is reserved for hash iteration \
-— rename the field at issue_83_hash_value_field_named_key_panics:1:15",
-    );
+    .result(Value::Null);
 }
 
 // Issue 83 positive: renaming the field (non-`key`) is the documented workaround.
@@ -2140,19 +2153,18 @@ fn issue_89_optional_ref_text_param_with_arg() {
     .result(Value::Null);
 }
 
-// ── S8 — Compile-time error when hash-value struct has field named `key` ──────
-// `key` is a pseudo-field reserved for hash iteration.  A struct with a real
-// field named `key` used as a hash value type must be rejected at compile time.
-
-// S8: hash-value struct with a `key` field must produce a compile-time error.
+// ── S8 — a hash-value struct may have a field named `key` ────────────────────
+// The compile-time refusal S8 added is retired; see `issue_83_hash_value_field_named_key_works`
+// above for what retired it (loft#932).  Kept as the declaration-only half: S8's program
+// never ran the collection, so it pins that the DECLARATION alone is accepted.
 #[test]
-fn s8_hash_value_struct_key_field_rejected() {
+fn s8_hash_value_struct_key_field_accepted() {
     code!(
         "struct Item { key: text, value: integer }
 struct Container { data: hash<Item[key]> }
 fn test() { }"
     )
-    .error("Struct 'Item' has a field named 'key' which is reserved for hash iteration — rename the field at s8_hash_value_struct_key_field_rejected:1:14");
+    .result(Value::Null);
 }
 
 // ── P2-R6 — Compiler check: yield inside par() body ──────────────────────────
@@ -9372,10 +9384,12 @@ fn run() -> integer {
     // comparison chain, so the non-associative-comparison guard also fires here.
     .error(
         "comparison operators do not chain — `>` follows another comparison, which would compare a boolean to the next operand; parenthesise (e.g. `(a == b) == c`) or combine with `&&` (e.g. `a < b && b < c`) at quality_6d_keyed_collection_constructor_hint:3:23",
-    )
-    .error(
-        "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
     );
+    // loft#918 — a THIRD error, "No matching operator '<' on 'unknown' and 'boolean'",
+    // used to trail these two.  An unmatched operator with an untyped operand now defers
+    // on pass 1, and pass 1 already reported the two errors above, so pass 2 never runs
+    // and the cascade line is gone.  Nothing is lost: those two name both halves of what
+    // is wrong here, and the dropped line named a type the author never wrote.
 }
 
 /// @PLN102 — a unary `-` on a value whose type is only resolved on the SECOND
@@ -9450,12 +9464,15 @@ fn pln102_all_unknown_deferral_still_reports_undefined_callee() {
     .error("missing argument for parameter 'v2' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2");
 }
 
-/// @PLN102 — the deferral is deliberately limited to the case where NO operand
-/// carries type information.  One KNOWN operand is enough to steer resolution, and
-/// keeping it on the resolving path is what preserves this diagnostic: the operands
-/// here are `unknown` and `boolean`, so the mismatch is still reported instead of
-/// being deferred into silence.  Widening the guard to "ANY operand unknown" would
-/// lose it.
+/// @PLN102 — the deferral at the TOP of `call_op` is deliberately limited to the case
+/// where no operand carries type information: one known operand is enough to steer
+/// resolution, so the operator search still runs here.
+///
+/// loft#918 added a second, later deferral — at the reject site, after that search has
+/// found nothing — and this is where the difference shows.  The mismatch is still
+/// reported, and now names the type the operand really has (`float`, resolved on pass 2)
+/// rather than the `unknown` pass 1 saw.  What must NOT happen is the diagnostic
+/// disappearing, which is what this test guards.
 #[test]
 fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
     code!(
@@ -9465,7 +9482,7 @@ fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
 fn f() -> float { 1.0 }"
     )
     .error(
-        "No matching operator '<' on 'unknown' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
+        "No matching operator '<' on 'float' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
     );
 }
 
@@ -16515,15 +16532,18 @@ fn pln87_l7_heap_reference_live_across_reassign() {
 /// the real diagnostic.  The parse must now diagnose cleanly instead of panicking;
 /// this test would panic inside `parse_str` before the fix.
 ///
-/// loft#825 — what it diagnoses CLEANLY has since moved one step upstream, and this
-/// test is where the move is visible.  It used to answer "Unknown field Pt.roads",
-/// which is the stale binding's CONSEQUENCE: the field is missing only because `t`
-/// still carries the first loop's type, and no amount of work on `Rt` fixes it.  The
-/// loop-variable conflict now runs on both passes, so the diagnostic names `t` and
-/// the rename that resolves it.  The field error never happens — the parse stops at
-/// the conflict, one pass earlier than the field access it would have caused.
+/// loft#825 — what it diagnoses CLEANLY moved one step upstream: it used to answer
+/// "Unknown field Pt.roads", which is the stale binding's CONSEQUENCE, and then named
+/// the loop-variable conflict itself.
+///
+/// loft#915 removed the conflict rather than reporting it — `t` in the second loop is
+/// its own variable carrying `Rt`, so `t.roads` resolves and the program COMPILES.  That
+/// is what this now pins, and it is the same guarantee from the other side: the field
+/// read only works if the second loop failed to inherit the first's type, so a
+/// regression to a shared binding fails this test as "Unknown field Pt.roads" — the
+/// error the whole chain started from.
 #[test]
-fn loop_var_reuse_different_type_diagnoses_not_panics() {
+fn loop_var_reuse_different_type_binds_per_loop() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     // `t` is a `Pt` in the first loop and an `Rt` in the second; `t.roads` in the
@@ -16542,16 +16562,9 @@ fn main() {
         false,
     );
     assert!(
-        p.diagnostics.level() >= loft::diagnostics::Level::Error,
-        "expected a compile error for invalid same-name loop-var reuse, got: {:?}",
-        p.diagnostics.lines()
-    );
-    assert!(
-        p.diagnostics
-            .lines()
-            .iter()
-            .any(|l| { l.contains("loop variable 't'") && l.contains("Rt") && l.contains("Pt") }),
-        "expected the loop-variable conflict to name 't' and both element types, got: {:?}",
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "each loop binds its own `t`, so `t.roads` resolves against `Rt` and this must \
+         compile; a shared binding shows up here as \"Unknown field Pt.roads\".  Got: {:?}",
         p.diagnostics.lines()
     );
 }
@@ -18032,7 +18045,7 @@ fn issue_689_range_is_refused_on_an_unordered_collection() {
 }
 
 /// loft#690 — a `for` loop whose variable name is already bound to a DIFFERENT type
-/// must be rejected, not silently reuse the earlier binding.
+/// must not silently reuse the earlier binding.
 ///
 /// The reuse check existed but compared with `Type::is_same`, which answers "same KIND
 /// of type": it reports any two `Reference`s as the same whatever struct they name.  So
@@ -18040,59 +18053,62 @@ fn issue_689_range_is_refused_on_an_unordered_collection() {
 /// second loop the FIRST binding — old var, old type, old dep — and the body read B's
 /// records through A's layout.  No diagnostic and no crash, just wrong numbers.
 ///
-/// This asserts the DIAGNOSTIC rather than values on purpose: whether the corruption is
-/// *visible* depends on the two layouts.  Two structs with identical fields returned the
-/// right answer while still being undefined, so a value test would have passed on three
-/// of the four shapes below and proved almost nothing.
+/// loft#915 removed the inheritance instead of reporting it: each loop binds its OWN
+/// variable, so there is no earlier binding for the second loop to take, and these
+/// programs now COMPILE.  What is asserted is therefore the stronger property the
+/// diagnostic only approximated — the second loop's variable really carries the SECOND
+/// element type.  Each body below reads a field that exists only on its own struct, so
+/// a leaked binding is an "unknown field" error rather than a silent wrong number, which
+/// is what made a value test unconvincing here (two structs with identical fields
+/// returned the right answer while still being undefined).  The value half, on both
+/// backends, is `tests/scripts/915-loop-variable-per-loop.loft` cell c6.
 #[test]
-fn issue_690_loop_variable_may_not_change_type() {
-    let rejected = [
+fn issue_690_loop_variable_binds_its_own_type() {
+    let per_loop_binding = [
         (
             "two struct types",
-            "struct A690 { k: integer, v: integer }\n\
-             struct B690 { k: text, v: integer }\n\
-             fn main() { a: vector<A690> = [A690{k:1,v:10}]; b: vector<B690> = [B690{k:\"x\",v:1}];\n\
-             n = 0; for r in a { n += r.v; } for r in b { n += r.v; } }\n",
+            "struct A690 { k: integer, av: integer }\n\
+             struct B690 { k: text, bv: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,av:10}]; b: vector<B690> = [B690{k:\"x\",bv:1}];\n\
+             n = 0; for r in a { n += r.av; } for r in b { n += r.bv; } println(\"{n}\"); }\n",
         ),
         (
-            "two structs with IDENTICAL fields — still different types",
-            "struct A690 { k: integer, v: integer }\n\
-             struct C690 { k: integer, v: integer }\n\
-             fn main() { a: vector<A690> = [A690{k:1,v:10}]; c: vector<C690> = [C690{k:2,v:20}];\n\
-             n = 0; for r in a { n += r.v; } for r in c { n += r.v; } }\n",
+            "two structs with IDENTICAL layouts — still different types",
+            "struct A690 { k: integer, av: integer }\n\
+             struct C690 { k: integer, cv: integer }\n\
+             fn main() { a: vector<A690> = [A690{k:1,av:10}]; c: vector<C690> = [C690{k:2,cv:20}];\n\
+             n = 0; for r in a { n += r.av; } for r in c { n += r.cv; } println(\"{n}\"); }\n",
         ),
         (
             "two enum types",
             "enum E690 { Red, Green }\n\
              enum F690 { Up, Down }\n\
              fn main() { a: vector<E690> = [E690.Red]; b: vector<F690> = [F690.Up];\n\
-             n = 0; for r in a { n += 1; } for r in b { n += 1; } }\n",
+             n = 0; for r in a { if r == E690.Red { n += 1; } } \
+             for r in b { if r == F690.Up { n += 1; } } println(\"{n}\"); }\n",
         ),
         (
             "nested vectors of different element structs",
-            "struct A690 { v: integer }\n\
-             struct B690 { v: integer }\n\
-             fn main() { a: vector<vector<A690>> = [[A690{v:1}]]; \
-             b: vector<vector<B690>> = [[B690{v:2}]];\n\
-             n = 0; for r in a { n += len(r); } for r in b { n += len(r); } }\n",
+            "struct A690 { av: integer }\n\
+             struct B690 { bv: integer }\n\
+             fn main() { a: vector<vector<A690>> = [[A690{av:1}]]; \
+             b: vector<vector<B690>> = [[B690{bv:2}]];\n\
+             n = 0; for r in a { for e in r { n += e.av; } } \
+             for r in b { for e in r { n += e.bv; } } println(\"{n}\"); }\n",
         ),
     ];
-    for (label, src) in rejected {
-        let src_path = std::env::temp_dir().join("loft_i690_rejected.loft");
+    for (label, src) in per_loop_binding {
+        let src_path = std::env::temp_dir().join("loft_i690_per_loop.loft");
         std::fs::write(&src_path, src).unwrap();
         let mut p = Parser::new();
         p.parse_dir("default", true, false).unwrap();
         p.parse(src_path.to_str().unwrap(), false);
         let lines = p.diagnostics.lines().join("\n");
         assert!(
-            p.diagnostics.level() >= loft::diagnostics::Level::Error,
-            "#690 ({label}): reusing a loop variable at a different type must be an error, \
-             not a silent reinterpretation.  Diagnostics: {lines}"
-        );
-        assert!(
-            lines.contains("loop variable 'r'") && lines.contains("previously used as"),
-            "#690 ({label}): the diagnostic must name the variable and the earlier type, \
-             got: {lines}"
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "#690 ({label}): each loop binds its own variable, so the second loop's field \
+             read resolves against the SECOND type and this must compile.  Diagnostics: \
+             {lines}"
         );
         let _ = std::fs::remove_file(&src_path);
     }
@@ -18275,4 +18291,41 @@ fn i815_reachable_set_is_closed_under_calls() {
          emits a call for each of these but no body:\n  {}",
         missing.join("\n  ")
     );
+}
+
+// A struct that contains ITSELF by value is reported as such — the diagnostic names the
+// type and the cure (`reference<T>`).  `Data::has_value_cycle` used to skip recursing into
+// a child the program had CONSTRUCTED anywhere (`def_referenced`), which is every cyclic
+// type a real program writes: the report went silent and the reader met the internal
+// layout validator instead — `type layout: PENode: field 'next' has no position
+// (u16::MAX)`, with no source position and no cure.  The `@EXPECT_ERROR: contains itself`
+// fixture in `tests/scripts/36-parse-errors.loft` was meant to catch that and had itself
+// gone inert (loft#929).
+#[test]
+fn a_struct_containing_itself_by_value_says_so() {
+    code!(
+        "struct PENode { val: integer, next: PENode }
+fn test() {
+    _n = PENode { val: 1 };
+}"
+    )
+    .error(
+        "Struct 'PENode' contains itself (directly or indirectly) — use reference<PENode> \
+to break the cycle at a_struct_containing_itself_by_value_says_so:1:16",
+    );
+}
+
+// The other direction of the same rule: `reference<T>` is the documented cure, so a
+// self-reference THROUGH it stays legal.  Removing the `def_referenced` gate must not
+// start reporting the shape the diagnostic recommends.
+#[test]
+fn a_reference_self_field_is_not_a_cycle() {
+    code!(
+        "struct RefNode { val: integer, next: reference<RefNode> }
+fn test() {
+    n = RefNode { val: 7 };
+    assert(n.val == 7, \"reference<Self> field is legal\");
+}"
+    )
+    .result(Value::Null);
 }

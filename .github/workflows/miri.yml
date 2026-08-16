@@ -516,6 +516,17 @@ jobs:
       # nextest (not `cargo test`): matches the other sanitizer jobs — skips
       # doctests, emits the JUnit report, and isolates each test in its own
       # process (a cleaner poison signal, no cross-test arena carryover).
+      # `loft_suite` runs scripts that `use` a library with a NATIVE cdylib, and a
+      # cdylib built against a different `libloft.rlib` is not loadable.  This job
+      # restores a cached `target/` and never rebuilt them, so `register_native_stubs`
+      # panicked mid-`execute_argv` — and under LOFT_POISON the freed records that
+      # unwind left behind read back as 0xDEADBEEF, turning a stale artefact into a
+      # SIGSEGV that looks exactly like the arena use-after-free this gate hunts
+      # (loft#920).  The local gate has always rebuilt them first; so does this one now,
+      # and the poison sweep is green over the same corpus with them current.
+      - name: Rebuild the native cdylibs against this libloft.rlib
+        run: make rebuild-native-cdylibs
+
       - name: Poison sweep (LOFT_POISON=1, interpreter corpus)
         env:
           LOFT_POISON: '1'

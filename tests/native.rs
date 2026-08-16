@@ -4274,6 +4274,61 @@ fn native_crate_package_links_and_runs_via_cabi() -> std::io::Result<()> {
     Ok(())
 }
 
+/// loft#907 — a `#native "sym"` its library implements under a DIFFERENT Rust
+/// name must reach that implementation on BOTH backends.
+///
+/// `#native "sym"` is an API id: a library registers its implementations by loft
+/// symbol (`loft_register_bridges! { "sym" => other__loft_bridge }`) and may point
+/// one at a differently-named fn.  `--interpret` reads that table; `--native` put
+/// the `#native` string straight into a `#[link_name]`, so it bound whatever else
+/// the cdylib exported under that name.  In the published `graphics` that was the
+/// same call in the older raw `(ptr, count)` shape rather than loft's
+/// `(LoftStore, LoftRef)` one, for ten functions — `save_png` returned `false`
+/// under `--native` and `true` under `--interpret`, silently, and the WebGL
+/// upload calls were mis-marshalled the same way.
+///
+/// The `native_remap_pkg` fixture exports a DECOY under each `#native` name
+/// (-1000 / -2000), so a regression does not merely fail to link — it answers,
+/// and the answer names which resolution path was taken.  `native_scalar_pkg`
+/// above is the clean-binding control: the redirect must leave it untouched.
+///
+/// Serialises via `native_suite_lock` and skips cleanly without `rustc` / the
+/// loft rlib, like the other native suites.
+#[test]
+fn remapped_native_symbol_resolves_to_its_implementation_on_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if find_loft_rlib().is_none() {
+        println!(
+            "remapped_native_symbol_resolves_to_its_implementation_on_both_backends: \
+             skipped (no libloft.rlib / rustc)"
+        );
+        return Ok(());
+    }
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let pkg_dir = Path::new("tests/lib/native_remap_pkg");
+
+    for backend in ["--native", "--interpret"] {
+        let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "remap", &[backend])?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !combined.contains("no implementation"),
+            "{backend}: the remapped native symbol was not linked at all (P269):\n{combined}"
+        );
+        assert!(
+            combined.contains("test result: ok"),
+            "{backend}: a remapped `#native` symbol did not reach its implementation \
+             (loft#907) — the assertion message names the wrong answer it got:\n{combined}"
+        );
+    }
+    Ok(())
+}
+
 /// The imaging fixture's PNG round-trip — a `[native] crate` package whose
 /// `#native` functions (`load_png`/`save_png`) do STORE-MUTATING file I/O via
 /// raw `std::fs`.  Guards two things at once: (1) the store-mutating C-ABI path
@@ -4342,10 +4397,18 @@ fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Each of these carries a differently-shaped nested narrow vector, and each
     // drifted by a different amount before the fix.
+    //
+    // loft#923 added the fourth: a `vector<τ?>` ELEMENT drifted for the same
+    // reason one level up. The emitter tested the element type without peeling
+    // its `Optional`, so a `vector<vector<integer>?>` missed the nested-vector
+    // arm and the generic path minted a type the program never named. It belongs
+    // in THIS list rather than beside its own script, because a drift is invisible
+    // to the program's output and only this env makes it fail.
     for script in [
         "tests/scripts/184-nested-narrow-int-vector.loft",
         "tests/scripts/624-nested-narrow-width.loft",
         "tests/scripts/432-untyped-vector-literal-arg.loft",
+        "tests/scripts/923-nullable-vector-element-schema.loft",
     ] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
             .arg("--native")

@@ -226,6 +226,15 @@ pub struct Function {
     /// re-resolves to a pass-1 var of a different TYPE in `add_variable`
     /// (#320's frame-drift: an integer-typed `__ncc_N` holding a DbRef).
     unique: HashMap<String, u16>,
+    /// Per-name counters for [`Function::loop_binding`] — how many `for` loops in this
+    /// function have already bound each source name.
+    ///
+    /// Counting occurrences in PARSE ORDER is what makes the extra bindings pass-stable.
+    /// The sequence reads no type and consults no table, so pass 2 regenerates it exactly
+    /// and `add_variable` re-finds each loop's slot under the same key; a verdict that
+    /// MINTS has to come out identical on both passes or every slot number after it
+    /// shifts.  Cleared by `append`, beside `unique`, for that reason.
+    loop_binds: HashMap<String, u16>,
     pub(crate) current_loop: u16,
     loops: Vec<Iterator>,
     variables: Vec<Variable>,
@@ -421,6 +430,7 @@ impl Function {
             name: name.to_string(),
             file: file.to_string(),
             unique: HashMap::new(),
+            loop_binds: HashMap::new(),
             current_loop: u16::MAX,
             loops: Vec::new(),
             work_text: 0,
@@ -565,6 +575,8 @@ impl Function {
         self.logging = other.logging;
         self.unique.clear();
         other.unique.clear();
+        self.loop_binds.clear();
+        other.loop_binds.clear();
         self.loops.clear();
         self.loops.append(&mut other.loops);
         self.variables.clear();
@@ -612,6 +624,7 @@ impl Function {
             file: other.file.clone(),
             current_loop: u16::MAX,
             unique: HashMap::new(),
+            loop_binds: HashMap::new(),
             loops: other.loops.clone(),
             variables: other.variables.clone(),
             annotated: other.annotated.clone(),
@@ -841,12 +854,24 @@ impl Function {
         self.loops[self.current_loop as usize].counter
     }
 
+    /// How many loops out `variable` names, counting from the innermost — the depth
+    /// `#break` / `#continue` jump.
+    ///
+    /// Matched on the BINDING the name currently denotes, not on the spelling: two `for i`
+    /// loops in one function are two variables and only one of them is bound to `i` here
+    /// (loft#915).  Comparing names would walk past a loop whose variable is `i#1` and
+    /// answer the chain length, which is a jump out of the wrong loop.
     pub fn loop_nr(&self, variable: &str) -> u16 {
-        let mut c = self.current_loop;
+        // An unbound name matches nothing: `u16::MAX` is also the "no variable yet"
+        // placeholder `start_loop` leaves on a loop still being parsed.
+        let target = self.var(variable);
+        let mut c = if target == u16::MAX {
+            u16::MAX
+        } else {
+            self.current_loop
+        };
         let mut nr = 0;
-        while c != u16::MAX
-            && self.variables[self.loops[c as usize].variable as usize].name != variable
-        {
+        while c != u16::MAX && self.loops[c as usize].variable != target {
             c = self.loops[c as usize].inside;
             nr += 1;
         }
@@ -1017,6 +1042,62 @@ impl Function {
             &Type::Null
         } else {
             &self.variables[var_nr as usize].type_def
+        }
+    }
+
+    /// Point every `Type::Unknown(stub)` in this function's variable types at `target`.
+    ///
+    /// Sibling of [`Function::substitute_type`], for adoption rather than instantiation.
+    /// The two-pass parser pre-populates the whole variable table in pass 1, so a local
+    /// whose declared type named a forward reference is stored as `Unknown(stub)` — and
+    /// pass 2, which resolves the name correctly, then meets the pass-1 slot and reports
+    /// `cannot change type from (integer, unknown) to (integer, Q)` (loft#944). Run after
+    /// pass 1, once the declaration has adopted the stub.
+    ///
+    /// Returns whether anything changed, so the caller can skip the tracing work.
+    pub fn resolve_unknown_stub(&mut self, stub_nr: u32, target: &Type) -> bool {
+        let mut changed = false;
+        for v in &mut self.variables {
+            if let Some(new_tp) = Self::rewrite_unknown(&v.type_def, stub_nr, target) {
+                v.type_def = new_tp;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// `Some(rewritten)` when the subtree named `stub`, `None` when it is unchanged.
+    /// Walks children through [`Type::for_each_child`]'s variant list, kept in step with
+    /// `Data::rewrite_type_opt` — the same question asked of a variable's type.
+    fn rewrite_unknown(t: &Type, stub: u32, target: &Type) -> Option<Type> {
+        match t {
+            Type::Unknown(n) if *n == stub => Some(target.clone()),
+            Type::Vector(inner, deps) => Self::rewrite_unknown(inner, stub, target)
+                .map(|new| Type::Vector(Box::new(new), deps.clone())),
+            Type::RefVar(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::RefVar(Box::new(new)))
+            }
+            Type::Rewritten(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Rewritten(Box::new(new)))
+            }
+            Type::Optional(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Optional(Box::new(new)))
+            }
+            Type::Tuple(elems) => {
+                let mut changed = false;
+                let new_elems: Vec<Type> = elems
+                    .iter()
+                    .map(|e| match Self::rewrite_unknown(e, stub, target) {
+                        Some(new_e) => {
+                            changed = true;
+                            new_e
+                        }
+                        None => e.clone(),
+                    })
+                    .collect();
+                changed.then_some(Type::Tuple(new_elems))
+            }
+            _ => None,
         }
     }
 
@@ -1316,6 +1397,75 @@ impl Function {
     /// Remove a name→variable mapping.
     pub fn remove_name(&mut self, name: &str) {
         self.names.remove(name);
+    }
+
+    /// The name the `for` loop now being parsed binds its variable under (loft#915).
+    ///
+    /// A loop variable stays a function-scoped local — `i` after the loop still reads the
+    /// value the loop left, which programs rely on — but each LOOP gets its own binding,
+    /// so a second loop may spell one name at a different element type instead of
+    /// re-typing the first loop's slot.  That is also what keeps loft#690 fixed by
+    /// construction rather than by diagnostic: the second loop can no longer inherit the
+    /// first's type, dep or storage, which is what made it read B's records through A's
+    /// layout.
+    ///
+    /// The FIRST loop to use a name binds the name itself, so a program with no repeat
+    /// spells every loop variable exactly as it did before — dumps, the debugger frame and
+    /// every diagnostic are untouched.  A second loop over the same name binds `i#1`, a
+    /// third `i#2`.  The suffix is on the NAME and not only on a lookup key because the
+    /// native backend names a local `var_<name>`, and two locals spelling one name declare
+    /// it twice — the same constraint loft#928 hit for a generator's fields.  `#` cannot
+    /// occur in a loft identifier, so a suffixed name cannot collide with a variable the
+    /// program declared itself.
+    ///
+    /// `_` and `$` are exempt: both already take a fresh slot per loop through `unique`,
+    /// and both must keep working across different element types in one function.
+    pub fn loop_binding(&mut self, id: &str) -> String {
+        if id == "_" || id == "$" {
+            return id.to_string();
+        }
+        let ctr = self.loop_binds.entry(id.to_string()).or_insert(0);
+        let nr = *ctr;
+        *ctr += 1;
+        if nr == 0 {
+            id.to_string()
+        } else {
+            format!("{id}#{nr}")
+        }
+    }
+
+    /// Add a `for` loop's variable under `name`, keyed for cross-pass identity by the
+    /// LOOP rather than by the name (loft#915).
+    ///
+    /// `add_variable` reuses by name, and that is what normally gives one variable one slot
+    /// across both parser passes.  A loop variable cannot use its own name as that key: the
+    /// name is re-pointed at every loop that binds it, so `names["i"]` ends pass 1 holding
+    /// the LAST loop's slot, and pass 2's FIRST loop would then be handed it — a text
+    /// binding reusing an integer one, which is the shape the whole split exists to stop.
+    ///
+    /// The key is `<name>#bind`.  `name` is already unique per loop (`loop_binding` gives
+    /// the second `for i` the name `i#1`), nothing re-points a `#`-suffixed name, and `#`
+    /// cannot occur in a loft identifier — so the key denotes exactly this loop on both
+    /// passes.
+    pub fn loop_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
+        // Binding the name is part of creating the loop's variable, on BOTH the create and
+        // the reuse path.  Pass 2 opens with the name pointing wherever pass 1 left it —
+        // at the LAST loop that bound it — so a reuse that only answered the slot number
+        // would leave this loop's body reading the last loop's variable.
+        let key = format!("{name}#bind");
+        if let Some(nr) = self.names.get(&key) {
+            let nr = *nr;
+            if self.variables[nr as usize].type_def.is_unknown() {
+                self.trace_type_change(nr, type_def, "loop_variable(reuse)");
+                self.variables[nr as usize].type_def = type_def.clone();
+            }
+            self.names.insert(name.to_string(), nr);
+            return nr;
+        }
+        let v = self.new_var(name, type_def, lexer);
+        self.names.insert(name.to_string(), v);
+        self.names.insert(key, v);
+        v
     }
 
     pub fn unique(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
@@ -1636,7 +1786,11 @@ impl Function {
             if to.is_unknown() {
                 return self.is_new(var_nr);
             }
-            if !tp.is_unknown() {
+            // loft#944 — the element's own unresolved MEMBER counts too, not just a bare
+            // unresolved element.  `vector<(integer, unknown)>` is the pass-1 placeholder
+            // for `vector<(integer, Q)>`, and rejecting the refinement made pass 2 refuse
+            // the literal it had just resolved.
+            if !crate::data::Data::type_has_unresolved(tp) {
                 self.reject_retype(var_nr, type_def, data, lexer);
             }
         } else if !var_tp.is_unknown()
@@ -1653,6 +1807,15 @@ impl Function {
             // in pass 1) to its real type instead of erroring "cannot change
             // type from never to Cell".
             && !matches!(var_tp, Type::Never)
+            // …and the general form of both of those (loft#944).  A type carrying an
+            // unresolved component ANYWHERE is not a baseline a change can be measured
+            // against: pass 2 resolving it is a refinement, not a retype.  `is_unknown()`
+            // sees through `Vector` alone, which is why `&unknown` and then
+            // `(integer, unknown)` each had to be discovered as their own bug —
+            // `t: (integer, Q) = (71, q)` with `Q` declared below reported "cannot change
+            // type from (integer, unknown) to (integer, unknown)", naming one type twice
+            // because both spellings render the unresolved member the same way.
+            && !crate::data::Data::type_has_unresolved(var_tp)
         {
             // @PLN25 DN1: peel an `Optional` source — `&text ← text?` is the hoisted
             // work-buffer local (control.rs return-deps hoist) re-assigned from a
@@ -1741,6 +1904,15 @@ impl Function {
     /// → `T`) `as` is the right instrument, which is what it was written for.
     fn reject_retype(&self, var_nr: u16, type_def: &Type, data: &Data, lexer: &mut Lexer) {
         let var_tp = &self.variables[var_nr as usize].type_def;
+        // `Never` is the POISON an already-reported expression leaves behind (@P376), not
+        // a type the author wrote — there is no source spelling for it, so "cannot change
+        // type from integer to never; use a new variable name or cast with 'as'" advertises
+        // a cure (`as never`) that cannot be written and buries the root error under it.
+        // `y: integer = qqq` earned both lines; only the first one is the author's
+        // (loft#934).
+        if matches!(type_def, Type::Never) || matches!(var_tp, Type::Never) {
+            return;
+        }
         let widened_to_nullable = matches!(type_def, Type::Optional(_))
             && !matches!(var_tp, Type::Optional(_))
             && var_tp.is_equal(type_def.base());
@@ -1910,14 +2082,35 @@ impl Function {
         self.arm_consumed.contains(&var_nr)
     }
 
-    /// Remove a work-ref from the preamble registry after the one-buffer
-    /// binding substituted it out of the IR (`ref_return`'s chain leg).
-    /// Without this the orphan still gets a `Set(v, Null)` preamble and a
-    /// scope-exit free; the presence of FREES then flips the tail-`If`
-    /// emission into the discarded-statement + `Return(Null)` shape that
-    /// returns the null sentinel on native (the @P378 trap).
+    /// Retire a work-ref the one-buffer binding substituted out of the IR
+    /// (`ref_return`'s chain leg): every use now names the return buffer, so the
+    /// variable names no storage at all.  Without this the orphan still gets a
+    /// `Set(v, Null)` preamble and a scope-exit free; the presence of FREES then
+    /// flips the tail-`If` emission into the discarded-statement + `Return(Null)`
+    /// shape that returns the null sentinel on native (the @P378 trap).
+    ///
+    /// Dropping it from the registry is not the whole retirement, because a
+    /// producer other than the bare-call site can have minted it: the `inline ref
+    /// copy` projection materialiser marks its ref `inline_ref` as well, and the
+    /// null-init for THOSE is inserted from a separate sweep that has already run by
+    /// the time a return site substitutes.  `skip_free` is the flag that actually
+    /// says "names no storage" — it is what suppresses a free and what tells
+    /// `check_ref_leaks` this is a dead declaration rather than a leaked store.
+    /// Without it, a `??` over a field reached through a call tripped that assert
+    /// under `-C debug-assertions=on` (loft#906): the two parser passes materialise
+    /// such a chain at DIFFERENT sites, so pass 2's ref is always the one substituted
+    /// out, and it stayed declared, unassigned and unfreed.  The `= null` the earlier
+    /// sweep already emitted for it stays behind as a dead store.
+    ///
+    /// `skip_free` cannot mask a real leak here, and that rests on something the
+    /// compiler checks rather than on care: `substitute_work_ref` lists every `Value`
+    /// variant explicitly (no wildcard arm), so the rewrite is TOTAL — a surviving use
+    /// of `var_nr` is not possible, and a variable with no uses holds no store.
     pub fn unregister_work_ref(&mut self, var_nr: u16) {
         self.work_refs.remove(&var_nr);
+        if (var_nr as usize) < self.variables.len() {
+            self.set_skip_free(var_nr);
+        }
     }
 
     pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
@@ -2139,8 +2332,8 @@ impl Function {
     /// arguments (the `const T` parameter modifier already handles
     /// const-ness on parameters), `_`-prefixed names, and synthetic
     /// names containing `#`.
-    pub fn warn_upper_case_locals(&self, lexer: &mut Lexer) {
-        for var in &self.variables {
+    pub fn warn_upper_case_locals(&self, lexer: &mut Lexer, body: &Value) {
+        for (nr, var) in self.variables.iter().enumerate() {
             if var.argument
                 || var.const_binding
                 || var.value_const
@@ -2150,6 +2343,21 @@ impl Function {
                 continue;
             }
             if !is_upper_case_name(&var.name) {
+                continue;
+            }
+            // A variable the emitted body never NAMES is a pass-1 leftover, not a local —
+            // the same peel `test_used` takes, and it was missing here (loft#921).  A
+            // constant used ABOVE its own `const NAME = …` cannot resolve in pass 1, so
+            // the name is parked as a placeholder variable; pass 2 has the declaration
+            // and pastes the constant's value, leaving that placeholder unread.  The
+            // stale entry then advised that a CONSTANT is a local variable — the one
+            // message whose whole job is to say a name is *not* a constant — and it fired
+            // only when the declaration sat below the use, so the same constant advised
+            // or stayed silent depending on where in the file it was declared.
+            //
+            // It cannot silence a real UPPER_CASE local: `reads_var` counts `Set` TARGETS
+            // too, so `FOO = 1;` names `FOO` whether or not anything reads it back.
+            if u16::try_from(nr).is_ok_and(|n| !body.reads_var(n)) {
                 continue;
             }
             lexer.to(var.source);

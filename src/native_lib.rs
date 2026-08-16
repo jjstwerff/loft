@@ -1176,7 +1176,17 @@ pub fn build_shared_cdylib(
     if let Some(reason) = crate::cache::rustc_mismatch() {
         return Err(format!("{reason} — rebuild loft to restore native"));
     }
-    let (rlib, deps) = find_loft_rlib().ok_or("libloft.rlib not found for this build")?;
+    // Name the cure, not just the absence.  This fires when `libloft.rlib` has not
+    // been built for the running binary's `target/` — the ordinary way to reach it
+    // is a run of `cargo build --bin loft` (or `--tests`), which refreshes the
+    // binary and leaves the library rlib behind.  Left bare, the message costs a
+    // full gate: it surfaces as several unrelated-looking native tests failing ~9
+    // minutes in, each naming a file that is present when you go and look.
+    let (rlib, deps) = find_loft_rlib().ok_or(
+        "libloft.rlib not found for this build — run `cargo build --release --lib` \
+         (or `make check-rlib` to check before a gate); a `cargo build --bin loft` \
+         refreshes the binary but not the library rlib the native path links",
+    )?;
     let src = generate_shared_cdylib_lib_rs(data, stores, export_set);
     std::fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
     let rs = out_dir.join(format!("{stem}.rs"));

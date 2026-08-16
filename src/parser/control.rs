@@ -1469,6 +1469,24 @@ impl Parser {
             || matches!(self.data.def(self.context).returned(),
                 Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"));
         if generic_promote_ok && context == "return from block" {
+            // loft#918 — pass 1 cannot type a local bound to a call whose callee is
+            // declared LOWER in the file: the call has nothing to resolve against there,
+            // so the local reads `Unknown` and the text work-buffer promotion below never
+            // fires.  Pass 2 types it `text` and promotes, which grows the signature after
+            // callers were lowered — the H5 cross-pass divergence, and with the caller
+            // declared above the callee a genuine arity mismatch.
+            //
+            // Record the tail here; `promote_late_text_buffers` settles it between the
+            // passes, where every declaration exists.  Same treatment #675 gave the heap
+            // return buffer in `reserve_late_return_buffers`.
+            if self.first_pass
+                && matches!(self.data.def(self.context).returned().base(), Type::Text(_))
+                && let Some(v) = Self::tail_bare_var(l)
+                && self.vars.tp(v).is_unknown()
+                && !self.vars.is_argument(v)
+            {
+                self.late_text_tails.push((self.context, v));
+            }
             // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
             // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
             // the type-keyed branches below (which match `t`) all miss it — the default
@@ -2980,23 +2998,41 @@ impl Parser {
         if had_else {
             self.vars.restore_write_state(&write_state);
             self.vars.clear_write_state();
+            // A bare-`null` THEN arm has no type of its own — it adopts the sibling's,
+            // whatever the sibling turns out to be.  Marked BEFORE the sibling is
+            // parsed, because parsing it is what makes that type available.
+            if matches!(true_type, Type::Null | Type::Never) {
+                true_type = Type::Unknown(0);
+            }
             if self.lexer.has_token("if") {
-                self.parse_if(&mut false_code);
-            } else {
-                if matches!(true_type, Type::Null | Type::Never) {
-                    true_type = Type::Unknown(0);
-                }
-                false_type = self.parse_block("else", &mut false_code, &true_type);
+                // loft#936 — an `else if` CHAIN is a sibling like any other.  Its
+                // result type used to be discarded here, so `if a { null } else if b
+                // { null } else { [n] }` left the whole chain typed by its untyped
+                // first arm and answered `null` for EVERY input — the value arm was
+                // unreachable, on both backends and on released 2026.8.0.  A THEN arm
+                // that already names the merged type keeps `false_type` at `Void`
+                // exactly as before; nothing downstream reads the chain's type there.
+                let chain_type = self.parse_if(&mut false_code);
                 if true_type == Type::Unknown(0) {
-                    if let Value::Block(bl) = &mut true_code {
-                        let p = bl.operators.len() - 1;
-                        if !is_block_divergent(&bl.operators) {
-                            bl.operators[p] = self.null(&false_type);
-                        }
-                        bl.result = false_type.clone();
-                    }
-                    true_type = false_type.clone();
+                    false_type = chain_type;
                 }
+            } else {
+                false_type = self.parse_block("else", &mut false_code, &true_type);
+            }
+            if true_type == Type::Unknown(0) {
+                if let Value::Block(bl) = &mut true_code {
+                    let p = bl.operators.len() - 1;
+                    if !is_block_divergent(&bl.operators) {
+                        // loft#936 — `null_value`, not `null`: the arm's null travels
+                        // to the merge on the eval stack, so a COLLECTION arm needs the
+                        // DbRef sentinel.  `null`'s catch-all answers a bare
+                        // `Value::Null`, which pushes nothing, and the join then read an
+                        // uninitialised 12-byte slot as a live reference.
+                        bl.operators[p] = self.null_value(&false_type);
+                    }
+                    bl.result = false_type.clone();
+                }
+                true_type = false_type.clone();
             }
         } else {
             self.vars.restore_write_state(&write_state);
@@ -3008,7 +3044,7 @@ impl Parser {
                         "If-expression produces a value but has no else clause; add an else branch or make the body a statement"
                     );
                 }
-                false_code = v_block(vec![self.null(&true_type)], true_type.clone(), "else");
+                false_code = v_block(vec![self.null_value(&true_type)], true_type.clone(), "else");
             }
         }
         self.vars.restore_write_state(&write_state);
@@ -3883,16 +3919,24 @@ impl Parser {
         }
 
         // A `null` arm lowers to the result type's null sentinel — `parse_if`
-        // (~line 1250) and `build_scalar_chain` do the same.  Now that
+        // and `build_scalar_chain` do the same.  Now that
         // result_type is final, convert bare-null (and block-trailing-null) arm
         // bodies, and keep `arm.tp` in step so the guarded-binding block wrapper
         // (below) declares the right result type.  Without this a `null` arm
         // pushes nothing and the if-chain join reads an unwritten, value-sized
         // slot (interp stack underflow / native lost value) — the #365 family.
+        //
+        // loft#936 — `null_value`, not `null`.  `null` doubles as a VARIABLE's
+        // default-init, where a collection must be an allocated empty store, so
+        // its catch-all answers a bare `Value::Null` for the whole collection
+        // family — which is the very "pushes nothing" this paragraph forbids.
+        // `match n { 0 => null, _ => [n] }` therefore left the ARMS at different
+        // eval-stack depths and `gives(3)` read back an empty vector on
+        // `--interpret` while `--native` answered `[3]`.
         let base = if matches!(result_type, Type::Void | Type::Null) {
             Value::Null
         } else {
-            let typed_null = self.null(&result_type);
+            let typed_null = self.null_value(&result_type);
             for arm in &mut arms {
                 let null_body = match &arm.code {
                     Value::Null => true,
@@ -4488,6 +4532,25 @@ impl Parser {
         self.vars.defined(done);
         let x = self.create_unique("stream_x", elm_tp);
         self.vars.defined(x);
+        // A RECORD-valued yield hands back a DbRef into the coroutine's own frame, which
+        // lives in the STACK store — `x` names it, and the append below deep-copies it into
+        // the buffer (`OpCopyRecord`), so the buffer owns the copy and `x` owns nothing.
+        // Scope cleanup did not know that and emitted `OpFreeRef(_stream_x_1)` at the end of
+        // every pull iteration, whole-store freeing a stack-record ref: `BUG (#306)` on each
+        // run of `match <iterator<StructEnum>>`, and only the store-0 guard stopped it from
+        // taking the eval stack with it (loft#920).  Same fact as `elm` below, one step
+        // earlier in the same loop.
+        //
+        // Gated on the record case rather than set for every element type: `skip_free` is one
+        // bit for all free kinds, and a `text` element's `x` holds a String the caller DOES
+        // own — suppressing its `OpFreeText` would trade this wrong free for a leak of one
+        // string per yield.  A scalar emits no free at all, so it never reaches either.
+        if matches!(
+            elm_tp.base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) {
+            self.vars.set_skip_free(x);
+        }
         let ed_nr = self.data.type_def_nr(elm_tp);
         let elm = self.create_unique("stream_elm", &Type::Reference(ed_nr, Deps::none()));
         self.vars.defined(elm);
@@ -7776,7 +7839,7 @@ impl Parser {
         let fallback = if has_wildcard {
             arms.pop().unwrap().code
         } else {
-            self.null(&result_type)
+            self.null_value(&result_type)
         };
         let mut chain = chain_pattern_arms(arms, fallback, &result_type);
         // @PLN85 — a bare `[]` arm (`_ => []`) lowers to a `null` of the result type, which the
@@ -8076,7 +8139,7 @@ impl Parser {
         let fallback = if has_wildcard {
             arms.pop().unwrap().code
         } else {
-            self.null(&result_type)
+            self.null_value(&result_type)
         };
         let chain = chain_pattern_arms(arms, fallback, &result_type);
 
@@ -8120,14 +8183,20 @@ impl Parser {
         // join then reads an unwritten, value-sized slot — interp stack underflow
         // ("No elements left on the stack"), native a lost value.  Convert each
         // bare-null arm to the result type's typed null sentinel, the same
-        // transform `parse_if` applies to a null branch (~line 1250) and the
-        // fallback gets just below.  `self.null` is a no-op (returns
+        // transform `parse_if` applies to a null branch and the
+        // fallback gets just below.  `null_value` is a no-op (returns
         // `Value::Null`) for Void/Unknown result types, so a statement-style
         // match is untouched.  Compute the typed null once (it's the same for
         // every arm — `result_type` is fixed), releasing the `&mut self` borrow
         // before mutating `arms`.
+        //
+        // loft#936 — `null_value` and not `null`, at every branch-MERGE slot in
+        // this file.  `null` also supplies a VARIABLE's default-init, where a
+        // collection has to be an allocated empty store, so its catch-all
+        // answers a bare `Value::Null` for the entire collection family and
+        // silently reintroduces the no-push this paragraph exists to prevent.
         if arms.iter().any(|a| matches!(a.1, Value::Null)) {
-            let typed_null = self.null(result_type);
+            let typed_null = self.null_value(result_type);
             for arm in &mut arms {
                 if matches!(arm.1, Value::Null) {
                     arm.1 = typed_null.clone();
@@ -8138,7 +8207,7 @@ impl Parser {
             let (_, arm_code, _, _) = arms.pop().unwrap();
             arm_code
         } else {
-            self.null(result_type)
+            self.null_value(result_type)
         };
 
         let mut chain = fallback;
@@ -9267,6 +9336,23 @@ impl Parser {
     /// outer local / param returned by the block) — a genuine borrow to keep.
     fn block_defines_var(l: &[Value], v: u16) -> bool {
         l.iter().any(|op| Self::stmt_defines_var(op, v))
+    }
+
+    /// loft#918 — the variable a block hands back, when its tail is nothing but a
+    /// name: `… ; w_t }` and `… ; return w_t; }` both answer `w_t`.
+    ///
+    /// Both spellings reach the same promotion, so both must be recognised — the
+    /// explicit `return` form types as `Never` rather than as the variable, which is
+    /// why the caller cannot read the tail's TYPE to find it.
+    fn tail_bare_var(l: &[Value]) -> Option<u16> {
+        let mut node = l.last()?;
+        loop {
+            match node.unspan() {
+                Value::Var(v) => return Some(*v),
+                Value::Return(inner) => node = inner,
+                _ => return None,
+            }
+        }
     }
 
     fn stmt_defines_var(op: &Value, v: u16) -> bool {
@@ -11515,7 +11601,7 @@ impl Parser {
             // a no-op (`n_store_violation` returns `false`).
             self.n_store_violation(&t, &r_type, "the return value", None);
             if t == Type::Null {
-                v = self.null_return(&r_type);
+                v = self.null_value(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }
@@ -12891,7 +12977,18 @@ impl Parser {
             let d_nr = self.data.def_nr(&id);
             if d_nr != u32::MAX && self.data.def_type(d_nr) != DefType::EnumValue {
                 if !self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
+                    // Still unresolved after pass 2, so this is not a forward reference:
+                    // those resolve in `resolve_deferred_unknowns` and take the branch
+                    // below with a real size.  It is a typo.  Accepting it silently left
+                    // `*val` at its `Null` initialiser, so `sizeof(NoSuchType)` answered
+                    // `null` and that null flowed on as a value (loft#933).  Still marked
+                    // `found`, so the expression path below adds no cascade.
                     found = true;
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Undefined type {id} — sizeof needs a variable or a declared type"
+                    );
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
@@ -12956,7 +13053,16 @@ impl Parser {
             let d_nr = self.data.def_nr(&id);
             if d_nr != u32::MAX && self.data.def_type(d_nr) != DefType::EnumValue {
                 if !self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
+                    // Same unresolved-name case `parse_size` handles above, and it was
+                    // silent here for the same reason: `*val` kept its `Null` initialiser,
+                    // so `type_name(NoSuchType)` rendered `null` as if that were the name
+                    // of a type (loft#933).
                     found = true;
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Undefined type {id} — type_name needs a variable or a declared type"
+                    );
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {

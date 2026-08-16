@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#940 — the consumer half.  Every line below is a RESULT, not the absence of a
+// diagnostic: the warning says a call goes somewhere the author did not write, so the
+// test has to read where it actually went.
+use issue940lib;
+
+fn main() {
+  // The library's `clamp` is an if/else-if (Unity's `Mathf.Clamp`), the stdlib's is
+  // `min(max(x, lo), hi)`.  They agree everywhere except `lo > hi`, which is what made
+  // the reporter's port quiet enough to ship — so that is the argument triple to use.
+  bare = clamp(5.0, 10.0, 0.0);                  // the stdlib's -> 0
+  qualified = issue940lib::clamp(5.0, 10.0, 0.0); // the library's -> 10
+
+  // The private SUBJECT, reached through the library's own bare call.  The library's
+  // `floor_mod(7, 3)` answers 4; the stdlib's answers 1.
+  private = issue940lib::private_caller();
+
+  // QUIET control — the free-function collision resolves to the LIBRARY (903), which is
+  // why it needs no warning.  A fix that silenced the subject by making imports lose
+  // would show up here as 3.
+  free = sum_of([1, 2, 3]);
+
+  // QUIET control — a name the stdlib methods on ANOTHER type stays reachable bare.
+  own = find(Span { lo: 2, hi: 8 }, 99);
+
+  println("bare={bare} qualified={qualified} private={private} free={free} own={own}");
+}

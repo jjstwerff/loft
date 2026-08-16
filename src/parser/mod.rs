@@ -355,6 +355,16 @@ pub struct Parser {
     /// names.  `None` = no manifest above that directory.
     pkg_dep_cache:
         std::collections::HashMap<String, Option<(String, std::collections::HashSet<String>)>>,
+    /// The FILE each `use` short-name was loaded from, canonicalised (loft#912).
+    ///
+    /// A module's short name is global across the whole dependency graph, but the
+    /// file it names is not: two packages may each hold `src/catalogue.loft`.  Only
+    /// the first is ever loaded — the second `use catalogue;` finds the name taken
+    /// and imports the other package's module — so the second package's own
+    /// functions are simply absent, reported as `Unknown function` at a line in a
+    /// package the author did not write.  Keeping the path is what lets the clash be
+    /// reported as a clash, naming both files.
+    use_paths: std::collections::HashMap<String, String>,
     /// Root project's `[dependencies]` version constraints (name → req), read
     /// once from the main script's nearest-ancestor `loft.toml` (via
     /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
@@ -430,6 +440,12 @@ pub struct Parser {
     /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
     /// set is complete, so `parse_function` reproduces the promoted type.
     par_worker_defs: std::collections::HashSet<u32>,
+    /// loft#918 — every `(function, tail variable)` whose promotion pass 1 could not
+    /// decide: the tail is a bare local, the function returns `text` / `text?`, and the
+    /// local's type is still `Unknown` because it was bound to a call declared lower in
+    /// the file.  Consumed by `promote_late_text_buffers` between the passes, where the
+    /// callee exists — the same late-derivation slot `reserve_late_return_buffers` uses.
+    late_text_tails: Vec<(u32, u16)>,
     /// @PLN125 — every bound-method stub built on pass 1, as
     /// `(stub, the interface method it stands in for, the holder that replaced `Self`)`.
     /// Consumed by `refresh_bound_method_stubs` between the passes, where a forward-
@@ -587,6 +603,15 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// True while the `as` handler runs the conversion for an EXPLICIT cast.
+    ///
+    /// `convert` serves both the implicit stores (a local annotation, an argument, a
+    /// field) and the body of an `as` cast, so the implicit-narrowing diagnostic it
+    /// raises has to know which one it is in.  Without that, the widened `integer` →
+    /// `i32` test (loft#931) fires on the very cast it prescribes as the cure — and on
+    /// every `f += (i as i32)` besides.  An explicit cast keeps the range-containment
+    /// rule alone; DN4 is what governs it.
+    pub(crate) in_explicit_cast: bool,
     /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
     /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
     /// `??` right operand from source, the postfix-`?` site builds the type's default
@@ -873,6 +898,7 @@ impl Parser {
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
+            late_text_tails: Vec::new(),
             bound_method_stubs: Vec::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -892,6 +918,7 @@ impl Parser {
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
+            use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
             auto_use_trigger_map: None,
@@ -922,6 +949,7 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            in_explicit_cast: false,
             pending_default_rhs: None,
             pending_default_src: None,
             conv_owned_result: None,
@@ -1524,6 +1552,56 @@ impl Parser {
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
         }
+        self.parse_main(filename, None, default)
+    }
+
+    /// loft#925 — parse `content` through the whole-program path of
+    /// [`parse`](Self::parse), as if it were the file at `filename`.
+    ///
+    /// Everything else is identical: `filename` decides the source directory,
+    /// the owning package, and therefore how a `use` inside `content` resolves.
+    /// The file itself is never read and need not exist.
+    ///
+    /// This is not [`parse_source`](Self::parse_source), which is the REPL /
+    /// `--script` entry and skips the between-pass promotions a program parse
+    /// runs (`reserve_late_return_buffers` and the rest) — a base parsed that
+    /// way would hand its libraries on in a state no ordinary parse produces.
+    pub fn parse_as(&mut self, filename: &str, content: &str, default: bool) -> bool {
+        self.parse_main(filename, Some(content), default)
+    }
+
+    /// loft#925 — start this parser from `base`, an already-completed parse of
+    /// the stdlib plus a set of libraries, so the program parsed next binds
+    /// those libraries instead of loading them again.
+    ///
+    /// What travels is what a `use` of an already-loaded library would otherwise
+    /// have produced: the definitions and the database schema (the pair a warm
+    /// stdlib load restores), the file each short name was loaded from — which
+    /// is what lets a module-name clash still be reported as a clash — and the
+    /// native / placed-library registrations a manifest read queued.  Everything
+    /// else is per-program and is left at its fresh value, `own_lib` and
+    /// `database.source_dir` among them, so the program's own file still decides
+    /// them.
+    ///
+    /// The parse-time side maps (`complexity`, `field_read_counts`, the sandbox
+    /// designations) deliberately do NOT travel: they drive diagnostics that the
+    /// base parse has already emitted, and copying them would emit each one a
+    /// second time.  The caller carries the base's diagnostics instead.
+    pub fn seed_from(&mut self, base: &Parser) {
+        self.data = base.data.clone();
+        self.data.freeze_uses();
+        self.database.install_schema(base.database.types.clone());
+        self.use_paths.clone_from(&base.use_paths);
+        self.pending_native_libs
+            .clone_from(&base.pending_native_libs);
+        self.native_lib_regs.clone_from(&base.native_lib_regs);
+        self.pending_native_compile
+            .clone_from(&base.pending_native_compile);
+        self.pending_placed_libs
+            .clone_from(&base.pending_placed_libs);
+    }
+
+    fn parse_main(&mut self, filename: &str, content: Option<&str>, default: bool) -> bool {
         // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
@@ -1563,7 +1641,7 @@ impl Parser {
                 .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()));
         }
         self.vars.logging = false;
-        self.lexer.switch(filename);
+        Self::load_main_file(&mut self.lexer, filename, content);
         self.first_pass = true;
         self.pending_imports.clear();
         self.applied_imports.clear();
@@ -1628,11 +1706,19 @@ impl Parser {
         // the boxing lands before `reserve_late_return_buffers` hands the now-heap
         // return its `__retbuf` and before the H5 snapshot counts attributes.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         // @PLN125 — the same class, one step earlier in the chain: a bound-method stub's
         // hidden parameters are decided from the INTERFACE method's return type, which on
         // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
         // buffers below and before the H5 snapshot.
         self.refresh_bound_method_stubs();
+        self.promote_late_text_buffers();
         self.reserve_late_return_buffers();
         let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
             .map(|d| self.data.attributes(d as u32))
@@ -1651,7 +1737,7 @@ impl Parser {
             }
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
-            self.lexer.switch(filename);
+            Self::load_main_file(&mut self.lexer, filename, content);
             self.parse_file();
             self.resolve_deferred_unknowns();
             // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
@@ -1688,6 +1774,16 @@ impl Parser {
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// Point the lexer at the parse's own entry — the file at `filename`, or
+    /// `content` claiming to be that file.  Both passes go through here, so a
+    /// caller supplying content gets it on both.
+    fn load_main_file(lexer: &mut Lexer, filename: &str, content: Option<&str>) {
+        match content {
+            Some(text) => lexer.parse_string(text, filename),
+            None => lexer.switch(filename),
+        }
     }
 
     /// H5 (two-pass name-stability contract): assert pass 2 reproduced pass 1's
@@ -1746,6 +1842,63 @@ impl Parser {
     /// same promoted type and the two passes agree. Idempotent — a worker declared
     /// BELOW its par site was already promoted in pass 1 and is skipped by the
     /// `Type::Tuple` guard.
+    /// loft#944 — refuse a tuple RETURN whose member is declared lower in the file.
+    ///
+    /// Everything else about a forward reference inside a tuple works: locals, vector
+    /// elements (declared and inferred), struct-literal members, parameters, nesting. A
+    /// RETURN does not, and the reason is structural rather than a missing branch.
+    ///
+    /// A heap-carrying tuple return is BOXED into the synthetic `Reference(__tuple<...>)`
+    /// and given a hidden `__retbuf`. `parse_function` decides that by asking whether an
+    /// element "carries a lifetime concern", and an unresolved member carries none — so
+    /// pass 1 says no, and the return type is stored on pass 1 ONLY. Promoting it between
+    /// the passes gets the signature right and still miscompiles: the synthetic struct is
+    /// minted after pass 1's `fill_all`, so it has no LAYOUT while pass 2 parses the bodies
+    /// that read it, and every offset lands as `u16::MAX` — the emitted body reads
+    /// `OpDatabase(__ref_2, 65535)` where the working spelling reads `79`. Making it work
+    /// means minting and laying out that struct during pass 1, from members that do not
+    /// resolve until the end of it.
+    ///
+    /// So this says so, at the declaration, with the one-line cure. It replaces an internal
+    /// compiler error — and, once the rest of loft#944 was fixed, something worse: a body
+    /// that ran on the interpreter and read its first member back as `0` on `--native`.
+    fn refuse_forward_tuple_returns(&mut self, adopted: &[(u32, Type)]) {
+        if adopted.is_empty() {
+            return;
+        }
+        for d in 0..self.data.definitions.len() as u32 {
+            if !matches!(self.data.def_type(d), crate::data::DefType::Function) {
+                continue;
+            }
+            let Type::Tuple(elems) = self.data.def(d).returned().clone() else {
+                continue;
+            };
+            let Some(late) = elems.iter().find_map(|e| match e {
+                Type::Unknown(n) => adopted
+                    .iter()
+                    .find(|(stub, _)| stub == n)
+                    .map(|(stub, _)| self.data.def(*stub).name().to_string()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let fname = self.data.def(d).name().trim_start_matches("n_").to_string();
+            let pos = self.data.def(d).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Error,
+                &pos,
+                &format!(
+                    "`{fname}` returns a tuple containing `{late}`, which is declared later \
+                     in the file — move the declaration of `{late}` above `{fname}`. A tuple \
+                     RETURN has to know at its declaration whether it carries heap storage, \
+                     and it cannot ask a type that does not exist yet; every other use of a \
+                     forward-declared type in a tuple (a local, a vector element, a struct \
+                     field, a parameter) works"
+                ),
+            );
+        }
+    }
+
     fn promote_par_worker_tuple_returns(&mut self) {
         let mut workers: Vec<u32> = self.par_worker_defs.iter().copied().collect();
         workers.sort_unstable(); // deterministic `__tuple<…>` def order across runs
@@ -1794,6 +1947,60 @@ impl Parser {
     fn refresh_bound_method_stubs(&mut self) {
         for (stub_nr, child_nr, holder_nr) in std::mem::take(&mut self.bound_method_stubs) {
             self.set_bound_stub_signature(stub_nr, child_nr, holder_nr);
+        }
+    }
+
+    /// loft#918 — give a text-returning function the hidden work buffer its returned
+    /// local needs, for the locals whose type pass 1 could not know.
+    ///
+    /// `text_return` promotes a returned text local into a hidden `&text` out-param, and
+    /// it decides that from the local's TYPE.  A local bound to a call declared lower in
+    /// the file has no type in pass 1 — the callee is not registered yet — so the
+    /// promotion happened on pass 2 alone: the signature grew one argument after pass 2
+    /// had already lowered calls against the old one.  With the caller below the callee
+    /// that is "only" the H5 divergence; with the caller above it, the call really does
+    /// pass one argument too few.
+    ///
+    /// Here, between the passes, every declaration exists, so the same promotion lands
+    /// before any caller is lowered — and pass 2 finds the attribute already there and
+    /// takes `classify_text_dep`'s `Attr` branch, which is exactly the state a pass-1
+    /// promotion leaves behind.  `reserve_late_return_buffers` settles the heap return
+    /// buffer (#675) in this slot for the same reason.
+    fn promote_late_text_buffers(&mut self) {
+        let buf_tp = Type::RefVar(Box::new(Type::Text(crate::data::Deps::none())));
+        for (d, v) in std::mem::take(&mut self.late_text_tails) {
+            let def = self.data.def(d);
+            if !matches!(self.data.def_type(d), DefType::Function)
+                || *def.code() == Value::Null
+                || def.is_operator()
+                || !def.rust().is_empty()
+                || !def.native().is_empty()
+                || def.name().starts_with("n___lambda_")
+            {
+                continue;
+            }
+            // The declared return had to stay text for the promotion to apply, and the
+            // local had to stay a local: a name that resolved to a parameter, or one an
+            // earlier candidate already promoted, is served by its own attribute.
+            if !matches!(def.returned().base(), Type::Text(_)) {
+                continue;
+            }
+            let vars = def.variables();
+            if !vars.exists(v) || vars.is_argument(v) {
+                continue;
+            }
+            let name = vars.name(v).to_string();
+            if def.attr_names.contains_key(&name) {
+                continue;
+            }
+            let a = self
+                .data
+                .add_attribute(&mut self.lexer, d, &name, buf_tp.clone());
+            self.data.definitions[d as usize].attributes[a].hidden = true;
+            let f = &mut self.data.definitions[d as usize].variables;
+            f.set_type(v, buf_tp.clone());
+            f.become_argument(v);
+            f.mark_used(v);
         }
     }
 
@@ -1871,8 +2078,19 @@ impl Parser {
             // instantiation that is pass-2-only by design — pass 1 only predicts.
             let lazy_bound_stub =
                 matches!(dt, DefType::Function) && self.h5_names_a_bound_stub(name);
+            // loft#944 — the fourth legal append: a synthetic TUPLE struct whose member was
+            // a forward reference.  `tuple_def` derives both the def NAME and the frozen
+            // element layout from the members' spellings, so it refuses to mint one while a
+            // member is still `Type::Unknown` — an unresolved member spells `"unknown"` and
+            // sizes as ZERO WIDTH, and the early-return on the name lookup means neither is
+            // ever revisited.  That makes the mint pass-2-only for exactly the same reason
+            // `map`'s output wrapper is: the input the name is derived from does not exist
+            // in pass 1.  Same append shape too — name-keyed, idempotent, at the end, so
+            // every pass-1 def number is untouched and the numbering contract H5 protects
+            // holds.
+            let lazy_tuple = matches!(dt, DefType::Struct) && name.starts_with("__tuple<");
             assert!(
-                lazy_wrapper || lazy_instantiation || lazy_bound_stub,
+                lazy_wrapper || lazy_instantiation || lazy_bound_stub || lazy_tuple,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
                  (pass1={}, pass2={})",
@@ -2314,6 +2532,13 @@ impl Parser {
         // handed over as a STRING boxes a par worker's tuple return identically to
         // one read from a file.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2364,6 +2589,13 @@ impl Parser {
         // handed over as a STRING boxes a par worker's tuple return identically to
         // one read from a file.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2497,6 +2729,13 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // loft#808 — the same between-passes promotion `parse` does; see there.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
@@ -2883,6 +3122,41 @@ impl Parser {
         s.min < d.min || s.max > d.max
     }
 
+    /// The narrowing test for an IMPLICIT store — a local annotation, an argument, a
+    /// field initialiser or a field write.  [`Self::is_narrowing_int`]'s range
+    /// containment plus the one pair it cannot see: `integer` → `i32`.
+    ///
+    /// Every narrow alias but `i32` is declared with a `limit(…)`, so its range is
+    /// genuinely tighter and containment catches it.  `i32` spans the whole 32-bit range,
+    /// which is the range `integer` REPORTS — the plain integer's bounds are `i32::MIN+1
+    /// ..= i32::MAX` with the 64-bit value living in an 8-byte slot the bounds do not
+    /// describe.  So the two specs differ in `forced_size` alone, `[s.min,s.max] ⊆
+    /// [d.min,d.max]` holds for a pair whose storage drops from 8 bytes to 4, and the one
+    /// alias whose NAME says "32 bits" was the one the width discipline never checked:
+    /// an `i32` field took `5000000000` and stored `705032704` with no diagnostic, on
+    /// both backends (loft#931).
+    ///
+    /// Comparing STORAGE WIDTH is what sees it, and it is a strictly wider test than
+    /// containment rather than a different one — a range that does not fit cannot have a
+    /// narrower width.  It lives here, apart from `is_narrowing_int`, because DN4's
+    /// explicit-cast rule must NOT adopt it: `as τ` is refused by DN4 whenever the value
+    /// is not provably in range, so widening that predicate would start demanding
+    /// `as i32?` at 56 sites across loft's own tests and libraries that today write
+    /// `f += (i as i32)` — and, more to the point, `as i32` is the very cure this
+    /// diagnostic prescribes.  It has to stay spellable.
+    fn is_narrowing_int_store(src: &Type, dst: &Type) -> bool {
+        if Self::is_narrowing_int(src, dst) {
+            return true;
+        }
+        let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
+            return false;
+        };
+        let Some(d_width) = d.forced_size.map(std::num::NonZeroU8::get) else {
+            return false;
+        };
+        s.byte_width(false) > d_width
+    }
+
     /// @PLAN48 P2: render an integer type with its explicit narrow alias
     /// (`i32`/`u8`/`u16`/`i8`/`i16`) so a narrowing diagnostic doesn't print
     /// the bare `integer` for both sides (they share bounds).
@@ -3159,10 +3433,17 @@ impl Parser {
         // the `is_equal` accept — the Error fails compilation, and returning via
         // `is_equal` avoids a second (generic) diagnostic from the caller's
         // `validate_convert` (which still sees integer/i32 as can_convert-compatible).
-        if !self.first_pass
-            && Self::is_narrowing_int(is_type, should)
-            && !self.int_value_fits(code, should)
-        {
+        // `null` is not a narrowing store: there is no value to lose, and whether the
+        // target may HOLD null is the separate (N-Store) nullability rule.  It reaches
+        // here typed as the full `integer` — a nullable narrow field left out of a struct
+        // literal takes its default this way — so the widened width test (loft#931) would
+        // otherwise refuse `n.c = null` and `N { t: 1 }` on an `i32?` field.
+        let narrows = if self.in_explicit_cast {
+            Self::is_narrowing_int(is_type, should)
+        } else {
+            Self::is_narrowing_int_store(is_type, should)
+        } && !self.is_null_source(code);
+        if !self.first_pass && narrows && !self.int_value_fits(code, should) {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
             diagnostic!(
@@ -7576,6 +7857,35 @@ impl Parser {
         ]
     }
 
+    /// @PLN25 E2a.5 / loft#896 — emit "this `__nullable<S>` slot is ABSENT" against `to`, the
+    /// slot's own `OpGetField`/element ref.
+    ///
+    /// A nullable struct field or vector element is the synthetic enum stored INLINE, so
+    /// absence is discriminant `0` — not the `store_nr` null sentinel a real DbRef uses, since
+    /// an inline slot has no DbRef of its own. Emitting a `copy_ref` here instead produces
+    /// `OpCopyRecord(null, dest, …)`, which is a silent no-op on the interpreter and does not
+    /// compile at all on native (`OpCopyRecord(cell, (), …)` — `()` where a `DbRef` is
+    /// expected). The inline form of `== null` reads this same discriminant
+    /// (`operators.rs::enum_null`), which is what makes the write and the test agree.
+    ///
+    /// A present `Some` carrying a heap payload (text, nested vector) is released FIRST via
+    /// `OpClearKeyed` → `remove_claims`; without it the old payload leaks until the host store
+    /// dies. That op reads the discriminant and no-ops on an already-absent or payload-less
+    /// slot, so this is safe whatever the slot held — including a freshly allocated record,
+    /// which is why the construction path can share it with the assignment path.
+    pub(crate) fn build_nullable_set_null(&mut self, syn: u32, to: Value) -> Value {
+        let set_null = self.cl(
+            "OpSetEnum",
+            &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+        );
+        let kt = self.data.def(syn).known_type();
+        if !self.first_pass && kt != u16::MAX {
+            let free = self.cl("OpClearKeyed", &[to, Value::Int(i32::from(kt))]);
+            return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
+        }
+        set_null
+    }
+
     fn set_field_check(
         &mut self,
         d_nr: u32,
@@ -8317,6 +8627,21 @@ impl Parser {
             *code = self.cl("OpEqInt", &[disc, Value::Int(0)]);
             return Type::Boolean;
         }
+        // loft#918 — no operator matched, and one of the operands has no type YET:
+        // `w_t + "!"` where `w_t` was bound to a call whose callee is declared lower in
+        // the file.  On pass 1 that is a deferral, not a reject — pass 2 has the callee
+        // and resolves the operand — and rejecting it here ended the parse before the
+        // pass that would have accepted the program.
+        //
+        // The deferral at the top of this function is deliberately narrower (it fires
+        // only when EVERY operand is unknown) because it also suppresses the `possible`
+        // loop, which one known operand can still steer.  Here the loop has already run
+        // and found nothing, so there is no resolution left to steer — only a message to
+        // hold back.  A genuinely unresolvable operand reaches this same site on pass 2,
+        // where the reject fires with the type it really has.
+        if self.first_pass && types.iter().any(Type::is_unknown) {
+            return Type::Unknown(0);
+        }
         // generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
@@ -8947,10 +9272,19 @@ impl Parser {
                         .returned
                         .depend()
                         .contains(&(a_nr as u16));
+                // A slot the caller DID write, whose expression already errored, is not a
+                // missing argument.  Such an expression is poisoned to `Never` by the site
+                // that reported it (@P376's rule), and it lowers to `Value::Null` because
+                // there is no value to lower — which is exactly what this check reads as
+                // "nothing supplied".  Reporting it again names an internal opcode and a
+                // parameter the program never wrote: `v > PEUnknown` answered
+                // "missing argument for parameter 'v1' of `OpLtInt`" (loft#934).
+                let already_errored = matches!(all_types.get(a_nr), Some(Type::Never));
                 if !self.first_pass
                     && default == Value::Null
                     && !matches!(tp, Type::Optional(_))
                     && !promoted
+                    && !already_errored
                 {
                     let fname = self.data.def(d_nr).display_name().to_string();
                     diagnostic!(
@@ -9307,6 +9641,13 @@ impl Parser {
                     } else {
                         None
                     };
+                    // loft#912 — the name is taken, but by WHICH file?  If this
+                    // package has its own `<id>.loft`, the two are different modules
+                    // sharing one global name, and the import below binds the other
+                    // package's.  Say so; the resolution itself is unchanged.
+                    if self.data.use_exists(&id) {
+                        self.module_name_clash(&id);
+                    }
                     if self.data.use_exists(&id) {
                         let lib_source = self.data.get_source(&id);
                         // @PLN22 Phase 3 — register the library alias for `m::` access.
@@ -9353,6 +9694,7 @@ impl Parser {
                         let cur = &self.lexer.pos().file;
                         self.todo_files.push((cur.clone(), self.data.source));
                         self.data.use_add(&id);
+                        self.record_use_path(&id, &f);
                         // @PLN22 Phase 3 — register the library alias now that the lib's
                         // source exists (use_add set self.data.source to it).  The
                         // import itself is recorded on the second encounter (via
@@ -9407,6 +9749,7 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&dep_id);
+                    self.record_use_path(&dep_id, &f);
                     self.switch_to_dep(&f);
                 }
             } else {
@@ -9507,6 +9850,7 @@ impl Parser {
                 // work-around: the load has nothing left to do.
                 if self.is_current_source(&f) {
                     self.data.use_add(&n);
+                    self.record_use_path(&n, &f);
                     continue;
                 }
                 if std::path::Path::new(&f).exists() {
@@ -9520,6 +9864,7 @@ impl Parser {
                 let cur = self.lexer.pos().file.clone();
                 self.todo_files.push((cur, self.data.source));
                 self.data.use_add(&name);
+                self.record_use_path(&name, &f);
                 self.switch_to_dep(&f);
             }
         }
@@ -9849,6 +10194,97 @@ impl Parser {
             f = format!("{id}.loft");
         }
         f
+    }
+
+    /// Remember which FILE a `use` short-name was loaded from (loft#912).
+    ///
+    /// Called at every site that pairs `Data::use_add` with a resolved path, so the
+    /// name→file mapping cannot drift from the load it describes.  Paths are
+    /// canonicalised, because the same file is reached by different spellings (a
+    /// relative `../pkg_dep/src/x.loft` here, an absolute one there) and only the
+    /// canonical form answers "is this the same module".
+    fn record_use_path(&mut self, id: &str, f: &str) {
+        let p = std::path::Path::new(f);
+        let canonical = p
+            .canonicalize()
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        self.use_paths.insert(id.to_string(), canonical);
+    }
+
+    /// The file the CURRENT file means by `use <id>`, when that is a module of its
+    /// own package — `<its dir>/<id>.loft` or `<its dir>/lib/<id>.loft`.
+    ///
+    /// `None` when no such file exists, or when `id` is a declared dependency of the
+    /// enclosing package: a dependency name always wins over a same-named file inside
+    /// the declaring package, which is the guard `lib_path` already applies.
+    fn own_module_file(&mut self, id: &str) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        if cur_dir.is_empty() {
+            return None;
+        }
+        if self
+            .package_declared_deps(&cur_dir)
+            .is_some_and(|(_, deps)| deps.contains(id))
+        {
+            return None;
+        }
+        let sep = sep_str();
+        [
+            format!("{cur_dir}{sep}{id}.loft"),
+            format!("{cur_dir}{sep}lib{sep}{id}.loft"),
+        ]
+        .into_iter()
+        .find(|c| std::path::Path::new(c).exists())
+    }
+
+    /// Report when `use <id>` here names a DIFFERENT file from the one already loaded
+    /// under that name, so the import below binds the other package's module.
+    ///
+    /// The module namespace is flat across the dependency graph while the files are
+    /// not.  Adding `src/catalogue.loft` to a package whose dependency already has one
+    /// leaves only the first loadable, and the loser's functions are then simply
+    /// absent — reported as `Unknown function part_list` at a line inside a package
+    /// the consumer never edited and cannot fix, with nothing naming a collision
+    /// (loft#912).  This says the collision out loud, and names both files.
+    ///
+    /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
+    /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
+    /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
+    /// `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while carrying
+    /// its own copies of all three.  Scoping module names to their package is the fix
+    /// this is a signpost for; it waits on two things this cannot reach — `use_add`
+    /// deriving a new source id from the SIZE of the name map, and
+    /// `qualified_type_name` deriving a DATABASE type key from a module's short name
+    /// (a package-qualified key must stay machine-independent, so it cannot carry the
+    /// package's path).
+    fn module_name_clash(&mut self, id: &str) {
+        let Some(own) = self.own_module_file(id) else {
+            return;
+        };
+        let own_canonical = std::path::Path::new(&own)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&own))
+            .to_string_lossy()
+            .to_string();
+        let Some(loaded) = self.use_paths.get(id) else {
+            return;
+        };
+        if *loaded == own_canonical {
+            return;
+        }
+        let loaded = loaded.clone();
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "module-name-shadowed",
+            "module '{id}' is declared by two files — '{own_canonical}' and '{loaded}' — \
+             and a module's file name is shared across the whole dependency graph, so \
+             this `use` binds the second one. Rename one file and its `use` if you meant \
+             the other"
+        );
     }
 
     /// The package context owning `cur_dir`: the nearest ancestor directory
@@ -11427,6 +11863,16 @@ impl Parser {
         self.vars.unique(name, var_type, &mut self.lexer)
     }
 
+    /// Create the variable a `for` loop binds — keyed by the LOOP, not by the name, so a
+    /// second loop over one name is a second variable (loft#915).  `name` comes from
+    /// [`crate::variables::Function::loop_binding`].
+    fn create_loop_var(&mut self, name: &str, var_type: &Type) -> u16 {
+        if self.context == u32::MAX {
+            return u16::MAX;
+        }
+        self.vars.loop_variable(name, var_type, &mut self.lexer)
+    }
+
     fn var_usages(&mut self, vnr: u16, plus: bool) {
         // @P387 — a captured-var number can arrive from a DIFFERENT var table
         // (a capturing lambda passed as a fn-value records its captures, which
@@ -11862,27 +12308,32 @@ impl Parser {
         }
     }
 
-    /// loft#793 — the null a `return` DELIVERS for `tp`: `null()`, plus the
-    /// store-pointer sentinel for every remaining DbRef-backed heap type (the
-    /// collections, and a struct-enum — whose payload is a record, not the
-    /// `255` discriminator a plain enum uses).
+    /// loft#793/loft#936 — the null a VALUE POSITION delivers for `tp`:
+    /// `null()`, plus the store-pointer sentinel for every remaining
+    /// DbRef-backed heap type (the collections, and a struct-enum — whose
+    /// payload is a record, not the `255` discriminator a plain enum uses).
+    ///
+    /// A value position is anywhere the null travels on the eval stack rather
+    /// than into a declared slot: a `return`, and the arm of an `if`/`match`
+    /// whose sibling arm decides the merged type.
     ///
     /// Separate from `null()` because that one also supplies a variable's
     /// DEFAULT-INIT, and the two want different answers here: a collection
     /// LOCAL must start as an ALLOCATED empty store, because a later write
     /// (`w: vector<single> = f#read(16) as vector<single>`) fills that store in
-    /// place and the sentinel's `store_nr` indexes nothing.  A RETURN has no
-    /// slot to fill — the value travels back as a DbRef — so there the
-    /// sentinel is the only thing that can mean null.
+    /// place and the sentinel's `store_nr` indexes nothing.  A value in flight
+    /// has no slot to fill — it travels as a DbRef — so there the sentinel is
+    /// the only thing that can mean null.
     ///
-    /// Untreated, `return null` from a `-> vector<T>?` / `-> StructEnum?` fn
-    /// pushed nothing (or a 4-byte discriminator) where the caller read a
-    /// 12-byte DbRef, so the interpreter's `OpReturn` handed back whatever the
-    /// eval stack held: the caller saw a stale ref as NON-null and freed it a
-    /// second time ("refused free of out-of-range store", sometimes a SIGSEGV).
-    /// Native was already right, so the two backends disagreed on a bare
-    /// `return null`.
-    pub fn null_return(&mut self, tp: &Type) -> Value {
+    /// Untreated, `null()`'s catch-all answers a bare `Value::Null`, which
+    /// pushes NOTHING where the consumer reads a 12-byte DbRef, so the
+    /// interpreter hands on whatever the eval stack held: the consumer saw an
+    /// uninitialised ref as NON-null and freed it ("refused free of
+    /// out-of-range store", sometimes a SIGSEGV).  Native was already right, so
+    /// the two backends disagreed — on a bare `return null` (#793), and on
+    /// `if n == 0 { null } else { [n] }`, where the null arm is parsed BEFORE
+    /// the sibling that names the type and so is back-patched here (#936).
+    pub fn null_value(&mut self, tp: &Type) -> Value {
         match tp.base() {
             Type::Vector(_, _)
             | Type::Sorted(_, _, _)

@@ -80,6 +80,29 @@ writing and the `n9_generated_fill_matches_src` test enforces byte-exact match.
 - **Pre-eval extension:** `needs_pre_eval` now covers `Value::Insert` and `Value::Iter`;
   `collect_pre_evals_inner` handles `Value::Return`.
 
+### Loop-invariant vector headers (loft#885)
+
+A loop the emitter can prove writes **no store** derives each vector's
+`(store_nr, record, length)` once, immediately before the loop, and reads its elements
+against that triple instead of re-deriving all three per element. Worth ~2× on an
+indexed-read kernel; the measurement, the design and the reason `rustc` cannot do it for us
+are in [PERFORMANCE.md § Design: P2](PERFORMANCE.md) → *Shipped: the NATIVE half*.
+
+Where it lives: `src/generation/hoist.rs` (the gate), `src/generation/ops/vector_ops.rs`
+(the two emitters, both falling through to the `#rust` template when the gate declined),
+`Output::begin_vector_hoist` (the prelude), and `vector::vec_header` /
+`vector::get_vector_hoisted` / `Stores::vec_get_hoisted_or_raise_runtime` (the runtime).
+Interpreter emission is untouched.
+
+Two switches, both read at GENERATION time:
+
+* **`LOFT_HOIST_VERIFY=1`** emits the checking form of every hoisted read — it re-derives
+  the header and panics if the loop moved the vector under it. This is the gate on the
+  gate; run it over the suite after touching `hoist.rs`.
+* **`LOFT_NO_VECTOR_HOIST=1`** emits the pre-loft#885 form, so one binary carries both
+  halves of an A/B. It is also the first bisect step for a `--native`-only wrong answer in
+  a loop that indexes a vector.
+
 ### Native→interpreter fallback, and `LOFT_REQUIRE_NATIVE` (efficiency-work aid)
 
 A default `loft <file>` run prefers native but **degrades to the interpreter** rather
@@ -154,6 +177,24 @@ yet run down: a nested narrow-int vector registers `vector<vector<integer>>`
 where the compiler recorded `main_vector<vector<integer(-32768, 32767)>>`,
 losing the narrow element type and minting an extra type; and `short<0,true>`
 lands one late behind the same nested-vector shape.
+
+**A `vector<τ?>` element used to be one of them (loft#923).** `Optional(τ)`
+shares τ's storage exactly — the compiler's own table holds `vector<integer?>`
+and `vector<integer>` as ONE type — but `emit_field_inner` tested the element
+type without peeling the `Optional`, so a `vector<vector<integer>?>` field
+missed the nested-vector arm and fell through to the generic path. There
+`type_def_nr` resolves an `Optional` to the generic `vector` def and reads
+whatever `known_type` was assigned last, so the emitted `db.vector(<that>)`
+MINTED a type the program never named and moved every id after it. The peel now
+happens once, at the top of the vector arm, beside the peel the FIELD's own type
+already had. The lesson generalises: any test on an element type in this emitter
+is a question about STORAGE, and `Optional` is not part of the answer.
+
+A keyed collection in that position is a different story — `vector<hash<E[k]>>`
+had no element type created at all, so `init()` named a binding no line made and
+rustc refused the program. It is now refused where it is declared instead
+(loft#923 leg A): nothing could fill one, so there was no working program to
+keep. See [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).
 
 `LOFT_TRACE_MINT=1` is the companion instrument: it narrates every
 collection-type lookup as `hit=<nr>` or `MINT=<nr>` with caller frames, so
@@ -2151,6 +2192,9 @@ codegen and the linker flags read the *same* helper so they never disagree.
   link), not `krate::sym`.  `output_native_direct_call`'s body is unchanged — its
   `transmute_copy`s are now harmless identities (the consumer has only loft's `loft_ffi`, named
   via `--extern loft_ffi`, since the cdylib's copy is sealed in the `.so`).
+- **which symbol** (loft#907): `#[link_name]` names the fn the LIBRARY says implements the
+  binding, which is not always the `#native` string.  See § Which symbol a `#native` binding
+  links, below.
 - **link** (`native_utils::add_native_extern_flags`, `target.is_none() && native_cabi_enabled()`):
   `-L native=<so dir> -l dylib=<stem> -Clink-arg=-Wl,-rpath,<so dir>`, not `--extern
   <ident>=<rlib>`.  Keyed on **`loft_ffi_fingerprint()`** (the ABI hash, matching what
@@ -2173,3 +2217,46 @@ wasm32-wasip2, and Windows still link the rlib; plus same-symbol cross-package
 disambiguation, `make install` `.so` packaging (`$ORIGIN` RPATH + copy), the
 boolean→`u8` ABI, and the `prebuilt/` + `fp == 0` resolution edges — are tracked in
 **@PLN26** ([loft-lang/plans#26](https://github.com/loft-lang/plans/issues/26)).
+
+### Which symbol a `#native` binding links (loft#907)
+
+**`#native "sym"` is an API id, not the name of the Rust fn behind it.**  A native library
+registers its implementations by loft symbol —
+`loft_register_bridges! { "sym" => other__loft_bridge }` — and nothing requires `other == sym`.
+So a `#native` string names a *binding*; only the library's own table names the *function*.
+
+The two backends used to answer that differently, and the disagreement was silent:
+
+| | how it resolved `#native "sym"` |
+|---|---|
+| `--interpret` | the loaded cdylib's `loft_register_bridges_v1` table — the library's own answer |
+| `--native` (before) | `#[link_name = "sym"]` — whatever the cdylib exports under that name |
+
+A C-ABI link matches on **name alone**, so where the two differed the call was marshalled into a
+different function with no error, no warning and no failed link.  In the published `graphics`
+that was ten functions: each store-aware one has loft's `(LoftStore, LoftRef)` entry point at
+`n_<x>` and an older raw `(ptr, count)` fn under the `#native` name, so arguments arrived shifted
+by a register — `save_png` answered `false` and wrote nothing, the WebGL upload calls uploaded
+nothing.
+
+**Both backends now read one source.**  `extensions::resolve_native_impl_symbols` runs after
+`load_all` and before any codegen, asks the loaded cdylibs which fn implements each symbol
+(`dladdr` on the registered bridge pointer names it — `#[loft_native]` emits `X__loft_bridge`
+beside `X`, so stripping the suffix gives the implementation), and records **only the differing
+entries** in `Data::native_impl_symbols`.  `Data::link_symbol` is the one accessor codegen emits
+through, on both the C-ABI `#[link_name]` and the rlib `krate::sym` path.
+
+- A **clean binding** — the loft symbol equals the implementing fn — maps to itself and nothing
+  changes.  That is the only shape `loft-ffi-build`'s generator can produce, so a library that
+  derives its registration from its `#native` annotations is clean by construction; a remap only
+  ever comes from a hand-written `loft_register_bridges!` list.
+- A cdylib that is **absent, un-loadable, or predates the bridge registry** cannot be resolved and
+  keeps the literal name.  Not a silent wrong answer: the interpreter reports the missing
+  registration at load (loft#886) and a call panics rather than answering.
+- `dladdr` is required to hit the bridge **exactly** (`dli_saddr == ptr`); it otherwise reports the
+  nearest preceding symbol, which would hand codegen a neighbouring function's name.  A near miss
+  leaves the symbol alone.
+
+Guards: `tests/lib/native_remap_pkg` is a `[native] crate` fixture in this shape which exports a
+DECOY under each `#native` name, so a regression *answers* (-1000 / -2000) instead of failing to
+link — the way this reached users.  `native_scalar_pkg` is the clean-binding control.

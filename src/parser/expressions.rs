@@ -346,6 +346,63 @@ enum VecBind {
 }
 
 impl Parser {
+    /// Does this expression hand back storage it did NOT allocate — so a temp bound
+    /// to it only NAMES that storage and must not free it?
+    ///
+    /// The question is about the expression's PRODUCER, so it looks at the call and
+    /// not at the value's type: a `vector<T>` from a call and a `vector<T>` from an
+    /// allocating cast have the same type and opposite ownership.
+    ///
+    /// There are two ways to be handed something you do not own, and the ownership
+    /// fact lives in a different place for each.
+    ///
+    /// **A return buffer** (loft#906). A heap-returning function writes its result
+    /// into a caller-allocated buffer passed as a hidden trailing `__retbuf`
+    /// parameter (the NRVO ABI), so the value it answers IS that buffer — allocated
+    /// once at the call site and, inside a loop, reused across every iteration.
+    /// Binding it to a temp that owns therefore frees the buffer once per iteration
+    /// while its real owner still holds it. The test is the parameter's `hidden`
+    /// FLAG, not its name: a function whose tail promotes a work-ref to BE the
+    /// buffer has that parameter RENAMED after the variable it promoted (`fn add(v,
+    /// x, out)` rather than `…, __retbuf`), so a name test sees a retbuf on one
+    /// shape of heap-returning function and not on the other — which is half a fix,
+    /// and the half that still crashes.
+    ///
+    /// **A view of something else's record** (loft#939). `src.items` answers a
+    /// projection into `src`'s record, and the synthetic `Set(tmp, src.items)` this
+    /// arm builds after the fact bypasses the parse-time vector deep-copy lowering
+    /// — the same reason the borrowed-`Var` arm below builds its temp by
+    /// element-append instead — so the temp ALIASES that record rather than copying
+    /// out of it. Freeing it at scope exit frees the record's owner: the caller's
+    /// argument, or a local that outlives the temp's inner scope.
+    ///
+    /// The fact is the RHS type's own `deps`, which is what the parser already uses
+    /// to answer owns-vs-borrows mid-parse (see [`VecBind::CopyOwnedField`]) —
+    /// non-empty deps mean the value names storage reached through something else.
+    /// It is read from the TYPE rather than from a list of projection opcodes
+    /// because a list is a second copy of the same fact, and the projection op a
+    /// later change forgets to add to it is exactly the one that then corrupts in
+    /// silence. Both the wrapper and the peeled type are asked, so a `vector<T>?`
+    /// (`Optional(Vector(…))`) cannot hide its deps behind the `?`.
+    ///
+    /// The two arms do not overlap: a return buffer's dep is on a HIDDEN parameter
+    /// and does not reach the RHS type as a borrow, which is why the first arm
+    /// exists and why neither subsumes the other.
+    ///
+    /// [`VecBind::CopyOwnedField`]: VecBind::CopyOwnedField
+    fn borrows_its_storage(data: &crate::data::Data, rhs: &Value, rhs_tp: &Type) -> bool {
+        if !rhs_tp.depend().is_empty() || !rhs_tp.base().depend().is_empty() {
+            return true;
+        }
+        let Value::Call(d_nr, _) = rhs.unspan() else {
+            return false;
+        };
+        data.def(*d_nr)
+            .attributes()
+            .last()
+            .is_some_and(|a| a.hidden)
+    }
+
     /// @PLN10 — wrap every text-dest native called in *value position* in a
     /// scope-bound work-text temp, so its result lives in a freed local instead
     /// of the never-cleared `stores.scratch` buffer.  Replaces
@@ -1371,8 +1428,11 @@ use a separate collection or add after the loop"
             return false;
         }
         // A narrowing integer store has its OWN diagnostic further down; running
-        // `convert` here as well would report the same store twice.
-        if Self::is_narrowing_int(s_type, f_type) {
+        // `convert` here as well would report the same store twice.  The STORE test, to
+        // stay paired with the site that reports (loft#931) — `integer` → `i32` is a
+        // narrowing that range containment cannot see, and reading it with the narrower
+        // test here let both sites fire for one assignment.
+        if Self::is_narrowing_int_store(s_type, f_type) {
             return false;
         }
         if f_type.is_equal(s_type) {
@@ -1434,6 +1494,41 @@ use a separate collection or add after the loop"
             return None;
         }
         Some((struct_tp, *byte_off as u16))
+    }
+
+    /// The database collection-type id behind a KEYED type — `sorted` / `hash` / `index` /
+    /// `spatial` / `trie` — or `None` for anything else, including a keyed type whose
+    /// element record has no runtime type yet (pass 1).
+    ///
+    /// One list of the keyed kinds, because a site that names four of the five reads as a
+    /// complete rule and is not one: the field-replace site named three, so `spatial` and
+    /// `trie` fields silently kept the whole-collection-assign defect the site exists to
+    /// fix (loft#922).  Peel the `?` before calling — an `Optional(τ)` collection lays out
+    /// exactly like `τ`.
+    fn keyed_type_id(&mut self, tp: &Type) -> Option<u16> {
+        match tp {
+            Type::Sorted(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.sorted(c, key))
+            }
+            Type::Hash(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.hash(c, key))
+            }
+            Type::Index(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.index(c, key))
+            }
+            Type::Radix(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.spatial(c, key))
+            }
+            Type::Trie(td, key, _) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.trie(c, key))
+            }
+            _ => None,
+        }
     }
 
     /// The clear that must run before a whole-collection literal is built into the
@@ -2202,11 +2297,18 @@ use a separate collection or add after the loop"
         // "push one element of element-type" AND syntactically resembles
         // "concat" (RHS is vector-typed) — the parser branch order used
         // to misroute the latter.
+        //
+        // @PLN25 — matched on the target's STORAGE, so a `vector<T>?` is refused the same
+        // way and gets the same cure.  Unpeeled, the ambiguity was not recognised on a
+        // nullable vector and the reader met whatever the fall-through said instead —
+        // *"Variable 'v' cannot change type from vector<integer>? to integer"* for a
+        // local, *"No matching operator 'Add'"* for a field, neither of which mentions
+        // `+= [elem]`.
         if op == "+="
-            && let Type::Vector(elm_tp, _) = f_type
+            && let Type::Vector(elm_tp, _) = f_type.base()
             && !s_type.is_unknown()
             && (**elm_tp).is_equal(&s_type)
-            && !s_type.is_equal(f_type)
+            && !s_type.is_equal(f_type.base())
         {
             diagnostic!(
                 self.lexer,
@@ -2523,15 +2625,46 @@ use a separate collection or add after the loop"
         // - RHS type is non-Vector (e.g. `b.data = f#read(...)` where f#read
         //   returns text) — preserve the historical silent no-op rather than
         //   emit a type-mismatched OpAppendVector.
+        //
+        // loft#917 — `.base()` peels the `?`.  A `vector<T>?` field is
+        // `Optional(Vector(...))`, which this selector did not match, so the whole
+        // replace was skipped and `q.xs = [9]` left the literal's element-construction
+        // ops appending to what the field already held: `=` silently meant `+=`, and
+        // assigning `[9]` over `[7, 8]` read back as three elements on both backends.
+        // An `Optional(τ)` field lays out exactly like `τ` (@PLN25 slice (b)), so the
+        // replace it needs is the same one — the `?` is about what the field may hold,
+        // not about how it is stored.
         if !self.first_pass
             && op == "="
             && var_nr == u16::MAX
-            && matches!(f_type, Type::Vector(_, _))
+            && matches!(f_type.base(), Type::Vector(_, _))
             && self.is_field(to)
         {
+            let f_type = f_type.base();
+            // loft#917 — `q.xs = null` on a `vector<T>?` field emitted a discarded null
+            // sentinel: the field kept its records (leaking them) and kept its length, so
+            // the clear the author asked for did not happen at all.  What the storage can
+            // express today is exactly the empty vector — a vector field holds a record id
+            // and `0` means "no records", with no room left to say *absent* rather than
+            // *empty* — so `= null` does what `= []` does, and the reader half of this
+            // issue (`q.xs == null` still answering false) waits on that representation.
+            // Freeing what the field holds is the part the write side owns, and it is
+            // strictly better than dropping the statement.
+            //
+            // loft#922 — and it does NOT depend on the `?`.  Under the null model only the
+            // SCALAR default flips to non-null: a heap type stays nullable, so `vector<T>`
+            // and `vector<T>?` are one type with one layout, and (N-Store) has nothing to
+            // say about a `null` reaching either.  Gating the clear on the `?` therefore
+            // split one type's behaviour in two — the declared-nullable field cleared while
+            // the identical field spelled without the `?` dropped the statement in silence,
+            // keeping the records it was told to release.
+            if matches!(s_type, Type::Null) {
+                *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
+                return Type::Void;
+            }
             let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());
             let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
-            let rhs_is_vector = matches!(s_type, Type::Vector(_, _));
+            let rhs_is_vector = matches!(s_type.base(), Type::Vector(_, _));
             if is_empty_literal {
                 *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
                 return Type::Void;
@@ -2613,6 +2746,23 @@ use a separate collection or add after the loop"
                     // a local first was clean, because a user local has no such dep.
                     let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
+                    // …but that is only true when the RHS ALLOCATED what it hands
+                    // back.  Where it hands back storage someone else owns — a
+                    // return buffer the caller allocated, or a projection into a
+                    // record the temp merely names — the `Set` below aliases that
+                    // storage, and owning it here frees it at the temp's scope exit
+                    // while its real owner is still live.  Inside a loop that scope
+                    // exit is once per ITERATION (loft#906); across a call it is the
+                    // caller's argument (loft#939).  The real owner still frees it.
+                    //
+                    // Silent in a release build until the slot is REUSED, which is
+                    // what turns it from a dangling read into a wrong answer: the
+                    // `LOFT_POISON` gate makes the loop shape a SIGSEGV instead,
+                    // because `b.items = add(b.items, k)` then reads a record
+                    // overwritten with 0xDEADBEEF.
+                    if Self::borrows_its_storage(&self.data, &rhs_saved, &s_type) {
+                        self.vars.set_skip_free(tmp);
+                    }
                     let set_tmp = v_set(tmp, rhs_saved);
                     let clear = self.clear_vector_field(to, &lhs_parent_tp);
                     let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
@@ -2649,36 +2799,37 @@ use a separate collection or add after the loop"
         // clear that releases the records exactly once, through their owner, and
         // resets the other routes to them — so the group takes the same replace
         // every other keyed field gets.
-        let keyed_field_replace = !self.first_pass
+        //
+        // loft#922 — `s.h = null` takes the same clear, for the same reason the vector
+        // field above does: a keyed field holds a claim pointer with no spelling for
+        // *absent* that is not *empty*, so releasing what it holds is the closest honest
+        // meaning the storage has, and dropping the statement left the field holding
+        // records the author had said to let go.
+        //
+        // The kinds are all five, not the three this selector used to name: `spatial`
+        // (Radix) and the text-keyed trie fell out of the match and so kept the whole
+        // @P307/loft#895 defect this branch exists to fix — on a `spatial` field `=` still
+        // meant `+=` (a one-element literal over one element read back as two) and `= []`
+        // still did nothing at all.  The keyed-LOCAL path below already lists all five.
+        let keyed_field_write = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && self.is_field(to)
-            && matches!(&*code, Value::Insert(_));
-        if keyed_field_replace {
-            let kt = match &f_type {
-                Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.sorted(c, key))
-                }
-                Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.hash(c, key))
-                }
-                Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.index(c, key))
-                }
-                _ => None,
-            };
-            if let Some(kt) = kt {
-                let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
-                if let Value::Insert(ls) = code {
+            && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
+        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type.base()) {
+            let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
+            match code {
+                // A literal: run the clear FIRST, so the element-construction ops that
+                // follow build into an empty collection instead of appending to the old one.
+                Value::Insert(ls) => {
                     for (i, op) in clear.into_iter().enumerate() {
                         ls.insert(i, op);
                     }
                 }
-                return Type::Void;
+                // `= null`: the clear is the whole statement.
+                _ => *code = Value::Insert(clear),
             }
+            return Type::Void;
         }
         // @P292 / @P394 — `local_v = other_var_v` where the RHS is a bare vector
         // Var read (not a fresh-storage Block / Call / slice).  The standard Set
@@ -2810,33 +2961,14 @@ use a separate collection or add after the loop"
         // `size(tp)` bytes there corrupts the store (the failure mode of the
         // first attempt).  `s = []` (empty literal) and first-declaration
         // go through `create_keyed` above and are unaffected.
+        //
+        // @PLN48 — a Radix (spatial) reassignment deep-copies through the same
+        // `OpReplaceKeyed` as the other keyed kinds; `copy_claims_radix_body` backs it.
+        // Replaces the old @P295 "not yet supported" gate.  All five kinds come from
+        // `keyed_type_id`, the one list, so this site and the FIELD site above cannot
+        // drift apart again (loft#922).
         let keyed_kt = if !self.first_pass && op == "=" && var_nr != u16::MAX {
-            match &f_type {
-                Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.sorted(c, key))
-                }
-                Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.hash(c, key))
-                }
-                Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.index(c, key))
-                }
-                // @PLN48 — Radix reassignment (return/pass a spatial) now deep-copies
-                // via OpReplaceKeyed like the other keyed kinds; copy_claims_radix_body
-                // backs it.  Replaces the old @P295 "not yet supported" gate.
-                Type::Radix(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.spatial(c, key))
-                }
-                Type::Trie(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.trie(c, key))
-                }
-                _ => None,
-            }
+            self.keyed_type_id(f_type)
         } else {
             None
         };
@@ -3150,7 +3282,12 @@ use a separate collection or add after the loop"
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.
-        if op == "=" && !self.first_pass && Self::is_narrowing_int(&s_type, f_type) {
+        //
+        // The STORE test (loft#931): `integer` and `i32` share BOUNDS as well, differing
+        // in `forced_size` alone, so range containment saw nothing here either and this
+        // site — which covers both the annotated local and the field WRITE — was the last
+        // place `b.v = n` could be caught before it silently stored 705032704.
+        if op == "=" && !self.first_pass && Self::is_narrowing_int_store(&s_type, f_type) {
             let dst = self.int_type_name(f_type);
             if let Some(hint) = self.nullable_sentinel_hint(code, f_type, &dst) {
                 // The literal fits the type but lands on the reserved null
@@ -3679,8 +3816,8 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
-                    let read = if ref_def_nr == u32::MAX {
-                        Value::TupleGet(tmp, i as u16)
+                    let step = if ref_def_nr == u32::MAX {
+                        Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16)))
                     } else {
                         let elem_offset = if let Some(offs) =
                             crate::data::stored_tuple_offsets_for_def(
@@ -3693,33 +3830,22 @@ use a separate collection or add after the loop"
                         } else {
                             crate::data::element_stack_offsets(&rhs_elems)[i] as u32
                         };
-                        // P250 fix (2026-05-11): when destructuring a synthetic
-                        // `__tuple<...>` struct (the wider-than-8B tuple-return
-                        // shape), each LHS Reference element is a VIEW into the
-                        // tmp's storage (`OpGetField(tmp, offset, ...)` returns
-                        // a DbRef that shares store_nr/rec with tmp).  Without a
-                        // dep, scope analysis emits an independent `OpFreeRef`
-                        // for the LHS at scope exit; that free works on a
-                        // store_nr basis and frees the entire tmp's underlying
-                        // store.  In a loop body, the next iteration's `tmp =
-                        // make_pair(...)` reassignment then runs `OpFreeRef(tmp)`
-                        // on the now-stale DbRef whose store_nr has been recycled
-                        // by an unrelated allocation (e.g. the new `pa`),
-                        // silently destroying that allocation.  The first LHS
-                        // arg's projection is most affected because the freshly-
-                        // allocated `pa` lands in the same store slot the prior
-                        // tuple occupied.  Marking the LHS dependent on tmp
-                        // suppresses its independent free; tmp's `OpFreeRef`
-                        // alone reclaims the storage at the right time.  Only
-                        // applies to the synthetic-struct path (Reference
-                        // elements); the inline `TupleGet` path (small tuples ≤
-                        // 8B) reads value-typed elements that need no free.
-                        if matches!(rhs_elems[i], Type::Reference(_, _)) {
-                            self.vars.depend(v_nr, tmp);
-                        }
-                        self.get_val(&rhs_elems[i], false, elem_offset, Value::Var(tmp), u32::MAX)
+                        // When destructuring a synthetic `__tuple<...>` struct (the
+                        // wider-than-8B tuple-return shape), reading an element gives
+                        // a VIEW into the tmp's storage: `OpGetField(tmp, offset, ...)`
+                        // answers a DbRef sharing tmp's store_nr and rec.  That view
+                        // must not become the binding, because tmp belongs to the CALL
+                        // SITE, not to the binding — see `materialize_tuple_element`.
+                        let view = self.get_val(
+                            &rhs_elems[i],
+                            false,
+                            elem_offset,
+                            Value::Var(tmp),
+                            u32::MAX,
+                        );
+                        self.materialize_tuple_element(v_nr, tmp, &rhs_elems[i], view)
                     };
-                    steps.push(Value::Set(v_nr, Box::new(read)));
+                    steps.push(step);
                 }
                 *code = Value::Insert(steps);
             } else if !self.first_pass {
@@ -4445,6 +4571,88 @@ use a separate collection or add after the loop"
             crate::copy_manifest::Origin::ParserMaterialise,
         );
         false
+    }
+
+    /// Bind a destructured tuple element to `v_nr` as a value the binding OWNS,
+    /// rather than as a view into the destructured buffer `tmp`.
+    ///
+    /// A tuple return wider than 8B arrives in a synthetic `__tuple<…>` record held
+    /// by a work-ref belonging to the CALL SITE, so one site reuses one buffer.
+    /// Reassigning that work-ref frees the store it named — and reassigning it is
+    /// exactly what the next turn of a loop does, before the call it feeds.  A
+    /// binding left pointing into the buffer therefore dangles from the second
+    /// iteration on, in two shapes that are one defect: reading a freed store answers
+    /// its cleared contents, so `(xs, n) = f(xs)` silently reports `len` 0 and a
+    /// struct field 0 while `--native` answers correctly, and appending onto a record
+    /// the arena has since recycled panics in `vector_append` (loft#941).
+    ///
+    /// P250 gave a `Reference` element a DEPENDENCY on `tmp` so scope analysis would
+    /// not emit a second `OpFreeRef` for the binding.  That stops a double free, but a
+    /// dependency cannot lengthen the buffer's life past the reassignment; the binding
+    /// still outlives the record it was read from.  So copy it out — the same
+    /// materialise-the-view move `return <field>` (#306) and `&out = <field>`
+    /// (loft#775) already make, which is why those two directions were safe and this
+    /// one was not.
+    ///
+    /// Value-typed elements (integer, boolean, …) are read by value and pass through
+    /// untouched; only a record and a vector read back as a pointer into the buffer.
+    ///
+    /// Answers the whole assignment STATEMENT, not a value to assign: the allocation
+    /// writes through `v_nr` itself, so wrapping it as `Set(v_nr, <block ending in
+    /// v_nr>)` would make the binding its own initialiser — legal in the IR, but the
+    /// native backend renders a first binding as `let mut var_v = <init>` and rustc
+    /// rejects the `var_v` inside it.  A flat `Insert` is the shape
+    /// [`Self::boxed_cell_alloc_and_set`] already uses for the same reason.
+    fn materialize_tuple_element(
+        &mut self,
+        v_nr: u16,
+        tmp: u16,
+        elem: &Type,
+        view: Value,
+    ) -> Value {
+        match elem {
+            Type::Reference(td, _) => {
+                let td = *td;
+                let copy_d = self.data.def_nr("OpCopyRecord");
+                if copy_d == u32::MAX {
+                    // No copy op to reach for: fall back to P250's dependency, which
+                    // at least stops scope analysis freeing the buffer's store a
+                    // second time through the binding.  `def_nr` answers the same on
+                    // both passes, so this arm cannot be a cross-pass difference.
+                    self.vars.depend(v_nr, tmp);
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                // Both passes agree the element is a record and add NO dependency;
+                // only pass 2 emits the copy, exactly as `assign_refvar_reference`
+                // does.  Adding the dependency on pass 1 alone would make the
+                // binding's deps differ by pass, which is the divergence the H5
+                // contract catches.
+                if self.first_pass {
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                let kt = i32::from(self.data.def(td).known_type());
+                Value::Insert(vec![
+                    v_set(v_nr, Value::Null),
+                    self.cl("OpDatabase", &[Value::Var(v_nr), Value::Int(kt)]),
+                    Value::Call(copy_d, vec![view, Value::Var(v_nr), Value::Int(kt)]),
+                ])
+            }
+            Type::Vector(elm_tp, _) => {
+                let elm_tp = (**elm_tp).clone();
+                // `vector_db` gives `v_nr` its own backing store and repoints it there
+                // (it is pass-2-only, and answers an empty list for a case that must
+                // keep the caller's backing — an argument, a keyed local — where the
+                // view is already not the buffer's).
+                let mut ops = self.vector_db(elem, v_nr);
+                if ops.is_empty() {
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp));
+                ops.push(self.cl("OpAppendVector", &[Value::Var(v_nr), view, rec_tp]));
+                Value::Insert(ops)
+            }
+            _ => Value::Set(v_nr, Box::new(view)),
+        }
     }
 
     /// Handle `v += expr` and `v = expr` where `v: &vector<T>`; returns true if handled.

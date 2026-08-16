@@ -163,7 +163,20 @@ impl Parser {
         op: &str,
         var_nr: u16,
     ) -> bool {
-        if let (Value::Insert(ls), Type::Vector(tp, _)) = (code, f_type) {
+        // @PLN25 / loft#909 — whether the target needs a record-pointer BACKING is a
+        // question about its storage, and `Optional(τ)` shares τ's storage exactly.  Peel
+        // the marker for that question; every nullability check downstream reads the
+        // unpeeled type, because those ARE about nullability.
+        //
+        // Unpeeled, this selector missed a `vector<T>?` LOCAL, and only for an EMPTY
+        // literal: `v: vector<integer>? = [1, 2]` was rescued by its elements, whose own
+        // `build_vector_list` allocates the backing, while `[]` has no element to do it —
+        // so nothing ever defined `v` and it reached codegen with no stack slot at all
+        // (*"Incorrect var v[65535]"*, an internal compiler error on both backends).  That
+        // is the loft#909 shape from the other side: there a nullable FIELD took the temp
+        // path and the EMPTY literal was what rescued it.
+        let f_storage = f_type.base();
+        if let (Value::Insert(ls), Type::Vector(tp, _)) = (code, f_storage) {
             if self.const_write_blocked(var_nr, op) {
                 diagnostic!(
                     self.lexer,
@@ -818,6 +831,30 @@ impl Parser {
                         && matches!(**inner, Type::Vector(_, _))
                     {
                         return self.parse_append_vector(code, inner, &ls, orig_var);
+                    } else if matches!(current_type.base(), Type::Vector(_, _)) {
+                        // A NULLABLE vector reaches none of the arms above, and the
+                        // fall-through returns the left operand — so `a + b` over two
+                        // `vector<T>?`s answered `a`, silently, on both backends.
+                        //
+                        // Concatenating them is not the fix: the nullable TEXT form
+                        // directly above propagates null (`null + "x"` is null), and a
+                        // vector has no such lowering to be consistent with yet.  Refuse
+                        // it, and name the discharge that already works, rather than
+                        // inventing the answer here or keeping the wrong one.
+                        // Unguarded by pass, like the vector arms above: the verdict reads
+                        // only the resolved left type, so pass 1 can stay silent where the
+                        // type is still `Unknown` but never contradict pass 2.  A pass-2-only
+                        // diagnostic would go missing in any file that already aborts on
+                        // pass 1, which is exactly where the expected-error suite lives.
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot concatenate a nullable `{}` — discharge the `?` \
+                             first (`(a ?? []) + (b ?? [])`), since a null operand has \
+                             no defined result for a vector",
+                            current_type.name(&self.data)
+                        );
+                        return current_type;
                     }
                 }
                 return current_type;
@@ -894,7 +931,18 @@ impl Parser {
         // `parse_single` (variable, literal, parenthesised expr).
         self.record_type_trace(&t);
         while self.lexer.peek_token(".")
-            || self.lexer.peek_token("[")
+            // `[` postfix-indexes a VALUE, and a `Void` subject produced none — so the
+            // bracket opens the next expression instead.  `if` is the construct that
+            // needs this said: it is an expression, so a bare `if c { … }` STATEMENT
+            // reached this chain and swallowed the `[` of the line below it.  A whole
+            // function's tail literal was read as an index on the `if`, and the
+            // resulting "Indexing a non vector — keyed collections have no
+            // generic-constructor expression" named a feature the program never used
+            // (loft#910).  `for` / `while` never had it: they are statements and never
+            // reach here.  An `if` that DOES yield a value keeps its index —
+            // `if c { [1,2] } else { [3,4] }[0]` is unaffected, because its type is a
+            // vector, not `Void`.
+            || (self.lexer.peek_token("[") && !matches!(t, Type::Void))
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
             || self.lexer.peek_token("?")
         {
@@ -916,8 +964,16 @@ impl Parser {
             // is wrapped under step 1.13.
             let chain_pos = self.lexer.pos().clone();
             let mut wrap_chain = false;
-            if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
-                diagnostic!(self.lexer, Level::Error, "Unknown variable");
+            if !self.first_pass
+                && t.is_unknown()
+                && let Value::Var(nr) = code
+            {
+                // Name it, like every sibling site does (`objects.rs` reports `Unknown
+                // variable 'x' — did you mean 'y'?`).  A bare "Unknown variable" leaves
+                // the reader to find which of the line's names is the unresolved one
+                // (loft#934).
+                let name = self.vars.name(*nr).to_string();
+                diagnostic!(self.lexer, Level::Error, "Unknown variable '{name}'");
             }
             if self.lexer.has_token(".") {
                 wrap_chain = true;
@@ -1663,7 +1719,7 @@ impl Parser {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }
         } else if r_type != Type::Void && !self.first_pass {
-            ret_val = self.null_return(&r_type);
+            ret_val = self.null_value(&r_type);
         }
         let ret_stmt = Value::Return(Box::new(ret_val));
 
@@ -2547,7 +2603,15 @@ impl Parser {
                     } else {
                         ctp
                     };
-                    if !self.convert(code, cast_src, &tp) && !self.cast(code, cast_src, &tp) {
+                    // An explicit cast is not an implicit store: `convert` serves both, and
+                    // the widened `integer` -> `i32` test (loft#931) must not fire on the
+                    // cast this diagnostic prescribes as its own cure.
+                    let outer_cast = self.in_explicit_cast;
+                    self.in_explicit_cast = true;
+                    let converted =
+                        self.convert(code, cast_src, &tp) || self.cast(code, cast_src, &tp);
+                    self.in_explicit_cast = outer_cast;
+                    if !converted {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
@@ -2851,7 +2915,24 @@ impl Parser {
                     // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
                     // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
                     // store, so it needs no work-ref.
-                    let w = if matches!(vec_code.unspan(), Value::Var(_)) {
+                    //
+                    // Neither does an operand whose type declares a BORROW.  "Non-`Var`" was
+                    // standing in for "a temp that owns its store", and a FIELD READ is
+                    // non-`Var` too: `h.vec == null` captured `OpGetField(h, …)` — a DbRef
+                    // into `h`'s record — and freed it, taking the holder's storage with it.
+                    // The next read of the same field then returned poisoned bytes, which
+                    // `len()` dereferenced: SIGSEGV under `LOFT_POISON=1`, and the nightly
+                    // UB gate's failure (loft#920).  The type already answers this — the
+                    // field read is typed `optional(vector(…, deps { items: [0] }))` — so ask
+                    // it rather than inferring ownership from the value's shape.
+                    //
+                    // Strictly narrowing: only an operand that POSITIVELY declares a borrow
+                    // loses its work-ref.  A call result still gets one, so this does not
+                    // touch loft#938, whose difficulty is the opposite case — an owning and a
+                    // borrowing nullable-collection RETURN are both spelled with EMPTY deps
+                    // and cannot be told apart here at all.
+                    let borrows = !vec_tp.depend().is_empty();
+                    let w = if matches!(vec_code.unspan(), Value::Var(_)) || borrows {
                         u16::MAX
                     } else {
                         self.vars.work_refs(&vec_tp, &mut self.lexer)

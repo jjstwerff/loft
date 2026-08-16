@@ -1,15 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Parse-error reproducers for PROBLEMS entries that are correctly rejected.
-// @EXPECT_ERROR: struct field cannot have a tuple type
 // @EXPECT_ERROR: compound assignment is not supported for tuple destructuring
 // @EXPECT_ERROR: circular init dependency: a
 // @EXPECT_ERROR: circular init dependency: b
 // @EXPECT_ERROR: '++' is not a valid operator
 // @EXPECT_ERROR: '++' is not a valid operator
 
-// --- P93: Tuple type in struct field — correctly rejected ---
-struct P93Bad {
+// --- P93: a tuple in a struct field is SUPPORTED now (Plan-06 laid the elements
+//     inline via the synthetic `__tuple<…>` positions), so it is no longer a
+//     parse-error reproducer.  Kept as a positive so the file records the change
+//     rather than leaving a silent hole where the refusal used to be.
+//     TUPLES.md § Tuples in struct fields; the reads live in 50-tuples.loft.
+struct P93Ok {
   coord: (integer, integer),
 }
 

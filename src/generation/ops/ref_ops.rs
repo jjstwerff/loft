@@ -96,10 +96,11 @@ impl OpEmitter for OpFreeRefEmitter {
                     ctx.output.data.def(ctx.output.def_nr).variables().name(*v),
                 );
                 let label = format!("var_{n}");
-                let lvalue = if ctx.output.coroutine_persistent_vars.contains(v) {
-                    format!("self.var_{n}")
-                } else {
-                    label.clone()
+                let lvalue = match ctx.output.coroutine_persistent_fields.get(v) {
+                    // The struct's spelling, which is the variable's own name only where no
+                    // other field claimed it first (loft#928).
+                    Some(field) => format!("self.var_{field}"),
+                    None => label.clone(),
                 };
                 (label, lvalue)
             } else {

@@ -181,6 +181,12 @@ fn a_call_in_a_loop_keeps_its_answer() {
 /// previous call had left in the upper seven bytes.  The edges are the point —
 /// a sweep of small positive numbers passes on a marshal that gets sign and
 /// width entirely wrong.
+///
+/// `i32`'s low edge is `-2147483647`, not `-2147483648`: `i32::MIN` is that type's null
+/// sentinel, so it is not a value an `i32` can carry (an `i32` FIELD given it reads back
+/// `null`).  Its siblings differ here — a non-null `i8` does hold `-128` — which is why
+/// each low edge is spelled out rather than derived.  The narrowing gate says so since
+/// loft#931; before that the constant was accepted and crossed as `null`.
 #[test]
 fn every_integer_width_crosses_with_its_sign() {
     let library = "pub fn e_u8(v: u8) -> u8 { v }\n\
@@ -201,7 +207,7 @@ fn every_integer_width_crosses_with_its_sign() {
                     \x20   println(\"u16 {e_u16(65535)}\");\n\
                     \x20   println(\"i16 {e_i16(-32768)} {e_i16(-1)}\");\n\
                     \x20   println(\"u32 {e_u32(4294967294)}\");\n\
-                    \x20   println(\"i32 {e_i32(-2147483648)} {e_i32(-1)}\");\n\
+                    \x20   println(\"i32 {e_i32(-2147483647)} {e_i32(-1)}\");\n\
                     \x20   println(\"mix {mixed(200, true, \"abc\", -9, 7)}\");\n\
                     }\n";
     let (inproc, placed) = both_placements("narrow", library, consumer);

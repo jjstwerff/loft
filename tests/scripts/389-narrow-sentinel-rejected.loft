@@ -1,18 +1,36 @@
-// @EXPECT_ERROR: reserved as the null sentinel
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// H6 — storing the sacrificed sentinel value (255) into a NULLABLE narrow field
-// is a COMPILE error, not a silent null, for a struct-literal init too (not just
-// `obj.x = 255`).  The field-store sentinel check lives at BOTH stores
-// (objects.rs struct-init + expressions.rs direct-assign); the message points at
-// `not null` for the full range.  A param/cast is a full-width register and is
-// NOT subject to this — only narrow FIELD stores reserve the sentinel.
+// H6 / @PLN25 F2 — where the sacrificed sentinel value of a narrow integer went.
+//
+// This file used to assert that storing `255` into a `u8` field is a COMPILE error
+// ("255 is reserved as the null sentinel"), which was the pre-F2 rule.  F2 reconciled the
+// ranges: a plain (non-`Optional`) narrow integer is NON-null under DN1, so it uses the
+// FULL width and has no sentinel to reserve — `Parser::nullable_sentinel_hint` returns
+// early for exactly that case.  The `@EXPECT_ERROR` therefore stopped matching, and the
+// harness had no way to say so (loft#929): a file whose diagnostics vanish entirely never
+// reached the check at all.
+//
+// So the rule is pinned from the value side instead, which cannot go quiet.
 
 struct U8N {
   x: u8,
 }
 
+struct U8Q {
+  x: u8?,
+}
+
 fn main() {
+  // Non-null narrow: the full range is usable, 255 included.
   b = U8N { x: 255 };
+  assert(b.x == 255, "a non-null u8 field holds 255: {b.x}");
+
+  // KNOWN GAP — the nullable narrow still spends its top value on the null sentinel, and
+  // a literal that lands on it becomes null with no diagnostic.  Reserving (and
+  // rejecting) it for an `Optional` narrow is the @PLN25 F2 Part-2 slice named in
+  // `nullable_sentinel_hint`.  Asserted as it BEHAVES so that closing the gap fails here
+  // loudly instead of leaving another silent expectation behind.
+  q = U8Q { x: 255 };
+  assert(q.x == null, "a nullable u8? field still reads 255 back as null (@PLN25 F2 Part 2)");
 }

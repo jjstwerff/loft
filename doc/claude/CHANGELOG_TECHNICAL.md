@@ -9,6 +9,820 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A null test on a collection FIELD does not free the record it read (loft#920, 2026-08-16)
+
+`vector == null` tests the null sentinel through `OpVectorIsNull`, which reads only the
+sentinel and discards the vector — so a heap-owning TEMP consumed by the test would be
+orphaned. `parse_compare` captures a non-`Var` operand in a work-ref precisely so scope exit
+frees it (loft#938's caller half).
+
+**"Non-`Var`" was standing in for "a temp that owns its store", and a FIELD READ is non-`Var`
+too.** `h.vec == null` captured `OpGetField(h, …)` — a DbRef pointing INTO `h`'s record — and
+freed it:
+
+```
+x = { __ref_1 = OpGetField(h, 0i32, 21i32); OpVectorIsNull(__ref_1); OpFreeRef(__ref_1); }
+```
+
+The type said so all along: that read is `optional(vector(…, deps { items: [0] }))`, and a
+non-empty dep list means BORROWS. The work-ref is now skipped for an operand that positively
+declares a borrow — strictly narrowing, so a call result keeps its work-ref and loft#938 is
+untouched (its leak count is unchanged, and that is a control in the guard).
+
+**This was the nightly UB gate's SIGSEGV**, red for three sessions. Under `LOFT_POISON=1` the
+freed record reads back `0xDEADBEEF`, so the next read of the same field built a garbage
+DbRef and `len()` dereferenced it. The whole-corpus run is now green under
+`LOFT_POISON=1 LOFT_HASH_SEED=0x0123456789abcdef`: **1876/1876**.
+
+**It was never only a UB-gate problem.** With no flags at all, letting the freed slot be
+recycled makes the next read of that field answer *another variable's data*:
+
+```loft
+h = Holder { vec: [71, 82, 93] };
+x = h.vec == null;
+filler: vector<integer> = [11, 22, 33, 44, 55, 66, 77, 88];
+len(h.vec ?? [])        // 8 before the fix — the FILLER's length; 3 after
+```
+
+Both backends, released 2026.8.0 included. That is what the guard asserts, because a crash
+needs a flag and a silent wrong answer does not.
+
+**How it was found, since the previous two attributions were wrong.** `tests/wrap.rs` gained
+`LOFT_SCRIPT_FIRST`/`LOFT_SCRIPT_LAST`, which run a WINDOW of the sorted corpus — the
+instrument a "one script corrupts, a later one dies" fault needs, and the one whose absence
+made the last three sessions guess. A bisect over 739 scripts took ten runs and landed on a
+single file; from there the reduction is six lines. Note the byte-vs-locale sort trap: `ls |
+sort` and Rust's `PathBuf` sort disagree, and an off-by-one there briefly indicted the
+neighbouring script.
+
+### A forward reference inside a tuple resolves like one anywhere else (loft#944, 2026-08-16)
+
+An in-file forward reference resolves by ADOPTION: the name becomes a `DefType::Unknown`
+stub and the declaration upgrades it in place. Nothing rewrites the `Type::Unknown(stub)`
+values already stored — `rewrite_unknown_refs` runs only for the cross-file import case,
+whose list is empty for one file. It works because **pass 2 re-parses** every type position
+with the declaration now visible. A tuple defeated that twice over.
+
+**Neither the name nor the layout of `__tuple<…>` survives an unresolved member.**
+`tuple_def` derives both from the members' spellings: an unresolved member spells
+`"unknown"`, and `element_stack_size`/`element_stack_align` have no arm for `Unknown` and
+fall through to **0 and 1** — a zero-width member, frozen, because the name lookup
+early-returns and nothing recomputes it. Pass 1 minted `__tuple<integer,unknown>` and pass 2
+asked for `__tuple<integer,Q>`, which the H5 guard reported as an internal compiler error.
+`tuple_def` now refuses to mint one until the members are final, which makes the mint
+pass-2-only for the same reason `map`'s output wrapper is — H5 gained the matching
+exemption, on its own stated criterion (a name-keyed idempotent append that leaves pass-1
+numbering untouched). Stabilising only the NAME would have been worse than the ICE: it
+reuses the zero-width layout.
+
+**Everything that stores a type froze the pass-1 stub.** `resolve_adopted_stubs` now points
+those at the real type between the passes, driven by stubs RECORDED at adoption — after the
+fact an adopted stub is indistinguishable from a generic's type VARIABLE, and a first
+attempt that swept by shape rewrote `vector<T>` and took the whole stdlib down with
+*"expected vector<text>, got vector<T>"*. It deliberately does NOT touch a function's
+`returned`: pass 2 recomputes that in full, and patching the member in place leaves the
+tuple-return PROMOTION undone while making the type look settled.
+
+**Underneath both: `Type::is_unknown()` answers for a bare `Unknown` and a vector of one,
+not for an unresolved member nested in a wrapper.** Six guards asked it and got "no" for
+`(integer, unknown)` — the same shape `&unknown` (#375) and `Never` (#376) had each already
+needed their own arm for. They now ask the recursive `Data::type_has_unresolved`, which
+walks children through `Type::for_each_child`:
+
+| site | what the user saw |
+|---|---|
+| `change_var_type` (scalar + `Vector` arms) | `cannot change type from (integer, unknown) to (integer, unknown)` — one type, printed twice |
+| `objects.rs` field store | `Cannot assign (integer, unknown(0)) to field W.t of type (integer, unknown(708))` |
+| `parse_vector` element convert / `declared` / adoption | `cannot store (integer, Q) elements in a vector<(integer, unknown)>` |
+| `new_record` + `build_vector_list` | Fatal `cannot build this record — its type never resolved`, aborting pass 1 |
+| `unbox_tuple_from_dbref` | `data.def(u32::MAX)` — an internal compiler error on a plain undefined name |
+
+**One shape is refused rather than fixed: a tuple RETURN naming a type declared below it.**
+A heap-carrying tuple return is boxed into `Reference(__tuple<…>)` and given a `__retbuf`,
+decided by asking whether an element carries a lifetime concern — which an unresolved member
+does not — and the return type is stored on pass 1 only. Promoting it between the passes
+gets the signature right and still miscompiles: the synthetic struct is minted after pass
+1's `fill_all`, so it has no layout while pass 2 parses the bodies that read it and every
+offset lands as `u16::MAX` (`OpDatabase(__ref_2, 65535)` where the working spelling reads
+`79`). Making it work means minting and laying out that struct during pass 1, from members
+that resolve only at the end of it. It now reports *"move the declaration of `Q` above
+`mk`"* — which replaces an ICE and, more importantly, the interpreter-runs /
+`--native`-reads-`0` split that removing the ICE alone produced.
+
+Guards: `tests/scripts/944-forward-reference-inside-a-tuple.loft` (8 rows + 4 controls, both
+backends) and `944b-forward-tuple-return-is-refused.loft`. Found and filed while writing
+them: loft#946, a call result used directly as a tuple member leaks the callee's store —
+pre-existing, unrelated to declaration order.
+
+### A coroutine's yielded record is borrowed, not owned (loft#920 partial, 2026-08-16)
+
+`collect_iterator_subject` materialises a `match <iterator<T>>` subject by pulling the
+coroutine into a buffer.  The pulled value lands in `stream_x`, typed with the ELEMENT type.
+For a **struct-enum** element that makes it a record ref — and the ref points into the
+coroutine's own frame, which lives in the STACK store.  The append below deep-copies it
+(`OpCopyRecord`) so the buffer owns its copy, but nothing said `stream_x` does not, and the
+loop-scope exit emitted `OpFreeRef(_stream_x_1)` on every pull:
+
+```
+loop {#stream pull_3
+  _stream_x_1(3):ref(Tok) = OpCoroutineNext(_stream_gen_1(2), 12i32);
+  …
+    OpCopyRecord(_stream_x_1(3), OpGetField(_stream_elm_1(3), 0i32, 78i32), 78i32);
+  OpFreeRef(_stream_x_1(3));          <-- whole-store free of a stack-record ref
+}
+```
+
+Only the store-0 guard kept that from taking every live frame with it; what reached the user
+was `BUG (#306)`.  The sibling `stream_elm` was already marked `skip_free` for the identical
+reason one line below, with a comment saying so.
+
+`skip_free` is ONE bit for every free kind, so the mark is gated on the record case: a `text`
+element's `stream_x` holds a String the caller DOES own (`OpFreeText`), and marking it would
+trade the wrong free for a leak of one string per yield.  A scalar emits no free at all.
+Verified both directions — the leak detector fires on a known-leaking control and stays
+silent here, on both backends.
+
+**The previous attribution was wrong, and the instrument is why.**  loft#920 was recorded
+against `tests/scripts/75-native-stub.loft`; the refusals actually came from
+`35p-iterator-match.loft`, which reproduces **alone**, on `--interpret`, with no harness and
+no `catch_unwind` — so the "mid-execution unwind leaves a live state" theory it was filed
+under had nothing to do with it.  The message carried a bare `pc=`, which is a position in
+the WHOLE bytecode stream (stdlib included) while `introspect` prints only the user file's,
+so no reader could resolve it.  It now names `file:line:col` (via the published span table)
+AND the dispatching opcode — the span map is sparse and can point several statements away,
+the op is exact, so both are printed.  That pair turned three failed attempts into one
+reduction.
+
+**And the gate that let it live.**  `35p-iterator-match.loft` raised this on every suite run
+for as long as it existed and scored PASS each time: the refusal keeps the store alive, so
+nothing the script asserts can notice, and the report went to stderr where nothing read it.
+`Stores::free_named` now counts refusals unconditionally (`keys::stack_free_refusals`) and
+`tests/wrap.rs` fails any script that raises one.  Corpus run: 3 refusals before, 0 after,
+and no other script trips it.
+
+**Not closed.**  The nightly poison gate's SIGSEGV survives this fix — `OpLengthVector`,
+reached during `917-nullable-collection-field-says-so.loft`, which is clean standalone.  That
+is latent corruption from an earlier script surfacing there, a second mechanism, and it does
+not reproduce under `LOFT_STRICT_STORES=1` (strict mode changes free/reuse and masks it).
+
+### A tuple's record shape does not depend on how its type was reached (loft#943, 2026-08-16)
+
+Two defects, one report, because a vector literal of tuples needs both fixed.
+
+**1. An inferred tuple element type registered no `__tuple<…>` struct.**  A tuple is stored as
+that synthetic struct, and every consumer needing its record shape — `type_def_nr`,
+`type_elm`, `fill_database` — resolves it BY NAME.  Registration happened only where a tuple
+appears in a TYPE position (`sub_type`, `parse_type_full`, the `__retbuf` rewrite), which is
+every DECLARED spelling and no inferred one: `v = [(7, 8)]` names no type anywhere.
+`type_def_nr` answered `u32::MAX` and `new_record` refused the literal outright with *"cannot
+build this record — its type never resolved"*.
+
+`Data::vector_def` now registers from the element type, which is the point that already needs
+it — the vector def's own `parent` is `type_def_nr(tp)`, and it was being stored as `u32::MAX`
+beside the refusal.  `ensure_tuple_defs` recurses inside-out (a nested tuple's members are
+sized from their own defs) and SKIPS a tuple with an `Unknown` member: a forward-declared
+member resolves only in pass 2, and registering the pass-1 shape would mint a second
+`__tuple<…,unknown>` beside the real one.  `ensure_tuple_defs_for_capture` (P216, the same
+walker written for closure captures) now delegates to it rather than keeping a second list.
+
+**The filed scope was the tuple LITERAL; the axis is inference.**  `t = (7, 8); v = [t]`
+builds its element from a tuple LOCAL and failed identically — c5 in the guard.
+
+**2. A struct-literal tuple member kept its `Rewritten` marker.**  `Rewritten(Reference(S))`
+says a value was built in place (#319) — a signal to the expression that parsed it, not a type
+a member can HAVE.  The tuple literal (`vectors.rs:409`) recorded it verbatim in the member
+list, so every consumer matching on the type constructor missed it:
+
+| site | what the user saw |
+|---|---|
+| `set_field` | `Cannot assign to field '_0' of type S` |
+| `get_val` | `Field access not supported on type S` |
+| `emit_tuple_put_ops` | `internal compiler error — unsupported elem Rewritten(Reference(707, …))` |
+
+That last row needs no vector at all: a bare `t = (S { … }, k)` was an ICE on released
+2026.8.0.  The wrapper is now peeled at the producer through the new `Type::unrewritten()`,
+which is the same move `parse_vector` and `parse_vector_for` already make for a vector's
+ELEMENT type — a tuple member is that fact one level in.  A struct member reached through a
+LOCAL or a CALL was always fine, which is what named the literal as the axis.
+
+Guard: `tests/scripts/943-inferred-tuple-element-type.loft`, 9 rows + 4 controls, both
+backends.  Out of scope and filed separately: a forward-declared type inside a tuple never
+resolves (loft#944) — it fails on the DECLARED path too, so it is stub adoption, not
+registration.
+
+### A tuple vector element is not offered the element slot (loft#942, 2026-08-16)
+
+`parse_item` seeds the element expression with `Value::Var(elm)` — the slot `OpNewRecord`
+carved out of the container — so a struct element builds straight into it; `parse_object`
+takes that in-place path whenever it is handed a `Var` that owns a store.  A TUPLE element is
+not built as one record: `emit_tuple_set_ops` writes each member at its own offset.  Offering
+the slot let the tuple literal's FIRST member consume it, so `[(S { … }, k)]` wrote S's fields
+directly into the element and then handed that valueless statement list to `OpCopyRecord` as
+its SOURCE:
+
+```
+_elm_1 = OpNewRecord(v, 81, 65535);
+OpCopyRecord({ !! INSERT                      <-- a statement list, no value
+    OpSetInt(_elm_1, 0, 11); OpSetInt(_elm_1, 8, 22)
+  }, OpGetField(_elm_1, 0, 78), 78);
+```
+
+Only the FIRST member could fail this way: `(a, b, …)` parses member zero into the caller's
+value (`vectors.rs:409`) and every later member into a fresh one, which is the whole reason
+`vector<(integer, S)>` was correct while `vector<(S, integer)>` was not.
+
+One defect, four filed symptoms — each construction path corrupts differently: reading an
+element back panicked in `allocation.rs` using the tuple's SECOND member value as a record
+index (`--native` refused the generated Rust with E0308), a 2+ element literal aborted the
+compiler with `Incorrect var _elm_1[56] versus 40`, a single `+=` silently zeroed the struct's
+fields, and a second `+=` SIGSEGV'd.
+
+**The guard keys on the `(` token, not on the element type.**  A literal in RETURN position
+infers its element type from itself, so the type is still `Unknown` when member zero is seeded
+and only resolves by member one — instrumenting the seed showed the guard firing 4× for a
+declared local but only 2× in return position.  A type-keyed attempt therefore fixed every
+other row and turned the return-position abort into a SILENTLY EMPTY vector, which is why the
+regression guard asserts lengths as well as values.  A `(`-leading element that is not a tuple
+(`[(S { … })]`) gives up the in-place build and takes the allocate-then-copy path every
+non-first member already takes; the unparenthesised `[S { … }]` common case is untouched.
+
+Not fixed, and separate: a vector literal of tuples cannot have its element type INFERRED
+(`v = [(7, 8)]` fails with "cannot build this record — its type never resolved" for every
+tuple shape including ones with no struct at all, on the released binary too).
+
+### A destructured tuple element is a value the binding owns (loft#941, 2026-08-16)
+
+A tuple return wider than 8B lands in a synthetic `__tuple<…>` record held by a work-ref
+belonging to the CALL SITE, so one site reuses one buffer.  Destructuring read each element
+straight out of it — `OpGetField(tmp, offset, …)` answers a DbRef sharing `tmp`'s `store_nr`
+and `rec` — and made that VIEW the binding.  Reassigning the work-ref frees the store it
+named, and reassigning it is exactly what the next turn of a loop does, *before* the call it
+feeds:
+
+```
+327: VarRef(__ref_2)              ; the tuple store from the previous iteration
+330: FreeRef            [store-free]
+337: Call(fn=n_passthrough)       ; xs, which VIEWS that store, is passed in here
+```
+
+So the binding dangled from the second iteration on.  One use-after-free, two symptoms:
+reading a freed store answers its cleared contents, so `(xs, n) = passthrough(xs)` reported
+`len` 0 while `--native` — which does not emit that free — answered correctly; and appending
+onto a record the arena had recycled panicked in `vector_append`.
+
+P250 had given a `Reference` element a DEPENDENCY on `tmp` so scope analysis would not emit a
+second `OpFreeRef` for the binding.  That stops a double free, but a dependency cannot lengthen
+the buffer's life past the reassignment — the binding still outlived the record it was read
+from.  `materialize_tuple_element` copies instead, the same materialise-the-view move
+`return <field>` (#306) and `&out = <field>` (loft#775) already make, which is why those two
+directions were safe and this one was not.  A record goes through `OpDatabase` + `OpCopyRecord`,
+a collection through `vector_db` + `OpAppendVector`; value-typed elements are read by value and
+are untouched.
+
+The filed scope was a third of it.  A plain STRUCT element fails identically, so the axis is any
+element read back as a pointer, not `vector<T>`; and the `xs = f(xs)` spelling is not needed —
+any binding that names the buffer and is read after the site runs again will do.  What IS
+load-bearing is the SITE repeating: two distinct call sites alternating in one loop each own a
+buffer and were always correct.
+
+The result is emitted as a flat `Insert`, not as `Set(v, <block ending in v>)`: the allocation
+writes through the binding itself, and the native backend renders a first binding as
+`let mut var_v = <init>`, which rustc rejects when `var_v` appears inside it.
+
+### `loft test` shares one library parse across the files that `use` it (loft#925, 2026-08-16)
+
+`run_tests` builds one `Parser` per test file, deliberately — a shared one would let one
+file's definitions leak into the next.  Each of those parsers loaded the `use`d library from
+source, and **twice**: `Parser::parse` runs two passes, `Data::reset` clears `use_names`
+between them, and an unnamed library is one `use` re-reads.  A suite therefore paid the
+PRODUCT of its file count and its library's size — measured at 0.068 s/file against a
+no-`use` control's 0.022 s/file, with the per-file cost proportional to the module count.
+
+Three pieces:
+
+- `Data::preloaded_uses` + `Data::freeze_uses`.  `reset` re-seeds `use_names` from it, so a
+  `use` of an already-parsed library takes the `use_exists` branch — a pending import against
+  definitions that are already present — instead of `switch_to_dep`.  This is the whole
+  mechanism; everything else is plumbing around it.  Empty for every ordinary parse.
+- `Parser::parse_as` — `parse` refactored so the entry can be a STRING claiming a filename,
+  the two `lexer.switch` sites going through one `load_main_file`.  Not `parse_source`, which
+  skips the between-pass promotions (`reserve_late_return_buffers` and friends): a base built
+  that way would hand its libraries on in a state no ordinary parse produces.
+- `Parser::seed_from` — `data` cloned, `database.install_schema`, plus `use_paths` and the
+  native/placed-library registrations a manifest read queued.  The parse-time side maps
+  (`complexity`, `field_read_counts`, the sandbox designations) deliberately do NOT travel:
+  they drive diagnostics the base already emitted, and copying them would emit each twice.
+  The runner carries the base's diagnostic LINES instead — minus the ones positioned at the
+  base file itself, which every group member re-emits from its own `use` line.
+
+`test_runner` groups files by `(directory, lib search path, leading use region)` — the region
+VERBATIM, so the parser stays the authority on what those lines mean and one key is one
+library set by construction.  The base is built when a SECOND file asks for it; a seeded file
+skips the stdlib warm load (the base holds it, and decoding the bundle only for `seed_from`
+to discard was most of what a seeded file still paid) and takes `start_def` from the base's
+recorded stdlib boundary, so the native codegen range and the coverage tally keep counting
+the library as part of the program under test.
+
+Refused, falling back to the ordinary parse: under a `[sandbox]` policy (admission reads what
+the parse recorded about designated functions), on a base parse that panics or errors, and on
+any region that is not plainly an optional `#cwd` plus complete `use` statements.  `#cwd` is
+IN the region rather than a reason to give up — all 81 of dryopea's test files open with one,
+so refusing it made the change measure perfectly on a synthetic and do nothing for the case
+that motivated it.
+
+Measured: 20 files / 25 modules 1.32 s → 0.43 s, 40 files 2.68 s → 0.74 s, 20 files / 50
+modules 2.44 s → 0.81 s; dryopea's 81-file, 1161-test suite 238 s → 209 s with byte-identical
+output.  `loft test <one-file>` unchanged (0.07 s → 0.06 s).
+
+`LOFT_NO_TEST_BASE=1` is the opt-out and `LOFT_TEST_BASE_REPORT=1` names the shared regions.
+`tests/test_base_equivalence.rs` compares a whole run against the opt-out over a package with
+four groups across two libraries — proved able to fail by dropping the carried diagnostics
+(turns `@EXPECT_WARNING` and `--deny-warnings` green) and by dropping the region from the key
+(a file resolves a library it never named).
+
+Also here: the per-function `@EXPECT_ERROR` / `@EXPECT_WARNING` / `@EXPECT_FAIL` maps are
+`BTreeMap`s.  They are iterated to REPORT the function names a file satisfied, and hash order
+is randomised per process, so the same green run printed that list in a different order every
+time — which makes a run's output undiffable, and this change is verified by diffing runs.
+
+### `sizeof` and `type_name` answered null for an undeclared name (loft#933, 2026-08-15)
+
+Both intrinsics read their argument the same way: take the identifier, look it up, and — when
+the def exists but is still `DefType::Unknown` after pass 2 — mark the argument *found* and
+return.  `*val` keeps its `Null` initialiser, so `sizeof(NoSuchType)` answered `null` and
+`type_name(NoSuchType)` rendered `null` as if that were a type's name.  Neither said anything,
+and the null flowed on as a value.
+
+A name still unresolved after pass 2 is not a forward reference — those resolve in
+`resolve_deferred_unknowns` and take the branch below with a real size (verified: a struct
+declared after its use, and a type named only in an earlier signature, both answer correctly).
+It is a typo, and it is the likeliest way to reach either intrinsic wrongly.  Both now report
+`Undefined type <name> — sizeof/type_name needs a variable or a declared type`, still marked
+found so the expression path adds no cascade.
+
+`src/parser/operators.rs`'s bare `Unknown variable` also names its variable now, matching every
+sibling site (`Unknown variable 'x' — did you mean 'y'?`).  Half of loft#934; the other half —
+an undefined comparison operand whose ONLY report is `missing argument for parameter 'v1' of
+`OpLtInt`` — is pinned in `36-parse-errors.loft` and left open.
+
+
+### `--lib` is part of the program-cache key (loft#930, 2026-08-15)
+
+`program_cache_paths` hashed the entry script's path and nothing else, so one script run
+against two library trees shared a cache slot and the second run silently reused the first
+tree's build.  Nothing downstream could catch it: the drift manifest re-validates the files
+the FIRST run resolved, and those are still unchanged, so the freshness check passes and
+hands back the wrong library's code.
+
+That made the tool look responsive while ignoring the flag that selects which library it is
+responding to — an in-place edit of the bound library DID rebuild, moving the tree away DID
+force re-resolution, and only the `--lib` value itself changed nothing.  A consumer's A/B
+harness (the Moros Economy planet-generator port, verifying loft against a compiled C# twin
+by running one entry script against two library trees) compared an arm against itself and
+read the byte-identical output as the strongest possible pass.
+
+The search path now feeds the key, length-prefixed and in order — order matters because the
+same dirs listed differently can resolve a name to a different file.  The cache still hits:
+repeated runs against one tree keep one manifest and stay warm (0.04 s cold → 0.01 s), and
+two trees now keep two.
+
+`loft` built in a Cargo tree disables the program cache by default, which is why this
+reproduces on an installed `loft` and needs `LOFT_PROGRAM_CACHE=1` to show up in a dev
+build — worth knowing before concluding a cache defect is fixed.
+
+
+### 56 of 167 `@EXPECT_ERROR` annotations never fired, and the suite reported nothing (loft#929, 2026-08-15)
+
+`check_diagnostics` failed a file on *unexpected* errors and on unmatched `// #warn`
+patterns.  It collected unmatched `@EXPECT_ERROR` and `@EXPECT_WARNING` substrings and then
+DROPPED them, so an expectation whose diagnostic had been reworded, narrowed or removed kept
+passing.  A third of that guard family was inert.
+
+**The dominant cause was not message drift.**  `Parser::parse` runs pass 2 only when pass 1
+finished clean, and a large share of loft's diagnostics are emitted by `!first_pass` code —
+`Unknown variable`, the const/`&` checks, match exhaustiveness, the @PLN25 N-Store family, the
+type-mismatch messages.  One pass-1 error therefore silences every pass-2 diagnostic in the
+same file, and an annotation for one of those can never match however correct its wording.
+Two files held 52 of the 56 for exactly this reason.  Error fixtures are now split by pass —
+`102`/`102b`, `36`/`36b`, `35`/`35b` — and TESTING.md records the rule.
+
+The rest triaged into reword (the argument/return/branch messages became `expected X, got Y
+on …`; the `&`-vector concat refusal was rephrased), tier (the whole N-Store family reports at
+`warning`, not error — `@EXPECT_WARNING` now), over-count (three `Undefined type V` signatures
+earn ONE diagnostic), delete (a tuple in a struct field is supported since Plan-06, so its
+refusal is gone), and blocked-by-a-neighbour (three tuple fixtures sourced their nullable from
+`s as integer`, which now errors `text-parse-may-fail` on the line before, so the N-Store check
+was never reached — they source it from division instead).
+
+Two guards had gone inert without any annotation being wrong:
+
+* `389-narrow-sentinel-rejected.loft` asserted the pre-@PLN25-F2 rule.  F2 made a plain narrow
+  integer non-null and full-range, so `nullable_sentinel_hint` returns early and there was no
+  error left to expect.  It now pins the rule from the value side, plus the half F2 left open
+  (a NULLABLE narrow still spends its top value on the sentinel: `U8Q { x: 255 }` reads back
+  null, silently).
+* `894-lost-write-through-returned-struct.loft` expected a diagnostic **the harness could not
+  produce**: `warn_lost_temp_writes` and its two neighbours ran only in `src/main.rs`.  They now
+  run in `run_test` in the same window, so the suite can both confirm one of their warnings and
+  catch a false positive from one.
+
+Both holes are closed: unmatched expectations are fatal, and the check runs even when a file
+produced NO diagnostics — the second way an expectation went unlooked-at.  `loft test`
+(`src/test_runner.rs`) had the weaker form of the same hole, where any single matching error
+satisfied every `@EXPECT_ERROR` in the file; each substring must now match one, the bar
+`@EXPECT_WARNING` already held.
+
+Three defects surfaced that the inert guards had been hiding, filed with repros: an `i32`
+struct field silently truncates a 64-bit integer (loft#931 — `i32` is the one narrow alias
+declared without a `limit(…)`, so the range-containment narrowing test cannot see it), the
+reserved-`key` hash guard covers a struct field but not a local (loft#932), and
+`sizeof(<undeclared name>)` answers null with no diagnostic (loft#933).  A fourth, an
+unresolved comparison operand cascading into `missing argument for parameter 'v1' of
+`OpLtInt``, is pinned in the fixture and filed as loft#934.
+
+### A struct that contains itself says so, even when the program uses it (loft#929, 2026-08-15)
+
+`Data::has_value_cycle` skipped recursing into a child struct that `def_referenced` marked.
+That flag records that a struct has been CONSTRUCTED somewhere (`build_object_ops` and the
+object literals set it) — it says nothing about whether the FIELD is a reference.  So the cycle
+report fired only for a cyclic type nothing instantiates, and every cyclic type a real program
+writes fell through to the layout validator instead:
+
+```
+Error: type layout: PENode: field 'next' has no position (u16::MAX)
+```
+
+in place of *"Struct 'PENode' contains itself (directly or indirectly) — use reference<PENode>
+to break the cycle"*.  The field's own deps are what say "reference" (the `u16::MAX` share
+marker), and that test was already there; the extra condition only suppressed the good message.
+Verified across the shapes the rule separates: `reference<Self>`, mutual A/B, mutual broken by a
+`reference`, plain nesting, `vector<Self>`, and a cyclic type never constructed.  The
+`@EXPECT_ERROR: contains itself` fixture that should have caught this had itself gone inert.
+
+
+### A `for` loop binds its own variable, so two loops may reuse a name (loft#915, 2026-08-15)
+
+A loop variable was an ordinary function-scoped local: `add_variable` resolved it by name, so
+a second `for` over the same name was handed the FIRST loop's slot — old var, old type, old
+dep. That is why two loops in one function could not reuse a name at different element types,
+and it is the mechanism behind loft#690's corruption (the second body read B's records through
+A's layout, `m=8589934636` for a sum of 3), which had been answered with a diagnostic.
+
+Each loop now binds its own variable. `Function::loop_binding` names them: the first loop to
+use a name binds the name itself — so a program with no repeat spells every loop variable
+exactly as it did before, dumps and debugger frames included — and a second binds `i#1`, a
+third `i#2`. The suffix is on the NAME and not merely on a lookup key because the native
+backend names a local `var_<name>` and two locals spelling one name declare it twice, the same
+constraint loft#928 hit for a generator's fields.
+
+**The cross-pass identity key is separate from the name** (`Function::loop_variable`, key
+`<name>#bind`). A loop variable cannot key on its own name: the name is re-pointed at each loop
+that binds it, so `names["i"]` ends pass 1 holding the LAST loop's slot and pass 2's FIRST loop
+would be handed it — a text binding reusing an integer one, which is the shape the split exists
+to stop. The occurrence counter reads no type and consults no table, so pass 2 regenerates the
+same sequence and every slot number holds.
+
+`i` after the loop still reads what the last loop left, so nothing that read it before changes.
+The companions (`#index`, `#next`, `#count`, `#iter_state`) are keyed off the binding rather
+than the spelling, and `iter_op` derives that base from the variable the name resolves to, so
+`i#index` in the second loop finds the second loop's counter. `loop_nr` — which `#break` and
+`#continue` jump on — matches the loop by BINDING instead of by name, since comparing names
+would walk past a loop whose variable is `i#1` and answer the chain length.
+
+**Two diagnostics folded into one.** loft#690's *"loop variable 'i' has type text but was
+previously used as integer"* is gone: the corruption it reported is unreachable by
+construction, and the local collision it also covered no longer needs a type comparison to
+state — any non-loop binding of the name is the shadow, whatever its type. The C61 shadow
+diagnostic now owns that case and fires on PASS 1 for every type pairing, where the type
+diagnostic reached the differing-kind case only on pass 2.
+
+Still rejected: a loop variable landing on a plain function local, and nested same-name loops
+(the inner binding would take over the name for the rest of the outer body).
+
+Guard: `tests/scripts/915-loop-variable-per-loop.loft` — 13 hand-computed cells on both
+backends, covering the filed shape, the after-loop read, `#index` / `#count` / `#first` /
+`#break`, loft#690's two-struct shape, three loops under one name, text loops, comprehensions,
+`_`, nesting, and per-function independence.
+
+
+### A loop that writes no store reads its vectors through one derived header (loft#885, 2026-08-15)
+
+`v[i]` re-derives three facts per element on `--native`: which store holds the vector, which
+record its elements live in, and how long it is. All three are loop-invariant in a loop that
+writes no store, and `rustc` cannot lift any of them — every store load is guarded
+(`if rec != 0 && valid(..)`) and LLVM will not speculate a conditional load out of a loop.
+So the emitter lifts them: `let __vh_N = vector::vec_header(…)` lands before the loop and each
+read becomes a bounds test plus address arithmetic. **~2× on the issue's kernel**, taking
+`vector<single>` indexed reads from ~15× hand-written Rust to ~6.5×.
+
+A scalar read of a hoisted element then fuses into ONE load (`vector::get_elem_hoisted`):
+the bounds test, then the value, with no element `DbRef` built, no `rec == 0` test, no second
+store resolution and no `rec != 0 && valid(..)` re-check between them — the bounds test
+decided all of it. Covers `OpGetInt` / `OpGetSingle` / `OpGetFloat`, the getters whose `Store`
+bodies are a plain guarded load; the masking / re-basing / decoding ones stay unfused. That
+also meant teaching the pre-eval collector about the fusion: `OpGetVector*` is on
+`op_uses_stores`, so it was being hoisted into a `let _pre_N` that the fused emission
+ignores — which would have run the read twice. `hoist::fused_element_read` is the one
+definition of the shape, and the emitter and the collector both ask it.
+
+Only an index in range for the hoisted length takes the fast path — a negative index, an
+out-of-range one, `i64::MIN`, a null or an empty vector all fall back into `get_vector` /
+`vec_get_or_raise_runtime`, so those answers and the `IndexOutOfBounds` / `NegativeIndex`
+raise keep one definition. The interpreter is untouched.
+
+The gate (`src/generation/hoist.rs`) is an **allow-list**, deliberately: PERFORMANCE.md
+§ Design: P8 catalogues five hand-maintained deny-lists of "which op mutates" that have
+already drifted, and an omission in one of those would be a silent wrong read. Here an op
+missing from the list costs the optimisation instead. An op qualifies by being named as a
+reader/constant, or by declaring at least one parameter with **every parameter a plain
+runtime scalar** — where `const` disqualifies, because a `const` parameter is a slot number
+or type id, and that is the channel `OpDatabase`, `OpCoroutineNext` and `OpFreeText` reach
+state through despite scalar signatures. The walk follows calls, so `for i in 0..len(v)`
+still hoists; `CallRef`, `par` and `yield` decline.
+
+Two switches, both read at generation time: `LOFT_HOIST_VERIFY=1` emits the checking form of
+every hoisted read (re-derives the header, panics on a mismatch) and `LOFT_NO_VECTOR_HOIST=1`
+emits the pre-885 form. Guards: `tests/hoist_gate.rs`, `tests/scripts/885-vector-hoist.loft`.
+
+### A `τ?` struct field is representable as absent (loft#896, 2026-08-14)
+
+A field declared `maybe: Inner?` was stored as a dense `Inner`, byte-identical to a
+non-nullable one. `OpGetField` therefore handed back a `DbRef` into the PARENT record, whose
+`rec` is never 0, so every reader saw a present-but-zeroed value: `??` never reached its
+default, `== null` was always false, and `h.maybe = null` found nothing to clear. Both
+backends, silently.
+
+**The representation was already built.** The synthetic `__nullable<S>` enum (discriminant 0 =
+absent) has shipped default-on for vector ELEMENTS for some time, and `vector<Inner?>` answers
+every cell of loft#896 correctly — which is what made it the oracle. What was wrong is the
+rewrite that assigns that type to a FIELD (`typedef.rs::synth_nullable_struct_fields`): it
+matched a bare `Type::Reference`, and `Inner?` reaches the type table as
+`Optional(Reference(Inner))`. A field written `Inner` — one that *cannot* be absent — is the
+bare `Reference`. So the arm selected the exact COMPLEMENT of its intended set, rewriting every
+dense field and never once firing for the `S?` it was written for.
+
+That inversion is also why it sat behind `LOFT_E2_FIELDS`: the gate's stated justification was
+that flipping fields tree-wide breaks stdlib field reads, which is what rewriting *dense* fields
+does. The symptom was read as the representation being immature rather than as the selector
+being backwards, and the read/construct glue the gate's comment called missing turns out to
+work — a bare `h.maybe.z` auto-unwraps.
+
+Fix: select on `Optional(Reference(S))`, drop the gate, and add the literal-`null` construction
+path (`H { maybe: null }`) — assignment already had one, so both now route through a single
+`Parser::build_nullable_set_null` and the two spellings of "absent" cannot drift.
+
+Also fixed by the type change: a struct literal that merely OMITS such a field did not compile
+under `--native`. The omitted default was `Value::Null`, which the interpreter tolerates as a
+no-op `OpCopyRecord` of a null source and native lowers to `OpCopyRecord(cell, (), …)` —
+`()` where a `DbRef` is expected. It reproduced on the released `loft 2026.8.0`.
+
+**Costs.** A `S?` field carries a discriminant, so it grows 8 bytes;
+`tests/multilib/fwd797_layout.loft`'s hand-computed sizes moved 44→52 and 52→60. A
+`vector<T>?` FIELD is `Optional(Vector)`, a different payload shape, and is unchanged — still
+wrong, and genuinely separate work.
+
+Guard: `tests/issue_896_nullable_field.rs`, 16 cells on both backends, including a dense-field
+control that fails if the selector ever again keys on anything but the `?`.
+`tests/plan25_e2_layout.rs`'s fixture declared `item: Row` and asserted the rewrite fired — it
+passed by encoding the inversion, and now declares `item: Row?` with a dense sibling beside it.
+
+### A partial struct literal names the field it left out (loft#914, 2026-08-14)
+
+New `advice[omitted-field-zero]`, default on, `LOFT_NO_OMITTED_FIELD` opts out. A literal that
+names SOME fields and leaves another out gives the omitted one its type's zero, and nothing
+distinguished that from an author writing the zero deliberately. It bites where zero is a
+meaningful value of the field's domain — dryopea's palette index wanted `-1` for "nothing
+selected", got `0`, and `0` is the entry that erases; the project carried a two-field workaround
+and a CLAUDE.md rule for it, because the cure (a declared field default) was undiscoverable.
+
+`advice`, not `warning`, per the two-tier rule: the zero is documented behaviour
+(`tests/scripts/06-structs.loft` locks it), so ignoring it cannot produce a result the language
+did not promise — and a warning would fail every library's own `LOFT_DENY_WARNINGS=1` CI on a
+common idiom, which is the trap the tiers exist to avoid.
+
+Quiet where the code already says what it means, or where the cure would be a no-op: a declared
+default; a nullable field; `reference<T>` and fn-ref fields (their omitted default is a null
+sentinel, and a fn-ref has no other default to declare); collections and `text` (their zero is
+the identity, and `= []` / `= ""` IS that zero); and a bare `S {}`, which asks for the whole
+default record and reads that way. Only the PARTIAL literal is ambiguous.
+
+The last three exemptions came from the suite rather than from reasoning —
+`issue_328_reference_field_pointer_semantics` and `p213_struct_field_default_init` each name a
+field whose absence is already the declaration's promise. Swept before it spoke: 25 hits across
+7 of ~400 corpus files, and one golden baseline moved
+(`tests/error_messages/cases/33_struct_missing_field.loft`, which produced no output at all).
+
+### `loft test` no longer reports a green for a file it did not run (loft#916, 2026-08-14)
+
+`loft test <a> <b>` silently discarded everything after the first target. It ran `<a>`, printed
+`test result: ok. 1 passed; 1 file`, and exited **0** — even when `<b>` held a failing test. The
+file count was the only place it showed, and that reads as correct unless you already knew how many
+you asked for. Naming two files is the natural move when a change touches two suites and the whole
+run is slow, which is exactly when nobody re-reads the count: it cost a sabotage sweep whose second
+half never executed and was reported green.
+
+A second target is now an error naming both, not a drop. One target per run is kept deliberately —
+the summary line is a single verdict over one scope, and looping would print a partial one per file,
+which misleads in a new way rather than fixing this one. Only the CONSECUTIVE leading positionals
+are examined, so a later flag's value (`--lib <dir>`) is never mistaken for a second target; that
+row is in the guard, because a rule written as "no bare token after the target" would have broken
+it. Guards: `tests/test_command_targets.rs`, asserting the EXIT CODE as well as the text — the exit
+code is what a CI job reads, and it was the half that made this dangerous rather than merely
+confusing.
+
+### A module shadowed by a dependency's same-named file now says so (loft#912, 2026-08-14)
+
+A module's basename is global across a consumer's whole dependency graph. Only the first file to
+claim a name is loaded, so adding `src/catalogue.loft` to a package whose dependency already had
+one made the LOSER's functions simply absent — reported as `Unknown function part_list` at a line
+inside a package the consumer never edited and cannot fix. Nothing in the output mentioned a
+collision, so the search went looking for a missing `pub`, a typo, or a version skew.
+
+New `advice[module-name-shadowed]` names the collision and BOTH files: *"module 'catalogue' is
+declared by two files — '…/pkg_top/src/catalogue.loft' and '…/pkg_dep/src/catalogue.loft' — … this
+`use` binds the second one"*. Both load orders are covered, so the report does not move when a
+`use` is reordered.
+
+**The resolution itself is unchanged, and that is deliberate — decided against a measurement rather
+than a preference.** The obvious fix, refusing the clash, was implemented first and then measured:
+it breaks code that builds today. `graphics` ≤ 0.4.2 and `mesh3d` both ship `math` / `mesh` /
+`scene`, and this repo's own `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while
+carrying its own copies of all three — three test binaries went red. A first sweep over
+`~/.loft/registry` alone had said the clash was extinct; it missed the fixtures, which is the axis
+that was held fixed.
+
+**Scoping module names to their package is the fix this advice is a signpost for.** Two things
+block it, both worth recording: `Data::use_add` derives a new source id from the SIZE of the name
+map (so a second key per module happens to keep the counter right, but nothing says it must), and
+`qualified_type_name` derives a DATABASE type key from a module's short name — a package-qualified
+key has to stay machine-independent, so it cannot carry the package's path. Guards:
+`tests/module_name_clash.rs`, which asserts the advice fires in both directions AND that the
+`Unknown function` symptom still follows, so a test cannot silently claim the fix that has not
+landed. It also pins the three neighbouring shapes that must stay silent: a distinct name, one
+module used from two files of one package, and a file named like a declared dependency (which the
+existing dep-shadowing guard already resolves).
+
+### `loft doc <library>` documented nothing, into the directory you were standing in (loft#911, 2026-08-14)
+
+`loft doc` reads as — and is used as — `loft doc <library>`, but its argument was a PATH only. A
+library name is not a directory, so `loft doc graphics` took the empty-manifest branch: it created
+`./graphics/doc/` wherever the user happened to stand, found no `src/` to read, and reported
+"0 API sections" for a package with 119 documented `pub fn`s. The path it printed was relative, so
+the stray tree looked like part of the project — one was swept into an unrelated repository by a
+later `git add -A`.
+
+The argument now resolves as a directory first and an installed package second, and a name that
+resolves to NEITHER is an error that creates nothing. An installed library's docs go to
+`~/.loft/doc/<name>-<version>`, because the registry copy is shared immutable cache content and the
+working directory is not loft's to write to; `-o <dir>` overrides, and the reported path is
+absolute. `loft doc graphics` now reports 1 guide and 19 API sections. Guards:
+`tests/doc_command.rs`.
+
+### A non-empty collection literal on a nullable field aborted the compiler (loft#909, 2026-08-14)
+
+`struct S { m: vector<integer>?, t: integer }` with `S { m: [5], t: 3 }` aborted with
+`Incorrect var _vec_1[65535]`, on both backends and on the published release. Whether a field
+carries a record-pointer HEADER is a question about its storage, and `Optional(τ)` shares τ's
+storage exactly — but `parse_object_field` asked it by matching the declared type against the
+collection formers without peeling the marker. The field was therefore not recognised as a
+collection: the literal built through a standalone temp instead of in place, and that temp, minted
+with a dep on the struct it sits in, is exactly the case where `build_vector_list` skips
+`vector_db`. Nothing assigned it, so it reached codegen with no live interval and no stack slot.
+
+Both halves were needed — a non-nullable field took the in-place path, and an empty literal
+returned before the temp was minted — which is why each of them rescued the program. A nullable
+KEYED field failed one step earlier still, refusing the literal outright with "Cannot assign
+vector<R> to field of type optional(hash(…))".
+
+The peel is applied at the three sites that classify a field by its layout — `parse_object_field`'s
+header prime, `handle_field`'s deep-copy dispatch, and `get_type`, whose sibling resolvers
+(`type_def_nr`, `type_elm`, `rust_type`, `element_stack_size`) all peeled already while it answered
+`u16::MAX`, the "no such type" sentinel, for every `Optional`. The nullability checks keep the
+unpeeled type: those ARE about nullability. Guard:
+`tests/scripts/909-nullable-collection-field-literal.loft`.
+
+### A bare `if` statement swallowed the `[` of the line below it (loft#910, 2026-08-14)
+
+`[` postfix-indexes a value, and a `Void` expression produced none. `if` is an expression in loft,
+so a bare `if c { … }` STATEMENT reached the postfix chain that handles `.`, `[…]` and `(…)` — and
+that chain consumed the bracket opening the next line. A function whose tail expression was a
+vector literal had that literal read as an index on the `if` above it, and indexing a `Void` fell
+to the catch-all: *"Indexing a non vector — keyed collections have no generic-constructor
+expression"*, naming a feature the program does not use and a line that is correct as written.
+
+The filed scope was a comprehension in tail-return position reading a local a bare `if` had
+mutated. None of those three is the trigger: a plain `[1, 2]` fails identically, `else` makes no
+difference, and the mutation is irrelevant. `for` and `while` never had it — they are statements
+and never reach the chain. The guard reads the subject's TYPE, so an `if` that yields a value keeps
+its index: `if c { [1,2] } else { [3,4] }[0]` is unaffected. An indexed `Void` CALL
+(`voidcall()[0]`) is still an error, so no wrong program became a silently accepted one.
+
+**A native-only defect surfaced while pinning that last row**, present on the published release
+too: `if c { [1,2] } else { [3,4] }[0]` ran correctly under `--interpret` and failed native codegen
+with "expected expression, found `let` statement". A pre-eval binding is emitted as
+`let _pre_N = <text>;`, so the text has to be one Rust expression — and an `if` that pre-declares
+its branch variables emits `let mut var__vec_1: DbRef = …; if …`. The wrap that made a statement
+sequence an expression had been written into ONE of the two lowerings that produce that prefix, so
+the other never got it. It is now enforced on the artifact instead: whatever lands in a `let`
+binding is braced if it is a statement sequence, which no producer can drift away from. Guard:
+`tests/scripts/910-statement-if-does-not-index-the-next-line.loft`, asserted on both backends.
+
+### `loft test` refused the path it prints (loft#913, 2026-08-14)
+
+`loft test` reports its files as `tests/<name>.loft` and rejected that exact string: the argument
+was joined onto `tests/` unconditionally, so pasting a failing line back asked for
+`tests/tests/<name>.loft`. Copying the path out of the output is the obvious way to iterate on one
+file, and the tool not accepting its own output is re-discovered by every new user rather than
+learned once.
+
+Measuring every spelling before fixing turned up a second break the report did not mention:
+`loft test draw::test_foo` — the selector form the code's own comment documents — resolved to
+`tests/draw::test_foo`, whose path half has no extension and matches no file. The `.loft` was
+appended to the whole argument rather than to the PATH half, so the documented form only worked
+if the caller also wrote `.loft`.
+
+`resolve_test_target` now splits the `::selector` off first, supplies the extension on the path
+half, and joins `tests/` only when the path is not already under it (nor absolute, nor reaching
+out with `..`). The doubled path could never exist, so every spelling that worked before resolves
+to the same file; four spellings that used to be errors now work. Unit tests in `src/main.rs`.
+
+**And the accidental guard it removed is replaced by a real one.** `loft test good::test_missing`
+used to fail — for the wrong reason, on the mangled path — while the correctly-spelled
+`loft test good.loft::test_missing` reported `ok. 0 passed; 0 files` and exited 0, on the published
+release too. A filter that matches nothing left every file empty and each was skipped silently. A
+selector naming no test function is now an error: it is the shape a CI job reads as "the tests I
+asked for passed". Only an explicit selector is checked — a directory with no tests is a different,
+legitimate zero. (A brace list with SOME matches still runs those and reports them; only a
+completely unmatched selector fails.)
+
+### An empty-text assignment pushed a value nothing consumed (loft#908, 2026-08-14)
+
+Reported as "a function that reads a MISSING file and returns a struct double-frees and SIGABRTs
+the interpreter" — `free(): invalid pointer`, `last op: OpFreeText`, on `--interpret` only, which is
+the worst direction: a consumer's gates run interpreted and the shipped native build is correct.
+
+Neither the file nor the struct is the defect. Appending the EMPTY literal to a text variable is a
+no-op — the variable has just been cleared — so `set_var`'s put dispatch skipped `OpAppendText` for
+it. It skipped only the OP, after `self.generate(value, …)` had already pushed the 16-byte const:
+the value stayed on the eval stack with nothing to take it off, and `stack.position` ran high for
+the rest of the statement. **A value is pushed if and only if an op consumes it**, and the two
+decisions sat in different places.
+
+Harmless until the statement is one ARM of an `if`/`else` — which `?? ""` over a CALL always is, the
+nullable result going into a work-ref that the presence test branches on. The arms then disagreed in
+height and `gen_if`'s arm-height equaliser (@PLN85 P2) "corrected" the taller one with an
+`OpFreeStack` whose discard walked past the frame's eval base into the LOCALS, overwriting a live
+text descriptor; freeing that at scope exit aborted. The aggregate return is what puts a live local
+under the over-discard (the hidden `__retbuf` shifts the frame), which is why the reporter's matrix
+found it needed a struct return — and why `-> integer` merely mis-tracked the stack silently.
+
+Four axes had to meet: the nullable text from a CALL, the call answering null, an EMPTY default, and
+an aggregate return. Moving any one made it correct, which is what kept it hidden.
+
+The guard now returns BEFORE the push, so push and consume are one decision;
+`gen_set_first_text` already skipped the whole `set_var` for this value, so the reassignment path
+now agrees with the first-assignment path rather than diverging from it.
+
+Guard: `tests/scripts/908-empty-text-default-does-not-strand-a-const.loft`, one axis per row and
+every row asserting a VALUE — `--native` was always correct, so a row that merely ran would read as
+a pass there. Verified to abort on the pre-fix build before shipping.
+
+### `--native` linked a `#native` symbol by NAME, not by what implements it (loft#907, 2026-08-14)
+
+`#native "sym"` is an API id, not the name of the Rust fn behind it. A library registers its
+implementations by loft symbol — `loft_register_bridges! { "sym" => other__loft_bridge }` — and
+that table is free to name an `other` different from `sym`. `--interpret` reads the table.
+`--native` put the `#native` string straight into a `#[link_name]`, so it bound whatever else the
+cdylib happened to export under that name, and a C-ABI link matches on name alone: no error, no
+warning, a call marshalled into the wrong function.
+
+In the published `graphics` that hit **ten** functions — every store-aware one. Each has loft's
+`(LoftStore, LoftRef)` entry point at `n_<x>` and an older raw `(ptr, count)` fn under the
+`#native` name, so the arguments arrived shifted by a register. `save_png` returned `false` and
+wrote nothing under `--native` while returning `true` under `--interpret` (the reported symptom);
+`gl_upload_vertices`, `gl_upload_canvas`, `gl_upload_indices`, `gl_upload_instance_buffer`,
+`gl_update_buffer`, `gl_set_mat4`, `gl_texture_subimage`, `rasterize_text_into` and
+`audio_play_raw` were mis-marshalled the same way and had no reporter because the WebGL
+consumers run in the browser, whose `--html` host imports take the raw pair by design.
+
+**One source for the answer, read by both backends.** `extensions::resolve_native_impl_symbols`
+asks the loaded cdylibs' own registration which fn implements each symbol (`dladdr` on the
+registered bridge names it; `X__loft_bridge` sits beside `X`), and records only the entries where
+the two names differ, in `Data::native_impl_symbols`. `Data::link_symbol` is what codegen emits
+through, on both the C-ABI `#[link_name]` and the rlib `krate::sym` path. A clean binding — what
+`loft-ffi-build`'s generator produces, and the only shape it CAN produce — maps to itself and is
+untouched.
+
+Residual: a library whose cdylib is absent or predates the bridge registry cannot be resolved and
+keeps the literal name. That is not a silent wrong answer — the interpreter reports it at load
+(loft#886) and calling it panics rather than answering.
+
+Guards: `tests/lib/native_remap_pkg` is a `[native] crate` fixture in exactly this shape, exporting
+a DECOY under each `#native` name (-1000 / -2000) so a regression answers rather than fails to
+link, and the answer names which resolution path was taken;
+`native::remapped_native_symbol_resolves_to_its_implementation_on_both_backends` runs it on both.
+`native_scalar_pkg` is the clean-binding control.
+
 ### Removing one entry of a linked collection group had no owner (loft#900, 2026-08-14)
 
 loft#898 gave the CLEAR an owner for a linked group's shared records; removal never got

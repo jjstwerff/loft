@@ -503,6 +503,36 @@ probe (@PLN123 B2, where compaction borrows a scratch slot on every load), and
 `slot_recycling_tests` in `src/database/mod.rs` pins both halves so the
 asymmetry stays recorded.
 
+### The value stack lives in ONE record, and that record has to grow with it
+
+Store index `0` is the interpreter's value stack. It is a single claimed
+record — `PRIMARY`, record 1 — and every frame slot is addressed as
+`(0, 1, pos)`. Frame writes go straight through `addr_mut`; they never call
+`claim`, so the normal growth path never runs and `State::ensure_stack` is what
+extends the buffer when a program nests deeply enough.
+
+**Growing the buffer is only half of it.** `Store::grow_words` extends the
+allocation; record 1's header still claims the size it was born with (1000 words
+= 8000 bytes), so every stack byte above that mark sits outside the record that
+owns it. `ensure_stack` therefore calls `Store::extend_primary_to_store_end`
+after every growth — the store's only record spans the whole store, which is the
+invariant `State::new` established and nothing since maintained (loft#935).
+
+`Store::resize` is the wrong tool here and must stay unused on this store: its
+fallback is claim-copy-delete, which RELOCATES the record. Record 1 IS the
+running stack, so moving it moves every live frame out from under the
+interpreter.
+
+The failure this caused is worth remembering for its shape rather than its
+cause: a consumer added a `vector<Struct>` local to a ~700-line dispatcher and
+got `realloc(): invalid next size` — a glibc heap abort — in a *different* test
+file, one that never called the edited code. The enclosing function's size was
+never the defect; it was what made the frame big enough to cross the initial
+claim. That is also why the shape resisted every attempt to shrink it: the axis
+it needed was stack DEPTH, and a matrix that varies the expression while holding
+the function fixed cannot reach it. `tests/scripts/935-stack-store-growth.loft`
+is the depth axis in fifteen lines.
+
 ### Constant store (`CONST_STORE`)
 
 Store index `1` is reserved for compile-time constant data:
@@ -685,6 +715,36 @@ empty record on `--native`: the materialise arm allocated first and asked the
 narrow question second, so `??` saw a present value and answered with the fresh
 record's uninitialised bytes. **Use `rec == 0` for "is this readable"; reserve
 `is_null()` for "is this the absent-value sentinel" specifically.**
+
+#### A null in flight is not a null in a slot
+
+The parser has two helpers for "the null of type τ", and picking the wrong one is
+silent on every scalar and corrupting on every collection:
+
+| helper | for | a collection's answer |
+|---|---|---|
+| `Parser::null(tp)` | a VARIABLE's default-init — a declared slot the value lands in | `Value::Null` (nothing) — the slot is an allocated empty store already |
+| `Parser::null_value(tp)` | a VALUE POSITION — the null travels on the eval stack | `OpNullRefSentinel()` — a 12-byte `DbRef` with `store_nr == u16::MAX` |
+
+The split is real: a collection LOCAL must start as an ALLOCATED empty store,
+because a later write (`w: vector<single> = f#read(16) as vector<single>`) fills
+that store in place and the sentinel's `store_nr` indexes nothing. A value in
+flight has no slot to fill, so there the sentinel is the only thing that can mean
+null.
+
+**Every branch-MERGE slot is a value position, exactly as a `return` is** — the
+arms of an `if` or a `match` all push into one join, and an arm that pushes
+NOTHING leaves the join reading an unwritten, value-sized slot: an uninitialised
+`DbRef` the interpreter then treats as a live reference (loft#936), or a lost
+value on `--native`. Arm ORDER is what made this look cosmetic rather than
+systemic: the SECOND arm is parsed with its sibling's type already in hand and
+converts correctly, so only a `null` written FIRST reached the back-patch that
+asked the wrong helper.
+
+`null_value` peels `Optional` and delegates to `null` for everything outside the
+DbRef-backed family (the collections and a struct-enum, whose payload is a record
+rather than the `255` discriminator a plain enum uses), so it is strictly the
+safer default at any site that is not a declared slot.
 
 ### Key
 
@@ -943,8 +1003,10 @@ refused ([`src/placement.rs`](../../src/placement.rs)).
 
 Two or more keyed collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
-fills both. Every combination of kinds is a valid group except **two `index` members with
-the same key**, which is refused where it is declared: an index keeps its tree links in a
+fills both. `trie` and `spatial` join on the same terms as the rest: they were missing
+from the test that FORMS a group, which did not refuse the pairing but silently built a
+second, independent collection (loft#927). Every combination of kinds is a valid group
+except **two `index` members with the same key**, which is refused where it is declared: an index keeps its tree links in a
 field of the element record, so a second one has nowhere to put them (loft#902, and
 [DESIGN_DECISIONS.md § C113](DESIGN_DECISIONS.md) for why it is refused rather than
 given its own storage). **The records belong to exactly one member.** `types.rs` decides which when it
@@ -952,6 +1014,13 @@ builds the group: the first-declared member is the PRIMARY, and every later one 
 leading `u16::MAX` on its `other_indexes` marking it a VIEW. That marker is the only place
 the ownership fact lives, and three readers now share it — the JSON default-init, the
 struct teardown walk, and the clear.
+
+Because the group is auto-formed, a struct literal that gives RECORDS to two members
+reads as two collections and behaves as one. That is documented behaviour, so it is not
+an error — but it is almost never what the author meant, and the `linked-group-double-fill`
+advice names it at the literal ([DIAGNOSTICS.md](DIAGNOSTICS.md), `LOFT_NO_LINKED_GROUP`
+opts out). It stays quiet on `field: []`, which is how every group is constructed, and on
+a literal that fills one member — the two deliberate shapes.
 
 Each member therefore releases only what it owns:
 
@@ -1052,6 +1121,31 @@ in the same order — so `Parser::reject_duplicate_index` refuses it where the f
 declared, naming the workaround: give the second route a different KIND, or a different
 key. A different key is a different type name and so its own link triple, and two
 `index<E[k]>` fields in different structs hold different records; both stay legal.
+
+### Constructing a group with a literal (loft#924)
+
+**A group's members are all zeroed together, before any of them is filled.** A collection
+field is a 4-byte header, and `parse_object` writes the group's headers as ONE block in
+the literal's prelude — the treatment #437 already gives plain vector fields, and for the
+same reason. `Parser::linked_group_offsets` names them; the two sites that otherwise
+prime one field at a time (the field parse, and `object_init` for a field the literal
+leaves out) skip whatever the prelude covered.
+
+Per-field priming cannot work here, and the reason is the group's own rule. `OpFinishRecord`
+through the member the author names indexes the record into every sibling, so a member
+whose header is written AFTER that insert drops the spine it was just handed. The result
+was decided by the ORDER the fields were written in: `S { data: […], lookup: [] }` left
+`lookup` empty while `data` held the records, `S { lookup: [], data: […] }` did not, and
+an OMITTED member was zeroed later still — by the default-init that runs once the body is
+read, so it lost them too. Every keyed lookup then answered null for a record that was
+there, which is indistinguishable from a key that was never inserted.
+
+The corollary is worth stating because it surprises: **a literal that names TWO members
+adds to the group twice.** `HS { by_k: [a], by_v: [b] }` puts two records in one set and
+both members see both — the same thing `h.by_k += [a]; h.by_v += [b]` has always done.
+Three in-tree fixtures had been reading the truncation as independence (`502`, `922` and
+`85`), which is a fair signal of how easily two keyed fields over one element type are
+written without meaning a group; there is no diagnostic for it yet (loft#926).
 
 ### Probing and Load Factor
 

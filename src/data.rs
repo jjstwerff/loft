@@ -1622,6 +1622,24 @@ impl Type {
         self.peel_optional().0
     }
 
+    /// This type with the `Rewritten` marker removed.
+    ///
+    /// `Rewritten(τ)` says a value was built in place (a struct literal constructed
+    /// straight into its destination slot, #319) — it is a signal to the expression that
+    /// PARSED it, not a type any slot can hold.  Once the value is stored anywhere it
+    /// outlives that signal, so peel it before the type is recorded as a variable's, a
+    /// vector element's, or a tuple member's.  Leaving it on makes every `matches!` over
+    /// the type constructor miss (loft#943), which reads as an unsupported operation
+    /// rather than a wrapper.
+    #[must_use]
+    pub fn unrewritten(&self) -> Type {
+        let mut t = self;
+        while let Type::Rewritten(inner) = t {
+            t = inner;
+        }
+        t.clone()
+    }
+
     /// Pass-2 keystone, the `Type` twin of `Value::for_each_child`
     /// (STABILITY_PASS2.md): the ONE place that knows which `Type`
     /// variants carry child types.  Exhaustive on purpose — a new
@@ -3654,6 +3672,20 @@ pub struct Data {
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
     use_names: HashMap<String, u16>,
+    /// loft#925 — libraries already parsed into this `Data` before the program
+    /// parse begins, re-seeded into `use_names` by every [`reset`](Self::reset).
+    ///
+    /// A `use <lib>` loads the library's file only when `use_names` does not
+    /// already name it, and `reset` runs at the start of each parse AND between
+    /// the two passes — so ordinarily every pass re-parses every library from
+    /// disk.  A caller that has already parsed a set of libraries records them
+    /// here (see [`freeze_uses`](Self::freeze_uses)); their `use` then resolves
+    /// to the definitions that are already present and no file is read.
+    ///
+    /// Empty for every ordinary parse, which is what keeps this inert: only a
+    /// caller that deliberately seeded a base — `loft test`, sharing one library
+    /// parse across the test files that `use` exactly it — ever fills it.
+    preloaded_uses: HashMap<String, u16>,
     /// Every import that has been applied, so [`rebuild_indices`](Self::rebuild_indices)
     /// can replay it.
     ///
@@ -3694,6 +3726,13 @@ pub struct Data {
     /// name it cannot find is `usize::MAX` — a not-found sentinel, not an index
     /// into `attributes[…]`.
     unknown_key_fields: Vec<(u32, usize, u32, String)>,
+    /// Forward-reference stubs a declaration has upgraded IN PLACE this pass (loft#944).
+    ///
+    /// Recorded rather than inferred: after the upgrade an adopted stub looks like any
+    /// other real def, and a generic template's type VARIABLE also carries
+    /// `Type::Unknown` — sweeping by shape rewrote `vector<T>` and broke the stdlib.
+    /// Drained by [`Data::resolve_adopted_stubs`] at the end of pass 1.
+    adopted_stubs: Vec<u32>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -3730,6 +3769,19 @@ pub struct Data {
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
     pub native_symbol_crates: HashMap<String, String>,
+    /// loft#907 — `#native "symbol"` → the Rust fn that actually carries loft's
+    /// C-ABI for it, for the libraries where the two names DIFFER.
+    ///
+    /// A library registers its implementations by loft symbol
+    /// (`loft_register_bridges! { "S" => X__loft_bridge }`), and that mapping is
+    /// free to name an `X` other than `S`.  The interpreter follows it; native
+    /// codegen used to link the C symbol literally called `S`, so a remapped
+    /// symbol bound a *different* function — whatever else the library happened
+    /// to export under that name — and marshalled the call into it.  Filled by
+    /// [`crate::extensions::resolve_native_impl_symbols`] from the loaded
+    /// cdylibs' own registrations, so both backends resolve through one fact.
+    /// Absent key = the names agree (the common case, nothing to redirect).
+    pub native_impl_symbols: HashMap<String, String>,
     /// lib_plan-29 W1c: WASM bridge package directories — (`crate_name`,
     /// `pkg_dir`).  Populated from each loaded package's `[wasm.bridge].crate`.
     /// The `--html` driver builds `<pkg_dir>/wasm/` to a
@@ -3993,9 +4045,11 @@ impl Data {
             lazy_drivers: LazyDriverCache::default(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
+            preloaded_uses: HashMap::new(),
             applied: Vec::new(),
             ambiguous: HashMap::new(),
             unknown_key_fields: Vec::new(),
+            adopted_stubs: Vec::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -4009,6 +4063,7 @@ impl Data {
             native_packages: Vec::new(),
             c_libraries: Vec::new(),
             native_symbol_crates: HashMap::new(),
+            native_impl_symbols: HashMap::new(),
             wasm_bridge_packages: Vec::new(),
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
@@ -4021,6 +4076,25 @@ impl Data {
         self.use_names.clear();
         self.source = STD_SOURCE;
         self.use_names.insert("std".to_string(), STD_SOURCE);
+        // loft#925 — a library parsed before this program's parse began stays
+        // named, so its `use` binds what is already here instead of reading the
+        // file again.  No-op unless a caller called `freeze_uses`.
+        for (lib, &src) in &self.preloaded_uses {
+            self.use_names.insert(lib.clone(), src);
+        }
+    }
+
+    /// loft#925 — declare every library currently loaded to be part of the
+    /// PRELOADED base, so the parses that follow reuse it instead of re-reading
+    /// its files.
+    ///
+    /// Called once, on a `Data` whose parse is complete, by a caller that will
+    /// hand copies of it to several program parses.  The libraries named here
+    /// must actually be present in `definitions`: this only stops the loader,
+    /// it does not supply anything.
+    pub fn freeze_uses(&mut self) {
+        self.preloaded_uses = self.use_names.clone();
+        self.preloaded_uses.remove("std"); // `reset` seeds it unconditionally
     }
 
     /// @PLN12 phase 02 — transactional rollback for the REPL statement parser.
@@ -4593,10 +4667,14 @@ impl Data {
     pub fn set_returned(&mut self, d_nr: u32, tp: Type) {
         assert!(
             self.def(d_nr).returned.is_unknown(),
-            "Cannot change returned type on [{d_nr}]{} to {} twice was {} at {:?}",
+            // The two types read backwards for a while: the slot's CURRENT value was
+            // printed where the message says "to", and the incoming one where it says
+            // "was".  Named plainly now — this fires during compiler work, where reading
+            // it wrong costs a debugging cycle.
+            "Cannot set returned type on [{d_nr}]{} to {} — already {} at {:?}",
             self.def(d_nr).name,
-            self.def(d_nr).returned.name(self),
             tp.name(self),
+            self.def(d_nr).returned.name(self),
             self.def(d_nr).position
         );
         self.definitions[d_nr as usize].returned = tp;
@@ -4679,10 +4757,18 @@ impl Data {
             // pointer, not inline bytes — it cannot cause an infinite-size
             // cycle, and skipping it here is exactly what makes
             // `reference<Self>` legal.
+            //
+            // The FIELD's own deps are what says "reference", not anything about the
+            // child type: `def_referenced` records that a struct has been CONSTRUCTED
+            // somewhere (`build_object_ops` and the object literals set it), so gating
+            // the recursion on it silenced the cycle report for every cyclic struct a
+            // program actually uses — the only ones anybody writes.  `struct PENode {
+            // next: PENode }` then reached layout validation instead, and the reader got
+            // `type layout: PENode: field 'next' has no position (u16::MAX)` in place of
+            // "contains itself — use reference<PENode> to break the cycle".
             if let Type::Reference(child_nr, deps) = &a_type
                 && !deps.contains(&u16::MAX)
                 && self.def_type(*child_nr) == DefType::Struct
-                && !self.def_referenced(*child_nr)
                 && self.has_value_cycle(*child_nr, visiting)
             {
                 visiting.remove(&d_nr);
@@ -4967,6 +5053,76 @@ impl Data {
                 fn_name.strip_prefix("n_").unwrap_or(fn_name),
                 self.def(o_nr).position
             );
+        }
+        // loft#940 — the C97 residual on the FREE-function side, and the only silent corner of
+        // the three. `find_fn` resolves the METHOD spelling `t_<sig>_<name>` before the free
+        // `n_<name>`, and it reaches that spelling through the STDLIB row from every source —
+        // so a library's `fn f(x: τ, …)` is unreachable by its bare name not just from the
+        // consumer that imported it, but from the library's own other modules and from the
+        // declaring file itself. C97 keeps the DEFINITION legal on purpose (module-scoped, so
+        // the stdlib can grow without breaking a shipped library) and `mylib::f` still reaches
+        // it; what it left unsaid is that the bare name now belongs to the stdlib. The MAIN
+        // spelling of this clash is the C95 error above and the `both:`/`self` spelling is the
+        // shared-attribute-table error below — this corner only needed a voice.
+        if scoped
+            && !shadows_a_method
+            && !(is_both || is_self)
+            && crate::keys::shadowed_by_method_lint_enabled()
+            && let Some(arg) = arguments.first()
+        {
+            let tn = self.type_def_nr(&arg.typedef);
+            if tn != u32::MAX {
+                let sig = Self::sig_type_name(&self.def(tn).name, &arg.typedef);
+                let m_nr = self.def_nr(&format!("t_{}{}_{fn_name}", sig.len(), sig));
+                if m_nr != u32::MAX {
+                    // The package short-name for the qualified-call fix line. `use_names`
+                    // may hold an alias beside the real name for one source, so take the
+                    // lexicographic minimum rather than whichever the hash order offers —
+                    // a diagnostic that changes wording run to run is not a contract.
+                    let lib = self
+                        .use_names
+                        .iter()
+                        .filter(|(_, s)| **s == self.source)
+                        .map(|(n, _)| n.clone())
+                        .min()
+                        .unwrap_or_default();
+                    diagnostic!(
+                        lexer,
+                        Level::Warning,
+                        code = "shadowed-by-method",
+                        "`{fn_name}` is also a method on `{sig}` (defined at {}), and a call \
+                         `{fn_name}(<{sig}>, …)` resolves the method — so this function is \
+                         unreachable by its bare name, here and in anything that imports it",
+                        self.def(m_nr).position
+                    );
+                    lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: format!("rename it — the bare name `{fn_name}` is taken"),
+                        condition: Some(
+                            "the two are different functions, so callers want to say which"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "module-scoped names",
+                        concept_ref: "@F16",
+                    });
+                    lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: if lib.is_empty() {
+                            format!("call it qualified — `<package>::{fn_name}(…)`")
+                        } else {
+                            format!("call it qualified — `{lib}::{fn_name}(…)`")
+                        },
+                        condition: Some(
+                            "the name is deliberate and every call site can spell the package"
+                                .to_string(),
+                        ),
+                        edit: None,
+                        concept: "qualified calls",
+                        concept_ref: "@F16",
+                    });
+                }
+            }
         }
         let mut d_nr = own(self, &name); // C97: a library's mangled name is scoped to its own source
         if d_nr != u32::MAX {
@@ -5304,9 +5460,150 @@ impl Data {
         d_nr
     }
 
+    /// Point every `Type::Unknown(n)` whose def has since become real at that real type.
+    ///
+    /// An in-file forward reference resolves by ADOPTION: the name becomes a
+    /// `DefType::Unknown` stub, and the later declaration upgrades that stub in place,
+    /// same def number. Nothing then rewrites the `Type::Unknown(stub)` values already
+    /// stored — the mechanism that would, `rewrite_unknown_refs`, only runs for the
+    /// cross-file import case, whose list is empty for a single file. It works anyway,
+    /// because pass 2 RE-PARSES every type position with the declaration now visible.
+    ///
+    /// That leaves exactly one hole, and it is the one loft#944 fell into: a type frozen
+    /// by an `if self.first_pass` guard is never re-parsed, so it keeps the pass-1 stub
+    /// forever. A function's `returned` is set only in pass 1, so `fn mk() -> (integer, Q)`
+    /// with `Q` declared below held `(integer, unknown)` while its body produced
+    /// `(integer, Q)` — the two spellings of one type, unable to meet.
+    ///
+    /// Run at the end of pass 1, once every declaration has been seen. Defs that were
+    /// never stubs have no `Unknown(n)` pointing at them, so this is inert for them.
+    /// Note that `d_nr` was a forward-reference stub and has just been upgraded in place.
+    ///
+    /// Recorded at the moment it happens rather than inferred afterwards, because after the
+    /// fact an adopted stub is indistinguishable from any other real def — and the
+    /// difference matters: a generic template's type VARIABLE is also a def carrying
+    /// `Type::Unknown`, and sweeping those rewrote `vector<T>` to a concrete type and took
+    /// the whole stdlib down with `expected vector<text>, got vector<T>`.
+    pub fn note_stub_adopted(&mut self, d_nr: u32) {
+        self.adopted_stubs.push(d_nr);
+    }
+
+    pub fn resolve_adopted_stubs(&mut self, lexer: &mut Lexer) -> Vec<(u32, Type)> {
+        let adopted: Vec<(u32, Type)> = std::mem::take(&mut self.adopted_stubs)
+            .into_iter()
+            .map(|d| (d, self.definitions[d as usize].returned.clone()))
+            .filter(|(_, ret)| !matches!(ret, Type::Unknown(_)))
+            .collect();
+        for (stub_nr, target) in &adopted {
+            let (stub_nr, target) = (*stub_nr, target.clone());
+            for d_nr in 0..self.definitions.len() {
+                // Deliberately NOT `definitions[d].returned` for a function.  Pass 2
+                // re-parses a signature and recomputes its return type in full — including
+                // the tuple-return PROMOTION to `Reference(__tuple<…>)`, which asks whether
+                // an element carries a lifetime concern and therefore answered "no" while
+                // the member was unresolved.  Patching the member here would leave the
+                // promotion undone and, worse, hide the fact that it was: `parse_function`
+                // re-stores its result exactly when what pass 1 stored was unresolved, and
+                // a swept type is no longer unresolved.  That silently produced an
+                // unpromoted `-> (integer, ref(Q))` — which the interpreter tolerated and
+                // `--native` read back as 0.  Sweep only what pass 2 does NOT recompute.
+                let n_attrs = self.definitions[d_nr].attributes.len();
+                for a_nr in 0..n_attrs {
+                    if let Some(new_ty) = Self::rewrite_type_opt(
+                        &self.definitions[d_nr].attributes[a_nr].typedef,
+                        stub_nr,
+                        &target,
+                    ) {
+                        self.definitions[d_nr].attributes[a_nr].typedef = new_ty;
+                    }
+                }
+                // …and the function's variable table, which the two-pass parser
+                // pre-populates in pass 1.  A local declared with a forward-referenced
+                // type sits there as `Unknown(stub)`, and pass 2 — which resolves the name
+                // — is refused by `change_var_type` for disagreeing with its own pass-1
+                // slot.  Same rewrite, third place the type is stored.
+                self.definitions[d_nr]
+                    .variables
+                    .resolve_unknown_stub(stub_nr, &target);
+            }
+        }
+        // A tuple whose member was the stub could not register its `__tuple<…>` struct
+        // while the member was unresolved — `tuple_def` refuses that, because both the
+        // name and the frozen layout come from the members' spellings.  The members are
+        // final now, so mint it here.  A STRUCT FIELD needs this and cannot get it any
+        // other way: declarations are parsed in pass 1 only, so nothing re-parses
+        // `struct W { t: (integer, Q) }` to ask again, and `fill_database` then reported
+        // `field 't' of 'W' has no storage in that type's layout`.
+        for d_nr in 0..self.definitions.len() {
+            let ret = self.definitions[d_nr].returned.clone();
+            self.ensure_tuple_defs(lexer, &ret);
+            for a_nr in 0..self.definitions[d_nr].attributes.len() {
+                let ty = self.definitions[d_nr].attributes[a_nr].typedef.clone();
+                self.ensure_tuple_defs(lexer, &ty);
+            }
+        }
+        adopted
+    }
+
+    /// Does `t`, anywhere inside it, still name a type that has not resolved?
+    ///
+    /// A forward reference parses as `Type::Unknown(stub)` and stays that way until the
+    /// declaration adopts the stub. Any DERIVED artefact keyed on a type's spelling — a
+    /// synthetic def name, a frozen layout — must wait for that, so it needs the question
+    /// asked through wrappers and member lists rather than at the top level. Walks via
+    /// [`Type::for_each_child`], the one place that knows which variants carry children,
+    /// so a new variant inherits the answer instead of quietly returning `false`.
+    #[must_use]
+    pub fn type_has_unresolved(t: &Type) -> bool {
+        if matches!(t, Type::Unknown(_)) {
+            return true;
+        }
+        let mut found = false;
+        t.for_each_child(&mut |c| {
+            if Self::type_has_unresolved(c) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    /// Register the synthetic `__tuple<…>` struct for every tuple inside `tp`.
+    ///
+    /// A tuple is stored as that struct, and everything needing its record shape —
+    /// `type_def_nr`, `type_elm`, `fill_database` — resolves it by NAME.  A DECLARED
+    /// tuple registers it the moment the type is parsed (`sub_type`, `parse_type_full`),
+    /// so only an INFERRED one can be missing: `v = [(7, 8)]` names no type anywhere,
+    /// and neither does `t = (7, 8); v = [t]`.  The lookup then answered `u32::MAX` and
+    /// the literal was refused outright — "cannot build this record — its type never
+    /// resolved" (loft#943).
+    ///
+    /// Nested tuples register inside-out, because `tuple_def` sizes each member from
+    /// that member's own def.  A tuple with an unresolved member registers nothing —
+    /// `tuple_def` refuses it there, which is the one home for that rule (loft#944).
+    /// Idempotent.
+    pub fn ensure_tuple_defs(&mut self, lexer: &mut Lexer, tp: &Type) {
+        match tp {
+            Type::Tuple(elems) => {
+                for inner in elems {
+                    self.ensure_tuple_defs(lexer, inner);
+                }
+                self.tuple_def(lexer, elems);
+            }
+            Type::Vector(inner, _) | Type::RefVar(inner) | Type::Optional(inner) => {
+                self.ensure_tuple_defs(lexer, inner);
+            }
+            _ => {}
+        }
+    }
+
     /// Get a vector definition. This is a record with a single field pointing towards this vector.
     /// We need this definition as the primary record of a database holding a vector and its child records/vectors.
     pub fn vector_def(&mut self, lexer: &mut Lexer, tp: &Type) -> u32 {
+        // The element type has to have a record shape before this def can point at it:
+        // `parent` below is `type_def_nr(tp)`, and the literal that built this vector
+        // reaches `new_record` with the same lookup.  An inferred tuple element is the
+        // one shape that arrives unregistered (loft#943).
+        self.ensure_tuple_defs(lexer, tp);
         let fld_tp = Type::Vector(Box::new(tp.clone()), Deps::none());
         let fld = fld_tp.name(self);
         if self.def_nr(&fld) == u32::MAX {
@@ -5367,6 +5664,28 @@ impl Data {
     /// Idempotent: returns the existing def_nr on subsequent calls
     /// for the same tuple shape.
     pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
+        // Refuse while any member is still an unresolved forward reference.  BOTH things
+        // this builds are derived from the members' spellings, and neither survives the
+        // member resolving:
+        //
+        //  * the NAME.  `Type::Unknown` spells `"unknown"`, so a pass-1 `(integer, Q)` with
+        //    `Q` declared below registers `__tuple<integer,unknown>` while pass 2 asks for
+        //    `__tuple<integer,Q>` — a second def for one shape, which is what the H5
+        //    cross-pass guard reported as an internal compiler error (loft#944).
+        //  * the LAYOUT.  `element_stack_size`/`element_stack_align` have no arm for
+        //    `Unknown` and fall through to 0 and 1, so the member is frozen at ZERO WIDTH —
+        //    and the lookups above return early, so nothing ever recomputes it.  Making the
+        //    name stable without this would reuse that layout and trade a loud ICE for a
+        //    silently mis-sized tuple.
+        //
+        // Registration is simply deferred: the stub is adopted in place, and the pass-2
+        // call for the same shape mints it once with final members.  Every type-position
+        // caller discards this return value, and the emit-time callers run on resolved
+        // types.  `u32::MAX` is what `type_def_nr` already answers for an unregistered
+        // tuple, so the not-yet-known answer is spelled the way callers already read it.
+        if types.iter().any(Self::type_has_unresolved) {
+            return u32::MAX;
+        }
         let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
         let name = format!("__tuple<{}>", inner_names.join(","));
         if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
@@ -5631,6 +5950,25 @@ impl Data {
         d.def_type == DefType::Struct
             && d.attributes.is_empty()
             && matches!(&d.returned, Type::Reference(r, _) if *r == d_nr)
+    }
+
+    /// The name to LINK for a `#native "sym"` binding — `sym` itself unless the
+    /// owning library implements it under another name (loft#907).
+    ///
+    /// `#native "sym"` is an API id, not a promise about the Rust fn behind it: a
+    /// library registers its implementations by loft symbol
+    /// (`loft_register_bridges! { "sym" => other_fn__loft_bridge }`) and may point
+    /// one at a differently-named fn.  The interpreter follows that table; native
+    /// codegen has to be told the same answer, or it links whatever else the cdylib
+    /// exports under `sym` and marshals the call into it — silently, since a C-ABI
+    /// link matches on name alone.  [`native_impl_symbols`](Self::native_impl_symbols)
+    /// holds only the entries where the two names differ, so the ordinary binding
+    /// borrows straight through.
+    #[must_use]
+    pub fn link_symbol<'s>(&'s self, sym: &'s str) -> &'s str {
+        self.native_impl_symbols
+            .get(sym)
+            .map_or(sym, String::as_str)
     }
 
     /// Get the corresponding number from a definition on name.

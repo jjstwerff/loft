@@ -13,19 +13,38 @@ struct Item {
   val: integer,
 }
 
-struct DB {
+// The two collections live in SEPARATE structs on purpose. Two keyed collections
+// over one element type in ONE struct are auto-linked into a linked group — two
+// routes to a single record set, where filling either fills both (DATABASE.md
+// § Clearing one member of a linked group). This file is about slicing two
+// INDEPENDENT collections, so keeping them apart is what makes their contents
+// mean what the assertions below say.
+//
+// They were one struct until loft#924. Each member zeroed its own header at its
+// own position in the literal, so the second one silently truncated away what
+// the first had put in the shared record set, and the two fills read as
+// independent. Rejoining them would make `s` hold all seven records.
+struct Idx {
   idx: index<Item[nr, label]>,
+}
+
+struct Srt {
   s: sorted<Item[nr]>,
 }
 
-fn build() -> DB {
-  DB {
+fn build_idx() -> Idx {
+  Idx {
     idx: [
       Item { nr: 10, label: "a", val: 1 },
       Item { nr: 20, label: "b", val: 2 },
       Item { nr: 20, label: "c", val: 3 },
       Item { nr: 30, label: "d", val: 4 },
     ],
+  }
+}
+
+fn build_srt() -> Srt {
+  Srt {
     s: [
       Item { nr: 10, label: "a", val: 1 },
       Item { nr: 20, label: "b", val: 2 },
@@ -35,7 +54,8 @@ fn build() -> DB {
 }
 
 fn main() {
-  db = build();
+  db = build_idx();
+  srt = build_srt();
 
   // (1) range slice consumed directly by a for-loop
   range_sum = 0;
@@ -63,9 +83,9 @@ fn main() {
   assert(!db.idx[99, "z"], "missing exact key is null");
 
   // (5) sorted: exact-key lookup + full key-ordered iteration
-  assert(db.s[30].val == 4, "sorted exact lookup: {db.s[30].val}");
+  assert(srt.s[30].val == 4, "sorted exact lookup: {srt.s[30].val}");
   sorted_sum = 0;
-  for e in db.s { sorted_sum += e.val; }
+  for e in srt.s { sorted_sum += e.val; }
   assert(sorted_sum == 7, "sorted for sum: {sorted_sum}");
 
   print("502-keyed-slice-for-only ok\n");

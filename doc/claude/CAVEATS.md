@@ -658,21 +658,20 @@ tests no longer exist).  Guard scripts:
 `tests/scripts/48-spatial-construct-free.loft`,
 `tests/scripts/48b-spatial-slice.loft`.
 
-### P344 — a reused loop-variable name must keep a consistent type
-`for i in [1,2,3] {…}` then `for i in ["a","b"] {…}` in the SAME function
-fails to parse: `loop variable 'i' has type text but was previously used as
-integer`.  Same-type reuse is fine (`[1,2,3]` then `[4,5,6]`) and the same name
-works across DIFFERENT functions — the constraint is per-name TYPE consistency,
-not name uniqueness.  Root cause: loft's per-function flat variable table holds
-one slot + type per name (`src/variables/mod.rs:83` — *"Variables might exist in
-multiple scopes but not with different types"*); the guard in
-`parse_for_iter_setup` (`src/parser/collections.rs:1258`) is deliberate, not a
-bug.  **Decision:** accepted as intended (was @P344).  True per-loop scoping (a
-fresh slot per loop body that shadows the prior binding) is a core-resolver +
-slot-liveness model change, deferred — distinct names are a zero-cost workaround
-(`for n in …` / `for s in …`).  Regression guard:
-`tests/parse_errors.rs::shadow_different_type` +
-`tests/scripts/36-parse-errors.loft:185`.
+### ~~P344~~ — a reused loop-variable name must keep a consistent type
+**Fixed (loft#915).** Two `for` loops in one function may reuse a name at
+different element types: `for i in [1,2,3] {…}` then `for i in ["a","b"] {…}`
+compiles.  Each loop binds its OWN variable, so the second inherits no type, dep
+or storage from the first — which is also what makes loft#690's corruption
+(reading B's records through A's layout) unreachable by construction rather than
+by diagnostic.  The loop variable stays function-scoped: `i` after the loop still
+reads the value the last loop left, so nothing that read it before changes.
+
+What is still rejected is a loop variable landing on a plain function local
+(`x = 5; for x in …` → *"loop variable 'x' shadows a local named 'x'"*) and
+nested same-name loops.  Guards:
+`tests/scripts/915-loop-variable-per-loop.loft` (13 cells, both backends),
+`tests/parse_errors.rs::shadow_different_type`, `tests/scripts/36-parse-errors.loft`.
 
 ---
 
@@ -690,7 +689,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | ~~P54~~ | — | **Done** — first-class `JsonValue` enum + `json_parse` shipped (`default/06_json.loft`); old text-based JSON surface withdrawn.  Residual: Q1 auto-wrap diagnostics (QUALITY.md § Open work) |
-| P344   | —         | Accepted — one slot+type per name in the flat per-function table; distinct names for different-typed loops.  Regression: `tests/parse_errors.rs::shadow_different_type` |
+| ~~P344~~ | — | **Done** (loft#915) — each `for` loop binds its own variable, so two loops in one function may reuse a name at different element types.  A loop variable landing on a plain local is still rejected.  Regression: `tests/scripts/915-loop-variable-per-loop.loft` |
 | ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
 | ~~P137~~ | — | **Done** — `Instant::now()` / `n_ticks` gated on `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature.  Regression: 4 guards in `tests/html_wasm.rs` behind a serial mutex |
 

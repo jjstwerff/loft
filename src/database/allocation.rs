@@ -294,6 +294,18 @@ impl Stores {
                 }
                 empty(Some(cur), Vec::new())
             }
+            // A trie / spatial view drops the TREE and keeps its leaves, because the
+            // leaves are the primary's element records.  One block: the owning arms free
+            // exactly `cur` beside the leaves they walk, so the tree's interior nodes
+            // live inside it and this releases the whole spine (loft#927 — these became
+            // reachable as views the moment a trie could join a group at all).
+            Parts::Radix(_, _) | Parts::Trie(_, _) => {
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return empty(None, Vec::new());
+                }
+                empty(Some(cur), Vec::new())
+            }
             Parts::Index(_, _, _) => empty(None, Vec::new()),
             _ => self.owned_walk(rec, tp, false),
         }
@@ -854,12 +866,47 @@ impl Stores {
         // whole-store freed: refuse loudly so the wrong-free site surfaces
         // instead of corrupting the entire runtime.
         if al == 0 && self.stack_store_at_zero {
+            // Count it before printing: stderr is where this went to die.  A test harness
+            // reads the counter and fails the script that raised it (loft#920).
+            crate::keys::note_stack_free_refusal();
+            // Name the SITE that attempted it.  `rec`/`pos`/`var` are routinely
+            // 0/0/'' here — the wrong free comes from a temp, so they identify
+            // nothing, and three attempts on loft#920 were sent down the wrong
+            // path by a message that named no site.  A bare `pc=` was not enough
+            // either: it is a position in the WHOLE bytecode stream, stdlib
+            // included, and `introspect` prints only the user file's, so nothing
+            // a reader has in hand can resolve it.  Resolve it here through the
+            // same published span table the crash report uses.
+            let at = crate::crash_report::source_loc_for_pc(self.alloc_pc).map_or_else(
+                || format!("pc={}", self.alloc_pc),
+                |p| format!("{}:{}:{} (pc={})", p.file, p.line, p.pos, self.alloc_pc),
+            );
+            // The source position is the NEAREST recorded span at or before the pc, and
+            // the span map is sparse — inside the stdlib it can name a line several
+            // statements away.  The opcode is exact, so print both: the line orients the
+            // reader, the op says what actually ran.
+            let op = crate::crash_report::last_op_name();
+            let op = if op.is_empty() {
+                String::new()
+            } else {
+                format!(", op={op}")
+            };
             eprintln!(
                 "loft: BUG (#306): refused to free the stack store (#0) \
-                 (rec={}, pos={}, var='{name}') — a stack-record ref was \
+                 (rec={}, pos={}, var='{name}', at {at}{op}) — a stack-record ref was \
                  treated as an owned heap store",
                 db.rec, db.pos,
             );
+            // Record it as a free site even though the free was REFUSED: the
+            // refusal keeps store 0 alive, but whatever produced this ref is
+            // still wrong, and a later strict-stores access report naming this
+            // PC is what ties the two halves together.  Returning before the
+            // `strict_note_free` below meant `LOFT_STRICT_STORES=1` — the
+            // instrument this fault's own message recommends — could never see
+            // the one free that matters.
+            if crate::keys::strict_stores() {
+                crate::keys::strict_note_free(al, self.alloc_pc, name);
+            }
             return;
         }
         // @PLN130 F8 — remember WHERE a store died, so a later access through a stale

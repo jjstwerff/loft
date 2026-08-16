@@ -409,8 +409,18 @@ impl Parser {
             let t = self.expression(val);
             if self.lexer.has_token(",") {
                 // T1.2: Tuple literal — (expr, expr, ...)
+                //
+                // A struct-literal member arrives as `Rewritten(Reference(S))` (#319).
+                // That wrapper is a parse-internal marker saying the value was built in
+                // place, not a type a member can HAVE, and every consumer that matches on
+                // the constructor misses it: `set_field` refused "Cannot assign to field
+                // '_0' of type S", `get_val` refused "Field access not supported on type
+                // S", and a bare `t = (S { … }, k)` reached codegen as the internal error
+                // "emit_tuple_put_ops: unsupported elem Rewritten(…)".  `parse_vector` and
+                // `parse_vector_for` already peel it from a vector's ELEMENT type for the
+                // same reason; a tuple member is the same fact one level in (loft#943).
                 let mut values = vec![val.clone()];
-                let mut types = vec![t];
+                let mut types = vec![t.unrewritten()];
                 loop {
                     if self.lexer.peek_token(")") {
                         break;
@@ -418,7 +428,7 @@ impl Parser {
                     let mut v = Value::Null;
                     let t2 = self.expression(&mut v);
                     values.push(v);
-                    types.push(t2);
+                    types.push(t2.unrewritten());
                     if !self.lexer.has_token(",") {
                         break;
                     }
@@ -1808,10 +1818,14 @@ impl Parser {
         block: bool,
         parent_tp: &Type,
     ) -> Type {
-        let Some(id) = self.lexer.has_identifier() else {
+        let Some(src_id) = self.lexer.has_identifier() else {
             diagnostic!(self.lexer, Level::Error, "Expect variable after for");
             return Type::Null;
         };
+        // loft#915 — the name this comprehension's loop BINDS.  Its variable and its
+        // `#index` / `#next` companions all hang off it, so a second comprehension over
+        // the same name in one function shares nothing with the first.
+        let id = self.vars.loop_binding(&src_id);
         self.lexer.token("in");
         let loop_nr = self.vars.start_loop();
         let mut expr = Value::Null;
@@ -1850,7 +1864,11 @@ impl Parser {
             self.vars.defined(iv);
             (iv, None)
         };
-        let for_var = self.create_var(&id, &var_tp);
+        let for_var = self.create_loop_var(&id, &var_tp);
+        // The body reads the name the program wrote (loft#915).
+        if id != src_id {
+            self.vars.set_name(&src_id, for_var);
+        }
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {
             let mut if_expr = Value::Null;
@@ -2244,7 +2262,15 @@ impl Parser {
         // an untyped literal.  A declared element type must NOT be silently
         // promoted to a wider type by `parse_item` (that changes the element
         // storage width and loses data); require an explicit `as` cast.
-        let declared = !assign_tp.is_unknown();
+        // loft#944 — and NOT declared when it carries an unresolved member.  `declared`
+        // means "the author wrote this element type, so do not silently widen it", and a
+        // pass-1 type holding a forward-referenced member is not something the author
+        // wrote — it is the parser's placeholder for it.  Treating it as declared made
+        // pass 2 refuse its own resolved literal: "cannot store (integer, Q) elements in a
+        // vector<(integer, unknown)>".  `is_unknown()` alone sees only the bare and
+        // vector-wrapped forms.
+        let declared =
+            !assign_tp.is_unknown() && !crate::data::Data::type_has_unresolved(&assign_tp);
         let is_field = self.is_field(val);
         let is_var = matches!(val, Value::Var(_));
         // Empty `[]`.  A new variable / struct field keeps the lightweight
@@ -2401,6 +2427,15 @@ impl Parser {
         is_field: bool,
     ) -> (Type, Vec<Value>) {
         let mut ls = Vec::new();
+        // loft#944 — in pass 1 an element type naming a type declared LOWER in the file is
+        // still a stub, so there is no record shape and every step below asks for one:
+        // `new_record` reports Fatal, and the append path reaches `data.def(u32::MAX)`.
+        // Nothing built here survives anyway — pass 1's IR is regenerated in pass 2, which
+        // sees the resolved element and builds it properly.  Emit nothing rather than
+        // half of it.
+        if self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
+            return (tp, ls);
+        }
         // loft#703 — a keyed literal in VALUE position allocates its accumulator's store
         // outright rather than as a side effect of the first `OpNewRecord`.  Two things
         // need it said: an EMPTY one has no element to allocate it at all (the temp
@@ -2727,7 +2762,41 @@ impl Parser {
         declared: bool,
         res: &mut Vec<Value>,
     ) -> Option<Type> {
-        let mut p = Value::Var(elm);
+        // `elm` is offered as an in-place construction target so a struct element
+        // builds straight into the slot `OpNewRecord` carved out (`parse_object`
+        // takes that path whenever it is handed a `Var` that owns a store).  A
+        // TUPLE element is not built as one record — `emit_tuple_set_ops` writes
+        // each member at its own offset — so offering the slot lets the tuple
+        // literal's FIRST member consume it: `[(S { … }, k)]` wrote S's fields
+        // directly into the element and then handed that valueless statement list
+        // to `OpCopyRecord` as its SOURCE.  Only the first member could ever fail
+        // this way, because `(a, b, …)` parses member 0 into the caller's value and
+        // every later member into a fresh one (loft#942).
+        // Peel `Rewritten` first: a literal in RETURN position gets its element type
+        // from the function's return type and arrives wrapped (the unwrap below runs
+        // only AFTER the element is parsed, which is too late to decide this).
+        let elem_is_tuple = {
+            let mut t: &Type = in_t;
+            while let Type::Rewritten(inner) = t {
+                t = inner;
+            }
+            matches!(t.base(), Type::Tuple(_))
+        };
+        // A `(`-leading element is a parenthesised expression or a tuple literal, and
+        // `(a, b, …)` parses member 0 into the caller's value while every later member
+        // gets a fresh one.  Offering the slot therefore lets the FIRST member consume
+        // it, and the type cannot tell us to stop: in return position the element type
+        // is inferred FROM this literal, so it is still `Unknown` when member 0 is
+        // seeded and only resolves by member 1 — which is exactly why the first member
+        // was the only one that ever failed.  Keying on the token instead is decidable
+        // at the one moment the decision has to be made.  A parenthesised struct
+        // literal `[(S { … })]` loses the in-place build and takes the allocate-then-
+        // copy path every non-first member already takes; it stays correct.
+        let mut p = if elem_is_tuple || self.lexer.peek_token("(") {
+            Value::Null
+        } else {
+            Value::Var(elm)
+        };
         // #247: isolate THIS element's capturing-lambda signal.  A capturing
         // lambda makes `emit_lambda_code` set `last_closure_work_var` (and emit
         // a Block, not a bare FnRef); a non-capturing lambda / non-lambda leaves
@@ -2762,6 +2831,21 @@ impl Parser {
             *in_t = t.clone();
         }
         if t.is_unknown() {
+            t = in_t.clone();
+        }
+        // loft#944 — the same adoption for a type that is unresolved INSIDE rather than at
+        // the top: a pass-1 element type carrying a forward-referenced member
+        // (`(integer, unknown)`) is a placeholder, and the element the author actually
+        // wrote is the resolved one.  Only when the other side is fully resolved, so this
+        // cannot swap one placeholder for another.  Without it pass 2 refused its own
+        // literal — "No common type (integer, Q) for vector (integer, unknown)".
+        if crate::data::Data::type_has_unresolved(in_t)
+            && !crate::data::Data::type_has_unresolved(&t)
+        {
+            *in_t = t.clone();
+        } else if crate::data::Data::type_has_unresolved(&t)
+            && !crate::data::Data::type_has_unresolved(in_t)
+        {
             t = in_t.clone();
         }
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
@@ -2831,6 +2915,16 @@ impl Parser {
                 in_t.name(&self.data),
                 in_t.name(&self.data)
             );
+        } else if self.first_pass
+            && (crate::data::Data::type_has_unresolved(&t)
+                || crate::data::Data::type_has_unresolved(in_t))
+        {
+            // loft#944 — neither side is a type yet.  A forward-referenced element member
+            // (`vector<(integer, Q)>` with `Q` declared below) is `Unknown(stub)` for all of
+            // pass 1, so `convert` fails and the arms below report a precision loss between
+            // two spellings of the SAME type — an error that aborted the run before pass 2
+            // could re-check against the resolved element.  Say nothing; pass 2 decides.
+            // The struct-field store guard (`objects.rs`) already works this way.
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
@@ -2986,6 +3080,15 @@ impl Parser {
         let mut ls = Vec::new();
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
+        if ed_nr == u32::MAX && self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
+            // loft#944 — "never resolved" is the wrong word for it in pass 1: the element
+            // names a type declared LOWER in the file, so it resolves at the end of this
+            // pass and pass 2 builds the record normally.  This diagnostic is Fatal, so
+            // firing it here aborted the whole compile on a program that is correct —
+            // `v: vector<(integer, Q)> = [(71, Q { … })]` with `Q` below.  Emit nothing and
+            // let pass 2 decide; a name that is still unresolved THERE reports below.
+            return ls;
+        }
         if ed_nr == u32::MAX {
             // The element type never resolved, so there is no record shape to build.  An
             // `assert_ne!` here made that an internal compiler error on ordinary source:
@@ -3236,6 +3339,26 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
+            } else if self.is_null_source(p) && Self::is_collection_type(in_t.base()) {
+                // A `null` ELEMENT of a collection-typed element (`vector<vector<T>?>`,
+                // and the keyed kinds) is the EMPTY collection — the same rule a `null`
+                // reaching a collection FIELD takes (loft#922), because the slot is the
+                // same: a 4-byte record id where `0` already means "no records".
+                //
+                // Without this arm the element fell to the generic `set_field` below,
+                // which wrote what `convert` had made of the `null`: a REFERENCE sentinel
+                // (`OpNullRefSentinel`, a 16-byte DbRef with `store_nr = u16::MAX`), the
+                // right null for a vector VARIABLE, whose slot is a DbRef.  Writing it
+                // through the element's 4-byte setter aborted the compiler with an
+                // internal assertion — `expected 8B on stack but … pushed 16B` — so
+                // `vv += [null]` never reached a diagnostic, let alone a value.
+                //
+                // Telling this empty from an absent element is the same open question
+                // the FIELD has, and has one home: loft#917's reader half.
+                ls.push(self.cl(
+                    "OpSetInt4",
+                    &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+                ));
             } else if let Some(op) = self.narrow_elm_set(in_t, elm, p) {
                 // @PLN25 item 2 / #624 — narrow integer element write, shared with
                 // the slice-materialise site.  The fallback (an element outside the
@@ -3595,6 +3718,13 @@ impl Parser {
                 // passed to the write path.
                 self.vector_of(tp)
             }
+            // @PLN25 — `Optional(τ)` is a compile-time nullability marker over τ's own
+            // storage, so it names the SAME db type.  Its sibling resolvers
+            // (`type_def_nr`, `type_elm`, `rust_type`, `element_stack_size`) all peel;
+            // this one did not, so an `Optional`-typed collection answered `u16::MAX` —
+            // the "no such type" sentinel — which callers read as "not a collection"
+            // (loft#909).
+            Type::Optional(inner) => self.get_type(inner),
             _ => u16::MAX,
         }
     }
@@ -3637,19 +3767,7 @@ fn ensure_tuple_defs_for_capture(
     lexer: &mut crate::lexer::Lexer,
     tp: &Type,
 ) {
-    match tp {
-        Type::Tuple(elems) => {
-            // Recurse first so nested tuples register inside-out.
-            for inner in elems {
-                ensure_tuple_defs_for_capture(data, lexer, inner);
-            }
-            data.tuple_def(lexer, elems);
-        }
-        Type::Vector(inner, _) | Type::RefVar(inner) => {
-            ensure_tuple_defs_for_capture(data, lexer, inner);
-        }
-        _ => {}
-    }
+    data.ensure_tuple_defs(lexer, tp);
 }
 
 /// Plan-22 phase 02d-ii — canonical cell-struct name for a scalar

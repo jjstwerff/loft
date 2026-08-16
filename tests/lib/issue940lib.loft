@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#940 — a library free function the STDLIB declares as a METHOD on its first
+// argument's type is unreachable by its bare name.  @PLN102 C97 keeps the definition
+// legal (module-scoped, reached as `issue940lib::clamp`); the `shadowed-by-method`
+// warning is what C97 left unsaid.
+//
+// The two SUBJECT functions differ only in visibility, which the boundary matrix showed
+// is not the axis: a private fn is shadowed for its own module's bare calls exactly as a
+// `pub` one is for a consumer's.  The two QUIET functions are the exemptions.
+
+pub struct Span { lo: integer, hi: integer }
+
+// SUBJECT — the stdlib has `clamp(both: float, …)`, so `t_5float_clamp` takes every
+// bare `clamp(<float>, …)` call and this definition is unreachable by that spelling.
+pub fn clamp(x: float, lo: float, hi: float) -> float {
+  if x < lo { lo } else if x > hi { hi } else { x }
+}
+
+// SUBJECT — same shadow, private.  `pub` is not the axis: the shadow is decided by the
+// receiver type's method table, which a bare call in THIS file consults too.
+fn floor_mod(ma: integer, mb: integer) -> integer {
+  ma - mb
+}
+
+// QUIET — `sum_of` is a stdlib FREE function (`n_sum_of`), not a method.  The import
+// lands in the consumer's own name row, which outranks the stdlib row, so this one IS
+// reachable bare and there is nothing to warn about.
+pub fn sum_of(v: vector<integer>) -> integer {
+  len(v) + 900
+}
+
+// QUIET — the stdlib's `find` is a method on `text`, not on this library's own `Span`,
+// so arg-type dispatch keeps this one reachable.  Warning here would fire on every free
+// function that merely shares a name with a method on some OTHER receiver type, which is
+// the case `tests/scripts/06-function.loft` relies on.
+pub fn find(s: Span, v: integer) -> integer {
+  if v < s.lo { s.lo } else if v > s.hi { s.hi } else { v }
+}
+
+// Proves the private SUBJECT really is unreachable by its bare name: this calls
+// `floor_mod(7, 3)` — the library's own answer is 4, the stdlib's is 1.
+pub fn private_caller() -> integer {
+  floor_mod(7, 3) ?? -1
+}

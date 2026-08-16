@@ -562,6 +562,7 @@ impl Parser {
         } else if self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
             self.data.definitions[d_nr as usize].def_type = DefType::Enum;
             self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
+            self.data.note_stub_adopted(d_nr);
         } else if self.first_pass {
             // a name that already exists must not be reused — that
             // would overwrite the existing definition's type and crash in
@@ -645,6 +646,7 @@ impl Parser {
             {
                 self.data.definitions[existing as usize].position = self.lexer.pos().clone();
                 self.data.definitions[existing as usize].def_type = DefType::Type;
+                self.data.note_stub_adopted(existing);
                 adopted = existing;
             } else if existing != u32::MAX {
                 let prev_pos = self.data.def(existing).position().clone();
@@ -1654,15 +1656,17 @@ impl Parser {
                 let fn_name = self.data.definitions[ctx].name();
                 self.vars.debug_dead_store_dump(fn_name, body, &self.data);
             }
+            let body = self.data.definitions[self.context as usize].code().clone();
             if !is_stub {
-                let body = self.data.definitions[self.context as usize].code().clone();
                 self.vars.test_used(&mut self.lexer, &self.data, &body);
             }
             // P246 follow-up — UPPER_CASE locals without `const`
             // violate the "UPPER_CASE means immutable constant"
             // convention.  Run once per function in the second pass
-            // (after const_param flags are settled).
-            self.vars.warn_upper_case_locals(&mut self.lexer);
+            // (after const_param flags are settled).  Takes the body for the
+            // same reason `test_used` does: a name the code never mentions is
+            // a pass-1 placeholder, not a local of this function.
+            self.vars.warn_upper_case_locals(&mut self.lexer, &body);
             // Plan-07 phase 4e.2 — undefended fault-site warning.
             // Walks this function's body looking for fault-prone op
             // calls (OpDivInt / OpRemInt / OpGetVector / OpVectorRef /
@@ -1671,7 +1675,6 @@ impl Parser {
             // skip pattern applies.  Silenceable via
             // `LOFT_NO_WARN_RUNTIME=1` env var.  Second-pass only —
             // first pass doesn't have the swap-pass results yet.
-            let body = self.data.definitions[self.context as usize].code.clone();
             self.warn_undefended_fault_sites(&body);
             // @PLN87 P3 (W4) — a `&` on a heap struct param that is never reassigned
             // has no effect (field mutation propagates regardless).
@@ -2707,6 +2710,48 @@ impl Parser {
                         // default) as a no-op, for back-compat with existing source.
                         self.has_deprecated_not_null();
                         self.lexer.closing_angle();
+                        // loft#923 — a KEYED collection is not a vector element, and
+                        // saying so here is the whole of it: this is the one
+                        // chokepoint every `vector<…>` element passes through.
+                        //
+                        // Nothing could ever fill one. A literal element types as the
+                        // CONTENT struct ("cannot store vector<E> elements in a
+                        // vector<hash<E,[\"k\"]>>"), and appending a keyed LOCAL walked
+                        // off the type table. `--native` did not even get that far: the
+                        // element type was never created, so the generated `init()`
+                        // named a binding no line made and rustc refused the program.
+                        // So it could be declared, and only declared.
+                        //
+                        // Refused where it is written rather than given storage, the
+                        // same call DESIGN_DECISIONS C113 makes for two `index`
+                        // members over one key — and the cure named below is a real
+                        // one that costs nothing the element would not have cost.
+                        //
+                        // Named by its KIND, not by `Type::name`: a keyed type's
+                        // registered name carries its key list in the schema's own
+                        // spelling (`sorted<E,[("k", true)]>`), which is not what the
+                        // author wrote and not something to hand back to them.
+                        let kind = match tp.base() {
+                            Type::Hash(_, _, _) => Some("hash"),
+                            Type::Sorted(_, _, _) => Some("sorted"),
+                            Type::Index(_, _, _) => Some("index"),
+                            Type::Radix(_, _, _) => Some("spatial"),
+                            Type::Trie(_, _, _) => Some("trie"),
+                            _ => None,
+                        };
+                        if let Some(kind) = kind {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `{kind}` cannot be a vector ELEMENT — a keyed \
+                                 collection has no element form anything can write, so \
+                                 `vector<{kind}<…>>` could only ever be declared and \
+                                 stay empty. Hold it in a struct and make a vector of \
+                                 THAT: the extra record is what the element would have \
+                                 been anyway."
+                            );
+                            return Some(Type::Unknown(0));
+                        }
                         // @PLN25 storage-vs-access-nullability: DENSE by default; the
                         // leading `?` (`vector<?S>`) opts in to a nullable element,
                         // synthesising the `__nullable<S>` enum.
@@ -3158,6 +3203,7 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned =
                     Type::Reference(d_nr, crate::data::Deps::none());
+                self.data.note_stub_adopted(d_nr);
             } else {
                 let prev_pos = self.data.def(d_nr).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();
@@ -3966,6 +4012,52 @@ impl Parser {
             // and the attribute flag cannot disagree.
             if let Type::Integer(ref mut spec) = a_type {
                 spec.not_null = !nullable;
+            }
+            // loft#917 — a `?` on a COLLECTION field is a promise the storage cannot keep.
+            // The field holds a 4-byte record id and starts zeroed, so `null` and `[]` write
+            // the identical zero, while `f == null` lowers to `OpVectorIsNull` — a test of the
+            // store_nr sentinel, which a field read never produces. The guard takes the
+            // present branch every time. A distinct absent marker would change the stored
+            // format of every existing collection field, so this cannot be repaired under the
+            // field's own declaration; saying so at the declaration is what IS answerable.
+            if crate::keys::nullable_collection_lint_enabled()
+                && let Type::Optional(inner) = &a_type
+                && matches!(
+                    inner.as_ref(),
+                    Type::Vector(_, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                )
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    code = "nullable-collection-field",
+                    "field `{a_name}` is declared `?`, but a collection field cannot read back \
+                     as null — it stores a record id whose zero already means empty, so \
+                     `{a_name} == null` is always false"
+                );
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: format!("test `len({a_name}) == 0` for absence, and clear it with `[]`"),
+                    condition: None,
+                    edit: None,
+                    concept: "absence of a collection",
+                    concept_ref: "@F1",
+                });
+                self.lexer.fix_last(crate::diagnostics::Fix {
+                    kind: crate::diagnostics::FixKind::Mechanical,
+                    title: format!(
+                        "drop the `?` from `{a_name}` — it promises what the field cannot do"
+                    ),
+                    condition: None,
+                    edit: None,
+                    concept: "nullable fields",
+                    concept_ref: "@F1",
+                });
             }
             self.reject_duplicate_index(d_nr, a_name, &a_type);
             let a = self

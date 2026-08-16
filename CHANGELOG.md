@@ -26,6 +26,180 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Checking a collection field against `null` no longer damages the record
+
+Comparing a `vector` field with `null` freed the storage of the struct it was read out of. The
+next read of that field then returned whatever had since been put in its place:
+
+```loft
+h = Holder { vec: [71, 82, 93] };
+x = h.vec == null;
+filler: vector<integer> = [11, 22, 33, 44, 55, 66, 77, 88];
+len(h.vec ?? [])          // said 8 — the filler's length — instead of 3
+```
+
+No warning, no crash, on both backends: one variable quietly reading another's data. Fixed.
+
+### Using a type inside a tuple before you declare it
+
+loft lets you use a struct before the line that declares it — except inside a tuple, where
+it did not work at all:
+
+```loft
+fn main() { t: (integer, Player) = (1, Player { id: 7 }); }
+struct Player { id: integer }
+```
+
+That reported `cannot change type from (integer, unknown) to (integer, unknown)` — the same
+type printed twice — and some spellings reported an internal compiler error instead. It now
+works, in every place a tuple can appear: a local, a vector element (with or without writing
+the type), a struct field, a nested tuple, a function parameter.
+
+One case is still not supported, and now says so plainly instead of crashing: a function that
+*returns* a tuple containing a type declared further down. Move that declaration above the
+function and it works — the error message tells you exactly that.
+
+### Lists of tuples you did not have to write the type of
+
+Writing the type out worked; letting loft work it out did not.
+
+```loft
+v = [(7, 8), (9, 10)];      // "cannot build this record — its type never resolved"
+```
+
+Every tuple shape was refused this way, including one with no structs in it at all, and so was
+the version that puts the tuple in a variable first (`t = (7, 8); v = [t]`). The declared
+spelling — `v: vector<(integer, integer)> = [(7, 8)]` — was fine, so the fix is not a new
+feature: it is the same list, written the shorter way.
+
+A tuple with a struct in it had a second problem, and this one did not need a list at all:
+
+```loft
+t = (Player { id: 1 }, 50);   // "internal compiler error"
+```
+
+Both are fixed. Tuples of any shape now work whether you write the type or not, nested tuples
+included, and a struct can sit in any position.
+
+One related case is still open ([#944](https://github.com/loft-lang/loft/issues/944)): a
+struct used in a tuple *above* the line that declares it. Declare it first, and everything
+here works.
+
+### A vector of tuples that start with a struct
+
+Pairing a record with a number and keeping a list of them is an ordinary thing to want:
+
+```loft
+scores: vector<(Player, integer)> = [(Player { id: 1, name: "ana" }, 50)];
+```
+
+Written that way round it did not work, and it went wrong differently depending on what you
+did with it — reading one back crashed, two or more in the same literal refused to compile,
+and building the list with `+=` gave you back a player whose fields were all zero, with no
+message at all. Writing the number first (`vector<(integer, Player)>`) worked fine, which made
+the whole thing look like several unrelated bugs.
+
+It was one: the first thing inside the brackets was being built directly into the list's own
+slot, which is right for `[Player { … }]` but not for a tuple, where each part has its own
+place in the element. Both orders now work, and so do three-part tuples and tuples of two
+structs.
+
+### Taking a collection out of a tuple return, in a loop
+
+A function can hand back several things at once, and the natural way to use one is to
+destructure it straight back into the variable you passed in:
+
+```loft
+fn find_or_add(keys: vector<integer>, k: integer) -> (vector<integer>, integer) { … }
+
+for item in items {
+  (keys, at) = find_or_add(keys, item.id);
+}
+```
+
+From the second turn of that loop, `keys` was empty. Not an error — just empty, and
+`--native` gave the right answer while the interpreter gave the wrong one. If the function
+appended to the vector instead of only reading it, the run crashed rather than lying.
+
+The value a tuple return is built in belongs to the call, and the next turn of the loop
+reclaimed it while the variable was still pointing at it. Destructuring now takes a copy the
+variable owns, so it keeps its value for as long as the variable does. The same fix covers a
+struct taken out of a tuple, which was quietly losing its fields the same way.
+
+### Two `for` loops in one function can share a name
+
+`for i in names { … }` followed by `for i in 0..3 { … }` used to be a compile error —
+the second loop was handed the first loop's variable, so the name could only ever hold
+one type per function. Consumers worked around it by prefixing every loop variable with
+something per-function (`wt_i`, `tslr_w`), which carries no meaning and is what a reader
+meets first in every loop.
+
+Each `for` now binds its own variable, so two loops can spell the name the same way at any
+element types. Reading the variable after the loop still works and still gives the last
+loop's value, so nothing that relied on that changes.
+
+Nested loops are the exception — `for i { for i { } }` is still rejected, because the inner
+binding would take over `i` for the rest of the outer body — and so is a loop variable that
+lands on a plain local you already have, which the compiler names and tells you how to fix.
+
+### A struct field you declared with `?` can now actually be empty
+
+Writing `?` on a struct-typed field is how you say "this may be absent". Until now it did
+not do that. A field declared `maybe: Inner?` was stored exactly like a field without the
+`?`, so there was nowhere to record that nothing was there:
+
+```loft
+struct Inner { z: integer }
+struct H { maybe: Inner?, tag: integer }
+
+h = H { maybe: null, tag: 0 };
+println("{(h.maybe ?? Inner{z:-1}).z}");   // was 0  — now -1
+println("{h.maybe == null}");              // was false — now true
+
+h.maybe = Inner { z: 9 };
+h.maybe = null;                            // was ignored — now clears
+println("{h.maybe == null}");              // was false — now true
+```
+
+All three readings of that declaration disagreed with it: `??` never reached its default,
+`== null` was always false, and assigning `null` kept the value that was already there.
+A program that stored `null` to let go of something optional quietly held on to it, and a
+program that checked for `null` before using a field took the "it's there" branch every
+time. Both on both backends, and neither said anything.
+
+The field now carries a small marker saying whether it holds a value, which is the same
+representation `vector<Inner?>` elements have used for a while — so `??`, `== null`, plain
+reads and assignment all agree with each other and with what you wrote. A field with **no**
+`?` is unchanged: it cannot be absent, so it stores exactly what it did before and pays
+nothing for the marker.
+
+Two smaller things came with it. A struct literal that simply left such a field out did not
+compile at all under `--native`; it does now. And a `?` field costs 8 bytes more than it
+did — `sizeof` on a struct containing one has grown, which matters only if you were
+depending on the exact number.
+
+### A struct literal that leaves a field out will mention it
+
+Leaving a field out of a struct literal gives it that type's zero. That is documented and
+unchanged — but nothing distinguished it from someone writing the zero on purpose, and it
+goes wrong exactly where zero is a real value:
+
+```
+advice[omitted-field-zero]: `EditorInput` literal omits the field `palette_index`, which
+takes the type's zero — nothing in the declaration chose that value
+```
+
+The cure already existed and was simply hard to find: give the field a default where you
+declare it (`palette_index: integer = -1`). Adding one is additive, so callers that already
+pass the field keep working.
+
+This is advice, never an error, and it stays quiet where the code already says what it
+means: a field **with** a declared default, a nullable field, a collection or text field
+(whose zero is "empty", which is the only default you could declare anyway), and a bare
+`Thing {}` — that asks for the whole default record, and reads that way. It only speaks for
+the partial literal, where some fields were singled out and a reader cannot tell whether the
+rest were considered. `LOFT_NO_OMITTED_FIELD=1` turns it off.
+
 ### A mistyped key field says so, instead of crashing the compiler
 
 Naming a key a collection's element type does not have — a typo, or the `hash<key, Value>`
@@ -39,6 +213,49 @@ error: Field `idx`: `ca_kye` is not a field of `At`, so it cannot be a key — d
 ```
 
 All five keyed kinds are covered: `hash`, `index`, `sorted`, `spatial` and `trie`.
+
+### `loft test` stops recompiling your library once per test file
+
+A suite of test files that all `use` the same library used to compile that library
+again for every one of them — twice for each, in fact, since the parser reads a file
+twice. Nothing was shared between the files, so the cost was the *product* of how many
+test files you have and how big your library is: a new module slowed down every test
+file, and a new test file re-paid for every module.
+
+```
+20 test files over a 25-module library     1.32 s  ->  0.43 s
+20 test files over a 50-module library     2.44 s  ->  0.81 s
+dryopea's real suite (81 files, 1161 tests)  238 s  ->   209 s
+```
+
+Test files that open with the same `use` lines now share one parse of those libraries.
+Nothing to change in your code, and nothing about what a run reports changes — each
+file is still compiled on its own, still sees only the libraries it named, and still
+raises exactly the diagnostics it did before. Running a *single* file is untouched:
+sharing needs a second file to share with, so `loft test one_file.loft` costs what it
+always did.
+
+### Reading a vector in a loop is about twice as fast
+
+`v[i]` has to work out three things before it can read anything: which store the vector
+lives in, which record holds its elements, and how long it is. In a loop that only *reads*,
+none of those can change — but every one of them was worked out again for every single
+element, and the Rust compiler could not lift them out for us.
+
+Now the compiled backend works them out once, before the loop:
+
+```loft
+for j in 0..n {
+  ax = qx - (sx[j] ?? 0.0f);      // ~19 ns per iteration before
+  ay = qy - (sy[j] ?? 0.0f);      // ~8.5 ns after
+  az = qz - (sz[j] ?? 0.0f);
+}
+```
+
+Nothing to change in your code, and nothing to be careful about: the moment anything in the
+loop can write to a collection — appending, removing, clearing, assigning, or calling
+something that does — the loop goes back to working it out per element, because then it
+genuinely can change. The interpreter is unaffected.
 
 ### Filling a vector is as fast written the obvious way
 
@@ -370,6 +587,69 @@ One consequence worth knowing if you ever compared behaviour across files: wheth
 `sorted<T[k]>` was record-backed used to depend on whether an `index<T[..]>` over the same
 element type was declared *anywhere else in the program*, so the same two lines behaved
 differently in two files. That is gone — group membership alone decides it.
+
+### …and building the pair with a `{…}` literal fills it too, whichever field you write first
+
+Everything above is about the collections once they exist. Building them in one literal
+had its own hole, and which field you happened to write first decided whether you hit it:
+
+```loft
+struct S { data: vector<E>, lookup: hash<E[k]> }
+
+a = S { data: [E{k:1,v:10}, E{k:2,v:20}] };              // len(a.lookup) was 0
+b = S { data: [E{k:1,v:10}, E{k:2,v:20}], lookup: [] };  // len(b.lookup) was 0
+c = S { lookup: [], data: [E{k:1,v:10}, E{k:2,v:20}] };  // len(c.lookup) was 2
+```
+
+The records were all there — `a.data[0].k` read `1` — but `a.lookup[1]` answered null,
+which is exactly what a key that was never inserted answers. The two spellings of "not
+found" are indistinguishable to the caller, so the fault read as missing DATA and sent you
+to the insert.
+
+A collection field is a small header, and each one used to be cleared at its own position
+in the literal. Since putting a record in through one member also files it under the
+others, a member written *after* the one holding the records wiped the index it had just
+been given — and a member you left out was cleared later still. The whole group is now
+cleared once, up front, before any of it is filled. All three lines above read `2`.
+
+One thing follows from this that is worth knowing. If you fill **two** members in one
+literal, you now add to the group **twice**:
+
+```loft
+struct HS { by_k: hash<E[k]>, by_v: sorted<E[v]> }
+s = HS { by_k: [E{k:1,v:10}], by_v: [E{k:2,v:20}] };
+len(s.by_k)                          // 2 — one record set, holding both
+```
+
+That is the same thing `s.by_k += …; s.by_v += …` has always done, and it is what "two
+routes to one set of records" means. If you wanted two independent collections, give them
+different element types — sharing one element type is what makes them a pair.
+
+### A vector of keyed collections says so at the declaration, instead of failing later
+
+`vector<hash<E[k]>>` used to parse. It could not do anything else: putting an element in
+by literal was a type error, putting one in from a variable crashed the compiler, and
+compiling the program natively failed with an error from `rustc`. Only the "declare it and
+never fill it" path worked, and that one silently reported length 0.
+
+It is now refused where you write it, with the shape that does work:
+
+```
+a `hash` cannot be a vector ELEMENT — a keyed collection has no element form anything
+can write, so `vector<hash<…>>` could only ever be declared and stay empty. Hold it in
+a struct and make a vector of THAT: the extra record is what the element would have
+been anyway.
+```
+
+```loft
+struct Box { by_k: hash<E[k]> }
+boxes: vector<Box> = [];
+boxes += [Box { by_k: [E{k:1, v:10}] }];
+boxes[0].by_k[1].v                        // 10
+```
+
+`sorted`, `index`, `spatial` and `trie` all say the same thing. Nothing changes for
+`vector<vector<T>>`, which was never affected.
 
 ### Reading a file straight into a struct field no longer leaks
 

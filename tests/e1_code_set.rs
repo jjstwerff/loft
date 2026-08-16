@@ -168,6 +168,18 @@ const CODES: &[(&str, &str)] = &[
          fn main() { print(\"{f(1,true,false)}\"); }",
     ),
     (
+        "omitted-field-zero",
+        "struct S { hover: integer, palette_pick: integer }\n\
+         fn main() { s = S { hover: 3 }; print(\"{s.palette_pick}\"); }",
+    ),
+    (
+        "linked-group-double-fill",
+        "struct E { k: integer, v: integer }\n\
+         struct S { by_k: hash<E[k]>, by_v: sorted<E[v]> }\n\
+         fn main() { s = S { by_k: [E { k: 1, v: 10 }], by_v: [E { k: 2, v: 20 }] }; \
+         print(\"{len(s.by_k)}\"); }",
+    ),
+    (
         "needless-reference-parameter",
         "fn f(x: &(integer, integer)) -> integer { x.0 }\n\
          fn main() { v = (1, 2); print(\"{f(&v)}\"); }",
@@ -250,10 +262,25 @@ const CODES: &[(&str, &str)] = &[
         "fn main() { print(\"needs an installed package manifest\"); }",
     ),
     (
+        "module-name-shadowed",
+        "fn main() { print(\"needs a two-package dependency graph\"); }",
+    ),
+    (
         "persist-bind-through-field",
         "struct Inner { k: integer }\n\
          struct Outer { items: hash<Inner[k]> }\n\
          fn main() { o = Outer { items: [] }; store_persist_bind(o.items, \"loft_trig.store\"); }",
+    ),
+    (
+        "shadowed-by-method",
+        "fn main() { print(\"needs the same fn in a LIBRARY — in main this is the C95 error\"); }",
+    ),
+    // loft#917 — a `?` on a COLLECTION field. The field stores a record id whose zero
+    // already means empty, so the `?` cannot read back as null.
+    (
+        "nullable-collection-field",
+        "struct H { xs: vector<integer>? }\n\
+         fn main() { h = H { xs: null }; print(\"{h.xs == null}\"); }",
     ),
 ];
 
@@ -276,6 +303,22 @@ const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
         // rather than deleting, since the warning is the friendlier of the two.
         "missing-return-path",
         "pre-empted by a hard error, and gated on a deprecated spelling",
+    ),
+    (
+        // loft#912 — needs TWO packages, each holding a module file of the same basename,
+        // with one depending on the other. A single source file cannot express a
+        // dependency graph. Covered instead by `tests/module_name_clash.rs`, which builds
+        // the two-package tree and asserts both load orders.
+        "module-name-shadowed",
+        "requires a two-package dependency graph",
+    ),
+    (
+        // loft#940 — fires only for a LIBRARY source (@PLN102 C97 module-scoping). The same
+        // definition in a single main file is the C95 hard error "Cannot redefine 'clamp'",
+        // which pre-empts it, so no one-file program can reach this warning. Covered instead
+        // by `tests/imports.rs`, which has the lib-dir harness.
+        "shadowed-by-method",
+        "fires only in a library source; in main the C95 error pre-empts it",
     ),
 ];
 

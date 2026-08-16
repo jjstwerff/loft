@@ -1,0 +1,171 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! `loft doc` writes where it says, and only when it resolved something (loft#911).
+//!
+//! The command reads as `loft doc <library>` and is used that way, but its argument
+//! was a PATH only.  A library name is not a directory, so `loft doc graphics` fell
+//! through to the empty-manifest branch: it CREATED `./graphics/doc/` in whatever
+//! directory the user happened to be standing in, found no `src/` to read, and
+//! reported "0 API sections" for a package with 119 documented `pub fn`s.  The
+//! printed path was relative, so `graphics/` looked like part of the project — one
+//! such tree was swept into an unrelated repository by a later `git add -A`.
+//!
+//! Three rules close it, and each has a test here: a name that resolves to nothing
+//! is an ERROR that creates nothing; an installed library's docs go to loft's own
+//! doc cache instead of the CWD; and the reported path is absolute.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn loft_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_loft"))
+}
+
+fn tmp_root(tag: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("loft_911_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    root
+}
+
+/// An unresolvable name must not leave a directory behind.  This is the whole
+/// mechanism of the reported litter: the old code took a name it could not resolve,
+/// treated it as a relative path, and `create_dir_all`'d it into existence.
+#[test]
+fn an_unresolvable_name_creates_nothing_and_fails() {
+    let root = tmp_root("noresolve");
+    let out = Command::new(loft_bin())
+        .current_dir(&root)
+        .args(["doc", "definitely_not_a_package_zzz"])
+        .output()
+        .expect("run loft doc");
+    assert!(
+        !out.status.success(),
+        "an unresolvable name must fail, not succeed quietly"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("neither a directory nor an installed package"),
+        "the refusal must say what it looked for; got:\n{stderr}"
+    );
+    assert!(
+        !root.join("definitely_not_a_package_zzz").exists(),
+        "no directory may be created for a name that resolved to nothing"
+    );
+    let left: Vec<_> = std::fs::read_dir(&root)
+        .expect("read root")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the working directory must be untouched, found: {left:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A real package directory still documents in place, and the API sections are
+/// extracted from its `src/*.loft` — the half the reporter never saw, because the
+/// name never resolved to a package with a `src/` at all.
+#[test]
+fn a_package_directory_documents_its_own_api() {
+    let root = tmp_root("pkgdir");
+    let pkg = root.join("mylib");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir pkg");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"mylib\"\nversion = \"0.2.0\"\n",
+    )
+    .expect("write manifest");
+    std::fs::write(
+        pkg.join("src/mylib.loft"),
+        "// Add two numbers together and answer the sum.\n\
+         pub fn add_two(a: integer, b: integer) -> integer { a + b }\n",
+    )
+    .expect("write src");
+
+    let out = Command::new(loft_bin())
+        .current_dir(&root)
+        .arg("doc")
+        .arg(&pkg)
+        .output()
+        .expect("run loft doc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "loft doc failed: {stdout}");
+    assert!(
+        !stdout.contains("0 API section"),
+        "a documented `pub fn` must produce an API section; got:\n{stdout}"
+    );
+    // The reported path is absolute, so it cannot be mistaken for a project subdir.
+    assert!(
+        stdout.contains(&pkg.join("doc").to_string_lossy().to_string())
+            || stdout.contains(
+                &pkg.join("doc")
+                    .canonicalize()
+                    .unwrap_or_else(|_| pkg.join("doc"))
+                    .to_string_lossy()
+                    .to_string()
+            ),
+        "the absolute output path must be printed; got:\n{stdout}"
+    );
+    let index = std::fs::read_to_string(pkg.join("doc/index.html")).expect("index.html");
+    assert!(
+        index.contains("API Reference"),
+        "the index must link the API it extracted"
+    );
+    let api: String = std::fs::read_dir(pkg.join("doc"))
+        .expect("read doc")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("api-"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .collect();
+    assert!(
+        api.contains("add_two"),
+        "the extracted API must carry the function's signature"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `-o <dir>` puts the output exactly where it is told — the escape hatch for the
+/// case where neither "beside the source" nor the doc cache is what is wanted.
+#[test]
+fn out_flag_redirects_the_output() {
+    let root = tmp_root("outflag");
+    let pkg = root.join("mylib");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir pkg");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"mylib\"\nversion = \"0.2.0\"\n",
+    )
+    .expect("write manifest");
+    std::fs::write(
+        pkg.join("src/mylib.loft"),
+        "// Answer a constant.\npub fn one() -> integer { 1 }\n",
+    )
+    .expect("write src");
+    let elsewhere = root.join("elsewhere");
+
+    let out = Command::new(loft_bin())
+        .current_dir(&root)
+        .arg("doc")
+        .arg(&pkg)
+        .arg("-o")
+        .arg(&elsewhere)
+        .output()
+        .expect("run loft doc");
+    assert!(
+        out.status.success(),
+        "loft doc -o failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        elsewhere.join("index.html").exists(),
+        "-o must place the pages in the named directory"
+    );
+    assert!(
+        !pkg.join("doc").exists(),
+        "-o must not also write beside the source"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

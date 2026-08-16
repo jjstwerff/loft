@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#927 — a `trie` or `spatial` beside a collection over the same element type joins
+// the linked group, like every other keyed kind.
+//
+// It used to be left out of the test that FORMS the group, which did not refuse the
+// pairing: it silently built a second, independent collection. Records put in through
+// `data` were not in `look` and records put in through `look` were not in `data`, while
+// the declaration looked exactly like the documented pairing and nothing said so.
+//
+// The kinds already worked as group MEMBERS — `trie` declared FIRST with a `sorted`
+// second did link, with the trie as primary — so the shape below is the one that was
+// broken, and the reversed shape is kept as the control that stayed right.
+//
+// The second half of the fix is the teardown. Joining a group makes a trie/spatial a
+// VIEW for the first time, and a view must release its own spine (the tree) and NOT the
+// records, which belong to the primary. Getting that wrong is a use-after-free, not a
+// wrong number, so every group here is built and dropped inside a called function: by the
+// time `main` returns, each has been torn down through the view as well as the primary.
+
+struct W { k: integer, nm: text }
+struct P { x: integer, y: integer, tag: integer }
+
+// The filed shape: a plain vector primary with a keyed view over it.
+struct VecTrie { data: vector<W>, look: trie<W[nm]> }
+struct VecSpatial { data: vector<P>, look: spatial<P[x, y]> }
+// The control: reversed declaration order, which linked even before the fix.
+struct TrieFirst { look: trie<W[nm]>, data: sorted<W[k]> }
+// Two collections over DIFFERENT element types are not a group and must stay independent.
+struct NotAGroup { ws: vector<W>, ps: vector<P> }
+
+fn fill_via_primary() -> integer {
+  x = VecTrie { data: [], look: [] };
+  x.data += [W { k: 1, nm: "a" }, W { k: 2, nm: "b" }];
+  len(x.data) * 10 + len(x.look)
+}
+
+fn fill_via_view() -> integer {
+  y = VecTrie { data: [], look: [] };
+  y.look += [W { k: 1, nm: "a" }, W { k: 2, nm: "b" }];
+  len(y.data) * 10 + len(y.look)
+}
+
+// The view is a real lookup route, not just a counter: a record added through the
+// PRIMARY has to be findable by key through the trie.
+fn found_through_the_view() -> integer {
+  x = VecTrie { data: [], look: [] };
+  x.data += [W { k: 7, nm: "seven" }];
+  w = x.look["seven"];
+  if w == null { -1 } else { w.k }
+}
+
+fn spatial_via_primary() -> integer {
+  s = VecSpatial { data: [], look: [] };
+  s.data += [P { x: 1, y: 2, tag: 5 }];
+  len(s.data) * 10 + len(s.look)
+}
+
+fn spatial_via_view() -> integer {
+  s = VecSpatial { data: [], look: [] };
+  s.look += [P { x: 1, y: 2, tag: 5 }];
+  len(s.data) * 10 + len(s.look)
+}
+
+fn trie_declared_first() -> integer {
+  t = TrieFirst { look: [], data: [] };
+  t.data += [W { k: 3, nm: "c" }];
+  len(t.data) * 10 + len(t.look)
+}
+
+fn different_element_types_stay_independent() -> integer {
+  n = NotAGroup { ws: [], ps: [] };
+  n.ws += [W { k: 1, nm: "a" }];
+  len(n.ws) * 10 + len(n.ps)
+}
+
+fn main() {
+  // Both routes reach one record set of two, which is what `hash` in the same
+  // position has always done.
+  assert(fill_via_primary() == 22, "fill_via_primary reads {fill_via_primary()}, want 22");
+  assert(fill_via_view() == 22, "fill_via_view reads {fill_via_view()}, want 22");
+  assert(found_through_the_view() == 7,
+         "found_through_the_view reads {found_through_the_view()}, want 7");
+
+  assert(spatial_via_primary() == 11,
+         "spatial_via_primary reads {spatial_via_primary()}, want 11");
+  assert(spatial_via_view() == 11,
+         "spatial_via_view reads {spatial_via_view()}, want 11");
+
+  assert(trie_declared_first() == 11,
+         "trie_declared_first reads {trie_declared_first()}, want 11");
+
+  // The negative cell: linking on element type must not link everything.
+  indep = different_element_types_stay_independent();
+  assert(indep == 10, "independent pair reads {indep}, want 10");
+
+  // Build and drop many groups, so a view teardown that freed the primary's records
+  // (or leaked its own tree) shows up as a fault or as growth rather than passing on
+  // one lucky allocation.
+  total = 0;
+  for round in 0..50 {
+    total = total + fill_via_primary() + fill_via_view() + spatial_via_view();
+  }
+  assert(total == 50 * (22 + 22 + 11), "teardown rounds read {total}, want {50 * 55}");
+
+  println("ok");
+}

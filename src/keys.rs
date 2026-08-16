@@ -513,6 +513,119 @@ pub fn lost_temp_writes_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_LOST_TEMP_WRITE").is_none())
 }
 
+/// loft#914: the omitted-constructor-field nudge. A struct literal that names SOME fields and
+/// leaves another out gives the omitted one its type's zero — and nothing distinguishes that
+/// from an author who wrote the zero deliberately. It is dangerous exactly where zero is a
+/// meaningful value of the field's domain: dryopea's palette index wanted `-1` for "nothing
+/// selected", got `0`, and `0` is the palette entry that erases.
+///
+/// `advice` tier, per the two-tier rule: the zero is the DOCUMENTED behaviour of an omitted
+/// field (LOFT.md § constructors, locked by `tests/scripts/06-structs.loft`), so the code is
+/// correct as written and ignoring this cannot produce a result the language did not promise.
+/// It reports a better spelling, and the spelling already exists — a declared field default
+/// (`palette_pick: integer = -1`) — which is the discoverability gap actually being closed.
+///
+/// Deliberately quiet on the two shapes that say something: a field WITH a declared default is
+/// the author stating that omitting it is fine, and a NULLABLE field's absence is a value it
+/// can hold. A bare `S {}` is also exempt — it asks for the whole default record, and a reader
+/// meeting it knows every field is defaulted; the ambiguity is only in the PARTIAL literal,
+/// where the author singled some fields out and a reader cannot tell whether the rest were
+/// considered.
+///
+/// **Default ON**; `LOFT_NO_OMITTED_FIELD` opts out. One cached env read.
+#[must_use]
+pub fn omitted_field_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OMITTED_FIELD").is_none())
+}
+
+/// loft#926 — one struct literal filling TWO members of a linked collection group.
+///
+/// Two collection fields over one element type, at least one of them keyed, are auto-linked:
+/// two routes to a SINGLE record set, where filling either fills both (DATABASE.md § Clearing
+/// one member of a linked group). That is documented and deliberate, so the DECLARATION says
+/// nothing — a program that means it fills one member and reads through both.
+///
+/// The literal filling a second member is where the author's model is demonstrably the other
+/// one: giving each member its own records only makes sense for independent collections, and
+/// these are not. Three of loft's own fixtures had written exactly that and were relying on a
+/// defect to hide it (loft#924) — with that defect fixed they behave as the group they are,
+/// and two of the three had meant the collections to be independent.
+///
+/// `advice` rather than `warning` by the tier rule: the result IS what the language promises,
+/// so ignoring it cannot produce a result the language did not document. What is wrong is the
+/// author's model, which is what an advice line is for.
+///
+/// **Default ON**; `LOFT_NO_LINKED_GROUP` opts out. One cached env read.
+#[must_use]
+pub fn linked_group_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_LINKED_GROUP").is_none())
+}
+
+/// loft#940 — a library's free function that no bare call can reach.
+///
+/// A call `f(x, …)` resolves the METHOD spelling `t_<type-of-x>_f` before the free `n_f`
+/// (`Data::find_fn`), and a method lives in its receiver type's shared, global attribute
+/// table. So a library's `fn f(x: τ, …)` is unreachable by its bare name whenever the stdlib
+/// declares `f(both: τ, …)` / `f(self: τ, …)` — from a consumer that imported it, from the
+/// library's own other modules, and from the declaring file itself.
+///
+/// The DEFINITION stays legal, which is @PLN102 C97: a library's names are module-scoped, so
+/// `mylib::f` still reaches it and the stdlib can grow without breaking a shipped library.
+/// What C97 left silent is that the bare name then belongs to the stdlib — the author writes
+/// a function, every unqualified call goes somewhere else, and nothing says so.
+///
+/// `warning` rather than `advice` by the tier rule: ignoring it produces a WRONG RESULT, not
+/// merely a worse spelling. The reporter's `clamp` differed from the stdlib's only where
+/// `lo > hi`, so the port ran the wrong function everywhere and agreed with the right one
+/// almost everywhere; the published `regex::find(pattern, input)` has the stdlib's exact
+/// arity and argument types, so a bare `find(p, i)` type-checks and answers the wrong thing.
+///
+/// The same-named free function on a DIFFERENT receiver type stays quiet — arg-type dispatch
+/// keeps it reachable, which is the case `tests/scripts/06-function.loft` exercises.
+///
+/// **Default ON**; `LOFT_NO_SHADOWED_BY_METHOD` opts out. One cached env read.
+#[must_use]
+pub fn shadowed_by_method_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
+}
+
+/// loft#917 — a `?` on a COLLECTION field promises an absence the storage cannot hold.
+///
+/// A collection field stores a 4-byte RECORD ID, and a fresh field is zeroed. `null` and `[]`
+/// therefore write the identical zero — verified: `H { xs: null }` and `H { xs: [] }` both
+/// lower to `OpSetInt4(h, <off>, 0)` with no other difference — while `xs == null` compiles
+/// to `OpVectorIsNull`, which tests the *store_nr* sentinel a field read never produces. So
+/// the guard takes the present branch every time.
+///
+/// Unlike the scalar and struct cases this cannot be repaired in place. A distinct absent
+/// marker is a change to the STORED format of every existing collection field, so a persisted
+/// store would change meaning under a compiler upgrade — which the compatibility rule forbids
+/// outright. And the two obvious in-band readings are both wrong: record id zero already means
+/// `[]`, so testing it would newly answer `[] == null` as *true*. Giving the field the `__nullable`
+/// enum #896 built for structs needs a `Some` layout for a 4-byte payload that is not a record —
+/// the open half of loft#917, shared with loft#938.
+///
+/// So the DECLARATION is where this is answerable today: the field cannot honour the `?`, and
+/// until the layout exists the honest thing is to say so rather than accept it silently.
+///
+/// `warning` rather than `advice` by the tier rule: ignoring it produces a wrong result. A
+/// guard written `if h.xs == null` runs its present branch on an absent collection, which is
+/// the opposite of what the author wrote — not merely a worse spelling of a documented one.
+///
+/// Covers every collection kind, which is wider than the filed `vector<T>?`: `hash<E[k]>?` and
+/// `sorted<E[k]>?` answer `false` in exactly the same way. Scalars (`text?`, `integer?`) and
+/// struct fields (`E?`, fixed by loft#896) read back as null correctly and stay quiet.
+///
+/// **Default ON**; `LOFT_NO_NULLABLE_COLLECTION` opts out. One cached env read.
+#[must_use]
+pub fn nullable_collection_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_COLLECTION").is_none())
+}
+
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
 /// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
 /// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
@@ -1033,6 +1146,30 @@ pub fn strict_store_violations() -> usize {
     STRICT_VIOLATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Every `BUG (#306)` refusal this process has made — a whole-store free aimed at the
+/// eval-stack store, which the allocator refuses so the runtime survives to report it.
+///
+/// Counted UNCONDITIONALLY, unlike [`strict_store_violations`], because the refusal is
+/// not an opt-in instrument: it is the runtime saying a store-ownership invariant was
+/// broken, and the guard is the only thing standing between that and the eval stack.
+/// It printed to stderr and nothing read it, so a suite could go green through nine of
+/// them while the nightly poison gate died of the consequences (loft#920) — the counter
+/// is what lets a test harness FAIL on one instead of scrolling past it.
+///
+/// One relaxed add on a path that must never execute; free when it does not.
+static STACK_FREE_REFUSALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Record a refused whole-store free of the eval-stack store. See [`stack_free_refusals`].
+pub fn note_stack_free_refusal() {
+    STACK_FREE_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many stack-store free refusals this process has made.
+#[must_use]
+pub fn stack_free_refusals() -> usize {
+    STACK_FREE_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
 /// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
 /// fields for an out-of-bounds pointer and report the op that produced it (pc/line +
@@ -1524,6 +1661,40 @@ fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut SipHash
         11 => hasher.write_i64(i64::from(s.get_short_full(r.rec, p, key.start))),
         _ => hasher.write_i64(i64::from(s.get_byte(r.rec, p, key.start))),
     }
+}
+
+/// The development hang guard's ceiling, in executed operations (loft#919).
+///
+/// The interpreter counts operations under debug assertions and panics with the last
+/// sixteen — the instrument that names the loop a hang is spinning in. A count cannot
+/// tell a long run from a hung one, so the ceiling sits far above anything the project's
+/// own suite executes and is worth roughly a minute of debug-assertion interpretation:
+/// long enough that reaching it means something is wrong, short enough to beat the
+/// 300-second test watchdog and report which ops rather than just "timed out".
+pub const DEFAULT_MAX_OPS: u64 = 4_000_000_000;
+
+/// `LOFT_MAX_OPS=<count|0>` — raise, lower, or switch off that ceiling.
+///
+/// `0` removes it (a genuinely long run then relies on `LOFT_TIMEOUT`). An unparseable
+/// value is reported and the default is kept: a typo in a limit must not silently remove
+/// the limit, the same rule `LOFT_MEMORY_LIMIT` follows.
+#[must_use]
+pub fn max_ops() -> u64 {
+    static MAX: OnceLock<u64> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        let Ok(v) = std::env::var("LOFT_MAX_OPS") else {
+            return DEFAULT_MAX_OPS;
+        };
+        if let Ok(n) = v.trim().parse::<u64>() {
+            n
+        } else {
+            eprintln!(
+                "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
+                 keeping the default {DEFAULT_MAX_OPS}"
+            );
+            DEFAULT_MAX_OPS
+        }
+    })
 }
 
 #[cfg(test)]

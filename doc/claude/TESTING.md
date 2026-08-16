@@ -9,6 +9,40 @@ each cycle pays the compile + test-startup cost and discovers
 only one failure at a time.  Run a single `--no-fail-fast`
 pass and read the captured failures once.
 
+### Before the suite: `make check-rlib` (one second)
+
+The tests link a built `libloft.rlib`, and **nothing in an ordinary edit loop
+rebuilds one**.  `cargo build --bin loft` refreshes the binary and leaves every rlib
+behind.  So a session that iterates on the compiler with `--bin loft` drifts, and the
+drift is invisible until a gate runs.
+
+There are **three** of them, one per link target, and they drift independently:
+
+| rlib | linked by | cure |
+|---|---|---|
+| `target/release/libloft.rlib` | `--native`, the cdylib tests | `cargo build --release --lib` |
+| `target/wasm32-unknown-unknown/release/libloft.rlib` | `--html` | `cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random` |
+| `target/wasm32-wasip2/release/libloft.rlib` | the wasm library suite | `cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random` |
+
+Refreshing the native one does nothing for the other two — which is how a re-run that
+fixed three native failures still went red on `moros_editor_html_smoke` and
+`wasm_library_suite` alone, a second full cycle later.
+
+It does not fail like a compile error.  It surfaces roughly nine minutes in, as a
+handful of tests failing for what look like unrelated reasons — `libloft.rlib not
+found for this build`, a cdylib mtime that did not advance, a `--html` build
+panicking — each naming a file that is present when you go and look.  The cost is a
+whole cycle, every time.
+
+`make ci` builds all three itself, beside the wasm builds it already ran, so it
+needs no pre-flight — a gate that refused on something it could build would be
+friction after every edit, and that is how a check gets switched off.  **A bare
+`cargo test --release` builds none of them**, so run the check yourself before one:
+
+```bash
+make check-rlib          # all three, each with its own cure; skips a target that isn't installed
+```
+
 ### Preferred shape — background + peek + wait
 
 ```bash
@@ -1017,6 +1051,35 @@ the reader to the wrong file costs more than one that stays quiet, so the report
 prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
 denser per-run table.
 
+## Hang guard (`LOFT_MAX_OPS`)
+
+The third sibling, and the only one that is **debug-assertions only**. The
+interpreter counts executed operations and, on reaching the ceiling, panics with the
+last sixteen ops — each resolved to `function+offset: OpName`. That trail is the
+whole value of it: a timeout tells you a run did not finish, this tells you which
+loop it did not finish in.
+
+A count cannot tell a long run from a hung one, which is the trap loft#919 walked
+into. The ceiling was 100M ops, two tests of the library suite legitimately execute
+more than that, and the only signal the guard had for "this is long" was the wording
+it uses for "this is hung" — so the debug-assertions gate read as *known red* for a
+reason that was never about those tests, and a gate read that way stops being run.
+
+| Mechanism | Default | How |
+|---|---|---|
+| Any interpreter run, debug assertions ON | **on, 4e9 ops** | roughly a minute of debug-assertion interpretation |
+| Debug assertions OFF (every release build) | **off** | the counter does not exist |
+| Env var | — | `LOFT_MAX_OPS=<count>`, or `0` to remove it |
+
+The default clears the project's own suite with room to spare — set it *low*
+(`LOFT_MAX_OPS=50000000`) when you are hunting a hang and want the trail sooner. An
+unparseable value is reported and the default is **kept**, the same rule
+`LOFT_MEMORY_LIMIT` follows.
+
+Implementation: `crate::keys::max_ops` (one cached env read) read once outside the
+dispatch loop in `src/state/mod.rs`; the trail is the `trail_pos` / `trail_op` ring
+beside it.
+
 ## Execution timeout (`LOFT_TIMEOUT` / `--timeout`)
 
 Guards against hangs that would wedge `cargo test` or `find_problems.sh`.  The
@@ -1083,9 +1146,52 @@ continue.  Full closure record at
 | Annotation | Scope | Effect |
 |---|---|---|
 | `// #warn <text>` | File | Warning must appear; missing → fail |
-| `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` is expected |
-| `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` is expected |
+| `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` must appear; missing → fail |
+| `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` must appear; missing → fail |
 | `// @EXPECT_FAIL: <text>` | Per-function (before `fn`) or file header | Runtime panic is tolerated |
+
+**Every expectation must match.**  `@EXPECT_ERROR` and `@EXPECT_WARNING` used to be
+collected and then dropped, so an annotation whose diagnostic had been reworded, narrowed
+or removed kept passing.  When that was measured, **56 of the 167 `@EXPECT_ERROR`
+annotations in the tree were inert** (loft#929).  Both are now fatal, and the check runs
+even when the file produced NO diagnostics at all — the other way an expectation went
+unlooked-at.
+
+### An error fixture asserts ONE pass, never both
+
+`Parser::parse` runs pass 2 only when pass 1 finished without an error:
+
+```rust
+let lvl = self.lexer.diagnostics().level();
+if lvl != Level::Error && lvl != Level::Fatal { /* pass 2 */ }
+```
+
+A large share of loft's diagnostics are emitted by `!first_pass` code — `Unknown variable`,
+the const/`&` checks, match exhaustiveness, the @PLN25 N-Store family, the type-mismatch
+messages.  **One pass-1 error therefore silences every pass-2 diagnostic in the same
+file**, and an `@EXPECT_ERROR` for one of those can never match, however correct its
+wording.  That, not message drift, was the cause of most of the 56.
+
+So a fixture holds pass-1 errors OR pass-2 errors.  The split is visible in the naming:
+
+| Pass 2 (needs a clean pass 1) | Pass 1 (aborts before pass 2) |
+|---|---|
+| `102-expected-errors.loft` | `102b-pass1-expected-errors.loft` |
+| `36-parse-errors.loft` | `36b-pass1-parse-errors.loft` |
+| `35b-format-errors-unknown-var.loft` | `35-format-errors.loft` |
+
+Pass 1 emits the lexer's own errors (`Misplaced '_' in number literal`), the definition
+and type checks (name conflicts, camel-case, `Undefined type`), and everything
+`typedef::fill_all` reports (type cycles, the reserved-`key` hash guard).  When a new
+`@EXPECT_ERROR` does not fire, check which half it landed in before rewording it.
+
+### Whole-program lints run here too
+
+`warn_dead_stores`, `warn_double_move` and `warn_lost_temp_writes` run in `run_test` in the
+same window `src/main.rs` uses — after `Parser::parse`, before `scopes::check`.  Until
+loft#929 they ran only in the CLI, so this suite could neither confirm one of their
+warnings nor catch a false positive from one: `894-lost-write-through-returned-struct.loft`
+carried an `@EXPECT_WARNING` for a diagnostic the harness had no way to produce.
 
 **Annotation placement rules** (same as `test_runner.rs`):
 - An annotation directly before a `fn` line (no blank lines between) binds to that function.
@@ -1797,6 +1903,12 @@ loft --tests 'file.loft::{a,b}'  # run specific test functions
 loft --tests --no-warnings    # suppress warning output
 ```
 
+Inside a package, `loft test [target]` runs `tests/` and takes the file **however you
+spell it** — `loft test draw`, `loft test draw.loft` and `loft test tests/draw.loft`
+are one target, so a path pasted out of the runner's own output works (loft#913).  A
+`::selector` combines with any of them (`loft test tests/draw.loft::test_foo`), and a
+selector that names no test function is an ERROR, not a `0 passed` success.
+
 The runner:
 1. Recursively discovers `.loft` files under the given directory (default: `.`).
    When given a single `.loft` file, runs only that file.
@@ -1894,6 +2006,32 @@ recursive walk.
 | `--tests file::{a,b}` | Run specific test functions in a file |
 | `--native` | Compile to native Rust instead of interpreting (with `--tests`) |
 | `--no-warnings` | Suppress warning diagnostics in test output |
+
+### The shared library base (loft#925)
+
+Each test file is its own program with its own parser — a shared one would let one
+file's definitions leak into the next — so a `use`d library used to be loaded from
+source once per file, and twice at that, since both parse passes re-run the use
+region.  A suite therefore paid the PRODUCT of its file count and its library's
+size.
+
+Files are now grouped by their leading `use` region (a `#cwd` directive included,
+verbatim), the region is parsed once per group, and every file after the first
+starts from a copy of that parse.  dryopea's 81-file suite: 238 s → 209 s, output
+byte-identical.  See [PERFORMANCE.md](PERFORMANCE.md) for the numbers and the
+three decisions that carry the win.
+
+| Env var | Effect |
+|---|---|
+| `LOFT_NO_TEST_BASE=1` | Parse every file's libraries for itself, as before.  The control half of an A/B on ONE binary, and what `tests/test_base_equivalence.rs` compares against — a run whose output differs from it is a bug in the sharing. |
+| `LOFT_TEST_BASE_REPORT=1` | Name on stderr each `use` region that got a shared base, or was refused one.  Reach for it when a suite did not get faster; it is also what keeps the equivalence guard from silently comparing a run to itself. |
+
+A group of ONE file never builds a base — the base is built when a second file asks
+for the same region — so `loft test <one-file>` costs exactly what it did.  A base
+is also refused outright under a `[sandbox]` policy (admission reads what the parse
+recorded about designated functions) and whenever the region's own parse raises an
+error (the error belongs to the file the reader is shown, so it is left to that
+file's own parse to re-emit).
 
 ---
 
