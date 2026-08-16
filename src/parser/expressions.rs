@@ -3816,8 +3816,8 @@ use a separate collection or add after the loop"
                             self.change_var_type(v_nr, &rhs_elems[i]);
                         }
                     }
-                    let read = if ref_def_nr == u32::MAX {
-                        Value::TupleGet(tmp, i as u16)
+                    let step = if ref_def_nr == u32::MAX {
+                        Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16)))
                     } else {
                         let elem_offset = if let Some(offs) =
                             crate::data::stored_tuple_offsets_for_def(
@@ -3830,33 +3830,22 @@ use a separate collection or add after the loop"
                         } else {
                             crate::data::element_stack_offsets(&rhs_elems)[i] as u32
                         };
-                        // P250 fix (2026-05-11): when destructuring a synthetic
-                        // `__tuple<...>` struct (the wider-than-8B tuple-return
-                        // shape), each LHS Reference element is a VIEW into the
-                        // tmp's storage (`OpGetField(tmp, offset, ...)` returns
-                        // a DbRef that shares store_nr/rec with tmp).  Without a
-                        // dep, scope analysis emits an independent `OpFreeRef`
-                        // for the LHS at scope exit; that free works on a
-                        // store_nr basis and frees the entire tmp's underlying
-                        // store.  In a loop body, the next iteration's `tmp =
-                        // make_pair(...)` reassignment then runs `OpFreeRef(tmp)`
-                        // on the now-stale DbRef whose store_nr has been recycled
-                        // by an unrelated allocation (e.g. the new `pa`),
-                        // silently destroying that allocation.  The first LHS
-                        // arg's projection is most affected because the freshly-
-                        // allocated `pa` lands in the same store slot the prior
-                        // tuple occupied.  Marking the LHS dependent on tmp
-                        // suppresses its independent free; tmp's `OpFreeRef`
-                        // alone reclaims the storage at the right time.  Only
-                        // applies to the synthetic-struct path (Reference
-                        // elements); the inline `TupleGet` path (small tuples ≤
-                        // 8B) reads value-typed elements that need no free.
-                        if matches!(rhs_elems[i], Type::Reference(_, _)) {
-                            self.vars.depend(v_nr, tmp);
-                        }
-                        self.get_val(&rhs_elems[i], false, elem_offset, Value::Var(tmp), u32::MAX)
+                        // When destructuring a synthetic `__tuple<...>` struct (the
+                        // wider-than-8B tuple-return shape), reading an element gives
+                        // a VIEW into the tmp's storage: `OpGetField(tmp, offset, ...)`
+                        // answers a DbRef sharing tmp's store_nr and rec.  That view
+                        // must not become the binding, because tmp belongs to the CALL
+                        // SITE, not to the binding — see `materialize_tuple_element`.
+                        let view = self.get_val(
+                            &rhs_elems[i],
+                            false,
+                            elem_offset,
+                            Value::Var(tmp),
+                            u32::MAX,
+                        );
+                        self.materialize_tuple_element(v_nr, tmp, &rhs_elems[i], view)
                     };
-                    steps.push(Value::Set(v_nr, Box::new(read)));
+                    steps.push(step);
                 }
                 *code = Value::Insert(steps);
             } else if !self.first_pass {
@@ -4582,6 +4571,88 @@ use a separate collection or add after the loop"
             crate::copy_manifest::Origin::ParserMaterialise,
         );
         false
+    }
+
+    /// Bind a destructured tuple element to `v_nr` as a value the binding OWNS,
+    /// rather than as a view into the destructured buffer `tmp`.
+    ///
+    /// A tuple return wider than 8B arrives in a synthetic `__tuple<…>` record held
+    /// by a work-ref belonging to the CALL SITE, so one site reuses one buffer.
+    /// Reassigning that work-ref frees the store it named — and reassigning it is
+    /// exactly what the next turn of a loop does, before the call it feeds.  A
+    /// binding left pointing into the buffer therefore dangles from the second
+    /// iteration on, in two shapes that are one defect: reading a freed store answers
+    /// its cleared contents, so `(xs, n) = f(xs)` silently reports `len` 0 and a
+    /// struct field 0 while `--native` answers correctly, and appending onto a record
+    /// the arena has since recycled panics in `vector_append` (loft#941).
+    ///
+    /// P250 gave a `Reference` element a DEPENDENCY on `tmp` so scope analysis would
+    /// not emit a second `OpFreeRef` for the binding.  That stops a double free, but a
+    /// dependency cannot lengthen the buffer's life past the reassignment; the binding
+    /// still outlives the record it was read from.  So copy it out — the same
+    /// materialise-the-view move `return <field>` (#306) and `&out = <field>`
+    /// (loft#775) already make, which is why those two directions were safe and this
+    /// one was not.
+    ///
+    /// Value-typed elements (integer, boolean, …) are read by value and pass through
+    /// untouched; only a record and a vector read back as a pointer into the buffer.
+    ///
+    /// Answers the whole assignment STATEMENT, not a value to assign: the allocation
+    /// writes through `v_nr` itself, so wrapping it as `Set(v_nr, <block ending in
+    /// v_nr>)` would make the binding its own initialiser — legal in the IR, but the
+    /// native backend renders a first binding as `let mut var_v = <init>` and rustc
+    /// rejects the `var_v` inside it.  A flat `Insert` is the shape
+    /// [`Self::boxed_cell_alloc_and_set`] already uses for the same reason.
+    fn materialize_tuple_element(
+        &mut self,
+        v_nr: u16,
+        tmp: u16,
+        elem: &Type,
+        view: Value,
+    ) -> Value {
+        match elem {
+            Type::Reference(td, _) => {
+                let td = *td;
+                let copy_d = self.data.def_nr("OpCopyRecord");
+                if copy_d == u32::MAX {
+                    // No copy op to reach for: fall back to P250's dependency, which
+                    // at least stops scope analysis freeing the buffer's store a
+                    // second time through the binding.  `def_nr` answers the same on
+                    // both passes, so this arm cannot be a cross-pass difference.
+                    self.vars.depend(v_nr, tmp);
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                // Both passes agree the element is a record and add NO dependency;
+                // only pass 2 emits the copy, exactly as `assign_refvar_reference`
+                // does.  Adding the dependency on pass 1 alone would make the
+                // binding's deps differ by pass, which is the divergence the H5
+                // contract catches.
+                if self.first_pass {
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                let kt = i32::from(self.data.def(td).known_type());
+                Value::Insert(vec![
+                    v_set(v_nr, Value::Null),
+                    self.cl("OpDatabase", &[Value::Var(v_nr), Value::Int(kt)]),
+                    Value::Call(copy_d, vec![view, Value::Var(v_nr), Value::Int(kt)]),
+                ])
+            }
+            Type::Vector(elm_tp, _) => {
+                let elm_tp = (**elm_tp).clone();
+                // `vector_db` gives `v_nr` its own backing store and repoints it there
+                // (it is pass-2-only, and answers an empty list for a case that must
+                // keep the caller's backing — an argument, a keyed local — where the
+                // view is already not the buffer's).
+                let mut ops = self.vector_db(elem, v_nr);
+                if ops.is_empty() {
+                    return Value::Set(v_nr, Box::new(view));
+                }
+                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp));
+                ops.push(self.cl("OpAppendVector", &[Value::Var(v_nr), view, rec_tp]));
+                Value::Insert(ops)
+            }
+            _ => Value::Set(v_nr, Box::new(view)),
+        }
     }
 
     /// Handle `v += expr` and `v = expr` where `v: &vector<T>`; returns true if handled.

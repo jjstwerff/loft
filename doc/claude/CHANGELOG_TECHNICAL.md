@@ -9,6 +9,45 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A destructured tuple element is a value the binding owns (loft#941, 2026-08-16)
+
+A tuple return wider than 8B lands in a synthetic `__tuple<…>` record held by a work-ref
+belonging to the CALL SITE, so one site reuses one buffer.  Destructuring read each element
+straight out of it — `OpGetField(tmp, offset, …)` answers a DbRef sharing `tmp`'s `store_nr`
+and `rec` — and made that VIEW the binding.  Reassigning the work-ref frees the store it
+named, and reassigning it is exactly what the next turn of a loop does, *before* the call it
+feeds:
+
+```
+327: VarRef(__ref_2)              ; the tuple store from the previous iteration
+330: FreeRef            [store-free]
+337: Call(fn=n_passthrough)       ; xs, which VIEWS that store, is passed in here
+```
+
+So the binding dangled from the second iteration on.  One use-after-free, two symptoms:
+reading a freed store answers its cleared contents, so `(xs, n) = passthrough(xs)` reported
+`len` 0 while `--native` — which does not emit that free — answered correctly; and appending
+onto a record the arena had recycled panicked in `vector_append`.
+
+P250 had given a `Reference` element a DEPENDENCY on `tmp` so scope analysis would not emit a
+second `OpFreeRef` for the binding.  That stops a double free, but a dependency cannot lengthen
+the buffer's life past the reassignment — the binding still outlived the record it was read
+from.  `materialize_tuple_element` copies instead, the same materialise-the-view move
+`return <field>` (#306) and `&out = <field>` (loft#775) already make, which is why those two
+directions were safe and this one was not.  A record goes through `OpDatabase` + `OpCopyRecord`,
+a collection through `vector_db` + `OpAppendVector`; value-typed elements are read by value and
+are untouched.
+
+The filed scope was a third of it.  A plain STRUCT element fails identically, so the axis is any
+element read back as a pointer, not `vector<T>`; and the `xs = f(xs)` spelling is not needed —
+any binding that names the buffer and is read after the site runs again will do.  What IS
+load-bearing is the SITE repeating: two distinct call sites alternating in one loop each own a
+buffer and were always correct.
+
+The result is emitted as a flat `Insert`, not as `Set(v, <block ending in v>)`: the allocation
+writes through the binding itself, and the native backend renders a first binding as
+`let mut var_v = <init>`, which rustc rejects when `var_v` appears inside it.
+
 ### `loft test` shares one library parse across the files that `use` it (loft#925, 2026-08-16)
 
 `run_tests` builds one `Parser` per test file, deliberately — a shared one would let one

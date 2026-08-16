@@ -26,6 +26,28 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Taking a collection out of a tuple return, in a loop
+
+A function can hand back several things at once, and the natural way to use one is to
+destructure it straight back into the variable you passed in:
+
+```loft
+fn find_or_add(keys: vector<integer>, k: integer) -> (vector<integer>, integer) { … }
+
+for item in items {
+  (keys, at) = find_or_add(keys, item.id);
+}
+```
+
+From the second turn of that loop, `keys` was empty. Not an error — just empty, and
+`--native` gave the right answer while the interpreter gave the wrong one. If the function
+appended to the vector instead of only reading it, the run crashed rather than lying.
+
+The value a tuple return is built in belongs to the call, and the next turn of the loop
+reclaimed it while the variable was still pointing at it. Destructuring now takes a copy the
+variable owns, so it keeps its value for as long as the variable does. The same fix covers a
+struct taken out of a tuple, which was quietly losing its fields the same way.
+
 ### Two `for` loops in one function can share a name
 
 `for i in names { … }` followed by `for i in 0..3 { … }` used to be a compile error —
