@@ -26,6 +26,32 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Lists of tuples you did not have to write the type of
+
+Writing the type out worked; letting loft work it out did not.
+
+```loft
+v = [(7, 8), (9, 10)];      // "cannot build this record — its type never resolved"
+```
+
+Every tuple shape was refused this way, including one with no structs in it at all, and so was
+the version that puts the tuple in a variable first (`t = (7, 8); v = [t]`). The declared
+spelling — `v: vector<(integer, integer)> = [(7, 8)]` — was fine, so the fix is not a new
+feature: it is the same list, written the shorter way.
+
+A tuple with a struct in it had a second problem, and this one did not need a list at all:
+
+```loft
+t = (Player { id: 1 }, 50);   // "internal compiler error"
+```
+
+Both are fixed. Tuples of any shape now work whether you write the type or not, nested tuples
+included, and a struct can sit in any position.
+
+One related case is still open ([#944](https://github.com/loft-lang/loft/issues/944)): a
+struct used in a tuple *above* the line that declares it. Declare it first, and everything
+here works.
+
 ### A vector of tuples that start with a struct
 
 Pairing a record with a number and keeping a list of them is an ordinary thing to want:

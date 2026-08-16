@@ -409,8 +409,18 @@ impl Parser {
             let t = self.expression(val);
             if self.lexer.has_token(",") {
                 // T1.2: Tuple literal — (expr, expr, ...)
+                //
+                // A struct-literal member arrives as `Rewritten(Reference(S))` (#319).
+                // That wrapper is a parse-internal marker saying the value was built in
+                // place, not a type a member can HAVE, and every consumer that matches on
+                // the constructor misses it: `set_field` refused "Cannot assign to field
+                // '_0' of type S", `get_val` refused "Field access not supported on type
+                // S", and a bare `t = (S { … }, k)` reached codegen as the internal error
+                // "emit_tuple_put_ops: unsupported elem Rewritten(…)".  `parse_vector` and
+                // `parse_vector_for` already peel it from a vector's ELEMENT type for the
+                // same reason; a tuple member is the same fact one level in (loft#943).
                 let mut values = vec![val.clone()];
-                let mut types = vec![t];
+                let mut types = vec![t.unrewritten()];
                 loop {
                     if self.lexer.peek_token(")") {
                         break;
@@ -418,7 +428,7 @@ impl Parser {
                     let mut v = Value::Null;
                     let t2 = self.expression(&mut v);
                     values.push(v);
-                    types.push(t2);
+                    types.push(t2.unrewritten());
                     if !self.lexer.has_token(",") {
                         break;
                     }
@@ -3706,19 +3716,7 @@ fn ensure_tuple_defs_for_capture(
     lexer: &mut crate::lexer::Lexer,
     tp: &Type,
 ) {
-    match tp {
-        Type::Tuple(elems) => {
-            // Recurse first so nested tuples register inside-out.
-            for inner in elems {
-                ensure_tuple_defs_for_capture(data, lexer, inner);
-            }
-            data.tuple_def(lexer, elems);
-        }
-        Type::Vector(inner, _) | Type::RefVar(inner) => {
-            ensure_tuple_defs_for_capture(data, lexer, inner);
-        }
-        _ => {}
-    }
+    data.ensure_tuple_defs(lexer, tp);
 }
 
 /// Plan-22 phase 02d-ii — canonical cell-struct name for a scalar

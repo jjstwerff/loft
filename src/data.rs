@@ -1622,6 +1622,24 @@ impl Type {
         self.peel_optional().0
     }
 
+    /// This type with the `Rewritten` marker removed.
+    ///
+    /// `Rewritten(τ)` says a value was built in place (a struct literal constructed
+    /// straight into its destination slot, #319) — it is a signal to the expression that
+    /// PARSED it, not a type any slot can hold.  Once the value is stored anywhere it
+    /// outlives that signal, so peel it before the type is recorded as a variable's, a
+    /// vector element's, or a tuple member's.  Leaving it on makes every `matches!` over
+    /// the type constructor miss (loft#943), which reads as an unsupported operation
+    /// rather than a wrapper.
+    #[must_use]
+    pub fn unrewritten(&self) -> Type {
+        let mut t = self;
+        while let Type::Rewritten(inner) = t {
+            t = inner;
+        }
+        t.clone()
+    }
+
     /// Pass-2 keystone, the `Type` twin of `Value::for_each_child`
     /// (STABILITY_PASS2.md): the ONE place that knows which `Type`
     /// variants carry child types.  Exhaustive on purpose — a new
@@ -5430,9 +5448,46 @@ impl Data {
         d_nr
     }
 
+    /// Register the synthetic `__tuple<…>` struct for every tuple inside `tp`.
+    ///
+    /// A tuple is stored as that struct, and everything needing its record shape —
+    /// `type_def_nr`, `type_elm`, `fill_database` — resolves it by NAME.  A DECLARED
+    /// tuple registers it the moment the type is parsed (`sub_type`, `parse_type_full`),
+    /// so only an INFERRED one can be missing: `v = [(7, 8)]` names no type anywhere,
+    /// and neither does `t = (7, 8); v = [t]`.  The lookup then answered `u32::MAX` and
+    /// the literal was refused outright — "cannot build this record — its type never
+    /// resolved" (loft#943).
+    ///
+    /// Nested tuples register inside-out, because `tuple_def` sizes each member from
+    /// that member's own def.  A tuple with a member still `Unknown` is SKIPPED rather
+    /// than registered: a forward-declared member resolves only in pass 2, so
+    /// registering the pass-1 shape would mint a second `__tuple<…,unknown>` struct
+    /// beside the real one, of a size nothing can build.  Idempotent.
+    pub fn ensure_tuple_defs(&mut self, lexer: &mut Lexer, tp: &Type) {
+        match tp {
+            Type::Tuple(elems) => {
+                for inner in elems {
+                    self.ensure_tuple_defs(lexer, inner);
+                }
+                if !elems.iter().any(Type::is_unknown) {
+                    self.tuple_def(lexer, elems);
+                }
+            }
+            Type::Vector(inner, _) | Type::RefVar(inner) | Type::Optional(inner) => {
+                self.ensure_tuple_defs(lexer, inner);
+            }
+            _ => {}
+        }
+    }
+
     /// Get a vector definition. This is a record with a single field pointing towards this vector.
     /// We need this definition as the primary record of a database holding a vector and its child records/vectors.
     pub fn vector_def(&mut self, lexer: &mut Lexer, tp: &Type) -> u32 {
+        // The element type has to have a record shape before this def can point at it:
+        // `parent` below is `type_def_nr(tp)`, and the literal that built this vector
+        // reaches `new_record` with the same lookup.  An inferred tuple element is the
+        // one shape that arrives unregistered (loft#943).
+        self.ensure_tuple_defs(lexer, tp);
         let fld_tp = Type::Vector(Box::new(tp.clone()), Deps::none());
         let fld = fld_tp.name(self);
         if self.def_nr(&fld) == u32::MAX {

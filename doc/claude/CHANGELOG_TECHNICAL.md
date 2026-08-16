@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A tuple's record shape does not depend on how its type was reached (loft#943, 2026-08-16)
+
+Two defects, one report, because a vector literal of tuples needs both fixed.
+
+**1. An inferred tuple element type registered no `__tuple<…>` struct.**  A tuple is stored as
+that synthetic struct, and every consumer needing its record shape — `type_def_nr`,
+`type_elm`, `fill_database` — resolves it BY NAME.  Registration happened only where a tuple
+appears in a TYPE position (`sub_type`, `parse_type_full`, the `__retbuf` rewrite), which is
+every DECLARED spelling and no inferred one: `v = [(7, 8)]` names no type anywhere.
+`type_def_nr` answered `u32::MAX` and `new_record` refused the literal outright with *"cannot
+build this record — its type never resolved"*.
+
+`Data::vector_def` now registers from the element type, which is the point that already needs
+it — the vector def's own `parent` is `type_def_nr(tp)`, and it was being stored as `u32::MAX`
+beside the refusal.  `ensure_tuple_defs` recurses inside-out (a nested tuple's members are
+sized from their own defs) and SKIPS a tuple with an `Unknown` member: a forward-declared
+member resolves only in pass 2, and registering the pass-1 shape would mint a second
+`__tuple<…,unknown>` beside the real one.  `ensure_tuple_defs_for_capture` (P216, the same
+walker written for closure captures) now delegates to it rather than keeping a second list.
+
+**The filed scope was the tuple LITERAL; the axis is inference.**  `t = (7, 8); v = [t]`
+builds its element from a tuple LOCAL and failed identically — c5 in the guard.
+
+**2. A struct-literal tuple member kept its `Rewritten` marker.**  `Rewritten(Reference(S))`
+says a value was built in place (#319) — a signal to the expression that parsed it, not a type
+a member can HAVE.  The tuple literal (`vectors.rs:409`) recorded it verbatim in the member
+list, so every consumer matching on the type constructor missed it:
+
+| site | what the user saw |
+|---|---|
+| `set_field` | `Cannot assign to field '_0' of type S` |
+| `get_val` | `Field access not supported on type S` |
+| `emit_tuple_put_ops` | `internal compiler error — unsupported elem Rewritten(Reference(707, …))` |
+
+That last row needs no vector at all: a bare `t = (S { … }, k)` was an ICE on released
+2026.8.0.  The wrapper is now peeled at the producer through the new `Type::unrewritten()`,
+which is the same move `parse_vector` and `parse_vector_for` already make for a vector's
+ELEMENT type — a tuple member is that fact one level in.  A struct member reached through a
+LOCAL or a CALL was always fine, which is what named the literal as the axis.
+
+Guard: `tests/scripts/943-inferred-tuple-element-type.loft`, 9 rows + 4 controls, both
+backends.  Out of scope and filed separately: a forward-declared type inside a tuple never
+resolves (loft#944) — it fails on the DECLARED path too, so it is stub adoption, not
+registration.
+
 ### A tuple vector element is not offered the element slot (loft#942, 2026-08-16)
 
 `parse_item` seeds the element expression with `Value::Var(elm)` — the slot `OpNewRecord`
