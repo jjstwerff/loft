@@ -9,6 +9,65 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A forward reference inside a tuple resolves like one anywhere else (loft#944, 2026-08-16)
+
+An in-file forward reference resolves by ADOPTION: the name becomes a `DefType::Unknown`
+stub and the declaration upgrades it in place. Nothing rewrites the `Type::Unknown(stub)`
+values already stored — `rewrite_unknown_refs` runs only for the cross-file import case,
+whose list is empty for one file. It works because **pass 2 re-parses** every type position
+with the declaration now visible. A tuple defeated that twice over.
+
+**Neither the name nor the layout of `__tuple<…>` survives an unresolved member.**
+`tuple_def` derives both from the members' spellings: an unresolved member spells
+`"unknown"`, and `element_stack_size`/`element_stack_align` have no arm for `Unknown` and
+fall through to **0 and 1** — a zero-width member, frozen, because the name lookup
+early-returns and nothing recomputes it. Pass 1 minted `__tuple<integer,unknown>` and pass 2
+asked for `__tuple<integer,Q>`, which the H5 guard reported as an internal compiler error.
+`tuple_def` now refuses to mint one until the members are final, which makes the mint
+pass-2-only for the same reason `map`'s output wrapper is — H5 gained the matching
+exemption, on its own stated criterion (a name-keyed idempotent append that leaves pass-1
+numbering untouched). Stabilising only the NAME would have been worse than the ICE: it
+reuses the zero-width layout.
+
+**Everything that stores a type froze the pass-1 stub.** `resolve_adopted_stubs` now points
+those at the real type between the passes, driven by stubs RECORDED at adoption — after the
+fact an adopted stub is indistinguishable from a generic's type VARIABLE, and a first
+attempt that swept by shape rewrote `vector<T>` and took the whole stdlib down with
+*"expected vector<text>, got vector<T>"*. It deliberately does NOT touch a function's
+`returned`: pass 2 recomputes that in full, and patching the member in place leaves the
+tuple-return PROMOTION undone while making the type look settled.
+
+**Underneath both: `Type::is_unknown()` answers for a bare `Unknown` and a vector of one,
+not for an unresolved member nested in a wrapper.** Six guards asked it and got "no" for
+`(integer, unknown)` — the same shape `&unknown` (#375) and `Never` (#376) had each already
+needed their own arm for. They now ask the recursive `Data::type_has_unresolved`, which
+walks children through `Type::for_each_child`:
+
+| site | what the user saw |
+|---|---|
+| `change_var_type` (scalar + `Vector` arms) | `cannot change type from (integer, unknown) to (integer, unknown)` — one type, printed twice |
+| `objects.rs` field store | `Cannot assign (integer, unknown(0)) to field W.t of type (integer, unknown(708))` |
+| `parse_vector` element convert / `declared` / adoption | `cannot store (integer, Q) elements in a vector<(integer, unknown)>` |
+| `new_record` + `build_vector_list` | Fatal `cannot build this record — its type never resolved`, aborting pass 1 |
+| `unbox_tuple_from_dbref` | `data.def(u32::MAX)` — an internal compiler error on a plain undefined name |
+
+**One shape is refused rather than fixed: a tuple RETURN naming a type declared below it.**
+A heap-carrying tuple return is boxed into `Reference(__tuple<…>)` and given a `__retbuf`,
+decided by asking whether an element carries a lifetime concern — which an unresolved member
+does not — and the return type is stored on pass 1 only. Promoting it between the passes
+gets the signature right and still miscompiles: the synthetic struct is minted after pass
+1's `fill_all`, so it has no layout while pass 2 parses the bodies that read it and every
+offset lands as `u16::MAX` (`OpDatabase(__ref_2, 65535)` where the working spelling reads
+`79`). Making it work means minting and laying out that struct during pass 1, from members
+that resolve only at the end of it. It now reports *"move the declaration of `Q` above
+`mk`"* — which replaces an ICE and, more importantly, the interpreter-runs /
+`--native`-reads-`0` split that removing the ICE alone produced.
+
+Guards: `tests/scripts/944-forward-reference-inside-a-tuple.loft` (8 rows + 4 controls, both
+backends) and `944b-forward-tuple-return-is-refused.loft`. Found and filed while writing
+them: loft#946, a call result used directly as a tuple member leaks the callee's store —
+pre-existing, unrelated to declaration order.
+
 ### A coroutine's yielded record is borrowed, not owned (loft#920 partial, 2026-08-16)
 
 `collect_iterator_subject` materialises a `match <iterator<T>>` subject by pulling the

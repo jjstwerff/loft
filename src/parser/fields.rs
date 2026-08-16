@@ -1445,6 +1445,15 @@ impl Parser {
     pub(crate) fn unbox_tuple_from_dbref(&mut self, dbref: Value, elems: &[Type]) -> Value {
         let elems_vec = elems.to_vec();
         let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+        if tuple_d_nr == u32::MAX {
+            // No record shape for this tuple, so there is nothing to unbox INTO — a member
+            // never resolved.  Typing the temp `Reference(u32::MAX)` instead reached
+            // `data.def(MAX)` and reported an internal compiler error for a plain undefined
+            // name in a tuple element (loft#944).  The unresolved member is reported by the
+            // type resolution that failed to find it; say nothing further and hand back the
+            // cursor unchanged so the parse can finish and collect the rest.
+            return dbref;
+        }
         // Is this cursor a POINTER INTO somebody else's store, or a record of its own?
         // Both arrive at this one helper, and the answer is a property of the DbRef: read
         // an element out of a `vector<(…)>` and it points into that vector; unbox a

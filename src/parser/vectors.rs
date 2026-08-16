@@ -2262,7 +2262,15 @@ impl Parser {
         // an untyped literal.  A declared element type must NOT be silently
         // promoted to a wider type by `parse_item` (that changes the element
         // storage width and loses data); require an explicit `as` cast.
-        let declared = !assign_tp.is_unknown();
+        // loft#944 — and NOT declared when it carries an unresolved member.  `declared`
+        // means "the author wrote this element type, so do not silently widen it", and a
+        // pass-1 type holding a forward-referenced member is not something the author
+        // wrote — it is the parser's placeholder for it.  Treating it as declared made
+        // pass 2 refuse its own resolved literal: "cannot store (integer, Q) elements in a
+        // vector<(integer, unknown)>".  `is_unknown()` alone sees only the bare and
+        // vector-wrapped forms.
+        let declared =
+            !assign_tp.is_unknown() && !crate::data::Data::type_has_unresolved(&assign_tp);
         let is_field = self.is_field(val);
         let is_var = matches!(val, Value::Var(_));
         // Empty `[]`.  A new variable / struct field keeps the lightweight
@@ -2419,6 +2427,15 @@ impl Parser {
         is_field: bool,
     ) -> (Type, Vec<Value>) {
         let mut ls = Vec::new();
+        // loft#944 — in pass 1 an element type naming a type declared LOWER in the file is
+        // still a stub, so there is no record shape and every step below asks for one:
+        // `new_record` reports Fatal, and the append path reaches `data.def(u32::MAX)`.
+        // Nothing built here survives anyway — pass 1's IR is regenerated in pass 2, which
+        // sees the resolved element and builds it properly.  Emit nothing rather than
+        // half of it.
+        if self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
+            return (tp, ls);
+        }
         // loft#703 — a keyed literal in VALUE position allocates its accumulator's store
         // outright rather than as a side effect of the first `OpNewRecord`.  Two things
         // need it said: an EMPTY one has no element to allocate it at all (the temp
@@ -2816,6 +2833,21 @@ impl Parser {
         if t.is_unknown() {
             t = in_t.clone();
         }
+        // loft#944 — the same adoption for a type that is unresolved INSIDE rather than at
+        // the top: a pass-1 element type carrying a forward-referenced member
+        // (`(integer, unknown)`) is a placeholder, and the element the author actually
+        // wrote is the resolved one.  Only when the other side is fully resolved, so this
+        // cannot swap one placeholder for another.  Without it pass 2 refused its own
+        // literal — "No common type (integer, Q) for vector (integer, unknown)".
+        if crate::data::Data::type_has_unresolved(in_t)
+            && !crate::data::Data::type_has_unresolved(&t)
+        {
+            *in_t = t.clone();
+        } else if crate::data::Data::type_has_unresolved(&t)
+            && !crate::data::Data::type_has_unresolved(in_t)
+        {
+            t = in_t.clone();
+        }
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
                 self.data.def(*t_nr).returned(),
@@ -2883,6 +2915,16 @@ impl Parser {
                 in_t.name(&self.data),
                 in_t.name(&self.data)
             );
+        } else if self.first_pass
+            && (crate::data::Data::type_has_unresolved(&t)
+                || crate::data::Data::type_has_unresolved(in_t))
+        {
+            // loft#944 — neither side is a type yet.  A forward-referenced element member
+            // (`vector<(integer, Q)>` with `Q` declared below) is `Unknown(stub)` for all of
+            // pass 1, so `convert` fails and the arms below report a precision loss between
+            // two spellings of the SAME type — an error that aborted the run before pass 2
+            // could re-check against the resolved element.  Say nothing; pass 2 decides.
+            // The struct-field store guard (`objects.rs`) already works this way.
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
@@ -3038,6 +3080,15 @@ impl Parser {
         let mut ls = Vec::new();
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
+        if ed_nr == u32::MAX && self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
+            // loft#944 — "never resolved" is the wrong word for it in pass 1: the element
+            // names a type declared LOWER in the file, so it resolves at the end of this
+            // pass and pass 2 builds the record normally.  This diagnostic is Fatal, so
+            // firing it here aborted the whole compile on a program that is correct —
+            // `v: vector<(integer, Q)> = [(71, Q { … })]` with `Q` below.  Emit nothing and
+            // let pass 2 decide; a name that is still unresolved THERE reports below.
+            return ls;
+        }
         if ed_nr == u32::MAX {
             // The element type never resolved, so there is no record shape to build.  An
             // `assert_ne!` here made that an internal compiler error on ordinary source:

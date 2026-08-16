@@ -1706,6 +1706,13 @@ impl Parser {
         // the boxing lands before `reserve_late_return_buffers` hands the now-heap
         // return its `__retbuf` and before the H5 snapshot counts attributes.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         // @PLN125 — the same class, one step earlier in the chain: a bound-method stub's
         // hidden parameters are decided from the INTERFACE method's return type, which on
         // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
@@ -1835,6 +1842,63 @@ impl Parser {
     /// same promoted type and the two passes agree. Idempotent — a worker declared
     /// BELOW its par site was already promoted in pass 1 and is skipped by the
     /// `Type::Tuple` guard.
+    /// loft#944 — refuse a tuple RETURN whose member is declared lower in the file.
+    ///
+    /// Everything else about a forward reference inside a tuple works: locals, vector
+    /// elements (declared and inferred), struct-literal members, parameters, nesting. A
+    /// RETURN does not, and the reason is structural rather than a missing branch.
+    ///
+    /// A heap-carrying tuple return is BOXED into the synthetic `Reference(__tuple<...>)`
+    /// and given a hidden `__retbuf`. `parse_function` decides that by asking whether an
+    /// element "carries a lifetime concern", and an unresolved member carries none — so
+    /// pass 1 says no, and the return type is stored on pass 1 ONLY. Promoting it between
+    /// the passes gets the signature right and still miscompiles: the synthetic struct is
+    /// minted after pass 1's `fill_all`, so it has no LAYOUT while pass 2 parses the bodies
+    /// that read it, and every offset lands as `u16::MAX` — the emitted body reads
+    /// `OpDatabase(__ref_2, 65535)` where the working spelling reads `79`. Making it work
+    /// means minting and laying out that struct during pass 1, from members that do not
+    /// resolve until the end of it.
+    ///
+    /// So this says so, at the declaration, with the one-line cure. It replaces an internal
+    /// compiler error — and, once the rest of loft#944 was fixed, something worse: a body
+    /// that ran on the interpreter and read its first member back as `0` on `--native`.
+    fn refuse_forward_tuple_returns(&mut self, adopted: &[(u32, Type)]) {
+        if adopted.is_empty() {
+            return;
+        }
+        for d in 0..self.data.definitions.len() as u32 {
+            if !matches!(self.data.def_type(d), crate::data::DefType::Function) {
+                continue;
+            }
+            let Type::Tuple(elems) = self.data.def(d).returned().clone() else {
+                continue;
+            };
+            let Some(late) = elems.iter().find_map(|e| match e {
+                Type::Unknown(n) => adopted
+                    .iter()
+                    .find(|(stub, _)| stub == n)
+                    .map(|(stub, _)| self.data.def(*stub).name().to_string()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let fname = self.data.def(d).name().trim_start_matches("n_").to_string();
+            let pos = self.data.def(d).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Error,
+                &pos,
+                &format!(
+                    "`{fname}` returns a tuple containing `{late}`, which is declared later \
+                     in the file — move the declaration of `{late}` above `{fname}`. A tuple \
+                     RETURN has to know at its declaration whether it carries heap storage, \
+                     and it cannot ask a type that does not exist yet; every other use of a \
+                     forward-declared type in a tuple (a local, a vector element, a struct \
+                     field, a parameter) works"
+                ),
+            );
+        }
+    }
+
     fn promote_par_worker_tuple_returns(&mut self) {
         let mut workers: Vec<u32> = self.par_worker_defs.iter().copied().collect();
         workers.sort_unstable(); // deterministic `__tuple<…>` def order across runs
@@ -2014,8 +2078,19 @@ impl Parser {
             // instantiation that is pass-2-only by design — pass 1 only predicts.
             let lazy_bound_stub =
                 matches!(dt, DefType::Function) && self.h5_names_a_bound_stub(name);
+            // loft#944 — the fourth legal append: a synthetic TUPLE struct whose member was
+            // a forward reference.  `tuple_def` derives both the def NAME and the frozen
+            // element layout from the members' spellings, so it refuses to mint one while a
+            // member is still `Type::Unknown` — an unresolved member spells `"unknown"` and
+            // sizes as ZERO WIDTH, and the early-return on the name lookup means neither is
+            // ever revisited.  That makes the mint pass-2-only for exactly the same reason
+            // `map`'s output wrapper is: the input the name is derived from does not exist
+            // in pass 1.  Same append shape too — name-keyed, idempotent, at the end, so
+            // every pass-1 def number is untouched and the numbering contract H5 protects
+            // holds.
+            let lazy_tuple = matches!(dt, DefType::Struct) && name.starts_with("__tuple<");
             assert!(
-                lazy_wrapper || lazy_instantiation || lazy_bound_stub,
+                lazy_wrapper || lazy_instantiation || lazy_bound_stub || lazy_tuple,
                 "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
                  wrapper or generic instantiation — a real cross-pass divergence \
                  (pass1={}, pass2={})",
@@ -2457,6 +2532,13 @@ impl Parser {
         // handed over as a STRING boxes a par worker's tuple return identically to
         // one read from a file.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2507,6 +2589,13 @@ impl Parser {
         // handed over as a STRING boxes a par worker's tuple return identically to
         // one read from a file.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -2640,6 +2729,13 @@ impl Parser {
         self.resolve_deferred_unknowns();
         // loft#808 — the same between-passes promotion `parse` does; see there.
         self.promote_par_worker_tuple_returns();
+        // loft#944 — every declaration has now been seen, so a forward reference the parser
+        // left as a stub has been adopted.  Point the stored `Type::Unknown(stub)` values at
+        // the real type, then promote the tuple RETURNS that could not be judged while a
+        // member was unresolved — both before `reserve_late_return_buffers` below, so a
+        // newly-heap return gets its `__retbuf` in the same breath.
+        let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
+        self.refuse_forward_tuple_returns(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());

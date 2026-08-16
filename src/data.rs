@@ -3726,6 +3726,13 @@ pub struct Data {
     /// name it cannot find is `usize::MAX` — a not-found sentinel, not an index
     /// into `attributes[…]`.
     unknown_key_fields: Vec<(u32, usize, u32, String)>,
+    /// Forward-reference stubs a declaration has upgraded IN PLACE this pass (loft#944).
+    ///
+    /// Recorded rather than inferred: after the upgrade an adopted stub looks like any
+    /// other real def, and a generic template's type VARIABLE also carries
+    /// `Type::Unknown` — sweeping by shape rewrote `vector<T>` and broke the stdlib.
+    /// Drained by [`Data::resolve_adopted_stubs`] at the end of pass 1.
+    adopted_stubs: Vec<u32>,
     /// Current source file
     pub source: u16,
     /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
@@ -4042,6 +4049,7 @@ impl Data {
             applied: Vec::new(),
             ambiguous: HashMap::new(),
             unknown_key_fields: Vec::new(),
+            adopted_stubs: Vec::new(),
             source: STD_SOURCE,
             value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
@@ -4659,10 +4667,14 @@ impl Data {
     pub fn set_returned(&mut self, d_nr: u32, tp: Type) {
         assert!(
             self.def(d_nr).returned.is_unknown(),
-            "Cannot change returned type on [{d_nr}]{} to {} twice was {} at {:?}",
+            // The two types read backwards for a while: the slot's CURRENT value was
+            // printed where the message says "to", and the incoming one where it says
+            // "was".  Named plainly now — this fires during compiler work, where reading
+            // it wrong costs a debugging cycle.
+            "Cannot set returned type on [{d_nr}]{} to {} — already {} at {:?}",
             self.def(d_nr).name,
-            self.def(d_nr).returned.name(self),
             tp.name(self),
+            self.def(d_nr).returned.name(self),
             self.def(d_nr).position
         );
         self.definitions[d_nr as usize].returned = tp;
@@ -5448,6 +5460,113 @@ impl Data {
         d_nr
     }
 
+    /// Point every `Type::Unknown(n)` whose def has since become real at that real type.
+    ///
+    /// An in-file forward reference resolves by ADOPTION: the name becomes a
+    /// `DefType::Unknown` stub, and the later declaration upgrades that stub in place,
+    /// same def number. Nothing then rewrites the `Type::Unknown(stub)` values already
+    /// stored — the mechanism that would, `rewrite_unknown_refs`, only runs for the
+    /// cross-file import case, whose list is empty for a single file. It works anyway,
+    /// because pass 2 RE-PARSES every type position with the declaration now visible.
+    ///
+    /// That leaves exactly one hole, and it is the one loft#944 fell into: a type frozen
+    /// by an `if self.first_pass` guard is never re-parsed, so it keeps the pass-1 stub
+    /// forever. A function's `returned` is set only in pass 1, so `fn mk() -> (integer, Q)`
+    /// with `Q` declared below held `(integer, unknown)` while its body produced
+    /// `(integer, Q)` — the two spellings of one type, unable to meet.
+    ///
+    /// Run at the end of pass 1, once every declaration has been seen. Defs that were
+    /// never stubs have no `Unknown(n)` pointing at them, so this is inert for them.
+    /// Note that `d_nr` was a forward-reference stub and has just been upgraded in place.
+    ///
+    /// Recorded at the moment it happens rather than inferred afterwards, because after the
+    /// fact an adopted stub is indistinguishable from any other real def — and the
+    /// difference matters: a generic template's type VARIABLE is also a def carrying
+    /// `Type::Unknown`, and sweeping those rewrote `vector<T>` to a concrete type and took
+    /// the whole stdlib down with `expected vector<text>, got vector<T>`.
+    pub fn note_stub_adopted(&mut self, d_nr: u32) {
+        self.adopted_stubs.push(d_nr);
+    }
+
+    pub fn resolve_adopted_stubs(&mut self, lexer: &mut Lexer) -> Vec<(u32, Type)> {
+        let adopted: Vec<(u32, Type)> = std::mem::take(&mut self.adopted_stubs)
+            .into_iter()
+            .map(|d| (d, self.definitions[d as usize].returned.clone()))
+            .filter(|(_, ret)| !matches!(ret, Type::Unknown(_)))
+            .collect();
+        for (stub_nr, target) in &adopted {
+            let (stub_nr, target) = (*stub_nr, target.clone());
+            for d_nr in 0..self.definitions.len() {
+                // Deliberately NOT `definitions[d].returned` for a function.  Pass 2
+                // re-parses a signature and recomputes its return type in full — including
+                // the tuple-return PROMOTION to `Reference(__tuple<…>)`, which asks whether
+                // an element carries a lifetime concern and therefore answered "no" while
+                // the member was unresolved.  Patching the member here would leave the
+                // promotion undone and, worse, hide the fact that it was: `parse_function`
+                // re-stores its result exactly when what pass 1 stored was unresolved, and
+                // a swept type is no longer unresolved.  That silently produced an
+                // unpromoted `-> (integer, ref(Q))` — which the interpreter tolerated and
+                // `--native` read back as 0.  Sweep only what pass 2 does NOT recompute.
+                let n_attrs = self.definitions[d_nr].attributes.len();
+                for a_nr in 0..n_attrs {
+                    if let Some(new_ty) = Self::rewrite_type_opt(
+                        &self.definitions[d_nr].attributes[a_nr].typedef,
+                        stub_nr,
+                        &target,
+                    ) {
+                        self.definitions[d_nr].attributes[a_nr].typedef = new_ty;
+                    }
+                }
+                // …and the function's variable table, which the two-pass parser
+                // pre-populates in pass 1.  A local declared with a forward-referenced
+                // type sits there as `Unknown(stub)`, and pass 2 — which resolves the name
+                // — is refused by `change_var_type` for disagreeing with its own pass-1
+                // slot.  Same rewrite, third place the type is stored.
+                self.definitions[d_nr]
+                    .variables
+                    .resolve_unknown_stub(stub_nr, &target);
+            }
+        }
+        // A tuple whose member was the stub could not register its `__tuple<…>` struct
+        // while the member was unresolved — `tuple_def` refuses that, because both the
+        // name and the frozen layout come from the members' spellings.  The members are
+        // final now, so mint it here.  A STRUCT FIELD needs this and cannot get it any
+        // other way: declarations are parsed in pass 1 only, so nothing re-parses
+        // `struct W { t: (integer, Q) }` to ask again, and `fill_database` then reported
+        // `field 't' of 'W' has no storage in that type's layout`.
+        for d_nr in 0..self.definitions.len() {
+            let ret = self.definitions[d_nr].returned.clone();
+            self.ensure_tuple_defs(lexer, &ret);
+            for a_nr in 0..self.definitions[d_nr].attributes.len() {
+                let ty = self.definitions[d_nr].attributes[a_nr].typedef.clone();
+                self.ensure_tuple_defs(lexer, &ty);
+            }
+        }
+        adopted
+    }
+
+    /// Does `t`, anywhere inside it, still name a type that has not resolved?
+    ///
+    /// A forward reference parses as `Type::Unknown(stub)` and stays that way until the
+    /// declaration adopts the stub. Any DERIVED artefact keyed on a type's spelling — a
+    /// synthetic def name, a frozen layout — must wait for that, so it needs the question
+    /// asked through wrappers and member lists rather than at the top level. Walks via
+    /// [`Type::for_each_child`], the one place that knows which variants carry children,
+    /// so a new variant inherits the answer instead of quietly returning `false`.
+    #[must_use]
+    pub fn type_has_unresolved(t: &Type) -> bool {
+        if matches!(t, Type::Unknown(_)) {
+            return true;
+        }
+        let mut found = false;
+        t.for_each_child(&mut |c| {
+            if Self::type_has_unresolved(c) {
+                found = true;
+            }
+        });
+        found
+    }
+
     /// Register the synthetic `__tuple<…>` struct for every tuple inside `tp`.
     ///
     /// A tuple is stored as that struct, and everything needing its record shape —
@@ -5459,19 +5578,16 @@ impl Data {
     /// resolved" (loft#943).
     ///
     /// Nested tuples register inside-out, because `tuple_def` sizes each member from
-    /// that member's own def.  A tuple with a member still `Unknown` is SKIPPED rather
-    /// than registered: a forward-declared member resolves only in pass 2, so
-    /// registering the pass-1 shape would mint a second `__tuple<…,unknown>` struct
-    /// beside the real one, of a size nothing can build.  Idempotent.
+    /// that member's own def.  A tuple with an unresolved member registers nothing —
+    /// `tuple_def` refuses it there, which is the one home for that rule (loft#944).
+    /// Idempotent.
     pub fn ensure_tuple_defs(&mut self, lexer: &mut Lexer, tp: &Type) {
         match tp {
             Type::Tuple(elems) => {
                 for inner in elems {
                     self.ensure_tuple_defs(lexer, inner);
                 }
-                if !elems.iter().any(Type::is_unknown) {
-                    self.tuple_def(lexer, elems);
-                }
+                self.tuple_def(lexer, elems);
             }
             Type::Vector(inner, _) | Type::RefVar(inner) | Type::Optional(inner) => {
                 self.ensure_tuple_defs(lexer, inner);
@@ -5548,6 +5664,28 @@ impl Data {
     /// Idempotent: returns the existing def_nr on subsequent calls
     /// for the same tuple shape.
     pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
+        // Refuse while any member is still an unresolved forward reference.  BOTH things
+        // this builds are derived from the members' spellings, and neither survives the
+        // member resolving:
+        //
+        //  * the NAME.  `Type::Unknown` spells `"unknown"`, so a pass-1 `(integer, Q)` with
+        //    `Q` declared below registers `__tuple<integer,unknown>` while pass 2 asks for
+        //    `__tuple<integer,Q>` — a second def for one shape, which is what the H5
+        //    cross-pass guard reported as an internal compiler error (loft#944).
+        //  * the LAYOUT.  `element_stack_size`/`element_stack_align` have no arm for
+        //    `Unknown` and fall through to 0 and 1, so the member is frozen at ZERO WIDTH —
+        //    and the lookups above return early, so nothing ever recomputes it.  Making the
+        //    name stable without this would reuse that layout and trade a loud ICE for a
+        //    silently mis-sized tuple.
+        //
+        // Registration is simply deferred: the stub is adopted in place, and the pass-2
+        // call for the same shape mints it once with final members.  Every type-position
+        // caller discards this return value, and the emit-time callers run on resolved
+        // types.  `u32::MAX` is what `type_def_nr` already answers for an unregistered
+        // tuple, so the not-yet-known answer is spelled the way callers already read it.
+        if types.iter().any(Self::type_has_unresolved) {
+            return u32::MAX;
+        }
         let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
         let name = format!("__tuple<{}>", inner_names.join(","));
         if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {

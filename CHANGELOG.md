@@ -26,6 +26,25 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Using a type inside a tuple before you declare it
+
+loft lets you use a struct before the line that declares it — except inside a tuple, where
+it did not work at all:
+
+```loft
+fn main() { t: (integer, Player) = (1, Player { id: 7 }); }
+struct Player { id: integer }
+```
+
+That reported `cannot change type from (integer, unknown) to (integer, unknown)` — the same
+type printed twice — and some spellings reported an internal compiler error instead. It now
+works, in every place a tuple can appear: a local, a vector element (with or without writing
+the type), a struct field, a nested tuple, a function parameter.
+
+One case is still not supported, and now says so plainly instead of crashing: a function that
+*returns* a tuple containing a type declared further down. Move that declaration above the
+function and it works — the error message tells you exactly that.
+
 ### Lists of tuples you did not have to write the type of
 
 Writing the type out worked; letting loft work it out did not.

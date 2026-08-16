@@ -4091,7 +4091,16 @@ impl Parser {
             // which re-checks against the resolved type and passes.  Two
             // mutually-referential types cannot dodge this by reordering:
             // whichever is declared first names the other before it exists.
-            if !self.first_pass || !(exp_tp.is_unknown() || td.is_unknown()) {
+            // loft#944 — `is_unknown()` answers for a bare `Unknown` (and a vector of one),
+            // not for an unresolved member nested inside a wrapper, so a tuple FIELD
+            // (`struct W { t: (integer, Q) }` with `Q` below) slipped past this very guard
+            // and aborted in pass 1 with `(integer, unknown(0))` vs `(integer, unknown(708))`
+            // — one type printed twice, because both spellings render the unresolved member
+            // the same way.  Ask the recursive question the guard always meant.
+            if !self.first_pass
+                || !(crate::data::Data::type_has_unresolved(exp_tp)
+                    || crate::data::Data::type_has_unresolved(&td))
+            {
                 // A FIELD STORE: a literal that fits the type but lands on the
                 // reserved null sentinel of a nullable narrow field is rejected
                 // here too (not just on `obj.f = …`), so `U8N { x: 255 }` doesn't

@@ -562,6 +562,7 @@ impl Parser {
         } else if self.first_pass && self.data.def_type(d_nr) == DefType::Unknown {
             self.data.definitions[d_nr as usize].def_type = DefType::Enum;
             self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
+            self.data.note_stub_adopted(d_nr);
         } else if self.first_pass {
             // a name that already exists must not be reused — that
             // would overwrite the existing definition's type and crash in
@@ -645,6 +646,7 @@ impl Parser {
             {
                 self.data.definitions[existing as usize].position = self.lexer.pos().clone();
                 self.data.definitions[existing as usize].def_type = DefType::Type;
+                self.data.note_stub_adopted(existing);
                 adopted = existing;
             } else if existing != u32::MAX {
                 let prev_pos = self.data.def(existing).position().clone();
@@ -3201,6 +3203,7 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned =
                     Type::Reference(d_nr, crate::data::Deps::none());
+                self.data.note_stub_adopted(d_nr);
             } else {
                 let prev_pos = self.data.def(d_nr).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();

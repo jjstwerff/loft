@@ -1045,6 +1045,62 @@ impl Function {
         }
     }
 
+    /// Point every `Type::Unknown(stub)` in this function's variable types at `target`.
+    ///
+    /// Sibling of [`Function::substitute_type`], for adoption rather than instantiation.
+    /// The two-pass parser pre-populates the whole variable table in pass 1, so a local
+    /// whose declared type named a forward reference is stored as `Unknown(stub)` — and
+    /// pass 2, which resolves the name correctly, then meets the pass-1 slot and reports
+    /// `cannot change type from (integer, unknown) to (integer, Q)` (loft#944). Run after
+    /// pass 1, once the declaration has adopted the stub.
+    ///
+    /// Returns whether anything changed, so the caller can skip the tracing work.
+    pub fn resolve_unknown_stub(&mut self, stub_nr: u32, target: &Type) -> bool {
+        let mut changed = false;
+        for v in &mut self.variables {
+            if let Some(new_tp) = Self::rewrite_unknown(&v.type_def, stub_nr, target) {
+                v.type_def = new_tp;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// `Some(rewritten)` when the subtree named `stub`, `None` when it is unchanged.
+    /// Walks children through [`Type::for_each_child`]'s variant list, kept in step with
+    /// `Data::rewrite_type_opt` — the same question asked of a variable's type.
+    fn rewrite_unknown(t: &Type, stub: u32, target: &Type) -> Option<Type> {
+        match t {
+            Type::Unknown(n) if *n == stub => Some(target.clone()),
+            Type::Vector(inner, deps) => Self::rewrite_unknown(inner, stub, target)
+                .map(|new| Type::Vector(Box::new(new), deps.clone())),
+            Type::RefVar(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::RefVar(Box::new(new)))
+            }
+            Type::Rewritten(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Rewritten(Box::new(new)))
+            }
+            Type::Optional(inner) => {
+                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Optional(Box::new(new)))
+            }
+            Type::Tuple(elems) => {
+                let mut changed = false;
+                let new_elems: Vec<Type> = elems
+                    .iter()
+                    .map(|e| match Self::rewrite_unknown(e, stub, target) {
+                        Some(new_e) => {
+                            changed = true;
+                            new_e
+                        }
+                        None => e.clone(),
+                    })
+                    .collect();
+                changed.then_some(Type::Tuple(new_elems))
+            }
+            _ => None,
+        }
+    }
+
     /// Replace all occurrences of `Type::Reference(tv_nr, _)` with `concrete`
     /// in every variable's type definition.  Used when instantiating a generic template.
     pub fn substitute_type(&mut self, tv_nr: u32, concrete: &Type) {
@@ -1730,7 +1786,11 @@ impl Function {
             if to.is_unknown() {
                 return self.is_new(var_nr);
             }
-            if !tp.is_unknown() {
+            // loft#944 — the element's own unresolved MEMBER counts too, not just a bare
+            // unresolved element.  `vector<(integer, unknown)>` is the pass-1 placeholder
+            // for `vector<(integer, Q)>`, and rejecting the refinement made pass 2 refuse
+            // the literal it had just resolved.
+            if !crate::data::Data::type_has_unresolved(tp) {
                 self.reject_retype(var_nr, type_def, data, lexer);
             }
         } else if !var_tp.is_unknown()
@@ -1747,6 +1807,15 @@ impl Function {
             // in pass 1) to its real type instead of erroring "cannot change
             // type from never to Cell".
             && !matches!(var_tp, Type::Never)
+            // …and the general form of both of those (loft#944).  A type carrying an
+            // unresolved component ANYWHERE is not a baseline a change can be measured
+            // against: pass 2 resolving it is a refinement, not a retype.  `is_unknown()`
+            // sees through `Vector` alone, which is why `&unknown` and then
+            // `(integer, unknown)` each had to be discovered as their own bug —
+            // `t: (integer, Q) = (71, q)` with `Q` declared below reported "cannot change
+            // type from (integer, unknown) to (integer, unknown)", naming one type twice
+            // because both spellings render the unresolved member the same way.
+            && !crate::data::Data::type_has_unresolved(var_tp)
         {
             // @PLN25 DN1: peel an `Optional` source — `&text ← text?` is the hoisted
             // work-buffer local (control.rs return-deps hoist) re-assigned from a
