@@ -1637,6 +1637,48 @@ use a separate collection or add after the loop"
         ops
     }
 
+    /// The clear a `= null` performs, plus the mark that says *absent* (loft#917).
+    ///
+    /// Releasing the records is the same work `= []` does and is not in question — the
+    /// field was told to let go of them either way. What `null` adds is the DISTINCTION:
+    /// afterwards the field holds `DbRef::ABSENT_REC` rather than the `0` that means an
+    /// empty collection, so `f.xs == null` can finally answer true without `f.xs = []`
+    /// answering it too.
+    ///
+    /// Marked only when the field's declared type carries the `?`. The clear itself
+    /// deliberately does NOT depend on it (loft#922 — a heap field is one type and one
+    /// layout whichever way it is spelled, and gating the RELEASE on the `?` silently kept
+    /// records the author had let go). The MARK is the opposite case: `?` is exactly the
+    /// declaration that this field may be absent, so writing the marker into a field
+    /// declared without one would let it read back as a null its own type forbids.
+    fn clear_vector_field_as(
+        &mut self,
+        to: &Value,
+        parent_tp: &Type,
+        f_type: &Type,
+        nullable: bool,
+    ) -> Vec<Value> {
+        let mut ops = self.clear_vector_field(to, parent_tp);
+        if !nullable || !Self::is_collection_type(f_type.base()) {
+            return ops;
+        }
+        // Write into the HOLDER's 4-byte field word, not through the field READ.
+        // `to` is `OpGetField(holder, offset, struct_tp)`, and its VALUE is a reference to
+        // the collection — writing at offset 0 of that lands in the collection record's own
+        // header. The slot that has to carry the marker is the one the struct literal
+        // writes, `OpSetInt4(holder, offset, …)`, so rebuild it from the same two arguments.
+        if let Value::Call(_, args) = to.unspan()
+            && args.len() >= 2
+        {
+            let holder = args[0].clone();
+            let offset = args[1].clone();
+            #[allow(clippy::cast_possible_wrap)]
+            let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
+            ops.push(self.cl("OpSetInt4", &[holder, offset, absent]));
+        }
+        ops
+    }
+
     /// `to` — an `OpGetField(var, off, struct_tp)` read — re-aimed at the sibling
     /// field at byte offset `off`. Rebuilt by swapping the offset in the SAME call
     /// so the base expression, its variable and the struct type all stay whatever
@@ -2640,6 +2682,9 @@ use a separate collection or add after the loop"
             && matches!(f_type.base(), Type::Vector(_, _))
             && self.is_field(to)
         {
+            // Read the `?` BEFORE `.base()` peels it away — it is the whole difference
+            // between a field that may record absence and one that may not (loft#917).
+            let declared_nullable = matches!(f_type, Type::Optional(_));
             let f_type = f_type.base();
             // loft#917 — `q.xs = null` on a `vector<T>?` field emitted a discarded null
             // sentinel: the field kept its records (leaking them) and kept its length, so
@@ -2659,7 +2704,11 @@ use a separate collection or add after the loop"
             // the identical field spelled without the `?` dropped the statement in silence,
             // keeping the records it was told to release.
             if matches!(s_type, Type::Null) {
-                *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
+                // loft#917 — and now it also MARKS the field absent, which is what makes
+                // the reader half work: `= null` and `= []` both release the records, and
+                // only the first leaves the reserved id behind.
+                let ops = self.clear_vector_field_as(to, &lhs_parent_tp, f_type, declared_nullable);
+                *code = Value::Insert(ops);
                 return Type::Void;
             }
             let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());

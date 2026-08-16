@@ -310,6 +310,21 @@ impl DbRef {
         self.store_nr == u16::MAX
     }
 
+    /// The record id a COLLECTION FIELD stores to mean *absent* (loft#917).
+    ///
+    /// [`DbRef::NULL`] says absent in the `store_nr`, which a field cannot use: a field
+    /// keeps only the 4-byte record id and [`Stores::get_ref`] rebuilds the rest from the
+    /// HOLDER's store, so `store_nr` is always a real store there. Record id `0` was the
+    /// only other candidate and it already means the EMPTY collection — which is why
+    /// `xs: null` and `xs: []` used to lower to the identical `OpSetInt4(h, 8, 0)` and
+    /// `xs == null` could never answer true.
+    ///
+    /// So absence gets its own reserved id, the same way a store reserves `u16::MAX`
+    /// (`database_named` asserts `slot != u16::MAX`). A record id indexes WORDS within a
+    /// store, so this is one word past the largest addressable store — unreachable for the
+    /// same reason, and now reserved rather than merely improbable.
+    pub const ABSENT_REC: u32 = u32::MAX;
+
     #[must_use]
     pub fn plus(&self, pos: u32) -> DbRef {
         DbRef {
@@ -590,40 +605,6 @@ pub fn linked_group_lint_enabled() -> bool {
 pub fn shadowed_by_method_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
-}
-
-/// loft#917 — a `?` on a COLLECTION field promises an absence the storage cannot hold.
-///
-/// A collection field stores a 4-byte RECORD ID, and a fresh field is zeroed. `null` and `[]`
-/// therefore write the identical zero — verified: `H { xs: null }` and `H { xs: [] }` both
-/// lower to `OpSetInt4(h, <off>, 0)` with no other difference — while `xs == null` compiles
-/// to `OpVectorIsNull`, which tests the *store_nr* sentinel a field read never produces. So
-/// the guard takes the present branch every time.
-///
-/// Unlike the scalar and struct cases this cannot be repaired in place. A distinct absent
-/// marker is a change to the STORED format of every existing collection field, so a persisted
-/// store would change meaning under a compiler upgrade — which the compatibility rule forbids
-/// outright. And the two obvious in-band readings are both wrong: record id zero already means
-/// `[]`, so testing it would newly answer `[] == null` as *true*. Giving the field the `__nullable`
-/// enum #896 built for structs needs a `Some` layout for a 4-byte payload that is not a record —
-/// the open half of loft#917, shared with loft#938.
-///
-/// So the DECLARATION is where this is answerable today: the field cannot honour the `?`, and
-/// until the layout exists the honest thing is to say so rather than accept it silently.
-///
-/// `warning` rather than `advice` by the tier rule: ignoring it produces a wrong result. A
-/// guard written `if h.xs == null` runs its present branch on an absent collection, which is
-/// the opposite of what the author wrote — not merely a worse spelling of a documented one.
-///
-/// Covers every collection kind, which is wider than the filed `vector<T>?`: `hash<E[k]>?` and
-/// `sorted<E[k]>?` answer `false` in exactly the same way. Scalars (`text?`, `integer?`) and
-/// struct fields (`E?`, fixed by loft#896) read back as null correctly and stay quiet.
-///
-/// **Default ON**; `LOFT_NO_NULLABLE_COLLECTION` opts out. One cached env read.
-#[must_use]
-pub fn nullable_collection_lint_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_COLLECTION").is_none())
 }
 
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +

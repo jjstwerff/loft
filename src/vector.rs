@@ -43,7 +43,7 @@ pub fn insert_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) ->
     }
     let real = real as i32;
     let store = keys::mut_store(db, stores);
-    let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let mut vec_rec = store.collection_rec(db.rec, db.pos);
     let new_length;
     if vec_rec == 0 {
         // claim a new array with minimal 11 elements
@@ -120,7 +120,7 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
         return;
     }
     let store = keys::mut_store(db, stores);
-    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let vec_rec = store.collection_rec(db.rec, db.pos);
     if vec_rec != 0 {
         return; // already allocated — don't overwrite
     }
@@ -164,7 +164,7 @@ pub fn reserve_vector(db: &DbRef, count: i64, elem_size: u32, stores: &mut [Stor
     // Same 11-element floor as `vector_append` / `pre_alloc_vector`, so a
     // reserved vector can never be shorter-capacity than an unreserved one.
     let words = checked_vec_cap(count.max(11), elem_size);
-    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let vec_rec = store.collection_rec(db.rec, db.pos);
     if vec_rec == 0 {
         let new_rec = store.claim(words);
         store.set_u32_raw(db.rec, db.pos, new_rec);
@@ -205,7 +205,7 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
             pos: 0,
         };
     }
-    let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let mut vec_rec = store.collection_rec(db.rec, db.pos);
     let pos = if vec_rec == 0 {
         // new array
         vec_rec = store.claim(checked_vec_cap(11, size)); // minimal 11 elements
@@ -305,7 +305,7 @@ pub fn vector_finish(db: &DbRef, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let vec_rec = store.collection_rec(db.rec, db.pos);
     let length = store.get_u32_raw(vec_rec, 4);
     store.set_u32_raw(vec_rec, 4, length + 1);
 }
@@ -314,7 +314,7 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     // Keep an extra record between the current and the new one.
     // This is needed to allow to create a new open space to move the new record to.
     let store = keys::mut_store(db, stores);
-    let mut sorted_rec = store.get_u32_raw(db.rec, db.pos);
+    let mut sorted_rec = store.collection_rec(db.rec, db.pos);
     // Claim a record at the back of the current structure or create a new structure.
     if sorted_rec == 0 {
         sorted_rec = store.claim(checked_vec_cap(12, size));
@@ -444,10 +444,35 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
     keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1 + length);
 }
 
-/// `#[inline]` because a generated `--native` program links this across a crate
-/// boundary with no LTO — see [`get_vector`].
+/// Is this collection ABSENT — a declared `?` that holds no collection (loft#917)?
+///
+/// A collection field or local is addressed by a DbRef aimed AT its 4-byte slot, not at the
+/// collection: `OpGetField` is pure pointer arithmetic (`pos + offset`) and the vector ops
+/// read the record id out of `(rec, pos)` themselves. So the value-level null — `store_nr ==
+/// u16::MAX`, which [`DbRef::is_null`] tests — can never appear there, and absence has to be
+/// read from the SLOT instead.
+///
+/// `0` in that slot already means the empty collection, so absence gets its own reserved id
+/// ([`DbRef::ABSENT_REC`]). This is the one place that reading is done; `OpVectorIsNull`
+/// consults it so `xs == null` and `xs == []` finally answer differently.
+///
+/// Guarded exactly like [`length_vector`]: a null DbRef, or one with no record or offset,
+/// has no slot to read and is answered without touching a store.
+///
+/// `#[inline]` because a generated `--native` program links this across a crate boundary
+/// with no LTO — see [`get_vector`].
 #[must_use]
 #[inline]
+pub fn is_absent_collection(db: &DbRef, stores: &[Store]) -> bool {
+    if db.is_null() {
+        return true;
+    }
+    if db.rec == 0 || db.pos == 0 {
+        return false;
+    }
+    keys::store(db, stores).get_u32_raw(db.rec, db.pos) == DbRef::ABSENT_REC
+}
+
 pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
     // A null vector (absent) and an unallocated/empty vector both have length 0;
     // the null sentinel is checked first so it never indexes stores[u16::MAX].
@@ -455,7 +480,7 @@ pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
         return 0;
     }
     let store = keys::store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     if v_rec == 0 {
         0
     } else {
@@ -472,7 +497,7 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     if v_rec != 0 {
         // Only set size of the vector to 0
         // TODO when the main path to a separate allocated objects: remove these
@@ -523,7 +548,7 @@ pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
             pos: 0,
         };
     }
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     let l = length_vector(db, stores);
     let f = if from < 0 { from + i64::from(l) } else { from };
     if f < 0 || f >= i64::from(l) {
@@ -580,7 +605,7 @@ pub fn vec_header(db: &DbRef, stores: &[Store]) -> VecHeader {
         };
     }
     let store = keys::store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     let len = if v_rec == 0 {
         0
     } else {
@@ -690,7 +715,7 @@ pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) ->
     }
     let len = i64::from(length_vector(db, stores));
     let store = keys::mut_store(db, stores);
-    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let vec_rec = store.collection_rec(db.rec, db.pos);
     let i = if index < 0 { index + len } else { index };
     if i >= len || i < 0 || vec_rec == 0 {
         return false;
@@ -848,7 +873,7 @@ pub fn ordered_find(
 }
 
 pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    let rec = keys::store(data, stores).collection_rec(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
@@ -874,7 +899,7 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
 /// stepper had only [`vector_next`], so the reverse bit had nothing to select
 /// (loft#904).
 pub fn vector_prev(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    let rec = keys::store(data, stores).collection_rec(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
@@ -947,7 +972,7 @@ pub fn ordered_range_cursors(
         return (i32::MAX as u32, 0);
     }
     let store = keys::store(data, stores);
-    let vec_rec = store.get_u32_raw(data.rec, data.pos);
+    let vec_rec = store.collection_rec(data.rec, data.pos);
     let length = if vec_rec == 0 {
         0
     } else {
@@ -1058,7 +1083,7 @@ pub fn step_ordered(
     } else {
         vector_next(data, &mut pos, stride, stores);
     }
-    let vector = store.get_u32_raw(data.rec, data.pos);
+    let vector = store.collection_rec(data.rec, data.pos);
     let (rec, elem_pos) = if pos == i32::MAX {
         (0, 8)
     } else if wide {
@@ -1085,7 +1110,7 @@ pub fn step_ordered(
 }
 
 pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    let rec = keys::store(data, stores).collection_rec(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
@@ -1105,7 +1130,7 @@ pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
 /// the first call sets `pos` to `length - 1` (last element).
 /// Returns `i32::MAX` when the iterator has moved past the first element.
 pub fn vector_step_rev(data: &DbRef, pos: &mut i32, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
+    let rec = keys::store(data, stores).collection_rec(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
@@ -1136,7 +1161,7 @@ pub fn sort_text_vector(db: &DbRef, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     if v_rec == 0 {
         return;
     }
@@ -1172,7 +1197,7 @@ pub fn sort_vector(db: &DbRef, elem_size: u16, is_float: bool, stores: &mut [Sto
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     if v_rec == 0 {
         return;
     }
@@ -1244,7 +1269,7 @@ pub fn reverse_vector(db: &DbRef, elem_size: u32, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_u32_raw(db.rec, db.pos);
+    let v_rec = store.collection_rec(db.rec, db.pos);
     if v_rec == 0 {
         return;
     }

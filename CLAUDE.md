@@ -374,18 +374,6 @@ nothing at the literal says so. Quiet on a member written `[]`, which is how eve
 constructed, and quiet when only one member is filled — those are the deliberate uses.
 `advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
 produce a result the language did not promise; what is wrong is the author's model) ·
-`LOFT_NO_NULLABLE_COLLECTION` (loft#917 `nullable-collection-field` WARNING: a `?` on a
-COLLECTION field — `vector`/`hash`/`sorted`/`index`/`radix`/`trie` — promises an absence the
-storage cannot hold. The field is a 4-byte RECORD ID and starts zeroed, so `H { xs: null }`
-and `H { xs: [] }` lower to the identical `OpSetInt4(h, off, 0)`, while `xs == null` lowers
-to `OpVectorIsNull`, a test of the *store_nr* sentinel a field read never produces — the
-guard takes the present branch every time. Not repairable under the field's own declaration:
-a distinct absent marker changes the STORED format of every existing collection field
-(compatibility forbids it), record id zero already means `[]` so an in-band reading would
-newly answer `[] == null` true, and the `__nullable` enum #896 built for structs needs a
-`Some` layout for a 4-byte non-record payload — the open half, shared with loft#938. Wider
-than the filed `vector<T>?`: `hash<E[k]>?` and `sorted<E[k]>?` fail identically. Quiet on
-scalar/struct `?` fields, which work, and on a nullable ELEMENT `vector<vector<T>?>`) ·
 `LOFT_NO_SHADOWED_BY_METHOD` (loft#940 `shadowed-by-method` WARNING: a LIBRARY's free
 `fn f(x: τ, …)` that no bare call can reach, because `find_fn` resolves the method
 spelling `t_<τ>_f` before the free `n_f` and reaches it through the stdlib row from

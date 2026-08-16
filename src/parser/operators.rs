@@ -2837,9 +2837,14 @@ impl Parser {
             // Match on the BASE type so a nullable vector (`vector<u8>? == null`, e.g.
             // a `read_bytes`/`list_dir` result — @PLN102 H4) is caught, not only a bare
             // `Type::Vector` — the same @PLN99 A5 gap the ref/enum null cases fixed.
+            // loft#917 — every COLLECTION kind, not just `vector`.  A keyed field is the
+            // same 4-byte slot and now carries the same absent marker, but `hash<K[k]>? ==
+            // null` fell past this test to `OpEqRef` — a DbRef comparison against
+            // `DbRef::NULL`, which a slot POINTER can never equal, so it answered false
+            // however the field was written.  `is_collection_type` is the shared list.
             let vec_null = (operator == "==" || operator == "!=")
-                && ((matches!(ctp.base(), Type::Vector(_, _)) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type.base(), Type::Vector(_, _))));
+                && ((Self::is_collection_type(ctp.base()) && second_type == Type::Null)
+                    || (*ctp == Type::Null && Self::is_collection_type(second_type.base())));
             // A float/single null is the NaN sentinel, and NaN compares unequal to
             // everything (including itself), so `f == null` can't go through OpEq —
             // it would always be false.  Test validity instead: convert(float, bool)
@@ -2904,7 +2909,7 @@ impl Parser {
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
                 // whose rec==0 null test would also match an empty `[]`.
                 if !self.first_pass {
-                    let (vec_code, vec_tp) = if matches!(ctp.base(), Type::Vector(_, _)) {
+                    let (vec_code, vec_tp) = if Self::is_collection_type(ctp.base()) {
                         (code.clone(), ctp.clone())
                     } else {
                         (second_code, second_type.clone())

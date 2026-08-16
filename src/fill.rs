@@ -2037,7 +2037,7 @@ fn length_vector(s: &mut State) {
 
 fn vector_is_null(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = v_r.store_nr == u16::MAX;
+    let new_value = vector::is_absent_collection(&v_r, &s.database.allocations);
     s.put_stack(new_value);
 }
 

@@ -9,6 +9,54 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `?` on a collection field means what it says (loft#917, 2026-08-16)
+
+A collection field is a 4-byte RECORD ID where `0` already means the EMPTY collection, so
+`xs: null` and `xs: []` lowered to the identical `OpSetInt4(h, 8, 0)` and `xs == null` could
+never answer true. The value-level null cannot help: `DbRef::NULL` says absent in `store_nr`,
+and a field has no `store_nr` — `OpGetField` is pure pointer arithmetic (`pos + offset`) and
+the collection ops read the id out of the slot themselves.
+
+**Absence gets its own reserved id.** `DbRef::ABSENT_REC` (`u32::MAX`), the same move a store
+already makes for `u16::MAX` (`database_named` asserts `slot != u16::MAX`). No layout change,
+no width change — one value reserved out of a range a record id cannot reach, since a record
+id indexes words within a store. Verified free before anything was built on it: the read
+conversion alone, with no writer, passed the whole suite 4141/4141.
+
+**The reserved id is read two ways, and keeping them apart is the design.**
+
+| reader | sees | because |
+|---|---|---|
+| `vector::is_absent_collection` | the RAW slot | `== null` is the one question whose answer differs between absent and empty |
+| `Store::collection_rec` | `MAX` mapped to `0` | every other reader asks "which record holds the elements?", and absent and empty answer that the same way |
+
+That split is what keeps the change to one accessor instead of a decision at each of the
+twenty-odd sites that dereference a slot — and a missed site is loud: taking `u32::MAX` for a
+record number is `get_u32_raw(MAX, 4)`, a SIGSEGV rather than a wrong answer. Two matrix rows
+(refilling an absent field, and `?? []` over one) caught exactly that when the writers landed
+before the readers.
+
+**Writers**, both gated on the declared `?` — without one the field's own type says it can
+never be absent: the struct literal (`handle_field`, the sibling of the `__nullable<S>` arm
+loft#896 added for structs) and the assignment (`clear_vector_field_as`). The RELEASE of the
+records is unchanged and stays ungated, which is loft#922's rule; only the marker is new.
+
+**`== null` now dispatches for every collection kind.** A keyed field is the same 4-byte slot
+and carries the same marker, but `hash<K[k]>? == null` fell past the vector-only selector to
+`OpEqRef` — a DbRef comparison against `DbRef::NULL` that a slot POINTER can never satisfy, so
+it answered false however the field was written.
+
+**Retired: the `nullable-collection-field` warning.** It existed to say the `?` was a promise
+the storage could not keep; that is no longer true. Its pinned row in `tests/e1_code_set.rs`,
+its DIAGNOSTICS.md entry and the `LOFT_NO_NULLABLE_COLLECTION` switch are gone with it.
+`tests/scripts/917-…loft` used to ASSERT the wrong answers and said so in its own header —
+"if a later layout change makes `== null` work, they fail and this file is the thing that says
+the warning can go". This is that change; the assertions are inverted.
+
+**Not loft#938.** That is the ownership half — who frees a returned `vector<T>?` — and is
+untouched: absence says nothing about who owns the collection that IS there.
+
+
 ### A null test on a collection FIELD does not free the record it read (loft#920, 2026-08-16)
 
 `vector == null` tests the null sentinel through `OpVectorIsNull`, which reads only the

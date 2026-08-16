@@ -2802,6 +2802,28 @@ impl Store {
         }
     }
 
+    /// Read a COLLECTION SLOT — the 4-byte record id a vector/keyed field or local holds.
+    ///
+    /// Identical to [`get_u32_raw`] except that it maps the reserved absent id
+    /// ([`DbRef::ABSENT_REC`], loft#917) to `0`. Every consumer that asks "which record
+    /// holds this collection's elements?" wants that: absent and empty are the same answer
+    /// to that question — no records — and differ only for the null TEST, which reads the
+    /// raw slot through `vector::is_absent_collection`.
+    ///
+    /// This exists so the distinction costs one accessor rather than a decision at each of
+    /// the twenty-odd sites that dereference a slot. Reading the raw value there instead
+    /// takes `u32::MAX` for a record number: `get_u32_raw(MAX, 4)` is out of bounds, and a
+    /// missed site is a SIGSEGV rather than a wrong answer.
+    #[inline]
+    pub fn collection_rec(&self, rec: u32, fld: u32) -> u32 {
+        let v = self.get_u32_raw(rec, fld);
+        if v == crate::keys::DbRef::ABSENT_REC {
+            0
+        } else {
+            v
+        }
+    }
+
     /// 4-byte unsigned raw write — counterpart of [`get_u32_raw`].
     #[inline]
     pub fn set_u32_raw(&mut self, rec: u32, fld: u32, val: u32) -> bool {

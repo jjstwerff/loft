@@ -26,6 +26,32 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A `?` on a list or map field now works
+
+You could always write it, and it never did anything:
+
+```loft
+struct Config { tags: vector<text>?, }
+
+c = Config { tags: null };
+c.tags == null            // said false
+```
+
+A collection field stores a record number, and zero already meant "empty" — so `null` and `[]`
+were written identically and the check could never come out true. loft warned you about this
+at the declaration and told you to drop the `?`.
+
+Now the two are different things, and the warning is gone:
+
+```loft
+Config { tags: null }.tags == null      // true  — absent
+Config { tags: [] }.tags   == null      // false — present, and empty
+```
+
+`len()` still answers 0 for both, which is usually what you want; `== null` is there for when
+the difference matters. Works for every collection kind — `vector`, `hash`, `sorted`, `index`,
+`spatial`, `trie` — on both backends, and nothing about how your data is stored changed.
+
 ### Checking a collection field against `null` no longer damages the record
 
 Comparing a `vector` field with `null` freed the storage of the struct it was read out of. The

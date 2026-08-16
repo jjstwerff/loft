@@ -4013,52 +4013,6 @@ impl Parser {
             if let Type::Integer(ref mut spec) = a_type {
                 spec.not_null = !nullable;
             }
-            // loft#917 — a `?` on a COLLECTION field is a promise the storage cannot keep.
-            // The field holds a 4-byte record id and starts zeroed, so `null` and `[]` write
-            // the identical zero, while `f == null` lowers to `OpVectorIsNull` — a test of the
-            // store_nr sentinel, which a field read never produces. The guard takes the
-            // present branch every time. A distinct absent marker would change the stored
-            // format of every existing collection field, so this cannot be repaired under the
-            // field's own declaration; saying so at the declaration is what IS answerable.
-            if crate::keys::nullable_collection_lint_enabled()
-                && let Type::Optional(inner) = &a_type
-                && matches!(
-                    inner.as_ref(),
-                    Type::Vector(_, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
-            {
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    code = "nullable-collection-field",
-                    "field `{a_name}` is declared `?`, but a collection field cannot read back \
-                     as null — it stores a record id whose zero already means empty, so \
-                     `{a_name} == null` is always false"
-                );
-                self.lexer.fix_last(crate::diagnostics::Fix {
-                    kind: crate::diagnostics::FixKind::Mechanical,
-                    title: format!("test `len({a_name}) == 0` for absence, and clear it with `[]`"),
-                    condition: None,
-                    edit: None,
-                    concept: "absence of a collection",
-                    concept_ref: "@F1",
-                });
-                self.lexer.fix_last(crate::diagnostics::Fix {
-                    kind: crate::diagnostics::FixKind::Mechanical,
-                    title: format!(
-                        "drop the `?` from `{a_name}` — it promises what the field cannot do"
-                    ),
-                    condition: None,
-                    edit: None,
-                    concept: "nullable fields",
-                    concept_ref: "@F1",
-                });
-            }
             self.reject_duplicate_index(d_nr, a_name, &a_type);
             let a = self
                 .data
