@@ -3911,10 +3911,39 @@ for reading that number: before the change, setting `LOFT_STDLIB_CACHE=1` on a
 `loft test` run did **nothing at all**, because the runner never called the API.
 
 What remains is the larger half of loft#925 and is NOT this cache: a `use`d LIBRARY
-is still compiled once per test file (~0.09 s per file per 30-module library on the
-same synthetic, and ~470 ms × 67 files for the consumer that reported it).  That
-needs a per-invocation compiled-library cache, which the per-file parser isolation
-makes a design question rather than a wiring one.
+is still compiled once per test file.  That needs a per-invocation compiled-library
+cache, which the per-file parser isolation makes a design question rather than a
+wiring one.
+
+**Measured, on a standalone synthetic** (best of 3, idle box; the generator is on
+loft#925).  A package of M modules behind an aggregator, N test files that all
+`use` it, beside a control package whose N test files `use` nothing:
+
+| N (M = 25) | `use` | control |   | M (N = 20) | per file |
+|---|---|---|---|---|---|
+| 1 | 0.10 s | 0.03 s |   | 10 modules | 0.039 s |
+| 5 | 0.35 s | 0.13 s |   | 25 modules | 0.065 s |
+| 10 | 0.66 s | 0.23 s |   | 50 modules | 0.122 s |
+| 20 | 1.36 s | 0.45 s |   | | |
+
+Dead linear in N with **zero amortization** — marginal 0.068 s/file against the
+control's 0.022 s/file — and the per-file cost is proportional to library size, so a
+suite pays the **product** of the two.  That is what makes it superlinear in project
+growth: a new module slows every test file, a new test file re-pays for every module.
+
+Two things had made this un-reproducible outside the reporting consumer, both worth
+knowing when cutting a suite-shaped benchmark: `loft test` refuses multiple file
+arguments (loft#916 — the suite form is a DIRECTORY, which only became nameable when
+`resolve_test_target` stopped appending `.loft` to one), and a package needs
+`[library] entry = …` or its own `src/` is not a library its tests can `use`.
+
+The recommended shape is to group test files by their ordered `use` list — one group
+in every consumer that has hit this — build each group's base parser (stdlib + libs)
+once, and start each file from an **in-memory clone**.  That captures the whole win
+above and needs no invalidation story.  A keyed on-disk bundle would additionally
+help the `loft test <one-file>` inner loop, but its key must cover every library
+source plus the resolved dependency graph; loft#930 is the recent reminder of what an
+incomplete key costs.
 
 ### Invalidation
 
