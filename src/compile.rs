@@ -360,13 +360,26 @@ fn register_native_stubs(state: &mut State, data: &Data) {
         // silently rots into this stub).  Name the fix, not the internal API: a generic
         // "call extensions::load_all() first" cost a multi-hour investigation once.
         // (A single generic stub — a `fn` pointer can't capture the symbol.)
+        // Two very different faults arrive here, and naming only the first sent a reader
+        // rebuilding libraries that were already current (loft#920): the nightly poison gate
+        // reported this panic — then a SIGSEGV as it unwound — on a tree whose cdylibs load
+        // fine, proven by the same suite passing on the same binary with `LOFT_POISON` unset.
+        // A freed record read back as poison is `0xDEADBEEF`, which indexes the static table
+        // at random and lands on whichever symbol lives there, so a store-lifetime bug
+        // presents as a missing library. The give-away is a `BUG (#306)` / strict-store line
+        // earlier in the run, and a crash site that MOVES between builds.
         let stub: fn(&mut Stores, &mut DbRef) = {
             |_stores: &mut Stores, _db: &mut DbRef| {
                 panic!(
-                    "native function not loaded: its library's native cdylib is missing or \
-                     stale (commonly: built against a different libloft.rlib). Rebuild the \
-                     native libraries with `make rebuild-native-cdylibs` — or `cargo build \
-                     --release` in the library's `native/` dir — then re-run."
+                    "native function not loaded. Either (a) its library's native cdylib is \
+                     missing or stale — commonly built against a different libloft.rlib; \
+                     rebuild with `make rebuild-native-cdylibs`, or `cargo build --release` \
+                     in the library's `native/` dir — or (b) a freed store was read and its \
+                     poisoned contents were used as the call index, in which case the real \
+                     fault is a store lifetime bug that happened EARLIER. Tell them apart: \
+                     if the run is green with LOFT_POISON unset, or an earlier line reports \
+                     `BUG (#306)` / a strict-store violation, it is (b) — re-run with \
+                     `LOFT_STRICT_STORES=1` to name the access and the free."
                 );
             }
         };
