@@ -299,6 +299,39 @@ fn loft_suite() -> std::io::Result<()> {
         })
         .collect();
     files.sort();
+    // `LOFT_SCRIPT_FIRST` / `LOFT_SCRIPT_LAST` — run only a WINDOW of the sorted corpus.
+    //
+    // The instrument for a fault that only appears in the whole-corpus run: one script
+    // corrupts the store table and a LATER, innocent one dies of it, so the question is
+    // "which earlier script?" and the only way to ask it is to run a subset. Without this
+    // the answer had to be guessed — loft#920 was attributed to the wrong script twice.
+    //
+    // A window rather than a limit, because both ends move: shrink `LAST` to find the
+    // script that DIES, then raise `FIRST` to find the earliest one whose presence still
+    // kills it. Indices are into the sorted list and are printed on every run, so a bisect
+    // step is a number rather than a filename. Pin the order with
+    // `LOFT_HASH_SEED=0x0123456789abcdef` — allocation order is what decides where latent
+    // corruption surfaces.
+    let idx_env = |k: &str, dflt: usize| -> usize {
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(dflt)
+    };
+    let first = idx_env("LOFT_SCRIPT_FIRST", 0);
+    let last = idx_env("LOFT_SCRIPT_LAST", files.len());
+    if first != 0 || last != files.len() {
+        eprintln!(
+            "loft_suite: window [{first}, {last}) of {} scripts — NOT a full run",
+            files.len()
+        );
+        files = files
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| *i >= first && *i < last)
+            .map(|(_, p)| p)
+            .collect();
+    }
     // Scripts with dedicated #[ignore] wrappers are skipped here to keep
     // loft_suite green while the feature is under development.
     let skip: HashSet<&str> = ignored_scripts();

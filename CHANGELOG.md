@@ -26,6 +26,20 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Checking a collection field against `null` no longer damages the record
+
+Comparing a `vector` field with `null` freed the storage of the struct it was read out of. The
+next read of that field then returned whatever had since been put in its place:
+
+```loft
+h = Holder { vec: [71, 82, 93] };
+x = h.vec == null;
+filler: vector<integer> = [11, 22, 33, 44, 55, 66, 77, 88];
+len(h.vec ?? [])          // said 8 — the filler's length — instead of 3
+```
+
+No warning, no crash, on both backends: one variable quietly reading another's data. Fixed.
+
 ### Using a type inside a tuple before you declare it
 
 loft lets you use a struct before the line that declares it — except inside a tuple, where

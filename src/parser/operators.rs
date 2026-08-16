@@ -2915,7 +2915,24 @@ impl Parser {
                     // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
                     // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
                     // store, so it needs no work-ref.
-                    let w = if matches!(vec_code.unspan(), Value::Var(_)) {
+                    //
+                    // Neither does an operand whose type declares a BORROW.  "Non-`Var`" was
+                    // standing in for "a temp that owns its store", and a FIELD READ is
+                    // non-`Var` too: `h.vec == null` captured `OpGetField(h, …)` — a DbRef
+                    // into `h`'s record — and freed it, taking the holder's storage with it.
+                    // The next read of the same field then returned poisoned bytes, which
+                    // `len()` dereferenced: SIGSEGV under `LOFT_POISON=1`, and the nightly
+                    // UB gate's failure (loft#920).  The type already answers this — the
+                    // field read is typed `optional(vector(…, deps { items: [0] }))` — so ask
+                    // it rather than inferring ownership from the value's shape.
+                    //
+                    // Strictly narrowing: only an operand that POSITIVELY declares a borrow
+                    // loses its work-ref.  A call result still gets one, so this does not
+                    // touch loft#938, whose difficulty is the opposite case — an owning and a
+                    // borrowing nullable-collection RETURN are both spelled with EMPTY deps
+                    // and cannot be told apart here at all.
+                    let borrows = !vec_tp.depend().is_empty();
+                    let w = if matches!(vec_code.unspan(), Value::Var(_)) || borrows {
                         u16::MAX
                     } else {
                         self.vars.work_refs(&vec_tp, &mut self.lexer)

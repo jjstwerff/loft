@@ -9,6 +9,52 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A null test on a collection FIELD does not free the record it read (loft#920, 2026-08-16)
+
+`vector == null` tests the null sentinel through `OpVectorIsNull`, which reads only the
+sentinel and discards the vector — so a heap-owning TEMP consumed by the test would be
+orphaned. `parse_compare` captures a non-`Var` operand in a work-ref precisely so scope exit
+frees it (loft#938's caller half).
+
+**"Non-`Var`" was standing in for "a temp that owns its store", and a FIELD READ is non-`Var`
+too.** `h.vec == null` captured `OpGetField(h, …)` — a DbRef pointing INTO `h`'s record — and
+freed it:
+
+```
+x = { __ref_1 = OpGetField(h, 0i32, 21i32); OpVectorIsNull(__ref_1); OpFreeRef(__ref_1); }
+```
+
+The type said so all along: that read is `optional(vector(…, deps { items: [0] }))`, and a
+non-empty dep list means BORROWS. The work-ref is now skipped for an operand that positively
+declares a borrow — strictly narrowing, so a call result keeps its work-ref and loft#938 is
+untouched (its leak count is unchanged, and that is a control in the guard).
+
+**This was the nightly UB gate's SIGSEGV**, red for three sessions. Under `LOFT_POISON=1` the
+freed record reads back `0xDEADBEEF`, so the next read of the same field built a garbage
+DbRef and `len()` dereferenced it. The whole-corpus run is now green under
+`LOFT_POISON=1 LOFT_HASH_SEED=0x0123456789abcdef`: **1876/1876**.
+
+**It was never only a UB-gate problem.** With no flags at all, letting the freed slot be
+recycled makes the next read of that field answer *another variable's data*:
+
+```loft
+h = Holder { vec: [71, 82, 93] };
+x = h.vec == null;
+filler: vector<integer> = [11, 22, 33, 44, 55, 66, 77, 88];
+len(h.vec ?? [])        // 8 before the fix — the FILLER's length; 3 after
+```
+
+Both backends, released 2026.8.0 included. That is what the guard asserts, because a crash
+needs a flag and a silent wrong answer does not.
+
+**How it was found, since the previous two attributions were wrong.** `tests/wrap.rs` gained
+`LOFT_SCRIPT_FIRST`/`LOFT_SCRIPT_LAST`, which run a WINDOW of the sorted corpus — the
+instrument a "one script corrupts, a later one dies" fault needs, and the one whose absence
+made the last three sessions guess. A bisect over 739 scripts took ten runs and landed on a
+single file; from there the reduction is six lines. Note the byte-vs-locale sort trap: `ls |
+sort` and Rust's `PathBuf` sort disagree, and an off-by-one there briefly indicted the
+neighbouring script.
+
 ### A forward reference inside a tuple resolves like one anywhere else (loft#944, 2026-08-16)
 
 An in-file forward reference resolves by ADOPTION: the name becomes a `DefType::Unknown`
