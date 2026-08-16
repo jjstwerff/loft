@@ -1622,6 +1622,41 @@ impl Type {
         self.peel_optional().0
     }
 
+    /// The type the return-buffer machinery should treat this return as (loft#938).
+    ///
+    /// `Optional(Vector(τ))` peels to `Vector(τ)`: a nullable COLLECTION return lays out
+    /// exactly like the bare one and wants the same hidden `__retbuf`, which is what stops
+    /// the caller inheriting a store the callee allocated per call.
+    ///
+    /// Every other `Optional` stays WRAPPED, and that is the load-bearing half. A nullable
+    /// STRUCT return (`-> S?`) is loft#896's synthetic `__nullable<S>` enum — a different
+    /// representation with its own delivery — and giving it a buffer as well leaks one record
+    /// per call. The `?` is transparent only where the storage under it is.
+    ///
+    /// Gated on [`keys::nullable_ret_buffer`], **OPT-IN and default off**: with the switch
+    /// off this is the IDENTITY, so every caller reads exactly as it did before the gate
+    /// existed. See that switch for what turning it on currently fixes and what it does not.
+    #[must_use]
+    pub fn ret_promo_base(&self) -> &Type {
+        if !crate::keys::nullable_ret_buffer() {
+            return self;
+        }
+        match self {
+            Type::Optional(inner) if matches!(inner.as_ref(), Type::Vector(_, _)) => inner,
+            other => other,
+        }
+    }
+
+    /// Does [`ret_promo_base`](Self::ret_promo_base) peel a `?` off this return type?
+    ///
+    /// The companion to it, so a caller that must RE-WRAP after rebuilding the base asks the
+    /// same question instead of re-deriving the rule. `false` whenever the switch is off.
+    #[must_use]
+    pub fn ret_promo_peels(&self) -> bool {
+        crate::keys::nullable_ret_buffer()
+            && matches!(self, Type::Optional(inner) if matches!(inner.as_ref(), Type::Vector(_, _)))
+    }
+
     /// This type with the `Rewritten` marker removed.
     ///
     /// `Rewritten(τ)` says a value was built in place (a struct literal constructed

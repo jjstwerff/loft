@@ -9,6 +9,61 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable collection return can have a return buffer — opt-in (loft#938, 2026-08-17)
+
+**`LOFT_NULLABLE_RETBUF=1`, OFF by default.** Built and validated far enough to be a basis,
+not far enough to default on. With the switch off every consulting site is byte-identical to
+before it existed: `Type::ret_promo_base` is the identity and `ret_promo_peels` is `false`.
+
+**What it does.** A `-> vector<T>?` gets the same hidden `__retbuf` the non-nullable form
+already gets. That is the whole fix, and the reason it is the right shape is visible in the
+non-nullable callee, which normalises EVERY arm into the caller's buffer:
+
+```
+if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);        __retbuf }
+else      { …build…; OpClearVector(__retbuf); OpAppendVector(__retbuf, _vec_1, 0);
+            OpFreeRef(__vdb_1);                                             __retbuf }
+```
+
+So ownership never varies at the call site — the ABI removes the variance rather than
+deciding it, and the caller frees one buffer per call SITE, which is why a loop does not
+leak. This corrects the earlier note on the issue, which argued from the nullable lowering
+that ownership was undecidable in principle. It is not; `Optional` was blind at every gate.
+
+**Five gates, each hidden behind the one before it:**
+
+| gate | symptom while blind |
+|---|---|
+| the `__retbuf` signature gate (`definitions.rs`) | no buffer created |
+| the top-level promotion gate (`control.rs`) | `classify_ret_promotion` never called at all |
+| `Bind` eligibility | no delivery emitted |
+| two `Vector` carve-outs | nullable took a different route |
+| `ref_return`'s re-typing | *"Unexpected return type in ref_return: vector<integer>?"* |
+
+The second one is why this took three sessions: it guards the WHOLE pass, so the symptom was
+the ABSENCE of a trace line rather than a wrong decision. `LOFT_TRACE_RETPROMO=1` exists for
+exactly that reading.
+
+**The peel is narrow on purpose.** `Optional(Vector)` only. Widening it to
+`Optional(Reference(S))` leaks one record per call — a nullable STRUCT return is loft#896's
+synthetic `__nullable<S>` enum with its own delivery, and
+`882-keyed-element-read-borrows-its-container.loft` catches it. The `?` is transparent only
+where the storage under it is.
+
+**Still open with the switch on**, both pinned as `#[ignore]`d tests in
+`tests/nullable_ret_buffer.rs` so they are named and runnable:
+
+* a function mixing a `null` arm, a parameter ALIAS arm and a FRESH arm leaks its fresh arms.
+  The null arm forces the `__ret_N` merge before promotion sees the arms, so none is a return
+  tail and none delivers. Value correct, container intact, `--interpret` only.
+* `pln133-optional-unify.loft` miscompiles on `--native` — a method returning `vector<T>?`
+  through different routes reads an element back as `0` where `14` is correct, while the
+  interpreter passes. A silent wrong answer on one backend is why this is not defaulted on.
+
+**How to finish it:** get those two green, then flip the default and delete
+`default_path_is_unchanged`. `make ci` 4144/4144 with the switch off.
+
+
 ### A `?` on a collection field means what it says (loft#917, 2026-08-16)
 
 A collection field is a 4-byte RECORD ID where `0` already means the EMPTY collection, so

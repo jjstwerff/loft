@@ -11008,7 +11008,7 @@ impl Parser {
             && !(!is_work_ref
                 && ctx.is_plain_fn
                 && ctx.site == RetSite::BlockTail
-                && matches!(ctx.ret, Type::Vector(_, _)))
+                && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _)))
         {
             return RetPromotion::SkipReassigned;
         }
@@ -11075,7 +11075,8 @@ impl Parser {
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
             || a1b_site
-            || (ctx.site == RetSite::MidReturn && matches!(ctx.ret, Type::Vector(_, _))));
+            || (ctx.site == RetSite::MidReturn
+                && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))));
         if allow_rename
             && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
         {
@@ -11084,9 +11085,10 @@ impl Parser {
                 chain_site: ctx.site == RetSite::MidReturn && is_work_ref,
             };
         }
+        // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
         if ctx.is_plain_fn
             && matches!(
-                ctx.ret,
+                ctx.ret.ret_promo_base(),
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
             )
             && let Some((buf_attr, buf_var)) = self.return_buffer()
@@ -11241,7 +11243,12 @@ impl Parser {
         // DbRef locally; the caller never reserves matching stack space;
         // OpReturn's value-width mismatches the reserved slot and the
         // interpreter loops on Return(ret=0, value=16) at PC=0.
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
+        // loft#938 gate 2 of 5, and the one that hid the rest: this guards the WHOLE
+        // promotion pass, so a nullable return matched no arm and `classify_ret_promotion`
+        // was never called for it — no output from `LOFT_TRACE_RETPROMO` at all.
+        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) =
+            ret.ret_promo_base()
+        {
             let mut dep = cur.clone();
             // #306: a returned local can itself hold a view — its TYPE deps name
             // the vars it borrows from (`chosen = table[idx]; chosen` gives
@@ -11507,20 +11514,33 @@ impl Parser {
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
             let dep = Deps::attrs(dep.to_vec());
-            self.data.definitions[self.context as usize].returned = match ret {
-                Type::Vector(it, _) => Type::Vector(it, dep),
-                Type::Reference(td, _) => Type::Reference(td, dep),
-                Type::Enum(td, true, _) => Type::Enum(td, true, dep),
-                _ => {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unexpected return type in ref_return: {}",
-                        ret.name(&self.data)
-                    );
-                    return;
+            // loft#938 — rebuild the deps on the BASE and re-wrap, so a nullable return keeps
+            // its `?`.  Matching `ret` directly refused `vector<T>?` outright once promotion
+            // began reaching it: the deps belong to the storage and the `?` to the value, and
+            // re-typing one must not drop the other.  Both calls are the identity when the
+            // switch is off, so this arm reads as it always did.
+            let rewrap = |t: Type| {
+                if ret.ret_promo_peels() {
+                    Type::optional(t)
+                } else {
+                    t
                 }
             };
+            self.data.definitions[self.context as usize].returned =
+                match ret.ret_promo_base().clone() {
+                    Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
+                    Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
+                    Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
+                    _ => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unexpected return type in ref_return: {}",
+                            ret.name(&self.data)
+                        );
+                        return;
+                    }
+                };
         }
     }
 

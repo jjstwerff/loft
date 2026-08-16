@@ -1528,12 +1528,23 @@ impl Parser {
                     DefType::Function | DefType::Generic
                 )
                 && self.data.def(self.context).rust().is_empty()
+                // loft#938 gate 1 of 5 — `ret_promo_base` peels `Optional(Vector)` so a
+                // NULLABLE collection return gets the buffer too.  Identity while
+                // `LOFT_NULLABLE_RETBUF` is off, which is the default.
                 && matches!(
-                    self.data.def(self.context).returned(),
+                    self.data.def(self.context).returned().ret_promo_base(),
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
                 )
             {
-                let ret = self.data.def(self.context).returned().clone();
+                // The buffer's own type is the BASE: it is storage, and storage is never
+                // absent.  The RETURN keeps its `?` — a null answer is a value the caller
+                // reads, not a buffer it fails to receive.
+                let ret = self
+                    .data
+                    .def(self.context)
+                    .returned()
+                    .ret_promo_base()
+                    .clone();
                 let a =
                     self.data
                         .add_attribute(&mut self.lexer, self.context, "__retbuf", ret.clone());

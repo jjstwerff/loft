@@ -607,6 +607,60 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
 }
 
+/// `LOFT_NULLABLE_RETBUF=1` — give a NULLABLE COLLECTION return the same hidden `__retbuf`
+/// the non-nullable one gets. **OPT-IN, DEFAULT OFF** (loft#938).
+///
+/// Off, every consulting site is byte-identical to today: [`Type::ret_promo_base`] is the
+/// identity and [`Type::ret_promo_peels`] is `false`, so the five gates below read exactly as
+/// they did before this existed.
+///
+/// # What it is for
+///
+/// `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller inherits
+/// whatever store the callee allocated — a fresh one per loop turn against a single
+/// scope-exit free. That is loft#938's leak. The NON-nullable twin of the same function is
+/// clean because its callee normalises every arm into the caller's buffer:
+///
+/// ```text
+/// if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);       __retbuf }
+/// else      { …build…; OpClearVector(__retbuf); OpAppendVector(__retbuf, _vec_1, 0);
+///             OpFreeRef(__vdb_1);                                            __retbuf }
+/// ```
+///
+/// So ownership never varies at the call site, and it does not need to: the ABI removes the
+/// variance rather than deciding it. `Optional` was simply blind at every gate on the way.
+///
+/// # State — what turning it on does today
+///
+/// Fixes the filed case: the unbound `f(i) != null` loop goes from 39 leaked stores to 0,
+/// and a `-> vector<T>?` returning a BORROWED view is still not over-freed. Two known
+/// failures remain, both reproducible with the switch on:
+///
+/// * **A mixed function leaks its fresh arms.** `if n==0 {null} else if n==1 {v} else {[…]}`
+///   merges its arms into `__ret_N` (the null-arm merge) BEFORE promotion sees them, so no
+///   arm is a return tail and none delivers. Value correct, container intact, 38/40 leaked.
+///   `--interpret` only.
+/// * **`pln133-optional-unify.loft` miscompiles on `--native`** — a method returning
+///   `vector<T>?` through different routes reads back `0` where it should read `14`, while
+///   the interpreter passes. A silent wrong answer on one backend, which is why this is not
+///   defaulted on.
+///
+/// # For whoever finishes it
+///
+/// The peel is deliberately narrow — `Optional(Vector)` only. Widening it to
+/// `Optional(Reference(S))` leaks one record per call, because a nullable STRUCT return is
+/// loft#896's synthetic `__nullable<S>` enum with its own delivery
+/// (`882-keyed-element-read-borrows-its-container.loft` catches it). The `?` is transparent
+/// only where the storage under it is.
+///
+/// Reach for [`trace_ret_promotion`] first: no output for a function means a gate UPSTREAM of
+/// the classifier, which is a different bug from the classifier deciding wrong.
+#[must_use]
+pub fn nullable_ret_buffer() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NULLABLE_RETBUF").is_some())
+}
+
 /// `LOFT_TRACE_RETPROMO=1` — name every candidate the return-buffer promotion classifies,
 /// with the function, the variable and the declared return type.
 ///
