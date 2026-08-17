@@ -486,6 +486,11 @@ check_examples() {
   local registry="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
   local repo_root="${EXAMPLES_REPO_ROOT:-.}"
   local cite_roots="${EXAMPLES_CITE_ROOTS:-default lib}"
+  # The loft repo hosting this gate is always available in place at `.` (the script cd'd
+  # to the loft root at startup) — even in a library CI, where loft is checked out as
+  # loft-src rather than a sibling ../loft.  So loft's OWN acronyms (STD/GIT/LEX/…)
+  # resolve there for any repo-under-test.  Its registry name is `loft` by convention.
+  local host_repo="${EXAMPLES_HOST_REPO:-loft}"
   local self_name; self_name=$(basename "$(cd "$repo_root" 2>/dev/null && pwd)")
   local cited cache
   cited=$(mktemp); cache=$(mktemp -d)
@@ -511,10 +516,13 @@ check_examples() {
     repo=$(printf '%s' "$row" | cut -f2)
     url=$(printf '%s'  "$row" | cut -f3)
     branch=$(printf '%s' "$row" | cut -f4)
-    # A foreign repo is a sibling checkout (../<repo>); the repo-under-test itself is
-    # scanned in place at repo_root (robust to the checkout dir's actual name).
+    # Resolve the owning repo to a checkout: the repo-under-test itself (in place at
+    # repo_root), the loft host repo (always in place at `.`, even as loft-src in a
+    # library CI), or a foreign sibling checkout (../<repo>).
     lpath="../$repo"
-    [ "$self_name" = "$repo" ] && lpath="$repo_root"
+    if [ "$self_name" = "$repo" ]; then lpath="$repo_root"
+    elif [ "$repo" = "$host_repo" ]; then lpath="."
+    fi
     if [ ! -d "$lpath" ]; then
       yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it to validate. link: $url"
       HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
@@ -529,7 +537,7 @@ check_examples() {
       say "  ok  $t -> $def"
     else
       link="$url/blob/$branch/$(printf '%s' "$def" | sed 's/:\([0-9][0-9]*\)$/#L\1/')"
-      say "  ok  $t -> $link  (validated against sibling ../$repo)"
+      say "  ok  $t -> $link  (validated against $repo)"
     fi
   done < "$cited"
   # DUPLICATE — one tag on two fns in THIS repo (each foreign repo owns its own).

@@ -349,10 +349,13 @@ Built (loft-side only, no library-repo edit):
   `EXAMPLES_CITE_ROOTS` (dirs grepped for citations, `default lib`), `EXAMPLES_REGISTRY`
   (for test isolation). The script cd's to the loft root at startup, so the registry
   and cross-repo link logic stay loft-anchored while the citation + local-def scan
-  follow `REPO_ROOT`. The self-repo's acronym resolves in place; a foreign acronym
-  keeps the sibling `../<repo>` path (an `unvalidated` warning when absent — e.g. a
-  library citing a loft `@STD` tag in its own CI, where loft is at `loft-src` not a
-  sibling; rare, non-gating, a noted follow-up).
+  follow `REPO_ROOT`. Three repos resolve in place: the repo-under-test (its own
+  acronym), the **loft host repo** (its acronyms — `STD`/`GIT`/… — always available at
+  `.`, since the gate runs from inside loft even when loft is checked out as `loft-src`
+  in a library CI, so a library citing a loft `@STD` tag hard-validates to the loft
+  blob link, and a missing one is real `dangling` drift), and a foreign sibling
+  checkout `../<repo>` (an `unvalidated` warning only when genuinely absent, e.g. an
+  app repo like `moros`).
 - `library-ci-reusable.yml` gained a **gating** per-package step running that gate with
   `REPO_ROOT=$GITHUB_WORKSPACE` + `CITE_ROOTS="<pkg>/src <pkg>/tests"`. **Vacuously
   green for a package with no citations**, so it is safe on all libraries from day one
