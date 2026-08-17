@@ -256,6 +256,42 @@ pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<ConstElem
     extract_literal_values(IrNode::Native(code), data)
 }
 
+/// loft#955 — a unary-minus call over a numeric literal, folded to the literal it means.
+///
+/// `-5` in source is `OpMinSingleInt(Int(5))` in the IR, not `Int(-5)`: unary minus is an
+/// operator like any other, and nothing had folded it by the time the constant store is
+/// built.  Only the three UNARY negations are matched — `OpMinInt` and friends are binary
+/// subtraction and their two operands are not a literal element.
+///
+/// `checked_neg` rather than `-`: loft spells a null integer as the type's MIN value
+/// ([CODE.md](../doc/claude/CODE.md) null sentinels), and negating that overflows.  Such a
+/// literal cannot be written anyway, so answering `None` refuses the constant exactly as
+/// before rather than inventing a value — which for a SENTINEL would mean pre-building a
+/// null the author never wrote.
+fn fold_negated_literal(v: &IrNode, data: &Data) -> Option<Value> {
+    if v.kind() != ValueType::Call {
+        return None;
+    }
+    let op = data.def(v.call_to()).name();
+    if !matches!(
+        op,
+        "OpMinSingleInt" | "OpMinSingleFloat" | "OpMinSingleSingle"
+    ) {
+        return None;
+    }
+    let args = v.call_args();
+    if args.len() != 1 {
+        return None;
+    }
+    match args.get(0).to_owned_value() {
+        Value::Int(n) => n.checked_neg().map(Value::Int),
+        Value::Long(n) => n.checked_neg().map(Value::Long),
+        Value::Float(f) => Some(Value::Float(-f)),
+        Value::Single(f) => Some(Value::Single(-f)),
+        _ => None,
+    }
+}
+
 fn extract_literal_values(code: IrNode, data: &Data) -> Vec<ConstElement> {
     if code.kind() != ValueType::Block {
         return vec![];
@@ -315,7 +351,23 @@ fn extract_literal_values(code: IrNode, data: &Data) -> Vec<ConstElement> {
                     };
                     current.push((offset as u32, v.to_owned_value()));
                 }
-                _ => return vec![], // non-literal value — can't pre-build
+                // loft#955 — a NEGATIVE element is still a literal, but it does not look
+                // like one here: unary minus lowers to a CALL (`OpMinSingleInt(5)`), which
+                // fell to the bail below and pre-built the WHOLE constant empty.  One
+                // negative element anywhere in the literal was enough, and nothing said so
+                // — `len()` answered 0, every index answered null, and a `for` over it ran
+                // zero times, so assertions inside held vacuously.  A local with the same
+                // literal was correct, which is what made it look like a value problem
+                // rather than a const-store one.
+                _ => {
+                    let Some(negated) = fold_negated_literal(&v, data) else {
+                        return vec![]; // genuinely non-literal — can't pre-build
+                    };
+                    let Some(current) = elements.last_mut() else {
+                        return vec![];
+                    };
+                    current.push((offset as u32, negated));
+                }
             }
         }
     }

@@ -26,6 +26,21 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A constant list with a negative number in it works
+
+```loft
+const OFFSETS: vector<integer> = [10, -5, 9];
+```
+
+That read back **empty** — `len()` gave 0, every index gave null, and a `for` over it ran
+zero times. No error, no warning, on both backends. One negative number anywhere in the
+list was enough; all-positive lists of any length were fine, and the same list written
+inside a function was fine.
+
+Worth knowing even if you never hit it: a loop over an empty list runs its body zero
+times, so *every check inside it passes*. A test built on such a constant is green
+because it is measuring nothing.
+
 ### `map` can change the element type
 
 `map` is documented as `fn(T) -> U` answering a `vector<U>`, and now it is:
