@@ -1487,6 +1487,25 @@ impl Parser {
         (code, tp)
     }
 
+    /// Whether a stored constant's IR still carries the file-scope "no slot" sentinel —
+    /// i.e. a name its initialiser could not resolve.
+    ///
+    /// `create_var` answers `u16::MAX` when there is no frame to allocate in, which is
+    /// every file-scope initialiser, so an unresolved name in one reads back as
+    /// `Var(u16::MAX)` rather than as a missing definition.  Nothing legitimate puts that
+    /// number in a constant: a real work buffer comes from `work_text`, and an initialiser
+    /// carrying any other frame slot is refused at the declaration (loft#744).
+    fn constant_is_unresolved(code: &Value) -> bool {
+        let mut unresolved = false;
+        let mut probe = code.clone();
+        crate::parser::definitions::visit_constant_vars(&mut probe, &mut |v| {
+            if *v == u16::MAX {
+                unresolved = true;
+            }
+        });
+        unresolved
+    }
+
     pub(crate) fn parse_constant_value(
         &mut self,
         code: &mut Value,
@@ -1621,6 +1640,30 @@ impl Parser {
             } else if self.data.def_type(d_nr) == DefType::Constant {
                 let const_code = self.data.def(d_nr).code().clone();
                 let const_tp = self.data.def(d_nr).returned().clone();
+                // loft#962 — a constant reached BEFORE pass 2 has re-read its own
+                // declaration still holds the first pass's answer, and pass 1 resolves
+                // names against an incomplete table.  Two ways that shows up, one cause:
+                // `create_var` has no frame at file scope, so an unresolved name left
+                // `Var(u16::MAX)` behind and pasting it panicked the variable allocator at
+                // `index 65535`; an unresolved CALL left the whole constant typed
+                // `Unknown`, and pasting that printed `null` with no diagnostic at all.
+                // Refuse both here — the only site that knows a paste is about to happen
+                // — and name the ordering that caused it.  Pass 2 only: on pass 1 the
+                // placeholder is the expected forward-reference stub.
+                if !self.first_pass
+                    && (const_tp.is_unknown() || Self::constant_is_unresolved(&const_code))
+                {
+                    let decl = self.data.def(d_nr).position().clone();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "constant '{name}' is read here, above its declaration at {decl}, \
+                         and that declaration reads a name of its own that is only known \
+                         later — move `{name}`'s declaration above this use"
+                    );
+                    *code = Value::Null;
+                    return Type::Unknown(0);
+                }
                 // vector constants are pre-built in CONST_STORE during
                 // byte_code(). Emit OpConstRef + OpCopyRecord to deep-copy
                 // from the constant store into a fresh runtime store.
