@@ -25,6 +25,7 @@
 #   scripts/check_doc_drift.sh stale           # only stale claims
 #   scripts/check_doc_drift.sh roadmap         # only ROADMAP/disk cross-check
 #   scripts/check_doc_drift.sh refs            # only finished/deferred refs
+#   scripts/check_doc_drift.sh examples        # only worked-example tag resolution
 #
 # Exit code: 0 = clean (or only time-projection warnings), 1 = drift.
 
@@ -45,6 +46,7 @@ HITS_STALE=0
 HITS_ROADMAP=0
 HITS_REFS=0
 HITS_LIBS=0
+HITS_EXAMPLES=0
 
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
@@ -431,6 +433,68 @@ has_header_docstring() {
   [ "$count" -gt 0 ]
 }
 
+# ---- Check: worked-example tags resolve to a real test (@PLN141) ----
+# A stdlib / library function documents its correct use by CITING a test that
+# demonstrates it: `// Example: @AAA-###` in the function's doc comment, where the
+# tag names a test carrying `// @AAA-###` directly above its `fn`.  This check makes
+# the citation honest — the doc-validation counterpart of dryopea's examples gate:
+#
+#   dangling   a citation whose tag no test carries (the test was deleted/renamed) —
+#              the exact "the tag must resolve to an actual test" failure.
+#   duplicate  one tag on two test fns, so a citation is ambiguous.
+#
+# The `@AAA-###` shape (three letters, hyphen, three digits) is distinct from the
+# repo's other tag families (@F1, @P259, @PLN141) — none has that hyphen — so this
+# never collides with them.  Citations live in default/ (stdlib) + lib/; tag
+# definitions live in the test trees + examples/.
+check_examples() {
+  say "=== Worked-example tags resolve to a test ==="
+  local tag_re='@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]'
+  local cited defs
+  cited=$(mktemp); defs=$(mktemp)
+  # Citations: the tags named on `// Example:` lines in stdlib + library sources.
+  grep -rhnE "//[[:space:]]*Example:" default/ lib/ --include='*.loft' 2>/dev/null \
+    | grep -oE "$tag_re" | sort -u > "$cited"
+  # Definitions: a `// @AAA-###` tag comment bound to the `fn` that FOLLOWS it (a
+  # blank line breaks the block, so a header tag cannot claim an unrelated fn).  An
+  # `Example:` line is a citation, never a definition.  One line per defining test.
+  find tests examples -name '*.loft' -print0 2>/dev/null | xargs -0 awk '
+    /^[[:space:]]*\/\/.*Example:/ { pend=""; next }
+    /^[[:space:]]*\/\// && match($0, /@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]/) {
+      pend = substr($0, RSTART, RLENGTH); next }
+    /^[[:space:]]*\/\// { next }
+    /^[[:space:]]*$/ { pend=""; next }
+    /^[[:space:]]*(pub )?fn / { if (pend != "") { print pend; pend="" } next }
+    { pend="" }
+  ' 2>/dev/null | sort > "$defs"
+  local defs_u; defs_u=$(sort -u "$defs")
+  local n_cited; n_cited=$(grep -cvE '^$' "$cited")
+  local hits=0
+  # DANGLING — a citation that resolves to no test.
+  local t
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    if ! printf '%s\n' "$defs_u" | grep -qxF "$t"; then
+      red "  dangling: $t is cited but no test carries it"
+      grep -rnE "Example:.*$t" default/ lib/ --include='*.loft' 2>/dev/null | sed 's/^/      /'
+      hits=$((hits + 1))
+    fi
+  done < "$cited"
+  # DUPLICATE — one tag on two tests, so a citation is ambiguous.
+  local d
+  for d in $(uniq -d "$defs"); do
+    red "  duplicate: $d tags more than one test"
+    hits=$((hits + 1))
+  done
+  rm -f "$cited" "$defs"
+  HITS_EXAMPLES=$hits
+  if [ $hits -gt 0 ]; then
+    DRIFT=1
+  else
+    green "  ok — $n_cited Example: citation(s) resolve to a test"
+  fi
+}
+
 # Sep between sections (verbose mode only).
 sep() { [ $QUIET -eq 0 ] && echo; }
 
@@ -441,6 +505,7 @@ case "$CHECK" in
   roadmap) check_roadmap ;;
   refs)    check_refs ;;
   libs)    check_libs ;;
+  examples) check_examples ;;
   all)
     check_paths
     sep
@@ -453,17 +518,19 @@ case "$CHECK" in
     check_refs
     sep
     check_libs
+    sep
+    check_examples
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples]" >&2
     exit 2
     ;;
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
-total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS))
+total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES))
 warns=$((HITS_TIME + HITS_LIBS))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS"
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0

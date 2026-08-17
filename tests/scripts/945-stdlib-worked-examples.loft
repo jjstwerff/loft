@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for stdlib text functions (@PLN141).  Each test is a
+// real, runnable use of a function whose correct call shape is NOT obvious
+// from its signature — the kind of function a reader (often an AI agent)
+// knows exists yet cannot use without seeing it in action.  The function's
+// doc comment in default/03_text.loft cites the tag here via
+// `// Example: @STD-00N`, and `scripts/check_doc_drift.sh examples` fails
+// if a citation goes dangling (no test carries the tag).
+
+// @STD-001 — is a token present at a given BYTE offset? (scanner idiom)
+fn test_starts_with_at_scans_a_token() {
+  line = "  let x = 5";
+  // starts_with_at asks "does `prefix` sit at byte `pos`?" without slicing.
+  assert(line.starts_with_at(2, "let"), "'let' begins at byte 2");
+  assert(!line.starts_with_at(0, "let"), "byte 0 is a space, not 'let'");
+  // Past the end is false, never an error.
+  assert(!line.starts_with_at(20, "five"), "past the end is false, not a crash");
+}
+
+// @STD-002 — build text from a Unicode CODE POINT (decode an escape / entity)
+fn test_chr_builds_text_from_a_code_point() {
+  // chr is the inverse of `ch as integer`: a number in, its character out.
+  assert(chr(65) == "A", "U+0041 is 'A'");
+  assert(chr(233) == "é", "U+00E9 is e-acute");
+  assert(chr(20013) == "中", "U+4E2D");
+  // A code point that names no character yields the empty text, never a crash.
+  assert(chr(-1) == "", "negative code point is empty text");
+}
+
+// @STD-003 — join vector<text> with a separator (build a delimited line)
+fn test_join_builds_a_delimited_line() {
+  parts: vector<text> = ["usr", "local", "bin"];
+  assert(parts.join("/") == "usr/local/bin", "path segments joined by '/'");
+  empty: vector<text> = [];
+  assert(empty.join(",") == "", "empty vector joins to empty text");
+}
