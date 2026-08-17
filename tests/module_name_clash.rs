@@ -319,9 +319,15 @@ fn the_clash_is_reported_even_when_it_breaks_the_build() {
         "the collision is unreported in exactly the case that is fatal — the reader gets \
          `Unknown function` against a dependency's source and nothing naming the cause:\n{all}"
     );
+    // The cure it names is `use self::` rather than a rename (loft#949).  Both packages
+    // here declare a `[package] name`, which is what `self::` qualifies with, so it is
+    // available — and it is the better answer: renaming churns a file and every `use` of
+    // it downstream, while `self::` keeps both modules reachable and puts the name beyond
+    // any consumer's reach.  A diagnostic that exists to be the signpost for an opt-in has
+    // to say the opt-in's name.
     assert!(
-        all.contains("catalogue.loft") && all.contains("Rename one file"),
-        "the advice must name both files and the cure:\n{all}"
+        all.contains("catalogue.loft") && all.contains("use self::catalogue"),
+        "the advice must name both files and the cure that keeps this package's answer:\n{all}"
     );
 }
 
@@ -726,5 +732,75 @@ fn use_self_outside_a_package_says_what_to_do_instead() {
         all.contains("loft.toml") && all.contains("use helper;"),
         "the message must name both cures — add a manifest, or take the module by its \
          shared name:\n{all}"
+    );
+}
+
+/// The other side of that refusal: where `self::` is unavailable, the clash advice must
+/// not prescribe it (loft#949).
+///
+/// `use self::<id>` qualifies with `[package] name`, so a bare script has nothing to
+/// qualify with and the spelling is refused — the test above pins that. An advice that
+/// recommended it anyway would hand the reader a cure that errors, which is the failure
+/// the `self::` work set out to avoid in its own ambiguity message. So the cure named
+/// here is keyed to whether the file HAS a package, and a bare script hears the rename.
+#[test]
+fn the_clash_advice_outside_a_package_does_not_prescribe_self() {
+    let root = std::env::temp_dir().join(format!("loft_949_advice_nopkg_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let a = root.join("dir_a");
+    let b = root.join("dir_b");
+    std::fs::create_dir_all(&a).expect("mkdir a");
+    std::fs::create_dir_all(&b).expect("mkdir b");
+    // Neither directory carries a `loft.toml`, so neither file is in a package.
+    std::fs::write(
+        a.join("catalogue.loft"),
+        "pub fn a_only() -> integer { 1 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b.join("catalogue.loft"),
+        "pub fn b_only() -> integer { 2 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b.join("bare.loft"),
+        "use catalogue;\nfn main() { println(\"{b_only()}\") }\n",
+    )
+    .unwrap();
+
+    // Driven through the BINARY: the clash needs `catalogue` to resolve OUTWARD to
+    // dir_a, which is what `--lib` sets up and what an in-process `Parser` has no
+    // search path for.  Without it the `use` binds dir_b's own file, there is no
+    // clash, and the test would assert nothing — which is how it first failed.
+    let mut bin = std::env::current_exe().expect("test binary path");
+    bin.pop();
+    if bin.ends_with("deps") {
+        bin.pop();
+    }
+    let out = std::process::Command::new(bin.join("loft"))
+        .args(["--interpret", "--path", env!("CARGO_MANIFEST_DIR"), "--lib"])
+        .arg(&a)
+        .arg(b.join("bare.loft"))
+        .env("LOFT_TIMEOUT", "120")
+        .output()
+        .expect("invoke loft");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("module 'catalogue' is declared by two files"),
+        "the scaffold must still produce the clash, or this asserts nothing:\n{all}"
+    );
+    assert!(
+        !all.contains("use self::"),
+        "a bare script cannot spell `use self::` — recommending it prescribes an error:\n{all}"
+    );
+    assert!(
+        all.contains("Rename one file"),
+        "so it must hear the cure that does work for it:\n{all}"
     );
 }

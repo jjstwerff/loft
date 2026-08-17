@@ -10488,6 +10488,16 @@ impl Parser {
     /// the consumer never edited and cannot fix, with nothing naming a collision
     /// (loft#912).  This says the collision out loud, and names both files.
     ///
+    /// **The cure it names is `use self::<id>`, not a rename** (loft#949).  That
+    /// spelling binds the local file under `<package>::<id>`, so both modules stay
+    /// reachable and no downstream file can take the name — where a rename churns a
+    /// file plus every `use` of it and leaves the next collision just as possible.
+    /// This diagnostic is the signpost for that opt-in, so it has to say its name;
+    /// the opt-in landing without the signpost naming it is what left "a reason to
+    /// know you must" missing.  Keyed on whether the file HAS a package, because
+    /// `self::` qualifies with `[package] name` and is refused without one — so a
+    /// bare script hears the rename instead of a cure that would error.
+    ///
     /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
     /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
     /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
@@ -10535,14 +10545,23 @@ impl Parser {
         if Self::same_package(&own_canonical, &loaded) {
             return;
         }
+        // Name the cure that KEEPS this package's answer, not just the one that
+        // renames around the collision (loft#949).  `use self::<id>` binds the local
+        // file under `<package>::<id>`, so both modules stay reachable and no
+        // downstream file can capture the name — but it needs a `[package] name` to
+        // qualify with, and without one it is refused.  A bare script therefore hears
+        // only the cure that works for it.
+        let cure = match self.own_package_name() {
+            Some(_) => format!("Write `use self::{id}` to bind this package's own file"),
+            None => "Rename one file and its `use` if you meant the other".to_string(),
+        };
         diagnostic!(
             self.lexer,
             Level::Advice,
             code = "module-name-shadowed",
             "module '{id}' is declared by two files — '{own_canonical}' and '{loaded}' — \
              and a module's file name is shared across the whole dependency graph, so \
-             this `use` binds the second one. Rename one file and its `use` if you meant \
-             the other"
+             this `use` binds the second one. {cure}"
         );
     }
 
