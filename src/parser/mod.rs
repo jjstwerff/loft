@@ -10198,12 +10198,10 @@ impl Parser {
         // The rule the guard is for is a stray same-named MODULE FILE (`use server` in a
         // package that also has `server.loft`); a nested package the manifest points at
         // is the opposite case, and it is named by exactly the path being exempted here.
-        let dep_root = self.declared_path_dep_root(id, cur_dir);
+        let dep_root = Self::declared_path_dep_root(id, cur_dir);
         let blocked = |candidate: &str| {
             let cand = std::path::Path::new(candidate);
-            let cand = cand
-                .canonicalize()
-                .unwrap_or_else(|_| cand.to_path_buf());
+            let cand = cand.canonicalize().unwrap_or_else(|_| cand.to_path_buf());
             if dep_root.as_ref().is_some_and(|r| cand.starts_with(r)) {
                 return false;
             }
@@ -10701,7 +10699,7 @@ impl Parser {
     /// in-tree path dep as a file shadowing the dependency it IS (loft#963).  Walks to
     /// the same manifest [`Self::probe_manifest_path_dep`] resolves against, so the
     /// exemption and the resolution cannot name different directories.
-    fn declared_path_dep_root(&self, id: &str, cur_dir: &str) -> Option<std::path::PathBuf> {
+    fn declared_path_dep_root(id: &str, cur_dir: &str) -> Option<std::path::PathBuf> {
         if cur_dir.is_empty() {
             return None;
         }
