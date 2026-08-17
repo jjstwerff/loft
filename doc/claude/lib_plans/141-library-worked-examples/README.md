@@ -231,12 +231,15 @@ consumer or a CI-run test — never a prose snippet:
   consumers run every `make index` / `make view` — `scan.loft` (`tracked_files`
   @GIT-001) and `refresh.loft` (`ahead_behind` @GIT-002, `log`-vs-`head`-date
   @GIT-003, `changed` rename→new-path @GIT-004, `numstat` `-1`-is-binary @GIT-005).
-- **`lib/lexer`** (`@LEX-001`, `LEX`→loft): the core cursor idiom — `matches`
+- **`lib/lexer`** (`@LEX-001..002`, `LEX`→loft): the core cursor idiom — `matches`
   (consume-if-equal) vs `test` (peek) + `identifier` — tagged on `parser.loft`'s
-  `function` grammar rule, exercised by the `16-parser` doc test. (The
-  format-protocol / comment / backtracking functions owe examples too, but their
-  only current demo is the *rendered* `15-lexer` doc test, which must not carry a
-  tag — a noted coverage gap for a non-rendered demo.)
+  `function` grammar rule (@LEX-001), plus the **backtracking protocol**
+  `anchor`/`revert` (@LEX-002) tagged on `parser.loft`'s `object` rule, which
+  anchors the cursor, attempts an object literal, and rewinds on the first
+  non-matching field. Both are exercised by the `16-parser` doc test (which parses
+  a function and an object literal). (The format-protocol / comment functions owe
+  examples too, but their only current demo is the *rendered* `15-lexer` doc test,
+  which must not carry a tag — a noted coverage gap for a non-rendered demo.)
 - **`lib/audience_crystal`** (`@ACR-001..003`, `ACR`→loft): tagged on the
   `01-editor-helpers` test (run both backends by `wrap.rs`) — `hex_at_world`
   picking inverse @ACR-001, the `crystal_incr_new`/paint/rebuild/`full_mesh` +
