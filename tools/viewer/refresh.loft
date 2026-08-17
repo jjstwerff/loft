@@ -45,6 +45,9 @@ fn main() {
 }
 
 // The branch header — name, HEAD, and how far it is from main.
+// @GIT-002 — ahead_behind() reads git's left/right count in the order a caller
+// expects (ahead of base, behind base) — the lib does the swap that is silent to
+// get wrong by hand.
 fn branch_state(base: text) -> JsonValue {
   h = head();
   ab = if len(base) > 0 { ahead_behind(base) } else { Counts { ahead: 0, behind: 0 } };
@@ -59,6 +62,8 @@ fn branch_state(base: text) -> JsonValue {
 
 // The files that differ from main.  Empty on a repository that has no main yet —
 // which is a state the dashboard has to render, not an error.
+// @GIT-004 — changed() yields the NEW path of a rename (git's `R100 old new`),
+// so a consumer links at a path that still exists.
 fn changed_state(base: text) -> JsonValue {
   items: vector<JsonValue> = [];
   if len(base) > 0 {
@@ -80,6 +85,8 @@ fn status_path(c: Change) -> JsonValue {
   ])
 }
 
+// @GIT-003 — log(n) carries each commit's date (unlike head(), whose date is
+// empty by design); this is the call to reach for when the date matters.
 fn commits_state() -> JsonValue {
   items: vector<JsonValue> = [];
   for c in log(RECENT) {
@@ -111,6 +118,8 @@ fn write_file_diffs(base: text) -> integer {
 }
 
 // Per-commit diffs plus the per-file line counts the activity cards show.
+// @GIT-005 — numstat() reports -1 for a binary file's line counts (git's `-`),
+// so a reader must handle it rather than render it as a number (see count_text).
 fn write_commit_diffs() -> integer {
   dir = "{STATE}/commits";
   clear_dir(dir);

@@ -109,7 +109,7 @@ commit" = the ref to pass as `--since` next month.
 | library | reviewed through | at commit | notes |
 |---|---|---|---|
 | stdlib `default/` | 2026-08 | (bootstrap) | @STD-001..012 authored across text / collections / JSON / files-IO; docs read while tagging |
-| `lib/git` | — | — | not yet reviewed |
+| `lib/git` | 2026-08 | (bootstrap) | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging |
 | `lib/html` | — | — | not yet reviewed |
 | `lib/markdown` | — | — | not yet reviewed |
 | `lib/input` · `lib/logger` · `lib/lexer` · `lib/parser` | — | — | not yet reviewed |

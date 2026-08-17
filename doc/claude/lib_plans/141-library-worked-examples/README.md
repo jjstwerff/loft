@@ -150,7 +150,8 @@ absent.
 ### Phase B — The acronym registry — DONE (foundation), still to broaden
 
 Built as `scripts/example_repos.tsv` (a loft-repo file for now, not yet the
-`loft-registry` shared home — see Open questions). Entered so far: `STD` loft · `DRY`
+`loft-registry` shared home — see Open questions). Entered so far: `STD` loft ·
+`GIT` loft (the in-tree `lib/git`; one repo may own several acronyms) · `DRY`
 dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
 arguments · `CRY` crypto · `GMP` game_protocol · `GRM` gridmesh · `RND` random ·
 `SRV` server · `SHP` shapes · `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW`
@@ -221,6 +222,26 @@ and files/IO (the missing-vs-empty `content`/`read_bytes`/`list_dir` contract
 @STD-010 — reusing `562-file-read-missing-null.loft` — `lines()` CRLF-normalisation
 @STD-011, the `FileResult`/`ok()` classify idiom @STD-012). The four stdlib clusters
 are covered; the rollout moves to the registered libraries below.
+
+**First library shipped: `lib/git`** (`@GIT-001..005`). The rollout's ideal
+source — not authored tests but **real, exercised call sites** in two in-tree
+consumers that run every `make index` / `make view`: `tools/indexer/src/scan.loft`
+(`tracked_files` @GIT-001) and `tools/viewer/refresh.loft` (`ahead_behind`
+@GIT-002, `log` vs `head` date @GIT-003, `changed` rename→new-path @GIT-004,
+`numstat` `-1`-is-binary @GIT-005) — each tag on the exact function whose silent
+trap the library's own doc calls out. `GIT` is registered → `loft` (a repo may
+own several acronyms; the def scan finds `tools/` too), so `idx tag:@GIT-002`
+resolves both citation and call site. Gate green, both consumers still run.
+
+**In-tree libraries roll out first (edit-only-this-repo).** The priority order
+below leads with cross-repo registered libraries (`arguments`/`hex_grid`/…), but
+the dogfood rule forbids editing a consumer's repo, so their tags must be authored
+by *their* agents. What this stream can do directly is the **in-tree** libraries
+(`lib/git` — done — then `lib/html`, `lib/markdown`, `lib/input`, `lib/logger`),
+where the strongest example is a **real call site in an in-tree consumer** that
+already runs in CI/tooling (`lib/git` tagged live uses in `scan.loft` +
+`refresh.loft`, no test authored). A cross-repo library's rollout waits until its
+own repo opts in.
 
 One library per phase (the skill's one-call-site-at-a-time shape). For each: tag the
 highest-value functions from its own tests and, where it exists, a real consumer

@@ -58,6 +58,7 @@ use git;
 // git would CARRY.  A file added but not yet committed is part of
 // the work and gets indexed; a build artefact `.gitignore` names is
 // not.  That distinction is git's to make.
+// @GIT-001 — ask git for what it would carry, rather than hand-maintain a skip list.
 fn indexable_files() -> vector<text> {
     out: vector<text> = [];
     for p in git::tracked_files() {
