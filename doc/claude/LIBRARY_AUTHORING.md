@@ -190,6 +190,53 @@ $ LOFT=target/release/loft \
   scripts/lib_warning_scan.py scan <pkg-dir> --label source
 ```
 
+### 2a. Worked examples — point at a real call site
+
+When a function's **correct use is not obvious from its signature and doc**, point
+the reader at a **real call site** instead of a prose snippet.  A snippet rots
+silently at the first signature change; a tagged test cannot drift, because it **is**
+working code that runs every CI.  This is the shared `@PLN141` convention — one tag
+family, one gate, across the whole loft library ecosystem.
+
+**Scope — the whole discipline.** Tag a function **only where a real call site
+teaches more than its signature does**.  A one-line accessor, a function whose use is
+self-evident from its type, needs none — the doc already suffices.  There is no
+retroactive sweep of every `pub fn`; the gate would go red on hundreds of obvious
+functions the day it landed.  The signal for *which* functions owe an example is
+concrete: **a reader — often an AI agent — who knows the function exists but cannot
+use it from its doc alone, and only succeeds once shown a program that already uses
+it**, is exactly the case that owes a worked example.  Lift that usage into a tagged
+test so the next reader never needs the pointer.
+
+**How it works — two halves and a registry.**
+
+- **Citation** — a comment `// Example: @AAA-###` directly above the documented
+  `pub fn` in `src/`.
+- **Definition** — the tag `// @AAA-###` in the comment block directly above the `fn`
+  that demonstrates it: a `test_*` in your `tests/` (author one in retrospect if none
+  is clear), or a real function in a first-class application's own source.
+- **Acronym** — `AAA` is three uppercase letters, hyphen, three digits — distinct
+  from loft's `@P`/`@PLN`/`@F`/`@GH` families (none has that interior hyphen).  Each
+  acronym names **one repo, ecosystem-globally**, registered once in loft's
+  [`scripts/example_repos.tsv`](../../scripts/example_repos.tsv) (monorepos map several
+  acronyms to one repo).  A citation can point *across* repos and is still validated +
+  linked; a foreign repo is read-only, never a build edge.
+
+**The gate runs in your CI already.**  Every `loft-libs-*` `library-ci.yml` is a thin
+caller of loft's reusable workflow, which checks loft out into `loft-src/` — so the
+shared gate `loft-src/scripts/check_doc_drift.sh examples` and the acronym registry
+are present in your CI run with no per-repo copy.  It is **vacuously green until you
+author your first citation**, then begins gating.  Faults: `dangling` (cited, no fn
+carries it), `duplicate` (one tag on two fns here), `unregistered` (acronym missing
+from the registry).  A generated `examples-index.tsv` at the repo root records where
+each tag lives (`tag ⇥ file:line ⇥ fn ⇥ git-link`) so a reader resolves it without a
+checkout; CI verifies the committed copy is current.
+
+The automated gate only sees a citation that *dangles* or *duplicates* — staleness
+(still resolves, no longer matches the code) and quality (valid but no longer the
+clearest) are caught by the monthly by-hand pass in
+[LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md).
+
 ## 3. Pre-release checklist
 
 **Declare your three compatibility levels first.** They are required before a package may be

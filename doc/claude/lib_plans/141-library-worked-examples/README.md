@@ -14,8 +14,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
-wired into every library's CI** (Phase-last CI ratchet, see below); authoring the
-first distributed library's tags (`arguments`) is the next step.
+wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
+page is done** (LIBRARY_AUTHORING.md § 2a). First distributed library **`arguments`
+in progress**: four `@ARG-001..004` worked examples authored + verified green on BOTH
+backends (`parse` declare→parse→query lifecycle, `optional` glued-only value,
+`enable_help` opt-in + required-bypass, `required` parse-failure error idiom) — the
+def tests live in `arguments/tests/02-worked-examples.loft`. The four `// Example:`
+citations in `arguments/src/arguments.loft` + the generated `examples-index.tsv` are
+pending: writing into the sibling `../loft-libs-core` checkout (clean + current, 0/0
+with origin) needs the operator's go-ahead, since the harness guards cross-repo
+writes and `arguments` lands as a commit/PR in loft-libs-core, not loft.
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
 broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 **shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
@@ -380,8 +388,13 @@ index); the CI verify is the backstop for a commit made without the hook install
 Vacuously "no index needed" for a repo with no tags, so it never reddens a library
 before it opts in.
 
-Still to do: the one upstream **convention doc** (a short shared page the libraries
-point at instead of re-explaining the tag family). The CI ratchet half is done.
+**Convention page — DONE.** The shared page the libraries point at instead of
+re-explaining the tag family is [LIBRARY_AUTHORING.md § 2a — Worked examples](../../LIBRARY_AUTHORING.md#2a-worked-examples--point-at-a-real-call-site)
+(a section, not a new top-level doc): the scope discipline, the citation/definition
+two-halves + acronym registry, and the note that the gate already runs in every
+`loft-libs-*` CI via the reusable workflow and is vacuously green until a package opts
+in. It cross-links to [LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md) for the
+staleness/quality half.
 
 ### Monthly by-hand review — the ongoing home (DONE, first pass 2026-08)
 
