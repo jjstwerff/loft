@@ -553,12 +553,21 @@ fn install_package(pkg_path: &std::path::Path) {
         println!("loft install: no loft.toml found in {}", pkg_path.display());
         std::process::exit(1);
     }
-    // Derive package name from the directory name.
-    let pkg_name = pkg_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    // loft#966 — the name is the MANIFEST's, not the checkout directory's.  A package
+    // whose directory differs from `[package] name` installed under a name nothing else
+    // refers to: `loft api` kept reporting the dependency unresolved, because the copy
+    // was filed under a name no `use` can reach.  The directory is only the fallback for
+    // a manifest that declares no name.
+    let pkg_name = loft::manifest::read_manifest(&manifest_file.to_string_lossy())
+        .and_then(|m| m.name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            pkg_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        });
     if pkg_name.is_empty() {
         println!("loft install: cannot determine package name from path");
         std::process::exit(1);
@@ -975,10 +984,27 @@ fn api_command(target: Option<&str>) {
         if manifest.dependencies.is_empty() {
             println!("  (none)");
         }
-        for (name, _constraint) in &manifest.dependencies {
+        for (name, constraint) in &manifest.dependencies {
             match api_resolve_pkg_dir(name) {
                 Some(dir) => println!("  {name}  {}", dir.display()),
-                None => println!("  {name}  NOT INSTALLED — run `loft install`"),
+                // loft#966 — name a command that resolves THIS dependency.  This used to
+                // say `run \`loft install\`` for every unresolved dep, and bare
+                // `loft install` installs the PROJECT into `~/.loft/lib`; it does not
+                // fetch anything the manifest declares.  So the one hint the tool gave
+                // was for the one case it does not address — and following it leaves a
+                // copy in `~/.loft/lib/<name>` that shadows the registry, which is
+                // loft#667.
+                //
+                // A path dep needs no install at all: it resolves from the path it names
+                // (loft#963).  Unresolved means the path is wrong, so say that instead of
+                // sending the reader to the registry for a package that is not there.
+                None => {
+                    if let Some(rel) = loft::manifest::extract_path_dep(constraint) {
+                        println!("  {name}  NOT FOUND at `{rel}` — check the path");
+                    } else {
+                        println!("  {name}  NOT INSTALLED — run `loft install {name}`");
+                    }
+                }
             }
         }
     }
@@ -7795,6 +7821,37 @@ fn main() {
 
     // Handle --tests before requiring an input file
     if let Some(ref test_dir) = tests_dir {
+        // loft#964 — refuse a compile-target flag the test runner does not implement,
+        // rather than accepting it and running something else.
+        //
+        // `loft test --native-wasm` exited 0, reported success, and ran the INTERPRETER.
+        // The banner did say "ran on the interpreter only", but it says that on every
+        // interpreter run, so it reads as a suggestion for a run you did not ask for
+        // rather than as notice that the flag you passed was dropped — a library author
+        // could green-light the wasm column of the target matrix on a run that never
+        // touched it.
+        //
+        // Refused as a group, not one flag at a time: this is the third flag found
+        // silently dropped on the test path (#860 `LOFT_PROFILE`, #865), so what needs
+        // to hold is *the test runner rejects what it cannot honour*, and a per-flag
+        // patch would leave the next one to be discovered the same way.
+        for (flag, set) in [
+            ("--native-wasm", native_wasm.is_some()),
+            ("--html", html_out.is_some()),
+            ("--native-android", native_android.is_some()),
+            ("--native-emit", native_emit.is_some()),
+        ] {
+            if set {
+                eprintln!(
+                    "loft test: `{flag}` is not supported by the test runner — it compiles \
+                     a program, and a test run has no single program to compile.\n\
+                     Run the suite on a backend it does have (`loft test` for the \
+                     interpreter, `loft test --native` for native), or build the target \
+                     from a program entry (`loft {flag} <program>.loft`)."
+                );
+                std::process::exit(2);
+            }
+        }
         // @PLAN49 T3 — default the timeout ON under `loft test` / `--tests`.
         // This is the auto-mode case the watchdog exists for: a hung test or a
         // looping compile in the suite can't be killed interactively, so a
