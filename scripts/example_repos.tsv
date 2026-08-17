@@ -40,6 +40,7 @@ SHP	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
 GMP	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
 SRV	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
 WEB	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
+SSH	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
 # loft-libs-world (hex_grid, hex_terrain, hex_world)
 HXG	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
 HXT	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main

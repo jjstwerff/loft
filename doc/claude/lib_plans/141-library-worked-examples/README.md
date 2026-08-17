@@ -31,10 +31,31 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
-**Tier 2 complete** (`crypto`, `server`, `web`). `server` + `web` opened
-`loft-libs-net`'s rollout branch **`worked-examples`** (the plan's no-host-prefix
-name; pushed, PR not opened), taking that repo to 2 tagged / 2 TODO
-(`game_protocol`, `ssh`) — the **closest of the three to a PR**.
+**`loft-libs-net` is READY TO PR — the first complete repo under the convention.**
+`make examples-progress REPO=../loft-libs-net` reads *3 tagged, 1 exempt, 0 deferred,
+0 todo* on branch **`worked-examples`** (the plan's no-host-prefix name; pushed, PR
+not opened — that needs an explicit ask). Tier 2 (`crypto`, `server`, `web`) is
+complete, and finishing the repo took `ssh` and `game_protocol` with it.
+
+**`game_protocol` is the convention's first `exempt`, and it is the row that proves
+the verdict column earns its keep.** Every public function is
+`msg_<kind>(args) -> GameEnvelope`, the arguments landing verbatim in named fields of
+a struct literal; no call order, no encoding, no return value that can mean something
+other than it says — its own tests are field-echo assertions, which is what an API a
+signature already explains looks like. Untagged, it is indistinguishable from a
+package nobody opened; the recorded reason is the whole difference, and it lives in
+`examples-exempt.tsv` beside the code rather than in a plan doc nobody reads at
+review time.
+
+`ssh` (`@SSH-001..002`): every method self-guards, so a refused connection still
+answers a `Session` from which `login`/`open_shell` answer false, `recv` answers "",
+and `send`/`resize`/`close` do nothing — right for a terminal app that must not die
+mid-frame, but a caller who skips `ok()` runs the entire session ladder, sends every
+keystroke, reads an endless empty stream and is never told @SSH-001. And `recv` is a
+raw BYTE stream: bound the loop with `size`, never `len`, because `byte_at` indexes
+bytes while `len` counts characters, so a `len`-bounded loop drops the tail of every
+multi-byte sequence — silently, since both are integers and the loop simply ends
+early @SSH-002.
 
 `server` (`@SRV-001..003`): `listen` HALTS on a lost port and that is the design —
 a `Server` built on a failed bind is indistinguishable from a healthy one at every
@@ -71,12 +92,20 @@ request layer makes — which header matched, whether the helper already answere
 the bytes that reach a client; that is the half a caller gets wrong and the half a
 single-process test can hold honestly.
 
-**Two more stale docs caught, both in the function being documented** (the same
-signal `crypto` gave): `web`'s `tests/byte_at.loft` header said out-of-range returns
-`0` when it returns `-1` — and `0` is the one wrong answer to state there, since it
-is a legitimate byte value. Writing a worked example forces a value to be pinned, and
-pinning it is what finds the prose that drifted; this is the monthly-review failure
-mode turning up early, three times in three libraries.
+**Stale docs caught in the very functions being documented — one per library so far,
+four for four.** `crypto`'s README table called `sha256_b64`'s return a hex digest
+when it is base64. `web`'s `tests/byte_at.loft` header said out-of-range returns `0`
+when it returns `-1` — and `0` is the one wrong answer to state there, since it is a
+legitimate byte value. And `ssh` shipped the bug in its own **documented idiom**: the
+header example and `recv`'s doc-comment both wrote `for i in 0..len(out) { byte_at(i,
+out) }`, a byte-indexed loop bounded by a CHARACTER count — the exact
+`strict-index-text` shape loft lints for, in the library whose whole payload is a
+byte stream. All fixed, each pinned by the assertion that found it. The mechanism is
+worth naming: writing a worked example forces a value to be *pinned*, and pinning it
+is what exposes prose that had drifted. This is the monthly review's failure mode
+(a doc that still resolves but no longer matches) arriving at the cheapest possible
+moment — and at four for four it is not incidental, it is the second thing the
+convention buys.
 
 **Noted coverage gap:** `server`'s multi-client event model (`run` / `poll_event`,
 the mutually-exclusive `WsEvent` flags, the pre-split `<msg_id>:<payload>` wire form,
@@ -148,7 +177,7 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 `@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
 `@EHK-001..004` (in-tree libraries), `@ARG-001..004` + `@CRY-001..006`
 (`loft-libs-core`), `@GRM-001..005` (`loft-libs-graphics`), `@SRV-001..003` +
-`@WEB-001..003` (`loft-libs-net`). **The distributed libraries are this stream's
+`@WEB-001..003` + `@SSH-001..002` (`loft-libs-net`). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
@@ -479,6 +508,11 @@ covers it (no per-library `examples.sh` to wire).
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
 
+  Off the priority list but done, because finishing a REPO is what earns a PR:
+  `ssh` (`@SSH-001..002`) and `game_protocol` (**exempt**), which together closed
+  `loft-libs-net`. Priority orders which library pays most; the PR unit decides which
+  ones you actually finish first.
+
 ### Landing the rollout — one branch per repo, PR when the repo is complete
 
 **The PR unit is the REPO, not the library.** A per-library PR buys nothing: the
@@ -528,14 +562,19 @@ added mid-rollout adopts later through the same ratchet. Without that, a 14-pack
 repo (`loft-libs-world`) is a moving target that never converges.
 
 **Where that leaves the three branches in flight** (`make examples-progress`):
-`loft-libs-net` (`worked-examples`) 2 tagged (`server`, `web`) / 2 TODO
-(`game_protocol`, `ssh`) — **the nearest to a PR**; `loft-libs-core`
-(`mac-worked-examples`) 2 tagged (`arguments`, `crypto`) / 4 TODO (`cbor`, `random`,
-`regex`, `zttext`); `loft-libs-graphics` (`tuxedo-worked-examples`) 1 tagged
-(`gridmesh`) / 3 TODO (`graphics`, `imaging`, `shapes`). None is ready yet. Finish
-`loft-libs-net` first — two packages from a complete repo, and it would be the
-convention's first PR, which is what makes the "the PR unit is the REPO" rule
-reviewable rather than theoretical.
+
+| repo | branch | state |
+|---|---|---|
+| `loft-libs-net` | `worked-examples` | **READY TO PR** — 3 tagged (`server`, `ssh`, `web`), 1 exempt (`game_protocol`), 0 todo |
+| `loft-libs-core` | `mac-worked-examples` | 2 tagged (`arguments`, `crypto`) / 4 todo (`cbor`, `random`, `regex`, `zttext`) |
+| `loft-libs-graphics` | `tuxedo-worked-examples` | 1 tagged (`gridmesh`) / 3 todo (`graphics`, `imaging`, `shapes`) |
+
+`loft-libs-net` is the convention's first complete repo, which is what makes the
+"the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
+handed *this repo has adopted the convention*, with a recorded reason for the one
+package that has nothing to demonstrate. **Opening the PR needs an explicit ask**
+(the branch is pushed and the report is green; the plan's "zero TODO ⇒ open the PR"
+sets the readiness bar, not the permission).
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
