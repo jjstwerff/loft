@@ -1657,3 +1657,101 @@ fn html_page_filesystem_unit_checks() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+// ── loft#950 — a page that faults must say what the fault WAS ────────────────────────
+
+/// A Rust panic inside a `--html` page reaches the page, with the loft frames under it.
+///
+/// On `wasm32-unknown-unknown` a panic aborts, and abort compiles to the `unreachable`
+/// instruction, so the page's whole symptom was `RuntimeError: unreachable` — std's
+/// message went to that target's stderr, which is a sink. loft#950 was reported as an
+/// undebuggable trap for exactly that reason: the consumer could see where in their own
+/// transcript the page died and nothing at all about why.
+///
+/// Asserted here is what a person acts on: the panic's own message, and the loft call
+/// chain it happened under. The Rust `file:line` is deliberately not asserted — it names
+/// generated code, whose line numbers move with the emitter.
+#[test]
+fn html_panic_names_itself_and_its_loft_frames() {
+    let src = "fn inner950(n: integer) -> integer {
+    assert(n < 5, \"distinctive950 text\");
+    n
+}
+fn middle950(n: integer) -> integer { inner950(n + 1) }
+fn main() {
+    println(\"before950\");
+    x = middle950(9);
+    println(\"after {x}\");
+}
+";
+    let Some((stdout, stderr, _ok)) = run_html_wasm("p950_panic", src) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    // The program really reached the fault — without this the cell would pass on a page
+    // that failed to build or trapped during init, which says nothing about the hook.
+    assert!(
+        all.contains("before950"),
+        "the page must run up to the fault\n{all}"
+    );
+    assert!(
+        all.contains("distinctive950 text"),
+        "the panic message must reach the page, not vanish into wasm stderr\n{all}"
+    );
+    for frame in ["inner950", "middle950", "main"] {
+        assert!(
+            all.contains(frame),
+            "the loft frame `{frame}` must appear under the panic — a Rust location \
+             alone does not say what the program was doing\n{all}"
+        );
+    }
+}
+
+/// A loft `panic(...)` renders its normal diagnostic into the page too.
+///
+/// This is the other half: `RuntimeError::report_and_exit` printed through `eprint!`,
+/// which is the same sink. So a page that faulted the way loft INTENDS also said nothing.
+#[test]
+fn html_loft_panic_renders_its_diagnostic() {
+    let src = "fn main() {
+    println(\"before950b\");
+    panic(\"distinctive950b message\");
+}
+";
+    let Some((stdout, stderr, _ok)) = run_html_wasm("p950_userpanic", src) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(
+        all.contains("before950b"),
+        "the page must run up to the fault\n{all}"
+    );
+    assert!(
+        all.contains("distinctive950b message"),
+        "a loft `panic` must render into the page\n{all}"
+    );
+    assert!(
+        all.contains("p950_userpanic.loft"),
+        "and name the loft source it came from\n{all}"
+    );
+}
+
+/// The control: a page that does NOT fault says nothing about panics.
+///
+/// Without it, a hook that printed on every run — or a harness that reported the same
+/// text whatever happened — would pass both cells above.
+#[test]
+fn html_a_clean_page_reports_no_panic() {
+    let Some((stdout, stderr, ok)) =
+        run_html_wasm("p950_clean", "fn main() { println(\"clean950\"); }\n")
+    else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok, "a clean page must not trap\n{all}");
+    assert!(all.contains("clean950"), "the program must run\n{all}");
+    assert!(
+        !all.contains("panicked at") && !all.contains("TRAP"),
+        "a clean page must report no panic\n{all}"
+    );
+}

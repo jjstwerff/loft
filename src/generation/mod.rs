@@ -2408,6 +2408,7 @@ extern crate loft;"
             write!(
                 w,
                 "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    \
+                 loft::codegen_runtime::install_browser_panic_hook();\n    \
                  let _ = LOFT_DEBUG_NAME;\n    \
                  let cell = std::cell::UnsafeCell::new(\n        \
                  loft::live_dispatch::bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)\n            \
@@ -2432,7 +2433,7 @@ extern crate loft;"
         } else {
             writeln!(
                 w,
-                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n{prelude}    n_main(&cell{args});\n}}"
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    loft::codegen_runtime::install_browser_panic_hook();\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n{prelude}    n_main(&cell{args});\n}}"
             )
         }
     }

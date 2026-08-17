@@ -394,6 +394,51 @@ Limited surface today; expand as need arises:
 - WASM imports use the `env` namespace — replace any import
   via a custom JS bridge if you wrap the output HTML
 
+## When a page faults (loft#950)
+
+A browser page reports a fault to the page, not to stderr — on
+`wasm32-unknown-unknown` stderr is a sink, so anything written there is
+simply lost.
+
+That matters because of how a fault ENDS on this target: a panic aborts,
+and abort compiles to the `unreachable` instruction.  So the console's
+whole symptom is:
+
+```
+RuntimeError: unreachable
+```
+
+No message, no location, no stack.  loft#950 was reported as an
+undebuggable trap for exactly that reason.  Both fault paths now route
+through the same host import `println` uses:
+
+| fault | what the page gets |
+|---|---|
+| a Rust panic (incl. a failed `assert`) | `loft: panicked at …: <message>` + the loft frames under it |
+| a loft `panic(…)` / any `RuntimeError` | the ordinary rendered diagnostic, with `--> file:line:col` |
+
+The loft frames come from the shadow call stack `cr_call_push` already
+maintains, and they are the half a reader acts on: the Rust location names
+a spot in generated code or in loft's own runtime, which does not say what
+the *program* was doing.
+
+```
+loft: panicked at prog.rs:502:18:
+game.loft:2 assertion failed
+  in inner() (game.loft:1)
+  in middle() (game.loft:5)
+  in main() (game.loft:6)
+```
+
+**What is still silent:** an allocation failure.  `handle_alloc_error`
+aborts without running the panic hook, so a page that OOMs still traps
+bare.  That is worth knowing rather than worth fixing — after this, a trap
+with no message before it has told you it was not a panic.
+
+The hook is installed by the generated `loft_start`, ahead of `init`, so a
+panic during startup is covered.  It is a no-op on every other target,
+where stderr works and the native crash reporter owns this job.
+
 ## Build prerequisites
 
 For users running `loft --html`:
