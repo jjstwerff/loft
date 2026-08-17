@@ -7,6 +7,9 @@
 // `vector<u8>?` / `vector<text>?`: MISSING → null, EMPTY-present → the empty value.
 // (Also exercises `vector<T>? == null`, the vec_null lowering that H4 needed.)
 
+// @STD-010 — content() / read_bytes() / list_dir() answer null for a MISSING
+// path, the empty value for a present-but-empty one — the distinction a reader
+// needs and cannot see from the `text?` / `vector<u8>?` / `vector<text>?` return.
 fn test() {
   // --- an EMPTY but present file: content is "", read_bytes is [], NOT null ---
   {

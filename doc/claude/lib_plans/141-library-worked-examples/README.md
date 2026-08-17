@@ -14,17 +14,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 ACTIVE — stdlib rollout underway. The loft **stdlib** is the starting library
-(source 3, in-repo, loft's own gate — the cleanest arrow): nine functions across
-three clusters carry `// Example: @STD-00N` citations — text (`starts_with_at`,
-`chr`, `join`), collection aggregates (`min_of`, `max_of`, `sum`, `tree_walk`), and
-JSON (`json_parse` navigation @STD-007, the `json_array`/`json_object` builders
-@STD-008, the `struct_from_jsonvalue`/`struct_to_json` round-trip @STD-009) —
-resolving to tagged tests (a `tree_walk` example reuses an existing test in
-`445-generic-tree-walk.loft`, the rest live in `945-stdlib-worked-examples.loft`,
-all green on both backends). The gate is `scripts/check_doc_drift.sh examples`
-(dangling + duplicate), wired into the `all` run that CI already blocks on — proven
-red on both a dangling citation and a duplicate tag. Next stdlib cluster: files/IO.
-Then the registered libraries.
+(source 3, in-repo, loft's own gate — the cleanest arrow): twelve functions across
+four clusters carry `// Example: @STD-0NN` citations — text (`starts_with_at`,
+`chr`, `join`), collection aggregates (`min_of`, `max_of`, `sum`, `tree_walk`), JSON
+(`json_parse` navigation @STD-007, the `json_array`/`json_object` builders @STD-008,
+the `struct_from_jsonvalue`/`struct_to_json` round-trip @STD-009), and files/IO (the
+missing-vs-empty `content`/`read_bytes`/`list_dir` `T?` contract @STD-010, `lines()`
+CRLF-normalisation @STD-011, the `FileResult`/`ok()` classify idiom @STD-012) —
+resolving to tagged tests (two examples reuse existing clear tests —
+`445-generic-tree-walk.loft` for `tree_walk`, `562-file-read-missing-null.loft` for
+the null contract — the rest live in `945-stdlib-worked-examples.loft` and the
+filesystem-isolated `946-stdlib-file-worked-examples.loft`, all green on both
+backends). The gate is `scripts/check_doc_drift.sh examples` (dangling + duplicate),
+wired into the `all` run that CI already blocks on — proven red on both a dangling
+citation and a duplicate tag. The stdlib clusters are covered; next is either
+**Phase C** (teach `scripts/idx`/`make index` to ingest `@AAA-###`) or the first
+**registered library** (`arguments`/`hex_grid`/`gridmesh`).
 
 **Cross-repo resolution now works (Phase B + first-class-app source).** The acronym
 registry lives at `scripts/example_repos.tsv` (acronym → repo → git url → branch).
@@ -203,9 +208,12 @@ synthetic snippet.
 **Started with the loft stdlib** (`@STD`, source 3, in-repo): text
 (`starts_with_at`, `chr`, `join`, @STD-001..003), collection aggregates
 (`min_of`/`max_of` @STD-004, `sum` @STD-005, `tree_walk` @STD-006 — the last reusing
-an existing test), and JSON (`json_parse` navigation @STD-007, the
-`json_array`/`json_object` builders @STD-008, the struct↔JSON round-trip @STD-009).
-Next stdlib cluster: files/IO. Then the registered libraries below.
+an existing test), JSON (`json_parse` navigation @STD-007, the
+`json_array`/`json_object` builders @STD-008, the struct↔JSON round-trip @STD-009),
+and files/IO (the missing-vs-empty `content`/`read_bytes`/`list_dir` contract
+@STD-010 — reusing `562-file-read-missing-null.loft` — `lines()` CRLF-normalisation
+@STD-011, the `FileResult`/`ok()` classify idiom @STD-012). The four stdlib clusters
+are covered; the rollout moves to the registered libraries below.
 
 One library per phase (the skill's one-call-site-at-a-time shape). For each: tag the
 highest-value functions from its own tests and, where it exists, a real consumer
