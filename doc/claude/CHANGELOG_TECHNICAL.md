@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A call used as a tuple member gets an owner (loft#946, 2026-08-17)
+
+A heap-returning callee allocates its OWN store and returns it — the hidden `__retbuf` the
+caller passes is not what comes back, and `n_mk` opens with its own `OpDatabase`. What owns
+that store is a BINDING, and a member of a tuple LITERAL is not one:
+
+```
+c1: (integer, Q) = (71, mk(82));    // the returned store has no owner — leaked
+q = mk(82); c1 = (71, q);           // `q` owns it, scope exit frees it — clean
+```
+
+One store per evaluation, scaling with the loop that runs it (25 of 25 in the guard's `c4`),
+which is the unbounded shape of loft#688 rather than a one-off.
+
+The cure is the binding the working spelling writes by hand — the same cure as loft#941, for
+the same reason: the value outlives the expression that produced it, so it needs a name that
+dies at the right time.
+
+**The predicate needs both halves, and the controls are what say so.** It fires on a member
+that is a CALL *and* whose type has empty deps:
+
+| control | why stashing it would be wrong |
+|---|---|
+| a variable member (`(71, q)`) | already owned by its own binding — a second owner frees it twice |
+| a literal member (`(71, Q { … })`) | builds into a work-ref the scope already frees |
+| a call returning a VIEW of its argument | non-empty deps: a second owner frees the caller's collection underneath it |
+
+**Not the axis:** member position, arity, or whether the tuple's type is declared — a call in
+any of them leaked. And a tuple RETURN was always correct: it deep-copies into the caller's
+buffer and the callee frees its own temps, which is why the leak is specific to a tuple LOCAL.
+
+Guard: `tests/scripts/946-tuple-member-call-owns-its-store.loft`, 5 rows + 5 controls, both
+backends. It leaks 32 stores on released 2026.8.0, and the corpus leak gate — whose allowlist
+is empty — is what turns that into a red rather than the script's own assertions, which pass
+either way.
+
+
 ### The module-shadow advice reaches the run it explains (loft#948, 2026-08-17)
 
 `Advice[module-name-shadowed]` (loft#912) fired where the collision was HARMLESS and stayed
