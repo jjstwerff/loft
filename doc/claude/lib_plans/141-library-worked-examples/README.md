@@ -245,6 +245,19 @@ each library's CI runs its gate. Ratchet: no sweep, a file opts in when someone
 finishes work in it — a gate red on every function the day it lands is switched off
 within a week.
 
+### Monthly by-hand review — the ongoing home (DONE, first pass 2026-08)
+
+The automated `check_doc_drift.sh examples` gate only sees a citation that
+*dangles* or *duplicates*. Two failures need a human: a doc that still resolves
+yet no longer matches the code (**staleness**), and an example that is valid but
+no longer the clearest (**quality**). Those are handled by a monthly by-hand pass
+at the release beat — [../../LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md),
+driven by `scripts/doc-review.sh` (coverage + citation inventory + a
+changed-since-watermark worklist), wired into [RELEASE.md](../../RELEASE.md)'s
+monthly cadence. It is a hygiene **ratchet, never a release blocker** — the
+watermark bounds each pass to what moved. This is where the per-library rollout's
+staleness/quality upkeep lives once a library is tagged.
+
 ## Open questions
 
 - **Registry home** — built as `scripts/example_repos.tsv` in the loft repo. Should
