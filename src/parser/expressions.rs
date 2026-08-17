@@ -1127,7 +1127,25 @@ impl Parser {
                     );
                 }
             }
-            self.known_var_or_type(val, &expr_pos);
+            // loft#960 — not for a name in a `( … ) =` LHS.  Those names are BEING
+            // BOUND, and this check asks whether a name being READ resolves: it
+            // reported `(a, b, c) = later(…)` as three unknown variables whenever
+            // `later` was declared below the caller, because the binding's type is
+            // only settled once the destructuring below has the callee's return
+            // type — which pass 1 does not have for a forward reference.  The plain
+            // `a = later(…)` form never came through here (its own LHS is the
+            // assignment target), so the two spellings disagreed about a name that
+            // is legal in both, and the message named the LEFT-hand names while the
+            // cure was to move the callee.
+            //
+            // `at_binding_name` is the one home for "is this a binding occurrence?",
+            // and its tuple arm is true exactly while the LHS list is being parsed
+            // (`in_tuple_lhs`, cursor on the `,` or `)`).  A destructuring the
+            // parser cannot lower is still refused below — "Cannot destructure a
+            // non-tuple value" — so nothing is silenced, only re-homed.
+            if !self.at_binding_name() {
+                self.known_var_or_type(val, &expr_pos);
+            }
             res
         }
     }
