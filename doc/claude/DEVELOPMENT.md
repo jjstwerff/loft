@@ -283,6 +283,18 @@ Verify locally at any point using the full CI gate:
 make ci       # fmt → clippy → test; stops at first failure; full output in result.txt
 ```
 
+Keep the **installed** loft current — a stale one silently builds consumer libraries
+against an old rlib.  Reinstalling needs no root:
+
+```bash
+make install-user-fast    # => ~/.local, native only (skips the wasm + html-mt runtimes)
+make install-user         # => ~/.local, everything
+```
+
+Both verify that `command -v loft` is the binary they just installed, reporting an
+absent *and* a shadowed `PATH` entry with the rc line for your shell.  `PREFIX=…`
+retargets any install target; `sudo` is used only when the prefix isn't writable.
+
 The order matters: `cargo fmt --check` and `cargo clippy --tests -- -D warnings` run
 first so formatting and lint errors are fixed before the slower `cargo test` runs.
 If `make` is unavailable, run the three commands manually in the same order:

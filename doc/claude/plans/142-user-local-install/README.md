@@ -3,137 +3,67 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN142 — Sudo-free user-local install of loft
+# 142 — Sudo-free user-local install of loft
 
-> Tracker: [loft-lang/plans#142](https://github.com/loft-lang/plans/issues/142)
-> (`subject:loft` + `status:next`).
+## Status — DONE, 2026-08-17
 
-## Status
+All three phases plus both Phase-3 tails shipped.  `make install-user` installs to
+`~/.local` with no sudo, passes the stdlib + cdylib smokes, and verifies that the
+freshly installed binary is the one the shell resolves; `make install-user-fast`
+does the same without the wasm/html-mt runtimes.
 
-**All phases + both tails implemented and validated live** on branch
-`mac-install-dylib-fix`, pending merge to `main`. `make install-user` installs to
-`~/.local` with no sudo, passes the stdlib + cdylib smokes, and reports `PATH OK`;
-`make install-user-fast` does the same skipping the wasm/html-mt runtimes. Ready to
-close (`status:finished`) once merged.
+**How to use it lives in [README § Getting started](../../../../README.md) (users) and
+[DEVELOPMENT.md § Development Phase](../../DEVELOPMENT.md#development-phase) (the
+after-merge reinstall loop); the mechanism lives in the `Makefile` targets
+themselves** (`install` / `install-artifacts` / `install-user` / `install-native` /
+`install-user-fast`, with the proc-macro rule commented at the copy site).  This
+file is the closure record.
 
-## Goal
+| phase | shipped |
+|---|---|
+| **1** proc-macro `.dylib` deps | `install-artifacts` copies `deps/*.dylib` beside `*.rlib`/`*.so`, and the deps refresh deletes them too so a reinstall can't leave a stale one (*install: copy proc-macro .dylib deps so library native builds work on macOS*) |
+| **2** `PREFIX` + conditional sudo | `PREFIX ?= /usr/local`; `SUDO` is **computed** from prefix writability (walk to the first existing ancestor, `test -w`) rather than assumed — a user prefix or a user-owned Homebrew `/usr/local` needs none, a root-owned prefix still escalates (*install: sudo-free user-local install via PREFIX + per-OS PATH check*) |
+| **3** `install-user` + PATH check | `install-user` / `uninstall-user`; after the copy, `command -v loft` must equal `$(PREFIX)/bin/loft` — reporting *absent from PATH* and *shadowed by an earlier entry* separately, with the rc line for the resolved shell/OS, and editing nothing |
+| **3a** native-only fast path | `NATIVE_ONLY=1` → `make install-native` (any prefix) / `install-user-fast` (`~/.local`): no wasm target builds, no html-mt, no `check-targets`, and the wasm copy step extracted to `install-wasm-artifacts` and skipped (*install: native-only fast path (install-user-fast) + README note*) |
+| **3b** doc | README § Getting started; the per-OS PATH line is emitted by the target, not duplicated in prose |
 
-Let a developer install loft into a **user-writable prefix** (`~/.local` by
-default) with **no `sudo`**, so loft can be reinstalled routinely — after each PR
-merge — without root. Today the only install path is system-wide
-(`/usr/local/{bin,share}`), which needs root and breaks too often to run frequently.
+No runtime code changed: loft already resolves its stdlib + rlibs **relative to the
+binary** (`src/cache.rs` `loft_rlib_path`, `src/native_lib.rs` `rlib_search_dirs`),
+so `<prefix>/bin/loft` finds `<prefix>/share/loft` for any prefix.  That is what
+made the whole plan a Makefile change, and the cdylib smoke passing from `~/.local`
+is what proved it end to end.
 
-**Why it's cheap:** the runtime already resolves its stdlib + rlibs **relative to
-the binary** — when the binary sits in `<prefix>/bin/loft`, it searches
-`<prefix>/share/loft` and `<prefix>/share/loft/deps` (`src/cache.rs:416`,
-`src/native_lib.rs:805`). Proven: the current post-install smoke runs the installed
-stdlib from `/usr/local/share/loft`. So a `~/.local` install needs **no code
-change** — only Makefile parameterisation. The one hard requirement is that the
-install's *content* (which dep artifacts get copied) is correct, which Phase 1 fixes.
+## What it found
 
-## Motivating failure (2026-08-17)
+**The motivating failure was a real macOS-only install break, not a convenience
+gap.**  `make install` copied `deps/*.rlib` and `deps/*.so` but never `*.dylib`.
+Proc-macro crates build to a *host* dylib — `.dylib` on macOS, `.so` on Linux — so
+on macOS the installed `share/loft/deps/` held 107 `.rlib` and zero dylibs, and
+every consumer library's cdylib (`extern crate loft;`) died at the post-install
+smoke with `error[E0463]: can't find crate for displaydoc`.  Linux never saw it,
+because its proc-macro artifact is the `.so` that was already copied.  A
+platform-conditional artifact extension is the kind of thing an install rule gets
+wrong silently on the platform its author doesn't use.
 
-`make install` failed at its binary↔rlib smoke with:
+Three open questions closed with the build:
 
-```
-error[E0463]: can't find crate for `displaydoc` which `loft` depends on
-```
+- **Writability detection** — "creatable by me" counts as writable: walk to the
+  first *existing* ancestor and test that, since a first-time `~/.local/share`
+  doesn't exist yet and `install -d` will make it.
+- **Symlink vs copy** — copy.  A symlinked binary with a copied `share/loft` can
+  drift out of pair, and the binary↔rlib smoke exists precisely to guard that pair.
+- **`PREFIX` for wasm/html-mt** — not a prefix question at all; `NATIVE_ONLY=1`
+  skips them, and the full `install-user` still ships them.
 
-**Root cause:** `displaydoc` is a **proc-macro** crate — on macOS it builds to
-`libdisplaydoc-*.dylib`, with no `.rlib`. The install copies `deps/*.rlib`
-(Makefile:235) and `deps/*.so` (Makefile:237) but **never `*.dylib`**. The installed
-`share/loft/deps/` ends up with 107 `.rlib`, 0 `.dylib`, 0 `.so` — so any consumer
-library's cdylib (`extern crate loft;`) can't resolve loft's proc-macro dep and
-fails E0463. macOS-specific: on Linux proc-macros are `.so`, which IS copied. This
-is a concrete instance of "install is broken too often" and blocks even the
-system-wide install today.
-
-## Phases
-
-Cut per the two-bounds rule; each can go red on its own.
-
-### Phase 1 — Copy proc-macro `.dylib` deps (XS) — unblocks install now
-
-Copy `deps/*.dylib` alongside `*.rlib`/`*.so` in `install-artifacts`/`install`, so
-the installed `share/loft/deps/` carries every artifact a cdylib link needs.
-- **Validation (can go red — it just did):** the existing post-install cdylib smoke
-  (Makefile ~279) goes red→green. Confirm on macOS (`.dylib`) *and* that Linux
-  (`.so`) is unaffected.
-- Note: `uninstall`'s `rm -rf share/loft` already removes them; the `rm -f
-  deps/*.so`/`*.rlib` refresh lines need a `*.dylib` sibling so a reinstall doesn't
-  leave a stale proc-macro dylib.
-
-### Phase 2 — `PREFIX` parameterisation + conditional sudo (S) — no code change
-
-Make `install`/`uninstall` honour `PREFIX ?= /usr/local`. Replace the hardcoded
-`/usr/local/{bin,share}` with `$(PREFIX)/...`. Gate `sudo` on writability: when
-`$(PREFIX)/bin` and `$(PREFIX)/share` are user-writable (or creatable), run the
-copies **without** `sudo`; keep the escalation only for a non-writable prefix.
-- **Validation (can go red):** `make install PREFIX=$HOME/.local` completes with
-  **no sudo prompt**, and `~/.local/bin/loft` passes the SAME stdlib + cdylib smoke
-  (proves prefix-relative resolution end-to-end). A stray `sudo` would prompt; a
-  non-prefix-relative resolver would fail the smoke.
-- Keep the existing `sudo true ||` preflight only on the system path — a user-prefix
-  install must never demand root.
-
-### Phase 3 — `make install-user` + per-OS PATH verification + the reinstall loop (S)
-
-- `install-user` target = `install` with `PREFIX := $(HOME)/.local`.
-- **PATH verification (per-OS) — the install must confirm the freshly installed
-  loft is the one the shell resolves.** A binary in `$(PREFIX)/bin` that isn't on
-  `PATH` — or is *shadowed* by an older loft earlier on `PATH` (e.g. a system
-  `/usr/local/bin/loft` in front of a new `~/.local/bin/loft`, or vice versa) — means
-  `loft` on the command line silently isn't the one just installed. So after the
-  copy, verify:
-  1. `$(PREFIX)/bin` is a `PATH` entry, **and**
-  2. `command -v loft` resolves to exactly `$(PREFIX)/bin/loft` (catches shadowing,
-     not just absence).
-  If either fails, print the **OS-appropriate** remedy rather than a generic
-  `export` (don't edit the user's rc):
-  - **macOS** (zsh default): the line for `~/.zprofile`
-    (`export PATH="$HOME/.local/bin:$PATH"`), and note `/etc/paths.d/` as the
-    system-wide alternative; flag when an earlier `/usr/local/bin/loft` shadows it.
-  - **Linux** (bash/other): the line for `~/.profile` / `~/.bashrc`; note that
-    `~/.local/bin` is on `PATH` by default under many distros' `~/.profile`
-    (systemd `user-dirs`), so the check may already pass.
-  - Resolve the shell from `$SHELL`/OS rather than assuming, since the rc file
-    differs (`~/.zprofile` vs `~/.bash_profile` vs `~/.profile`).
-- **Native-only fast path — DONE.** Chose a **separate `install-user-fast`** (and
-  `install-native` for any prefix) over folding into `install-user`, so the full
-  install stays the default and the fast one is an explicit opt-in. Driven by
-  `NATIVE_ONLY=1`, which: builds `install-artifacts-native` (no wasm target builds,
-  no `wasm-html-mt-lib`, no `check-targets`), skips the extracted
-  `install-wasm-artifacts` copy step, AND — the leak found while validating — is
-  passed down to `rebuild-native-cdylibs`, whose two wasm rlib rebuilds are now
-  gated on it (untouched for every other caller). The two native loft compiles
-  (default-feature binary + install-feature rlib) still dominate; the win is
-  skipping all wasm/html-mt build + copy work.
-- **Validation (can go red):** run the target with `$(PREFIX)/bin` absent from
-  `PATH` → it warns with the correct per-OS line; with it present but a system loft
-  ahead of it → it reports the shadowing; with it correctly first → `command -v loft`
-  equals `$(PREFIX)/bin/loft` and the check is silent. All three are real,
-  reproducible states. `install-user-fast` verified live: prints "native-only —
-  skipping wasm + html-mt runtimes", passes both smokes, "PATH OK".
-- **Doc — DONE.** README § Getting started gained a `make install-user` /
-  `install-user-fast` note; the per-OS PATH one-liner is emitted by the install
-  target itself rather than duplicated in prose.
-
-## Open questions
-
-- **Writability detection** — test-and-create `$(PREFIX)` vs check `-w`. A
-  first-time `~/.local/share` may not exist; `install -d` as the user creates it,
-  so detection should treat "creatable by me" as writable.
-- **Symlink vs copy for the binary** — `install-user` could symlink
-  `target/release/loft` into `~/.local/bin` (like the `debug` target does) for an
-  even faster reinstall, but then `share/loft` must still be refreshed as a copy;
-  a copy keeps the binary↔stdlib pair atomic, which is what the smoke guards. Lean
-  copy.
-- ~~**`PREFIX` for wasm/html-mt**~~ — RESOLVED: `install-user-fast` / `install-native`
-  (`NATIVE_ONLY=1`) skip them entirely; the full `install-user` still ships them.
+**One leak found while validating the fast path:** `NATIVE_ONLY` initially stopped
+at the install targets, so `rebuild-native-cdylibs` still ran its two wasm rlib
+rebuilds after any source change — the "fast" path re-entering the work it was
+built to skip, via a shared dependency. The gate now passes down into it, and is
+inert for every other caller.
 
 ## See also
 
-- `src/cache.rs:410` `loft_rlib_path` / `src/native_lib.rs:792` `rlib_search_dirs` —
-  the prefix-relative resolvers that make this a Makefile-only change.
-- Makefile `install` / `install-artifacts` / `uninstall` (221 / 214 / 293).
+- [README § Getting started](../../../../README.md) — the user-facing install.
+- `Makefile` — `install`, `install-artifacts`, `install-user`, `install-native`,
+  `install-user-fast`, `uninstall-user`.
 - loft#693 — the binary↔rlib smoke this plan keeps green.
