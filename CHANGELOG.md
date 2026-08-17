@@ -379,6 +379,36 @@ moment, and treat silence as an answer instead of a hang.
 Characters are never torn in half by the wait: a read that arrives mid-character
 hands over the part that is whole and keeps the rest for the next read.
 
+### A library can say "my own module", so a consumer cannot change its answer
+
+If your library has `src/catalogue.loft` and says `use catalogue;`, it did not
+necessarily get *your* file. Module names are shared across the whole dependency graph,
+and building a package reads every file under `src/` — so a program that uses your
+library and happens to add its own `src/catalogue.loft` takes the name, and **your**
+code starts calling **their** function:
+
+```loft
+// your library                        // their program
+pub fn part_list() -> integer { 41 }   pub fn part_list() -> integer { 99 }
+
+dep_answer()   // 42 on its own … and 100 in their tree
+```
+
+Nothing in your library changed. Nothing in their program imported `catalogue`. Write
+`use self::catalogue;` and that cannot happen — it always means your file:
+
+```loft
+use self::catalogue;             // this package's own src/catalogue.loft
+use self::catalogue as cat;      // …with a qualifier: cat::part_list()
+```
+
+Two packages can now both have a `catalogue` module and both work, which is the part
+that could not be fixed just by preferring the nearer file.
+
+Bare `use catalogue;` still behaves exactly as before, so nothing you have written
+changes — add `self::` where you want the guarantee. The advice that already warns you
+about a shared module name is the signpost for where.
+
 ### A browser page's crash tells you which of your functions crashed
 
 When an `--html` page traps, the browser hands over a full backtrace, and until now

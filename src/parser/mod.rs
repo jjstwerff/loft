@@ -9658,6 +9658,14 @@ impl Parser {
             while self.lexer.has_token("use") {
                 if let Some(id) = self.lexer.has_identifier() {
                     had_use = true;
+                    // loft#949 — `use self::<module>` binds THIS package's own module,
+                    // whatever else in the graph ships a file of that name.  Handled
+                    // before the shared path because it resolves and registers under a
+                    // package-qualified key rather than the bare short name.
+                    if id == "self" {
+                        self.parse_use_self();
+                        continue;
+                    }
                     // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
                     let lib_alias = if self.lexer.has_token("as") {
                         self.lexer.has_identifier()
@@ -9669,50 +9677,7 @@ impl Parser {
                     // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
                     // the flat top-level comma list (`use lib::a, b`) is dropped (it
                     // read poorly — `b` didn't visually bind to `lib::`).
-                    let spec = if self.lexer.has_token("::") {
-                        if self.lexer.has_token("*") {
-                            Some(ImportSpec::Wildcard)
-                        } else {
-                            let grouped = self.lexer.has_token("(");
-                            let mut names = Vec::new();
-                            while let Some(name) = self.lexer.has_identifier() {
-                                // @PLN22 Phase 3 — `Name as Alias` binds the imported
-                                // name under the bare alias (works inside `(…)` too).
-                                let bind = if self.lexer.has_token("as") {
-                                    self.lexer.has_identifier().unwrap_or_else(|| name.clone())
-                                } else {
-                                    name.clone()
-                                };
-                                names.push((name, bind));
-                                if !self.lexer.has_token(",") {
-                                    break;
-                                }
-                            }
-                            if grouped {
-                                self.lexer.token(")");
-                            } else if names.len() > 1 {
-                                // @PLN22 Phase 4 — flat comma list dropped; the names
-                                // are still bound (recovery) so the rest parses cleanly.
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "import multiple names with parentheses: `use {id}::(a, b, …)`"
-                                );
-                            }
-                            if names.is_empty() {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "Expected name, '*', or '(' after '::'"
-                                );
-                                None
-                            } else {
-                                Some(ImportSpec::Names(names))
-                            }
-                        }
-                    } else {
-                        None
-                    };
+                    let spec = self.parse_import_spec(&id);
                     // loft#912 — the name is taken, but by WHICH file?  If this
                     // package has its own `<id>.loft`, the two are different modules
                     // sharing one global name, and the import below binds the other
@@ -10268,6 +10233,175 @@ impl Parser {
         f
     }
 
+    /// The optional import spec after a `use` target: `::*`, a single `::name [as bind]`,
+    /// or the grouped `::(a [as x], b, …)`.  `None` when no `::` follows.
+    ///
+    /// `path` is only for the diagnostic, so it reads back the spelling the author used
+    /// (`lib` or `self::module`).
+    ///
+    /// One grammar for both spellings (loft#949): `use self::<m>::(a, b)` has to accept
+    /// exactly what `use <lib>::(a, b)` accepts, and two copies of this loop would drift.
+    ///
+    /// @PLN22 Phase 4 — multiple names MUST be grouped in parentheses; the flat
+    /// top-level comma list (`use lib::a, b`) is dropped (it read poorly — `b` didn't
+    /// visually bind to `lib::`).  The names are still bound on that error so the rest
+    /// of the file parses cleanly.
+    fn parse_import_spec(&mut self, path: &str) -> Option<ImportSpec> {
+        if !self.lexer.has_token("::") {
+            return None;
+        }
+        if self.lexer.has_token("*") {
+            return Some(ImportSpec::Wildcard);
+        }
+        let grouped = self.lexer.has_token("(");
+        let mut names = Vec::new();
+        while let Some(name) = self.lexer.has_identifier() {
+            // @PLN22 Phase 3 — `Name as Alias` binds the imported name under the bare
+            // alias (works inside `(…)` too).
+            let bind = if self.lexer.has_token("as") {
+                self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+            } else {
+                name.clone()
+            };
+            names.push((name, bind));
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        if grouped {
+            self.lexer.token(")");
+        } else if names.len() > 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "import multiple names with parentheses: `use {path}::(a, b, …)`"
+            );
+        }
+        if names.is_empty() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expected name, '*', or '(' after '::'"
+            );
+            None
+        } else {
+            Some(ImportSpec::Names(names))
+        }
+    }
+
+    /// `use self::<module> [as <alias>] [::<spec>];` — bind the CURRENT package's own
+    /// module (loft#949).
+    ///
+    /// A module's short name is one slot shared by the whole dependency graph, so a
+    /// package's own `use catalogue;` binds whichever `catalogue.loft` was registered
+    /// first — and building a package reads every file under its `src/`, so a consumer
+    /// that merely ADDS `src/catalogue.loft` can take the name before its dependency
+    /// asks for it.  The dependency then calls the consumer's function: a published,
+    /// versioned, tested package answering differently because of a file downstream.
+    ///
+    /// `self::` is the spelling that cannot be captured.  It registers the module under
+    /// `<package>::<module>`, taken from `[package] name`, so two packages' `catalogue`
+    /// modules occupy two different slots and both stay reachable — which is the half
+    /// "prefer the local file" could not provide, since the flat `use_names` map has
+    /// room for only one `catalogue` however precedence is decided.
+    ///
+    /// Bare `use <id>;` is untouched, so this is additive: nothing that builds today
+    /// changes, and a package opts in where it wants the guarantee.
+    ///
+    /// Mirrors the bare-`use` protocol exactly, including its two-encounter shape: the
+    /// first encounter loads the file and switches the lexer onto it, and the import is
+    /// recorded on the second, when this file is re-parsed off `todo_files` and the key
+    /// already exists.
+    fn parse_use_self(&mut self) {
+        if !self.lexer.has_token("::") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`use self` must name a module — write `use self::<module>;`"
+            );
+            self.lexer.has_token(";");
+            return;
+        }
+        let Some(module) = self.lexer.has_identifier() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expected a module name after `use self::`"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        let alias = if self.lexer.has_token("as") {
+            self.lexer.has_identifier()
+        } else {
+            None
+        };
+        let spec = self.parse_import_spec(&format!("self::{module}"));
+        let Some(pkg) = self.own_package_name() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`use self::{module}` needs a package: no `loft.toml` declaring \
+                 `[package] name` was found above this file. Add one, or write \
+                 `use {module};` to take the module by its shared name"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        // No fall-through to the wider `lib_path` search when the module is absent.
+        // Bare `use` searches outward by design; `self::` must not, or a typo silently
+        // binds some other package's file — the exact outcome it exists to prevent.
+        let Some(f) = self.own_module_path(&module) else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "package '{pkg}' has no module '{module}' — expected \
+                 '{module}.loft' beside this file (or in its `lib/`)"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        let key = format!("{pkg}::{module}");
+        if self.data.use_exists(&key) {
+            let lib_source = self.data.get_source(&key);
+            if let Some(a) = &alias {
+                self.data.use_alias(a, lib_source);
+            }
+            // Same rule as a bare `use`: a plain one wildcard-imports, an explicit
+            // `::` spec is honoured, and an alias with neither gives ONLY the
+            // qualifier — the disambiguation escape hatch, which would be pointless
+            // if it also poured the names in bare.
+            let import_spec = match spec {
+                Some(s) => Some(s),
+                None if alias.is_some() => None,
+                None => Some(ImportSpec::Wildcard),
+            };
+            if let Some(import_spec) = import_spec {
+                self.pending_imports.push(PendingImport {
+                    for_source: self.data.source,
+                    lib_source,
+                    spec: import_spec,
+                });
+            }
+            if !self.lexer.has_token(";") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Missing ';' after 'use self::{module}' — use statements must end with a semicolon"
+                );
+            }
+            return;
+        }
+        let cur = self.lexer.pos().file.clone();
+        self.todo_files.push((cur, self.data.source));
+        self.data.use_add(&key);
+        self.record_use_path(&key, &f);
+        if let Some(a) = &alias {
+            self.data.use_alias(a, self.data.source);
+        }
+        self.switch_to_dep(&f);
+    }
+
     /// Remember which FILE a `use` short-name was loaded from (loft#912).
     ///
     /// Called at every site that pairs `Data::use_add` with a resolved path, so the
@@ -10303,6 +10437,23 @@ impl Parser {
         {
             return None;
         }
+        self.own_module_path(id)
+    }
+
+    /// Where a module of the CURRENT file's own package would live — `<its
+    /// dir>/<id>.loft` or `<its dir>/lib/<id>.loft` — with no view on whether
+    /// something else should win the name.
+    ///
+    /// Split out from [`own_module_file`] because `use self::<id>` (loft#949) wants
+    /// exactly this probe and NOT its dependency guard: that guard exists so a bare
+    /// `use <id>` prefers a declared dependency over a same-named local file, and
+    /// `self::` is the spelling that says the author means the local one.
+    fn own_module_path(&self, id: &str) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        if cur_dir.is_empty() {
+            return None;
+        }
         let sep = sep_str();
         [
             format!("{cur_dir}{sep}{id}.loft"),
@@ -10310,6 +10461,21 @@ impl Parser {
         ]
         .into_iter()
         .find(|c| std::path::Path::new(c).exists())
+    }
+
+    /// The `[package] name` of the package the current file belongs to (loft#949).
+    ///
+    /// This is the qualifier `use self::<module>` registers under, and it has to be
+    /// the manifest NAME rather than the package's path: the key reaches a database
+    /// type key, which must be identical on every machine that reads the store.  The
+    /// registry already enforces that names are unique, so `<name>::<module>` is a
+    /// qualifier nothing else in the graph can spell by accident.
+    fn own_package_name(&mut self) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        let (root, _) = self.package_declared_deps(&cur_dir)?;
+        let manifest = std::path::Path::new(&root).join("loft.toml");
+        crate::manifest::read_manifest(&manifest.to_string_lossy())?.name
     }
 
     /// Report when `use <id>` here names a DIFFERENT file from the one already loaded
@@ -11901,11 +12067,38 @@ impl Parser {
         spellings.sort();
         spellings.dedup();
         let bare = name.strip_prefix("n_").unwrap_or(name);
+        // loft#949 — a module taken with `use self::<m>` registers under the
+        // package-qualified key `<pkg>::<m>`, so its spelling here reads
+        // `pkg::mod::name`: THREE segments, which the expression parser does not
+        // accept.  Suggesting it would repeat the mistake the comment above this
+        // function records — a cure that cannot be typed is a dead end in both
+        // directions — so a scoped rival names the two cures that do work.
+        let scoped: Vec<&String> = spellings
+            .iter()
+            .filter(|s| s.matches("::").count() > 1)
+            .collect();
+        if scoped.is_empty() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{bare}` is declared by more than one package here — write {} to say which",
+                spellings.join(" or ")
+            );
+            return;
+        }
+        // The module name out of `<pkg>::<module>::<name>`, for the alias example.
+        let module = scoped
+            .first()
+            .and_then(|s| s.split("::").nth(1))
+            .unwrap_or("that module");
         diagnostic!(
             self.lexer,
             Level::Error,
-            "`{bare}` is declared by more than one package here — write {} to say which",
-            spellings.join(" or ")
+            "`{bare}` is declared by more than one module here — {}. A module taken \
+             with `use self::` has no bare qualifier of its own: alias yours \
+             (`use self::{module} as m;` then `m::{bare}`), or import the other one \
+             by name so only one `{bare}` is in scope",
+            spellings.join(" and ")
         );
     }
 

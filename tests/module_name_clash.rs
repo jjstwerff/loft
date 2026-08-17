@@ -366,3 +366,365 @@ fn a_same_package_basename_collision_is_not_advised() {
         "two files of ONE package drew a cross-package collision advice:\n{lines:#?}"
     );
 }
+
+/// Build the loft#949 tree and return what `loft test` prints for a given `pkg_dep`
+/// entry body.  The consumer ships its own `src/catalogue.loft` declaring `part_list`
+/// with the SAME signature as the dependency's, so nothing errors — the dependency
+/// simply answers with the consumer's number.
+///
+/// Driven through the BINARY, and that is load-bearing: nobody imports the consumer's
+/// `catalogue.loft`, so no `use` edge reaches it.  It is loaded because building a
+/// package reads every file under `src/` — which is what lets a consumer take a name
+/// its dependency has not asked for yet.
+fn use_self_tree(tag: &str, dep_entry: &str) -> String {
+    let root = std::env::temp_dir().join(format!("loft_949_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dep = root.join("pkg_dep");
+    let top = root.join("pkg_top");
+    std::fs::create_dir_all(dep.join("src")).expect("mkdir dep");
+    std::fs::create_dir_all(top.join("src")).expect("mkdir top");
+    std::fs::create_dir_all(top.join("tests")).expect("mkdir tests");
+
+    std::fs::write(
+        dep.join("loft.toml"),
+        "[package]\nname = \"pkg_dep\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_dep.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/catalogue.loft"),
+        "pub fn part_list() -> integer { 41 }\n",
+    )
+    .unwrap();
+    std::fs::write(dep.join("src/pkg_dep.loft"), dep_entry).unwrap();
+
+    std::fs::write(
+        top.join("loft.toml"),
+        "[package]\nname = \"pkg_top\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_top.loft\"\n\n\
+         [dependencies]\npkg_dep = { path = \"../pkg_dep\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("src/pkg_top.loft"),
+        "use pkg_dep::*;\npub fn top_answer() -> integer { dep_answer() }\n",
+    )
+    .unwrap();
+    // Same name, same signature — so this does not break the build, it changes the answer.
+    std::fs::write(
+        top.join("src/catalogue.loft"),
+        "pub fn part_list() -> integer { 99 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("tests/answer.loft"),
+        "use pkg_top::*;\nfn main() { println(\"answer={top_answer()}\"); }\n",
+    )
+    .unwrap();
+
+    let mut bin = std::env::current_exe().expect("test binary path");
+    bin.pop();
+    if bin.ends_with("deps") {
+        bin.pop();
+    }
+    let out = std::process::Command::new(bin.join("loft"))
+        .arg("test")
+        .current_dir(&top)
+        .env("LOFT_TIMEOUT", "300")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_NO_AUTO_INSTALL", "1")
+        .output()
+        .expect("invoke loft test");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    all
+}
+
+/// loft#949 — `use self::<module>` binds the package's OWN module, so a dependency
+/// answers the same in every consumer.
+///
+/// Both arms run, and the bare-`use` arm is what makes this a proof rather than an
+/// assertion: it pins that the scaffold still reproduces the wrong answer, so a green
+/// `self::` arm cannot come from a tree that stopped colliding. Same files, same
+/// dependency, one line different.
+#[test]
+fn use_self_binds_the_packages_own_module_not_a_consumers() {
+    let bare = use_self_tree(
+        "bare",
+        "use catalogue::*;\npub fn dep_answer() -> integer { part_list() + 1 }\n",
+    );
+    assert!(
+        bare.contains("answer=100"),
+        "control: bare `use` must still bind the consumer's file — if this stopped \
+         happening the scaffold no longer reproduces #949 and the other arm proves \
+         nothing:\n{bare}"
+    );
+
+    let scoped = use_self_tree(
+        "self",
+        "use self::catalogue;\npub fn dep_answer() -> integer { part_list() + 1 }\n",
+    );
+    assert!(
+        scoped.contains("answer=42"),
+        "`use self::catalogue` must bind pkg_dep's own catalogue.loft (41 + 1), \
+         whatever the consumer ships:\n{scoped}"
+    );
+    // No collision left to report: the module is registered under `pkg_dep::catalogue`,
+    // so the consumer's `catalogue` is no longer competing for the same slot.
+    assert!(
+        !scoped.contains("module-name-shadowed"),
+        "a scoped module must not still be reported as sharing a name:\n{scoped}"
+    );
+}
+
+/// The half "prefer the local file" could not have delivered: two packages' same-named
+/// modules COEXIST, each declaring its own `struct Row` and its own `make_row`, and each
+/// answers its own.
+///
+/// A precedence rule alone cannot do this — `use_names` is a flat map and `use_add`
+/// derives the source id from its size, so one `catalogue` overwrites the other however
+/// the winner is chosen. `self::` registers under `<package>::<module>`, which is two
+/// keys, so both stay reachable and the database type keys stay distinct too.
+///
+/// The values are the assertion, not the absence of an error: `dep_tag=dep` can only come
+/// from pkg_dep's `Row`, `top_label=top` only from pkg_top's, and they have different
+/// FIELDS — so a schema that had merged them could not produce both.
+#[test]
+fn two_packages_same_named_self_modules_both_stay_reachable() {
+    let root = std::env::temp_dir().join(format!("loft_949_coexist_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dep = root.join("pkg_dep");
+    let top = root.join("pkg_top");
+    std::fs::create_dir_all(dep.join("src")).expect("mkdir dep");
+    std::fs::create_dir_all(top.join("src")).expect("mkdir top");
+    std::fs::create_dir_all(top.join("tests")).expect("mkdir tests");
+
+    std::fs::write(
+        dep.join("loft.toml"),
+        "[package]\nname = \"pkg_dep\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_dep.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/catalogue.loft"),
+        "pub struct Row { n: integer, tag: text }\n\
+         pub fn make_row() -> Row { Row { n: 41, tag: \"dep\" } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/pkg_dep.loft"),
+        "use self::catalogue;\n\
+         pub fn dep_answer() -> integer { make_row().n + 1 }\n\
+         pub fn dep_tag() -> text { make_row().tag }\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        top.join("loft.toml"),
+        "[package]\nname = \"pkg_top\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/pkg_top.loft\"\n\n\
+         [dependencies]\npkg_dep = { path = \"../pkg_dep\" }\n",
+    )
+    .unwrap();
+    // Same module name, same function name, a DIFFERENT struct behind it.
+    std::fs::write(
+        top.join("src/catalogue.loft"),
+        "pub struct Row { label: text, extra: float }\n\
+         pub fn make_row() -> Row { Row { label: \"top\", extra: 2.5 } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("src/pkg_top.loft"),
+        "use pkg_dep::*;\nuse self::catalogue as m;\n\
+         pub fn top_answer() -> integer { dep_answer() }\n\
+         pub fn top_label() -> text { m::make_row().label }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        top.join("tests/answer.loft"),
+        "use pkg_top::*;\n\
+         fn main() { println(\"dep_answer={top_answer()} dep_tag={dep_tag()} top_label={top_label()}\"); }\n",
+    )
+    .unwrap();
+
+    let mut bin = std::env::current_exe().expect("test binary path");
+    bin.pop();
+    if bin.ends_with("deps") {
+        bin.pop();
+    }
+    let out = std::process::Command::new(bin.join("loft"))
+        .arg("test")
+        .current_dir(&top)
+        .env("LOFT_TIMEOUT", "300")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_NO_AUTO_INSTALL", "1")
+        .output()
+        .expect("invoke loft test");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("dep_answer=42 dep_tag=dep top_label=top"),
+        "both packages' `catalogue` modules must stay reachable, each answering its \
+         own:\n{all}"
+    );
+}
+
+/// `use self::<m>` accepts the same import spec as `use <lib>` — the grammar is shared,
+/// so the two spellings cannot drift into accepting different things.
+///
+/// The refused case is the point of the last row: the flat comma list is rejected for
+/// `self::` too, and the message quotes the spelling the author actually wrote
+/// (`use self::tools::(a, b, …)`) rather than a bare-library one they did not.
+#[test]
+fn use_self_takes_the_same_import_spec_as_a_library() {
+    let root = std::env::temp_dir().join(format!("loft_949_spec_{}", std::process::id()));
+    let pkg = root.join("pkg");
+    for (tag, body, want) in [
+        ("plain", "use self::tools;", "1|2"),
+        ("one", "use self::tools::one;", "1|"),
+        ("group", "use self::tools::(one, two);", "1|2"),
+        ("rename", "use self::tools::(one as first);", "1|"),
+        ("star", "use self::tools::*;", "1|2"),
+    ] {
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(pkg.join("src")).expect("mkdir");
+        std::fs::write(
+            pkg.join("loft.toml"),
+            "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nentry = \"src/pkg.loft\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("src/tools.loft"),
+            "pub fn one() -> integer { 1 }\npub fn two() -> integer { 2 }\n",
+        )
+        .unwrap();
+        // `first` is bound only in the rename row; every row prints what it imported.
+        let call = if tag == "rename" { "first()" } else { "one()" };
+        let second = if want.ends_with('2') { "two()" } else { "\"\"" };
+        std::fs::write(
+            pkg.join("src/pkg.loft"),
+            format!("{body}\nfn main() {{ println(\"{{{call}}}|{{{second}}}\") }}\n"),
+        )
+        .unwrap();
+
+        let mut p = Parser::new();
+        p.parse_dir("default", true, true).unwrap();
+        p.parse(&pkg.join("src/pkg.loft").to_string_lossy(), false);
+        assert!(
+            p.diagnostics.level() < Level::Error,
+            "`{body}` must parse:\n{}",
+            p.diagnostics.lines().join("\n")
+        );
+    }
+
+    // The flat comma list is refused for `self::` exactly as it is for a library.
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nentry = \"src/pkg.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/tools.loft"),
+        "pub fn one() -> integer { 1 }\npub fn two() -> integer { 2 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/pkg.loft"),
+        "use self::tools::one, two;\nfn main() { println(\"{one()}\") }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("src/pkg.loft").to_string_lossy(), false);
+    let all = p.diagnostics.lines().join("\n");
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        all.contains("use self::tools::(a, b, …)"),
+        "the grouping error must quote the spelling the author wrote:\n{all}"
+    );
+}
+
+/// `use self::<module>` must NOT fall through to the wider `lib_path` search when the
+/// module is absent.
+///
+/// Bare `use` searches outward by design — project `lib/`, sibling packages, the
+/// registry. Letting `self::` do the same would mean a typo silently binds some other
+/// package's file, which is the exact outcome the spelling exists to prevent. So an
+/// absent module is an error that names the package it looked in.
+#[test]
+fn use_self_refuses_to_search_outside_its_own_package() {
+    let root = std::env::temp_dir().join(format!("loft_949_absent_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("pkg_solo");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir src");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"pkg_solo\"\nversion = \"0.1.0\"\nentry = \"src/pkg_solo.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/pkg_solo.loft"),
+        "use self::nope;\npub fn solo() -> integer { 1 }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("src/pkg_solo.loft").to_string_lossy(), false);
+    let all = p.diagnostics.lines().join("\n");
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        p.diagnostics.level(),
+        Level::Error,
+        "an absent self-module must be an error, not a silent outward search:\n{all}"
+    );
+    assert!(
+        all.contains("pkg_solo") && all.contains("nope"),
+        "the error must name the package it searched and the module it wanted:\n{all}"
+    );
+}
+
+/// `self` needs a package to mean something.  In a bare script there is no
+/// `[package] name` to qualify with, so the spelling is refused — and the message
+/// carries the two ways forward rather than only the refusal.
+#[test]
+fn use_self_outside_a_package_says_what_to_do_instead() {
+    let root = std::env::temp_dir().join(format!("loft_949_nopkg_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    std::fs::write(
+        root.join("helper.loft"),
+        "pub fn helper() -> integer { 1 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("bare.loft"),
+        "use self::helper;\nfn main() { println(\"{helper()}\") }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&root.join("bare.loft").to_string_lossy(), false);
+    let all = p.diagnostics.lines().join("\n");
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        p.diagnostics.level(),
+        Level::Error,
+        "expected an error:\n{all}"
+    );
+    assert!(
+        all.contains("loft.toml") && all.contains("use helper;"),
+        "the message must name both cures — add a manifest, or take the module by its \
+         shared name:\n{all}"
+    );
+}
