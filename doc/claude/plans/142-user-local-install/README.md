@@ -3,16 +3,17 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan — Sudo-free user-local install of loft
+# @PLN142 — Sudo-free user-local install of loft
 
-> **Tracker id: PENDING** — GitHub was unreachable (503) when this was written.
-> File a `loft-lang/plans` issue (`subject:loft` + `status:next`) when gh recovers
-> and rename this dir `doc/claude/plans/<N>-user-local-install/`. Method: the
-> loft-plan-workflow skill.
+> Tracker: [loft-lang/plans#142](https://github.com/loft-lang/plans/issues/142)
+> (`subject:loft` + `status:next`).
 
 ## Status
 
-NEXT — motivated by a live failure (below). Phase 1 is a same-session fix.
+Phases 1–3 **implemented + validated live** on branch `mac-install-dylib-fix`
+(commits `e37266a1`, `75a7b67d`), pending merge to `main`. `make install-user`
+installs to `~/.local` with no sudo, passes the stdlib + cdylib smokes, and reports
+`PATH OK`.
 
 ## Goal
 
