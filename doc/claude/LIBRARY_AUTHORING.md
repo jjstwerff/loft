@@ -303,6 +303,21 @@ Before you ship a version:
 - [ ] `LOFT_DENY_WARNINGS=1 loft test` is green (or you've
       kept `.allow_warnings` as an opt-out only when the
       package isn't ready yet).
+- [ ] **The publish gate's own command is green** — it is a *different* gate
+      from `loft test`, and it is the one that can stop a release:
+
+      ```
+      $ <loft-checkout>/target/release/loft --interpret --tests tests
+      ```
+
+      `loft test` runs the **installed** loft; `registry_maintain.sh` runs the
+      loft built in the **checkout it is invoked from**, and the two can
+      disagree while both report the same version — a local shadowing a stdlib
+      function name (`now = …`) passed every `loft test` and blocked the
+      publish of `imaging` 0.2.2 with *"Cannot redefine function 'now' as a
+      variable"*. The gate is the right authority: a published library must
+      parse under whatever loft its **consumers** hold, not just the one on the
+      publishing machine. Run it before tagging, not after.
 - [ ] `loft.toml` has the new version under `[package] version`.
 - [ ] `[package] description` is a real one-line summary (not the `loft new`
       placeholder) — it's the official registry catalog text (`loft search` /
