@@ -13,7 +13,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-ACTIVE — stdlib rollout underway. The loft **stdlib** is the starting library
+ACTIVE — stdlib + in-tree libraries done; distributed-library rollout is next.
+Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
+broadened** to the distributed monorepos, Phase C indexer ingestion. Tagged so far:
+`@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
+`@EHK-001..004` (in-tree libraries). **The distributed libraries are this stream's
+to roll out** — they are shared code with their own validated contract (each
+`library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
+loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
+work only in a clean, current checkout). Next: the priority order below —
+`arguments`/`hex_grid`/`gridmesh` first. The genuine wait-for-their-agent case is
+only the first-class *apps* (`dryopea`/`crawler`/`moros`), which loft merely cites.
+
+The loft **stdlib** was the starting library
 (source 3, in-repo, loft's own gate — the cleanest arrow): twelve functions across
 four clusters carry `// Example: @STD-0NN` citations — text (`starts_with_at`,
 `chr`, `join`), collection aggregates (`min_of`, `max_of`, `sum`, `tree_walk`), JSON
@@ -27,9 +39,7 @@ the null contract — the rest live in `945-stdlib-worked-examples.loft` and the
 filesystem-isolated `946-stdlib-file-worked-examples.loft`, all green on both
 backends). The gate is `scripts/check_doc_drift.sh examples` (dangling + duplicate),
 wired into the `all` run that CI already blocks on — proven red on both a dangling
-citation and a duplicate tag. The stdlib clusters are covered; next is either
-**Phase C** (teach `scripts/idx`/`make index` to ingest `@AAA-###`) or the first
-**registered library** (`arguments`/`hex_grid`/`gridmesh`).
+citation and a duplicate tag. All four stdlib clusters are covered.
 
 **Cross-repo resolution now works (Phase B + first-class-app source).** The acronym
 registry lives at `scripts/example_repos.tsv` (acronym → repo → git url → branch).
@@ -162,11 +172,21 @@ forced, below): `loft-libs-core` → `ARG` arguments · `CRY` crypto · `RND` ra
 `loft-libs-graphics` → `GFX` graphics · `GRM` gridmesh · `SHP` shapes ·
 `loft-libs-net` → `GMP` game_protocol · `SRV` server · `WEB` web ·
 `loft-libs-world` → `HXG` hex_grid · `HXT` hex_terrain · `HXW` hex_world. These
-rows only **stake the ecosystem-global acronym** — none of the monorepos carries a
-worked-example tag yet, and authoring those is each library's own agents' work (they
-are also actively edited: `loft-libs-world`/`-core` were dirty when surveyed). Still
-to add when reached: `MKD` markdown (no sibling checkout found — deferred), the new
-`imaging`/`ssh`/`cbor`/`regex` packages, and `FTR` the feature catalogue (Phase C2).
+rows **stake the ecosystem-global acronym**; none of the monorepos carries a
+worked-example tag yet. Still to add when reached: `MKD` markdown (no sibling
+checkout found — deferred), the new `imaging`/`ssh`/`cbor`/`regex` packages, and
+`FTR` the feature catalogue (Phase C2).
+
+**These libraries ARE this stream's to roll out** — they are shared code between
+agents (not one consumer-agent's private tree, the way dryopea/crawler/moros are),
+each guarded by its **own validated contract** (its `library-ci.yml` gate + the API
+signatures recorded in the register). So the `edit-only-this-repo` dogfood rule that
+holds for a first-class *app* does **not** apply here: this stream authors the
+libraries' worked-example tags directly, in the library's canonical location. The
+one operational caveat is ordinary git-safety — work only in a **clean, current**
+checkout (`loft-libs-graphics`/`-net` were clean when surveyed; `loft-libs-world`/
+`-core` were dirty/behind, so leave those until clean rather than risk a concurrent
+edit).
 
 - **Design decision — monorepo, not per-package (registry `repo` = the monorepo).**
   The registry's `../<repo>` assumption was written for one repo per package
@@ -176,6 +196,13 @@ to add when reached: `MKD` markdown (no sibling checkout found — deferred), th
   scans the whole monorepo for the acronym's tag and captures a **repo-relative**
   path, so the emitted git link is correct
   (`…/loft-libs-graphics/blob/main/gridmesh/tests/x.loft#L12`).
+- **Canonical location = the monorepo subdir, per the register.** The authority for
+  where a library lives is `loft-registry/index.json`: each package entry carries a
+  `homepage` (`…/loft-libs-graphics/tree/main/gridmesh`) and every version a
+  `subpath` (`gridmesh`) + release `url` on the monorepo. So a worked-example tag is
+  authored in that canonical tree — never in loft's `lib/<name>` stubs (empty
+  scaffolding) nor an installed/`~/.loft/` copy (a lagging cache). The register also
+  records each version's `api` signatures — the contract the tag documents against.
 - **Still to do:** a duplicate-**acronym** guard (two repos claiming one acronym) —
   the gate today guards duplicate *tags* within a repo, not acronym collisions across
   the registry.
@@ -242,9 +269,8 @@ and files/IO (the missing-vs-empty `content`/`read_bytes`/`list_dir` contract
 @STD-011, the `FileResult`/`ok()` classify idiom @STD-012). The four stdlib clusters
 are covered; the rollout moves to the registered libraries below.
 
-**In-tree libraries shipping (edit-only-this-repo; cross-repo libs wait for their
-own agents).** Each anchors its tags on **real, exercised code** — a live
-consumer or a CI-run test — never a prose snippet:
+**In-tree libraries shipping.** Each anchors its tags on **real, exercised code** —
+a live consumer or a CI-run test — never a prose snippet:
 - **`lib/git`** (`@GIT-001..005`, registered `GIT`→loft): tags on live uses in two
   consumers run every `make index` / `make view` — `scan.loft` (`tracked_files`
   @GIT-001) and `refresh.loft` (`ahead_behind` @GIT-002, `log`-vs-`head`-date
@@ -272,15 +298,18 @@ consumer or a CI-run test — never a prose snippet:
 
 All resolve through `idx` and the gate; each host program / test still runs.
 
-**In-tree libraries roll out first (edit-only-this-repo).** The priority order
-below leads with cross-repo registered libraries (`arguments`/`hex_grid`/…), but
-the dogfood rule forbids editing a consumer's repo, so their tags must be authored
-by *their* agents. What this stream can do directly is the **in-tree** libraries
-(`lib/git` — done — then `lib/html`, `lib/markdown`, `lib/input`, `lib/logger`),
-where the strongest example is a **real call site in an in-tree consumer** that
-already runs in CI/tooling (`lib/git` tagged live uses in `scan.loft` +
-`refresh.loft`, no test authored). A cross-repo library's rollout waits until its
-own repo opts in.
+**All the distributed libraries are this stream's to roll out.** They are shared
+code between agents, each guarded by its own validated contract (its `library-ci.yml`
+gate + the register's recorded `api`), so — unlike a first-class *app* — this stream
+authors their worked-example tags directly, in the canonical monorepo tree (per the
+register; see Phase B). The in-tree libraries went first only because they were the
+nearest to hand (`lib/git` — done — anchoring live uses in `scan.loft` +
+`refresh.loft`, no test authored); the priority order below then covers the
+distributed monorepos. The one gate is git-safety: roll out only in a **clean,
+current** checkout, and leave a dirty/behind monorepo (e.g. `loft-libs-world` was
+39 behind) until it is clean. The genuine wait-for-their-agent case is narrower than
+first written: it is the first-class *apps* (`dryopea`/`crawler`/`moros`), whose own
+agents author their `@DRY`/`@CRW`/`@MOR` tags — loft only *cites* those.
 
 One library per phase (the skill's one-call-site-at-a-time shape). For each: tag the
 highest-value functions from its own tests and, where it exists, a real consumer
