@@ -31,6 +31,60 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
+**Tier 2 complete** (`crypto`, `server`, `web`). `server` + `web` opened
+`loft-libs-net`'s rollout branch **`worked-examples`** (the plan's no-host-prefix
+name; pushed, PR not opened), taking that repo to 2 tagged / 2 TODO
+(`game_protocol`, `ssh`) — the **closest of the three to a PR**.
+
+`server` (`@SRV-001..003`): `listen` HALTS on a lost port and that is the design —
+a `Server` built on a failed bind is indistinguishable from a healthy one at every
+call site, so the process reports itself up and serves nobody, invisibly from
+outside too, because a readiness probe reaches whoever DID win the bind;
+`try_listen` + `bound()` is the recoverable door @SRV-001 (tagged on the smoke test
+that already demonstrated it, rather than writing a second). `header` folds case —
+the client picks its own, so a hand-rolled `starts_with("Origin:")` misses the next
+one — and rejoins a value's own colons, which a hand-rolled `split(':')[1]` truncates
+off an Origin's port @SRV-002. And the return value **says who answered**:
+`serve_range` declines with false when there is no `Range` header, the only case the
+caller must handle (ignore it and the client waits for a reply nobody sent, or gets
+two), while `serve_data` takes every branch and is therefore always true and always
+final @SRV-003.
+
+`web` (`@WEB-001..003`): the `pack_*` builder exists because interpolation cannot
+carry a zero byte — codepoint 0 is the `character` null sentinel, so `"{a}{b}{c}"`
+silently drops every NUL and a binary header with a small integer field is mostly
+NULs; the example packs `01 00 02` and shows the interpolated form measuring **2**
+bytes, and pins that `pack_take` MOVES @WEB-001. An out-of-range `byte_at` answers
+`-1`, which matters *because* 0 is a byte the buffer legitimately carries: `== 0` as
+a bounds test reads a real NUL field as end-of-frame **and** an overrun as a NUL
+field, wrong in both directions @WEB-002. And a handle is not a connection —
+`ws_handler` answers null for a malformed URL only, so a well-formed URL with nobody
+listening still yields a usable handle (reconnecting is the library's job) and a
+caller reading non-null as "connected" reports itself up against a server that does
+not exist; `send`'s false is what reports the link down @WEB-003.
+
+All six run with **no network**, like the rest of those packages' CI tests. @WEB-003
+is the pleasing case: its contract is that a down server is *not* an error, so having
+no server is exactly what makes it demonstrable. @SRV-002/003 build a `Request` by
+hand rather than accepting one off a socket, because what they pin is a DECISION the
+request layer makes — which header matched, whether the helper already answered — not
+the bytes that reach a client; that is the half a caller gets wrong and the half a
+single-process test can hold honestly.
+
+**Two more stale docs caught, both in the function being documented** (the same
+signal `crypto` gave): `web`'s `tests/byte_at.loft` header said out-of-range returns
+`0` when it returns `-1` — and `0` is the one wrong answer to state there, since it
+is a legitimate byte value. Writing a worked example forces a value to be pinned, and
+pinning it is what finds the prose that drifted; this is the monthly-review failure
+mode turning up early, three times in three libraries.
+
+**Noted coverage gap:** `server`'s multi-client event model (`run` / `poll_event`,
+the mutually-exclusive `WsEvent` flags, the pre-split `<msg_id>:<payload>` wire form,
+and disconnects absorbed **silently** — the surprising one) owes an example and has
+no demonstrator that CI runs; a real one needs a concurrent client+server, which the
+package's own smoke test already records as out of reach today. Deliberately left
+untagged rather than tagged against a test that does not exercise it.
+
 Third **`crypto` DONE** — the second package on `loft-libs-core`'s
 `mac-worked-examples` branch (pushed, PR not opened). Six `@CRY-001..006` worked
 examples in `crypto/tests/worked-examples.loft`, cited from the twelve functions
@@ -75,6 +129,17 @@ channel is vacuous. `hex_grid` (the other tier-1 library) is **held**: its
 monorepo `loft-libs-world` has uncommitted work in the tree, and the rollout's
 one gate is a clean, current checkout.
 
+**What "clean" has to mean, refined by `loft-libs-net`.** That repo's tree was not
+pristine either — but every entry was `.loft/` build residue, including one *tracked*
+cache file (`server/tests/.loft/cache/…`) that a test run had deleted. Build cache is
+not someone's work, so the rollout proceeded there and simply never staged those
+paths; `loft-libs-world`'s modified `README.md` and lock files are a different thing
+and the hold stands. The distinguishing question is not `git status` being empty, it
+is whether a human or another agent would lose anything. (`loft-libs-core` fixed its
+own version of this by ignoring `.loft/` by directory NAME rather than one row per
+place someone noticed — `loft-libs-net` still tracks a cache file and wants the same
+one-line fix, filed here rather than folded into a docs branch.)
+
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
 broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 **shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
@@ -82,7 +147,8 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 (loft self-check byte-identical, synthetic-lib probe green/dangling/duplicate). Tagged so far:
 `@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
 `@EHK-001..004` (in-tree libraries), `@ARG-001..004` + `@CRY-001..006`
-(`loft-libs-core`), `@GRM-001..005` (`loft-libs-graphics`). **The distributed libraries are this stream's
+(`loft-libs-core`), `@GRM-001..005` (`loft-libs-graphics`), `@SRV-001..003` +
+`@WEB-001..003` (`loft-libs-net`). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
@@ -401,10 +467,14 @@ covers it (no per-library `examples.sh` to wire).
      question. Confirmed by the two done: every tag is a contract a caller can get
      wrong while type-checking (a forgotten `clear_dirty`, a halo cell emitted
      twice, a stale cell index, a group rebuilt whole, a `-1` read as null).
-  2. `crypto` (DONE, `@CRY-001..006`), `server`, `web` — protocol/sequence APIs
-     (order of calls matters). `crypto` sharpened what "gettable wrong while
-     type-checking" means for this tier: its whole surface is `text -> text`, so
-     the *encoding* is the contract and the compiler is blind to all of it.
+  2. **DONE** — `crypto` (`@CRY-001..006`), `server` (`@SRV-001..003`), `web`
+     (`@WEB-001..003`): protocol/sequence APIs where the order of calls matters.
+     The tier sharpened what "gettable wrong while type-checking" means. For
+     `crypto` the whole surface is `text -> text`, so the *encoding* is the
+     contract and the compiler is blind to all of it. For `server` and `web` it is
+     the RETURN VALUE that carries the contract — `serve_range`'s false, `send`'s
+     false, `byte_at`'s `-1`, a non-null `WsHandler` — each a well-typed answer
+     that means something other than what a caller assumes.
   3. `markdown`, `graphics`, `random`, `shapes`, `game_protocol` — as they're touched.
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
@@ -457,12 +527,15 @@ a time without reddening a neighbour.
 added mid-rollout adopts later through the same ratchet. Without that, a 14-package
 repo (`loft-libs-world`) is a moving target that never converges.
 
-**Where that leaves the two branches in flight** (`make examples-progress`):
-`loft-libs-core` 2 tagged (`arguments`, `crypto`) / 4 TODO (`cbor`, `random`,
-`regex`, `zttext`); `loft-libs-graphics` 1 tagged (`gridmesh`) / 3 TODO
-(`graphics`, `imaging`, `shapes`). Neither is ready. `loft-libs-core` is the nearer
-one, and the four it still owes are the packages where an *exempt* verdict is most
-likely to be the honest answer — which is what the verdict column is for.
+**Where that leaves the three branches in flight** (`make examples-progress`):
+`loft-libs-net` (`worked-examples`) 2 tagged (`server`, `web`) / 2 TODO
+(`game_protocol`, `ssh`) — **the nearest to a PR**; `loft-libs-core`
+(`mac-worked-examples`) 2 tagged (`arguments`, `crypto`) / 4 TODO (`cbor`, `random`,
+`regex`, `zttext`); `loft-libs-graphics` (`tuxedo-worked-examples`) 1 tagged
+(`gridmesh`) / 3 TODO (`graphics`, `imaging`, `shapes`). None is ready yet. Finish
+`loft-libs-net` first — two packages from a complete repo, and it would be the
+convention's first PR, which is what makes the "the PR unit is the REPO" rule
+reviewable rather than theoretical.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
