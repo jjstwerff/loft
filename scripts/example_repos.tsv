@@ -35,6 +35,7 @@ RND	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
 # loft-libs-graphics (graphics, gridmesh, shapes, imaging)
 GFX	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
 GRM	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
+IMG	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
 SHP	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
 # loft-libs-net (game_protocol, server, web, ssh)
 GMP	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
