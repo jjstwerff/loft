@@ -4252,6 +4252,26 @@ use #count instead"
     // Consume the remaining `par(...)` tokens and then the body block so the
     // parser can recover after an error in the parallel clause.
     // Called after '(' has already been consumed, so this drains to ')'.
+    /// Build the call to a user CALLBACK that a builtin lowers by hand — `map`'s and
+    /// `filter`'s per-element call, `reduce`'s per-step fold (loft#945).
+    ///
+    /// The declared arguments are not the whole call.  A callee that answers a HEAP value
+    /// (text, a collection, a struct) also takes a hidden buffer parameter the CALLER
+    /// allocates, and an ordinary call site fills those slots in `add_defaults`.  A
+    /// hand-built `Value::Call` skipped that step, so any callback returning text crashed
+    /// the compiler outright — *"Too few parameters on n_shout (got 1, need 2)"* — while
+    /// the equivalent comprehension `[for s in xs { shout(s) }]` was fine.  Routing
+    /// through the same filler is what makes the two spellings agree.
+    pub(crate) fn callback_call(
+        &mut self,
+        d_nr: u32,
+        mut args: Vec<Value>,
+        mut types: Vec<Type>,
+    ) -> Value {
+        self.add_defaults(d_nr, &mut args, &mut types);
+        Value::Call(d_nr, args)
+    }
+
     /// Compiler special-case for `map(v: vector<T>, f: fn(T) -> U) -> vector<U>`.
     /// Generates inline bytecode equivalent to `[for elm in v { f(elm) }]`.
     #[allow(clippy::too_many_lines)]
@@ -4263,10 +4283,20 @@ use #count instead"
         // and subsequent `for x in r` iterations resolve correctly.
         // We must NOT create unique variables here — only determine the type.
         if self.first_pass {
-            // On first pass, infer output element type from the input vector.
-            // The lambda return type may not be fully resolved yet; defaulting
-            // to the input element type is correct for most cases (e.g. x * 10)
-            // and lets downstream code like r[0] type-check.
+            // loft#945 — the output element is the CALLBACK's return type: `map` is
+            // `fn(T) -> U` answering `vector<U>`.  Both passes must agree on it or the
+            // BINDING reports "Variable 'v' cannot change type from vector<T> to
+            // vector<U>" — which is how a perfectly good `map(xs, label)` was refused.
+            if let Some(Type::Function(_, ret, _)) = types.get(1)
+                && !ret.is_unknown()
+                && !matches!(**ret, Type::Void)
+            {
+                return Type::Vector(ret.clone(), crate::data::Deps::none());
+            }
+            // The callback's return is not resolvable yet — a function declared BELOW
+            // this call has nothing to resolve against on pass 1 (loft#918's shape).
+            // Fall back to the input element type, which is right whenever `U == T`
+            // and lets downstream code like `r[0]` type-check either way.
             if let Type::Vector(elm, _) = &types[0] {
                 return Type::Vector(elm.clone(), crate::data::Deps::none());
             }
@@ -4381,7 +4411,7 @@ use #count instead"
         }
 
         let body = if let Some(d) = fn_d_nr {
-            Value::Call(d, vec![Value::Var(for_var)])
+            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
         } else {
             Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
         };
@@ -4529,7 +4559,7 @@ use #count instead"
         }
 
         let if_step = if let Some(d) = fn_d_nr {
-            Value::Call(d, vec![Value::Var(for_var)])
+            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
         } else {
             Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
         };

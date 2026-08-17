@@ -360,6 +360,27 @@ impl Parser {
                     }
                 }
             }
+            // map/filter/reduce as method syntax on vectors: `v.map(fn)` → `map(v, fn)`.
+            // Unwrap `&vector<T>` so they work on ref params.
+            //
+            // loft#945 — on BOTH passes.  Pass 1 used to fall through to
+            // `skip_remaining_args` below, so the callback lambda was parsed with no
+            // element-type hint on pass 1 and with one on pass 2 — the two passes
+            // disagreed about the lambda's own signature, which is how `xs.map(…)` and
+            // `map(xs, …)` came to lower differently for the same program.  `parse_map`
+            // and friends already have their own pass-1 arms (type only, no variables
+            // minted), which is what makes running them here safe.
+            let vec_recv = if let Type::RefVar(inner) = &t {
+                inner.as_ref().clone()
+            } else {
+                t.clone()
+            };
+            if matches!(vec_recv, Type::Vector(_, _))
+                && matches!(field.as_str(), "map" | "filter" | "reduce")
+                && self.lexer.has_token("(")
+            {
+                return self.parse_vector_method(code, &vec_recv, &field);
+            }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
             } else if let Type::Enum(enum_d_nr, true, _) = &t
@@ -391,20 +412,6 @@ impl Parser {
                 }
                 return t;
             } else if !self.first_pass {
-                // map/filter/reduce as method syntax on vectors:
-                // v.map(fn) → map(v, fn)
-                // Unwrap &vector<T> so map/filter/reduce work on ref params.
-                let vec_t = if let Type::RefVar(inner) = &t {
-                    inner.as_ref().clone()
-                } else {
-                    t.clone()
-                };
-                if matches!(vec_t, Type::Vector(_, _))
-                    && matches!(field.as_str(), "map" | "filter" | "reduce")
-                    && self.lexer.has_token("(")
-                {
-                    return self.parse_vector_method(code, &vec_t, &field);
-                }
                 // generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
                     diagnostic!(
@@ -629,9 +636,16 @@ impl Parser {
             if let Type::Vector(elm, _) = t {
                 let elem = *elm.clone();
                 let hint = match (method, m_arg_idx) {
+                    // loft#945 — `map` is `fn(T) -> U`, so only the PARAMETER is the
+                    // element type; the return is free.  Pinning it to `elem` type-checked
+                    // the lambda's body against `T`, which is why every `U != T` was
+                    // refused inside the user's own lambda ("expected integer, got text").
+                    // `Unknown` leaves the return to `parse_lambda_short`'s body inference.
+                    // `filter`/`reduce` keep their returns: a predicate really is `-> bool`,
+                    // and a fold really answers its accumulator's type.
                     ("map", 1) => Some(Type::Function(
-                        vec![elem.clone()],
-                        Box::new(elem),
+                        vec![elem],
+                        Box::new(Type::Unknown(0)),
                         crate::data::Deps::none(),
                     )),
                     ("filter", 1) => Some(Type::Function(

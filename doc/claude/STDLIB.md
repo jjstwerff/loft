@@ -1027,7 +1027,7 @@ New code should prefer the `JsonValue` surface; the text-based `Struct.parse(tex
 |---|---|
 | `map(v: vector<T>, f: fn(T) -> U) -> vector<U>` | Applies `f` to each element and collects the results |
 | `filter(v: vector<T>, pred: fn(T) -> boolean) -> vector<T>` | Keeps only elements for which `pred` returns `true` |
-| `reduce(v: vector<T>, init: U, f: fn(U, T) -> U) -> U` | Left-folds `v` starting from `init`, applying `f(acc, elm)` at each step |
+| `reduce(v: vector<T>, init: U, f: fn(U, T) -> U) -> U` | Left-folds `v` starting from `init`, applying `f(acc, elm)` at each step. `U` must be a SCALAR — a text or collection accumulator is refused, because the fold would reuse one buffer across the turns and keep only the last step (loft#951). Write the loop instead: `acc = <init>; for x in v { acc = f(acc, x); }` |
 
 ```loft
 fn double(x: integer) -> integer { x * 2 }
@@ -1037,6 +1037,15 @@ fn add(a: integer, b: integer) -> integer { a + b }
 doubled  = map(nums, fn double);         // [2, 4, 6, ...]
 positive = filter(nums, fn is_pos);      // only positive elements
 total    = reduce(nums, 0, fn add);      // sum of all elements
+```
+
+`U` really is free in `map` — the callback's return type is what the result vector holds, and
+an inline lambda takes its return type from its own body:
+
+```loft
+labels = map(nums, |x| { "n{x}" });      // vector<text> from a vector<integer>
+sizes  = words.map(|w| { len(w) });      // vector<integer> from a vector<text>
+pairs  = nums.map(|x| { [x, x + 1] });   // vector<vector<integer>>
 ```
 
 All three accept either a named function reference (`fn <name>`) or a lambda expression:

@@ -611,8 +611,8 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 /// the non-nullable one gets. **OPT-IN, DEFAULT OFF** (loft#938).
 ///
 /// Off, every consulting site is byte-identical to today: [`Type::ret_promo_base`] is the
-/// identity and [`Type::ret_promo_peels`] is `false`, so the five gates below read exactly as
-/// they did before this existed.
+/// identity and [`Type::ret_promo_peels`] is `false`, so the gates below read exactly as they
+/// did before this existed.
 ///
 /// # What it is for
 ///
@@ -632,18 +632,25 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///
 /// # State — what turning it on does today
 ///
-/// Fixes the filed case: the unbound `f(i) != null` loop goes from 39 leaked stores to 0,
-/// and a `-> vector<T>?` returning a BORROWED view is still not over-freed. Two known
-/// failures remain, both reproducible with the switch on:
+/// Every shape in `tests/probes/938-nullable-collection-return-buffer.loft` is correct and
+/// leak-free on BOTH backends: the unbound `f(i) != null` loop, a returned BORROWED view, a
+/// function whose arms disagree (null / alias / fresh), an explicit `return <fresh vector>`
+/// beside an early `return null`, and a FORWARDING tail in both its spellings. The last one is
+/// the `--native` wrong answer this switch could not ship without — `fn fwd(i) -> vector<T>?
+/// { a1(i) }` compiled to `return null`, and the interpreter read the freed slot and only
+/// looked right.
 ///
-/// * **A mixed function leaks its fresh arms.** `if n==0 {null} else if n==1 {v} else {[…]}`
-///   merges its arms into `__ret_N` (the null-arm merge) BEFORE promotion sees them, so no
-///   arm is a return tail and none delivers. Value correct, container intact, 38/40 leaked.
-///   `--interpret` only.
-/// * **`pln133-optional-unify.loft` miscompiles on `--native`** — a method returning
-///   `vector<T>?` through different routes reads back `0` where it should read `14`, while
-///   the interpreter passes. A silent wrong answer on one backend, which is why this is not
-///   defaulted on.
+/// **One known failure remains**, and it is why the default is still off:
+///
+/// * **Two call sites of a two-arm dispatch share one return dep.** A `match` in a
+///   `-> vector<T>?` method forwarding to a different implementation per arm, called TWICE,
+///   types the second result as a borrow of the FIRST (`gl(1):vector<integer>["gd"]` where the
+///   dep should name the second site's own `__ref_N`), so it is freed on the first one's
+///   schedule. Every value is correct and nothing leaks — the only witness is
+///   `LOFT_STRICT_STORES=1`, which is exactly the silent half of this issue. It needs BOTH
+///   halves: one arm alone is clean and one call site alone is clean.
+///   `known_two_site_dispatch_reads_a_freed_store` in `tests/nullable_ret_buffer.rs` is the
+///   14-line repro.
 ///
 /// # For whoever finishes it
 ///
@@ -653,8 +660,15 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 /// (`882-keyed-element-read-borrows-its-container.loft` catches it). The `?` is transparent
 /// only where the storage under it is.
 ///
-/// Reach for [`trace_ret_promotion`] first: no output for a function means a gate UPSTREAM of
-/// the classifier, which is a different bug from the classifier deciding wrong.
+/// A delivery that COPIES the tail into the buffer and answers the buffer cannot be reached
+/// from a nullable return: it would turn a `null` answer into an empty collection. That is why
+/// the `Bind` leg in `ref_return` deliberately does NOT peel, and why the remaining work is on
+/// the caller's dep resolution rather than on another delivery cell.
+///
+/// Reach for [`trace_ret_promotion`] first: it prints the candidate AND the verdict, so no line
+/// for a function means a gate UPSTREAM of the classifier while a `Skip*` verdict means the
+/// classifier was asked and said no. Then `LOFT_STRICT_STORES=1` — a green run without it is
+/// not evidence here.
 #[must_use]
 pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

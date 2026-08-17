@@ -26,6 +26,28 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `map` can change the element type
+
+`map` is documented as `fn(T) -> U` answering a `vector<U>`, and now it is:
+
+```loft
+xs = [1, 2];
+v = map(xs, |x| { "n{x}" });     // vector<text> — used to be refused
+```
+
+Before, every `U` other than `T` was rejected, and the error pointed *inside your own lambda*
+("expected integer, got text") or at the assignment ("cannot change type from vector<integer>
+to vector<text>"). Naming the destination did not help. The only shape that worked was a
+transform back to the same type.
+
+The same fix removes two crashes that had nothing to do with changing the type:
+`xs.map(|s| { "{s}!" })` on a list of text, and `map(xs, some_text_function)`, both of which
+used to report an internal compiler error.
+
+One thing is now refused that used to crash: `reduce` with a text or list accumulator. The fold
+reuses a single buffer across the turns, so it kept only the last step; it now says so and
+points at the loop to write instead.
+
 ### A `?` on a list or map field now works
 
 You could always write it, and it never did anything:

@@ -446,6 +446,38 @@ pub struct Parser {
     /// the file.  Consumed by `promote_late_text_buffers` between the passes, where the
     /// callee exists — the same late-derivation slot `reserve_late_return_buffers` uses.
     late_text_tails: Vec<(u32, u16)>,
+    /// loft#945 — every short `|x|` lambda whose return type is to be read off its own
+    /// BODY, because nothing else names it: no `-> τ` (the short form forbids one) and no
+    /// return in the hint that placed it (`map`'s callback, whose `U` is free).
+    ///
+    /// Consumed by [`block_result`](Self::block_result) at the body's tail, which is the
+    /// first moment the type exists AND still early enough to run the return machinery on
+    /// it — a text or collection return mints a hidden buffer parameter there.  Adopting
+    /// the type any later mints that buffer on pass 2 only, which is the H5 two-pass
+    /// contract violation, so the timing is the whole point.
+    infer_ret_defs: std::collections::HashSet<u32>,
+    /// loft#945 — every def that ACTUALLY adopted its return type from its own body tail,
+    /// recorded by [`block_result`](Self::block_result) at the moment it does so.
+    ///
+    /// [`infer_ret_defs`](Self::infer_ret_defs) says a lambda is a CANDIDATE for that and is
+    /// cleared when its body closes; this says the adoption happened and survives to
+    /// `reserve_late_return_buffers`, which is between the passes.  The two are not the same
+    /// set — a candidate whose tail is scalar, `Void` or `Never` adopts nothing.
+    ///
+    /// It is the late reservation's admission test for a lambda, and the narrowness is the
+    /// point: a lambda that DECLARED its return (`fn(i: integer) -> S { … }`) is served by
+    /// the signature-time path and reserving a second buffer for it leaks one store per
+    /// closure (`717-closure-struct-return.loft`).  Only a return nothing declared can have
+    /// missed the earlier slot.
+    adopted_ret_defs: std::collections::HashSet<u32>,
+    /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
+    /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
+    ///
+    /// Deliberately NOT cleared between the passes: by the end of such a statement the
+    /// variable holds the CHAIN's type, and the variable table outlives the pass, so pass 2
+    /// would otherwise build the literal against a type it is not — a `vector<text>` for an
+    /// integer literal, or an integer for a vector one.
+    literal_chain_lhs: std::collections::HashSet<(u32, u16)>,
     /// @PLN125 — every bound-method stub built on pass 1, as
     /// `(stub, the interface method it stands in for, the holder that replaced `Self`)`.
     /// Consumed by `refresh_bound_method_stubs` between the passes, where a forward-
@@ -899,6 +931,9 @@ impl Parser {
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
             late_text_tails: Vec::new(),
+            infer_ret_defs: std::collections::HashSet::new(),
+            adopted_ret_defs: std::collections::HashSet::new(),
+            literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -2012,8 +2047,20 @@ impl Parser {
                 || def.is_operator()
                 || !def.rust().is_empty()
                 || !def.native().is_empty()
-                || def.name().starts_with("n___lambda_")
             {
+                continue;
+            }
+            // loft#945 — a LAMBDA is included when, and only when, its return type was read
+            // off its own body (`Parser::adopted_ret_defs`).  That is the case nothing could
+            // reserve for at signature time, and without a buffer pass 2's `ref_return` GREW
+            // the attribute instead of renaming onto it, so `xs.map(|x| { [x, x + 1] })` died
+            // on the H5 two-pass contract.
+            //
+            // A lambda that DECLARED its return (`fn(i: integer) -> S { … }`) keeps the old
+            // skip, and the narrowness is load-bearing rather than conservative: the
+            // signature-time path already served it, and a second buffer is one store leaked
+            // per closure — `717-closure-struct-return.loft` caught exactly that.
+            if def.name().starts_with("n___lambda_") && !self.adopted_ret_defs.contains(&d) {
                 continue;
             }
             let ret = def.returned().clone();

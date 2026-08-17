@@ -9,6 +9,96 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `map` answers `vector<U>` for a callback `fn(T) -> U` (loft#945, 2026-08-17)
+
+STDLIB.md has documented `map(v: vector<T>, f: fn(T) -> U) -> vector<U>` all along, and the
+lowering already built the result from the callback's return type. Every `U != T` was refused
+anyway, in three different places:
+
+* the **argument hint** pinned the callback's return to the element type, so an inline lambda
+  was type-checked against `T` and the error landed *inside the user's own lambda* — `map(xs,
+  |x| { "n{x}" })` reported *"expected integer, got text on return from block"*;
+* **pass 1** answered `vector<T>` while pass 2 answered `vector<U>`, so a named callback got as
+  far as the binding and was refused there — *"cannot change type from vector<integer> to
+  vector<text>"*, and declaring the destination only moved the report;
+* the hand-built per-element **call** never supplied the hidden buffer a heap-returning callee
+  takes, which crashed the compiler outright: *"Too few parameters on n_shout (got 1, need 2)"*.
+
+That third one bit `U == T` as well, so this was never only about changing the element type.
+On the released 2026.8.0, `xs.map(|s| { "{s}!" })` over a `vector<text>` is an internal compiler
+error, and so is `xs.reduce("", |a, x| { "{a}{x}" })` — while the equivalent comprehension
+`[for s in xs { shout(s) }]` was fine all along, because it goes through the ordinary call
+machinery. The comprehension is the oracle this is measured against.
+
+**The lambda's return type now comes from its own body.** A short `|x|` form cannot declare one
+(`-> τ` is refused there by design), so when the hint names no return either, `block_result`
+adopts the tail's type at the tail. That timing is the whole point: a text or collection return
+mints a hidden buffer parameter *while the body is parsed*, and minting it on pass 2 alone is
+the H5 two-pass contract violation the ICEs above were. Pass 1 also takes the hint's return
+type now, rather than storing `Void` and letting pass 2 force it — the same divergence, one
+step earlier. `filter` and `reduce` keep their own contracts: a predicate really is `-> boolean`
+and a fold really answers its accumulator's type.
+
+Three supporting changes fall out of it:
+
+* **`.map(…)` is recognised on BOTH passes.** It used to be pass-2 only, so pass 1 parsed the
+  callback with no element-type hint — the two passes disagreed about the callback's signature,
+  and the method and free spellings of one program lowered differently.
+* **A heap-returning LAMBDA gets its return buffer reserved between the passes.** Its return
+  type is read off its body, so nothing could reserve one at signature time, and pass 2 grew the
+  attribute instead of renaming onto it.
+* **A literal RECEIVER is recorded**, so pass 2 does not build `[1, 2, 3]` against the type the
+  chain left on the LHS (`d = [1, 2, 3].map(|x| { "n{x}" })` leaves a `vector<text>` there, and
+  `total = [1, 2, 3, 4].reduce(0, …)` leaves an integer).
+
+**`reduce` with a HEAP accumulator is now refused** rather than mis-folded. The fold lowers to
+`acc = f(acc, x)` in a loop, and a callee answering text or a collection writes into one
+caller-allocated buffer that it CLEARS on entry — so after the first turn `acc` IS that buffer
+and the next turn erases the fold. It answered the LAST element on the interpreter and did not
+compile at all on `--native`. The cure is the H7 two-buffer rotation, which today covers only a
+vector-typed assignment target; until it reaches text, the diagnostic names the loop to write
+instead.
+
+Guard: `tests/scripts/945-map-changes-the-element-type.loft` sweeps four axes together — the
+spelling (free vs method), the callback (inline lambda vs named function), `U`'s storage class
+(scalar, text, collection, record, enum), and whether `U == T` — with `filter`, `reduce`, a
+capturing lambda, a chained `.filter(…).map(…)` and the comprehension as controls.
+
+### A nullable collection return can have a return buffer — four of five gaps closed (loft#938, 2026-08-17)
+
+Still behind `LOFT_NULLABLE_RETBUF=1` and still off by default, but the switch now carries every
+shape in `tests/probes/938-nullable-collection-return-buffer.loft` correctly and leak-free on
+both backends. `Optional(Vector)` was blind at three more gates than the first pass at this
+found:
+
+* **the tail-delivery selector in `block_result`** — the type-keyed chain matched `t` directly
+  where the Text arm above and the Reference arm below already peel with `.base()`. A nullable
+  collection tail missed the arm entirely, so it never reached `ref_return` and
+  `classify_ret_promotion` was never called for it. This is why a FORWARDING tail
+  (`fn fwd(i) -> vector<T>? { a1(i) }`) compiled to `return null` on `--native` while the
+  interpreter read the freed slot and only looked right.
+* **the per-arm materialise** — `vec_match_candidate` excluded any tail with a direct `null`
+  arm, because materialising it would have forced an owned-buffer return type onto a path that
+  yields null. With the `?` re-wrapped around the buffer-dep'd base that is representable, so a
+  function whose arms disagree (null / alias of a parameter / fresh store) now delivers.
+  On the released binary that shape corrupts the caller's collection on `--native` — `base=2
+  base0=39` where `3`/`71` is correct — which was never filed.
+* **the mid-body `return <call>` site** — it preferred the callee's declared deps over the
+  site's own hidden buffer args, so a nullable callee that already names its `__retbuf` left the
+  site's `__ref_N` out of the candidate list. Nothing bound it, `unregister_work_ref` never ran,
+  and it leaked one store per call, scaling with the loop.
+
+One known failure remains and is what keeps the default off: **two call sites of a two-arm
+dispatch share one return dep**. The second result is typed as a borrow of the first
+(`gl(1):vector<integer>["gd"]`) and freed on its schedule. Every value is correct and nothing
+leaks; the only witness is `LOFT_STRICT_STORES=1`. It needs both halves — one arm alone is
+clean, one call site alone is clean — which is why every smaller probe passes.
+`known_two_site_dispatch_reads_a_freed_store` is the 14-line repro.
+
+`LOFT_TRACE_RETPROMO` now prints the VERDICT and the site beside the candidate, because "no line
+at all" (a gate upstream of the classifier) and "a `Skip*` verdict" (the classifier said no) are
+different bugs that the IR does not tell apart.
+
 ### A call used as a tuple member gets an owner (loft#946, 2026-08-17)
 
 A heap-returning callee allocates its OWN store and returns it — the hidden `__retbuf` the
