@@ -44,9 +44,18 @@ The same fix removes two crashes that had nothing to do with changing the type:
 `xs.map(|s| { "{s}!" })` on a list of text, and `map(xs, some_text_function)`, both of which
 used to report an internal compiler error.
 
-One thing is now refused that used to crash: `reduce` with a text or list accumulator. The fold
-reuses a single buffer across the turns, so it kept only the last step; it now says so and
-points at the loop to write instead.
+### `reduce` can build text
+
+```loft
+joined = words.reduce("", |a, w| { "{a}{w}" });   // one string from a list of them
+```
+
+This used to crash the compiler. Once it compiled, it was worse: the fold reused a single
+buffer across the turns, so it kept only the *last* step and quietly answered `"c"` for
+`"abc"`.
+
+Folding into a **list** is still refused — with a message pointing at the loop to write
+instead, rather than the internal compiler error it used to be.
 
 ### A `?` on a list or map field now works
 

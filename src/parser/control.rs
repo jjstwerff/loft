@@ -13038,21 +13038,22 @@ impl Parser {
             return Type::Unknown(0);
         };
         let acc_type = types[1].clone();
-        // loft#951 — a HEAP accumulator is refused rather than mis-folded.  `reduce`
-        // lowers to `acc = f(acc, x)` in a loop, and a callee answering text or a
-        // collection writes into ONE caller-allocated buffer that it CLEARS on entry —
-        // so after the first turn `acc` IS that buffer and the next turn erases the fold
-        // so far.  `xs.reduce("", |a, x| { "{a}{x}" })` answered the LAST element on the
-        // interpreter and did not compile at all on `--native`.  The cure is the H7
-        // two-buffer rotation, which today covers only a vector-typed assignment target
-        // (`self_feeding_call`); until it reaches text, say so instead of folding wrong.
-        if Self::is_heap_storage(&acc_type) {
+        // loft#951 — a COLLECTION accumulator is refused rather than mis-compiled.  Text
+        // is not: it is handled below, by the same work-buffer route an ordinary
+        // `acc = f(acc, x)` assignment takes.
+        //
+        // A collection is a different defect with a different shape, not the same one one
+        // size larger: `n.reduce([], f)` reads back EMPTY on the interpreter and is an
+        // internal compiler error on `--native` (*"Incorrect type Never"*), on released
+        // 2026.8.0 as well as here — so nothing about the buffer story explains it.  It is
+        // filed as loft#956; until it is fixed, say so rather than emit an ICE.
+        if Self::is_heap_storage(&acc_type) && !matches!(acc_type.base(), Type::Text(_)) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "`reduce` needs a scalar accumulator — `{}` is heap storage, and the fold \
-                 would reuse one buffer across the turns and lose all but the last. Write \
-                 the loop instead: `acc = <init>; for x in v {{ acc = f(acc, x); }}`",
+                "`reduce` cannot fold into a `{}` accumulator yet — only scalars and \
+                 `text`. Write the loop instead: \
+                 `acc = <init>; for x in v {{ acc = f(acc, x); }}`",
                 acc_type.name(&self.data)
             );
             return acc_type;
@@ -13087,7 +13088,24 @@ impl Parser {
             return Type::Unknown(0);
         };
 
-        let acc_var = self.create_unique("reduce_acc", &acc_type);
+        // loft#951 — a TEXT accumulator is minted as a WORK BUFFER, which puts it at
+        // FUNCTION scope rather than inside the `reduce` block.  The block's tail is the
+        // accumulator, and generated Rust ends a text block with a BORROW of it
+        // (`&var…`), so a block-scoped accumulator is dropped while still borrowed:
+        // `error[E0597]: var__reduce_acc_1 does not live long enough`.  Every other
+        // text-valued block loft emits — a formatted string, say — already builds into a
+        // function-scope `__work_N` for exactly this reason.
+        //
+        // `work_text_p2`, not `work_text`: this function returns early on pass 1, so a
+        // mint here fires on pass 2 ONLY.  Drawing from the shared sequence would shift
+        // every later `__work_N` relative to pass 1, and the variable tables persist BY
+        // NAME — which is loft#662, pass 2 re-finding pass 1's variables under the wrong
+        // roles.  The `_p2` sequence has no pass-1 counterpart to collide with.
+        let acc_var = if matches!(acc_type.base(), Type::Text(_)) {
+            self.vars.work_text_p2(&mut self.lexer)
+        } else {
+            self.create_unique("reduce_acc", &acc_type)
+        };
         self.vars.defined(acc_var);
 
         let mut in_type = types[0].clone();
@@ -13126,7 +13144,32 @@ impl Parser {
             vec![Value::Var(acc_var), Value::Var(for_var)],
             vec![acc_type.clone(), var_tp.clone()],
         );
-        let fold_step = v_set(acc_var, fold_call);
+        // loft#951 — a TEXT accumulator cannot take the bare `acc = f(acc, x)`.  A callee
+        // answering text writes into ONE caller-allocated buffer and CLEARS it on entry,
+        // so binding `acc` straight to that buffer means the next turn erases the fold so
+        // far: the interpreter answered the LAST element and `--native` did not compile
+        // (`var__reduce_acc_1 does not live long enough`).
+        //
+        // The cure already exists and is what the hand-written loop has always compiled
+        // to.  `assign_text` sees that a right-hand side READS the variable being assigned
+        // and routes it through a second, caller-owned work buffer, so the buffer the
+        // callee clears is never the one the live accumulator holds.  This is that same
+        // sequence — spelled out rather than called, because `assign_text` draws from the
+        // shared `__work_N` sequence and this site is pass-2-only (see `acc_var` above).
+        //
+        // A VECTOR accumulator needs none of it: its assignment target is exactly what
+        // H7's `self_feeding_call` looks for, so `rotate_loop_retbufs` already gives the
+        // site a partner buffer and ping-pongs the pair.
+        let fold_step = if matches!(acc_type.base(), Type::Text(_)) {
+            let work = self.vars.work_text_p2(&mut self.lexer);
+            Value::Insert(vec![
+                self.cl("OpClearText", &[Value::Var(work)]),
+                self.cl("OpAppendText", &[Value::Var(work), fold_call]),
+                v_set(acc_var, Value::Var(work)),
+            ])
+        } else {
+            v_set(acc_var, fold_call)
+        };
 
         let loop_body = vec![for_next, break_if_null, fold_step];
 
