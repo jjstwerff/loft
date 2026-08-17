@@ -366,6 +366,20 @@ Validated: loft's own `check_doc_drift.sh examples` output is byte-identical bef
 (no self-check regression), and a synthetic library tree proved `ok` / `dangling` /
 `duplicate` / `unregistered` all fire correctly in library mode.
 
+**Published per-repo index — where each tag lives, without a checkout.** Each repo
+carries a generated `examples-index.tsv` at its root: one row per `@AAA-###`-tagged fn
+— `tag ⇥ file:line ⇥ fn ⇥ git-blob-link` — so a reader (or loft's cross-repo `idx`)
+learns where a tag resolves without cloning. It is GENERATED, never hand-edited:
+`make examples-index` (or `scripts/check_doc_drift.sh write-examples-index`) writes it;
+`check_doc_drift.sh examples-index` VERIFIES the committed copy is current (fail-on-diff,
+the `features-check` pattern), wired into both loft's `all` gate and the per-package
+library-CI step. Line numbers churn, so the index lives WITH the code it indexes — the
+central `example_repos.tsv` stays one stable row per acronym. **Auto-created on commit**
+by a `.githooks/pre-commit` hook (regenerates + stages it, so every PR carries a current
+index); the CI verify is the backstop for a commit made without the hook installed.
+Vacuously "no index needed" for a repo with no tags, so it never reddens a library
+before it opts in.
+
 Still to do: the one upstream **convention doc** (a short shared page the libraries
 point at instead of re-explaining the tag family). The CI ratchet half is done.
 

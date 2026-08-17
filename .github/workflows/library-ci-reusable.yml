@@ -177,11 +177,18 @@ jobs:
       # drift.  Vacuously green for a package with no citations, so it is safe on every
       # library from day one and only begins gating once the package opts in by authoring
       # a citation.  REPO_ROOT is the library checkout; the acronym resolves in place.
+      # Two checks, both gating and both vacuously green until the package authors tags:
+      #   examples       — every `// Example: @AAA-###` citation resolves to a tagged fn
+      #   examples-index — the committed examples-index.tsv (tag -> file:line -> blob link)
+      #                    is current (regenerate with `make examples-index` in loft-src,
+      #                    or let the pre-commit hook do it).
       - name: Worked-example tags resolve — ${{ matrix.package }}
         env:
           EXAMPLES_REPO_ROOT: ${{ github.workspace }}
           EXAMPLES_CITE_ROOTS: ${{ matrix.package }}/src ${{ matrix.package }}/tests
-        run: bash loft-src/scripts/check_doc_drift.sh examples
+        run: |
+          bash loft-src/scripts/check_doc_drift.sh examples
+          bash loft-src/scripts/check_doc_drift.sh examples-index
 
       # Library compatibility contract, step 4 — ADVISORY, never gating.
       #

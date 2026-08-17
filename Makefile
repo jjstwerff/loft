@@ -791,6 +791,9 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 	fi
 	@echo "features shadow in sync with index/features.json."
 
+examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:line -> blob link)
+	@bash scripts/check_doc_drift.sh write-examples-index
+
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft
 	@rc=0; for base in tests/fixtures/api_compat/*.api-baseline; do \
