@@ -1487,23 +1487,26 @@ impl Parser {
         (code, tp)
     }
 
-    /// Whether a stored constant's IR still carries the file-scope "no slot" sentinel —
-    /// i.e. a name its initialiser could not resolve.
+    /// Whether a stored constant's IR carries the file-scope "no slot" sentinel.
     ///
     /// `create_var` answers `u16::MAX` when there is no frame to allocate in, which is
-    /// every file-scope initialiser, so an unresolved name in one reads back as
-    /// `Var(u16::MAX)` rather than as a missing definition.  Nothing legitimate puts that
-    /// number in a constant: a real work buffer comes from `work_text`, and an initialiser
-    /// carrying any other frame slot is refused at the declaration (loft#744).
-    fn constant_is_unresolved(code: &Value) -> bool {
-        let mut unresolved = false;
-        let mut probe = code.clone();
-        crate::parser::definitions::visit_constant_vars(&mut probe, &mut |v| {
+    /// every file-scope initialiser, so a name it could not resolve reads back as
+    /// `Var(u16::MAX)` rather than as a missing definition.
+    ///
+    /// The sentinel alone does not mean "unresolved" — a struct-valued constant needs a
+    /// work slot to build its record and gets the same answer for an entirely different
+    /// reason.  The caller supplies the rest of the question.
+    ///
+    /// Takes `&mut` and rewrites nothing: `visit_constant_vars` is the exhaustive walker,
+    /// and a read-only twin of it would be a second list of the same facts.
+    fn constant_carries_no_slot(code: &mut Value) -> bool {
+        let mut sentinel = false;
+        crate::parser::definitions::visit_constant_vars(code, &mut |v| {
             if *v == u16::MAX {
-                unresolved = true;
+                sentinel = true;
             }
         });
-        unresolved
+        sentinel
     }
 
     pub(crate) fn parse_constant_value(
@@ -1638,28 +1641,44 @@ impl Parser {
                 }
                 self.lexer.revert(link);
             } else if self.data.def_type(d_nr) == DefType::Constant {
-                let const_code = self.data.def(d_nr).code().clone();
+                let mut const_code = self.data.def(d_nr).code().clone();
                 let const_tp = self.data.def(d_nr).returned().clone();
-                // loft#962 — a constant reached BEFORE pass 2 has re-read its own
-                // declaration still holds the first pass's answer, and pass 1 resolves
-                // names against an incomplete table.  Two ways that shows up, one cause:
-                // `create_var` has no frame at file scope, so an unresolved name left
-                // `Var(u16::MAX)` behind and pasting it panicked the variable allocator at
-                // `index 65535`; an unresolved CALL left the whole constant typed
-                // `Unknown`, and pasting that printed `null` with no diagnostic at all.
-                // Refuse both here — the only site that knows a paste is about to happen
-                // — and name the ordering that caused it.  Pass 2 only: on pass 1 the
-                // placeholder is the expected forward-reference stub.
+                // loft#962 — a constant reached before pass 2 has re-read its own
+                // declaration still holds pass 1's answer, and pass 1 resolves names
+                // against an incomplete table.  `create_var` has no frame at file scope,
+                // so a name it could not find left `Var(u16::MAX)` behind, and pasting
+                // that panicked the variable allocator at `index 65535` — one file away
+                // from the constant that failed, with the caret on an unrelated function.
+                // Refuse it here, the only site that knows a paste is about to happen.
+                //
+                // Three conditions, and the last two are what keep it off working code:
+                //
+                // * pass 2 — on pass 1 the sentinel is the expected forward-reference
+                //   stub, and the declaration has not been re-read yet either way;
+                // * the use is textually ABOVE the declaration in the same file.  That is
+                //   precisely the window the pass-2 re-store cannot reach, and it is the
+                //   sentence the message says.  Without it this fired on a struct-valued
+                //   constant used normally: `POINT_NONE = Point { x: 1 };` needs a work
+                //   slot to build the record and file scope has none, so `Var(u16::MAX)`
+                //   is what that initialiser legitimately holds;
+                // * not a `Reference` — that struct-valued kind is refused at the
+                //   declaration with a message that names the real limitation, and one
+                //   rule keeps one home.
+                let decl_pos = self.data.def(d_nr).position().clone();
+                let use_pos = self.lexer.pos();
+                let reads_above_its_declaration = use_pos.file == decl_pos.file
+                    && (use_pos.line, use_pos.pos) < (decl_pos.line, decl_pos.pos);
                 if !self.first_pass
-                    && (const_tp.is_unknown() || Self::constant_is_unresolved(&const_code))
+                    && reads_above_its_declaration
+                    && !matches!(const_tp.base(), Type::Reference(_, _))
+                    && Self::constant_carries_no_slot(&mut const_code)
                 {
-                    let decl = self.data.def(d_nr).position().clone();
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "constant '{name}' is read here, above its declaration at {decl}, \
-                         and that declaration reads a name of its own that is only known \
-                         later — move `{name}`'s declaration above this use"
+                        "constant '{name}' is read here, above its declaration at \
+                         {decl_pos}, and that declaration reads a name of its own that is \
+                         only known later — move `{name}`'s declaration above this use"
                     );
                     *code = Value::Null;
                     return Type::Unknown(0);

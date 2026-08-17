@@ -1051,8 +1051,16 @@ impl Parser {
                 // pass 2 sees every declaration, so pass 2's answer wins.  The type is
                 // re-stored with it — `const N = later() * 2;` picks its operator from the
                 // callee's return type, which pass 1 does not have.
+                //
+                // Not the struct-valued kind.  That one is REFUSED at the declaration
+                // above — a record cannot be materialised at each use — so its stored IR
+                // is never pasted by a program that compiles, and re-storing it only
+                // moves the diagnostics of one that does not.
                 let c_nr = self.data.def_nr(&id);
-                if c_nr != u32::MAX && self.data.def(c_nr).def_type() == DefType::Constant {
+                if c_nr != u32::MAX
+                    && self.data.def(c_nr).def_type() == DefType::Constant
+                    && !matches!(tp.base(), Type::Reference(_, _))
+                {
                     // Written straight into the slot rather than through `set_returned`,
                     // which is set-once: `data.reset()` between passes keeps definitions,
                     // so pass 1's answer is still sitting there and this is a REPLACEMENT.
