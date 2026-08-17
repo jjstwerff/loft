@@ -2402,19 +2402,15 @@ impl Store {
     /// Byte offset of field `fld` in record `rec`, computed in u64 so the multiply
     /// cannot wrap.
     ///
-    /// **The panic is reachable only where `isize` is 32 bits** — the wasm targets.
-    /// Both inputs are `u32`, so the largest offset this can produce is about 3.7e10,
-    /// which fits an i64 with room to spare: on a 64-bit host `try_from` never fails
-    /// and this raise is dead code.  On wasm32 it fires once `rec` passes ~268
-    /// million.
+    /// Only reports the offset.  Whether the offset is *inside this store* is a
+    /// question about `self`, which this associated function cannot see — ask
+    /// [`Self::offset_in_bounds`], and prefer it wherever a `&self` is at hand.
     ///
-    /// That asymmetry is worth knowing when reading a bug report.  A `rec` big enough
-    /// to trip this is not off by one, it is garbage — a corrupted `DbRef`, i.e. a
-    /// store-lifetime fault.  And the SAME corruption on a 64-bit build does not stop
-    /// here; it computes a representable offset and reads whatever lies at it, which
-    /// surfaces as a silently wrong scalar rather than a trap.  So "the browser build
-    /// traps and every other backend is green" is evidence about where the guard can
-    /// speak, not about where the corruption is (loft#950).
+    /// **The panic here is reachable only where `isize` is 32 bits** — the wasm
+    /// targets.  Both inputs are `u32`, so the largest offset this can produce is
+    /// about 3.7e10, which fits an i64 with room to spare: on a 64-bit host
+    /// `try_from` never fails and this raise is dead code.  On wasm32 it fires once
+    /// `rec` passes ~268 million.
     #[inline]
     fn checked_offset(rec: u32, fld: u32) -> isize {
         let off = u64::from(rec) * 8 + u64::from(fld);
@@ -2422,15 +2418,59 @@ impl Store {
             .unwrap_or_else(|_| panic!("Store offset overflow: rec={rec} fld={fld}"))
     }
 
+    /// Byte offset of `width` bytes at field `fld` of record `rec`, **checked
+    /// against this store's capacity on every target and in every build**.
+    ///
+    /// This is the guard that catches a corrupted `DbRef`.  It is deliberately
+    /// always-on rather than a `debug_assert!`, and the reason is loft#950.  The
+    /// only bound that used to survive a release build was `checked_offset`'s
+    /// `isize::try_from`, which can fail solely where `isize` is 32 bits.  So the
+    /// same corrupt `rec` trapped in a browser page and, on every 64-bit backend,
+    /// computed a representable offset and read whatever lay at it — a silently
+    /// wrong scalar, or a wild write through [`Self::addr_mut`].  "The browser
+    /// build traps and the interpreter is green" was therefore evidence about
+    /// where the guard could speak, not about where the corruption was.
+    ///
+    /// Reading a report: a `rec` that trips this is not off by one, it is garbage,
+    /// so the fault to hunt is whatever produced the reference — a store-lifetime
+    /// bug, not an indexing bug.  `LOFT_STRICT_STORES=1` names the free
+    /// ([DEBUG.md](../doc/claude/DEBUG.md)).
+    ///
+    /// The price is one `u64` compare and a not-taken branch per access.  Measured
+    /// by instruction count (the box was loaded, so wall clock could not settle) on
+    /// a loop that does nothing but read and write struct fields — the worst case by
+    /// construction: **+2.5 % on `--native`, +9.4 % on `--interpret`**.  Native is
+    /// the default backend and pays least, and loft#885's hoisted element reads
+    /// derive their address once per loop and never come through here at all.
+    #[inline]
+    fn offset_in_bounds(&self, rec: u32, fld: u32, width: usize) -> isize {
+        let off = u64::from(rec) * 8 + u64::from(fld);
+        if off + width as u64 > u64::from(self.size) * 8 {
+            self.raise_out_of_bounds(rec, fld, width);
+        }
+        // The bound just proved `off` addresses a byte of this store's live
+        // allocation, and that allocation's `Layout` was accepted — so `off`
+        // fits `isize` on every target, and no second `try_from` is needed.
+        off as isize
+    }
+
+    /// The message for [`Self::offset_in_bounds`], kept out of line so the guard
+    /// itself stays a compare and a not-taken branch.
+    #[cold]
+    #[inline(never)]
+    fn raise_out_of_bounds(&self, rec: u32, fld: u32, width: usize) -> ! {
+        panic!(
+            "Store access out of bounds: rec={rec} fld={fld} width={width} \
+             store_bytes={} type={} — the reference is corrupt, not merely \
+             out of range; run with LOFT_STRICT_STORES=1 to name the free",
+            u64::from(self.size) * 8,
+            self.known_type,
+        )
+    }
+
     #[inline]
     pub fn addr<T>(&self, rec: u32, fld: u32) -> &T {
-        debug_assert!(
-            Self::checked_offset(rec, fld) + std::mem::size_of::<T>() as isize
-                <= self.size as isize * 8,
-            "Store read out of bounds: rec={rec} fld={fld} size={} store_size={}",
-            std::mem::size_of::<T>(),
-            self.size * 8,
-        );
+        let at = self.offset_in_bounds(rec, fld, std::mem::size_of::<T>());
         // Validate field offset against record's claimed size (first word).
         // rec=0 and rec=1 are special (store header / primary record).
         #[cfg(debug_assertions)]
@@ -2449,7 +2489,7 @@ impl Store {
             );
         }
         unsafe {
-            let off = self.ptr.offset(Self::checked_offset(rec, fld)).cast::<T>();
+            let off = self.ptr.offset(at).cast::<T>();
             off.as_mut().expect("Reference")
         }
     }
@@ -2463,13 +2503,7 @@ impl Store {
             "Write to read-only store at rec={rec} fld={fld} (locked by: {})",
             self.lock_origin
         );
-        debug_assert!(
-            Self::checked_offset(rec, fld) + std::mem::size_of::<T>() as isize
-                <= self.size as isize * 8,
-            "Store write out of bounds: rec={rec} fld={fld} size={} store_size={}",
-            std::mem::size_of::<T>(),
-            self.size * 8,
-        );
+        let at = self.offset_in_bounds(rec, fld, std::mem::size_of::<T>());
         #[cfg(debug_assertions)]
         if rec > 1 && fld > 0 {
             let rec_header = unsafe {
@@ -2491,15 +2525,19 @@ impl Store {
             self.lock_origin
         );
         unsafe {
-            let off = self.ptr.offset(Self::checked_offset(rec, fld)).cast::<T>();
+            let off = self.ptr.offset(at).cast::<T>();
             off.as_mut().expect("Reference")
         }
     }
 
     pub fn buffer(&mut self, rec: u32) -> &mut [u8] {
         let size = *self.addr::<u32>(rec, 0) as usize * 8;
+        // The length comes from the record's own header, so a corrupt header sizes
+        // the slice — and a FREED record's header is negative, which reading it as
+        // `u32` turns into a span of gigabytes.  Bound it before it becomes a slice.
+        let at = self.offset_in_bounds(rec, 8, size);
         unsafe {
-            let p = self.ptr.offset(rec as isize * 8 + 8);
+            let p = self.ptr.offset(at);
             std::slice::from_raw_parts_mut(p, size)
         }
     }
@@ -2514,15 +2552,12 @@ impl Store {
             "read_span out of bounds: rec={rec} off={off} len={len} store_size={}",
             self.size * 8,
         );
+        let at = self.offset_in_bounds(rec, off, len as usize);
         let mut out = vec![0u8; len as usize];
         if len > 0 {
             // SAFETY: the span is bounds-checked above; `out` holds `len` bytes.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    self.ptr.offset(Self::checked_offset(rec, off)),
-                    out.as_mut_ptr(),
-                    len as usize,
-                );
+                std::ptr::copy_nonoverlapping(self.ptr.offset(at), out.as_mut_ptr(), len as usize);
             }
         }
         out.into_boxed_slice()
@@ -2544,14 +2579,11 @@ impl Store {
             bytes.len(),
             self.size * 8,
         );
+        let at = self.offset_in_bounds(rec, off, bytes.len());
         if !bytes.is_empty() {
             // SAFETY: the span is bounds-checked above; `bytes` is `bytes.len()` long.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    self.ptr.offset(Self::checked_offset(rec, off)),
-                    bytes.len(),
-                );
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptr.offset(at), bytes.len());
             }
         }
     }
@@ -3824,6 +3856,58 @@ mod tests {
         let rec = store.claim(2);
         store.read_only = true;
         store.delete(rec);
+    }
+
+    /// loft#950 — a corrupt record number is refused on EVERY target, not only where
+    /// `isize` is 32 bits.
+    ///
+    /// The only bound that used to survive a release build was `checked_offset`'s
+    /// `isize::try_from`, which can fail solely on wasm32.  So one corrupt `DbRef`
+    /// trapped in a browser page and, on every 64-bit backend, addressed whatever lay
+    /// at the offset it happened to compute — the browser looked like the buggy target
+    /// when it was merely the only one that could speak.  `u32::MAX` here is the shape
+    /// that report carried: not an index off by one, a reference that is garbage.
+    ///
+    /// These are written against `Store` for the same reason as the tests above — the
+    /// loft program that corrupts a reference needs a whole consumer package to arise,
+    /// while the invariant is one compare.
+    #[test]
+    #[should_panic(expected = "Store access out of bounds")]
+    fn a_corrupt_record_number_is_refused_on_the_read_path() {
+        let store = Store::new(4);
+        let _ = *store.addr::<i64>(u32::MAX, 0);
+    }
+
+    /// The write half, which is the one that matters for soundness: unchecked,
+    /// `addr_mut` hands out a `&mut` to arbitrary process memory.
+    #[test]
+    #[should_panic(expected = "Store access out of bounds")]
+    fn a_corrupt_record_number_is_refused_on_the_write_path() {
+        let mut store = Store::new(4);
+        *store.addr_mut::<i64>(u32::MAX, 0) = 1;
+    }
+
+    /// The bound is exact, not merely a smell test for huge numbers: one word past
+    /// the end is refused too.
+    #[test]
+    #[should_panic(expected = "Store access out of bounds")]
+    fn one_word_past_the_end_is_refused() {
+        let store = Store::new(4); // 4 words = 32 bytes
+        let _ = *store.addr::<i64>(4, 0); // bytes 32..40
+    }
+
+    /// The positive control for all three: without it they would pass just as well if
+    /// the guard refused every access.  The LAST addressable word must still read, so
+    /// the bound cannot be off by one in the direction that costs correct programs.
+    #[test]
+    fn the_last_word_of_a_store_is_still_readable() {
+        let mut store = Store::new(4); // 4 words = 32 bytes
+        *store.addr_mut::<i64>(3, 0) = 0x0123_4567_89ab_cdef; // bytes 24..32
+        assert_eq!(
+            *store.addr::<i64>(3, 0),
+            0x0123_4567_89ab_cdef,
+            "the last word is inside the store and stays writable"
+        );
     }
 
     /// Growing the store through many claims must not wrap or silently fail.

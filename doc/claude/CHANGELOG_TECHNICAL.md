@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Every store access is bounded, on every target (loft#950, 2026-08-17)
+
+`Store::addr` and `addr_mut` bounded their offset with a `debug_assert!`, and loft's
+library build compiles those out (`[profile.dev.package.loft]`). So the only bound left
+in a release build was `checked_offset`'s `isize::try_from` — which can fail **solely
+where `isize` is 32 bits**, i.e. the wasm targets.
+
+The consequence was an asymmetry that cost a day of diagnosis. One corrupt `DbRef`
+trapped in a browser page as `RuntimeError: unreachable`, while the same corruption on
+the interpreter and `--native` computed a representable offset and read whatever lay at
+it — a silently wrong scalar, or, through `addr_mut`, a `&mut` handed out into arbitrary
+process memory. "The browser traps and every other backend is green" therefore said
+nothing about where the corruption was; it said where the guard could speak.
+
+The bound is now a real check in `offset_in_bounds`, shared by `addr`, `addr_mut`,
+`read_span`, `write_span` and `buffer`, and its message names the fault as a corrupt
+reference and points at `LOFT_STRICT_STORES=1` for the free that produced it. `buffer`
+gains a bound it never had: its length comes from the record's own header, and a freed
+record's header is negative, which reading it as `u32` turned into a multi-gigabyte
+slice.
+
+Measured by instruction count on a loop that does nothing but read and write struct
+fields — the worst case by construction: **+2.5 % on `--native`** (the default backend)
+and **+9.4 % on `--interpret`**. loft#885's hoisted element reads derive their address
+once per loop and do not come through here at all.
+
+This is the report half of loft#950. The corruption that produced the reference is a
+separate fault and is still open.
+
 ### `map` answers `vector<U>` for a callback `fn(T) -> U` (loft#945, 2026-08-17)
 
 STDLIB.md has documented `map(v: vector<T>, f: fn(T) -> U) -> vector<U>` all along, and the
