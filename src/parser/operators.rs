@@ -393,16 +393,79 @@ impl Parser {
             return false;
         }
         match val.unspan() {
-            Value::Call(fn_nr, _) => {
+            Value::Call(fn_nr, args) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
-                def.name().starts_with("n_") && *def.code() != Value::Null
+                def.name().starts_with("n_")
+                    && *def.code() != Value::Null
+                    && !self.answers_caller_buffer(*fn_nr, args)
             }
             // Struct constructor blocks allocate a store too — when assigned
             // to a field, the source store is a temporary that should be freed.
             Value::Block(bl) => bl.name == "Object",
             _ => false,
         }
+    }
+
+    /// loft#953 — does this call hand back a buffer the CALLER already owns?
+    ///
+    /// A heap-returning callee is given a hidden destination argument: the caller mints
+    /// a `__ref_N` work-ref (`mark_caller_hidden_buf`, `parse_call`'s three heap arms),
+    /// the callee fills it, and the value it returns IS that buffer.  The work-ref is a
+    /// caller FUNCTION-scope variable with its own scope-exit `OpFreeRef`, so the store
+    /// is already spoken for — nothing at the call site may claim it.
+    ///
+    /// Without this the free-source bit releases the caller's buffer once per call while
+    /// the caller still holds it.  In a loop that is a use-after-free on every iteration
+    /// after the first: the callee clears and refills a freed store, and once anything
+    /// recycles the store number — the callee's own second vector local is enough — the
+    /// two collide and rows written earlier read back empty or zeroed.  Silent on both
+    /// backends; `LOFT_STRICT_STORES=1` is the witness.
+    ///
+    /// Same mechanism as the @P313 carve-out on the `Block "Object"` leg below, reached
+    /// through a call instead of a literal: a source that carries its own scope free
+    /// must not also be freed by the copy.  A callee with no hidden buffer allocates its
+    /// own store and the caller has no free for it — that is the case the bit exists
+    /// for, and it still gets it.
+    ///
+    /// # Why the return SHAPE is part of the question
+    ///
+    /// A buffer argument alone does not settle it, because the caller does not always
+    /// copy from the call.  `scopes.rs`'s `lift_owned_return` interposes a `__lift_N`
+    /// temp for a `Reference` / struct-`Enum` return, and that lift adopts the result
+    /// only when it is owned — when the value aliases an argument it takes a private
+    /// copy instead:
+    ///
+    /// ```text
+    /// let _src = n_pick(cell, var_t, var_i, var___ref_1);
+    /// if _src.store_nr == u16::MAX || _src.store_nr != var_t.store_nr { var___lift_1 = _src; }
+    /// else { var___lift_1 = OpDatabase(…); OpCopyRecord(_src, var___lift_1, 79); }
+    /// ```
+    ///
+    /// So by the time the copy runs, its source is a temp that OWNS its store, not the
+    /// caller's buffer, and claiming it is right.  A COLLECTION return has no such lift
+    /// — the value handed back is the buffer itself — which is why the cut is exactly
+    /// there.  `tests/use_analysis.rs`'s `collect` fixture is the witness for the lifted
+    /// side; loft#953's is the witness for the unlifted one.
+    fn answers_caller_buffer(&self, fn_nr: u32, args: &[Value]) -> bool {
+        if !crate::keys::retbuf_claim_guard_enabled() {
+            return false;
+        }
+        // Only the shapes `lift_owned_return` does NOT lift — a collection return, whose
+        // hidden buffer IS what the call answers.
+        if !matches!(
+            self.data.def(fn_nr).returned().base(),
+            Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        ) {
+            return false;
+        }
+        args.iter()
+            .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
     }
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
@@ -2035,13 +2098,29 @@ impl Parser {
             // present-path value's backing storage outlives the block.
             // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
             // @PLN102 `??` heap-ownership: distinguish an OWNED Vector subject (a
-            // call result / comprehension — EMPTY deps, the value the `??` block
-            // must free) from a BORROWED one (`vv[i]`, `s.field` — deps name the
-            // source; freeing it is a use-after-free).  loft's core convention:
-            // `dep.is_empty()` == owned.  Only the OWNED case migrates to the
-            // view-model below; a BORROWED Vector keeps the original skip_free
-            // hand-off (its store is owned elsewhere and must NOT be freed here).
-            let owned_vector = matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty());
+            // call result / comprehension — the value the `??` block must free) from
+            // a BORROWED one (`vv[i]`, `s.field` — deps name the source; freeing it
+            // is a use-after-free).  Only the OWNED case migrates to the view-model
+            // below; a BORROWED Vector keeps the original skip_free hand-off (its
+            // store is owned elsewhere and must NOT be freed here).
+            //
+            // loft's core convention is `dep.is_empty()` == owned, and that is a
+            // PROXY: what "owned" means here is that no one else's store is reached
+            // through this value.  A dep naming THIS FRAME's own hidden return buffer
+            // satisfies that — the buffer is the caller's, minted for this very call
+            // — so emptiness is too strong a test.  loft#938's dep translation made
+            // that visible: once `mkv()`'s nullable result correctly names the
+            // `__ref_N` it is delivered into, `dep.is_empty()` flipped false, the
+            // subject was misread as borrowed, and the `??` handed its store off to
+            // nobody — `return mkv() ?? [1]` answered length 0 on `--native`
+            // (`562-ncc-owned-subject-consumers.loft`, native-only, both switches on).
+            //
+            // Ask the question the proxy stood for: every dep is one of our own
+            // caller-minted buffers.  Same predicate `is_struct_returning_call` uses
+            // for loft#953, and the same hidden-vs-visible rule as
+            // `Definition::returns_borrowed_view` — a hidden attr is not a borrow.
+            let owned_vector = matches!(lhs_type, Type::Vector(_, dep)
+                if dep.iter().all(|&d| self.vars.is_caller_hidden_buf(d)));
             if matches!(
                 lhs_type,
                 Type::Text(_)
@@ -2837,9 +2916,14 @@ impl Parser {
             // Match on the BASE type so a nullable vector (`vector<u8>? == null`, e.g.
             // a `read_bytes`/`list_dir` result — @PLN102 H4) is caught, not only a bare
             // `Type::Vector` — the same @PLN99 A5 gap the ref/enum null cases fixed.
+            // loft#917 — every COLLECTION kind, not just `vector`.  A keyed field is the
+            // same 4-byte slot and now carries the same absent marker, but `hash<K[k]>? ==
+            // null` fell past this test to `OpEqRef` — a DbRef comparison against
+            // `DbRef::NULL`, which a slot POINTER can never equal, so it answered false
+            // however the field was written.  `is_collection_type` is the shared list.
             let vec_null = (operator == "==" || operator == "!=")
-                && ((matches!(ctp.base(), Type::Vector(_, _)) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type.base(), Type::Vector(_, _))));
+                && ((Self::is_collection_type(ctp.base()) && second_type == Type::Null)
+                    || (*ctp == Type::Null && Self::is_collection_type(second_type.base())));
             // A float/single null is the NaN sentinel, and NaN compares unequal to
             // everything (including itself), so `f == null` can't go through OpEq —
             // it would always be false.  Test validity instead: convert(float, bool)
@@ -2904,7 +2988,7 @@ impl Parser {
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
                 // whose rec==0 null test would also match an empty `[]`.
                 if !self.first_pass {
-                    let (vec_code, vec_tp) = if matches!(ctp.base(), Type::Vector(_, _)) {
+                    let (vec_code, vec_tp) = if Self::is_collection_type(ctp.base()) {
                         (code.clone(), ctp.clone())
                     } else {
                         (second_code, second_type.clone())

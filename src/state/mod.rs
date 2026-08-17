@@ -699,6 +699,11 @@ impl State {
         {
             *slot = true;
         }
+        // loft#952 — the timeout breadcrumb, in the same place and for the same reason
+        // native's `cr_call_push` carries it: this is the last loft function the run
+        // entered, so it is what a hang should be reported against.  Two relaxed stores
+        // when armed, one load and a branch when not.
+        crate::timeout::checkpoint_interp_call(d_nr);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
@@ -4822,6 +4827,20 @@ impl State {
         // @PLAN49 T1 — runtime phase breadcrumb.  One call per
         // program; runtime cost is irrelevant.
         crate::timeout::checkpoint_fn("run-interpret", "<entry>", "", 0);
+        // loft#952 — and the vocabulary its per-call breadcrumb reports in.  `"<entry>"`
+        // above is a placeholder that names nothing; from here on a hard-kill names the
+        // loft function the run was in.  Skipped entirely when no watchdog is armed.
+        crate::timeout::note_interp_entry(name);
+        crate::timeout::publish_interp_fns(data.definitions.iter().map(|def| {
+            (
+                def.name()
+                    .strip_prefix("n_")
+                    .unwrap_or(def.name())
+                    .to_string(),
+                def.position().file.clone(),
+                def.position().line,
+            )
+        }));
         // loft#665 piece 3 — compilation is over, so drop the compile position: a
         // RUNTIME panic must not be attributed to whatever line was compiled last.
         // The runtime has its own, better attribution (pc -> source span).

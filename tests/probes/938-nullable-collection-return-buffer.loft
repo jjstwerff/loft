@@ -1,0 +1,132 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `-> vector<T>?` return gets the same caller-allocated buffer the bare one gets (loft#938).
+//
+// Without a buffer the caller inherits whatever store the callee allocated — a fresh one per
+// loop turn against a single scope-exit free — and *then* ownership becomes undecidable,
+// because one function can alias a parameter on one arm and allocate on another. The ABI
+// removes that variance rather than deciding it: the callee normalises every non-null arm into
+// the caller's buffer, so one free per call SITE is correct however the arms behave, and a
+// null answer is still the sentinel the caller reads.
+//
+// `Optional(Vector)` was blind at every gate on the way there — the `__retbuf` signature gate,
+// the promotion pass gate, `Bind` eligibility, two `Vector` carve-outs, `ref_return`'s
+// re-typing, and the tail-delivery selector in `block_result`. The last one is why a
+// FORWARDING tail (`fn fwd(i) -> vector<T>? { a1(i) }`) compiled to `return null` on
+// `--native` while the interpreter read the freed slot and only looked right.
+//
+// One cause, three symptoms, and all three are cells below:
+//
+//   * an OWNED payload leaked one store per evaluation (`--interpret`);
+//   * a BORROWED payload had the caller's collection freed under it (both backends);
+//   * a forwarding tail answered the wrong value on `--native`.
+//
+// The counts scale with the loop that runs them, which is the unbounded shape of loft#688.
+
+struct S938 { items: vector<integer> }
+
+// Allocates a fresh store on the value arm.
+fn gives938(n: integer) -> vector<integer>? { if n != 0 { [n, n + 1] } else { null } }
+
+// Answers a BORROWED view of its parameter — the row that says a free cannot be unconditional.
+fn view938(v: vector<integer>, n: integer) -> vector<integer>? { if n != 0 { v } else { null } }
+
+// One function, three disagreeing arms: null, an alias of a parameter, and a fresh store.
+fn pick938(v: vector<integer>, n: integer) -> vector<integer>? {
+  if n == 0 { null } else if n == 1 { v } else { [n, n + 1] }
+}
+
+// An explicit `return` tail beside an early `return null`.
+fn ret938(i: integer) -> vector<integer>? {
+  if i == 0 { return null }
+  return [i, i + 10];
+}
+
+// A FORWARDING tail: the value comes straight back from another nullable-collection return.
+fn fwd938(i: integer) -> vector<integer>? { ret938(i) }
+
+// The same forward reached through a `match`, which is how it was found (@PLN133's registry).
+enum Any938 { Ad938 { d: S938 }, Al938 { l: S938 } }
+fn take938(self: Any938, i: integer) -> vector<integer>? {
+  match self {
+    Ad938 { d } => ret938(i),
+    Al938 { l } => fwd938(i),
+  }
+}
+
+fn main() {
+  // c1 — the filed shape: the result is never BOUND, so the null test captures it in a
+  //      work-ref whose free is emitted once at scope exit while each turn overwrites it.
+  c1 = 0;
+  for i in 0..40 { if gives938(i + 1) != null { c1 = c1 + 1; } }
+  assert(c1 == 40, "c1 = {c1}, want 40");
+
+  // c2 — the BORROWED twin of c1. The caller's collection must survive: the cure for the leak
+  //      must not become an over-free, which is what freeing at the site would have done.
+  base2: vector<integer> = [71, 82, 93];
+  c2 = 0;
+  for i in 0..40 { if view938(base2, i + 1) != null { c2 = c2 + 1; } }
+  assert(c2 == 40, "c2 = {c2}, want 40");
+  assert(len(base2) == 3 && base2[0] == 71, "c2 base = {len(base2)}/{base2[0] ?? -1}, want 3/71");
+
+  // c3 — arms that disagree, in a loop. The fresh arms leaked while the aliasing arm must NOT
+  //      be freed — both answers out of one function, which is why no signature-level
+  //      allocates-vs-aliases flag could have carried it.
+  base3: vector<integer> = [71, 82, 93];
+  c3 = 0;
+  for i in 0..40 { r = pick938(base3, i); c3 = c3 + len(r ?? []); }
+  assert(c3 == 79, "c3 = {c3}, want 79");
+  assert(len(base3) == 3 && base3[0] == 71, "c3 base = {len(base3)}/{base3[0] ?? -1}, want 3/71");
+
+  // c4 — an explicit `return <fresh vector>` tail beside an early `return null`. It reached a
+  //      different delivery cell from the implicit tail and kept building into its own store.
+  c4 = 0;
+  for i in 0..40 { r = ret938(i + 1); c4 = c4 + len(r ?? []); }
+  assert(c4 == 80, "c4 = {c4}, want 80");
+  assert(ret938(0) == null, "c4 null arm did not survive");
+
+  // c5 — the FORWARDING tail, the `--native` wrong answer: it read back an EMPTY collection
+  //      where two elements are correct, while the interpreter passed.
+  g5 = fwd938(4) ?? [];
+  assert(len(g5) == 2, "c5 len = {len(g5)}, want 2");
+  assert((g5[1] ?? -1) == 14, "c5 value = {g5[1] ?? -1}, want 14");
+  assert(fwd938(0) == null, "c5 null forwarded wrong");
+  c5 = 0;
+  for i in 0..40 { r = fwd938(i + 1); c5 = c5 + len(r ?? []); }
+  assert(c5 == 80, "c5 loop = {c5}, want 80");
+
+  // c6 — the same forward through a `match`, where each arm forwards a different route. The
+  //      arms can only agree if the `?` is looked through rather than compared with.
+  d6: Any938 = Ad938 { d: S938 { items: [] } };
+  l6: Any938 = Al938 { l: S938 { items: [] } };
+  g6d = d6.take938(4) ?? [];
+  g6l = l6.take938(6) ?? [];
+  assert((g6d[1] ?? -1) == 14, "c6 direct = {g6d[1] ?? -1}, want 14");
+  assert((g6l[1] ?? -1) == 16, "c6 forward = {g6l[1] ?? -1}, want 16");
+  assert(d6.take938(0) == null, "c6 null arm did not survive");
+
+  // c7 (control) — BINDING the result first was the documented workaround and was always
+  //       clean. It must stay clean, and it is what the buffer ABI makes the unbound form
+  //       equivalent to.
+  c7 = 0;
+  for i in 0..40 { v = gives938(i + 1); if v != null { c7 = c7 + 1; } }
+  assert(c7 == 40, "c7 = {c7}, want 40");
+
+  // c8 (control) — the NON-nullable twin, which had the buffer all along. It is the oracle the
+  //       nullable lowering is measured against, so a change that broke it would mean the peel
+  //       had leaked into the bare return.
+  c8 = 0;
+  for i in 0..40 { c8 = c8 + len(nn938(base3, i)); }
+  // i == 1 aliases `base3` (3 elements); every other turn builds a fresh pair.
+  assert(c8 == 81, "c8 = {c8}, want 81");
+  assert(len(base3) == 3, "c8 base = {len(base3)}, want 3");
+
+  println("938 ok");
+}
+
+// The non-nullable twin of `pick938`, kept below `main` on purpose: a callee declared after its
+// caller resolves on pass 2, so this also pins that the buffer survives that order.
+fn nn938(v: vector<integer>, n: integer) -> vector<integer> {
+  if n == 1 { v } else { [n, n + 1] }
+}

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 /// 01b breakage), and its bare-call value needs the explicit
 /// `Set + Var` shape or native loses it to the `Return(Null)`
 /// fall-through (#356).
-#[derive(PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum RetSite {
     BlockTail,
     MidReturn,
@@ -1233,6 +1233,36 @@ impl Parser {
         l: &mut [Value],
         tail_pos: &Position,
     ) -> Type {
+        // loft#945 — a short lambda whose return type nothing named takes it from its own
+        // body, HERE: the tail's type is known for the first time, and the delivery
+        // machinery below has not run yet.  Both halves matter.  Reading the type after
+        // the body parsed instead would set it on pass 1 only after pass 1's body had
+        // already been lowered as if it returned nothing, so the hidden text buffer
+        // appeared on pass 2 alone — the H5 two-pass contract violation that turned an
+        // honest `xs.map(|s| { "{s}!" })` into an internal compiler error.  Pass 2 finds
+        // `returned` already set from pass 1, so the adoption is a pass-1-only event and
+        // the two passes lower the same signature.
+        let adopted;
+        let result = if context == "return from block"
+            && self.context != u32::MAX
+            && self.infer_ret_defs.contains(&self.context)
+            && matches!(self.data.def(self.context).returned(), Type::Void)
+            && !t.is_unknown()
+            && !matches!(t, Type::Void | Type::Never)
+        {
+            // `unrewritten` as well as `without_deps`: a struct-literal tail carries the
+            // `Rewritten` marker that says it was built in place, and a marker is a fact
+            // about the EXPRESSION, not a type a signature can name (loft#943).
+            adopted = t.unrewritten().without_deps();
+            self.data.definitions[self.context as usize].returned = adopted.clone();
+            // Remembered past the body, where `infer_ret_defs` is cleared: the late
+            // buffer reservation between the passes admits a lambda only if its return
+            // came from here (see `Parser::adopted_ret_defs`).
+            self.adopted_ret_defs.insert(self.context);
+            &adopted
+        } else {
+            result
+        };
         let mut tp = t.clone();
         // @PLN85 move-on-block-return (block-return-move.md): a block used as a
         // VALUE — NOT a function return (those flow through the delivery
@@ -1352,14 +1382,25 @@ impl Parser {
             // `returned = Vector[__retbuf]` while a reachable arm yields null, which
             // native cannot represent. enc's exhaustive-match default-null is nested
             // and unreachable, so it is not a direct arm-null and still materialises.
+            //
+            // loft#938 — a return that PEELS (`-> vector<T>?` with the buffer ABI) is the
+            // one case where a direct null arm is representable, so it drops the
+            // exclusion: the delivery re-wraps the `?` (`returned = optional(vector[
+            // __retbuf])`), the value arms yield the buffer and the null arm yields the
+            // sentinel, which is what a nullable DbRef return already means on both
+            // backends.  Non-nullable behaviour is untouched — `ret_promo_peels` is false
+            // for it whatever the switch says.
             let vec_match_candidate = !tuple_rewritten
                 && !if_unified
                 && !self.first_pass
                 && context == "return from block"
-                && matches!(result, Type::Vector(_, _))
-                && matches!(t, Type::Never | Type::Void | Type::Vector(_, _))
+                && matches!(result.ret_promo_base(), Type::Vector(_, _))
+                && matches!(
+                    t.ret_promo_base(),
+                    Type::Never | Type::Void | Type::Vector(_, _)
+                )
                 && Self::tail_terminal_is_branch(&l[last])
-                && !self.tail_if_has_null_arm(&l[last]);
+                && (result.ret_promo_peels() || !self.tail_if_has_null_arm(&l[last]));
             if std::env::var_os("LOFT_DBG_VMC").is_some() && matches!(result, Type::Vector(_, _)) {
                 eprintln!(
                     "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} branch={} !null={} => {vec_match_candidate}",
@@ -1373,7 +1414,7 @@ impl Parser {
                     !self.tail_if_has_null_arm(&l[last]),
                 );
             }
-            if vec_match_candidate && let Type::Vector(elm, _) = result {
+            if vec_match_candidate && let Type::Vector(elm, _) = result.ret_promo_base() {
                 // #416 — a match/if branch tail materialises each arm into __retbuf.
                 // Routed through the ONE vector dispatch (Delivery::Materialize); it
                 // gates convert via vec_arm_handled on whether a rewritable arm was
@@ -1513,9 +1554,14 @@ impl Parser {
             // RESULT TYPE still reads the original `["__vdb"]` (the inner build),
             // so without this gate `fresh_owned_vector_deps` is fooled and delivers
             // it a SECOND time (appending __retbuf into itself → doubled length).
+            // loft#938 — `ret_promo_base` so a NULLABLE collection return reaches this
+            // arm too: `fn a1(i) -> vector<T>? { if … { return null } return [ … ]; }`
+            // otherwise kept building into its own `__vdb` store and handed back a view,
+            // leaking one store per call beside the buffer the caller had allocated.
+            // Identity while `LOFT_NULLABLE_RETBUF` is off.
             let tail_ret_owned: Option<Vec<u16>> = if !self.first_pass
                 && !vec_arm_handled
-                && matches!(result, Type::Vector(_, _))
+                && matches!(result.ret_promo_base(), Type::Vector(_, _))
                 && let Some(Value::Return(inner)) = l.last().map(Value::unspan)
             {
                 self.fresh_owned_vector_deps(inner)
@@ -1535,7 +1581,7 @@ impl Parser {
                 // fact deciding rename-vs-copy.
                 let mut delivered = false;
                 if !Self::tail_terminal_is_branch(&l[last])
-                    && let Type::Vector(elm, _) = result
+                    && let Type::Vector(elm, _) = result.ret_promo_base()
                     && let Some((buf_attr, buf_var)) = self.return_buffer()
                     && self.returned_uses_buffer(buf_attr)
                     && Self::body_has_buffer_return(&l[..last], buf_var)
@@ -1588,10 +1634,17 @@ impl Parser {
                 if self.force_tret.contains(&self.context) && ls.len() == 1 {
                     tp = self.av_renumber_retbuf(l, ls[0]);
                 }
-            } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
+            } else if !vec_arm_handled && let Type::Vector(elm, ls) = t.ret_promo_base() {
                 // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
                 // then emit. The three old inline branches (recover-hidden-refs /
                 // arg-borrow-copy / multi-arm-rename) are now cells of one selector.
+                //
+                // loft#938 gate 6 of 6 — `ret_promo_base` peels `Optional(Vector)`, the
+                // same peel the Text arm above and the Reference arm below already do
+                // with `.base()`.  A nullable collection tail missed this arm entirely,
+                // so it never reached `ref_return` and `classify_ret_promotion` was
+                // never called for it — `LOFT_TRACE_RETPROMO` printed nothing at all.
+                // Identity while `LOFT_NULLABLE_RETBUF` is off.
                 let delivery = self.classify_vector_delivery(ls, l, context);
                 let elm_ty = (**elm).clone();
                 self.dispatch_vector_delivery(delivery, &elm_ty, l);
@@ -1609,7 +1662,7 @@ impl Parser {
                 let td = *td;
                 let delivery = self.classify_reference_delivery(ls, l);
                 self.dispatch_reference_delivery(delivery, td, l);
-            } else if let Type::Vector(elm, _) = result
+            } else if let Type::Vector(elm, _) = result.ret_promo_base()
                 && let Some((buf_attr, buf_var)) = self.return_buffer()
                 && self.returned_uses_buffer(buf_attr)
             {
@@ -1826,8 +1879,19 @@ impl Parser {
                 if let Some((buf_attr, buf_var)) = self.return_buffer()
                     && self.materialize_vector_arms_into(elm, &mut l[last], buf_var)
                 {
-                    self.data.definitions[self.context as usize].returned =
+                    // loft#938 — the deps belong to the STORAGE and the `?` to the value,
+                    // so re-typing one must not drop the other: a nullable collection
+                    // return keeps its `?` around the buffer-dep'd base.  Identity while
+                    // the switch is off.
+                    let delivered =
                         Type::Vector(Box::new(elm.clone()), Deps::attrs(vec![buf_attr]));
+                    let declared = self.data.def(self.context).returned();
+                    self.data.definitions[self.context as usize].returned =
+                        if declared.ret_promo_peels() {
+                            Type::optional(delivered)
+                        } else {
+                            delivered
+                        };
                     true
                 } else {
                     false
@@ -10260,12 +10324,23 @@ impl Parser {
     fn fresh_owned_vector_deps(&self, v: &Value) -> Option<Vec<u16>> {
         match v.unspan() {
             // #437 — a named non-argument local vector with a backing store.
+            //
+            // loft#938 — `ret_promo_base`, because the LOCAL's own type carries the `?` too.
+            // `v = src(i); return v;` from a `-> vector<T>?` types `v` as
+            // `Optional(Vector(…, [__ref_1]))`, which matched no arm here, so the tail
+            // intercept in `block_result` never fired and `ref_return` was never reached at
+            // ALL for that function — no `LOFT_TRACE_RETPROMO` line, the `returned` deps left
+            // empty, and the callee handing back its own `__ref_1` store while the caller's
+            // `__retbuf` stayed untouched and was freed empty.  Every neighbouring gate had
+            // already been peeled (six of them); this one is on the RETURNED VALUE rather
+            // than on the return TYPE, which is why it outlived the sweep that fixed them.
+            // Identity while `LOFT_NULLABLE_RETBUF` is off.
             Value::Var(o)
                 if self.vars.exists(*o)
                     && !self.vars.is_argument(*o)
-                    && matches!(self.vars.tp(*o), Type::Vector(_, d) if !d.is_empty()) =>
+                    && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, d) if !d.is_empty()) =>
             {
-                let Type::Vector(_, d) = self.vars.tp(*o) else {
+                let Type::Vector(_, d) = self.vars.tp(*o).ret_promo_base() else {
                     unreachable!()
                 };
                 Some(d.iter().copied().collect())
@@ -10274,7 +10349,7 @@ impl Parser {
             // store. Every dep must be a non-argument local; this excludes a block
             // already delivering into `__retbuf` (whose dep is the hidden buffer
             // arg) and an arg / struct-field borrow (copied, not renamed).
-            Value::Block(bl) => match &bl.result {
+            Value::Block(bl) => match bl.result.ret_promo_base() {
                 Type::Vector(_, d)
                     if !d.is_empty()
                         && d.iter()
@@ -10294,8 +10369,10 @@ impl Parser {
     /// builds its own store. The precondition for the copy-into-buffer rewrite of
     /// a fresh-local tail (so it does not re-derive / overwrite the classification).
     fn returned_uses_buffer(&self, buf_attr: u16) -> bool {
+        // loft#938 — a nullable collection return carries the same dep under its `?`, so
+        // ask the base.  Identity while `LOFT_NULLABLE_RETBUF` is off.
         matches!(
-            self.data.def(self.context).returned(),
+            self.data.def(self.context).returned().ret_promo_base(),
             Type::Vector(_, d) if d.contains(&buf_attr)
         )
     }
@@ -10942,7 +11019,35 @@ impl Parser {
     /// candidate's `Rename` is suppressed once ANY earlier site chained into
     /// the placeholder (`bound_already`), so classification is per-var
     /// in-loop, not a pre-pass.
+    /// Trace wrapper around [`classify_ret_promotion_inner`](Self::classify_ret_promotion_inner)
+    /// — it prints the candidate AND the VERDICT, because those are two different questions.
+    /// No line at all for a function means a gate UPSTREAM of the classifier; a line whose
+    /// verdict is a `Skip*` means the classifier was asked and said no.
     fn classify_ret_promotion(
+        &self,
+        v: u16,
+        transitive: bool,
+        body: &[Value],
+        dep: &[u16],
+        ctx: &RetPromoCtx,
+    ) -> RetPromotion {
+        let verdict = self.classify_ret_promotion_inner(v, transitive, body, dep, ctx);
+        if crate::keys::trace_ret_promotion() {
+            eprintln!(
+                "[retpromo] fn={} v={} name={} site={:?} ret={:?} plain={} buf={:?} => {verdict:?}",
+                self.data.def(self.context).name(),
+                v,
+                self.vars.name(v),
+                ctx.site,
+                ctx.ret,
+                ctx.is_plain_fn,
+                self.return_buffer(),
+            );
+        }
+        verdict
+    }
+
+    fn classify_ret_promotion_inner(
         &self,
         v: u16,
         transitive: bool,
@@ -10997,7 +11102,7 @@ impl Parser {
             && !(!is_work_ref
                 && ctx.is_plain_fn
                 && ctx.site == RetSite::BlockTail
-                && matches!(ctx.ret, Type::Vector(_, _)))
+                && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _)))
         {
             return RetPromotion::SkipReassigned;
         }
@@ -11064,7 +11169,8 @@ impl Parser {
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
             || a1b_site
-            || (ctx.site == RetSite::MidReturn && matches!(ctx.ret, Type::Vector(_, _))));
+            || (ctx.site == RetSite::MidReturn
+                && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))));
         if allow_rename
             && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
         {
@@ -11073,9 +11179,10 @@ impl Parser {
                 chain_site: ctx.site == RetSite::MidReturn && is_work_ref,
             };
         }
+        // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
         if ctx.is_plain_fn
             && matches!(
-                ctx.ret,
+                ctx.ret.ret_promo_base(),
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
             )
             && let Some((buf_attr, buf_var)) = self.return_buffer()
@@ -11154,6 +11261,21 @@ impl Parser {
     }
 
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
+        // loft#938 — an ENTRY line, not just a verdict line.  `LOFT_TRACE_RETPROMO`
+        // documented "no line for a function means a gate UPSTREAM of the classifier",
+        // which is true and was not actionable: the pass has two upstream gates, and
+        // silence could not tell "`ref_return` ran and classified nothing" from
+        // "`ref_return` was never called".  Those are different bugs in different files,
+        // and the second one is what gate 7 turned out to be.
+        if crate::keys::trace_ret_promotion() {
+            eprintln!(
+                "[retpromo] ENTER fn={} site={site:?} ls={:?}",
+                self.data.def(self.context).name(),
+                ls.iter()
+                    .map(|v| self.vars.name(*v).to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
         let newrecord_nr = self.data.def_nr("OpNewRecord");
         let ret = self.data.definitions[self.context as usize]
             .returned
@@ -11230,7 +11352,12 @@ impl Parser {
         // DbRef locally; the caller never reserves matching stack space;
         // OpReturn's value-width mismatches the reserved slot and the
         // interpreter loops on Return(ret=0, value=16) at PC=0.
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
+        // loft#938 gate 2 of 5, and the one that hid the rest: this guards the WHOLE
+        // promotion pass, so a nullable return matched no arm and `classify_ret_promotion`
+        // was never called for it — no output from `LOFT_TRACE_RETPROMO` at all.
+        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) =
+            ret.ret_promo_base()
+        {
             let mut dep = cur.clone();
             // #306: a returned local can itself hold a view — its TYPE deps name
             // the vars it borrows from (`chosen = table[idx]; chosen` gives
@@ -11356,6 +11483,13 @@ impl Parser {
                             // `materialize_return_into` emits
                             // `OpCopyRecord(d.field → buf)` (the record copy
                             // works for any heap record, enum or struct).
+                            // loft#938 — deliberately NOT `ret_promo_base` here.  This leg
+                            // COPIES the tail into the buffer and answers the buffer, which
+                            // for a nullable collection return would turn a `null` answer
+                            // into an empty collection.  A nullable return that reaches
+                            // this leg keeps its own store instead (loft#948 tracks the
+                            // one-store-per-call leak that leaves on a `return <call>`
+                            // forward); a conditional delivery is what would close it.
                             match ret.clone() {
                                 Type::Reference(td, _) | Type::Enum(td, true, _) => {
                                     self.materialize_return_into(td, tail, buf_var);
@@ -11496,20 +11630,33 @@ impl Parser {
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
             let dep = Deps::attrs(dep.to_vec());
-            self.data.definitions[self.context as usize].returned = match ret {
-                Type::Vector(it, _) => Type::Vector(it, dep),
-                Type::Reference(td, _) => Type::Reference(td, dep),
-                Type::Enum(td, true, _) => Type::Enum(td, true, dep),
-                _ => {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unexpected return type in ref_return: {}",
-                        ret.name(&self.data)
-                    );
-                    return;
+            // loft#938 — rebuild the deps on the BASE and re-wrap, so a nullable return keeps
+            // its `?`.  Matching `ret` directly refused `vector<T>?` outright once promotion
+            // began reaching it: the deps belong to the storage and the `?` to the value, and
+            // re-typing one must not drop the other.  Both calls are the identity when the
+            // switch is off, so this arm reads as it always did.
+            let rewrap = |t: Type| {
+                if ret.ret_promo_peels() {
+                    Type::optional(t)
+                } else {
+                    t
                 }
             };
+            self.data.definitions[self.context as usize].returned =
+                match ret.ret_promo_base().clone() {
+                    Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
+                    Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
+                    Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
+                    _ => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unexpected return type in ref_return: {}",
+                            ret.name(&self.data)
+                        );
+                        return;
+                    }
+                };
         }
     }
 
@@ -11744,11 +11891,20 @@ impl Parser {
                     // named-local returns keep the legacy `__ref_1` append
                     // path below — its element-copy handles nested rows,
                     // which a plain buffer append would shallow-copy.
-                    let ls_own: Vec<u16> = if ls.is_empty() {
-                        Self::collect_hidden_ref_args(&v, &self.data)
-                    } else {
-                        ls.to_vec()
-                    };
+                    // loft#938 — UNION the hidden buffer args with the deps rather than
+                    // preferring the deps.  A nullable collection callee whose own return
+                    // already names its `__retbuf` resolves to a dep here, so the
+                    // `ls.is_empty()` branch was skipped and the site's own `__ref_N` never
+                    // entered the list — the site then bound nothing, `unregister_work_ref`
+                    // never ran, and the work-ref leaked one store per call on a
+                    // `return <call>` forward.  Adding to the list can only widen what the
+                    // filter below considers; it still keeps only `__ref_`/`__rref_` names.
+                    let mut ls_own: Vec<u16> = ls.to_vec();
+                    for w in Self::collect_hidden_ref_args(&v, &self.data) {
+                        if !ls_own.contains(&w) {
+                            ls_own.push(w);
+                        }
+                    }
                     let site_refs: Vec<u16> = ls_own
                         .iter()
                         .copied()
@@ -12242,9 +12398,11 @@ impl Parser {
             {
                 let elem = *elm.clone();
                 let hint = match (name, arg_idx) {
+                    // loft#945 — `map` is `fn(T) -> U`: the PARAMETER is the element type,
+                    // the return is free.  See the twin hint in `parse_vector_method`.
                     ("map", 1) => Some(Type::Function(
                         vec![elem.clone()],
-                        Box::new(elem),
+                        Box::new(Type::Unknown(0)),
                         Deps::none(),
                     )),
                     ("filter" | "any" | "all" | "count_if", 1) => Some(Type::Function(
@@ -12859,6 +13017,26 @@ impl Parser {
     // - Extra arg count must match the worker's extra parameters (args[1..]).
     /// Compiler special-case for `reduce(v: vector<T>, init: U, f: fn(U, T) -> U) -> U`.
     /// Generates inline bytecode equivalent to a left-fold over the vector.
+    /// Does a value of this type live in a STORE (or a text buffer) rather than in the
+    /// stack slot itself?  The question the callback builtins ask (loft#945/#951): a
+    /// callee answering one of these is handed a caller-allocated buffer, and the
+    /// hand-built per-element call each builtin lowers cannot always supply one.
+    pub(crate) fn is_heap_storage(t: &Type) -> bool {
+        matches!(
+            t.base(),
+            Type::Text(_)
+                | Type::Vector(_, _)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::RefVar(_)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        )
+    }
+
     pub(crate) fn parse_reduce(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
         if self.first_pass {
             // On first pass, return the accumulator type (second arg) if available.
@@ -12885,7 +13063,6 @@ impl Parser {
             );
             return Type::Unknown(0);
         };
-        let acc_type = types[1].clone();
         let (fn_param_types, _fn_ret_type) = if let Type::Function(params, ret, _) = &types[2] {
             (params.clone(), *ret.clone())
         } else {
@@ -12904,6 +13081,58 @@ impl Parser {
             );
             return Type::Unknown(0);
         }
+        // loft#956 — the FOLD FUNCTION's first parameter is what the accumulator type is.
+        //
+        // An empty `[]` written as the init argument carries no element type of its own, so
+        // it arrives here as `Unknown(0)` — and every question asked below is asked of the
+        // init's type.  `is_heap_storage` answers false for `Unknown`, so the collection
+        // refusal did not fire, and `reduce_acc` was minted with no type at all: the
+        // interpreter read it back EMPTY and `--native` reached `rust_type` with a `Never`
+        // and panicked (*"Incorrect type Never"*).  Both silent about the real cause, which
+        // is that nothing had said what `[]` was empty OF.
+        //
+        // The signature has always known.  `f: fn(U, T) -> U` names `U` in its first
+        // parameter, and the init only has to be assignable to it, so read the accumulator
+        // off the fold rather than off the literal.  That makes the diagnostic below name
+        // the type the program actually meant, and it is the inference the fold needs
+        // anyway on the day a collection accumulator is supported.
+        let mut acc_type = types[1].clone();
+        if acc_type.is_unknown() && !fn_param_types[0].is_unknown() {
+            acc_type = fn_param_types[0].without_deps();
+        }
+        // loft#951 — a COLLECTION accumulator is refused rather than mis-compiled.  Text
+        // is not: it is handled below, by the same work-buffer route an ordinary
+        // `acc = f(acc, x)` assignment takes.
+        //
+        // A collection is a different defect with a different shape, not the same one one
+        // size larger, which is why it is still refused after loft#951: the fold has to
+        // hand the callee a buffer per step, and a collection's is not the text one.
+        if Self::is_heap_storage(&acc_type) && !matches!(acc_type.base(), Type::Text(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`reduce` cannot fold into a `{}` accumulator yet — only scalars and \
+                 `text`. Write the loop instead: \
+                 `acc = <init>; for x in v {{ acc = f(acc, x); }}`",
+                acc_type.source_name(&self.data)
+            );
+            return acc_type;
+        }
+        // Still unresolved: neither the init nor the signature said what this folds into.
+        // Refuse and name the hole — a variable with no type reaches codegen as `Never`,
+        // which is an internal compiler error on `--native` and an empty read on the
+        // interpreter (loft#956).
+        if acc_type.is_unknown() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`reduce` cannot tell what its accumulator holds — the initial value gives \
+                 no type (`[]` is empty of nothing in particular) and the fold function's \
+                 first parameter does not say either. Annotate it: \
+                 `acc: <type> = <init>; v.reduce(acc, f)`"
+            );
+            return Type::Unknown(0);
+        }
         // Extract the compile-time d_nr from the fn-ref value (always Value::Int(d_nr)).
         let fn_d_nr = if let Value::Int(d) = &list[2] {
             *d as u32
@@ -12916,7 +13145,24 @@ impl Parser {
             return Type::Unknown(0);
         };
 
-        let acc_var = self.create_unique("reduce_acc", &acc_type);
+        // loft#951 — a TEXT accumulator is minted as a WORK BUFFER, which puts it at
+        // FUNCTION scope rather than inside the `reduce` block.  The block's tail is the
+        // accumulator, and generated Rust ends a text block with a BORROW of it
+        // (`&var…`), so a block-scoped accumulator is dropped while still borrowed:
+        // `error[E0597]: var__reduce_acc_1 does not live long enough`.  Every other
+        // text-valued block loft emits — a formatted string, say — already builds into a
+        // function-scope `__work_N` for exactly this reason.
+        //
+        // `work_text_p2`, not `work_text`: this function returns early on pass 1, so a
+        // mint here fires on pass 2 ONLY.  Drawing from the shared sequence would shift
+        // every later `__work_N` relative to pass 1, and the variable tables persist BY
+        // NAME — which is loft#662, pass 2 re-finding pass 1's variables under the wrong
+        // roles.  The `_p2` sequence has no pass-1 counterpart to collide with.
+        let acc_var = if matches!(acc_type.base(), Type::Text(_)) {
+            self.vars.work_text_p2(&mut self.lexer)
+        } else {
+            self.create_unique("reduce_acc", &acc_type)
+        };
         self.vars.defined(acc_var);
 
         let mut in_type = types[0].clone();
@@ -12947,11 +13193,40 @@ impl Parser {
             Value::Null,
         );
 
-        // Use Value::Call(d_nr, ...) directly — no fn_ref_var local needed.
-        let fold_step = v_set(
-            acc_var,
-            Value::Call(fn_d_nr, vec![Value::Var(acc_var), Value::Var(for_var)]),
+        // Use Value::Call(d_nr, ...) directly — no fn_ref_var local needed.  loft#945:
+        // through `callback_call`, so a fold whose accumulator is TEXT gets the hidden
+        // buffer its callee takes (`xs.reduce("", |a, x| { "{a}{x}" })` was an ICE).
+        let fold_call = self.callback_call(
+            fn_d_nr,
+            vec![Value::Var(acc_var), Value::Var(for_var)],
+            vec![acc_type.clone(), var_tp.clone()],
         );
+        // loft#951 — a TEXT accumulator cannot take the bare `acc = f(acc, x)`.  A callee
+        // answering text writes into ONE caller-allocated buffer and CLEARS it on entry,
+        // so binding `acc` straight to that buffer means the next turn erases the fold so
+        // far: the interpreter answered the LAST element and `--native` did not compile
+        // (`var__reduce_acc_1 does not live long enough`).
+        //
+        // The cure already exists and is what the hand-written loop has always compiled
+        // to.  `assign_text` sees that a right-hand side READS the variable being assigned
+        // and routes it through a second, caller-owned work buffer, so the buffer the
+        // callee clears is never the one the live accumulator holds.  This is that same
+        // sequence — spelled out rather than called, because `assign_text` draws from the
+        // shared `__work_N` sequence and this site is pass-2-only (see `acc_var` above).
+        //
+        // A VECTOR accumulator needs none of it: its assignment target is exactly what
+        // H7's `self_feeding_call` looks for, so `rotate_loop_retbufs` already gives the
+        // site a partner buffer and ping-pongs the pair.
+        let fold_step = if matches!(acc_type.base(), Type::Text(_)) {
+            let work = self.vars.work_text_p2(&mut self.lexer);
+            Value::Insert(vec![
+                self.cl("OpClearText", &[Value::Var(work)]),
+                self.cl("OpAppendText", &[Value::Var(work), fold_call]),
+                v_set(acc_var, Value::Var(work)),
+            ])
+        } else {
+            v_set(acc_var, fold_call)
+        };
 
         let loop_body = vec![for_next, break_if_null, fold_step];
 

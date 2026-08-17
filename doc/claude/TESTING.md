@@ -1086,15 +1086,25 @@ Guards against hangs that would wedge `cargo test` or `find_problems.sh`.  The
 deadline mechanism is layered:
 
 - **Cooperative diagnostic check** fires at `T` (the requested deadline) — runs at
-  every loft "checkpoint" (interpreter dispatch entry, native fn-entry, lexer
-  recovery loop, etc.).  Raises a typed `Timeout`, dumps the rich call stack
-  (interpreter: `crash_tail` + `StackFrame`; native: `CALL_STACK` thread-local),
-  exits cleanly.
+  every loft "checkpoint" (loft fn-entry on both backends, lexer recovery loop).
+  Raises a typed `Timeout`, dumps the rich call stack (interpreter: `crash_tail` +
+  `StackFrame`; native: `CALL_STACK` thread-local), exits cleanly with `124`.
 - **Watchdog hard-kill** fires at `T + grace` — runs on a background thread and
   calls `std::process::abort()`, guaranteeing termination even when execution is
   stuck in arbitrary Rust / native / blocking syscall.  Prints a shared breadcrumb
-  (`phase ∈ {parse, run-interpret, run-native}` + file:line) so the kill is still
-  informative.
+  so the kill is still informative:
+
+  ```
+  [timeout] hard-kill after 300s+2s grace: phase=run-interpret fn=helper952 \
+            file=tests/14-workflow.loft:31 entry=test_the_stuck_one
+  ```
+
+  `fn`/`file` name the loft function the run was in; `entry` names the entry point it
+  was reached from, which under `--tests` is the TEST — the field that says which of
+  the swept-in files is responsible.  **loft#952:** the interpreter used to checkpoint
+  ONCE, with the literal `"<entry>"`, so every interpreted hang reported
+  `fn=<entry> file=?:0` and the culprit had to be recovered by grepping raw output.
+  It now carries the breadcrumb per call, as `--native` always did.
 
 Configuration:
 

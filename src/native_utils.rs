@@ -1085,6 +1085,75 @@ pub(crate) fn html_wasm_imports(
     Some(out)
 }
 
+/// loft#954 — how many of the module's own functions the `name` custom section
+/// names, or `None` when there is no such section.
+///
+/// This is what makes `--names` checkable rather than hopeful.  The section is
+/// what turns the `wasm-function[1073]` frames a browser prints for a trap into
+/// function names, and it survives only if binaryen was asked for it (`-g`) and
+/// not asked to drop it (`--strip-debug`).  A build that quietly emitted no
+/// section would hand over a page whose backtrace is exactly as unreadable as
+/// before, with nothing to say so.
+///
+/// Counts the whole function subsection, imports included — the caller wants to
+/// know whether names are THERE, and the import names are present in any build
+/// because linking needs them.  Conservative like its neighbours: any shape it
+/// cannot walk reads as `None`.
+pub(crate) fn html_wasm_named_functions(wasm: &[u8]) -> Option<usize> {
+    fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let mut result: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            result |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(result);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
+        return None;
+    }
+    let mut p = 8;
+    while p < wasm.len() {
+        let id = *wasm.get(p)?;
+        p += 1;
+        let size = usize::try_from(read_uleb(wasm, &mut p)?).ok()?;
+        let start = p;
+        let end = start.checked_add(size).filter(|e| *e <= wasm.len())?;
+        // Custom section (id 0): a name, then the payload.
+        if id == 0 {
+            let mut q = start;
+            let len = usize::try_from(read_uleb(wasm, &mut q)?).ok()?;
+            let name = wasm.get(q..q.checked_add(len)?)?;
+            q += len;
+            if name == b"name" {
+                // Subsections, each `id : u8` + `size : uleb` + payload.  Id 1 is
+                // the function subsection: a vec of (function index, name).
+                while q < end {
+                    let sub = *wasm.get(q)?;
+                    q += 1;
+                    let sub_size = usize::try_from(read_uleb(wasm, &mut q)?).ok()?;
+                    let sub_end = q.checked_add(sub_size).filter(|e| *e <= end)?;
+                    if sub == 1 {
+                        let mut r = q;
+                        return usize::try_from(read_uleb(wasm, &mut r)?).ok();
+                    }
+                    q = sub_end;
+                }
+                return Some(0);
+            }
+        }
+        p = end;
+    }
+    None
+}
+
 /// JS that gives every `loft_*` host function this wasm imports a stand-in, for
 /// the ones the page shim does not define.
 ///

@@ -26,6 +26,78 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A constant list with a negative number in it works
+
+```loft
+const OFFSETS: vector<integer> = [10, -5, 9];
+```
+
+That read back **empty** — `len()` gave 0, every index gave null, and a `for` over it ran
+zero times. No error, no warning, on both backends. One negative number anywhere in the
+list was enough; all-positive lists of any length were fine, and the same list written
+inside a function was fine.
+
+Worth knowing even if you never hit it: a loop over an empty list runs its body zero
+times, so *every check inside it passes*. A test built on such a constant is green
+because it is measuring nothing.
+
+### `map` can change the element type
+
+`map` is documented as `fn(T) -> U` answering a `vector<U>`, and now it is:
+
+```loft
+xs = [1, 2];
+v = map(xs, |x| { "n{x}" });     // vector<text> — used to be refused
+```
+
+Before, every `U` other than `T` was rejected, and the error pointed *inside your own lambda*
+("expected integer, got text") or at the assignment ("cannot change type from vector<integer>
+to vector<text>"). Naming the destination did not help. The only shape that worked was a
+transform back to the same type.
+
+The same fix removes two crashes that had nothing to do with changing the type:
+`xs.map(|s| { "{s}!" })` on a list of text, and `map(xs, some_text_function)`, both of which
+used to report an internal compiler error.
+
+### `reduce` can build text
+
+```loft
+joined = words.reduce("", |a, w| { "{a}{w}" });   // one string from a list of them
+```
+
+This used to crash the compiler. Once it compiled, it was worse: the fold reused a single
+buffer across the turns, so it kept only the *last* step and quietly answered `"c"` for
+`"abc"`.
+
+Folding into a **list** is still refused — with a message pointing at the loop to write
+instead, rather than the internal compiler error it used to be.
+
+### A `?` on a list or map field now works
+
+You could always write it, and it never did anything:
+
+```loft
+struct Config { tags: vector<text>?, }
+
+c = Config { tags: null };
+c.tags == null            // said false
+```
+
+A collection field stores a record number, and zero already meant "empty" — so `null` and `[]`
+were written identically and the check could never come out true. loft warned you about this
+at the declaration and told you to drop the `?`.
+
+Now the two are different things, and the warning is gone:
+
+```loft
+Config { tags: null }.tags == null      // true  — absent
+Config { tags: [] }.tags   == null      // false — present, and empty
+```
+
+`len()` still answers 0 for both, which is usually what you want; `== null` is there for when
+the difference matters. Works for every collection kind — `vector`, `hash`, `sorted`, `index`,
+`spatial`, `trie` — on both backends, and nothing about how your data is stored changed.
+
 ### Checking a collection field against `null` no longer damages the record
 
 Comparing a `vector` field with `null` freed the storage of the struct it was read out of. The
@@ -306,6 +378,65 @@ moment, and treat silence as an answer instead of a hang.
 
 Characters are never torn in half by the wait: a read that arrives mid-character
 hands over the part that is whole and keeps the rest for the next read.
+
+### A library can say "my own module", so a consumer cannot change its answer
+
+If your library has `src/catalogue.loft` and says `use catalogue;`, it did not
+necessarily get *your* file. Module names are shared across the whole dependency graph,
+and building a package reads every file under `src/` — so a program that uses your
+library and happens to add its own `src/catalogue.loft` takes the name, and **your**
+code starts calling **their** function:
+
+```loft
+// your library                        // their program
+pub fn part_list() -> integer { 41 }   pub fn part_list() -> integer { 99 }
+
+dep_answer()   // 42 on its own … and 100 in their tree
+```
+
+Nothing in your library changed. Nothing in their program imported `catalogue`. Write
+`use self::catalogue;` and that cannot happen — it always means your file:
+
+```loft
+use self::catalogue;             // this package's own src/catalogue.loft
+use self::catalogue as cat;      // …with a qualifier: cat::part_list()
+```
+
+Two packages can now both have a `catalogue` module and both work, which is the part
+that could not be fixed just by preferring the nearer file.
+
+Bare `use catalogue;` still behaves exactly as before, so nothing you have written
+changes — add `self::` where you want the guarantee. The advice that already warns you
+about a shared module name is the signpost for where.
+
+### A browser page's crash tells you which of your functions crashed
+
+When an `--html` page traps, the browser hands over a full backtrace, and until now
+none of it could be read:
+
+```
+[exception] RuntimeError: unreachable
+    at wasm://wasm/0168beca:wasm-function[1073]:0x56a035
+    at wasm://wasm/0168beca:wasm-function[1054]:0x567983
+```
+
+Those numbers name the failing function and everything that called it, but a page
+carried nothing to turn a number into a name — so the only way forward was moving a
+`println` through your source, rebuilding, and reloading the browser, over and over.
+
+Build with `--names` and they resolve:
+
+```
+loft --html --names game.loft
+```
+
+The page grows by roughly 10–15 %, which is why you ask for it rather than always
+getting it. Reach for it the moment a page traps, and drop it when you ship.
+
+One thing to know: `--names` also keeps your functions from being folded into their
+callers, which is what leaves a frame to put a name on. That makes it a slightly
+different build — so if a trap happens without `--names` and stops happening with it,
+that is worth knowing rather than worth ignoring.
 
 ### A test that names a helper the way its library does
 

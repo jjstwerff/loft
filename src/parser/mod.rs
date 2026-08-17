@@ -446,6 +446,38 @@ pub struct Parser {
     /// the file.  Consumed by `promote_late_text_buffers` between the passes, where the
     /// callee exists — the same late-derivation slot `reserve_late_return_buffers` uses.
     late_text_tails: Vec<(u32, u16)>,
+    /// loft#945 — every short `|x|` lambda whose return type is to be read off its own
+    /// BODY, because nothing else names it: no `-> τ` (the short form forbids one) and no
+    /// return in the hint that placed it (`map`'s callback, whose `U` is free).
+    ///
+    /// Consumed by [`block_result`](Self::block_result) at the body's tail, which is the
+    /// first moment the type exists AND still early enough to run the return machinery on
+    /// it — a text or collection return mints a hidden buffer parameter there.  Adopting
+    /// the type any later mints that buffer on pass 2 only, which is the H5 two-pass
+    /// contract violation, so the timing is the whole point.
+    infer_ret_defs: std::collections::HashSet<u32>,
+    /// loft#945 — every def that ACTUALLY adopted its return type from its own body tail,
+    /// recorded by [`block_result`](Self::block_result) at the moment it does so.
+    ///
+    /// [`infer_ret_defs`](Self::infer_ret_defs) says a lambda is a CANDIDATE for that and is
+    /// cleared when its body closes; this says the adoption happened and survives to
+    /// `reserve_late_return_buffers`, which is between the passes.  The two are not the same
+    /// set — a candidate whose tail is scalar, `Void` or `Never` adopts nothing.
+    ///
+    /// It is the late reservation's admission test for a lambda, and the narrowness is the
+    /// point: a lambda that DECLARED its return (`fn(i: integer) -> S { … }`) is served by
+    /// the signature-time path and reserving a second buffer for it leaks one store per
+    /// closure (`717-closure-struct-return.loft`).  Only a return nothing declared can have
+    /// missed the earlier slot.
+    adopted_ret_defs: std::collections::HashSet<u32>,
+    /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
+    /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
+    ///
+    /// Deliberately NOT cleared between the passes: by the end of such a statement the
+    /// variable holds the CHAIN's type, and the variable table outlives the pass, so pass 2
+    /// would otherwise build the literal against a type it is not — a `vector<text>` for an
+    /// integer literal, or an integer for a vector one.
+    literal_chain_lhs: std::collections::HashSet<(u32, u16)>,
     /// @PLN125 — every bound-method stub built on pass 1, as
     /// `(stub, the interface method it stands in for, the holder that replaced `Self`)`.
     /// Consumed by `refresh_bound_method_stubs` between the passes, where a forward-
@@ -899,6 +931,9 @@ impl Parser {
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
             late_text_tails: Vec::new(),
+            infer_ret_defs: std::collections::HashSet::new(),
+            adopted_ret_defs: std::collections::HashSet::new(),
+            literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             reverse_iterator: false,
             iterable_context: false,
@@ -2012,8 +2047,20 @@ impl Parser {
                 || def.is_operator()
                 || !def.rust().is_empty()
                 || !def.native().is_empty()
-                || def.name().starts_with("n___lambda_")
             {
+                continue;
+            }
+            // loft#945 — a LAMBDA is included when, and only when, its return type was read
+            // off its own body (`Parser::adopted_ret_defs`).  That is the case nothing could
+            // reserve for at signature time, and without a buffer pass 2's `ref_return` GREW
+            // the attribute instead of renaming onto it, so `xs.map(|x| { [x, x + 1] })` died
+            // on the H5 two-pass contract.
+            //
+            // A lambda that DECLARED its return (`fn(i: integer) -> S { … }`) keeps the old
+            // skip, and the narrowness is load-bearing rather than conservative: the
+            // signature-time path already served it, and a second buffer is one store leaked
+            // per closure — `717-closure-struct-return.loft` caught exactly that.
+            if def.name().starts_with("n___lambda_") && !self.adopted_ret_defs.contains(&d) {
                 continue;
             }
             let ret = def.returned().clone();
@@ -9088,7 +9135,29 @@ impl Parser {
 
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
-        let tp = self.data.def(d_nr).returned().clone();
+        // loft#938 — peel `Optional` before asking the shape question, and put it back on
+        // the answer.  Every arm below matches a BARE shape, so a `-> vector<T>?` return
+        // matched none of them and fell through the final `else { tp }`, which hands the
+        // declared type back VERBATIM — with the callee's deps still in it.  Those deps are
+        // ATTRIBUTE indices in callee space; read in the caller they are frame variable
+        // numbers, so the result was typed as borrowing whichever caller local happened to
+        // hold that number.  With two call sites the second one landed on the first's local
+        // and was freed on its schedule (`gd`/`gl` both typed `["gd"]`), which is the whole
+        // of the `LOFT_NULLABLE_RETBUF` blocker: values all correct, nothing leaked, and
+        // only `LOFT_STRICT_STORES=1` able to see it.
+        //
+        // Same peel `scopes.rs` already does for the ownership question (loft#879's
+        // `peel_optional` + [`Self::reopt`]); this is the dep-translation half.
+        let (declared, opt) = self.data.def(d_nr).returned().peel_optional();
+        let was_optional = opt && crate::keys::optional_dep_peel();
+        let tp = if was_optional {
+            declared.clone()
+        } else {
+            self.data.def(d_nr).returned().clone()
+        };
+        let reopt = |t: Type| {
+            if was_optional { Type::optional(t) } else { t }
+        };
         // for Reference returns (structs), filter out hidden return-mechanism
         // attributes from dep resolution. The struct owns its store independently —
         // hidden return-store buffers are implementation artifacts.
@@ -9101,7 +9170,10 @@ impl Parser {
                 .collect()
         };
         if let Type::Text(d) = tp {
-            Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+            reopt(Type::Text(Deps::frame(Self::resolve_deps(
+                types,
+                d.as_attr_indices(),
+            ))))
         } else if let Type::Vector(to, d) = tp {
             // A vector return genuinely depends on its hidden retbuf (see above), so
             // an EMPTY result here means the dep could not be read — not that the
@@ -9116,50 +9188,50 @@ impl Parser {
             if dp.is_empty() && d_nr >= self.context {
                 dp = self.caller_vector_retbuf_dep(d_nr, types);
             }
-            Type::Vector(to, Deps::frame(dp))
+            reopt(Type::Vector(to, Deps::frame(dp)))
         } else if let Type::Sorted(to, key, d) = tp {
-            Type::Sorted(
+            reopt(Type::Sorted(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Hash(to, key, d) = tp {
-            Type::Hash(
+            reopt(Type::Hash(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Index(to, key, d) = tp {
-            Type::Index(
+            reopt(Type::Index(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Radix(to, key, d) = tp {
-            Type::Radix(
+            reopt(Type::Radix(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(
+            reopt(Type::Reference(
                 to,
                 Deps::frame(Self::resolve_deps(
                     types,
                     &filter_hidden(d.as_attr_indices()),
                 )),
-            )
+            ))
         } else if let Type::Enum(to, true, d) = tp {
-            Type::Enum(
+            reopt(Type::Enum(
                 to,
                 true,
                 Deps::frame(Self::resolve_deps(
                     types,
                     &filter_hidden(d.as_attr_indices()),
                 )),
-            )
+            ))
         } else {
-            tp
+            reopt(tp)
         }
     }
 
@@ -9586,6 +9658,14 @@ impl Parser {
             while self.lexer.has_token("use") {
                 if let Some(id) = self.lexer.has_identifier() {
                     had_use = true;
+                    // loft#949 — `use self::<module>` binds THIS package's own module,
+                    // whatever else in the graph ships a file of that name.  Handled
+                    // before the shared path because it resolves and registers under a
+                    // package-qualified key rather than the bare short name.
+                    if id == "self" {
+                        self.parse_use_self();
+                        continue;
+                    }
                     // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
                     let lib_alias = if self.lexer.has_token("as") {
                         self.lexer.has_identifier()
@@ -9597,50 +9677,7 @@ impl Parser {
                     // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
                     // the flat top-level comma list (`use lib::a, b`) is dropped (it
                     // read poorly — `b` didn't visually bind to `lib::`).
-                    let spec = if self.lexer.has_token("::") {
-                        if self.lexer.has_token("*") {
-                            Some(ImportSpec::Wildcard)
-                        } else {
-                            let grouped = self.lexer.has_token("(");
-                            let mut names = Vec::new();
-                            while let Some(name) = self.lexer.has_identifier() {
-                                // @PLN22 Phase 3 — `Name as Alias` binds the imported
-                                // name under the bare alias (works inside `(…)` too).
-                                let bind = if self.lexer.has_token("as") {
-                                    self.lexer.has_identifier().unwrap_or_else(|| name.clone())
-                                } else {
-                                    name.clone()
-                                };
-                                names.push((name, bind));
-                                if !self.lexer.has_token(",") {
-                                    break;
-                                }
-                            }
-                            if grouped {
-                                self.lexer.token(")");
-                            } else if names.len() > 1 {
-                                // @PLN22 Phase 4 — flat comma list dropped; the names
-                                // are still bound (recovery) so the rest parses cleanly.
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "import multiple names with parentheses: `use {id}::(a, b, …)`"
-                                );
-                            }
-                            if names.is_empty() {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "Expected name, '*', or '(' after '::'"
-                                );
-                                None
-                            } else {
-                                Some(ImportSpec::Names(names))
-                            }
-                        }
-                    } else {
-                        None
-                    };
+                    let spec = self.parse_import_spec(&id);
                     // loft#912 — the name is taken, but by WHICH file?  If this
                     // package has its own `<id>.loft`, the two are different modules
                     // sharing one global name, and the import below binds the other
@@ -10196,6 +10233,175 @@ impl Parser {
         f
     }
 
+    /// The optional import spec after a `use` target: `::*`, a single `::name [as bind]`,
+    /// or the grouped `::(a [as x], b, …)`.  `None` when no `::` follows.
+    ///
+    /// `path` is only for the diagnostic, so it reads back the spelling the author used
+    /// (`lib` or `self::module`).
+    ///
+    /// One grammar for both spellings (loft#949): `use self::<m>::(a, b)` has to accept
+    /// exactly what `use <lib>::(a, b)` accepts, and two copies of this loop would drift.
+    ///
+    /// @PLN22 Phase 4 — multiple names MUST be grouped in parentheses; the flat
+    /// top-level comma list (`use lib::a, b`) is dropped (it read poorly — `b` didn't
+    /// visually bind to `lib::`).  The names are still bound on that error so the rest
+    /// of the file parses cleanly.
+    fn parse_import_spec(&mut self, path: &str) -> Option<ImportSpec> {
+        if !self.lexer.has_token("::") {
+            return None;
+        }
+        if self.lexer.has_token("*") {
+            return Some(ImportSpec::Wildcard);
+        }
+        let grouped = self.lexer.has_token("(");
+        let mut names = Vec::new();
+        while let Some(name) = self.lexer.has_identifier() {
+            // @PLN22 Phase 3 — `Name as Alias` binds the imported name under the bare
+            // alias (works inside `(…)` too).
+            let bind = if self.lexer.has_token("as") {
+                self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+            } else {
+                name.clone()
+            };
+            names.push((name, bind));
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        if grouped {
+            self.lexer.token(")");
+        } else if names.len() > 1 {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "import multiple names with parentheses: `use {path}::(a, b, …)`"
+            );
+        }
+        if names.is_empty() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expected name, '*', or '(' after '::'"
+            );
+            None
+        } else {
+            Some(ImportSpec::Names(names))
+        }
+    }
+
+    /// `use self::<module> [as <alias>] [::<spec>];` — bind the CURRENT package's own
+    /// module (loft#949).
+    ///
+    /// A module's short name is one slot shared by the whole dependency graph, so a
+    /// package's own `use catalogue;` binds whichever `catalogue.loft` was registered
+    /// first — and building a package reads every file under its `src/`, so a consumer
+    /// that merely ADDS `src/catalogue.loft` can take the name before its dependency
+    /// asks for it.  The dependency then calls the consumer's function: a published,
+    /// versioned, tested package answering differently because of a file downstream.
+    ///
+    /// `self::` is the spelling that cannot be captured.  It registers the module under
+    /// `<package>::<module>`, taken from `[package] name`, so two packages' `catalogue`
+    /// modules occupy two different slots and both stay reachable — which is the half
+    /// "prefer the local file" could not provide, since the flat `use_names` map has
+    /// room for only one `catalogue` however precedence is decided.
+    ///
+    /// Bare `use <id>;` is untouched, so this is additive: nothing that builds today
+    /// changes, and a package opts in where it wants the guarantee.
+    ///
+    /// Mirrors the bare-`use` protocol exactly, including its two-encounter shape: the
+    /// first encounter loads the file and switches the lexer onto it, and the import is
+    /// recorded on the second, when this file is re-parsed off `todo_files` and the key
+    /// already exists.
+    fn parse_use_self(&mut self) {
+        if !self.lexer.has_token("::") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`use self` must name a module — write `use self::<module>;`"
+            );
+            self.lexer.has_token(";");
+            return;
+        }
+        let Some(module) = self.lexer.has_identifier() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expected a module name after `use self::`"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        let alias = if self.lexer.has_token("as") {
+            self.lexer.has_identifier()
+        } else {
+            None
+        };
+        let spec = self.parse_import_spec(&format!("self::{module}"));
+        let Some(pkg) = self.own_package_name() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`use self::{module}` needs a package: no `loft.toml` declaring \
+                 `[package] name` was found above this file. Add one, or write \
+                 `use {module};` to take the module by its shared name"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        // No fall-through to the wider `lib_path` search when the module is absent.
+        // Bare `use` searches outward by design; `self::` must not, or a typo silently
+        // binds some other package's file — the exact outcome it exists to prevent.
+        let Some(f) = self.own_module_path(&module) else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "package '{pkg}' has no module '{module}' — expected \
+                 '{module}.loft' beside this file (or in its `lib/`)"
+            );
+            self.lexer.has_token(";");
+            return;
+        };
+        let key = format!("{pkg}::{module}");
+        if self.data.use_exists(&key) {
+            let lib_source = self.data.get_source(&key);
+            if let Some(a) = &alias {
+                self.data.use_alias(a, lib_source);
+            }
+            // Same rule as a bare `use`: a plain one wildcard-imports, an explicit
+            // `::` spec is honoured, and an alias with neither gives ONLY the
+            // qualifier — the disambiguation escape hatch, which would be pointless
+            // if it also poured the names in bare.
+            let import_spec = match spec {
+                Some(s) => Some(s),
+                None if alias.is_some() => None,
+                None => Some(ImportSpec::Wildcard),
+            };
+            if let Some(import_spec) = import_spec {
+                self.pending_imports.push(PendingImport {
+                    for_source: self.data.source,
+                    lib_source,
+                    spec: import_spec,
+                });
+            }
+            if !self.lexer.has_token(";") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Missing ';' after 'use self::{module}' — use statements must end with a semicolon"
+                );
+            }
+            return;
+        }
+        let cur = self.lexer.pos().file.clone();
+        self.todo_files.push((cur, self.data.source));
+        self.data.use_add(&key);
+        self.record_use_path(&key, &f);
+        if let Some(a) = &alias {
+            self.data.use_alias(a, self.data.source);
+        }
+        self.switch_to_dep(&f);
+    }
+
     /// Remember which FILE a `use` short-name was loaded from (loft#912).
     ///
     /// Called at every site that pairs `Data::use_add` with a resolved path, so the
@@ -10231,6 +10437,23 @@ impl Parser {
         {
             return None;
         }
+        self.own_module_path(id)
+    }
+
+    /// Where a module of the CURRENT file's own package would live — `<its
+    /// dir>/<id>.loft` or `<its dir>/lib/<id>.loft` — with no view on whether
+    /// something else should win the name.
+    ///
+    /// Split out from [`own_module_file`] because `use self::<id>` (loft#949) wants
+    /// exactly this probe and NOT its dependency guard: that guard exists so a bare
+    /// `use <id>` prefers a declared dependency over a same-named local file, and
+    /// `self::` is the spelling that says the author means the local one.
+    fn own_module_path(&self, id: &str) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        if cur_dir.is_empty() {
+            return None;
+        }
         let sep = sep_str();
         [
             format!("{cur_dir}{sep}{id}.loft"),
@@ -10238,6 +10461,21 @@ impl Parser {
         ]
         .into_iter()
         .find(|c| std::path::Path::new(c).exists())
+    }
+
+    /// The `[package] name` of the package the current file belongs to (loft#949).
+    ///
+    /// This is the qualifier `use self::<module>` registers under, and it has to be
+    /// the manifest NAME rather than the package's path: the key reaches a database
+    /// type key, which must be identical on every machine that reads the store.  The
+    /// registry already enforces that names are unique, so `<name>::<module>` is a
+    /// qualifier nothing else in the graph can spell by accident.
+    fn own_package_name(&mut self) -> Option<String> {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        let (root, _) = self.package_declared_deps(&cur_dir)?;
+        let manifest = std::path::Path::new(&root).join("loft.toml");
+        crate::manifest::read_manifest(&manifest.to_string_lossy())?.name
     }
 
     /// Report when `use <id>` here names a DIFFERENT file from the one already loaded
@@ -10250,6 +10488,16 @@ impl Parser {
     /// the consumer never edited and cannot fix, with nothing naming a collision
     /// (loft#912).  This says the collision out loud, and names both files.
     ///
+    /// **The cure it names is `use self::<id>`, not a rename** (loft#949).  That
+    /// spelling binds the local file under `<package>::<id>`, so both modules stay
+    /// reachable and no downstream file can take the name — where a rename churns a
+    /// file plus every `use` of it and leaves the next collision just as possible.
+    /// This diagnostic is the signpost for that opt-in, so it has to say its name;
+    /// the opt-in landing without the signpost naming it is what left "a reason to
+    /// know you must" missing.  Keyed on whether the file HAS a package, because
+    /// `self::` qualifies with `[package] name` and is refused without one — so a
+    /// bare script hears the rename instead of a cure that would error.
+    ///
     /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
     /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
     /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
@@ -10260,6 +10508,16 @@ impl Parser {
     /// `qualified_type_name` deriving a DATABASE type key from a module's short name
     /// (a package-qualified key must stay machine-independent, so it cannot carry the
     /// package's path).
+    ///
+    /// **"Bind the local file first" is not the cheap way round that (loft#949).**  It
+    /// reads as a change nobody would notice, and the corpus says otherwise: across 65
+    /// packages, four module basenames are shipped by two DIFFERENT packages (`glb`,
+    /// `math`, `mesh`, `scene`), and **19 sites in shipped library code** — plus 16 in
+    /// tests — are a package `use`-ing a name it also ships.  Every one is the
+    /// `graphics` ⟷ `mesh3d` overlap above.  Local-first would rebind all of them, and
+    /// it does not avoid the blockers either: two modules called `math` then have to
+    /// coexist, which is exactly what the flat `use_names` map cannot express.  So the
+    /// design owes an answer for coexistence, not just for precedence.
     fn module_name_clash(&mut self, id: &str) {
         let Some(own) = self.own_module_file(id) else {
             return;
@@ -10276,15 +10534,59 @@ impl Parser {
             return;
         }
         let loaded = loaded.clone();
+        // Both files in ONE package is not the collision this is about.  The text says it —
+        // "shared across the whole dependency graph" — and the case that costs a person a
+        // diagnosis is a CONSUMER's new file shadowing a DEPENDENCY's.  Two files inside one
+        // package are the author's own, the `use` binds the one they meant, and nothing
+        // breaks: `tests/<pkg>.loft` beside `src/<pkg>.loft` is an ordinary layout that two
+        // of this repo's own fixtures use, and telling that author to rename a file is
+        // advice they should ignore (loft#948).  A diagnostic that fires where there is
+        // nothing to fix teaches people to skip the ones where there is.
+        if Self::same_package(&own_canonical, &loaded) {
+            return;
+        }
+        // Name the cure that KEEPS this package's answer, not just the one that
+        // renames around the collision (loft#949).  `use self::<id>` binds the local
+        // file under `<package>::<id>`, so both modules stay reachable and no
+        // downstream file can capture the name — but it needs a `[package] name` to
+        // qualify with, and without one it is refused.  A bare script therefore hears
+        // only the cure that works for it.
+        let cure = match self.own_package_name() {
+            Some(_) => format!("Write `use self::{id}` to bind this package's own file"),
+            None => "Rename one file and its `use` if you meant the other".to_string(),
+        };
         diagnostic!(
             self.lexer,
             Level::Advice,
             code = "module-name-shadowed",
             "module '{id}' is declared by two files — '{own_canonical}' and '{loaded}' — \
              and a module's file name is shared across the whole dependency graph, so \
-             this `use` binds the second one. Rename one file and its `use` if you meant \
-             the other"
+             this `use` binds the second one. {cure}"
         );
+    }
+
+    /// Do these two files belong to the same package — the same nearest `loft.toml`?
+    ///
+    /// Answered by walking up from each, which is the same rule `package_declared_deps` uses
+    /// to decide what package a directory is in. A path with no manifest above it (a bare
+    /// script) is in no package and so shares one with nothing.
+    fn same_package(a: &str, b: &str) -> bool {
+        let root = |p: &str| -> Option<std::path::PathBuf> {
+            let mut dir = std::path::Path::new(p).canonicalize().ok()?;
+            if dir.is_file() {
+                dir = dir.parent()?.to_path_buf();
+            }
+            loop {
+                if dir.join("loft.toml").exists() {
+                    return Some(dir);
+                }
+                dir = dir.parent()?.to_path_buf();
+            }
+        };
+        match (root(a), root(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
     }
 
     /// The package context owning `cur_dir`: the nearest ancestor directory
@@ -11784,11 +12086,38 @@ impl Parser {
         spellings.sort();
         spellings.dedup();
         let bare = name.strip_prefix("n_").unwrap_or(name);
+        // loft#949 — a module taken with `use self::<m>` registers under the
+        // package-qualified key `<pkg>::<m>`, so its spelling here reads
+        // `pkg::mod::name`: THREE segments, which the expression parser does not
+        // accept.  Suggesting it would repeat the mistake the comment above this
+        // function records — a cure that cannot be typed is a dead end in both
+        // directions — so a scoped rival names the two cures that do work.
+        let scoped: Vec<&String> = spellings
+            .iter()
+            .filter(|s| s.matches("::").count() > 1)
+            .collect();
+        if scoped.is_empty() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{bare}` is declared by more than one package here — write {} to say which",
+                spellings.join(" or ")
+            );
+            return;
+        }
+        // The module name out of `<pkg>::<module>::<name>`, for the alias example.
+        let module = scoped
+            .first()
+            .and_then(|s| s.split("::").nth(1))
+            .unwrap_or("that module");
         diagnostic!(
             self.lexer,
             Level::Error,
-            "`{bare}` is declared by more than one package here — write {} to say which",
-            spellings.join(" or ")
+            "`{bare}` is declared by more than one module here — {}. A module taken \
+             with `use self::` has no bare qualifier of its own: alias yours \
+             (`use self::{module} as m;` then `m::{bare}`), or import the other one \
+             by name so only one `{bare}` is in scope",
+            spellings.join(" and ")
         );
     }
 

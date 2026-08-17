@@ -519,8 +519,27 @@ impl Parser {
             } else {
                 None
             };
+            // loft#945 — a literal that pass 1 already found to be a RECEIVER takes neither
+            // the reuse nor the LHS's type.  The variable table survives the pass boundary,
+            // and after the chain the LHS holds the CHAIN's type, not the literal's:
+            // `total = [1, 2, 3, 4].reduce(0, …)` leaves an integer, and
+            // `d = [1, 2, 3].map(|x| { "n{x}" })` leaves a `vector<text>`.  Pass 2 then built
+            // the literal against that and refused it — "cannot change type from integer to
+            // vector<integer>", or "cannot store integer elements in a vector<text>".  Below
+            // is where the chain is recognised and recorded; here is where the next pass
+            // acts on it.  Building into a fresh accumulator is what the chain case does
+            // anyway, so this only brings pass 2 forward to the same decision.
+            let known_receiver =
+                orig_lhs.is_some_and(|n| self.literal_chain_lhs.contains(&(self.context, n)));
+            if known_receiver {
+                *val = Value::Null;
+            }
+            let orig_lhs = if known_receiver { None } else { orig_lhs };
             let seeded;
-            let elem_tp = if var_tp.is_unknown() && is_collection(&hint) {
+            let unseeded = Type::Unknown(0);
+            let elem_tp = if known_receiver {
+                &unseeded
+            } else if var_tp.is_unknown() && is_collection(&hint) {
                 seeded = hint;
                 &seeded
             } else {
@@ -543,6 +562,11 @@ impl Parser {
             if let Some(lhs) = orig_lhs
                 && self.lexer.peek_token(".")
             {
+                // loft#945 — record it, so the NEXT pass knows this literal is a receiver
+                // before it starts building (see `known_receiver` above).  By the end of
+                // this statement the LHS holds the CHAIN's type, which is not a type the
+                // literal can be built against.
+                self.literal_chain_lhs.insert((self.context, lhs));
                 // Inherit the LHS's parsed vector type — it carries the `["__vdb_N"]`
                 // borrow dep on the literal's backing store, so the chain BORROWS the
                 // receiver and the backing is freed once at scope exit (matching a
@@ -1045,15 +1069,20 @@ impl Parser {
             Type::Void
         };
         if self.first_pass {
-            // On first pass, hint is unavailable — store Void when no annotation.
-            self.data.set_returned(
-                d_nr,
-                if has_arrow {
-                    result.clone()
-                } else {
-                    Type::Void
-                },
-            );
+            // loft#945 — pass 1 takes the hint's return type too, not only an explicit
+            // `->`.  Storing `Void` here and letting pass 2 force the hint meant the two
+            // passes parsed the body against different return types: a text-returning
+            // callback promotes a work buffer into a hidden PARAMETER while its body
+            // parses, so the signature grew on pass 2 alone and
+            // `xs.reduce("", |a, x| { "{a}{x}" })` died on the H5 two-pass contract.
+            // Left `Void` only when nothing names the return — `block_result` infers it
+            // from the body then, at the same point on both passes.
+            let known = if has_arrow || !(result.is_unknown() || matches!(result, Type::Void)) {
+                result.clone()
+            } else {
+                Type::Void
+            };
+            self.data.set_returned(d_nr, known);
         } else if !result.is_unknown() && !matches!(result, Type::Void) {
             // On second pass, force-update the return type from hint or annotation.
             self.data.definitions[d_nr as usize].returned = result.clone();
@@ -1102,7 +1131,21 @@ impl Parser {
             }
         }
 
+        // loft#945 — with no `-> τ` (the short form forbids one) and no return in the
+        // hint that placed this lambda (`map`'s callback: its `U` is free), the body IS
+        // the declaration.  `block_result` adopts the tail's type at the tail, where the
+        // return machinery can still act on it; see `Parser::infer_ret_defs` for why
+        // anywhere later is the H5 two-pass contract violation.
+        // Nothing named the return: no `-> τ`, and the hint either is not a function type
+        // at all (`Void` here) or names no return (`Unknown` — `map`'s callback).
+        let infer_ret = !has_arrow && (result.is_unknown() || matches!(result, Type::Void));
+        if infer_ret {
+            self.infer_ret_defs.insert(d_nr);
+        }
         self.parse_code();
+        if infer_ret {
+            self.infer_ret_defs.remove(&d_nr);
+        }
         self.closure_param = outer_closure_param;
         self.data.op_code(d_nr);
         self.data.definitions[d_nr as usize]

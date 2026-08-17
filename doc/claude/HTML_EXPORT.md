@@ -385,14 +385,112 @@ matters more than a few KB).  See CHANGELOG_TECHNICAL.md
 If `wasm-opt` is not on `PATH`, the pipeline skips the
 optimisation step with a warning.
 
+`--strip-debug` is part of that `-O1` line, and it drops the wasm `name`
+section along with the DWARF — which is what makes a trap's frames
+unresolvable.  `--names` swaps it for `--strip-dwarf -g`, keeping the names
+while still dropping the bulk (1.5 MB of DWARF against a 100-byte name
+section, measured on a toy module).
+
 ## Customisation hooks
 
 Limited surface today; expand as need arises:
 
 - `--html out.html` — explicit output path
+- `--names` — keep the wasm name section so a trap's frames resolve to loft
+  function names (see *When a page faults* below)
 - `LOFT_HTML_TITLE=…` (env var) — override the `<title>`
 - WASM imports use the `env` namespace — replace any import
   via a custom JS bridge if you wrap the output HTML
+
+## When a page faults (loft#950)
+
+A browser page reports a fault to the page, not to stderr — on
+`wasm32-unknown-unknown` stderr is a sink, so anything written there is
+simply lost.
+
+That matters because of how a fault ENDS on this target: a panic aborts,
+and abort compiles to the `unreachable` instruction.  So the console's
+whole symptom is:
+
+```
+RuntimeError: unreachable
+```
+
+No message, no location, no stack.  loft#950 was reported as an
+undebuggable trap for exactly that reason.  Both fault paths now route
+through the same host import `println` uses:
+
+| fault | what the page gets |
+|---|---|
+| a Rust panic (incl. a failed `assert`) | `loft: panicked at …: <message>` + the loft frames under it |
+| a loft `panic(…)` / any `RuntimeError` | the ordinary rendered diagnostic, with `--> file:line:col` |
+
+The loft frames come from the shadow call stack `cr_call_push` already
+maintains, and they are the half a reader acts on: the Rust location names
+a spot in generated code or in loft's own runtime, which does not say what
+the *program* was doing.
+
+```
+loft: panicked at prog.rs:502:18:
+game.loft:2 assertion failed
+  in inner() (game.loft:1)
+  in middle() (game.loft:5)
+  in main() (game.loft:6)
+```
+
+**What is still silent:** an allocation failure.  `handle_alloc_error`
+aborts without running the panic hook, so a page that OOMs still traps
+bare.  That is worth knowing rather than worth fixing — after this, a trap
+with no message before it has told you it was not a panic.
+
+The hook is installed by the generated `loft_start`, ahead of `init`, so a
+panic during startup is covered.  It is a no-op on every other target,
+where stderr works and the native crash reporter owns this job.
+
+### `--names`: reading the browser's own backtrace (loft#954)
+
+Chrome hands a trap a complete wasm backtrace, and it is the best evidence
+there is — ten frames naming the failing function and its whole call chain:
+
+```
+[exception] RuntimeError: unreachable
+    at wasm://wasm/0168beca:wasm-function[1073]:0x56a035
+    at wasm://wasm/0168beca:wasm-function[1054]:0x567983
+```
+
+A default page cannot resolve one of those numbers, so the only route left
+is bisecting the loft source by hand — rebuild, redrive the browser, move
+one `println`.  **`loft --html --names`** makes them resolve.  It costs
+roughly 10–15 % page size, so it is opt-in: the people who need it are
+debugging and will take the bytes.
+
+It has to do two things, and either one alone is useless:
+
+| half | what it does | if it were missing |
+|---|---|---|
+| `wasm-opt --strip-dwarf -g` instead of `--strip-debug` | keeps the `name` custom section | no names at all — the default page |
+| `#[inline(never)]` on each generated loft function | leaves a frame to name | measured on a four-function program, LLVM folded all of them into `loft_start`; the section then named 616 std/alloc internals and not one loft function |
+
+The names are the generated Rust symbols, which carry the loft name
+verbatim: `_RNvCs3DwF3yqkNJQ_4prog17n_part_thumb_wire` is `part_thumb_wire`.
+Only loft's own functions are pinned out of line — std, alloc and loft's
+runtime still inline freely, so the cost stays on the code the backtrace is
+about.
+
+Two things to know before leaning on it:
+
+- **It is a different build.** Pinning functions out of line can move an
+  optimiser-sensitive fault.  If a trap reproduces without `--names` and not
+  with it, that difference is itself the finding.
+- **A build that produced no section says so.**  `--names` is asked for
+  exactly when a page must be debugged from its backtrace, so a silently
+  nameless page — a binaryen that does not honour `-g` — is reported rather
+  than shipped looking identical.
+
+Guarded by `html_names_flag_makes_loft_functions_resolvable_in_a_backtrace`
+in `tests/html_wasm.rs`, which asserts both halves and pins the default page
+as still stripped, so a green there cannot come from names that were always
+present.
 
 ## Build prerequisites
 

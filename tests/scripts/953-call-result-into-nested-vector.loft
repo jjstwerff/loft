@@ -1,0 +1,160 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A copy may not claim the return buffer its CALLER owns (loft#953).
+//
+// A heap-returning callee is handed a hidden destination: the caller mints a `__ref_N` work-ref,
+// the callee fills it, and the value it hands back IS that buffer. The work-ref is a caller
+// FUNCTION-scope variable with its own scope-exit free, so the store is already spoken for.
+// `OpCopyRecord`'s `0x8000` free-source bit claimed it anyway, releasing the caller's buffer once
+// per call while the caller still held it.
+//
+// In a loop that is a use-after-free on every turn after the first: the callee clears and refills
+// a freed store. Nothing announces it — the length stays right and `len(o)` counts three rows —
+// until something RECYCLES the store number, at which point the recycler and the buffer become
+// one store. The callee's own second vector local is enough to do that.
+//
+// The axis the issue was filed on ("a callee that allocates a second local vector") is the
+// RECYCLER, not the defect. c1 is the shape that was filed; c2/c3/c4 hold the loop and the append
+// and vary only what the callee does, and every one of them committed the same use-after-free
+// before the fix — they merely read back the right values because nothing took the freed number.
+// `tests/store_lifetime_953.rs` runs this file under `LOFT_STRICT_STORES=1`, which is the only
+// oracle that sees them; the assertions here catch c1 and c5 on values alone.
+//
+// c6/c7 are the controls that say the cure is not "stop freeing": both were already correct and
+// must stay so. c6 binds the result to a local first, so the caller reads the buffer through a
+// borrow and no copy claims it. c7 calls from straight-line code, where each site gets its OWN
+// work-ref, so one claim per site cost nothing.
+
+fn copy_v953(v: const vector<single>) -> vector<single> {
+  n = len(v);
+  a: vector<single> = [for i in 0..n { v[i] ?? 0.0f }];
+  buf: vector<single> = [for _ in 0..n { 0.0f }];   // the RECYCLER: declared after `a`, never used
+  a
+}
+
+fn plain_v953(v: const vector<single>) -> vector<single> {
+  n = len(v);
+  a: vector<single> = [for i in 0..n { v[i] ?? 0.0f }];
+  a
+}
+
+fn before_v953(v: const vector<single>) -> vector<single> {
+  n = len(v);
+  buf: vector<single> = [for _ in 0..n { 0.0f }];   // declared BEFORE the returned one
+  a: vector<single> = [for i in 0..n { v[i] ?? 0.0f }];
+  a
+}
+
+fn bare_v953(v: const vector<single>) -> vector<single> {
+  n = len(v);
+  a: vector<single> = [for i in 0..n { v[i] ?? 0.0f }];
+  buf: vector<integer> = [];                        // a bare `[]` of ANOTHER element type
+  a
+}
+
+fn text_v953(v: const vector<single>) -> vector<single> {
+  n = len(v);
+  a: vector<single> = [for i in 0..n { v[i] ?? 0.0f }];
+  buf = "scratch";                                  // a TEXT second local — recycles no store
+  a
+}
+
+// Every row is `[k*10 + 0 .. k*10 + 3]`, so a row that reads back empty, zeroed, or holding
+// another row's values is caught by value and not only by length.
+fn check953(o: const vector<vector<single>>, label: text) {
+  assert(len(o) == 3, "{label}: rows = {len(o)}, want 3");
+  for k in 0..3 {
+    row = o[k] ?? [];
+    assert(len(row) == 4, "{label}: row {k} len = {len(row)}, want 4");
+    for i in 0..4 {
+      want = (k * 10 + i) as single;
+      got = row[i] ?? -1.0f;
+      assert(got == want, "{label}: row {k} [{i}] = {got}, want {want}");
+    }
+  }
+}
+
+fn main() {
+  // c1 — the filed shape: the callee allocates a second vector local AFTER the returned one, so
+  //      its `OpDatabase` takes the store number the call site had just freed. `--interpret`
+  //      answered len 0 for rows 1 and 2; `--native` kept the length and zeroed the contents.
+  c1: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c1 += [copy_v953(vals)];
+  }
+  check953(c1, "c1 second-vector-after");
+
+  // c2 — no second local at all. Read back correctly BEFORE the fix and still committed the
+  //      use-after-free; only the strict-store oracle saw it. Here to pin that the fix did not
+  //      merely move the recycler.
+  c2: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c2 += [plain_v953(vals)];
+  }
+  check953(c2, "c2 no-second-local");
+
+  // c3 — declaration ORDER. Filed as green, and green only in the same inert way as c2.
+  c3: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c3 += [before_v953(vals)];
+  }
+  check953(c3, "c3 second-vector-before");
+
+  // c4 — a TEXT second local recycles no store, so this too was inert-green.
+  c4: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c4 += [text_v953(vals)];
+  }
+  check953(c4, "c4 second-local-is-text");
+
+  // c5 — a bare `[]` of a DIFFERENT element type is enough to recycle: no contents needed, and
+  //      the element type is not the axis. This one failed by value on BOTH backends.
+  c5: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c5 += [bare_v953(vals)];
+  }
+  check953(c5, "c5 bare-empty-second-local");
+
+  // c6 (control) — binding the result to a local first. The local is a BORROW of the buffer, so
+  //      nothing claims it; correct before and after.
+  c6: vector<vector<single>> = [];
+  for k in 0..3 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    r = copy_v953(vals);
+    c6 += [r];
+  }
+  check953(c6, "c6 bound-first");
+
+  // c7 (control) — straight-line calls. Each site mints its own work-ref, so a per-site claim was
+  //      harmless; the loop is what makes one buffer serve every turn.
+  c7: vector<vector<single>> = [];
+  v0: vector<single> = [0.0f, 1.0f, 2.0f, 3.0f];
+  v1: vector<single> = [10.0f, 11.0f, 12.0f, 13.0f];
+  v2: vector<single> = [20.0f, 21.0f, 22.0f, 23.0f];
+  c7 += [copy_v953(v0)];
+  c7 += [copy_v953(v1)];
+  c7 += [copy_v953(v2)];
+  check953(c7, "c7 straight-line");
+
+  // c8 — the count scales with the loop, so this is not a three-row artefact. A claimed buffer
+  //      leaves the last rows wrong however many there are.
+  c8: vector<vector<single>> = [];
+  for k in 0..40 {
+    vals: vector<single> = [for i in 0..4 { (i + k * 10) as single }];
+    c8 += [copy_v953(vals)];
+  }
+  assert(len(c8) == 40, "c8 rows = {len(c8)}, want 40");
+  last = c8[39] ?? [];
+  assert(len(last) == 4, "c8 last len = {len(last)}, want 4");
+  assert((last[3] ?? -1.0f) == 393.0f, "c8 last[3] = {last[3] ?? -1.0f}, want 393");
+  mid = c8[17] ?? [];
+  assert((mid[2] ?? -1.0f) == 172.0f, "c8 mid[2] = {mid[2] ?? -1.0f}, want 172");
+
+  println("953 ok");
+}

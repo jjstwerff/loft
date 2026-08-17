@@ -304,10 +304,14 @@ Wall-clock milliseconds, **best of 3 warm runs**, single core, Linux x86-64, **r
 >    **without `-O`** for fast dev iteration and runs ~6× slower (fib: 2953 ms unoptimized
 >    vs 489 ms optimized). The benchmark + this table use the optimized build
 >    (`loft --native-release` / the script's `rustc -O`). Quote *that* for "native speed".
-> 2. **Run WITHOUT `LOFT_TIMEOUT`.** An armed watchdog makes `checkpoint_fn` do a mutex
->    `try_lock` + deadline check on **every function call** — it inflated fib ~2× (489 →
->    ~1000 ms+) and call-heavy code more. (Side effect worth noting: `loft test` arms the
->    watchdog at 300 s, so the test path pays this per-call tax — a real follow-up.)
+> 2. **Run WITHOUT `LOFT_TIMEOUT`.** An armed watchdog makes the NATIVE `checkpoint_fn`
+>    do a mutex `try_lock` + deadline check on **every function call** — it inflated fib
+>    ~2× (489 → ~1000 ms+) and call-heavy code more. (Side effect worth noting: `loft
+>    test` arms the watchdog at 300 s, so the native test path pays this per-call tax — a
+>    real follow-up.) The INTERPRETER's per-call breadcrumb (loft#952) is deliberately not
+>    built that way and does not carry the tax: two relaxed atomic stores, with the
+>    clock-reading deadline test throttled to every 1024th call. Measured at 20 M calls,
+>    armed and disarmed are within run-to-run noise (~2 %).
 
 | # | Benchmark | Python | interp | native | Rust | interp/Py | native/Rust |
 |---|-----------|-------:|-------:|-------:|-----:|----------:|------------:|

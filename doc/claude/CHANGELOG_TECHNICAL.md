@@ -9,6 +9,267 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Every store access is bounded, on every target (loft#950, 2026-08-17)
+
+`Store::addr` and `addr_mut` bounded their offset with a `debug_assert!`, and loft's
+library build compiles those out (`[profile.dev.package.loft]`). So the only bound left
+in a release build was `checked_offset`'s `isize::try_from` — which can fail **solely
+where `isize` is 32 bits**, i.e. the wasm targets.
+
+The consequence was an asymmetry that cost a day of diagnosis. One corrupt `DbRef`
+trapped in a browser page as `RuntimeError: unreachable`, while the same corruption on
+the interpreter and `--native` computed a representable offset and read whatever lay at
+it — a silently wrong scalar, or, through `addr_mut`, a `&mut` handed out into arbitrary
+process memory. "The browser traps and every other backend is green" therefore said
+nothing about where the corruption was; it said where the guard could speak.
+
+The bound is now a real check in `offset_in_bounds`, shared by `addr`, `addr_mut`,
+`read_span`, `write_span` and `buffer`, and its message names the fault as a corrupt
+reference and points at `LOFT_STRICT_STORES=1` for the free that produced it. `buffer`
+gains a bound it never had: its length comes from the record's own header, and a freed
+record's header is negative, which reading it as `u32` turned into a multi-gigabyte
+slice.
+
+Measured by instruction count on a loop that does nothing but read and write struct
+fields — the worst case by construction: **+2.5 % on `--native`** (the default backend)
+and **+9.4 % on `--interpret`**. loft#885's hoisted element reads derive their address
+once per loop and do not come through here at all.
+
+This is the report half of loft#950. The corruption that produced the reference is a
+separate fault and is still open.
+
+### `map` answers `vector<U>` for a callback `fn(T) -> U` (loft#945, 2026-08-17)
+
+STDLIB.md has documented `map(v: vector<T>, f: fn(T) -> U) -> vector<U>` all along, and the
+lowering already built the result from the callback's return type. Every `U != T` was refused
+anyway, in three different places:
+
+* the **argument hint** pinned the callback's return to the element type, so an inline lambda
+  was type-checked against `T` and the error landed *inside the user's own lambda* — `map(xs,
+  |x| { "n{x}" })` reported *"expected integer, got text on return from block"*;
+* **pass 1** answered `vector<T>` while pass 2 answered `vector<U>`, so a named callback got as
+  far as the binding and was refused there — *"cannot change type from vector<integer> to
+  vector<text>"*, and declaring the destination only moved the report;
+* the hand-built per-element **call** never supplied the hidden buffer a heap-returning callee
+  takes, which crashed the compiler outright: *"Too few parameters on n_shout (got 1, need 2)"*.
+
+That third one bit `U == T` as well, so this was never only about changing the element type.
+On the released 2026.8.0, `xs.map(|s| { "{s}!" })` over a `vector<text>` is an internal compiler
+error, and so is `xs.reduce("", |a, x| { "{a}{x}" })` — while the equivalent comprehension
+`[for s in xs { shout(s) }]` was fine all along, because it goes through the ordinary call
+machinery. The comprehension is the oracle this is measured against.
+
+**The lambda's return type now comes from its own body.** A short `|x|` form cannot declare one
+(`-> τ` is refused there by design), so when the hint names no return either, `block_result`
+adopts the tail's type at the tail. That timing is the whole point: a text or collection return
+mints a hidden buffer parameter *while the body is parsed*, and minting it on pass 2 alone is
+the H5 two-pass contract violation the ICEs above were. Pass 1 also takes the hint's return
+type now, rather than storing `Void` and letting pass 2 force it — the same divergence, one
+step earlier. `filter` and `reduce` keep their own contracts: a predicate really is `-> boolean`
+and a fold really answers its accumulator's type.
+
+Three supporting changes fall out of it:
+
+* **`.map(…)` is recognised on BOTH passes.** It used to be pass-2 only, so pass 1 parsed the
+  callback with no element-type hint — the two passes disagreed about the callback's signature,
+  and the method and free spellings of one program lowered differently.
+* **A heap-returning LAMBDA gets its return buffer reserved between the passes.** Its return
+  type is read off its body, so nothing could reserve one at signature time, and pass 2 grew the
+  attribute instead of renaming onto it.
+* **A literal RECEIVER is recorded**, so pass 2 does not build `[1, 2, 3]` against the type the
+  chain left on the LHS (`d = [1, 2, 3].map(|x| { "n{x}" })` leaves a `vector<text>` there, and
+  `total = [1, 2, 3, 4].reduce(0, …)` leaves an integer).
+
+**`reduce` with a HEAP accumulator is now refused** rather than mis-folded. The fold lowers to
+`acc = f(acc, x)` in a loop, and a callee answering text or a collection writes into one
+caller-allocated buffer that it CLEARS on entry — so after the first turn `acc` IS that buffer
+and the next turn erases the fold. It answered the LAST element on the interpreter and did not
+compile at all on `--native`. The cure is the H7 two-buffer rotation, which today covers only a
+vector-typed assignment target; until it reaches text, the diagnostic names the loop to write
+instead.
+
+Guard: `tests/scripts/945-map-changes-the-element-type.loft` sweeps four axes together — the
+spelling (free vs method), the callback (inline lambda vs named function), `U`'s storage class
+(scalar, text, collection, record, enum), and whether `U == T` — with `filter`, `reduce`, a
+capturing lambda, a chained `.filter(…).map(…)` and the comprehension as controls.
+
+### A nullable collection return can have a return buffer — four of five gaps closed (loft#938, 2026-08-17)
+
+Still behind `LOFT_NULLABLE_RETBUF=1` and still off by default, but the switch now carries every
+shape in `tests/probes/938-nullable-collection-return-buffer.loft` correctly and leak-free on
+both backends. `Optional(Vector)` was blind at three more gates than the first pass at this
+found:
+
+* **the tail-delivery selector in `block_result`** — the type-keyed chain matched `t` directly
+  where the Text arm above and the Reference arm below already peel with `.base()`. A nullable
+  collection tail missed the arm entirely, so it never reached `ref_return` and
+  `classify_ret_promotion` was never called for it. This is why a FORWARDING tail
+  (`fn fwd(i) -> vector<T>? { a1(i) }`) compiled to `return null` on `--native` while the
+  interpreter read the freed slot and only looked right.
+* **the per-arm materialise** — `vec_match_candidate` excluded any tail with a direct `null`
+  arm, because materialising it would have forced an owned-buffer return type onto a path that
+  yields null. With the `?` re-wrapped around the buffer-dep'd base that is representable, so a
+  function whose arms disagree (null / alias of a parameter / fresh store) now delivers.
+  On the released binary that shape corrupts the caller's collection on `--native` — `base=2
+  base0=39` where `3`/`71` is correct — which was never filed.
+* **the mid-body `return <call>` site** — it preferred the callee's declared deps over the
+  site's own hidden buffer args, so a nullable callee that already names its `__retbuf` left the
+  site's `__ref_N` out of the candidate list. Nothing bound it, `unregister_work_ref` never ran,
+  and it leaked one store per call, scaling with the loop.
+
+One known failure remains and is what keeps the default off: **two call sites of a two-arm
+dispatch share one return dep**. The second result is typed as a borrow of the first
+(`gl(1):vector<integer>["gd"]`) and freed on its schedule. Every value is correct and nothing
+leaks; the only witness is `LOFT_STRICT_STORES=1`. It needs both halves — one arm alone is
+clean, one call site alone is clean — which is why every smaller probe passes.
+`known_two_site_dispatch_reads_a_freed_store` is the 14-line repro.
+
+`LOFT_TRACE_RETPROMO` now prints the VERDICT and the site beside the candidate, because "no line
+at all" (a gate upstream of the classifier) and "a `Skip*` verdict" (the classifier said no) are
+different bugs that the IR does not tell apart.
+
+### The module-shadow advice reaches the run it explains (loft#948, 2026-08-17)
+
+`Advice[module-name-shadowed]` (loft#912) fired where the collision was HARMLESS and stayed
+silent where it broke the build — the one case a reader cannot diagnose from the output.
+
+Three findings, in the order they were established:
+
+**The advice was produced all along.** The measurement that settled it holds the shadowing
+file fixed and changes only whether the dependency CALLS the shadowed function:
+
+| dependency calls it? | build | advices printed |
+|---|---|---|
+| no | compiles | 4 |
+| yes | **errors** | **0** |
+
+So detection was never the problem. `test_runner.rs`'s parse-error branch printed
+`unexpected_errors` and `file_result.warnings` — and not `file_result.advice`, which the
+success path a few lines below chains in. A diagnostic that explains a build break is only
+useful in the run that breaks; it now prints on both paths.
+
+**The doubling was real.** Both parser passes emit each diagnostic, so every warning and
+advice reached the reader twice. A line carries its own position, so two identical lines are
+one finding said twice — deduped.
+
+**And one false positive had to go with it.** `tests/<pkg>.loft` beside `src/<pkg>.loft` drew
+a rename that fixes nothing: the `use` binds the file the author meant, and two of this repo's
+own fixtures use that layout. The advice is about a name *"shared across the whole dependency
+graph"*, so it is now suppressed when both files resolve to the same nearest `loft.toml`.
+Making a diagnostic prominent and leaving it firing where there is nothing to fix is how one
+teaches people to skip the cases where there is.
+
+Guards: `tests/module_name_clash.rs` gains the fatal case and the same-package control. The
+fatal one drives the BINARY rather than `Parser::parse`, and that is load-bearing — the
+shadowing file is imported by nobody, so nothing reaches it by following `use` edges. It is
+loaded because building the package reads every file under `src/`, which is both why the
+collision happens and why it has to be tested at the `loft test` surface where the output was
+dropped.
+
+
+### A nullable collection return can have a return buffer — opt-in (loft#938, 2026-08-17)
+
+**`LOFT_NULLABLE_RETBUF=1`, OFF by default.** Built and validated far enough to be a basis,
+not far enough to default on. With the switch off every consulting site is byte-identical to
+before it existed: `Type::ret_promo_base` is the identity and `ret_promo_peels` is `false`.
+
+**What it does.** A `-> vector<T>?` gets the same hidden `__retbuf` the non-nullable form
+already gets. That is the whole fix, and the reason it is the right shape is visible in the
+non-nullable callee, which normalises EVERY arm into the caller's buffer:
+
+```
+if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);        __retbuf }
+else      { …build…; OpClearVector(__retbuf); OpAppendVector(__retbuf, _vec_1, 0);
+            OpFreeRef(__vdb_1);                                             __retbuf }
+```
+
+So ownership never varies at the call site — the ABI removes the variance rather than
+deciding it, and the caller frees one buffer per call SITE, which is why a loop does not
+leak. This corrects the earlier note on the issue, which argued from the nullable lowering
+that ownership was undecidable in principle. It is not; `Optional` was blind at every gate.
+
+**Five gates, each hidden behind the one before it:**
+
+| gate | symptom while blind |
+|---|---|
+| the `__retbuf` signature gate (`definitions.rs`) | no buffer created |
+| the top-level promotion gate (`control.rs`) | `classify_ret_promotion` never called at all |
+| `Bind` eligibility | no delivery emitted |
+| two `Vector` carve-outs | nullable took a different route |
+| `ref_return`'s re-typing | *"Unexpected return type in ref_return: vector<integer>?"* |
+
+The second one is why this took three sessions: it guards the WHOLE pass, so the symptom was
+the ABSENCE of a trace line rather than a wrong decision. `LOFT_TRACE_RETPROMO=1` exists for
+exactly that reading.
+
+**The peel is narrow on purpose.** `Optional(Vector)` only. Widening it to
+`Optional(Reference(S))` leaks one record per call — a nullable STRUCT return is loft#896's
+synthetic `__nullable<S>` enum with its own delivery, and
+`882-keyed-element-read-borrows-its-container.loft` catches it. The `?` is transparent only
+where the storage under it is.
+
+**Still open with the switch on**, both pinned as `#[ignore]`d tests in
+`tests/nullable_ret_buffer.rs` so they are named and runnable:
+
+* a function mixing a `null` arm, a parameter ALIAS arm and a FRESH arm leaks its fresh arms.
+  The null arm forces the `__ret_N` merge before promotion sees the arms, so none is a return
+  tail and none delivers. Value correct, container intact, `--interpret` only.
+* `pln133-optional-unify.loft` miscompiles on `--native` — a method returning `vector<T>?`
+  through different routes reads an element back as `0` where `14` is correct, while the
+  interpreter passes. A silent wrong answer on one backend is why this is not defaulted on.
+
+**How to finish it:** get those two green, then flip the default and delete
+`default_path_is_unchanged`. `make ci` 4144/4144 with the switch off.
+
+
+### A `?` on a collection field means what it says (loft#917, 2026-08-16)
+
+A collection field is a 4-byte RECORD ID where `0` already means the EMPTY collection, so
+`xs: null` and `xs: []` lowered to the identical `OpSetInt4(h, 8, 0)` and `xs == null` could
+never answer true. The value-level null cannot help: `DbRef::NULL` says absent in `store_nr`,
+and a field has no `store_nr` — `OpGetField` is pure pointer arithmetic (`pos + offset`) and
+the collection ops read the id out of the slot themselves.
+
+**Absence gets its own reserved id.** `DbRef::ABSENT_REC` (`u32::MAX`), the same move a store
+already makes for `u16::MAX` (`database_named` asserts `slot != u16::MAX`). No layout change,
+no width change — one value reserved out of a range a record id cannot reach, since a record
+id indexes words within a store. Verified free before anything was built on it: the read
+conversion alone, with no writer, passed the whole suite 4141/4141.
+
+**The reserved id is read two ways, and keeping them apart is the design.**
+
+| reader | sees | because |
+|---|---|---|
+| `vector::is_absent_collection` | the RAW slot | `== null` is the one question whose answer differs between absent and empty |
+| `Store::collection_rec` | `MAX` mapped to `0` | every other reader asks "which record holds the elements?", and absent and empty answer that the same way |
+
+That split is what keeps the change to one accessor instead of a decision at each of the
+twenty-odd sites that dereference a slot — and a missed site is loud: taking `u32::MAX` for a
+record number is `get_u32_raw(MAX, 4)`, a SIGSEGV rather than a wrong answer. Two matrix rows
+(refilling an absent field, and `?? []` over one) caught exactly that when the writers landed
+before the readers.
+
+**Writers**, both gated on the declared `?` — without one the field's own type says it can
+never be absent: the struct literal (`handle_field`, the sibling of the `__nullable<S>` arm
+loft#896 added for structs) and the assignment (`clear_vector_field_as`). The RELEASE of the
+records is unchanged and stays ungated, which is loft#922's rule; only the marker is new.
+
+**`== null` now dispatches for every collection kind.** A keyed field is the same 4-byte slot
+and carries the same marker, but `hash<K[k]>? == null` fell past the vector-only selector to
+`OpEqRef` — a DbRef comparison against `DbRef::NULL` that a slot POINTER can never satisfy, so
+it answered false however the field was written.
+
+**Retired: the `nullable-collection-field` warning.** It existed to say the `?` was a promise
+the storage could not keep; that is no longer true. Its pinned row in `tests/e1_code_set.rs`,
+its DIAGNOSTICS.md entry and the `LOFT_NO_NULLABLE_COLLECTION` switch are gone with it.
+`tests/scripts/917-…loft` used to ASSERT the wrong answers and said so in its own header —
+"if a later layout change makes `== null` work, they fail and this file is the thing that says
+the warning can go". This is that change; the assertions are inverted.
+
+**Not loft#938.** That is the ownership half — who frees a returned `vector<T>?` — and is
+untouched: absence says nothing about who owns the collection that IS there.
+
+
 ### A null test on a collection FIELD does not free the record it read (loft#920, 2026-08-16)
 
 `vector == null` tests the null sentinel through `OpVectorIsNull`, which reads only the

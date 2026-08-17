@@ -4868,6 +4868,71 @@ pub fn OpGetClosure(cell: &std::cell::UnsafeCell<Stores>, d_nr: u32) -> DbRef {
 
 // ── Shadow call stack for native stack_trace() ──────────────────────────────
 
+/// loft#950 — make a Rust panic in a browser (`--html`) build say what it was.
+///
+/// On `wasm32-unknown-unknown` a panic aborts, and abort compiles to the `unreachable`
+/// instruction — so the page's only symptom is `RuntimeError: unreachable`.  The message
+/// std would have printed goes to that target's stderr, which is a sink, so the trap
+/// arrives with no name, no location and no stack.  That is what made loft#950
+/// undebuggable from the browser: the consumer could see WHERE in their own transcript
+/// the page died, and nothing whatever about why.
+///
+/// The hook forwards the panic — message and `file:line` — through the same host import
+/// `println` uses, so it lands in the page's console before the trap.  Called from the
+/// generated `loft_start`, ahead of `init`, so a panic during startup is covered too.
+///
+/// It does NOT cover an allocation failure: `handle_alloc_error` aborts without running
+/// the panic hook.  That is worth knowing rather than worth fixing — a trap that stays
+/// silent after this has told you it was not a panic.
+///
+/// A no-op on every other target, where stderr works and the native crash reporter
+/// already owns this job.
+pub fn install_browser_panic_hook() {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static INSTALLED: AtomicBool = AtomicBool::new(false);
+        if INSTALLED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        std::panic::set_hook(Box::new(|info| {
+            // `PanicHookInfo`'s own Display is "panicked at <file:line:col>:\n<payload>",
+            // which is the whole of what the default hook would have written to stderr.
+            let mut out = format!("loft: {info}\n");
+            // …plus the LOFT frames it happened under.  The Rust location alone names a
+            // spot in generated code or in loft's own runtime, which does not say what
+            // the program was doing; the shadow call stack is the half a reader acts on.
+            out.push_str(&browser_panic_frames());
+            crate::live_dispatch::wasm_host_log(&out);
+        }));
+    }
+}
+
+/// The loft frames a browser panic happened under, innermost first, as indented lines.
+///
+/// `try_borrow` rather than `borrow`: a panic can fire while the shadow stack is already
+/// borrowed, and a hook that panics in turn loses the message it exists to deliver.
+/// Missing frames are worth strictly less than the message, so they yield.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+fn browser_panic_frames() -> String {
+    CALL_STACK.with(|s| {
+        let Ok(b) = s.try_borrow() else {
+            return String::new();
+        };
+        if b.is_empty() {
+            return "  (no loft frame — the panic is outside any loft call)\n".to_string();
+        }
+        let mut out = String::new();
+        for (nm, f, ln) in b.iter().rev().take(12) {
+            out.push_str(&format!("  in {nm}() ({f}:{ln})\n"));
+        }
+        if b.len() > 12 {
+            out.push_str(&format!("  … ({} more frames)\n", b.len() - 12));
+        }
+        out
+    })
+}
+
 // Thread-local shadow call stack used by native-compiled loft code.
 // Each entry is (function_name, source_file, line_number).
 // Generated code calls `cr_call_push` / `cr_call_pop` around every function body.

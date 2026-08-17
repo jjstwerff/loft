@@ -182,6 +182,17 @@ impl Stores {
         cur < self.store(rec).capacity_words()
     }
 
+    /// Is this stored container id the *absent* marker rather than a record to follow?
+    ///
+    /// loft#917 reserves `DbRef::ABSENT_REC` in a collection field to mean "no collection
+    /// here". The walk must read that as an EDGE THAT IS NOT THERE — the same answer it
+    /// gives id `0` — and not as a record. Left to the bound check below it fails
+    /// `cur < capacity_words()` and reports `BUG (#796)`, so every free of a struct holding
+    /// a null collection field would have announced corruption in a correct program.
+    fn owned_edge_absent(cur: u32) -> bool {
+        cur == DbRef::ABSENT_REC
+    }
+
     /// Report an edge the walk refused to follow, once per site.
     ///
     /// Loud rather than silent: refusing the edge turns a crash into a leak, which is
@@ -277,7 +288,7 @@ impl Stores {
         match &self.types[tp as usize].parts {
             Parts::Hash(_, _) => {
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 || !self.owned_edge_in_store(rec, cur) {
+                if cur == 0 || Self::owned_edge_absent(cur) || !self.owned_edge_in_store(rec, cur) {
                     return empty(None, Vec::new());
                 }
                 let extra = if hash::owns_entries(self.store(rec), cur) {
@@ -289,7 +300,7 @@ impl Stores {
             }
             Parts::Array(_) | Parts::Ordered(_, _) => {
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 || !self.owned_edge_in_store(rec, cur) {
+                if cur == 0 || Self::owned_edge_absent(cur) || !self.owned_edge_in_store(rec, cur) {
                     return empty(None, Vec::new());
                 }
                 empty(Some(cur), Vec::new())
@@ -370,7 +381,8 @@ impl Stores {
             Parts::Vector(v) | Parts::Sorted(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                if cur != 0 && !Self::owned_edge_absent(cur) && !self.owned_edge_in_store(rec, cur)
+                {
                     self.refuse_owned_edge(rec, tp, cur, "vector");
                 } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
@@ -406,7 +418,8 @@ impl Stores {
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                if cur != 0 && !Self::owned_edge_absent(cur) && !self.owned_edge_in_store(rec, cur)
+                {
                     self.refuse_owned_edge(rec, tp, cur, "array");
                 } else if cur != 0 {
                     let length = vector::length_vector(rec, &self.allocations);
@@ -440,7 +453,8 @@ impl Stores {
             Parts::Hash(v, _) => {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                if cur != 0 && !Self::owned_edge_absent(cur) && !self.owned_edge_in_store(rec, cur)
+                {
                     self.refuse_owned_edge(rec, tp, cur, "hash");
                 } else if cur != 0 {
                     // Enumerate the live entries through `hash::records`, the single
@@ -489,7 +503,8 @@ impl Stores {
                 let c = *c;
                 let left = self.fields(tp);
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                if cur != 0 && !Self::owned_edge_absent(cur) && !self.owned_edge_in_store(rec, cur)
+                {
                     self.refuse_owned_edge(rec, tp, cur, "index");
                 } else if cur != 0 {
                     for node in self.collect_index_nodes(rec, left) {
@@ -510,7 +525,8 @@ impl Stores {
             Parts::ChildRec(ct) => {
                 let ct = *ct;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur != 0 && !self.owned_edge_in_store(rec, cur) {
+                if cur != 0 && !Self::owned_edge_absent(cur) && !self.owned_edge_in_store(rec, cur)
+                {
                     self.refuse_owned_edge(rec, tp, cur, "child record");
                 } else if cur != 0 {
                     children.push(OwnedChild {

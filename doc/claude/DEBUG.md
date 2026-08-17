@@ -921,6 +921,34 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 > emits unrelated same-frame noise (loft#939 — the report reads as "no detector sees
 > it", which is what sends you off building one).
 
+**One net is always on and needs no switch: every store access is bounded.**
+`Store::addr` / `addr_mut` / `read_span` / `write_span` / `buffer` check the offset
+against the store's capacity in every build and on every target, and a failure reads
+
+```
+Store access out of bounds: rec=4294967295 fld=0 width=8 store_bytes=32 type=…
+  — the reference is corrupt, not merely out of range; run with
+    LOFT_STRICT_STORES=1 to name the free
+```
+
+Read it as a *store-lifetime* report, not an indexing one: a `rec` that trips this is
+garbage rather than off by one, so the fault to hunt is whatever produced the
+reference. On `--html` the panic text and the loft frames under it reach the browser
+console.
+
+This used to be a `debug_assert!`, which loft's library build compiles out
+(`[profile.dev.package.loft]` sets `debug-assertions = false`, so such a guard is
+vacuous in `cargo build`, `cargo test` and `make ci` alike),
+so the only bound surviving a release build was `checked_offset`'s `isize::try_from`
+— and that can fail **solely where `isize` is 32 bits**. One corrupt `DbRef` therefore
+trapped in a browser page while every 64-bit backend addressed whatever lay at the
+offset it computed: a silently wrong scalar, or a wild `&mut` into process memory.
+loft#950 cost a day to that asymmetry, because "the browser traps and the interpreter
+is green" reads as evidence about the browser and is only evidence about where the
+guard could speak. Cost of making it real: +2.5 % instructions on `--native` (the
+default backend), +9.4 % on `--interpret`, on a loop that does nothing but touch
+struct fields.
+
 
 
 | Lever | What it does | Use when |
@@ -1211,6 +1239,8 @@ LOFT_TIMEOUT_GRACE=5 LOFT_TIMEOUT=60 loft …  # grace before the hard kill (def
 Mechanics (`src/timeout.rs`): `arm(secs, grace)` spawns a `loft-watchdog` thread
 that sleeps to `secs + grace`, prints a breadcrumb, and **process-aborts** — so it
 bounds the WHOLE process: the `--native` compile, the interpreter loop, everything.
+The breadcrumb names the loft `fn`, its `file:line`, and the `entry` it was reached
+from (under `--tests`, the test) — see [TESTING.md](TESTING.md) for the format.
 `arm` is idempotent (first deadline wins) and `secs == 0` leaves it disarmed (the
 default for ad-hoc runs — hence the hang risk). `LOFT_TIMEOUT` is read before argv,
 so it is the floor; an explicit `--timeout` only re-arms if nothing armed yet.

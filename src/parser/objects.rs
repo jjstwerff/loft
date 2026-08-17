@@ -3976,6 +3976,26 @@ impl Parser {
                 | Type::Trie(_, _, _)
                 | Type::Index(_, _, _)
         ) {
+            // loft#917 — `H { xs: null }` on a field declared `?`.  The header prime in
+            // `parse_object` has already zeroed the slot, and zero is the EMPTY collection;
+            // leaving it there is what made `xs: null` and `xs: []` byte-identical and
+            // `xs == null` answer false forever.  Write the reserved absent id over it.
+            //
+            // The sibling of the `__nullable<S>` arm above, which does the same job for a
+            // nullable STRUCT field (loft#896) — same question, different storage.  Gated on
+            // the declared `?` for the reason given at `clear_vector_field_as`: without one,
+            // the field's own type says it can never be absent.
+            if !self.first_pass && matches!(td, Type::Optional(_)) && self.is_null_source(value) {
+                let item_pos = i32::from(
+                    self.database
+                        .position(self.data.def(td_nr).known_type(), field),
+                );
+                #[allow(clippy::cast_possible_wrap)]
+                let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
+                let mark = self.cl("OpSetInt4", &[code.clone(), Value::Int(item_pos), absent]);
+                list.push(mark);
+                return;
+            }
             // Issue #120: for vector fields assigned from a bare variable
             // (e.g. `BigBox { data: d }`), parse_operators overwrites the
             // field ref with Var(d) — no copy operation is generated.

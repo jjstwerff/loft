@@ -29,15 +29,20 @@
 //!
 //! ## Cost when armed
 //!
-//! Each checkpoint takes one mutex `try_lock` + a few field writes
-//! (~50–100 ns).  Frequencies are low: native fn-entry (once per
-//! loft fn call), interpret execute_argv (once per program), parse
-//! (once per file), lexer recovery (throttled to every 256
-//! iterations).  Not in any hot opcode dispatch loop.
+//! The mutex-backed checkpoints take one `try_lock` + a few field
+//! writes (~50–100 ns): native fn-entry (once per loft fn call),
+//! parse (once per file), lexer recovery (throttled to every 256
+//! iterations).  None is in a hot opcode dispatch loop.
+//!
+//! The interpreter's per-call breadcrumb ([`checkpoint_interp_call`],
+//! loft#952) is built differently *because* it is the frequent one:
+//! two relaxed atomic stores, no mutex and no allocation, with the
+//! clock-reading deadline test throttled to every 1024th call.  At
+//! 20 M calls, armed and disarmed are within run-to-run noise.
 
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Master "is the timeout active?" flag.  Every checkpoint's first
@@ -65,6 +70,37 @@ static BREADCRUMB: Mutex<Breadcrumb> = Mutex::new(Breadcrumb {
     file: String::new(),
     line: 0,
 });
+
+/// loft#952 — the interpreter's most recently entered loft function, as a `d_nr`
+/// into [`INTERP_FNS`].  `u32::MAX` = none entered yet.
+///
+/// The interpreter cannot use [`checkpoint_fn`]'s `&'static str`: its function names
+/// live in the `Data` table, so passing one would mean leaking a `String` per call.
+/// An index costs a relaxed store and resolves on the watchdog's side, where the cost
+/// is irrelevant because the process is about to die.
+static INTERP_FN: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Calls counted by [`checkpoint_interp_call`], so it can test the deadline on a
+/// fraction of them rather than reading the clock on every loft call.
+static INTERP_CALLS: AtomicU32 = AtomicU32::new(0);
+
+/// The names [`INTERP_FN`] indexes, as `(fn name, file, line)` — the function's own
+/// DECLARATION position, which is what `--native` reports too, so a hang localises the
+/// same way on both backends.
+///
+/// Published once per program by [`publish_interp_fns`] and only when the watchdog is
+/// armed, so an ordinary run neither builds nor holds it.
+static INTERP_FNS: OnceLock<Vec<(String, String, u32)>> = OnceLock::new();
+
+/// loft#952 — the entry point the interpreter was last asked to run, which under
+/// `--tests` is the TEST function's own name.
+///
+/// Separate from [`INTERP_FN`] because they answer different questions and the reporter
+/// needed both: that one says which function the run was executing, this one says which
+/// test it got there from.  `--tests` sweeps in every sibling file it can reach, so
+/// "which of dozens of tests" was the part that had to be recovered by grepping raw
+/// output.  Written once per test, so a `Mutex<String>` costs nothing that matters.
+static INTERP_ENTRY: Mutex<String> = Mutex::new(String::new());
 
 struct Breadcrumb {
     /// Coarse execution phase: "parse", "run-interpret", "run-native",
@@ -138,19 +174,49 @@ pub fn deadline_reached() -> bool {
 /// (no checkpoint runs past `T`), only the watchdog fires — the guarantee.
 #[cold]
 fn graceful_exit() -> ! {
+    let (phase, fn_name, file, line) = report_fields();
+    eprintln!(
+        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}{}",
+        TIMEOUT_SECS.load(Ordering::Relaxed),
+        phase,
+        fn_name,
+        file,
+        line,
+        entry_suffix(&fn_name)
+    );
+    std::process::exit(124);
+}
+
+/// The `phase` / `fn` / `file` / `line` both timeout reports print, with the
+/// interpreter's per-call breadcrumb (loft#952) preferred over the coarse one.
+///
+/// The interpreter position wins where it exists because it is strictly more specific:
+/// the coarse breadcrumb's last word during an interpreted run is `execute_argv`'s
+/// one-shot `"<entry>"`, which names nothing.  Unset fields render as `?` rather than
+/// empty, so a placeholder is visibly a placeholder.
+fn report_fields() -> (&'static str, String, String, u32) {
     let (phase, fn_name, file, line) = match BREADCRUMB.try_lock() {
         Ok(bc) => (bc.phase, bc.fn_name, bc.file.clone(), bc.line),
         Err(_) => ("", "", String::new(), 0),
     };
-    eprintln!(
-        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}",
-        TIMEOUT_SECS.load(Ordering::Relaxed),
+    let (fn_name, file, line) = match interp_position() {
+        Some((n, f, l)) => (n.to_string(), f.to_string(), l),
+        None => (fn_name.to_string(), file, line),
+    };
+    (
         if phase.is_empty() { "?" } else { phase },
-        if fn_name.is_empty() { "?" } else { fn_name },
-        if file.is_empty() { "?" } else { &file },
-        line
-    );
-    std::process::exit(124);
+        if fn_name.is_empty() {
+            "?".to_string()
+        } else {
+            fn_name
+        },
+        if file.is_empty() {
+            "?".to_string()
+        } else {
+            file
+        },
+        line,
+    )
 }
 
 /// Native / interpret function-entry checkpoint — combines phase +
@@ -176,6 +242,93 @@ pub fn checkpoint_fn(phase: &'static str, name: &'static str, file: &'static str
     if deadline_reached() {
         graceful_exit();
     }
+}
+
+/// loft#952 — give the interpreter the per-function breadcrumb `--native` has had all
+/// along, so a watchdog hard-kill names the loft function it died in.
+///
+/// Before this, the interpreter checkpointed ONCE, with the literal `"<entry>"`, so
+/// every interpreted hang reported `fn=<entry> file=?:0` — a placeholder, not a
+/// location.  A slow test therefore became an undebuggable `SIGABRT`, and the only way
+/// to find the culprit was grepping the raw output for repeating text.
+///
+/// Cheaper than [`checkpoint_fn`] rather than more expensive: two relaxed stores
+/// instead of a mutex `try_lock`.  Disarmed it is the same single load and branch every
+/// other checkpoint costs.
+///
+/// Also the interpreter's cooperative deadline check.  `--native` exits gracefully at
+/// `T` because its fn-entry checkpoint tests the deadline; the interpreter had nowhere
+/// to test it and so could only ever be hard-killed at `T + grace`.  Now the common
+/// case is a clean `124` naming the function, and the watchdog stays the guarantee for
+/// a hang with no loft call in it.
+#[inline]
+pub fn checkpoint_interp_call(d_nr: u32) {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    INTERP_FN.store(d_nr, Ordering::Relaxed);
+    // The deadline test is THROTTLED, the breadcrumb above is not.  `deadline_reached`
+    // reads the clock, and a loft call is frequent enough that doing so on every one
+    // would be a measurable tax on interpreted code — while the breadcrumb, two relaxed
+    // stores, is not.  Every 1024th call bounds the graceful exit's lateness by
+    // microseconds of loft execution, which is far inside the grace window the watchdog
+    // gives it.
+    let n = INTERP_CALLS.fetch_add(1, Ordering::Relaxed);
+    if n.is_multiple_of(1024) && deadline_reached() {
+        graceful_exit();
+    }
+}
+
+/// Tell [`checkpoint_interp_call`]'s breadcrumb what the program's functions are called,
+/// so the watchdog can turn a `d_nr` into a name and a source position.
+///
+/// A whole-table sweep once per program rather than a hook on each call — the same shape
+/// (and the same reason) as `Stores::publish_type_names`: it cannot miss a function the
+/// way a per-site hook can, and it is inert when nothing will read it.
+pub fn publish_interp_fns(names: impl IntoIterator<Item = (String, String, u32)>) {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    let _ = INTERP_FNS.set(names.into_iter().collect());
+}
+
+/// Record the entry point about to run — under `--tests`, the test's own name.
+///
+/// Unlike [`publish_interp_fns`] this is set per RUN, not per program: a `--tests`
+/// invocation executes many entries against one name table.
+pub fn note_interp_entry(name: &str) {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut e) = INTERP_ENTRY.try_lock() {
+        e.clear();
+        e.push_str(name);
+    }
+}
+
+/// ` entry=<name>` for the run's entry point, or empty when there is nothing to add.
+///
+/// Suppressed when the entry IS the reported function, so the common single-`main` run
+/// does not print the same name twice — the field earns its place only under `--tests`,
+/// where it names the test a stuck helper was reached from.
+fn entry_suffix(fn_name: &str) -> String {
+    match INTERP_ENTRY.try_lock() {
+        Ok(e) if !e.is_empty() && *e != fn_name => format!(" entry={e}"),
+        _ => String::new(),
+    }
+}
+
+/// The interpreter breadcrumb as `(fn name, file, line)`, or `None` when no loft
+/// function has been entered or the name table was never published.
+fn interp_position() -> Option<(&'static str, &'static str, u32)> {
+    let d_nr = INTERP_FN.load(Ordering::Relaxed);
+    if d_nr == u32::MAX {
+        return None;
+    }
+    let (name, file, line) = INTERP_FNS.get()?.get(d_nr as usize)?;
+    // `INTERP_FNS` is a `OnceLock` that is never cleared, so its contents live as long
+    // as the process — which outlives every reader, all of which are about to end it.
+    Some((name.as_str(), file.as_str(), *line))
 }
 
 /// Parser checkpoint — `file` is a runtime `&str` (filename from
@@ -204,21 +357,19 @@ pub fn checkpoint_parse(file: &str, line: u32) {
 }
 
 fn print_breadcrumb_and_abort(timeout: u64, grace: u64) {
-    // try_lock to avoid blocking on a poisoned / held mutex — if we
-    // can't read the breadcrumb we still hard-kill (the GUARANTEE).
-    let (phase, fn_name, file, line) = match BREADCRUMB.try_lock() {
-        Ok(bc) => (bc.phase, bc.fn_name, bc.file.clone(), bc.line),
-        Err(_) => ("", "", String::new(), 0),
-    };
+    // `report_fields` try_locks rather than locks, so a poisoned or held mutex costs
+    // the breadcrumb, not the hard-kill (the GUARANTEE).
+    let (phase, fn_name, file, line) = report_fields();
     eprintln!(
         "[timeout] hard-kill after {}s+{}s grace: \
-         phase={} fn={} file={}:{}",
+         phase={} fn={} file={}:{}{}",
         timeout,
         grace,
-        if phase.is_empty() { "?" } else { phase },
-        if fn_name.is_empty() { "?" } else { fn_name },
-        if file.is_empty() { "?" } else { &file },
-        line
+        phase,
+        fn_name,
+        file,
+        line,
+        entry_suffix(&fn_name)
     );
     // `process::abort()` raises SIGABRT — useful for debugging
     // (core dump on `ulimit -c`).  Test/CI runs may prefer the

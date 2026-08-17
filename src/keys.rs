@@ -310,6 +310,21 @@ impl DbRef {
         self.store_nr == u16::MAX
     }
 
+    /// The record id a COLLECTION FIELD stores to mean *absent* (loft#917).
+    ///
+    /// [`DbRef::NULL`] says absent in the `store_nr`, which a field cannot use: a field
+    /// keeps only the 4-byte record id and [`Stores::get_ref`] rebuilds the rest from the
+    /// HOLDER's store, so `store_nr` is always a real store there. Record id `0` was the
+    /// only other candidate and it already means the EMPTY collection — which is why
+    /// `xs: null` and `xs: []` used to lower to the identical `OpSetInt4(h, 8, 0)` and
+    /// `xs == null` could never answer true.
+    ///
+    /// So absence gets its own reserved id, the same way a store reserves `u16::MAX`
+    /// (`database_named` asserts `slot != u16::MAX`). A record id indexes WORDS within a
+    /// store, so this is one word past the largest addressable store — unreachable for the
+    /// same reason, and now reserved rather than merely improbable.
+    pub const ABSENT_REC: u32 = u32::MAX;
+
     #[must_use]
     pub fn plus(&self, pos: u32) -> DbRef {
         DbRef {
@@ -592,38 +607,110 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
 }
 
-/// loft#917 — a `?` on a COLLECTION field promises an absence the storage cannot hold.
+/// A NULLABLE COLLECTION return gets the same hidden `__retbuf` the non-nullable one gets —
+/// **DEFAULT ON** (loft#938). Opt OUT with `LOFT_NO_NULLABLE_RETBUF`.
 ///
-/// A collection field stores a 4-byte RECORD ID, and a fresh field is zeroed. `null` and `[]`
-/// therefore write the identical zero — verified: `H { xs: null }` and `H { xs: [] }` both
-/// lower to `OpSetInt4(h, <off>, 0)` with no other difference — while `xs == null` compiles
-/// to `OpVectorIsNull`, which tests the *store_nr* sentinel a field read never produces. So
-/// the guard takes the present branch every time.
+/// # What it is for
 ///
-/// Unlike the scalar and struct cases this cannot be repaired in place. A distinct absent
-/// marker is a change to the STORED format of every existing collection field, so a persisted
-/// store would change meaning under a compiler upgrade — which the compatibility rule forbids
-/// outright. And the two obvious in-band readings are both wrong: record id zero already means
-/// `[]`, so testing it would newly answer `[] == null` as *true*. Giving the field the `__nullable`
-/// enum #896 built for structs needs a `Some` layout for a 4-byte payload that is not a record —
-/// the open half of loft#917, shared with loft#938.
+/// Without it `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller
+/// inherits whatever store the callee allocated — a fresh one per loop turn against a single
+/// scope-exit free. That is loft#938's leak. The NON-nullable twin of the same function is
+/// clean because its callee normalises every arm into the caller's buffer:
 ///
-/// So the DECLARATION is where this is answerable today: the field cannot honour the `?`, and
-/// until the layout exists the honest thing is to say so rather than accept it silently.
+/// ```text
+/// if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);       __retbuf }
+/// else      { …build…; OpClearVector(__retbuf); OpAppendVector(__retbuf, _vec_1, 0);
+///             OpFreeRef(__vdb_1);                                            __retbuf }
+/// ```
 ///
-/// `warning` rather than `advice` by the tier rule: ignoring it produces a wrong result. A
-/// guard written `if h.xs == null` runs its present branch on an absent collection, which is
-/// the opposite of what the author wrote — not merely a worse spelling of a documented one.
+/// So ownership never varies at the call site, and it does not need to: the ABI removes the
+/// variance rather than deciding it. `Optional` was simply blind at every gate on the way.
 ///
-/// Covers every collection kind, which is wider than the filed `vector<T>?`: `hash<E[k]>?` and
-/// `sorted<E[k]>?` answer `false` in exactly the same way. Scalars (`text?`, `integer?`) and
-/// struct fields (`E?`, fixed by loft#896) read back as null correctly and stay quiet.
+/// # Why it took seven gates
 ///
-/// **Default ON**; `LOFT_NO_NULLABLE_COLLECTION` opts out. One cached env read.
+/// `Optional(Vector)` and `Vector` share one runtime layout, so every gate that asked the
+/// shape question with a bare `matches!` silently excluded the nullable form. Six were peeled
+/// when the mechanism was built ([`Type::ret_promo_base`] / [`Type::ret_promo_peels`], still
+/// the identity when this is off, so the opt-out is exact). The seventh outlived that sweep
+/// because it asks about the returned VALUE rather than the return TYPE:
+/// `fresh_owned_vector_deps` matched `Type::Vector` on the returned LOCAL's own type, and
+/// `v = src(i); return v;` types `v` as `Optional(Vector)`. So `block_result`'s tail intercept
+/// never fired, `ref_return` was never called for that function at all, and the arm handed
+/// back its own store while the caller's buffer stayed untouched and was freed empty.
+///
+/// It needed [`optional_dep_peel`] with it, and neither alone is an improvement — see there.
+///
+/// # For whoever changes this
+///
+/// The peel is deliberately narrow — `Optional(Vector)` only. Widening it to
+/// `Optional(Reference(S))` leaks one record per call, because a nullable STRUCT return is
+/// loft#896's synthetic `__nullable<S>` enum with its own delivery
+/// (`882-keyed-element-read-borrows-its-container.loft` catches it). The `?` is transparent
+/// only where the storage under it is.
+///
+/// A delivery that COPIES the tail into the buffer and answers the buffer cannot be reached
+/// from a nullable return: it would turn a `null` answer into an empty collection. That is why
+/// the `Bind` leg in `ref_return` deliberately does NOT peel.
+///
+/// Reach for [`trace_ret_promotion`] first — it prints an ENTER line per `ref_return` call and
+/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" is
+/// which of the two upstream gates you are looking at. Then `LOFT_STRICT_STORES=1`: every
+/// value here is correct in every state of the bug, so a green run without it is not evidence.
 #[must_use]
-pub fn nullable_collection_lint_enabled() -> bool {
+pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_COLLECTION").is_none())
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_RETBUF").is_none())
+}
+
+/// `LOFT_OPTIONAL_DEP_PEEL=1` — loft#938, HALF ONE of the `LOFT_NULLABLE_RETBUF` blocker.
+/// **OPT-IN, DEFAULT OFF**, and the reason is that it is half.
+///
+/// `call_dependencies` translates a callee's return deps — ATTRIBUTE indices in callee space —
+/// onto the caller's variables. Every arm of it matches a BARE shape, so an `Optional` return
+/// matched none and fell through `else { tp }`, which hands the declared type back verbatim
+/// with those indices still in it. Read in the caller they are frame variable NUMBERS, so the
+/// result was typed as borrowing whichever local happened to hold that number. When set, the
+/// `Optional` is peeled before the shape question and restored on the answer, so each call site
+/// names its own buffer (`__ref_3` / `__ref_4`, not both naming `gd`).
+///
+/// That is unambiguously the right translation, and on its own it makes things no better: the
+/// OTHER half is that an enum-dispatched arm which binds the inner call to a local and returns
+/// it never writes the `__retbuf` it was handed — it allocates its own store and returns that
+/// (`LOFT_TRACE_RETPROMO=1` prints no line for it at all, so the gate is upstream of
+/// `classify_ret_promotion`). Caller dep and callee delivery therefore disagree, and believing
+/// either leaves the other wrong: with the stale dep the store is freed on an unrelated local's
+/// schedule (`USE AFTER FREE`), with the correct dep the caller frees an empty buffer and the
+/// real store is never freed (`NEVER FREED`). Turning this on alone converts the first into the
+/// second — a trade, not a fix, which is why it does not ship on.
+///
+/// Both halves land together or neither does. See
+/// `known_dispatch_arm_returning_a_local_does_not_deliver` in `tests/nullable_ret_buffer.rs`,
+/// which asserts the absence of BOTH (a UAF-only assertion went green on this change while the
+/// store had simply stopped being freed at all).
+#[must_use]
+pub fn optional_dep_peel() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OPTIONAL_DEP_PEEL").is_none())
+}
+
+/// `LOFT_TRACE_RETPROMO=1` — name every candidate the return-buffer promotion classifies,
+/// with the function, the variable and the declared return type.
+///
+/// Return promotion decides whether a heap return is delivered into the caller's hidden
+/// `__retbuf` or left as the callee's own store, and it is invisible from the outside: the
+/// only symptoms are a leak, or a store freed twice. Reconstructing it from IR has now cost
+/// two sessions.
+///
+/// The line that mattered for loft#938 was the ABSENCE of one. A nullable collection return
+/// printed nothing at all, which says the pass never ran for it — a different bug from the
+/// pass running and deciding wrong, and not a distinction the IR shows. Reach for it before
+/// reading a callee's body: no output means a gate upstream of the classifier.
+///
+/// Off by default; one cached env read.
+#[must_use]
+pub fn trace_ret_promotion() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_RETPROMO").is_some())
 }
 
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
@@ -688,6 +775,23 @@ pub fn a1b_materialise_enabled() -> bool {
 pub fn work_ref_stepover_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_WORKREF_STEPOVER").is_none())
+}
+
+/// loft#953: a copy may not claim a buffer the CALLER owns — **DEFAULT ON**. `OpCopyRecord`'s
+/// `0x8000` free-source bit releases the store its source came from, which is right for a callee
+/// that allocated one of its own and wrong for a callee handed the caller's hidden `__ref_N`
+/// destination: the value returned IS that buffer, and the caller's scope-exit `OpFreeRef` already
+/// claims it. Freeing it at the call site releases it while the caller still holds it, so every
+/// later turn of a loop clears and refills a freed store — silent on both backends until something
+/// recycles the store number (the callee's own second vector local suffices), after which rows
+/// written earlier read back empty (`--interpret`) or zeroed (`--native`). Opt OUT with
+/// `LOFT_NO_RETBUF_CLAIM_GUARD` to restore the claim: the A/B on one binary, and the first bisect
+/// step for a leak that appears in a heap-returning call chain. One cached env read. See
+/// `Parser::answers_caller_buffer`.
+#[must_use]
+pub fn retbuf_claim_guard_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_RETBUF_CLAIM_GUARD").is_none())
 }
 
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a

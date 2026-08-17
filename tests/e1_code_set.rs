@@ -275,13 +275,6 @@ const CODES: &[(&str, &str)] = &[
         "shadowed-by-method",
         "fn main() { print(\"needs the same fn in a LIBRARY — in main this is the C95 error\"); }",
     ),
-    // loft#917 — a `?` on a COLLECTION field. The field stores a record id whose zero
-    // already means empty, so the `?` cannot read back as null.
-    (
-        "nullable-collection-field",
-        "struct H { xs: vector<integer>? }\n\
-         fn main() { h = H { xs: null }; print(\"{h.xs == null}\"); }",
-    ),
 ];
 
 /// @PLN131 — codes with no MINIMAL trigger, each with why.

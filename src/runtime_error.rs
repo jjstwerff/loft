@@ -197,6 +197,12 @@ impl RuntimeError {
             crate::diagnostic_render::ColorMode::Auto,
         );
         eprint!("{rendered}");
+        // loft#950 — and to the PAGE on the browser target, where `eprint!` is a sink.
+        // A `--html` build that faulted printed nothing at all and the trap reached the
+        // console as a bare `RuntimeError: unreachable`, so the one thing a fault has to
+        // do — say what went wrong — was exactly what it could not do there.  A no-op on
+        // every other target.
+        crate::live_dispatch::wasm_host_log(&rendered);
         std::process::exit(1);
     }
 

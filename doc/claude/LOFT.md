@@ -576,6 +576,49 @@ qualified access.
 **Multiple names from one library must be parenthesised.** `use lib::a, b;` (a flat
 comma list) is a compile error; write `use lib::(a, b);`.
 
+#### `use self::<module>` — my own module, whatever else the graph ships (loft#949)
+
+A module's short name is one slot shared by the whole dependency graph, and building a
+package reads every file under its `src/`. So a consumer that merely *adds*
+`src/catalogue.loft` can take the name before its dependency asks for it — and the
+dependency's own `use catalogue;` then binds the consumer's file:
+
+```
+dep/src/catalogue.loft   pub fn part_list() -> integer { 41 }
+dep/src/dep.loft         use catalogue;
+                         pub fn dep_answer() -> integer { part_list() + 1 }
+con/src/catalogue.loft   pub fn part_list() -> integer { 99 }
+
+dep_answer()  ->  100        // the consumer's number, from inside the dependency
+```
+
+Nothing in `dep` changed; nothing in `con` imported `catalogue`. A published, versioned,
+tested package answers differently because of a file downstream.
+
+`use self::catalogue;` cannot be captured — it always binds `dep`'s own file, and
+`dep_answer()` is 42 in every consumer:
+
+```
+use self::catalogue;              // this package's own src/catalogue.loft
+use self::catalogue as cat;       // …and give it a qualifier: cat::part_list()
+```
+
+Three things to know:
+
+- **It is additive.** Bare `use catalogue;` is unchanged, so nothing that builds today
+  moves. Opt in where a package wants the guarantee; the `module-name-shadowed` advice
+  is the signpost.
+- **It does not search outward.** Bare `use` falls back to `lib/`, sibling packages and
+  the registry; `self::` does not, because a typo that quietly binds another package's
+  file is the outcome it exists to prevent. An absent module is an error naming the
+  package it looked in. It also needs a package: in a bare script with no `loft.toml`
+  declaring `[package] name`, `self::` is refused.
+- **Its qualifier is the alias.** The module registers under `<package>::<module>` so
+  two packages' `catalogue` modules can both be live — which is what a mere "prefer the
+  local file" rule could not give, since the name map has room for one `catalogue`
+  however precedence is decided. That key is not a typeable path, so use
+  `use self::catalogue as cat;` when you want to write `cat::part_list()`.
+
 ### Shadowing and qualified names (`@PLN22`)
 
 Definitions are scoped, not flat. A name resolves first in the current file, then
