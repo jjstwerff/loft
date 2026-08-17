@@ -15,11 +15,28 @@
 
 function AsyncifyCtrl(instance) {
   // Asyncify data area: an 8-byte struct {current, end} in WASM memory plus a
-  // STACK_SIZE save region, allocated right after __heap_base.  `current`
-  // (struct field @0) is the live cursor; `end` (@4) caps the save region.
-  const DATA_ADDR = (instance.exports.__heap_base?.value || 65536);
-  const STACK_SIZE = 16384;  // 16KB for asyncify stack
+  // save region after it.  `current` (struct field @0) is the live cursor;
+  // `end` (@4) caps the region.
+  //
+  // loft#950 — the MODULE owns that memory and tells us where it is.  This used
+  // to pick the address here: `__heap_base` when the module exported it, else the
+  // literal 65536.  It never did export it (that flag rides in WASM_THREAD_FLAGS,
+  // which only the threaded link passes), so every ordinary page took the
+  // fallback — and 65536 is not in the heap.  The shadow stack is [0, 0x100000)
+  // growing down, so the save region sat 966,648 bytes INTO it: asyncify wrote
+  // saved frames over live locals and read live locals back as saved frames.
+  //
+  // No fallback now.  A module without these exports cannot tell us memory that
+  // is safe to write, and guessing is what this bug was.
   const E = instance.exports;
+  if (!E.loft_asyncify_data || !E.loft_asyncify_size) {
+    throw new Error(
+      'loft: this wasm module does not reserve an asyncify save region ' +
+      '(no loft_asyncify_data/loft_asyncify_size export) — rebuild the page ' +
+      'with a loft that has loft#950');
+  }
+  const DATA_ADDR = E.loft_asyncify_data();
+  const STACK_SIZE = E.loft_asyncify_size();
   this.sleeping = false;
   this.exports = E;
   // The save-buffer top after the last unwind.  Asyncify writes the stack
@@ -39,6 +56,20 @@ function AsyncifyCtrl(instance) {
   };
   const curPtr = () => new Int32Array(E.memory.buffer)[DATA_ADDR >> 2];
 
+  // loft#950 — a stack deeper than the save region overruns it, and asyncify
+  // writes past the end without saying so: the bytes after it belong to another
+  // static, so the damage surfaces somewhere else entirely.  The module keeps a
+  // canary there and `loft_asyncify_ok` reports it.  Checked after each unwind,
+  // which is the only moment the region is written.
+  const checkRegion = () => {
+    if (E.loft_asyncify_ok && !E.loft_asyncify_ok()) {
+      throw new Error(
+        'loft: the asyncify save region overflowed — the wasm stack at this ' +
+        'suspend needs more than ' + STACK_SIZE + ' bytes.  Everything after ' +
+        'this point would be reading corrupted memory.');
+    }
+  };
+
   this.start = function(fn) {
     this.sleeping = false;
     E[fn]();
@@ -47,6 +78,7 @@ function AsyncifyCtrl(instance) {
     if (this.sleeping) {
       savedTop = curPtr();
       E.asyncify_stop_unwind();
+      checkRegion();
     }
   };
 
@@ -60,6 +92,7 @@ function AsyncifyCtrl(instance) {
     if (this.sleeping) {
       savedTop = curPtr();
       E.asyncify_stop_unwind();
+      checkRegion();
     }
     return true;
   };

@@ -1922,3 +1922,161 @@ fn html_a_clean_page_reports_no_panic() {
         "a clean page must report no panic\n{all}"
     );
 }
+
+/// The wasm module's shadow-stack top (`__stack_pointer`'s initial value) and the linear
+/// address of the asyncify canary, decoded straight from the artefact.
+///
+/// A second, independent walk for the reason `wasm_function_names` gives: the assertion
+/// below is about what the emitted module says, and a shared decoder would let one bug
+/// stand on both sides of it.  Returns `None` when either cannot be found.
+fn wasm_stack_top_and_canary(wasm: &[u8]) -> (Option<u32>, Option<u32>) {
+    fn uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let (mut v, mut shift) = (0u64, 0u32);
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            v |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(v);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    // `i32.const <sleb> end` — the only initialiser shape a data offset or a
+    // pointer-valued global uses.
+    fn i32_const(b: &[u8], p: &mut usize) -> Option<i64> {
+        if *b.get(*p)? != 0x41 {
+            return None;
+        }
+        *p += 1;
+        let (mut v, mut shift) = (0i64, 0u32);
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            v |= i64::from(byte & 0x7f) << shift;
+            shift += 7;
+            if byte & 0x80 == 0 {
+                if shift < 64 && byte & 0x40 != 0 {
+                    v |= -(1i64 << shift);
+                }
+                return Some(v);
+            }
+        }
+    }
+    const CANARY: &[u8] = b"LOFT950!";
+    let mut stack_top = None;
+    let mut canary_at = None;
+    let mut p = 8usize;
+    while p < wasm.len() {
+        let Some(&id) = wasm.get(p) else { break };
+        p += 1;
+        let Some(size) = uleb(wasm, &mut p).and_then(|s| usize::try_from(s).ok()) else {
+            break;
+        };
+        let (start, Some(end)) = (p, p.checked_add(size).filter(|e| *e <= wasm.len())) else {
+            break;
+        };
+        // Global section: the FIRST i32 mutable global a Rust wasm module declares is
+        // `__stack_pointer`, initialised to the top of the shadow stack.
+        if id == 6 && stack_top.is_none() {
+            let mut q = start;
+            if uleb(wasm, &mut q).is_some_and(|n| n > 0) {
+                q += 2; // value type + mutability
+                if let Some(v) = i32_const(wasm, &mut q) {
+                    stack_top = u32::try_from(v).ok();
+                }
+            }
+        }
+        // Data section: find the segment holding the canary and turn its index within
+        // that segment into a linear address.
+        if id == 11 && canary_at.is_none() {
+            let mut q = start;
+            let count = uleb(wasm, &mut q).unwrap_or(0);
+            for _ in 0..count {
+                if uleb(wasm, &mut q) != Some(0) {
+                    break; // only the active-at-a-constant form is emitted here
+                }
+                let Some(off) = i32_const(wasm, &mut q) else {
+                    break;
+                };
+                if wasm.get(q) != Some(&0x0b) {
+                    break;
+                }
+                q += 1;
+                let Some(len) = uleb(wasm, &mut q).and_then(|l| usize::try_from(l).ok()) else {
+                    break;
+                };
+                let Some(body) = wasm.get(q..q.saturating_add(len)) else {
+                    break;
+                };
+                if let Some(idx) = body.windows(CANARY.len()).position(|w| w == CANARY) {
+                    canary_at = u32::try_from(off)
+                        .ok()
+                        .and_then(|o| u32::try_from(idx).ok().and_then(|i| o.checked_add(i)));
+                }
+                q += len;
+            }
+        }
+        p = end;
+    }
+    (stack_top, canary_at)
+}
+
+// loft#950 — the asyncify save region must be memory the MODULE owns.
+//
+// `wasm-opt --asyncify` spills the whole wasm stack into a caller-chosen buffer on every
+// suspend and reads it back on resume.  The JS driver used to choose that address:
+// `__heap_base` when the module exported it, and the literal `65536` when it did not.  It
+// never did — that export rides in `WASM_THREAD_FLAGS`, which only the THREADED `--html`
+// link passes — so every ordinary page took the fallback, and `65536` is not in the heap.
+// `__stack_pointer` starts at `0x100000`, so the shadow stack is `[0, 0x100000)` growing
+// DOWN and the region sat 966,648 bytes into it: a page whose stack ever reached that
+// depth had asyncify writing saved frames over live locals and reading live locals back
+// as saved frames.  Browser-only, because no other target runs asyncify.
+//
+// ⚠ THE ASSERTION IS THE ADDRESS, not the presence of the exports.  A page that exports
+// all three and still hands the driver an address inside the shadow stack has exactly the
+// bug this is written against, and an export-name check would pass it.  The region is
+// derived from the CANARY's linear address, so it is read out of the artefact the browser
+// actually gets rather than from anything this build could assert about itself.
+#[test]
+fn the_asyncify_save_region_is_outside_the_shadow_stack() {
+    let Some((stdout, stderr, ok)) = run_html_wasm(
+        "asyncify_region",
+        "fn main() {\n  v: vector<integer> = [];\n  for i in 0..64 { v += [i]; }\n  \
+         print(\"len {len(v)}\\n\");\n}\n",
+    ) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok && all.contains("len 64"), "the page must run\n{all}");
+
+    let wasm = std::fs::read(extracted_wasm("asyncify_region")).expect("read extracted wasm");
+    let (stack_top, canary_at) = wasm_stack_top_and_canary(&wasm);
+    let stack_top = stack_top.expect("__stack_pointer initialiser present");
+    let canary_at = canary_at.expect(
+        "the asyncify canary must be in the module's data — without it the region is not \
+         reserved and the driver is choosing an address again",
+    );
+
+    // The canary sits immediately after the 8-byte control struct and the save area.
+    let size = 16384u32;
+    let region = canary_at
+        .checked_sub(size + 8)
+        .expect("canary cannot precede the region it guards");
+
+    assert!(
+        region >= stack_top,
+        "the asyncify save region is at 0x{region:x}, inside the shadow stack \
+         [0, 0x{stack_top:x}) — a suspend will overwrite live locals (loft#950)"
+    );
+    // The fallback address the bug shipped with, pinned by value: a regression that
+    // restores it lands here with a name rather than as a browser-only wrong answer.
+    assert_ne!(
+        region, 65536,
+        "the region is back at the hardcoded 65536 fallback (loft#950)"
+    );
+}
