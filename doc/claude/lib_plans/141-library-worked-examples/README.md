@@ -16,18 +16,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
 page is done** (LIBRARY_AUTHORING.md § 2a). First distributed library **`arguments`
-COMPLETE in the working tree, awaiting a branch to land on**: four `@ARG-001..004`
-worked examples (`parse` declare→parse→query lifecycle, `optional` glued-only value,
-`enable_help` opt-in + required-bypass, `required` parse-failure error idiom) — def
-tests in `arguments/tests/02-worked-examples.loft`, the four `// Example:` citations
-in `arguments/src/arguments.loft`, and the generated repo-root `examples-index.tsv`.
-Both per-library validations pass: the gate is green in library mode
+DONE** — pushed as `loft-libs-core` branch `mac-worked-examples` (rebased onto
+`origin/main`, PR not opened). Four `@ARG-001..004` worked examples (`parse`
+declare→parse→query lifecycle, `optional` glued-only value, `enable_help` opt-in +
+required-bypass, `required` parse-failure error idiom): def tests in
+`arguments/tests/02-worked-examples.loft`, the four `// Example:` citations in
+`arguments/src/arguments.loft`, and the generated repo-root `examples-index.tsv`.
+Both per-library validations pass: green in library mode
 (`EXAMPLES_REPO_ROOT=../loft-libs-core EXAMPLES_CITE_ROOTS="arguments/src
 arguments/tests"` — the same two env values `library-ci-reusable.yml` sets), and
 deleting the demonstrator file makes all four citations `dangling`. `loft test` and
-`loft test --native` are both 17/17. The change sits uncommitted in the sibling
-`../loft-libs-core` checkout because that repo is on `main` and the branch policy
-forbids both committing there and creating a branch unasked.
+`loft test --native` are both 17/17. The other five packages in that monorepo
+(`cbor`, `crypto`, `random`, `regex`, `zttext`) run the same CI step **vacuously
+green** — the opt-in ratchet working as designed, so one library adopting the
+convention cannot redden its neighbours.
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
 broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 **shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
@@ -197,9 +199,12 @@ forced, below): `loft-libs-core` → `ARG` arguments · `CRY` crypto · `RND` ra
 `loft-libs-net` → `GMP` game_protocol · `SRV` server · `WEB` web ·
 `loft-libs-world` → `HXG` hex_grid · `HXT` hex_terrain · `HXW` hex_world. These
 rows **stake the ecosystem-global acronym**; none of the monorepos carries a
-worked-example tag yet. Still to add when reached: `MKD` markdown (no sibling
-checkout found — deferred), the new `imaging`/`ssh`/`cbor`/`regex` packages, and
-`FTR` the feature catalogue (Phase C2).
+worked-example tag yet — except `ARG`, whose four are now authored (Status). Still to
+add when reached: `MKD` markdown (no sibling checkout found — deferred), the newer
+`imaging`/`ssh`/`cbor`/`regex`/`zttext` packages, and `FTR` the feature catalogue
+(Phase C2). An acronym is only needed the moment a package authors its first tag: the
+per-package CI step is vacuously green without one, so an unregistered package cannot
+go red before it opts in.
 
 **These libraries ARE this stream's to roll out** — they are shared code between
 agents (not one consumer-agent's private tree, the way dryopea/crawler/moros are),
