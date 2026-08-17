@@ -10332,6 +10332,16 @@ impl Parser {
     /// `qualified_type_name` deriving a DATABASE type key from a module's short name
     /// (a package-qualified key must stay machine-independent, so it cannot carry the
     /// package's path).
+    ///
+    /// **"Bind the local file first" is not the cheap way round that (loft#949).**  It
+    /// reads as a change nobody would notice, and the corpus says otherwise: across 65
+    /// packages, four module basenames are shipped by two DIFFERENT packages (`glb`,
+    /// `math`, `mesh`, `scene`), and **19 sites in shipped library code** — plus 16 in
+    /// tests — are a package `use`-ing a name it also ships.  Every one is the
+    /// `graphics` ⟷ `mesh3d` overlap above.  Local-first would rebind all of them, and
+    /// it does not avoid the blockers either: two modules called `math` then have to
+    /// coexist, which is exactly what the flat `use_names` map cannot express.  So the
+    /// design owes an answer for coexistence, not just for precedence.
     fn module_name_clash(&mut self, id: &str) {
         let Some(own) = self.own_module_file(id) else {
             return;
