@@ -6,11 +6,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN141 — Worked examples for the current libraries
 
 > Tracker: [loft-lang/plans#141](https://github.com/loft-lang/plans/issues/141)
-> (`subject:libs` + `status:future`). **Home:** place this file at
-> `doc/claude/lib_plans/141-library-worked-examples/README.md` when work starts on a
-> branch (kept out of the unrelated install branch on purpose). Origin: dryopea's
+> (`subject:libs`, `status:future` → move to `status:active`). Origin: dryopea's
 > `docs/EXAMPLES.md` gate (commits `9cf8a01` + `1f4c35f`, 2026-08-17) — this idea
-> rolled out across the loft library + feature ecosystem.
+> rolled out across the loft library + feature ecosystem. Built on branch
+> `mac-install-dylib-fix` (alongside @PLN142).
 
 ## Status
 
@@ -82,20 +81,27 @@ test, so the next reader never needs the pointer. This is not a contradiction of
 ratchet: the ratchet says don't tag the *obvious*; this says for the *non-obvious*,
 a missing example is a gap to fill, not a reason to skip.
 
-## The mechanism (adapted from dryopea)
+## The mechanism (as built — adapted from dryopea)
 
 - **Tag family `@AAA-###`** — `@`, three-letter acronym, hyphen, three digits
-  (`@ARG-001`). Same indexer family as loft's `@P`/`@PLN`; the hyphen keeps it
-  distinct. One acronym per library, claimed **ecosystem-globally** (two libraries
-  claiming `@GRM-` collide in a shared index even though neither repo sees the
-  other).
-- **Citation** — `// Example: @ARG-001, @ARG-002` directly above a `pub fn`, or
-  `// Example: none — <reason>` for an opted-in file's function that needs none.
-- **Definition** — the tag sits in a comment block directly above the test it names
-  (a blank line breaks the block, so a header tag can't drift down and claim an
-  unrelated test).
-- **Gate** — `examples.sh` per library, checking `dangling` / `duplicate` /
-  `orphan` / (opt-in) `uncovered`, with a self-test that proves each fault *fires*.
+  (`@STD-001`). Distinct from loft's `@P`/`@PLN`/`@F`/`@GH` families (none has that
+  hyphen). One acronym per repo, claimed **ecosystem-globally**.
+- **Citation** — `// Example: @STD-001` on a comment line directly above the
+  function it documents (stdlib fn in `default/`, library fn in `lib/`).
+- **Definition** — the tag sits in a comment block directly above the `fn` it names
+  (a blank line breaks the block). The `fn` may be a `test_*` **or a real function
+  in a first-class application's own source** — a live use documents as well as a
+  test does.
+- **Acronym registry** — `scripts/example_repos.tsv`: `acronym → repo → git_url →
+  branch`. Projects are assumed checked out as **siblings** in one parent dir, so a
+  repo's checkout is `../<repo>`.
+- **Gate** — `scripts/check_doc_drift.sh examples` (part of the `all` run CI's
+  doc-hygiene job already blocks on). Faults: `dangling` (cited, no fn carries it),
+  `duplicate` (one tag on two fns in this repo), `unregistered` (acronym not in the
+  registry) — all drift; `unvalidated` (cross-repo tag whose sibling isn't checked
+  out) — warning only, link still emitted. Proven red on dangling + duplicate.
+  *Not yet built:* `orphan`, opt-in `uncovered`, and a self-test harness — deferred
+  (the non-vacuous set of real @STD citations is what keeps the green honest today).
 
 ### Design decision — which way the cross-repo arrow points
 
@@ -103,67 +109,59 @@ A library must **not** gain a code dependency on its consumers, and a first-clas
 app is not a dep in the library's `loft.toml`. So the two sources resolve
 differently, and this split is load-bearing:
 
-| source | tag DEFINED in | citation lives on | resolved by | orphan checked by |
-|---|---|---|---|---|
-| library's own test | the library's `tests/` | the library's `pub fn` | the library's own `examples.sh` (primary tree) | the library's gate |
-| loft in-repo demo / example program | loft's `examples/` (or a demo's test) | the stdlib fn / feature issue | loft's **own** gate — same tree, no arrow | loft's gate |
-| real use in a first-class app | the **app's** tests | (discoverable via the indexer) | the **ecosystem indexer** (Phase C) — an inert doc pointer, never a build edge | the **app's** own gate |
+| source | tag DEFINED in | citation lives on | resolved by (as built) |
+|---|---|---|---|
+| library's own test | this repo's `tests/` | the fn's doc comment | `check_doc_drift.sh examples`, scanned in place |
+| loft in-repo demo / example program | this repo's `examples/` / `tools/` | the stdlib fn / feature issue | same — same tree, no cross-repo arrow |
+| real use in a first-class app | the app's `tests/` **or its `src/`** | the stdlib / library fn | the registry maps the acronym to `../<repo>`; validated offline against that sibling checkout, git link emitted |
 
-The library's gate only ever checks its **own** in-repo citations — the library
-still builds and tests standalone with every consumer absent. "Seen used in `moros`"
-is an *indexer* feature, not a library-gate feature. This is exactly dryopea's own
-split: `EXAMPLES_TEST_ROOTS` resolves citations into registered libs, and `orphan`
-is asked only of the primary tree so a consumer is never red for a dependency's tags.
-The demo-program row is the middle case that needs neither: a loft `examples/`
-program documenting a stdlib function or feature is in the **same tree** as what it
-documents, so it resolves like a library's own test — no cross-repo arrow, no
-indexer dependency. That is why it is the preferred source for stdlib + feature
-examples.
+The gate only ever checks a citation against the repo its **acronym** names, and a
+foreign repo is consulted **read-only** via its sibling checkout — never a build
+edge, so every library still builds and tests standalone. A cross-repo tag whose
+sibling isn't checked out is a warning, not a failure, so CI stays deterministic.
+The demo-program row is the case that needs no foreign repo at all: a loft
+`examples/` program documenting a stdlib function or feature is in the **same tree**
+as what it documents — the preferred source for stdlib + feature examples.
 
 ## Phases
 
 Cut per the two-bounds rule (each can go red on its own, for a real reason).
 
-### Phase A — Probe: does the cross-repo pointer work, and does it stay inert? (XS)
+### Phase A — Probe: does the cross-repo pointer work, and does it stay inert? — DONE
 
-Pick **one** library with genuinely non-obvious usage — `arguments` (parser
-lifecycle) — and **one** first-class consumer that already uses it.
-- Port `examples.sh` + its 8-control self-test into `arguments`.
-- Tag two things: one test in `arguments/tests`, one real usage in the consumer's
-  tests. Add `// Example:` on the two `pub fn`s.
-- **Validation (must be able to go red):** self-test's 8 controls pass; deleting the
-  cited test makes `dangling` fire; **and** the consumer-side citation does NOT make
-  `arguments` fail to build/test when the consumer is absent (the pointer is inert).
-- **Output:** the arrow-direction + resolution config from the table above, confirmed
-  or corrected in writing. Kills the design for the cost of one compile if cross-repo
-  resolution is unworkable.
+Done differently than first sketched (no `arguments`/`examples.sh` port): the probe
+rode the real gate. A temporary `// Example: @DRY-001` in loft's stdlib **validated
+against the sibling `../dryopea` checkout** and emitted the git blob link; `@DRY-999`
+went `dangling`; `@MOR-001` (moros not checked out) stayed an `unvalidated` warning
+without failing. Confirms all three: the cross-repo pointer resolves, it produces a
+real link, and it is inert (read-only, never a build edge) when the foreign repo is
+absent.
 
-### Phase B — The acronym registry (S)
+### Phase B — The acronym registry — DONE (foundation), still to broaden
 
-The namespace is ecosystem-global, so it needs one home. Stand up the minimal
-registry (a table in `loft-registry`, the ecosystem's shared place — not a
-per-library copy) and assign acronyms to the current libraries.
-- **Validation:** a duplicate-acronym check with a deliberate-collision fixture that
-  makes it go red. A green run over the real set means no two libraries collide.
-- Proposed acronyms (ratified here): `ARG` arguments · `CRY` crypto · `GMP`
-  game_protocol · `GRM` gridmesh · `RND` random · `SRV` server · `SHP` shapes ·
-  `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW` hex_world · `MKD` markdown ·
-  `GFX` graphics · `FTR` the feature catalogue (Phase C2). (`DRY`/`FIX`/`TST`
-  already claimed by dryopea.)
+Built as `scripts/example_repos.tsv` (a loft-repo file for now, not yet the
+`loft-registry` shared home — see Open questions). Entered so far: `STD` loft · `DRY`
+dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
+arguments · `CRY` crypto · `GMP` game_protocol · `GRM` gridmesh · `RND` random ·
+`SRV` server · `SHP` shapes · `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW`
+hex_world · `MKD` markdown · `GFX` graphics · `FTR` the feature catalogue (Phase C2).
+(`DRY`/`FIX`/`TST` also claimed by dryopea.)
+- **Still to do:** a duplicate-**acronym** guard (two repos claiming one acronym) —
+  the gate today guards duplicate *tags* within a repo, not acronym collisions across
+  the registry.
 
-### Phase C — Shared gate + indexer ingestion (M)
+### Phase C — Shared gate + indexer ingestion — PARTIAL
 
-- Promote `examples.sh` to **one** upstream copy libraries consume, instead of each
-  copy-pasting it.
-- Teach loft's indexer (`make index` / `scripts/idx`) to ingest `@AAA-###` tags so
-  `scripts/idx tag:@ARG-001` resolves the tagged test — this is the piece dryopea's
-  `EXAMPLES.md § What is NOT decided` explicitly defers to "wherever the indexer is
-  defined." This is what makes a "real use in a first-class app" *discoverable*.
-- **Validation:** `idx tag:@ARG-001` resolves; a dangling tag reports; the indexer
-  crawls a `~/.loft/`-style hidden root (dryopea's traversal-from-root bug — a
-  `--exclude-dir='.*'` scan reads zero files under any hidden path).
-- **Deferrable:** if per-library gates suffice for now, C can defer with the trigger
-  "cross-repo 'used in <app>' links wanted".
+- **Done:** the gate is one shared script — `scripts/check_doc_drift.sh examples` —
+  not a per-library copy; it already resolves cross-repo citations and **emits the
+  git link** (the "carry a real link" half of what the indexer owes).
+- **Still to do:** teach loft's tag indexer (`make index` / `scripts/idx`) to ingest
+  `@AAA-###` so `scripts/idx tag:@STD-001` resolves the tagged fn — today `idx` knows
+  only `@P`/`@PLN`/`@F`/`@GH`. This makes examples *queryable*, not just gate-checked.
+- **Still to do (Follow-up from Status):** hard *online* validation of a cross-repo
+  tag when its sibling isn't checked out (fetch a published per-repo tag index),
+  crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
+  bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
 ### Phase C2 — Worked examples for the feature catalogue (S)
 
@@ -197,12 +195,17 @@ synthetic snippet.
 
 ### Phases D… — Per-library rollout, one library per phase (S each)
 
-One library per phase (the skill's one-call-site-at-a-time shape). For each: opt in
-the files worth documenting (`// #examples`), tag the highest-value functions from
-its own tests and, where it exists, a real consumer usage — and where **no** clear
-demonstrating test exists, **author one in retrospect** (lifting the pattern from a
-first-class app that already uses the function correctly) rather than skipping the
-function; wire `examples.sh` into the library's `test.sh`/CI.
+**Started with the loft stdlib** (`@STD`, source 3, in-repo): three text functions
+(`starts_with_at`, `chr`, `join`) cited → `tests/scripts/945-stdlib-worked-examples.loft`.
+Next stdlib clusters: collections, files/IO, json. Then the registered libraries
+below.
+
+One library per phase (the skill's one-call-site-at-a-time shape). For each: tag the
+highest-value functions from its own tests and, where it exists, a real consumer
+usage — and where **no** clear demonstrating test exists, **author one in retrospect**
+(lifting the pattern from a first-class app that already uses the function correctly)
+rather than skipping the function; the shared `check_doc_drift.sh examples` gate
+covers it (no per-library `examples.sh` to wire).
 - **Validation per library:** gate green on that library **and** a deliberately
   deleted test makes a citation dangle.
 - **Priority order** (non-obvious usage first, where a real call site pays most):
@@ -222,12 +225,16 @@ within a week.
 
 ## Open questions
 
-- **Registry home** — `loft-registry` table vs a loft doc, if the registry isn't
-  ready to carry it. (Phase B decides; leans `loft-registry`.)
-- **`// Example:` spelling** — cheap to change now, expensive once citations exist.
-  Keep dryopea's spelling for one shared indexer unless Phase A surfaces a reason.
-- **In-repo `lib/moros_*`** — these are first-class-app-internal libs; likely lower
-  priority than the registered/sibling libraries a broad audience consumes.
+- **Registry home** — built as `scripts/example_repos.tsv` in the loft repo. Should
+  it migrate to `loft-registry` (the ecosystem-shared home) so every repo reads one
+  copy? Leans yes eventually; the loft-repo file is fine while loft is the only
+  consumer.
+- **Online cross-repo validation** — a sibling checkout validates offline today; a
+  repo not checked out only warns. A published per-repo tag index (one small file
+  fetched by raw URL) would let it hard-validate offline-of-clone. (Phase C follow-up.)
+- **`// Example:` spelling** — kept dryopea's spelling for one shared indexer.
+- **In-repo `lib/moros_*`** — first-class-app-internal libs; lower priority than the
+  registered/sibling libraries a broad audience consumes.
 
 ## See also
 
