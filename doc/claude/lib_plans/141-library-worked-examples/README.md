@@ -31,6 +31,33 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
+Third **`crypto` DONE** — the second package on `loft-libs-core`'s
+`mac-worked-examples` branch (pushed, PR not opened). Six `@CRY-001..006` worked
+examples in `crypto/tests/worked-examples.loft`, cited from the twelve functions
+they document. The reason this library owes them is one fact about its surface:
+**every parameter and return is `text`**, so the type checker cannot tell a message
+from the base64 of a message, a hex digest from a base64 one, a 32-byte seed from a
+64-byte key, or a `""` that means *it failed* from a `""` that means *it was empty*.
+The six: the two hashing doors (`sha256` text-in/HEX-out vs `sha256_b64` base64 both
+ways — and only the base64 door can see a non-UTF-8 byte string at all) @CRY-001;
+sign `base64_encode(msg)`, never the message — `"test"` is *itself* valid base64, so
+the bare text signs three other bytes **and verifies against itself**, which is why
+the mistake is invisible inside one program and only a peer ever sees it @CRY-002;
+ES256 determinism (RFC 6979 — two signatures differing is a bug, not entropy) plus
+the flat JOSE encodings (bare scalar, `x || y` with no `0x04`, `r || s` not DER), so
+check lengths 32/64/64 @CRY-003; a DH output is not a key — run it through HKDF,
+where `info` is what separates two keys from one shared secret, and the one-shot is
+exactly Extract-then-Expand @CRY-004; the 16-byte tag rides *inside* the sealed blob
+and `""` from `open` means AUTHENTICATION FAILED — the same `""` an authentic empty
+plaintext answers @CRY-005; `enc` is fresh per seal and must travel with the
+ciphertext, while `info` AND `aad` must both match and neither failure says which
+@CRY-006. Both validations pass (green in library mode; removing the demonstrator
+dangles all six, exit 1), `loft test` / `loft test --native` are 78/78, and a
+flipped expected value goes red. The pass also caught a real doc defect in the
+function @CRY-001 documents: the README's API table called `sha256_b64`'s return a
+hex digest when it is base64 — fixed in its own commit. `loft-libs-core` now reads
+2 tagged / 4 TODO (`cbor`, `random`, `regex`, `zttext`).
+
 Second distributed library **`gridmesh` DONE** — pushed as `loft-libs-graphics`
 branch `tuxedo-worked-examples` (PR not opened). Five `@GRM-001..005` worked
 examples in `gridmesh/tests/worked-examples.loft`, cited from the seven functions
@@ -54,7 +81,8 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 `loft-libs-*` repo's own citations are validated in its CI with no per-repo copy
 (loft self-check byte-identical, synthetic-lib probe green/dangling/duplicate). Tagged so far:
 `@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
-`@EHK-001..004` (in-tree libraries). **The distributed libraries are this stream's
+`@EHK-001..004` (in-tree libraries), `@ARG-001..004` + `@CRY-001..006`
+(`loft-libs-core`), `@GRM-001..005` (`loft-libs-graphics`). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
@@ -373,7 +401,10 @@ covers it (no per-library `examples.sh` to wire).
      question. Confirmed by the two done: every tag is a contract a caller can get
      wrong while type-checking (a forgotten `clear_dirty`, a halo cell emitted
      twice, a stale cell index, a group rebuilt whole, a `-1` read as null).
-  2. `crypto`, `server`, `web` — protocol/sequence APIs (order of calls matters).
+  2. `crypto` (DONE, `@CRY-001..006`), `server`, `web` — protocol/sequence APIs
+     (order of calls matters). `crypto` sharpened what "gettable wrong while
+     type-checking" means for this tier: its whole surface is `text -> text`, so
+     the *encoding* is the contract and the compiler is blind to all of it.
   3. `markdown`, `graphics`, `random`, `shapes`, `game_protocol` — as they're touched.
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
@@ -427,9 +458,11 @@ added mid-rollout adopts later through the same ratchet. Without that, a 14-pack
 repo (`loft-libs-world`) is a moving target that never converges.
 
 **Where that leaves the two branches in flight** (`make examples-progress`):
-`loft-libs-graphics` 1 tagged / 3 TODO (`graphics`, `imaging`, `shapes`);
-`loft-libs-core` 1 tagged (`arguments`, on its branch) / 5 TODO. Neither is ready;
-tier 2 (`crypto`, `server`, `web`) now doubles as *finish the repo you started*.
+`loft-libs-core` 2 tagged (`arguments`, `crypto`) / 4 TODO (`cbor`, `random`,
+`regex`, `zttext`); `loft-libs-graphics` 1 tagged (`gridmesh`) / 3 TODO
+(`graphics`, `imaging`, `shapes`). Neither is ready. `loft-libs-core` is the nearer
+one, and the four it still owes are the packages where an *exempt* verdict is most
+likely to be the honest answer — which is what the verdict column is for.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
