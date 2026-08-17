@@ -613,6 +613,19 @@ pub struct Output<'a> {
     /// to the server, which then ADDRESSES debug frames to it over the relay.
     /// `None` on a production (default, no-`--debug`) client — no debug tier at all.
     pub debug_name: Option<String>,
+    /// loft#954 (`--html --names`) — mark every generated loft function
+    /// `#[inline(never)]`, so it survives into the wasm as a function of its own.
+    ///
+    /// Keeping the wasm `name` section is only half of naming a trap's frames.  The
+    /// other half is that there has to BE a frame: measured on a four-function
+    /// program with loops and vectors, LLVM inlined every one of them into
+    /// `loft_start`, so the section named 616 std/alloc internals and not one loft
+    /// function.  A backtrace that resolves to `RawVecInner::finish_grow` answers a
+    /// question nobody asked.
+    ///
+    /// Only loft's own functions are pinned — std, alloc and loft's runtime still
+    /// inline freely, so the cost is confined to the code the backtrace is about.
+    pub keep_fn_names: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -1182,6 +1195,20 @@ impl<'a> Output<'a> {
             emit_live: true,
             program_src: None,
             debug_name: None,
+            keep_fn_names: false,
+        }
+    }
+
+    /// loft#954 — the attribute line that precedes a generated loft function
+    /// definition, so `--names` keeps it out of line and a trap's frame can name it.
+    /// Empty (not a blank line) in every ordinary build, which keeps the emitted
+    /// Rust byte-identical to what it was.
+    #[must_use]
+    fn fn_inline_attr(&self) -> &'static str {
+        if self.keep_fn_names {
+            "#[inline(never)]\n"
+        } else {
+            ""
         }
     }
 
@@ -4199,7 +4226,8 @@ extern crate loft;"
         }
         write!(
             w,
-            "fn {}(cell: &std::cell::UnsafeCell<Stores>",
+            "{}fn {}(cell: &std::cell::UnsafeCell<Stores>",
+            self.fn_inline_attr(),
             self.fn_ident(def)
         )?;
         for a in def.attributes() {

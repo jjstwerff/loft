@@ -48,7 +48,7 @@ mod test_runner;
 
 use crate::native_utils::{
     build_script_native_lib_dirs, default_artifact_path, deps_dir_of, html_wasm_import_modules_ok,
-    is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
+    html_wasm_named_functions, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
 use crate::test_runner::run_tests;
 use loft::diagnostics::Level;
@@ -220,6 +220,11 @@ fn print_help() {
     );
     println!("                                JS host, so an import loft's page shim lacks is a");
     println!("                                warning, not a refusal (alias: --no-host-check)");
+    println!(
+        "  --names                       with --html: keep the wasm name section, so the frames"
+    );
+    println!("                                a browser prints for a trap resolve to function");
+    println!("                                names instead of bare indices (a larger page)");
     println!("  targets [<target>]            which stdlib builtins are NOT available on a target");
     println!("                                (ask before designing, not after the build fails)");
     println!(
@@ -6301,6 +6306,8 @@ fn main() {
     // loft#681 — the consumer supplies its OWN host for the emitted wasm, so the page
     // loft would write is never used and its shim's surface is not the relevant one.
     let mut html_host_provided = false;
+    // loft#954 — keep the wasm `name` section, so a browser backtrace resolves.
+    let mut html_names = false;
     let mut tests_dir: Option<String> = None;
     // loft#925 — whether `tests_dir` came from the `loft test` SUBCOMMAND, and
     // whether that subcommand was given a target of its own.  A target written
@@ -6613,6 +6620,12 @@ fn main() {
             html_threads = Some(true);
         } else if a == "--no-threads" {
             html_threads = Some(false);
+        // loft#954 — a browser trap hands over a complete backtrace, and without the
+        // wasm `name` section every frame in it is a bare index that resolves to
+        // nothing.  Opt-in rather than default because the section is real bytes on a
+        // page that is already large; the people who need it are debugging.
+        } else if a == "--names" {
+            html_names = true;
         } else if a == "--host-provided" || a == "--no-host-check" {
             // Extract-the-wasm workflows drive the module from their own JS (see
             // BROWSER_INTEROP's "loft owns the loop"), so an import loft's shim lacks is
@@ -8891,6 +8904,10 @@ fn main() {
             // server, which then addresses debug frames to it over the relay.
             out.emit_live = debug_name.is_some() && !lean;
             out.debug_name.clone_from(&debug_name);
+            // loft#954 — `--names` promises that a trap's frames resolve to loft
+            // function names, which needs BOTH halves: the wasm name section (kept by
+            // the wasm-opt flags below) and a function left to name.
+            out.keep_fn_names = html_names;
             // Embed the program source so the debug client bootstraps the parked
             // interpreter from BYTES (no filesystem in a browser) — see P3.1.
             if out.emit_live {
@@ -9227,6 +9244,17 @@ fn main() {
                 "--enable-mutable-globals",
             ]);
         }
+        // loft#954 — `--strip-debug` drops the `name` section along with the DWARF, so
+        // every frame a browser prints for a trap is an index that resolves to nothing.
+        // Under `--names` strip only the DWARF (which is the bulk: 1.5 MB against a
+        // 100-byte name section on a toy module) and pass `-g`, because binaryen writes
+        // the section out only when asked.  The names are the generated Rust symbols,
+        // which carry the loft function name verbatim (`…_4prog21n_part_thumb_wire`).
+        let (strip_flag, debuginfo_flags): (&str, &[&str]) = if html_names {
+            ("--strip-dwarf", &["-g"])
+        } else {
+            ("--strip-debug", &[])
+        };
         let final_wasm = if wasm_opt
             .args([
                 // -O / -Oz plus --asyncify strips the host imports
@@ -9236,7 +9264,7 @@ fn main() {
                 // --asyncify pass keeps imports intact while still
                 // producing a smaller, asyncify-ready bundle.
                 "-O1",
-                "--strip-debug",
+                strip_flag,
                 "--strip-producers",
                 "--asyncify",
                 // Asyncify suspend imports (comma-separated module.function):
@@ -9265,6 +9293,7 @@ fn main() {
                 //     only reports what the completed fetch already learned.
                 "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get,loft_io.loft_host_http_range",
             ])
+            .args(debuginfo_flags)
             .arg("-o")
             .arg(&opt_path)
             .arg(&wasm_path)
@@ -9294,6 +9323,21 @@ fn main() {
         // Assemble HTML
         let wasm_bytes = std::fs::read(&final_wasm).unwrap_or_default();
         let _ = std::fs::remove_file(&final_wasm);
+        // loft#954 — `--names` is asked for precisely when a page has to be
+        // debugged from its backtrace, so a build that silently produced no names
+        // is the one failure that must not be quiet: the page looks identical and
+        // its frames resolve to nothing, which is the state the flag exists to
+        // leave.  Say so and name the tool, rather than let the next trap be
+        // read as "the flag didn't help".
+        if html_names && html_wasm_named_functions(&wasm_bytes).unwrap_or(0) == 0 {
+            eprintln!(
+                "loft: --names was requested but the emitted wasm carries no name \
+                 section, so a browser backtrace will still show bare frame \
+                 indices.\n  \
+                 This needs a binaryen that honours `-g` (`wasm-opt --version`); \
+                 without one, build without --names and bisect by hand."
+            );
+        }
         // @P350: self-validate the emitted wasm BEFORE writing the HTML so a
         // bare `loft --html` never ships the silently-broken "rlib stomp"
         // bundle.  `make wasm` (wasm-pack, feature=wasm) and `--html` write

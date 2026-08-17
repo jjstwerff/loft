@@ -196,6 +196,161 @@ fn run_html_wasm_full(
     ))
 }
 
+/// Where `run_html_wasm_full` leaves the wasm it pulled out of the page.
+fn extracted_wasm(name: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("loft_html_{name}"))
+        .join(format!("{name}.wasm"))
+}
+
+/// Every name in the wasm `name` section's function subsection (loft#954).
+///
+/// Deliberately a second, independent walk rather than a call into loft's own
+/// parser: this test's whole job is to check what the emitted artefact carries,
+/// and a shared decoder would let one bug hide on both sides of the assertion.
+fn wasm_function_names(wasm: &[u8]) -> Vec<String> {
+    fn uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let (mut v, mut shift) = (0u64, 0u32);
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            v |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(v);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    fn walk(wasm: &[u8], out: &mut Vec<String>) -> Option<()> {
+        if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
+            return None;
+        }
+        let mut p = 8;
+        while p < wasm.len() {
+            let id = *wasm.get(p)?;
+            p += 1;
+            let size = usize::try_from(uleb(wasm, &mut p)?).ok()?;
+            let (start, end) = (p, p.checked_add(size).filter(|e| *e <= wasm.len())?);
+            if id == 0 {
+                let mut q = start;
+                let len = usize::try_from(uleb(wasm, &mut q)?).ok()?;
+                let sect = wasm.get(q..q.checked_add(len)?)?;
+                q += len;
+                if sect == b"name" {
+                    while q < end {
+                        let sub = *wasm.get(q)?;
+                        q += 1;
+                        let sub_size = usize::try_from(uleb(wasm, &mut q)?).ok()?;
+                        let sub_end = q.checked_add(sub_size).filter(|e| *e <= end)?;
+                        if sub == 1 {
+                            let count = uleb(wasm, &mut q)?;
+                            for _ in 0..count {
+                                uleb(wasm, &mut q)?; // function index
+                                let n = usize::try_from(uleb(wasm, &mut q)?).ok()?;
+                                let bytes = wasm.get(q..q.checked_add(n)?)?;
+                                q += n;
+                                out.push(String::from_utf8_lossy(bytes).into_owned());
+                            }
+                            return Some(());
+                        }
+                        q = sub_end;
+                    }
+                }
+            }
+            p = end;
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    let _ = walk(wasm, &mut out);
+    out
+}
+
+// loft#954 — `--html --names` must make a browser backtrace readable.  A trap in a
+// page hands over a complete stack of `wasm-function[1073]` frames, and resolving
+// them needs BOTH halves, which is why one assertion here is not enough:
+//
+//   * the `name` custom section has to survive wasm-opt (the default build strips
+//     it along with the DWARF), and
+//   * the loft function has to still BE a function.  Without `#[inline(never)]`
+//     LLVM folded every function of this very program into `loft_start`, and the
+//     section then named 616 std/alloc internals and not one line of loft.
+//
+// The no-`--names` control is what proves the test can fail: it pins that the
+// default page carries no section at all, so a green here cannot come from names
+// that were always present.
+#[test]
+fn html_names_flag_makes_loft_functions_resolvable_in_a_backtrace() {
+    let source = "fn ring_of(radius: float, steps: integer) -> vector<float> {\n\
+                  \x20 out: vector<float> = [];\n\
+                  \x20 for i in 0..steps {\n\
+                  \x20   out += [radius * (i as float)];\n\
+                  \x20 }\n\
+                  \x20 out\n\
+                  }\n\
+                  fn thumb_wire(rings: integer) -> integer {\n\
+                  \x20 total = 0;\n\
+                  \x20 for r in 1..rings {\n\
+                  \x20   for v in ring_of(r as float, 4) { if v > 0.0 { total += 1 } }\n\
+                  \x20 }\n\
+                  \x20 total\n\
+                  }\n\
+                  fn main() {\n  print(\"wire={thumb_wire(6)}\")\n}\n";
+
+    let Some((stdout, stderr, ok)) = run_html_wasm_full(
+        "n954_names",
+        source,
+        &[],
+        &[],
+        &["--names"],
+        "tools/wasm_repro.mjs",
+    ) else {
+        return; // skipped: no node / no wasm target / no release loft
+    };
+    let all = format!("{stdout}{stderr}");
+    // A debug flag that changes the answer is worse than no flag: pin the result.
+    assert!(ok, "the --names page trapped.\n{all}");
+    assert!(all.contains("wire=15"), "--names changed the answer: {all}");
+
+    let bytes = std::fs::read(extracted_wasm("n954_names")).expect("read extracted wasm");
+    let names = wasm_function_names(&bytes);
+    assert!(
+        !names.is_empty(),
+        "--names must keep the wasm name section (wasm-opt -g + --strip-dwarf)"
+    );
+    // The generated Rust carries the loft name verbatim inside its v0 symbol
+    // (`…_4prog12n_thumb_wire`), so a frame index resolves to something the author
+    // wrote.  Both functions: `main` alone would pass on a build that inlined
+    // everything into it.
+    for want in ["n_thumb_wire", "n_ring_of"] {
+        assert!(
+            names.iter().any(|n| n.contains(want)),
+            "no name section entry mentions `{want}` — a trap in it would still \
+             resolve to nothing.\nnames from the program crate: {:?}",
+            names
+                .iter()
+                .filter(|n| n.contains("4prog"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Control: without the flag the page carries no names at all.
+    let Some((_, _, ok)) =
+        run_html_wasm_full("n954_plain", source, &[], &[], &[], "tools/wasm_repro.mjs")
+    else {
+        return;
+    };
+    assert!(ok, "the control page trapped");
+    let plain = std::fs::read(extracted_wasm("n954_plain")).expect("read control wasm");
+    assert!(
+        wasm_function_names(&plain).is_empty(),
+        "the default page must stay stripped — otherwise this test proves nothing"
+    );
+}
+
 /// P137 root case: an empty `fn main() {}` traps before any user code
 /// runs.  This was the minimal reproducer that revealed
 /// `Stores::new()` → `Instant::now()` as the panic site.  If WASM init

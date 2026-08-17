@@ -379,6 +379,35 @@ moment, and treat silence as an answer instead of a hang.
 Characters are never torn in half by the wait: a read that arrives mid-character
 hands over the part that is whole and keeps the rest for the next read.
 
+### A browser page's crash tells you which of your functions crashed
+
+When an `--html` page traps, the browser hands over a full backtrace, and until now
+none of it could be read:
+
+```
+[exception] RuntimeError: unreachable
+    at wasm://wasm/0168beca:wasm-function[1073]:0x56a035
+    at wasm://wasm/0168beca:wasm-function[1054]:0x567983
+```
+
+Those numbers name the failing function and everything that called it, but a page
+carried nothing to turn a number into a name — so the only way forward was moving a
+`println` through your source, rebuilding, and reloading the browser, over and over.
+
+Build with `--names` and they resolve:
+
+```
+loft --html --names game.loft
+```
+
+The page grows by roughly 10–15 %, which is why you ask for it rather than always
+getting it. Reach for it the moment a page traps, and drop it when you ship.
+
+One thing to know: `--names` also keeps your functions from being folded into their
+callers, which is what leaves a frame to put a name on. That makes it a slightly
+different build — so if a trap happens without `--names` and stops happening with it,
+that is worth knowing rather than worth ignoring.
+
 ### A test that names a helper the way its library does
 
 A package whose test file defined `fn defaulted(…)` while its library had a private
