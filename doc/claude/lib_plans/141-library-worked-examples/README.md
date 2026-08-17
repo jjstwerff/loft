@@ -16,14 +16,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
 page is done** (LIBRARY_AUTHORING.md § 2a). First distributed library **`arguments`
-in progress**: four `@ARG-001..004` worked examples authored + verified green on BOTH
-backends (`parse` declare→parse→query lifecycle, `optional` glued-only value,
-`enable_help` opt-in + required-bypass, `required` parse-failure error idiom) — the
-def tests live in `arguments/tests/02-worked-examples.loft`. The four `// Example:`
-citations in `arguments/src/arguments.loft` + the generated `examples-index.tsv` are
-pending: writing into the sibling `../loft-libs-core` checkout (clean + current, 0/0
-with origin) needs the operator's go-ahead, since the harness guards cross-repo
-writes and `arguments` lands as a commit/PR in loft-libs-core, not loft.
+COMPLETE in the working tree, awaiting a branch to land on**: four `@ARG-001..004`
+worked examples (`parse` declare→parse→query lifecycle, `optional` glued-only value,
+`enable_help` opt-in + required-bypass, `required` parse-failure error idiom) — def
+tests in `arguments/tests/02-worked-examples.loft`, the four `// Example:` citations
+in `arguments/src/arguments.loft`, and the generated repo-root `examples-index.tsv`.
+Both per-library validations pass: the gate is green in library mode
+(`EXAMPLES_REPO_ROOT=../loft-libs-core EXAMPLES_CITE_ROOTS="arguments/src
+arguments/tests"` — the same two env values `library-ci-reusable.yml` sets), and
+deleting the demonstrator file makes all four citations `dangling`. `loft test` and
+`loft test --native` are both 17/17. The change sits uncommitted in the sibling
+`../loft-libs-core` checkout because that repo is on `main` and the branch policy
+forbids both committing there and creating a branch unasked.
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
 broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 **shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
@@ -133,6 +137,13 @@ a missing example is a gap to fill, not a reason to skip.
   `duplicate` (one tag on two fns in this repo), `unregistered` (acronym not in the
   registry) — all drift; `unvalidated` (cross-repo tag whose sibling isn't checked
   out) — warning only, link still emitted. Proven red on dangling + duplicate.
+  **The FIRST tag in a definition block defines it.** An example's prose routinely
+  names a sibling ("the failure path, see @ARG-004"), and letting a later mention win
+  read that block as defining the *sibling* — surfacing as a `dangling` on the block's
+  own tag plus a `duplicate` on the one it mentioned, both pointing away from the real
+  mistake (found on the `arguments` rollout, the first library whose examples
+  cross-reference each other). Verified a no-op on every existing tree: the def scan is
+  byte-identical over loft, `loft-libs-graphics`, `loft-libs-net` and `dryopea`.
   *Not yet built:* `orphan`, opt-in `uncovered`, and a self-test harness — deferred
   (the non-vacuous set of real @STD citations is what keeps the green honest today).
 

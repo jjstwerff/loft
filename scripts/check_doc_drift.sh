@@ -440,6 +440,12 @@ has_header_docstring() {
 # line breaks the block); an `Example:` line is a citation, never a definition.  The
 # `fn` may be ANY function — a `test_*`, or a real function in a first-class
 # application's own source — so a worked example can be a live use, not only a test.
+#
+# The FIRST tag in a block defines it.  An example's prose routinely names a sibling
+# example ("the failure path, see @ARG-004"), and letting a later mention win read
+# that block as defining the sibling — which surfaced as a `dangling` on the block's
+# own tag AND a `duplicate` on the one it mentioned, both pointing away from the
+# actual mistake.
 examples_defs_in_tree() {
   local root="$1"
   [ -d "$root" ] || return 0
@@ -449,7 +455,7 @@ examples_defs_in_tree() {
         FNR==1 { f=FILENAME; sub(/^\.\//,"",f) }
         /^[[:space:]]*\/\/.*Example:/ { p=""; next }
         /^[[:space:]]*\/\// && match($0, /@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]/) {
-          p=substr($0,RSTART,RLENGTH); pl=FNR; next }
+          if (p=="") { p=substr($0,RSTART,RLENGTH); pl=FNR } next }
         /^[[:space:]]*\/\// { next }
         /^[[:space:]]*$/ { p=""; next }
         /^[[:space:]]*(pub )?fn / {
