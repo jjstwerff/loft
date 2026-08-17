@@ -47,6 +47,7 @@ HITS_ROADMAP=0
 HITS_REFS=0
 HITS_LIBS=0
 HITS_EXAMPLES=0
+HITS_EXAMPLES_WARN=0
 
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
@@ -433,65 +434,103 @@ has_header_docstring() {
   [ "$count" -gt 0 ]
 }
 
-# ---- Check: worked-example tags resolve to a real test (@PLN141) ----
-# A stdlib / library function documents its correct use by CITING a test that
-# demonstrates it: `// Example: @AAA-###` in the function's doc comment, where the
-# tag names a test carrying `// @AAA-###` directly above its `fn`.  This check makes
-# the citation honest — the doc-validation counterpart of dryopea's examples gate:
+# Emit `tag<TAB>relpath:line<TAB>fn` for every `// @AAA-### … <newline> fn` in a
+# tree.  A tag binds to the `fn` that FOLLOWS it in the same comment block (a blank
+# line breaks the block); an `Example:` line is a citation, never a definition.  The
+# `fn` may be ANY function — a `test_*`, or a real function in a first-class
+# application's own source — so a worked example can be a live use, not only a test.
+examples_defs_in_tree() {
+  local root="$1"
+  [ -d "$root" ] || return 0
+  ( cd "$root" 2>/dev/null && \
+    find . -name '*.loft' -not -path './.*' -not -path './target/*' -print0 2>/dev/null \
+    | xargs -0 awk '
+        FNR==1 { f=FILENAME; sub(/^\.\//,"",f) }
+        /^[[:space:]]*\/\/.*Example:/ { p=""; next }
+        /^[[:space:]]*\/\// && match($0, /@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]/) {
+          p=substr($0,RSTART,RLENGTH); pl=FNR; next }
+        /^[[:space:]]*\/\// { next }
+        /^[[:space:]]*$/ { p=""; next }
+        /^[[:space:]]*(pub )?fn / {
+          if (p!="") { n=$0; sub(/^[[:space:]]*(pub )?fn /,"",n); sub(/\(.*$/,"",n);
+                       printf "%s\t%s:%d\t%s\n", p, f, pl, n; p="" } next }
+        { p="" }
+      ' 2>/dev/null )
+}
+
+# ---- Check: worked-example tags resolve to a real test/function (@PLN141) ----
+# A stdlib / library function documents its correct use by CITING a demonstrator:
+# `// Example: @AAA-###`, where the tag names a `fn` carrying `// @AAA-###` above it
+# — a test, OR a real function in a first-class application.  The acronym names the
+# repo that owns the tag (scripts/example_repos.tsv), so a citation can point ACROSS
+# repos and still be validated + linked:
 #
-#   dangling   a citation whose tag no test carries (the test was deleted/renamed) —
-#              the exact "the tag must resolve to an actual test" failure.
-#   duplicate  one tag on two test fns, so a citation is ambiguous.
+#   ok           the tag resolves to a fn; a cross-repo hit prints its git link.
+#   dangling     cited, but no fn in the owning repo carries it → drift.
+#   duplicate    one tag on two fns in this repo → ambiguous → drift.
+#   unregistered the acronym isn't in the registry → drift (add its repo + url).
+#   unvalidated  a cross-repo tag whose repo has no local checkout → WARNING only
+#                (the link is still emitted); a local checkout is validated OFFLINE
+#                and preferred over any online lookup.
 #
 # The `@AAA-###` shape (three letters, hyphen, three digits) is distinct from the
-# repo's other tag families (@F1, @P259, @PLN141) — none has that hyphen — so this
-# never collides with them.  Citations live in default/ (stdlib) + lib/; tag
-# definitions live in the test trees + examples/.
+# repo's other tag families (@F1, @P259, @PLN141) — none has that hyphen.
 check_examples() {
-  say "=== Worked-example tags resolve to a test ==="
+  say "=== Worked-example tags resolve to a test/function ==="
   local tag_re='@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]'
-  local cited defs
-  cited=$(mktemp); defs=$(mktemp)
-  # Citations: the tags named on `// Example:` lines in stdlib + library sources.
+  local registry="scripts/example_repos.tsv"
+  local cited localdefs
+  cited=$(mktemp); localdefs=$(mktemp)
+  # Citations in THIS repo's stdlib + libraries.
   grep -rhnE "//[[:space:]]*Example:" default/ lib/ --include='*.loft' 2>/dev/null \
     | grep -oE "$tag_re" | sort -u > "$cited"
-  # Definitions: a `// @AAA-###` tag comment bound to the `fn` that FOLLOWS it (a
-  # blank line breaks the block, so a header tag cannot claim an unrelated fn).  An
-  # `Example:` line is a citation, never a definition.  One line per defining test.
-  find tests examples -name '*.loft' -print0 2>/dev/null | xargs -0 awk '
-    /^[[:space:]]*\/\/.*Example:/ { pend=""; next }
-    /^[[:space:]]*\/\// && match($0, /@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]/) {
-      pend = substr($0, RSTART, RLENGTH); next }
-    /^[[:space:]]*\/\// { next }
-    /^[[:space:]]*$/ { pend=""; next }
-    /^[[:space:]]*(pub )?fn / { if (pend != "") { print pend; pend="" } next }
-    { pend="" }
-  ' 2>/dev/null | sort > "$defs"
-  local defs_u; defs_u=$(sort -u "$defs")
+  # This repo's own defs (STD etc.), scanned once.
+  examples_defs_in_tree . > "$localdefs" 2>/dev/null
   local n_cited; n_cited=$(grep -cvE '^$' "$cited")
-  local hits=0
-  # DANGLING — a citation that resolves to no test.
-  local t
+  local hits=0 t acr row lpath url branch def link
   while IFS= read -r t; do
     [ -z "$t" ] && continue
-    if ! printf '%s\n' "$defs_u" | grep -qxF "$t"; then
-      red "  dangling: $t is cited but no test carries it"
+    acr=${t#@}; acr=${acr%%-*}
+    row=$(awk -F'\t' -v a="$acr" '$1!~/^#/ && $1==a {print; exit}' "$registry" 2>/dev/null)
+    if [ -z "$row" ]; then
+      red "  unregistered: $t — acronym '$acr' not in $registry (add its repo + git url)"
+      hits=$((hits + 1)); continue
+    fi
+    lpath=$(printf '%s' "$row" | cut -f2)
+    url=$(printf '%s' "$row" | cut -f3)
+    branch=$(printf '%s' "$row" | cut -f4)
+    if [ "$lpath" = "." ]; then
+      def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$localdefs")
+    elif [ -d "$lpath" ]; then
+      def=$(examples_defs_in_tree "$lpath" | awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}')
+    else
+      yellow "  unvalidated: $t — no local checkout of $acr at '$lpath'; clone to validate. link: $url"
+      HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
+    fi
+    if [ -z "$def" ]; then
+      red "  dangling: $t is cited but no fn carries it in ${acr} ($lpath)"
       grep -rnE "Example:.*$t" default/ lib/ --include='*.loft' 2>/dev/null | sed 's/^/      /'
-      hits=$((hits + 1))
+      hits=$((hits + 1)); continue
+    fi
+    if [ "$lpath" = "." ]; then
+      say "  ok  $t -> $def"
+    else
+      link="$url/blob/$branch/$(printf '%s' "$def" | sed 's/:\([0-9][0-9]*\)$/#L\1/')"
+      say "  ok  $t -> $link  (validated against local $lpath)"
     fi
   done < "$cited"
-  # DUPLICATE — one tag on two tests, so a citation is ambiguous.
+  # DUPLICATE — one tag on two fns in THIS repo (each foreign repo owns its own).
   local d
-  for d in $(uniq -d "$defs"); do
-    red "  duplicate: $d tags more than one test"
+  for d in $(cut -f1 "$localdefs" | sort | uniq -d); do
+    red "  duplicate: $d tags more than one fn in this repo"
     hits=$((hits + 1))
   done
-  rm -f "$cited" "$defs"
+  rm -f "$cited" "$localdefs"
   HITS_EXAMPLES=$hits
   if [ $hits -gt 0 ]; then
     DRIFT=1
-  else
-    green "  ok — $n_cited Example: citation(s) resolve to a test"
+  elif [ "${HITS_EXAMPLES_WARN:-0}" -eq 0 ]; then
+    green "  ok — $n_cited citation(s) resolve to a test/function"
   fi
 }
 
@@ -529,8 +568,8 @@ esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
 total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES))
-warns=$((HITS_TIME + HITS_LIBS))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES"
+warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN))
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0

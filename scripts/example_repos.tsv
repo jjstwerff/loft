@@ -1,0 +1,21 @@
+# Worked-example acronym registry (@PLN141) — maps a tag acronym to the repo that
+# owns it, so a `// Example: @AAA-###` citation resolves to a real test/function and
+# produces a real link.  Tab-separated: acronym <TAB> local_path <TAB> git_url <TAB> branch
+#
+#   local_path   where the repo is checked out relative to THIS repo (`.` = loft
+#                itself); `-` = no local checkout expected (validate/link online).
+#   git_url      the repo's web root, used to build the actual link.
+#   branch       the branch the tags live on (for the link + online validation).
+#
+# Resolution: if local_path is a directory, the tag is validated against that
+# checkout (offline, authoritative) — this is preferred over online.  A cross-repo
+# acronym with no checkout present is reported unvalidated (a warning), never a hard
+# failure, so CI stays deterministic; the link is still emitted from git_url.
+#
+# The acronym namespace is ecosystem-global: one acronym names one repo everywhere.
+#
+# acronym	local_path	git_url	branch
+STD	.	https://github.com/loft-lang/loft	main
+DRY	../dryopea	https://github.com/jjstwerff/dryopea	main
+CRW	../crawler	https://github.com/jjstwerff/crawler	main
+MOR	-	https://github.com/jjstwerff/moros	main

@@ -20,8 +20,21 @@ ACTIVE — first slice shipped. The loft **stdlib** is the starting library (sou
 to tagged tests in `tests/scripts/945-stdlib-worked-examples.loft`, and the gate is
 `scripts/check_doc_drift.sh examples` (dangling + duplicate), wired into the `all`
 run that CI already blocks on — proven red on both a dangling citation and a
-duplicate tag. Next: broaden the stdlib clusters, then Phase B (acronym registry)
-and the registered libraries.
+duplicate tag. Next: broaden the stdlib clusters, then the registered libraries.
+
+**Cross-repo resolution now works (Phase B + first-class-app source).** The acronym
+registry lives at `scripts/example_repos.tsv` (acronym → local path + git url +
+branch). A `// Example: @AAA-###` citation is resolved by acronym:
+- the owning repo's tag may sit above **any `fn`** — a `test_*` OR a real function in
+  a first-class application's own source (dryopea tags both `tests/` and `src/`);
+- a repo with a **local checkout is validated offline against it** (preferred) and
+  the check emits the real git blob link (verified live: `@DRY-001` →
+  `dryopea/blob/main/tests/25_m3_the_ground_gl.loft#L43`);
+- a cross-repo tag whose repo is **not** checked out is reported `unvalidated` (a
+  warning, not a hard failure — keeps CI deterministic) with the link still emitted.
+
+Follow-up: hard *online* validation without a checkout (fetch a published per-repo
+tag index) — today the offline local-checkout path is the validated one.
 
 ## Goal
 
