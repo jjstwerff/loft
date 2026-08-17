@@ -14,14 +14,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 ACTIVE — stdlib rollout underway. The loft **stdlib** is the starting library
-(source 3, in-repo, loft's own gate — the cleanest arrow): six functions across two
-clusters carry `// Example: @STD-00N` citations — text (`starts_with_at`, `chr`,
-`join`) and collection aggregates (`min_of`, `max_of`, `sum`, `tree_walk`) —
+(source 3, in-repo, loft's own gate — the cleanest arrow): nine functions across
+three clusters carry `// Example: @STD-00N` citations — text (`starts_with_at`,
+`chr`, `join`), collection aggregates (`min_of`, `max_of`, `sum`, `tree_walk`), and
+JSON (`json_parse` navigation @STD-007, the `json_array`/`json_object` builders
+@STD-008, the `struct_from_jsonvalue`/`struct_to_json` round-trip @STD-009) —
 resolving to tagged tests (a `tree_walk` example reuses an existing test in
-`445-generic-tree-walk.loft`, the rest live in `945-stdlib-worked-examples.loft`).
-The gate is `scripts/check_doc_drift.sh examples` (dangling + duplicate), wired into
-the `all` run that CI already blocks on — proven red on both a dangling citation and
-a duplicate tag. Next stdlib clusters: files/IO, json. Then the registered libraries.
+`445-generic-tree-walk.loft`, the rest live in `945-stdlib-worked-examples.loft`,
+all green on both backends). The gate is `scripts/check_doc_drift.sh examples`
+(dangling + duplicate), wired into the `all` run that CI already blocks on — proven
+red on both a dangling citation and a duplicate tag. Next stdlib cluster: files/IO.
+Then the registered libraries.
 
 **Cross-repo resolution now works (Phase B + first-class-app source).** The acronym
 registry lives at `scripts/example_repos.tsv` (acronym → repo → git url → branch).
@@ -198,10 +201,11 @@ synthetic snippet.
 ### Phases D… — Per-library rollout, one library per phase (S each)
 
 **Started with the loft stdlib** (`@STD`, source 3, in-repo): text
-(`starts_with_at`, `chr`, `join`, @STD-001..003) and collection aggregates
+(`starts_with_at`, `chr`, `join`, @STD-001..003), collection aggregates
 (`min_of`/`max_of` @STD-004, `sum` @STD-005, `tree_walk` @STD-006 — the last reusing
-an existing test). Next stdlib clusters: files/IO, json. Then the registered
-libraries below.
+an existing test), and JSON (`json_parse` navigation @STD-007, the
+`json_array`/`json_object` builders @STD-008, the struct↔JSON round-trip @STD-009).
+Next stdlib cluster: files/IO. Then the registered libraries below.
 
 One library per phase (the skill's one-call-site-at-a-time shape). For each: tag the
 highest-value functions from its own tests and, where it exists, a real consumer

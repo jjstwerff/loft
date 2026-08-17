@@ -53,6 +53,7 @@ pub struct JsonField {
 ///   _                  => println("unexpected root kind"),
 /// }
 /// ```
+// Example: @STD-007
 pub fn json_parse(raw: text) -> JsonValue;
 // Populates the runtime's
 // per-call json_errors state (read by json_errors()).  Allocates
@@ -192,6 +193,7 @@ pub fn json_string(v: text) -> JsonValue;
 /// so nested containers and arena-origin subtrees (e.g. a captured
 /// `field()` result) embed correctly.  Empty input produces a
 /// real empty JArray.
+// Example: @STD-008
 pub fn json_array(items: vector<JsonValue>) -> JsonValue;
 #pure
 
@@ -199,6 +201,7 @@ pub fn json_array(items: vector<JsonValue>) -> JsonValue;
 /// fields.  Each field's value deep-copies via the same `dbref_to_parsed`
 /// walker as `json_array`, so a JObject can carry captured-subtree JArray
 /// / JObject values.  Empty input produces a real empty JObject.
+// Example: @STD-008
 pub fn json_object(fields: vector<JsonField>) -> JsonValue;
 #pure
 
@@ -217,6 +220,7 @@ pub fn json_object(fields: vector<JsonField>) -> JsonValue;
 /// the walker produces — the compile-time codegen at
 /// `parse_type_parse` overrides the type to `reference[T]` for the
 /// caller while the stack accounting remains correct.
+// Example: @STD-009
 pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue;
 // Populates json_errors on
 // type mismatches.  Allocates the result struct into worker
@@ -235,6 +239,7 @@ pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue;
 /// `JsonValue` purely so the parser type-system accepts the synthesised
 /// call regardless of the actual receiver's struct type — the runtime
 /// only reads the `struct_kt` discriminant for dispatch.
+// Example: @STD-009
 pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text;
 
 /// As `struct_to_json` but produces a pretty (2-space-indent, one

@@ -1,11 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// Worked examples for stdlib text functions (@PLN141).  Each test is a
-// real, runnable use of a function whose correct call shape is NOT obvious
-// from its signature — the kind of function a reader (often an AI agent)
-// knows exists yet cannot use without seeing it in action.  The function's
-// doc comment in default/03_text.loft cites the tag here via
+// Worked examples for stdlib functions (@PLN141) — text, collection
+// aggregates, and JSON.  Each test is a real, runnable use of a function
+// whose correct call shape is NOT obvious from its signature — the kind of
+// function a reader (often an AI agent) knows exists yet cannot use without
+// seeing it in action.  The function's doc comment (in default/03_text.loft,
+// default/01_code.loft, or default/06_json.loft) cites the tag here via
 // `// Example: @STD-00N`, and `scripts/check_doc_drift.sh examples` fails
 // if a citation goes dangling (no test carries the tag).
 
@@ -56,4 +57,52 @@ fn test_sum_takes_an_identity() {
   assert(sum(floats, 0.0) == 4.0, "float sum starts from 0.0");
   none: vector<integer> = [];
   assert(sum(none, 0) == 0, "empty sum is the identity");
+}
+
+// A struct for the JSON round-trip example below.  Reflection reads its
+// fields — no annotations, no code generation on the struct itself.
+struct Widget { id: integer, name: text, tags: vector<text> }
+
+// @STD-007 — parse JSON, then navigate + typed-extract (config / API-response idiom)
+fn test_json_parse_navigates_and_extracts() {
+  // A backtick raw string carries literal JSON; `{{`/`}}` are literal braces.
+  raw = `{{"name": "ada", "scores": [10, 20, 30], "active": true}}`;
+  root = json_parse(raw);
+  // field() indexes a JObject, item() a JArray; you take a typed leaf at the
+  // end with as_text / as_long / as_bool / as_number.
+  assert(root.field("name").as_text() == "ada", "string leaf: field()+as_text()");
+  assert(root.field("scores").item(1).as_long() == 20, "array leaf: item()+as_long()");
+  assert(root.field("active").as_bool(), "bool leaf: as_bool()");
+  // A missing path is JNull, never a trap — the chain stays safe to the end.
+  assert(root.field("missing").kind() == "JNull", "absent field navigates to JNull");
+  // A clean parse leaves no error trail; json_errors() reads it after the fact.
+  assert(json_errors() == "", "a successful parse has an empty error trail");
+}
+
+// @STD-008 — build a JSON tree with the constructors, then serialise it
+fn test_json_builders_compose_and_serialise() {
+  // JObject fields are JsonField { name, value }; each value comes from a
+  // json_* constructor, and json_array / json_object nest to any depth.
+  tree = json_object([
+    JsonField { name: "id", value: json_number(7.0) },
+    JsonField { name: "tags", value: json_array([json_string("a"), json_string("b")]) },
+  ]);
+  // to_json renders canonical RFC 8259 text in insertion order; an
+  // integer-valued number prints without a fractional part.
+  assert(tree.to_json() == `{{"id":7,"tags":["a","b"]}}`, "builders serialise canonically");
+  // Full round-trip: parse what we just built and read a leaf back out.
+  built = json_parse(tree.to_json());
+  assert(built.field("tags").item(0).as_text() == "a", "build → serialise → parse round-trips");
+}
+
+// @STD-009 — a user struct ↔ JSON, both directions (reflection, no annotations)
+fn test_struct_json_round_trip() {
+  // Stage through json_parse() rather than the auto-wrapping Widget.parse(text):
+  // the explicit form routes parse AND schema errors to json_errors().
+  w = Widget.parse(json_parse(`{{"id": 3, "name": "gear", "tags": ["x", "y"]}}`));
+  assert(w.id == 3, "integer field parsed");
+  assert(w.name == "gear", "text field parsed");
+  assert(w.tags[1] == "y", "vector field parsed");
+  // Serialise any struct back with the ':j' format flag (backed by struct_to_json).
+  assert("{w:j}" == `{{"id":3,"name":"gear","tags":["x","y"]}}`, "struct → JSON via :j");
 }
