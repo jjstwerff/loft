@@ -448,23 +448,79 @@ has_header_docstring() {
 # that block as defining the sibling — which surfaced as a `dangling` on the block's
 # own tag AND a `duplicate` on the one it mentioned, both pointing away from the
 # actual mistake.
+#
+# An `Example:` line makes its whole block a CITATION: it cancels any pending tag
+# (dryopea's `crossref` fixture pins that half — a file may name a tag in prose and
+# then cite it without claiming to define it), and nothing AFTER it in the block may
+# define either.  The second half is what was missing.  A citation is prose, and its
+# continuation lines routinely name a second tag — "@GFX-005: the choice is read off
+# the pixels, so one alpha-0 pixel (@GFX-001) makes the file RGBA" — so the line
+# under the citation was read as defining the tag it merely mentioned, reported as a
+# `duplicate` against the real definition somewhere else entirely.  Same misdirection
+# the first-tag rule removed on the definition side, arriving from the citation side.
 examples_defs_in_tree() {
   local root="$1"
   [ -d "$root" ] || return 0
   ( cd "$root" 2>/dev/null && \
     find . -name '*.loft' -not -path './.*' -not -path './target/*' -print0 2>/dev/null \
     | xargs -0 awk '
-        FNR==1 { f=FILENAME; sub(/^\.\//,"",f) }
-        /^[[:space:]]*\/\/.*Example:/ { p=""; next }
+        FNR==1 { f=FILENAME; sub(/^\.\//,"",f); p=""; cited=0 }
+        /^[[:space:]]*\/\/.*Example:/ { p=""; cited=1; next }
         /^[[:space:]]*\/\// && match($0, /@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]/) {
-          if (p=="") { p=substr($0,RSTART,RLENGTH); pl=FNR } next }
+          if (p=="" && cited==0) { p=substr($0,RSTART,RLENGTH); pl=FNR } next }
         /^[[:space:]]*\/\// { next }
-        /^[[:space:]]*$/ { p=""; next }
+        /^[[:space:]]*$/ { p=""; cited=0; next }
         /^[[:space:]]*(pub )?fn / {
           if (p!="") { n=$0; sub(/^[[:space:]]*(pub )?fn /,"",n); sub(/\(.*$/,"",n);
-                       printf "%s\t%s:%d\t%s\n", p, f, pl, n; p="" } next }
-        { p="" }
+                       printf "%s\t%s:%d\t%s\n", p, f, pl, n }
+          p=""; cited=0; next }
+        { p=""; cited=0 }
       ' 2>/dev/null )
+}
+
+# ---- Self-test: the def scanner's four rules, pinned (@PLN141) ----
+# `examples_defs_in_tree` decides what a tag MEANS, and its rules are subtle enough
+# that two of them have already been got wrong in a way whose fault report points
+# somewhere else entirely (a `duplicate` naming the innocent definition, a `dangling`
+# naming the block that was right).  The real trees cannot pin them: they are the
+# tree the rules were tuned against, so a scanner change that breaks a rule nobody
+# happens to exercise stays green.  These fixtures exercise each rule on purpose.
+#
+# Built in a temp dir rather than committed under the repo: the scanner walks every
+# `*.loft` in a tree, so committed fixtures would inject their fake `@TST` tags into
+# loft's own tag index and `examples-index.tsv`.
+check_examples_selftest() {
+  say "=== Worked-example def scanner: the rules still hold ==="
+  local d; d=$(mktemp -d) || { red "  selftest: cannot create a temp dir"; DRIFT=1; return; }
+  mkdir -p "$d/src"
+
+  # 1. A tag above a fn defines it.
+  printf '// @TST-001 — the plain case.\nfn plain_def() { }\n' > "$d/src/a.loft"
+  # 2. The FIRST tag in a block wins; a sibling named later is only a mention.
+  #    The mention must be on a LATER LINE — `match()` only ever sees the first tag
+  #    on a line, so a same-line sibling passes whatever the rule is, and pins nothing.
+  printf '// @TST-002 — the real one.\n// See @TST-003 for the failure path.\nfn first_wins() { }\n' \
+    > "$d/src/b.loft"
+  # 3. A blank line breaks the block, so nothing is defined.
+  printf '// @TST-004 — orphaned by the blank line below.\n\nfn not_defined() { }\n' > "$d/src/c.loft"
+  # 4. An `Example:` line makes the block a CITATION: it cancels a tag named in
+  #    earlier prose, and a tag named in its own continuation defines nothing.
+  printf '// @TST-005 lives elsewhere; this file only cites it.\n//\n// Example: @TST-005\nfn cites_only() { }\n' \
+    > "$d/src/e.loft"
+  printf '// Example: @TST-006 — the choice is read off the pixels, so one\n// alpha-0 pixel (@TST-007) makes the whole file RGBA.\nfn cite_continuation() { }\n' \
+    > "$d/src/f.loft"
+
+  local want got
+  want=$(printf '@TST-001\tsrc/a.loft:1\tplain_def\n@TST-002\tsrc/b.loft:1\tfirst_wins\n')
+  got=$(examples_defs_in_tree "$d" | sort)
+  rm -rf "$d"
+  if [ "$got" = "$want" ]; then
+    green "  ok — 5 fixtures, 4 rules (defines / first-tag-wins / blank-breaks / citation-block)"
+  else
+    red "  selftest FAILED — the scanner no longer follows its documented rules:"
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^/      /'
+    HITS_EXAMPLES=$((HITS_EXAMPLES + 1)); DRIFT=1
+  fi
 }
 
 # ---- Check: worked-example tags resolve to a real test/function (@PLN141) ----
@@ -698,6 +754,7 @@ case "$CHECK" in
   refs)    check_refs ;;
   libs)    check_libs ;;
   examples) check_examples ;;
+  examples-selftest) check_examples_selftest ;;
   examples-index) check_examples_index ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
@@ -714,12 +771,14 @@ case "$CHECK" in
     sep
     check_libs
     sep
+    check_examples_selftest
+    sep
     check_examples
     sep
     check_examples_index
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-index|write-examples-index|examples-progress]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|write-examples-index|examples-progress]" >&2
     exit 2
     ;;
 esac
