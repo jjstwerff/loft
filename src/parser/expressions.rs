@@ -3859,11 +3859,26 @@ use a separate collection or add after the loop"
                 }
                 let mut steps = vec![Value::Set(tmp, Box::new(rhs))];
                 for (i, &v_nr) in var_nrs.iter().enumerate() {
+                    // The arity mismatch above is already an Error, but it only
+                    // REPORTED — lowering carried on and indexed the tuple with an
+                    // LHS position it does not have (loft#959).  A scalar tuple got
+                    // away with it: `ref_def_nr == u32::MAX` takes the `TupleGet`
+                    // branch, which indexes nothing.  Widen the tuple past 8B — one
+                    // `vector<T>` element is enough — and it becomes the synthetic
+                    // `__tuple<…>` struct, where both `rhs_elems[i]` and `offs[i]`
+                    // are real indexes: `(a, b, d, e, f) = <4-tuple>` then panicked
+                    // with "the len is 4 but the index is 4" and the user got an ICE
+                    // instead of the two errors the scalar form prints.
+                    //
+                    // Stop at the shorter side.  In a well-formed destructuring the
+                    // two lengths are equal and this never fires; in a broken one the
+                    // compile is already failing, so a partial lowering is never run.
+                    if i >= rhs_elems.len() {
+                        break;
+                    }
                     if self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
-                        if i < rhs_elems.len() {
-                            self.change_var_type(v_nr, &rhs_elems[i]);
-                        }
+                        self.change_var_type(v_nr, &rhs_elems[i]);
                     }
                     let step = if ref_def_nr == u32::MAX {
                         Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16)))
