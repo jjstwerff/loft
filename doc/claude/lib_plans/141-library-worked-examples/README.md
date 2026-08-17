@@ -150,14 +150,32 @@ absent.
 ### Phase B — The acronym registry — DONE (foundation), still to broaden
 
 Built as `scripts/example_repos.tsv` (a loft-repo file for now, not yet the
-`loft-registry` shared home — see Open questions). Entered so far: `STD` loft ·
-`GIT` loft (in-tree `lib/git`) · `LEX` loft (in-tree `lib/lexer`) · `ACR` loft
-(in-tree `lib/audience_crystal`) · `EHK` loft (in-tree `lib/engine_host`) — one
-repo may own several acronyms · `DRY` dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
-arguments · `CRY` crypto · `GMP` game_protocol · `GRM` gridmesh · `RND` random ·
-`SRV` server · `SHP` shapes · `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW`
-hex_world · `MKD` markdown · `GFX` graphics · `FTR` the feature catalogue (Phase C2).
-(`DRY`/`FIX`/`TST` also claimed by dryopea.)
+`loft-registry` shared home — see Open questions). loft's own: `STD` · `GIT`
+(in-tree `lib/git`) · `LEX` (in-tree `lib/lexer`) · `ACR` (in-tree
+`lib/audience_crystal`) · `EHK` (in-tree `lib/engine_host`) — one repo may own
+several acronyms. First-class apps: `DRY` dryopea · `CRW` crawler · `MOR` moros.
+
+**Distributed libraries registered (claim staked, tags not authored yet).** With
+the sibling monorepos pulled, the library acronyms are entered — mapped to their
+**monorepo** checkout, not a per-package repo (the design the checkout layout
+forced, below): `loft-libs-core` → `ARG` arguments · `CRY` crypto · `RND` random ·
+`loft-libs-graphics` → `GFX` graphics · `GRM` gridmesh · `SHP` shapes ·
+`loft-libs-net` → `GMP` game_protocol · `SRV` server · `WEB` web ·
+`loft-libs-world` → `HXG` hex_grid · `HXT` hex_terrain · `HXW` hex_world. These
+rows only **stake the ecosystem-global acronym** — none of the monorepos carries a
+worked-example tag yet, and authoring those is each library's own agents' work (they
+are also actively edited: `loft-libs-world`/`-core` were dirty when surveyed). Still
+to add when reached: `MKD` markdown (no sibling checkout found — deferred), the new
+`imaging`/`ssh`/`cbor`/`regex` packages, and `FTR` the feature catalogue (Phase C2).
+
+- **Design decision — monorepo, not per-package (registry `repo` = the monorepo).**
+  The registry's `../<repo>` assumption was written for one repo per package
+  (`../gridmesh`). Reality is monorepos: `gridmesh` lives at
+  `../loft-libs-graphics/gridmesh`. So the `repo` column names the **monorepo** and
+  several acronyms map to it. This needs **no gate change**: `examples_defs_in_tree`
+  scans the whole monorepo for the acronym's tag and captures a **repo-relative**
+  path, so the emitted git link is correct
+  (`…/loft-libs-graphics/blob/main/gridmesh/tests/x.loft#L12`).
 - **Still to do:** a duplicate-**acronym** guard (two repos claiming one acronym) —
   the gate today guards duplicate *tags* within a repo, not acronym collisions across
   the registry.
