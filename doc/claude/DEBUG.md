@@ -1211,6 +1211,8 @@ LOFT_TIMEOUT_GRACE=5 LOFT_TIMEOUT=60 loft …  # grace before the hard kill (def
 Mechanics (`src/timeout.rs`): `arm(secs, grace)` spawns a `loft-watchdog` thread
 that sleeps to `secs + grace`, prints a breadcrumb, and **process-aborts** — so it
 bounds the WHOLE process: the `--native` compile, the interpreter loop, everything.
+The breadcrumb names the loft `fn`, its `file:line`, and the `entry` it was reached
+from (under `--tests`, the test) — see [TESTING.md](TESTING.md) for the format.
 `arm` is idempotent (first deadline wins) and `secs == 0` leaves it disarmed (the
 default for ad-hoc runs — hence the hang risk). `LOFT_TIMEOUT` is read before argv,
 so it is the floor; an explicit `--timeout` only re-arms if nothing armed yet.
