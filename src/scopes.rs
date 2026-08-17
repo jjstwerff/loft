@@ -5246,6 +5246,10 @@ impl Scopes {
                 result.push(Value::Var(tmp));
                 return result;
             }
+            // Whether anything runs BETWEEN the value and the return.  `ls` holds
+            // this scope's frees; the `insert` below puts the value in front of
+            // them, so a non-empty `ls` here is exactly "frees follow the value".
+            let frees_follow = !ls.is_empty();
             ls.insert(0, expr.clone());
             if is_return {
                 // P236: when `expr` is an `If/Match` whose unified
@@ -5262,10 +5266,53 @@ impl Scopes {
                 // statement leaves all writes in place; native
                 // `return var___ref_N` then returns the active
                 // branch's value correctly.
-                if ret_var == u16::MAX {
-                    ls.push(Value::Return(Box::new(Value::Null)));
-                } else {
+                if ret_var != u16::MAX {
                     ls.push(Value::Return(Box::new(Value::Var(ret_var))));
+                } else if frees_follow
+                    && *tp != Type::Void
+                    && !expr_is_terminal
+                    // A CALL, and only a call.  That is the producer the diagnosis
+                    // names — the one whose result no binding holds — and it is the
+                    // same shape `chain_site_set_shape` promotes into `__retbuf`
+                    // when promotion does run.  A wider test is not a safer one: an
+                    // earlier cut allowed any non-null tail and so fired on a
+                    // COROUTINE's body, whose tail is the `while` loop itself.  That
+                    // wrapped the loop into `__ret_tail_1 = loop { … }`, and the
+                    // state-machine lowering then could not see the captured
+                    // parameters — four `coroutine_matrix` cells failed to compile
+                    // with `cannot find value var_n`.  An `iterator` return is
+                    // excluded outright for the same reason: a coroutine does not
+                    // return its body's value.
+                    && matches!(expr.unspan(), Value::Call(_, _) | Value::CallRef(_, _))
+                    && !matches!(tp.base(), Type::Iterator(_, _))
+                {
+                    // loft#957 — the same eval-stack reliance P236 names above, for
+                    // the case where the value lives in NO variable: a tail
+                    // `return <call>` whose callee is a bodiless `#rust` native
+                    // returning a collection (`read_bytes`, `list_dir`).  Return
+                    // promotion never runs for it — there is no local candidate to
+                    // promote — so nothing binds the result, and the legacy shape
+                    // lowered to `read_bytes(p); free …; return null`.  The
+                    // interpreter answered correctly by accident, its `OpReturn`
+                    // taking the eval-stack top the call happened to leave there;
+                    // native emitted the typed null sentinel and the bytes were
+                    // gone, silently, on a backend `loft test --interpret` cannot
+                    // see.  P236 could reuse a variable that already existed; here
+                    // there is none, so give the value one and return THAT.
+                    //
+                    // Gated on frees actually following: with nothing between the
+                    // value and the return, the existing shape already emits
+                    // `return <expr>` directly and needs no temp.  The temp is
+                    // deliberately NOT registered in `var_scope` — it holds the
+                    // value being transferred to the caller, so a scope-exit free
+                    // of it would free what the caller adopts.
+                    self.ret_temp_counter += 1;
+                    let name = format!("__ret_tail_{}", self.ret_temp_counter);
+                    let tmp = function.add_temp_var(&name, tp);
+                    ls[0] = v_set(tmp, expr.clone());
+                    ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                } else {
+                    ls.push(Value::Return(Box::new(Value::Null)));
                 }
             }
         }
