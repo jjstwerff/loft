@@ -284,6 +284,18 @@ fn wasm_function_names(wasm: &[u8]) -> Vec<String> {
 // that were always present.
 #[test]
 fn html_names_flag_makes_loft_functions_resolvable_in_a_backtrace() {
+    // `--names` is implemented as `wasm-opt -g --strip-dwarf` in place of
+    // `--strip-debug`, so with `wasm-opt` absent there is no name section to
+    // assert on and the page is merely unoptimised — the build says so and
+    // carries on.  Say SKIPPED rather than fail: this is the same self-skip the
+    // rest of the file uses for a missing node / wasm target, and a machine
+    // without binaryen is not a machine with a broken `--names`.  CI installs
+    // binaryen (`.github/workflows/ci.yml`, the Linux tools step) precisely so
+    // this stays a real gate there rather than a permanent skip.
+    if !loft::build_phase::tool_on_path("wasm-opt") {
+        println!("skipped: wasm-opt (binaryen) is not installed — --names has no effect");
+        return;
+    }
     let source = "fn ring_of(radius: float, steps: integer) -> vector<float> {\n\
                   \x20 out: vector<float> = [];\n\
                   \x20 for i in 0..steps {\n\

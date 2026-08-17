@@ -373,9 +373,16 @@ jobs:
       # library is absent — a runner image that stopped shipping it would retire
       # that whole suite without turning anything red.  The Linux test step
       # pairs this with `LOFT_REQUIRE_SQLITE=1`, which makes that skip a failure.
-      - name: Install mold + ALSA + headless GL + sqlite (Linux only)
+      # binaryen supplies `wasm-opt`, which every `--html` build shells out to.
+      # Without it the html tests still BUILD — `wasm-opt` is optional and the
+      # build only warns — but the page skips optimisation, and loft#954's
+      # `--names` guard then has nothing to assert on: `--names` works by passing
+      # `-g --strip-dwarf` to `wasm-opt` instead of `--strip-debug`, so with the
+      # tool absent the named and plain pages come out the same size (2107 KB vs
+      # 2106 KB on the run that caught this) and the name section never appears.
+      - name: Install mold + ALSA + headless GL + sqlite + binaryen (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri libsqlite3-0
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri libsqlite3-0 binaryen
 
       # The native-fixture binary cache lives in `target/loft-native-cache`
       # (keyed INSIDE loft on the libloft.rlib content hash — see
