@@ -2399,7 +2399,22 @@ impl Store {
 
     // ---- End of LLRB free-space tree -----------------------------------------
 
-    /// Checked offset calculation — `rec * 8 + fld` using u64 to detect overflow.
+    /// Byte offset of field `fld` in record `rec`, computed in u64 so the multiply
+    /// cannot wrap.
+    ///
+    /// **The panic is reachable only where `isize` is 32 bits** — the wasm targets.
+    /// Both inputs are `u32`, so the largest offset this can produce is about 3.7e10,
+    /// which fits an i64 with room to spare: on a 64-bit host `try_from` never fails
+    /// and this raise is dead code.  On wasm32 it fires once `rec` passes ~268
+    /// million.
+    ///
+    /// That asymmetry is worth knowing when reading a bug report.  A `rec` big enough
+    /// to trip this is not off by one, it is garbage — a corrupted `DbRef`, i.e. a
+    /// store-lifetime fault.  And the SAME corruption on a 64-bit build does not stop
+    /// here; it computes a representable offset and reads whatever lies at it, which
+    /// surfaces as a silently wrong scalar rather than a trap.  So "the browser build
+    /// traps and every other backend is green" is evidence about where the guard can
+    /// speak, not about where the corruption is (loft#950).
     #[inline]
     fn checked_offset(rec: u32, fld: u32) -> isize {
         let off = u64::from(rec) * 8 + u64::from(fld);
