@@ -231,11 +231,19 @@ install:
 	@sudo rm -rf /usr/local/share/loft/default
 	@sudo cp -r default /usr/local/share/loft/
 	@sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
-	@sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
+	@sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so /usr/local/share/loft/deps/*.dylib
 	@sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
 	@if ls target/install-lib/release/deps/*.so >/dev/null 2>&1; then \
 		sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ || { \
 			echo "ERROR: failed to install dependency .so files (rights?)."; exit 1; }; \
+	fi
+	@# Proc-macro deps (e.g. displaydoc) are host dylibs — `.dylib` on macOS,
+	@# `.so` on Linux (copied above).  A cdylib's `extern crate loft;` needs them,
+	@# so omitting the macOS `.dylib` broke every library native build with
+	@# E0463 "can't find crate for displaydoc" (see plans/user-local-install).
+	@if ls target/install-lib/release/deps/*.dylib >/dev/null 2>&1; then \
+		sudo cp target/install-lib/release/deps/*.dylib /usr/local/share/loft/deps/ || { \
+			echo "ERROR: failed to install dependency .dylib files (rights?)."; exit 1; }; \
 	fi
 	@sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
 	@sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
@@ -465,7 +473,7 @@ wasm:
 # start loft's pool automatically when crossOriginIsolated.  Needs the same
 # nightly + rust-src toolchain as `wasm-mt`.
 gallery-mt:
-	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
@@ -1101,6 +1109,16 @@ WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
   -C link-arg=--export=__stack_pointer
 
+# `-Z build-std` reads the std SOURCE from the sysroot of the rustc cargo spawns
+# — NOT the rustc `rustup run nightly` selected for cargo itself.  On a box whose
+# PATH carries a toolchain's real bin dir (e.g. `.rustup/toolchains/stable/bin`)
+# instead of the `~/.cargo/bin` rustup proxies, that bare `rustc` resolves to
+# STABLE, whose rust-src omits `library/Cargo.lock` (build-std is nightly-only),
+# and every build-std recipe dies with "Cargo.lock does not exist".  Pinning
+# RUSTC to nightly's own rustc closes the leak regardless of PATH shape.
+# `$$(...)` runs in the recipe shell, so it costs nothing until a target uses it.
+NIGHTLY_RUSTC = "$$(rustup run nightly rustc --print sysroot)/bin/rustc"
+
 # @PLN117 — prove `par` still computes the right answers in a build WITHOUT the
 # threading feature (the shape `make wasm` ships to the browser).  CI only
 # `cargo check`s that configuration, which is how a par that returned garbage
@@ -1155,7 +1173,7 @@ wasm-html-mt-lib:
 	  echo "      installing without it — 'loft --html --threads' will report the missing runtime."; \
 	else \
 	  echo "building the threaded browser runtime (html-mt) — build-std, one-time"; \
-	  RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	  RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	  rustup run nightly cargo build --release --lib --target wasm32-unknown-unknown \
 	    --no-default-features --features "random wasm-native-threads" \
 	    --target-dir target/loft/html-mt -Zbuild-std=panic_abort,std \
@@ -1163,13 +1181,13 @@ wasm-html-mt-lib:
 	fi
 
 check-wasm-threads:
-	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' \
+	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly cargo check --lib --target wasm32-unknown-unknown \
 	--no-default-features --features "random wasm-native-threads" \
 	--target-dir target/loft/html-mt -Zbuild-std=panic_abort,std
 
 wasm-mt:
-	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
