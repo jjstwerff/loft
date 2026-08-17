@@ -607,17 +607,13 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
 }
 
-/// `LOFT_NULLABLE_RETBUF=1` — give a NULLABLE COLLECTION return the same hidden `__retbuf`
-/// the non-nullable one gets. **OPT-IN, DEFAULT OFF** (loft#938).
-///
-/// Off, every consulting site is byte-identical to today: [`Type::ret_promo_base`] is the
-/// identity and [`Type::ret_promo_peels`] is `false`, so the gates below read exactly as they
-/// did before this existed.
+/// A NULLABLE COLLECTION return gets the same hidden `__retbuf` the non-nullable one gets —
+/// **DEFAULT ON** (loft#938). Opt OUT with `LOFT_NO_NULLABLE_RETBUF`.
 ///
 /// # What it is for
 ///
-/// `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller inherits
-/// whatever store the callee allocated — a fresh one per loop turn against a single
+/// Without it `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller
+/// inherits whatever store the callee allocated — a fresh one per loop turn against a single
 /// scope-exit free. That is loft#938's leak. The NON-nullable twin of the same function is
 /// clean because its callee normalises every arm into the caller's buffer:
 ///
@@ -630,29 +626,21 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 /// So ownership never varies at the call site, and it does not need to: the ABI removes the
 /// variance rather than deciding it. `Optional` was simply blind at every gate on the way.
 ///
-/// # State — what turning it on does today
+/// # Why it took seven gates
 ///
-/// Every shape in `tests/probes/938-nullable-collection-return-buffer.loft` is correct and
-/// leak-free on BOTH backends: the unbound `f(i) != null` loop, a returned BORROWED view, a
-/// function whose arms disagree (null / alias / fresh), an explicit `return <fresh vector>`
-/// beside an early `return null`, and a FORWARDING tail in both its spellings. The last one is
-/// the `--native` wrong answer this switch could not ship without — `fn fwd(i) -> vector<T>?
-/// { a1(i) }` compiled to `return null`, and the interpreter read the freed slot and only
-/// looked right.
+/// `Optional(Vector)` and `Vector` share one runtime layout, so every gate that asked the
+/// shape question with a bare `matches!` silently excluded the nullable form. Six were peeled
+/// when the mechanism was built ([`Type::ret_promo_base`] / [`Type::ret_promo_peels`], still
+/// the identity when this is off, so the opt-out is exact). The seventh outlived that sweep
+/// because it asks about the returned VALUE rather than the return TYPE:
+/// `fresh_owned_vector_deps` matched `Type::Vector` on the returned LOCAL's own type, and
+/// `v = src(i); return v;` types `v` as `Optional(Vector)`. So `block_result`'s tail intercept
+/// never fired, `ref_return` was never called for that function at all, and the arm handed
+/// back its own store while the caller's buffer stayed untouched and was freed empty.
 ///
-/// **One known failure remains**, and it is why the default is still off:
+/// It needed [`optional_dep_peel`] with it, and neither alone is an improvement — see there.
 ///
-/// * **Two call sites of a two-arm dispatch share one return dep.** A `match` in a
-///   `-> vector<T>?` method forwarding to a different implementation per arm, called TWICE,
-///   types the second result as a borrow of the FIRST (`gl(1):vector<integer>["gd"]` where the
-///   dep should name the second site's own `__ref_N`), so it is freed on the first one's
-///   schedule. Every value is correct and nothing leaks — the only witness is
-///   `LOFT_STRICT_STORES=1`, which is exactly the silent half of this issue. It needs BOTH
-///   halves: one arm alone is clean and one call site alone is clean.
-///   `known_two_site_dispatch_reads_a_freed_store` in `tests/nullable_ret_buffer.rs` is the
-///   14-line repro.
-///
-/// # For whoever finishes it
+/// # For whoever changes this
 ///
 /// The peel is deliberately narrow — `Optional(Vector)` only. Widening it to
 /// `Optional(Reference(S))` leaks one record per call, because a nullable STRUCT return is
@@ -662,17 +650,47 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///
 /// A delivery that COPIES the tail into the buffer and answers the buffer cannot be reached
 /// from a nullable return: it would turn a `null` answer into an empty collection. That is why
-/// the `Bind` leg in `ref_return` deliberately does NOT peel, and why the remaining work is on
-/// the caller's dep resolution rather than on another delivery cell.
+/// the `Bind` leg in `ref_return` deliberately does NOT peel.
 ///
-/// Reach for [`trace_ret_promotion`] first: it prints the candidate AND the verdict, so no line
-/// for a function means a gate UPSTREAM of the classifier while a `Skip*` verdict means the
-/// classifier was asked and said no. Then `LOFT_STRICT_STORES=1` — a green run without it is
-/// not evidence here.
+/// Reach for [`trace_ret_promotion`] first — it prints an ENTER line per `ref_return` call and
+/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" is
+/// which of the two upstream gates you are looking at. Then `LOFT_STRICT_STORES=1`: every
+/// value here is correct in every state of the bug, so a green run without it is not evidence.
 #[must_use]
 pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NULLABLE_RETBUF").is_some())
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_RETBUF").is_none())
+}
+
+/// `LOFT_OPTIONAL_DEP_PEEL=1` — loft#938, HALF ONE of the `LOFT_NULLABLE_RETBUF` blocker.
+/// **OPT-IN, DEFAULT OFF**, and the reason is that it is half.
+///
+/// `call_dependencies` translates a callee's return deps — ATTRIBUTE indices in callee space —
+/// onto the caller's variables. Every arm of it matches a BARE shape, so an `Optional` return
+/// matched none and fell through `else { tp }`, which hands the declared type back verbatim
+/// with those indices still in it. Read in the caller they are frame variable NUMBERS, so the
+/// result was typed as borrowing whichever local happened to hold that number. When set, the
+/// `Optional` is peeled before the shape question and restored on the answer, so each call site
+/// names its own buffer (`__ref_3` / `__ref_4`, not both naming `gd`).
+///
+/// That is unambiguously the right translation, and on its own it makes things no better: the
+/// OTHER half is that an enum-dispatched arm which binds the inner call to a local and returns
+/// it never writes the `__retbuf` it was handed — it allocates its own store and returns that
+/// (`LOFT_TRACE_RETPROMO=1` prints no line for it at all, so the gate is upstream of
+/// `classify_ret_promotion`). Caller dep and callee delivery therefore disagree, and believing
+/// either leaves the other wrong: with the stale dep the store is freed on an unrelated local's
+/// schedule (`USE AFTER FREE`), with the correct dep the caller frees an empty buffer and the
+/// real store is never freed (`NEVER FREED`). Turning this on alone converts the first into the
+/// second — a trade, not a fix, which is why it does not ship on.
+///
+/// Both halves land together or neither does. See
+/// `known_dispatch_arm_returning_a_local_does_not_deliver` in `tests/nullable_ret_buffer.rs`,
+/// which asserts the absence of BOTH (a UAF-only assertion went green on this change while the
+/// store had simply stopped being freed at all).
+#[must_use]
+pub fn optional_dep_peel() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OPTIONAL_DEP_PEEL").is_none())
 }
 
 /// `LOFT_TRACE_RETPROMO=1` — name every candidate the return-buffer promotion classifies,

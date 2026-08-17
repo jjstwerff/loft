@@ -9135,7 +9135,29 @@ impl Parser {
 
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
-        let tp = self.data.def(d_nr).returned().clone();
+        // loft#938 — peel `Optional` before asking the shape question, and put it back on
+        // the answer.  Every arm below matches a BARE shape, so a `-> vector<T>?` return
+        // matched none of them and fell through the final `else { tp }`, which hands the
+        // declared type back VERBATIM — with the callee's deps still in it.  Those deps are
+        // ATTRIBUTE indices in callee space; read in the caller they are frame variable
+        // numbers, so the result was typed as borrowing whichever caller local happened to
+        // hold that number.  With two call sites the second one landed on the first's local
+        // and was freed on its schedule (`gd`/`gl` both typed `["gd"]`), which is the whole
+        // of the `LOFT_NULLABLE_RETBUF` blocker: values all correct, nothing leaked, and
+        // only `LOFT_STRICT_STORES=1` able to see it.
+        //
+        // Same peel `scopes.rs` already does for the ownership question (loft#879's
+        // `peel_optional` + [`Self::reopt`]); this is the dep-translation half.
+        let (declared, opt) = self.data.def(d_nr).returned().peel_optional();
+        let was_optional = opt && crate::keys::optional_dep_peel();
+        let tp = if was_optional {
+            declared.clone()
+        } else {
+            self.data.def(d_nr).returned().clone()
+        };
+        let reopt = |t: Type| {
+            if was_optional { Type::optional(t) } else { t }
+        };
         // for Reference returns (structs), filter out hidden return-mechanism
         // attributes from dep resolution. The struct owns its store independently —
         // hidden return-store buffers are implementation artifacts.
@@ -9148,7 +9170,10 @@ impl Parser {
                 .collect()
         };
         if let Type::Text(d) = tp {
-            Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+            reopt(Type::Text(Deps::frame(Self::resolve_deps(
+                types,
+                d.as_attr_indices(),
+            ))))
         } else if let Type::Vector(to, d) = tp {
             // A vector return genuinely depends on its hidden retbuf (see above), so
             // an EMPTY result here means the dep could not be read — not that the
@@ -9163,50 +9188,50 @@ impl Parser {
             if dp.is_empty() && d_nr >= self.context {
                 dp = self.caller_vector_retbuf_dep(d_nr, types);
             }
-            Type::Vector(to, Deps::frame(dp))
+            reopt(Type::Vector(to, Deps::frame(dp)))
         } else if let Type::Sorted(to, key, d) = tp {
-            Type::Sorted(
+            reopt(Type::Sorted(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Hash(to, key, d) = tp {
-            Type::Hash(
+            reopt(Type::Hash(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Index(to, key, d) = tp {
-            Type::Index(
+            reopt(Type::Index(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Radix(to, key, d) = tp {
-            Type::Radix(
+            reopt(Type::Radix(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            )
+            ))
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(
+            reopt(Type::Reference(
                 to,
                 Deps::frame(Self::resolve_deps(
                     types,
                     &filter_hidden(d.as_attr_indices()),
                 )),
-            )
+            ))
         } else if let Type::Enum(to, true, d) = tp {
-            Type::Enum(
+            reopt(Type::Enum(
                 to,
                 true,
                 Deps::frame(Self::resolve_deps(
                     types,
                     &filter_hidden(d.as_attr_indices()),
                 )),
-            )
+            ))
         } else {
-            tp
+            reopt(tp)
         }
     }
 

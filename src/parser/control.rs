@@ -10324,12 +10324,23 @@ impl Parser {
     fn fresh_owned_vector_deps(&self, v: &Value) -> Option<Vec<u16>> {
         match v.unspan() {
             // #437 — a named non-argument local vector with a backing store.
+            //
+            // loft#938 — `ret_promo_base`, because the LOCAL's own type carries the `?` too.
+            // `v = src(i); return v;` from a `-> vector<T>?` types `v` as
+            // `Optional(Vector(…, [__ref_1]))`, which matched no arm here, so the tail
+            // intercept in `block_result` never fired and `ref_return` was never reached at
+            // ALL for that function — no `LOFT_TRACE_RETPROMO` line, the `returned` deps left
+            // empty, and the callee handing back its own `__ref_1` store while the caller's
+            // `__retbuf` stayed untouched and was freed empty.  Every neighbouring gate had
+            // already been peeled (six of them); this one is on the RETURNED VALUE rather
+            // than on the return TYPE, which is why it outlived the sweep that fixed them.
+            // Identity while `LOFT_NULLABLE_RETBUF` is off.
             Value::Var(o)
                 if self.vars.exists(*o)
                     && !self.vars.is_argument(*o)
-                    && matches!(self.vars.tp(*o), Type::Vector(_, d) if !d.is_empty()) =>
+                    && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, d) if !d.is_empty()) =>
             {
-                let Type::Vector(_, d) = self.vars.tp(*o) else {
+                let Type::Vector(_, d) = self.vars.tp(*o).ret_promo_base() else {
                     unreachable!()
                 };
                 Some(d.iter().copied().collect())
@@ -10338,7 +10349,7 @@ impl Parser {
             // store. Every dep must be a non-argument local; this excludes a block
             // already delivering into `__retbuf` (whose dep is the hidden buffer
             // arg) and an arg / struct-field borrow (copied, not renamed).
-            Value::Block(bl) => match &bl.result {
+            Value::Block(bl) => match bl.result.ret_promo_base() {
                 Type::Vector(_, d)
                     if !d.is_empty()
                         && d.iter()
@@ -11250,6 +11261,21 @@ impl Parser {
     }
 
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
+        // loft#938 — an ENTRY line, not just a verdict line.  `LOFT_TRACE_RETPROMO`
+        // documented "no line for a function means a gate UPSTREAM of the classifier",
+        // which is true and was not actionable: the pass has two upstream gates, and
+        // silence could not tell "`ref_return` ran and classified nothing" from
+        // "`ref_return` was never called".  Those are different bugs in different files,
+        // and the second one is what gate 7 turned out to be.
+        if crate::keys::trace_ret_promotion() {
+            eprintln!(
+                "[retpromo] ENTER fn={} site={site:?} ls={:?}",
+                self.data.def(self.context).name(),
+                ls.iter()
+                    .map(|v| self.vars.name(*v).to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
         let newrecord_nr = self.data.def_nr("OpNewRecord");
         let ret = self.data.definitions[self.context as usize]
             .returned

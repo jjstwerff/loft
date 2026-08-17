@@ -18,6 +18,9 @@
 // the same answer — which is the whole point: `[]` and `vector<integer>` were never different
 // folds, only different amounts of writing-out.
 //
+// Two `vector<integer>` lines, one per cell: c1 and c2 are the same fold written two ways and
+// the point is that they now answer IDENTICALLY, so both must appear.
+// @EXPECT_ERROR: cannot fold into a `vector<integer>` accumulator yet
 // @EXPECT_ERROR: cannot fold into a `vector<integer>` accumulator yet
 // @EXPECT_ERROR: cannot fold into a `vector<text>` accumulator yet
 // @EXPECT_ERROR: cannot fold into a `index<Rec956[id]>` accumulator yet

@@ -2098,13 +2098,29 @@ impl Parser {
             // present-path value's backing storage outlives the block.
             // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
             // @PLN102 `??` heap-ownership: distinguish an OWNED Vector subject (a
-            // call result / comprehension — EMPTY deps, the value the `??` block
-            // must free) from a BORROWED one (`vv[i]`, `s.field` — deps name the
-            // source; freeing it is a use-after-free).  loft's core convention:
-            // `dep.is_empty()` == owned.  Only the OWNED case migrates to the
-            // view-model below; a BORROWED Vector keeps the original skip_free
-            // hand-off (its store is owned elsewhere and must NOT be freed here).
-            let owned_vector = matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty());
+            // call result / comprehension — the value the `??` block must free) from
+            // a BORROWED one (`vv[i]`, `s.field` — deps name the source; freeing it
+            // is a use-after-free).  Only the OWNED case migrates to the view-model
+            // below; a BORROWED Vector keeps the original skip_free hand-off (its
+            // store is owned elsewhere and must NOT be freed here).
+            //
+            // loft's core convention is `dep.is_empty()` == owned, and that is a
+            // PROXY: what "owned" means here is that no one else's store is reached
+            // through this value.  A dep naming THIS FRAME's own hidden return buffer
+            // satisfies that — the buffer is the caller's, minted for this very call
+            // — so emptiness is too strong a test.  loft#938's dep translation made
+            // that visible: once `mkv()`'s nullable result correctly names the
+            // `__ref_N` it is delivered into, `dep.is_empty()` flipped false, the
+            // subject was misread as borrowed, and the `??` handed its store off to
+            // nobody — `return mkv() ?? [1]` answered length 0 on `--native`
+            // (`562-ncc-owned-subject-consumers.loft`, native-only, both switches on).
+            //
+            // Ask the question the proxy stood for: every dep is one of our own
+            // caller-minted buffers.  Same predicate `is_struct_returning_call` uses
+            // for loft#953, and the same hidden-vs-visible rule as
+            // `Definition::returns_borrowed_view` — a hidden attr is not a borrow.
+            let owned_vector = matches!(lhs_type, Type::Vector(_, dep)
+                if dep.iter().all(|&d| self.vars.is_caller_hidden_buf(d)));
             if matches!(
                 lhs_type,
                 Type::Text(_)
