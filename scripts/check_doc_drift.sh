@@ -479,15 +479,19 @@ check_examples() {
   say "=== Worked-example tags resolve to a test/function ==="
   local tag_re='@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]'
   local registry="scripts/example_repos.tsv"
-  local cited localdefs
-  cited=$(mktemp); localdefs=$(mktemp)
+  local cited cache
+  cited=$(mktemp); cache=$(mktemp -d)
   # Citations in THIS repo's stdlib + libraries.
   grep -rhnE "//[[:space:]]*Example:" default/ lib/ --include='*.loft' 2>/dev/null \
     | grep -oE "$tag_re" | sort -u > "$cited"
-  # This repo's own defs (STD etc.), scanned once.
-  examples_defs_in_tree . > "$localdefs" 2>/dev/null
+  # Cache a repo's defs by checkout path, so each repo is scanned at most once.
+  _defs() {
+    local key cf; key=$(printf '%s' "$1" | tr '/.' '__'); cf="$cache/$key"
+    [ -f "$cf" ] || examples_defs_in_tree "$1" > "$cf" 2>/dev/null
+    printf '%s' "$cf"
+  }
   local n_cited; n_cited=$(grep -cvE '^$' "$cited")
-  local hits=0 t acr row lpath url branch def link
+  local hits=0 t acr row repo url branch lpath def link
   while IFS= read -r t; do
     [ -z "$t" ] && continue
     acr=${t#@}; acr=${acr%%-*}
@@ -496,19 +500,20 @@ check_examples() {
       red "  unregistered: $t — acronym '$acr' not in $registry (add its repo + git url)"
       hits=$((hits + 1)); continue
     fi
-    lpath=$(printf '%s' "$row" | cut -f2)
-    url=$(printf '%s' "$row" | cut -f3)
+    repo=$(printf '%s' "$row" | cut -f2)
+    url=$(printf '%s'  "$row" | cut -f3)
     branch=$(printf '%s' "$row" | cut -f4)
-    if [ "$lpath" = "." ]; then
-      def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$localdefs")
-    elif [ -d "$lpath" ]; then
-      def=$(examples_defs_in_tree "$lpath" | awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}')
-    else
-      yellow "  unvalidated: $t — no local checkout of $acr at '$lpath'; clone to validate. link: $url"
+    # Projects are siblings, so the checkout is ../<repo>; if that IS the current
+    # repo, scan it in place as `.` (robust to the checkout dir's actual name).
+    lpath="../$repo"
+    [ "$(basename "$PWD")" = "$repo" ] && lpath="."
+    if [ ! -d "$lpath" ]; then
+      yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it to validate. link: $url"
       HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
     fi
+    def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$(_defs "$lpath")")
     if [ -z "$def" ]; then
-      red "  dangling: $t is cited but no fn carries it in ${acr} ($lpath)"
+      red "  dangling: $t is cited but no fn carries it in $repo (../$repo)"
       grep -rnE "Example:.*$t" default/ lib/ --include='*.loft' 2>/dev/null | sed 's/^/      /'
       hits=$((hits + 1)); continue
     fi
@@ -516,16 +521,16 @@ check_examples() {
       say "  ok  $t -> $def"
     else
       link="$url/blob/$branch/$(printf '%s' "$def" | sed 's/:\([0-9][0-9]*\)$/#L\1/')"
-      say "  ok  $t -> $link  (validated against local $lpath)"
+      say "  ok  $t -> $link  (validated against sibling ../$repo)"
     fi
   done < "$cited"
   # DUPLICATE — one tag on two fns in THIS repo (each foreign repo owns its own).
   local d
-  for d in $(cut -f1 "$localdefs" | sort | uniq -d); do
+  for d in $(cut -f1 "$(_defs .)" | sort | uniq -d); do
     red "  duplicate: $d tags more than one fn in this repo"
     hits=$((hits + 1))
   done
-  rm -f "$cited" "$localdefs"
+  rm -rf "$cited" "$cache"
   HITS_EXAMPLES=$hits
   if [ $hits -gt 0 ]; then
     DRIFT=1

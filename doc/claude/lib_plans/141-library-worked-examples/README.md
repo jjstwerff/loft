@@ -23,8 +23,10 @@ run that CI already blocks on — proven red on both a dangling citation and a
 duplicate tag. Next: broaden the stdlib clusters, then the registered libraries.
 
 **Cross-repo resolution now works (Phase B + first-class-app source).** The acronym
-registry lives at `scripts/example_repos.tsv` (acronym → local path + git url +
-branch). A `// Example: @AAA-###` citation is resolved by acronym:
+registry lives at `scripts/example_repos.tsv` (acronym → repo → git url → branch).
+Projects are assumed checked out as **siblings** in one parent dir, so a repo's
+checkout is simply `../<repo>` (no per-entry path navigation; the current repo is
+scanned in place). A `// Example: @AAA-###` citation is resolved by acronym:
 - the owning repo's tag may sit above **any `fn`** — a `test_*` OR a real function in
   a first-class application's own source (dryopea tags both `tests/` and `src/`);
 - a repo with a **local checkout is validated offline against it** (preferred) and
