@@ -36,3 +36,24 @@ fn test_join_builds_a_delimited_line() {
   empty: vector<text> = [];
   assert(empty.join(",") == "", "empty vector joins to empty text");
 }
+
+// @STD-004 — smallest / largest of a vector, NULL when empty (guard with ??)
+fn test_min_of_max_of_are_null_on_empty() {
+  v: vector<integer> = [3, 1, 4, 1, 5];
+  assert((min_of(v) ?? 0) == 1, "min of a non-empty vector");
+  assert((max_of(v) ?? 0) == 5, "max of a non-empty vector");
+  // Empty is NOT zero — it is null, so choose the fallback explicitly with ??.
+  empty: vector<integer> = [];
+  assert((min_of(empty) ?? -1) == -1, "min of empty is null → the ?? fallback");
+}
+
+// @STD-005 — sum with a caller-supplied identity (works for any Addable type)
+fn test_sum_takes_an_identity() {
+  ints: vector<integer> = [10, 20, 12];
+  assert(sum(ints, 0) == 42, "integer sum starts from the 0 identity");
+  // The identity fixes the element type AND the empty-vector answer.
+  floats: vector<float> = [1.5, 2.5];
+  assert(sum(floats, 0.0) == 4.0, "float sum starts from 0.0");
+  none: vector<integer> = [];
+  assert(sum(none, 0) == 0, "empty sum is the identity");
+}

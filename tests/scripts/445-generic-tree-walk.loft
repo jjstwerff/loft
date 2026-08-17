@@ -77,6 +77,9 @@ fn children(self: SwNode) -> vector<SwNode> {
   return self.swn_kids;
 }
 
+// @STD-006 — walk a tree breadth-first via the Walkable interface (a bare
+// `fn children(self: T) -> vector<T>` makes T Walkable; tree_walk returns
+// level order, bounded by the cap)
 fn test_stdlib_tree_walk_level_order() {
   st_n4 = SwNode { swn_v: 4, swn_kids: [] };
   st_n5 = SwNode { swn_v: 5, swn_kids: [] };
