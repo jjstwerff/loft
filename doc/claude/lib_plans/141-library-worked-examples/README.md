@@ -13,9 +13,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-ACTIVE — stdlib + in-tree libraries done; distributed-library rollout is next.
+ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
+wired into every library's CI** (Phase-last CI ratchet, see below); authoring the
+first distributed library's tags (`arguments`) is the next step.
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
-broadened** to the distributed monorepos, Phase C indexer ingestion. Tagged so far:
+broadened** to the distributed monorepos, Phase C indexer ingestion, and the
+**shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
+`loft-libs-*` repo's own citations are validated in its CI with no per-repo copy
+(loft self-check byte-identical, synthetic-lib probe green/dangling/duplicate). Tagged so far:
 `@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
 `@EHK-001..004` (in-tree libraries). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
@@ -327,12 +332,39 @@ covers it (no per-library `examples.sh` to wire).
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
 
-### Phase (last) — Convention doc + CI ratchet (S)
+### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
-One upstream doc of the convention (libraries share it, not a per-repo copy), and
-each library's CI runs its gate. Ratchet: no sweep, a file opts in when someone
-finishes work in it — a gate red on every function the day it lands is switched off
-within a week.
+**The shared gate now runs in every library's CI, from a single source.** The
+distribution question had an answer already in the tree: every `loft-libs-*` repo's
+`library-ci.yml` is a thin caller of the reusable workflow
+`loft-lang/loft/.github/workflows/library-ci-reusable.yml@main`, which checks out
+the library at `$GITHUB_WORKSPACE` **and** loft into `loft-src/`. So the shared gate
+(`loft-src/scripts/check_doc_drift.sh`) and the acronym registry
+(`scripts/example_repos.tsv`) are ALREADY present in every library CI run — "libraries
+share it, not a per-repo copy" is satisfied natively, with no `loft-registry` migration.
+
+Built (loft-side only, no library-repo edit):
+- `check_examples` made **repo-agnostic** via three env knobs that all default to
+  loft's own self-check byte-for-byte: `EXAMPLES_REPO_ROOT` (repo under test, `.`),
+  `EXAMPLES_CITE_ROOTS` (dirs grepped for citations, `default lib`), `EXAMPLES_REGISTRY`
+  (for test isolation). The script cd's to the loft root at startup, so the registry
+  and cross-repo link logic stay loft-anchored while the citation + local-def scan
+  follow `REPO_ROOT`. The self-repo's acronym resolves in place; a foreign acronym
+  keeps the sibling `../<repo>` path (an `unvalidated` warning when absent — e.g. a
+  library citing a loft `@STD` tag in its own CI, where loft is at `loft-src` not a
+  sibling; rare, non-gating, a noted follow-up).
+- `library-ci-reusable.yml` gained a **gating** per-package step running that gate with
+  `REPO_ROOT=$GITHUB_WORKSPACE` + `CITE_ROOTS="<pkg>/src <pkg>/tests"`. **Vacuously
+  green for a package with no citations**, so it is safe on all libraries from day one
+  and only begins gating once a package opts in by authoring a citation — the ratchet,
+  enforced by construction rather than by a switch-off-within-a-week promise.
+
+Validated: loft's own `check_doc_drift.sh examples` output is byte-identical before/after
+(no self-check regression), and a synthetic library tree proved `ok` / `dangling` /
+`duplicate` / `unregistered` all fire correctly in library mode.
+
+Still to do: the one upstream **convention doc** (a short shared page the libraries
+point at instead of re-explaining the tag family). The CI ratchet half is done.
 
 ### Monthly by-hand review — the ongoing home (DONE, first pass 2026-08)
 
@@ -349,10 +381,11 @@ staleness/quality upkeep lives once a library is tagged.
 
 ## Open questions
 
-- **Registry home** — built as `scripts/example_repos.tsv` in the loft repo. Should
-  it migrate to `loft-registry` (the ecosystem-shared home) so every repo reads one
-  copy? Leans yes eventually; the loft-repo file is fine while loft is the only
-  consumer.
+- ~~**Registry home**~~ — RESOLVED: stays `scripts/example_repos.tsv` in the loft
+  repo. A migration to `loft-registry` is unnecessary because the library CI already
+  reaches the loft tree — every `loft-libs-*` `library-ci.yml` is a thin caller of the
+  reusable workflow in loft, which checks loft out into `loft-src/`. So the single
+  copy in loft IS the shared copy every library reads; no second home is needed.
 - **Online cross-repo validation** — a sibling checkout validates offline today; a
   repo not checked out only warns. A published per-repo tag index (one small file
   fetched by raw URL) would let it hard-validate offline-of-clone. (Phase C follow-up.)

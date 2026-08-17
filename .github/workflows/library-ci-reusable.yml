@@ -169,6 +169,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
+      # Worked-example citations resolve (@PLN141) — the SAME shared gate loft runs on
+      # its own tree, pointed at this package.  Every `// Example: @AAA-###` on a fn must
+      # resolve to exactly one `// @AAA-###`-tagged fn in the repo the acronym names
+      # (dangling / duplicate / unregistered = drift, red).  The logic + the acronym
+      # registry live in loft-src, so all libraries share ONE gate — no per-repo copy to
+      # drift.  Vacuously green for a package with no citations, so it is safe on every
+      # library from day one and only begins gating once the package opts in by authoring
+      # a citation.  REPO_ROOT is the library checkout; the acronym resolves in place.
+      - name: Worked-example tags resolve — ${{ matrix.package }}
+        env:
+          EXAMPLES_REPO_ROOT: ${{ github.workspace }}
+          EXAMPLES_CITE_ROOTS: ${{ matrix.package }}/src ${{ matrix.package }}/tests
+        run: bash loft-src/scripts/check_doc_drift.sh examples
+
       # Library compatibility contract, step 4 — ADVISORY, never gating.
       #
       # Compares this package against a sample of its own published releases: the latest, the

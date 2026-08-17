@@ -478,11 +478,19 @@ examples_defs_in_tree() {
 check_examples() {
   say "=== Worked-example tags resolve to a test/function ==="
   local tag_re='@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]'
-  local registry="scripts/example_repos.tsv"
+  # The registry + gate logic are loft-anchored (this script cd'd to the loft root at
+  # startup), but the CITATIONS and the local repo's defs come from EXAMPLES_REPO_ROOT:
+  # `.` (loft) for loft's own run, the library checkout when library-ci-reusable.yml
+  # runs this same gate against a loft-libs-* repo.  Defaults reproduce loft's self-check
+  # byte-for-byte; the library CI sets REPO_ROOT + CITE_ROOTS to the package under test.
+  local registry="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
+  local repo_root="${EXAMPLES_REPO_ROOT:-.}"
+  local cite_roots="${EXAMPLES_CITE_ROOTS:-default lib}"
+  local self_name; self_name=$(basename "$(cd "$repo_root" 2>/dev/null && pwd)")
   local cited cache
   cited=$(mktemp); cache=$(mktemp -d)
-  # Citations in THIS repo's stdlib + libraries.
-  grep -rhnE "//[[:space:]]*Example:" default/ lib/ --include='*.loft' 2>/dev/null \
+  # Citations under the repo-under-test (loft: default/ + lib/).
+  ( cd "$repo_root" 2>/dev/null && grep -rhnE "//[[:space:]]*Example:" $cite_roots --include='*.loft' 2>/dev/null ) \
     | grep -oE "$tag_re" | sort -u > "$cited"
   # Cache a repo's defs by checkout path, so each repo is scanned at most once.
   _defs() {
@@ -503,21 +511,21 @@ check_examples() {
     repo=$(printf '%s' "$row" | cut -f2)
     url=$(printf '%s'  "$row" | cut -f3)
     branch=$(printf '%s' "$row" | cut -f4)
-    # Projects are siblings, so the checkout is ../<repo>; if that IS the current
-    # repo, scan it in place as `.` (robust to the checkout dir's actual name).
+    # A foreign repo is a sibling checkout (../<repo>); the repo-under-test itself is
+    # scanned in place at repo_root (robust to the checkout dir's actual name).
     lpath="../$repo"
-    [ "$(basename "$PWD")" = "$repo" ] && lpath="."
+    [ "$self_name" = "$repo" ] && lpath="$repo_root"
     if [ ! -d "$lpath" ]; then
       yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it to validate. link: $url"
       HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
     fi
     def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$(_defs "$lpath")")
     if [ -z "$def" ]; then
-      red "  dangling: $t is cited but no fn carries it in $repo (../$repo)"
-      grep -rnE "Example:.*$t" default/ lib/ --include='*.loft' 2>/dev/null | sed 's/^/      /'
+      red "  dangling: $t is cited but no fn carries it in $repo"
+      ( cd "$repo_root" 2>/dev/null && grep -rnE "Example:.*$t" $cite_roots --include='*.loft' 2>/dev/null ) | sed 's/^/      /'
       hits=$((hits + 1)); continue
     fi
-    if [ "$lpath" = "." ]; then
+    if [ "$lpath" = "$repo_root" ]; then
       say "  ok  $t -> $def"
     else
       link="$url/blob/$branch/$(printf '%s' "$def" | sed 's/:\([0-9][0-9]*\)$/#L\1/')"
@@ -526,7 +534,7 @@ check_examples() {
   done < "$cited"
   # DUPLICATE — one tag on two fns in THIS repo (each foreign repo owns its own).
   local d
-  for d in $(cut -f1 "$(_defs .)" | sort | uniq -d); do
+  for d in $(cut -f1 "$(_defs "$repo_root")" | sort | uniq -d); do
     red "  duplicate: $d tags more than one fn in this repo"
     hits=$((hits + 1))
   done
