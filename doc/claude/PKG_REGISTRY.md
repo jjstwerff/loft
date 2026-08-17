@@ -469,8 +469,12 @@ coexist.
 
 ## Manifest-less resolution — a bare script takes the latest release
 
-**Status: DESIGN, not built.** The behaviour below is the target; the
-"Where it stands today" table says what actually runs.
+**Status: DESIGN, not built — tracked as @PLN143.** The behaviour below is the
+target; the "Where it stands today" table says what actually runs.  The plan
+carries the phase cuts, one precondition this section does not state
+(`probe_auto_install` passes `allow_unsigned: true`, which is defensible for a
+fallback and not for a default), and a second half: a `loft.lock` has no expiry,
+so a pin that has fallen behind is silent in PACKAGE scope too.
 
 A script with no `loft.toml` is loft's `python script.py` case: one file, a
 `use`, run it. It should mean *"the newest release of that library"*, every run,
