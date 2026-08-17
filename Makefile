@@ -82,6 +82,8 @@
 #                        wasm-bindgen variant.
 #   make install         System-wide install to /usr/local (sudo if not writable).
 #   make install-user    Sudo-free install to ~/.local (PREFIX=$$HOME/.local).
+#   make install-user-fast  As install-user, but native-only (no wasm) — fast
+#                        reinstall for the after-each-PR-merge loop.
 #   make test-gl-golden  Pixel-compare the smoke-test screenshot (Xvfb).
 #   make fill            Regenerate src/fill.rs from default/*.loft annotations.
 #   make pdf             Rebuild the printable reference PDF.
@@ -149,7 +151,13 @@ PREFIX ?= /usr/local
 # the ancestor is writable and nothing extra runs.  Empty = run the copies directly.
 SUDO := $(shell d="$(PREFIX)"; while [ -n "$$d" ] && [ "$$d" != / ] && [ ! -e "$$d" ]; do d=$$(dirname "$$d"); done; if [ -w "$$d" ]; then echo ""; else echo "sudo"; fi)
 
-.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-user install-artifacts uninstall uninstall-user debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens
+# Native-only install: skip the wasm + html-mt browser runtimes — the slow part of
+# the build — for a FAST reinstall.  The result runs loft programs and builds library
+# cdylibs (all a dev needs after a PR merge); only `--html` / wasm export needs the
+# skipped runtimes.  Set by `make install-native` / `install-user-fast`.
+NATIVE_ONLY ?=
+
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-user install-native install-user-fast install-artifacts install-artifacts-native install-wasm-artifacts uninstall uninstall-user debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -233,6 +241,15 @@ install-artifacts: check-targets all wasm-html-mt-lib
 	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
 	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
 
+# Native-only artifacts: the same install-lib rlib, but WITHOUT the two wasm target
+# builds, the wasm-target check, or the html-mt build-std runtime.  `all` builds the
+# native binary + lib; this adds the feature-complete install-lib rlib the copies
+# need.  Same stale-loft_ffi prune as the full target.
+install-artifacts-native: all
+	@cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
+	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
+	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
+
 install:
 	@if [ -n "$(SUDO)" ]; then \
 		sudo true || { \
@@ -244,10 +261,9 @@ install:
 	else \
 		echo "install: writing $(PREFIX) as $$(id -un) — no sudo needed"; \
 	fi
-	@$(AS_USER) $(MAKE) --no-print-directory install-artifacts
+	@$(AS_USER) $(MAKE) --no-print-directory $(if $(NATIVE_ONLY),install-artifacts-native,install-artifacts)
 	@$(AS_USER) $(MAKE) --no-print-directory rebuild-native-cdylibs
 	@$(SUDO) install -d $(PREFIX)/share/loft/deps
-	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-wasip2/deps
 	@$(SUDO) rm -rf $(PREFIX)/share/loft/default
 	@$(SUDO) cp -r default $(PREFIX)/share/loft/
 	@$(SUDO) install -m 644 target/install-lib/release/libloft.rlib $(PREFIX)/share/loft/
@@ -265,23 +281,10 @@ install:
 		$(SUDO) cp target/install-lib/release/deps/*.dylib $(PREFIX)/share/loft/deps/ || { \
 			echo "ERROR: failed to install dependency .dylib files (rights?)."; exit 1; }; \
 	fi
-	@$(SUDO) install -m 644 target/wasm32-wasip2/release/libloft.rlib $(PREFIX)/share/loft/wasm32-wasip2/
-	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-wasip2/deps/*.rlib
-	@$(SUDO) cp target/wasm32-wasip2/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-wasip2/deps/
-	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-unknown-unknown/deps
-	@$(SUDO) install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/
-	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/*.rlib
-	@$(SUDO) cp target/wasm32-unknown-unknown/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/
-	@if [ -f target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib ]; then \
-	  echo "install: shipping the threaded browser runtime (html-mt)"; \
-	  $(SUDO) install -d $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps; \
-	  $(SUDO) install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
-	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/; \
-	  $(SUDO) rm -f $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
-	  $(SUDO) cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
-	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
+	@if [ -n "$(NATIVE_ONLY)" ]; then \
+		echo "install: native-only — skipping wasm + html-mt runtimes ('--html'/wasm export unavailable)"; \
 	else \
-	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
+		$(MAKE) --no-print-directory install-wasm-artifacts PREFIX="$(PREFIX)"; \
 	fi
 	@$(SUDO) chmod -R a+rX $(PREFIX)/share/loft
 	@$(SUDO) install -d $(PREFIX)/bin
@@ -347,11 +350,44 @@ install:
 		fi; \
 	fi
 
+# Copy the wasm (wasm32-wasip2, wasm32-unknown-unknown) + html-mt browser runtimes
+# into the install prefix.  Split out of `install` so a native-only install can skip
+# it; called with the same PREFIX/SUDO the parent resolved.
+install-wasm-artifacts:
+	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-wasip2/deps
+	@$(SUDO) install -m 644 target/wasm32-wasip2/release/libloft.rlib $(PREFIX)/share/loft/wasm32-wasip2/
+	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-wasip2/deps/*.rlib
+	@$(SUDO) cp target/wasm32-wasip2/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-wasip2/deps/
+	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-unknown-unknown/deps
+	@$(SUDO) install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/
+	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/*.rlib
+	@$(SUDO) cp target/wasm32-unknown-unknown/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/
+	@if [ -f target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib ]; then \
+	  echo "install: shipping the threaded browser runtime (html-mt)"; \
+	  $(SUDO) install -d $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps; \
+	  $(SUDO) install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
+	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/; \
+	  $(SUDO) rm -f $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
+	  $(SUDO) cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
+	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
+	else \
+	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
+	fi
+
 # Sudo-free install into the user's home prefix — reinstall as often as you like
 # (e.g. after each PR merge) with no root.  Just `make install` with PREFIX pointed
 # at ~/.local, which is user-writable so $(SUDO) resolves empty.
 install-user:
 	@$(MAKE) --no-print-directory install PREFIX=$(HOME)/.local
+
+# Fast reinstalls: skip the wasm + html-mt runtimes.  `install-native` respects
+# PREFIX (system by default); `install-user-fast` is the sudo-free ~/.local variant —
+# the one to run after each PR merge when you only need to run + build loft locally.
+install-native:
+	@$(MAKE) --no-print-directory install NATIVE_ONLY=1
+
+install-user-fast:
+	@$(MAKE) --no-print-directory install PREFIX=$(HOME)/.local NATIVE_ONLY=1
 
 uninstall:
 	$(SUDO) rm -f $(PREFIX)/bin/loft
@@ -403,7 +439,8 @@ rebuild-native-cdylibs:
 	@# drops the wasm std but leaves target/wasm32-*/, so the old `[ -d … ]`
 	@# heuristic hard-failed with a buried E0463).  Installed → rebuild;
 	@# stale artefact but std gone → warn with the fix and SKIP; neither → skip.
-	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+	@if [ -n "$(NATIVE_ONLY)" ]; then :; \
+	elif rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 	  cargo build --release --target wasm32-unknown-unknown \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-unknown-unknown rlib rebuild"; exit 1; \
@@ -412,7 +449,8 @@ rebuild-native-cdylibs:
 	  echo "WARN: wasm32-unknown-unknown std not installed — skipping wasm rlib refresh"; \
 	  echo "      (stale target/wasm32-unknown-unknown/ present; run: rustup target add wasm32-unknown-unknown)"; \
 	fi
-	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-wasip2; then \
+	@if [ -n "$(NATIVE_ONLY)" ]; then :; \
+	elif rustup target list --installed 2>/dev/null | grep -qx wasm32-wasip2; then \
 	  cargo build --release --target wasm32-wasip2 \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-wasip2 rlib rebuild"; exit 1; \

@@ -10,10 +10,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Phases 1–3 **implemented + validated live** on branch `mac-install-dylib-fix`
-(commits `e37266a1`, `75a7b67d`), pending merge to `main`. `make install-user`
-installs to `~/.local` with no sudo, passes the stdlib + cdylib smokes, and reports
-`PATH OK`.
+**All phases + both tails implemented and validated live** on branch
+`mac-install-dylib-fix`, pending merge to `main`. `make install-user` installs to
+`~/.local` with no sudo, passes the stdlib + cdylib smokes, and reports `PATH OK`;
+`make install-user-fast` does the same skipping the wasm/html-mt runtimes. Ready to
+close (`status:finished`) once merged.
 
 ## Goal
 
@@ -97,17 +98,25 @@ copies **without** `sudo`; keep the escalation only for a non-writable prefix.
     (systemd `user-dirs`), so the check may already pass.
   - Resolve the shell from `$SHELL`/OS rather than assuming, since the rc file
     differs (`~/.zprofile` vs `~/.bash_profile` vs `~/.profile`).
-- **Optional fast path:** a lighter variant that skips the wasm/html-mt artifacts
-  (the slow part of `install-artifacts`) for a native-only "after each PR merge"
-  reinstall — the browser runtimes aren't needed to run loft locally. Decide in this
-  phase whether to fold it into `install-user` or a separate `install-user-fast`.
+- **Native-only fast path — DONE.** Chose a **separate `install-user-fast`** (and
+  `install-native` for any prefix) over folding into `install-user`, so the full
+  install stays the default and the fast one is an explicit opt-in. Driven by
+  `NATIVE_ONLY=1`, which: builds `install-artifacts-native` (no wasm target builds,
+  no `wasm-html-mt-lib`, no `check-targets`), skips the extracted
+  `install-wasm-artifacts` copy step, AND — the leak found while validating — is
+  passed down to `rebuild-native-cdylibs`, whose two wasm rlib rebuilds are now
+  gated on it (untouched for every other caller). The two native loft compiles
+  (default-feature binary + install-feature rlib) still dominate; the win is
+  skipping all wasm/html-mt build + copy work.
 - **Validation (can go red):** run the target with `$(PREFIX)/bin` absent from
   `PATH` → it warns with the correct per-OS line; with it present but a system loft
   ahead of it → it reports the shadowing; with it correctly first → `command -v loft`
   equals `$(PREFIX)/bin/loft` and the check is silent. All three are real,
-  reproducible states.
-- Doc: a short section (RELEASE.md or a new INSTALL note) on the no-sudo reinstall
-  loop, including the PATH one-liner per OS.
+  reproducible states. `install-user-fast` verified live: prints "native-only —
+  skipping wasm + html-mt runtimes", passes both smokes, "PATH OK".
+- **Doc — DONE.** README § Getting started gained a `make install-user` /
+  `install-user-fast` note; the per-OS PATH one-liner is emitted by the install
+  target itself rather than duplicated in prose.
 
 ## Open questions
 
@@ -119,8 +128,8 @@ copies **without** `sudo`; keep the escalation only for a non-writable prefix.
   even faster reinstall, but then `share/loft` must still be refreshed as a copy;
   a copy keeps the binary↔stdlib pair atomic, which is what the smoke guards. Lean
   copy.
-- **`PREFIX` for wasm/html-mt** — those artifacts are large; the fast path above
-  likely makes them opt-in for a user install.
+- ~~**`PREFIX` for wasm/html-mt**~~ — RESOLVED: `install-user-fast` / `install-native`
+  (`NATIVE_ONLY=1`) skip them entirely; the full `install-user` still ships them.
 
 ## See also
 
