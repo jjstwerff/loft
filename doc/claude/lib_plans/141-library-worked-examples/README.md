@@ -165,9 +165,16 @@ hex_world · `MKD` markdown · `GFX` graphics · `FTR` the feature catalogue (Ph
 - **Done:** the gate is one shared script — `scripts/check_doc_drift.sh examples` —
   not a per-library copy; it already resolves cross-repo citations and **emits the
   git link** (the "carry a real link" half of what the indexer owes).
-- **Still to do:** teach loft's tag indexer (`make index` / `scripts/idx`) to ingest
-  `@AAA-###` so `scripts/idx tag:@STD-001` resolves the tagged fn — today `idx` knows
-  only `@P`/`@PLN`/`@F`/`@GH`. This makes examples *queryable*, not just gate-checked.
+- **Done:** loft's tag indexer (`make index` / `scripts/idx`) now ingests
+  `@AAA-###`, so `scripts/idx tag:@STD-011` resolves both the citation and the
+  demonstrating fn. Added one branch to `tools/indexer/src/scan.loft`'s per-byte
+  `scan_line` dispatch (three uppercase letters, hyphen, three digits; the interior
+  hyphen disambiguates from `@P`/`@PLAN`/`@F`/`@GH`, and it is checked AFTER `@F`/`@I`
+  so `@FTR-001` is not eaten by the `@F` branch). `tag_is_valid` already accepts the
+  shape via its fallthrough, so `idx broken` stays `[]`; the query side (`scripts/idx
+  tag:…`) is a generic bucket lookup and needed no change. Verified: all 16
+  `@AAA`-shaped tags in the tree index (12 `@STD` + the plan's `@DRY`/`@MOR`/`@FTR`
+  mechanism examples), no accidental matches, `idx broken` + `broken-links` clean.
 - **Still to do (Follow-up from Status):** hard *online* validation of a cross-repo
   tag when its sibling isn't checked out (fetch a published per-repo tag index),
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
