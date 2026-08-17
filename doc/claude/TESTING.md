@@ -447,6 +447,27 @@ detector the way Goal A has the sanitizer and Goal E has `LOFT_STORE_GUARD`;
 divergence the day it lands, provided the cell's oracle is the *cross-backend*
 output, not a self-satisfying assert.
 
+### A round-trip test is closed under its own encoder
+
+The same self-satisfaction has a second, quieter shape: a **write it, read it
+back, compare** test only ever exercises the inputs its own writer produces.
+Every value the writer cannot emit is untested *and unmentioned* — coverage reads
+100 %, because the decoder function really was entered.
+
+`imaging` shipped this for months (@PLN141).  Its suite saved a `Canvas` as PNG
+and reloaded it, pixel for pixel, across small / non-square / extreme / solid
+shapes — all green.  Its encoder always writes 8-bit RGB, so RGBA, greyscale,
+grey+alpha, palette and 16-bit files were never read by any test; the decoder
+handed the raw buffer through and cut it into three-byte pixels, so an RGBA image
+came back with **5** pixels for a 2×2 file, channels shifted one byte, against a
+header still claiming 2×2.
+
+The instrument is an input the code under test **did not produce**: a fixture
+authored outside the system, with hand-computed expected values.  A good prompt
+for finding where you owe one is asking what a *worked example* for the function
+would have to assert — that question names the outside values by construction,
+which is how this one was found.
+
 ---
 
 ## Database backends: sqlite gates CI, all four are the local bar
