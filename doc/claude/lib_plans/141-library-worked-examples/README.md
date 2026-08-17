@@ -31,6 +31,66 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
+**`loft-libs-graphics` is READY TO PR — the convention's SECOND complete repo, and
+the one that says what a worked example is worth.** `make examples-progress
+REPO=../loft-libs-graphics` reads *4 tagged, 0 exempt, 0 deferred, 0 todo* on branch
+`tuxedo-worked-examples` (pushed, PR not opened). `shapes` (`@SHP-001..003`),
+`imaging` (`@IMG-001..004`) and `graphics` (`@GFX-001..005`) joined `gridmesh`.
+
+**`imaging` is the row that pays for the whole plan: writing @IMG-002 found a
+silent decode bug that had shipped.** `decode_png` handed the png crate's raw
+output buffer through and `n_load_png` re-cut it into three-byte `Pixel`s — correct
+only for 8-bit RGB. A 2×2 RGBA file came back as **5** pixels with the channels
+shifted one byte (`(10,20,30) (255,40,50) (60,255,70) …` — alpha smeared into
+colour); a 2×2 greyscale as **1**; a 2×2 palette as **0**, against a header still
+saying 2×2. So `len(data) != width * height` and the first thing any caller does —
+`data[y*w+x]` — read garbage or null. RGBA is the default for anything with
+transparency, so this covered most PNGs in the wild, and nothing anywhere reported
+it. Fixed by normalising to 8-bit and folding all four remaining colour types to
+RGB, returning `None` rather than a buffer whose length disagrees with the header;
+five 2×2 fixtures pin each fold to hand-computed values. `png()` now honours
+`load_png`'s boolean too, so a decode failure reaches the caller as the null its own
+doc-example always promised, instead of a non-null 0×0 `Image` that *passes* the
+documented null check and then silently yields nothing. **The bug was reachable only
+by asking what an example should assert** — the library's own suite round-tripped
+its own encoder's output, which is always 8-bit RGB, so every colour type it did not
+write was untested and unmentioned.
+
+`graphics` (`@GFX-001..005`): a colour is a bare `integer` and a canvas a flat
+`vector<integer>`, so the compiler sees none of the contract. The packing is
+0xAARRGGBB and `rgb(255,0,0)` is `0xFFFF0000` — **not** the `0xFF0000` a reader
+reaches for, whose alpha byte is 0, so it stores fine, reads back as red, and
+composites to nothing @GFX-001. The solid primitives STORE rather than composite, so
+a half-transparent `fill_rect` replaces what was under it with a colour that merely
+records "half transparent"; `blend_pixel` is the door @GFX-002. `get_pixel` answers 0
+off the canvas and 0 is a colour the canvas can hold, so the answer is not a bounds
+test in either direction — the example's three-sample scan has the colour test
+calling 2 "outside" where the size test calls 1 @GFX-003. Span ends are exclusive and
+a reversed span draws nothing and says nothing @GFX-004. And `save_png` reads its
+colour type off the PIXELS, so one alpha-0 literal in an otherwise opaque picture
+turns the file RGBA and that pixel into a transparent hole — asserted by reading the
+IHDR byte back off disk, so the claim is about the file, not the buffer @GFX-005.
+
+`shapes` (`@SHP-001..003`): every predicate is STRICT, so tiles laid edge to edge
+never collide and a mover pushed out by exactly its penetration depth is done
+@SHP-001; the depths say HOW FAR and never WHICH WAY, so applying `+ox` where `-ox`
+was meant is a well-typed call that pushes deeper in, and the smaller axis is the
+minimal correction @SHP-002; and `rect_circle_overlap` is a real circle test whose
+bounding-box substitute grows an invisible square shoulder on every corner @SHP-003.
+
+**Coverage gap recorded, not papered over:** `graphics`'s `gl_*` half needs a window
+and has no CI demonstrator, so it carries no tags rather than tags pointing at a test
+that cannot exercise them — the same call as `server`'s multi-client event model.
+
+**Two tooling defects surfaced by this repo.** (1) `loft test` does **not** pick up an
+edit to a library's own `native/src/*.rs`: `auto_build_native` reuses the cached
+cdylib whenever the loft-ffi/RUSTFLAGS/codegen fingerprint matches and never stats
+the crate's Rust sources, so the imaging fix read as "no effect" through two runs and
+only took hold after a hand `cargo build --release`. A false GREEN, and CI is immune
+(a clean checkout has no artifact to reuse), which is what makes it a local trap that
+survives review — filed as loft#965. (2) The examples gate's def scanner let a
+CITATION's prose define the tag it merely mentioned; fixed below.
+
 **`loft-libs-net` is READY TO PR — the first complete repo under the convention.**
 `make examples-progress REPO=../loft-libs-net` reads *3 tagged, 1 exempt, 0 deferred,
 0 todo* on branch **`worked-examples`** (the plan's no-host-prefix name; pushed, PR
@@ -176,8 +236,9 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 (loft self-check byte-identical, synthetic-lib probe green/dangling/duplicate). Tagged so far:
 `@STD-001..012` (stdlib), `@GIT-001..005`, `@LEX-001..002`, `@ACR-001..003`,
 `@EHK-001..004` (in-tree libraries), `@ARG-001..004` + `@CRY-001..006`
-(`loft-libs-core`), `@GRM-001..005` (`loft-libs-graphics`), `@SRV-001..003` +
-`@WEB-001..003` + `@SSH-001..002` (`loft-libs-net`). **The distributed libraries are this stream's
+(`loft-libs-core`), `@GRM-001..005` + `@SHP-001..003` + `@IMG-001..004` +
+`@GFX-001..005` (`loft-libs-graphics`, complete), `@SRV-001..003` +
+`@WEB-001..003` + `@SSH-001..002` (`loft-libs-net`, complete). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
@@ -287,8 +348,30 @@ a missing example is a gap to fill, not a reason to skip.
   mistake (found on the `arguments` rollout, the first library whose examples
   cross-reference each other). Verified a no-op on every existing tree: the def scan is
   byte-identical over loft, `loft-libs-graphics`, `loft-libs-net` and `dryopea`.
-  *Not yet built:* `orphan`, opt-in `uncovered`, and a self-test harness — deferred
-  (the non-vacuous set of real @STD citations is what keeps the green honest today).
+  **A block containing an `// Example:` line is a CITATION and defines nothing** —
+  not before that line, not after it. The first half was always there (dryopea's
+  `crossref` fixture pins it: a file may name a tag in prose and then cite it without
+  claiming it). The second half was missing, and a citation is prose whose
+  continuation lines routinely name a second tag — `// Example: @GFX-005 … one
+  alpha-0 pixel (@GFX-001) makes the file RGBA` read as *defining* @GFX-001 above
+  `save_png`, surfacing as `duplicate: @GFX-001` against the innocent real
+  definition. The same misdirection the first-tag rule removed, arriving from the
+  citation side. Verified a no-op on every existing tree (def scan byte-identical
+  over loft 26, dryopea 21, `loft-libs-core` 10, `loft-libs-net` 8, and the three
+  zero-tag repos).
+  **Self-test built** (`check_doc_drift.sh examples-selftest`, run inside `all`, so
+  loft's doc-hygiene job gates on it and library CI is untouched): five temp-dir
+  fixtures pinning all four rules — defines, first-tag-wins, blank-breaks-the-block,
+  citation-block. Not committed under the repo, because the scanner walks every
+  `*.loft` and committed fixtures would inject their fake `@TST` tags into loft's own
+  index. Each rule was reverted in turn and each goes red naming its own fixture —
+  including one fixture that needed a second pass: first-tag-wins was written with
+  both tags on ONE line, where `match()` only ever sees the first, so it passed
+  whatever the rule was. **The real trees cannot pin these rules** (they are the trees
+  the rules were tuned against), which is exactly why reverting the old
+  `Example:`-cancels rule left the whole ecosystem green and only a fixture in
+  *another repo* caught it.
+  *Not yet built:* `orphan` and opt-in `uncovered` — deferred.
 
 ### Design decision — which way the cross-repo arrow points
 
@@ -504,7 +587,15 @@ covers it (no per-library `examples.sh` to wire).
      the RETURN VALUE that carries the contract — `serve_range`'s false, `send`'s
      false, `byte_at`'s `-1`, a non-null `WsHandler` — each a well-typed answer
      that means something other than what a caller assumes.
-  3. `markdown`, `graphics`, `random`, `shapes`, `game_protocol` — as they're touched.
+  3. **DONE for `loft-libs-graphics`** — `graphics` (`@GFX-001..005`), `shapes`
+     (`@SHP-001..003`) and `imaging` (`@IMG-001..004`), which closed that repo.
+     Remaining here: `markdown`, `random`, and `game_protocol` (already **exempt**).
+     What tier 3 added to "gettable wrong while type-checking": the type is not
+     merely uninformative, it is a *bare integer standing for a convention* — which
+     byte of a colour is alpha, which end of a span is included, whether an answer
+     of 0 means "transparent" or "not there". `imaging` also showed the tier's own
+     payoff: asking what an example should ASSERT is what surfaced a shipped
+     decoder bug that the library's round-trip suite structurally could not see.
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
 
@@ -566,15 +657,17 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | repo | branch | state |
 |---|---|---|
 | `loft-libs-net` | `worked-examples` | **READY TO PR** — 3 tagged (`server`, `ssh`, `web`), 1 exempt (`game_protocol`), 0 todo |
+| `loft-libs-graphics` | `tuxedo-worked-examples` | **READY TO PR** — 4 tagged (`graphics`, `gridmesh`, `imaging`, `shapes`), 0 todo |
 | `loft-libs-core` | `mac-worked-examples` | 2 tagged (`arguments`, `crypto`) / 4 todo (`cbor`, `random`, `regex`, `zttext`) |
-| `loft-libs-graphics` | `tuxedo-worked-examples` | 1 tagged (`gridmesh`) / 3 todo (`graphics`, `imaging`, `shapes`) |
 
 `loft-libs-net` is the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
 handed *this repo has adopted the convention*, with a recorded reason for the one
-package that has nothing to demonstrate. **Opening the PR needs an explicit ask**
-(the branch is pushed and the report is green; the plan's "zero TODO ⇒ open the PR"
-sets the readiness bar, not the permission).
+package that has nothing to demonstrate. `loft-libs-graphics` is the second, and it
+reached zero TODO without needing the exempt column at all: each of its four
+packages had something a signature could not say. **Opening either PR needs an
+explicit ask** (both branches are pushed and both reports are green; the plan's
+"zero TODO ⇒ open the PR" sets the readiness bar, not the permission).
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 

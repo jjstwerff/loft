@@ -215,6 +215,14 @@ test so the next reader never needs the pointer.
 - **Definition** — the tag `// @AAA-###` in the comment block directly above the `fn`
   that demonstrates it: a `test_*` in your `tests/` (author one in retrospect if none
   is clear), or a real function in a first-class application's own source.
+- **Naming a tag in prose** — a comment block directly above a `fn` *defines* the
+  first tag it names, so a passing mention there ("see @ARG-004 for the failure
+  path") would claim that tag.  Two rules keep ordinary cross-referencing safe: the
+  **first** tag in a block is the one it defines, and a block containing an
+  `// Example:` line is a **citation** — it defines nothing, before or after that
+  line.  So mention a sibling freely inside an example's own prose or under a
+  citation; just never open a block above a `fn` with a tag you do not mean to
+  define.
 - **Acronym** — `AAA` is three uppercase letters, hyphen, three digits — distinct
   from loft's `@P`/`@PLN`/`@F`/`@GH` families (none has that interior hyphen).  Each
   acronym names **one repo, ecosystem-globally**, registered once in loft's
