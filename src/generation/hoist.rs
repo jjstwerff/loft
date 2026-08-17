@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 // loft#885 — loop-invariant vector headers
 
 //! Which vectors a loop may read through a header derived once, instead of re-deriving

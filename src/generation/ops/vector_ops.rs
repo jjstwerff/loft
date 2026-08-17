@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 // loft#885 — indexed reads through a loop-invariant vector header
 
 //! Indexed reads emitted against a header the enclosing loop already derived, once
