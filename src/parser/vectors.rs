@@ -434,28 +434,6 @@ impl Parser {
                     }
                 }
                 self.lexer.token(")");
-                // loft#946 — a member that is a CALL answering a record needs an owner.
-                //
-                // A heap-returning callee allocates its own store and returns it; the hidden
-                // `__retbuf` the caller passes is not what comes back (`n_mk` opens with its
-                // own `OpDatabase`). A BINDING is what owns that store — `q = mk(); (71, q)`
-                // frees it at scope exit — and a member of a tuple LITERAL is not a binding,
-                // so `(71, mk())` dropped it on the floor: one store per evaluation, scaling
-                // with the loop that runs it.
-                //
-                // Give it the binding it needs, which is exactly what the working spelling
-                // does by hand.  The same cure as loft#941, and for the same reason: the
-                // value outlives the expression that produced it, so it needs a name that
-                // dies at the right time.
-                let mut prelude: Vec<Value> = Vec::new();
-                for (v, ty) in values.iter_mut().zip(types.iter()) {
-                    if owns_call_result(self, v, ty) {
-                        let tmp = self.create_unique("tup_own", ty);
-                        self.vars.defined(tmp);
-                        prelude.push(v_set(tmp, v.clone()));
-                        *v = Value::Var(tmp);
-                    }
-                }
                 if types.len() < 2 {
                     diagnostic!(
                         self.lexer,
@@ -463,16 +441,8 @@ impl Parser {
                         "Tuple literals require at least 2 elements"
                     );
                 }
-                let tuple_tp = Type::Tuple(types);
-                *val = if prelude.is_empty() {
-                    Value::Tuple(values)
-                } else {
-                    // The stashes must run BEFORE the tuple reads them, and the block has to
-                    // yield the tuple — the members are its VALUE, not a side effect.
-                    prelude.push(Value::Tuple(values));
-                    v_block(prelude, tuple_tp.clone(), "tuple_own")
-                };
-                tuple_tp
+                *val = Value::Tuple(values);
+                Type::Tuple(types)
             } else {
                 self.lexer.token(")");
                 // @P395 — a parenthesised vector concat consumed by a trailing
@@ -3811,23 +3781,6 @@ impl Parser {
 /// loft#703: a `[…]` literal infers `vector<T>`, and a keyed type is not a wider or
 /// narrower version of that but a DIFFERENT container, so the two are never
 /// interchangeable and every site that builds a literal has to ask which it is.
-/// Is this tuple member a CALL whose result OWNS a heap store it hands to us?
-///
-/// Both halves are needed. A call is the only producer that can answer a store nobody
-/// names — a literal builds into a work-ref the scope already frees, and a variable is
-/// already owned by its own binding. And empty deps is what says the answer is OWNED
-/// rather than a view of something the caller still holds: a borrowed result must NOT be
-/// given a second owner, or its source is freed underneath it.
-pub(crate) fn owns_call_result(parser: &Parser, val: &Value, tp: &Type) -> bool {
-    matches!(val.unspan(), Value::Call(_, _) | Value::CallRef(_, _))
-        && tp.depend().is_empty()
-        && matches!(
-            tp.base(),
-            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Tuple(_)
-        )
-        && !parser.first_pass
-}
-
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,
