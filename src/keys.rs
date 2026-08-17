@@ -759,6 +759,23 @@ pub fn work_ref_stepover_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_WORKREF_STEPOVER").is_none())
 }
 
+/// loft#953: a copy may not claim a buffer the CALLER owns — **DEFAULT ON**. `OpCopyRecord`'s
+/// `0x8000` free-source bit releases the store its source came from, which is right for a callee
+/// that allocated one of its own and wrong for a callee handed the caller's hidden `__ref_N`
+/// destination: the value returned IS that buffer, and the caller's scope-exit `OpFreeRef` already
+/// claims it. Freeing it at the call site releases it while the caller still holds it, so every
+/// later turn of a loop clears and refills a freed store — silent on both backends until something
+/// recycles the store number (the callee's own second vector local suffices), after which rows
+/// written earlier read back empty (`--interpret`) or zeroed (`--native`). Opt OUT with
+/// `LOFT_NO_RETBUF_CLAIM_GUARD` to restore the claim: the A/B on one binary, and the first bisect
+/// step for a leak that appears in a heap-returning call chain. One cached env read. See
+/// `Parser::answers_caller_buffer`.
+#[must_use]
+pub fn retbuf_claim_guard_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_RETBUF_CLAIM_GUARD").is_none())
+}
+
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a
 /// dead-after owned source directly into its destination field/element instead of copy-then-free,
 /// for every proven-safe shape (Record `v[i]=e`/`o.f=src`; Construct field-append, fresh

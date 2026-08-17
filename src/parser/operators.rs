@@ -393,16 +393,45 @@ impl Parser {
             return false;
         }
         match val.unspan() {
-            Value::Call(fn_nr, _) => {
+            Value::Call(fn_nr, args) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
-                def.name().starts_with("n_") && *def.code() != Value::Null
+                def.name().starts_with("n_")
+                    && *def.code() != Value::Null
+                    && !self.answers_caller_buffer(args)
             }
             // Struct constructor blocks allocate a store too — when assigned
             // to a field, the source store is a temporary that should be freed.
             Value::Block(bl) => bl.name == "Object",
             _ => false,
         }
+    }
+
+    /// loft#953 — does this call hand back a buffer the CALLER already owns?
+    ///
+    /// A heap-returning callee is given a hidden destination argument: the caller mints
+    /// a `__ref_N` work-ref (`mark_caller_hidden_buf`, `parse_call`'s three heap arms),
+    /// the callee fills it, and the value it returns IS that buffer.  The work-ref is a
+    /// caller FUNCTION-scope variable with its own scope-exit `OpFreeRef`, so the store
+    /// is already spoken for — nothing at the call site may claim it.
+    ///
+    /// Without this the free-source bit releases the caller's buffer once per call while
+    /// the caller still holds it.  In a loop that is a use-after-free on every iteration
+    /// after the first: the callee clears and refills a freed store, and once anything
+    /// recycles the store number — the callee's own second vector local is enough — the
+    /// two collide and rows written earlier read back empty or zeroed.  Silent on both
+    /// backends; `LOFT_STRICT_STORES=1` is the witness.
+    ///
+    /// Same mechanism as the @P313 carve-out on the `Block "Object"` leg below, reached
+    /// through a call instead of a literal: a source that carries its own scope free
+    /// must not also be freed by the copy.  A callee with no hidden buffer allocates its
+    /// own store and the caller has no free for it — that is the case the bit exists
+    /// for, and it still gets it.
+    fn answers_caller_buffer(&self, args: &[Value]) -> bool {
+        crate::keys::retbuf_claim_guard_enabled()
+            && args
+                .iter()
+                .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
     }
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
