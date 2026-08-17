@@ -71,6 +71,7 @@ pub fn send(cid: integer, msg: text) -> boolean {
 fn kernel_broadcast(msg: text) -> integer;
 #native
 
+// Example: @EHK-002
 pub fn broadcast(msg: text) -> integer {
   kernel_broadcast(msg)
 }
@@ -234,10 +235,12 @@ pub fn keyframe(cid: integer, msg: text) -> boolean;
 // closures (@P213/@P214); until then the per-kind split lives in your
 // on_event — exactly the shape the language prescribes (#318).
 
+// Example: @EHK-003
 pub fn fast_lane(msg_id: integer) {
   sync_class(msg_id);
 }
 
+// Example: @EHK-003
 pub fn fast_lane_keyed(msg_id: integer) {
   sync_class_keyed(msg_id);
 }
@@ -342,6 +345,7 @@ pub fn turn(max_events: integer) -> Turn {
 // completed build swap; a headless server simply never calls stop.  `on_event`
 // and `on_tick` are the user's meaning; their captures (the world) live in the
 // caller's frame, which stays alive for the loop's lifetime.
+// Example: @EHK-001
 pub fn run(port: integer, tick_interval_us: integer, on_event: fn(Event), on_tick: fn()) {
   ok = kernel_listen(port, tick_interval_us);
   if !ok {
@@ -445,6 +449,7 @@ pub fn client_send(msg: text) -> boolean;
 #native "n_kernel_client_send"
 
 // Drain the newest unread server state, one kind per call — inside `on_tick`.
+// Example: @EHK-004
 pub fn client_sync_next() -> boolean;
 #native "n_kernel_client_sync_next"
 
@@ -454,6 +459,7 @@ pub fn client_sync_seq() -> integer;
 fn kernel_client_sync_payload() -> text;
 #native
 
+// Example: @EHK-004
 pub fn client_sync_payload() -> text {
   kernel_client_sync_payload()
 }
@@ -494,6 +500,7 @@ fn kernel_local(tick_interval_us: integer) -> boolean;
 // Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
 // once the server connection closes — the kind-2 disconnect event reaches
 // `on_event` first.
+// Example: @EHK-004
 pub fn run_client(
   host: text,
   port: integer,

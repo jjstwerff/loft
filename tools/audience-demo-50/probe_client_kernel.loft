@@ -78,6 +78,10 @@ fn report(st: Stats) {
   println("nclient: report ticks={st.tick_n} udp={ub} poses={st.poses} echoes={st.echoes} tot_p50={tp50}us tot_p95={tp95}us hold_p50={hp50}us");
 }
 
+// @EHK-004 — the client counterpart: run_client(host, port, tick, on_event,
+// on_tick) drives the same loop against a server, and each tick DRAINS the sync
+// bus with `while client_sync_next() { client_sync_payload() … }` — one call per
+// buffered state message, so a burst is consumed in order, not one-per-tick.
 fn main() {
   // The wire-schema table — must match the server's declarations.
   engine_host::fast_lane_keyed(2);   // poses: latest-value per plane

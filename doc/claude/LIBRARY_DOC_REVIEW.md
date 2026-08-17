@@ -112,6 +112,7 @@ commit" = the ref to pass as `--since` next month.
 | `lib/git` | 2026-08 | (bootstrap) | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging |
 | `lib/lexer` | 2026-08 | (bootstrap) | @LEX-001 (matches/test/identifier via `parser.loft`); format-protocol/comment/backtracking fns owe examples (need a non-rendered demo) |
 | `lib/audience_crystal` | 2026-08 | (bootstrap) | @ACR-001..003 tagged to the `01-editor-helpers` test (picking inverse, incr editor loop, erase) |
+| `lib/engine_host` | 2026-08 | (bootstrap) | @EHK-001..004 tagged to CI-spawned audience-demo kernels (run loop, broadcast, sync lanes, run_client drain); 37 pub fns read while tagging |
 | `lib/html` | — | — | not yet reviewed |
 | `lib/markdown` | — | — | not yet reviewed |
 | `lib/input` · `lib/logger` · `lib/lexer` · `lib/parser` | — | — | not yet reviewed |

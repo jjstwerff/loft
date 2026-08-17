@@ -152,8 +152,8 @@ absent.
 Built as `scripts/example_repos.tsv` (a loft-repo file for now, not yet the
 `loft-registry` shared home — see Open questions). Entered so far: `STD` loft ·
 `GIT` loft (in-tree `lib/git`) · `LEX` loft (in-tree `lib/lexer`) · `ACR` loft
-(in-tree `lib/audience_crystal`) — one repo may own several acronyms · `DRY`
-dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
+(in-tree `lib/audience_crystal`) · `EHK` loft (in-tree `lib/engine_host`) — one
+repo may own several acronyms · `DRY` dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
 arguments · `CRY` crypto · `GMP` game_protocol · `GRM` gridmesh · `RND` random ·
 `SRV` server · `SHP` shapes · `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW`
 hex_world · `MKD` markdown · `GFX` graphics · `FTR` the feature catalogue (Phase C2).
@@ -242,6 +242,12 @@ consumer or a CI-run test — never a prose snippet:
   picking inverse @ACR-001, the `crystal_incr_new`/paint/rebuild/`full_mesh` +
   `crystal_mesh_to_lines` stride-10 loop @ACR-002, `crystal_incr_erase`
   edit-then-rebuild @ACR-003.
+- **`lib/engine_host`** (`@EHK-001..004`, `EHK`→loft): the @PLN18 server kernel,
+  a sequence-sensitive API — tagged on the audience-demo kernels that CI spawns
+  (`engine_host_audience.rs`, `engine_host_udp.rs`): `run` loop-skeleton with
+  closures-as-args @EHK-001, `broadcast`-to-all vs `send`-to-one @EHK-002, the
+  `fast_lane`/`fast_lane_keyed` sync-lane declaration *before* `run` @EHK-003, and
+  `run_client` + the `client_sync_next`/`client_sync_payload` drain loop @EHK-004.
 
 All resolve through `idx` and the gate; each host program / test still runs.
 

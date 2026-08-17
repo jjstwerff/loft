@@ -102,6 +102,9 @@ fn handle_seed(world: World, cid: integer, q: integer, r: integer, color: intege
   color
 }
 
+// @EHK-002 — broadcast(msg) sends to EVERY connected client at once (the server
+// holds the world and pushes each change out); send(cid, msg) is the one-client
+// form used to replay state to a just-connected client.
 fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
   if msg_id == 1 {
     (q, r, c) = parse_qrc(payload);
@@ -134,6 +137,10 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
   }
 }
 
+// @EHK-001 — run(port, tick_us, on_event, on_tick) IS the server loop: it pumps
+// the kernel, calling on_event per network event and on_tick every interval. The
+// two handlers are CLOSURES passed as ARGUMENTS (not struct fields — loft#313),
+// which is how user code supplies meaning while the kernel owns the mechanics.
 fn main() {
   port = 18083;
   println("audience server (kernel): holds world state + broadcasts every change");
