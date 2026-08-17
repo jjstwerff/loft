@@ -30,6 +30,24 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 (`cbor`, `crypto`, `random`, `regex`, `zttext`) run the same CI step **vacuously
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
+
+Second distributed library **`gridmesh` DONE** — pushed as `loft-libs-graphics`
+branch `tuxedo-worked-examples` (PR not opened). Five `@GRM-001..005` worked
+examples in `gridmesh/tests/worked-examples.loft`, cited from the seven functions
+they document: the edit→collect→rebuild→**clear** cycle (@GRM-001), `cell_ixs`
+(emit) vs `halo_ixs` (read-only, owned by the neighbour) (@GRM-002), cell indices
+surviving a removal uncompacted while a repaint gets a fresh one (@GRM-003), a
+dirty GROUP listing its CLEAN member chunks so their cached meshes are copied
+(@GRM-004), and the `step_x`/`step_y` parity pair + `idx_at`'s `-1`-not-null
+sentinel (@GRM-005). What a toolkit owes an example is the SHAPE of a correct
+call, not a single signature — every one of the five is a contract a caller can
+get wrong while type-checking. Both validations pass (gate green in library mode;
+removing the demonstrator dangles all five, gate exit 1) and `loft test` /
+`loft test --native` are 25/25; a flipped expected value goes red, so neither
+channel is vacuous. `hex_grid` (the other tier-1 library) is **held**: its
+monorepo `loft-libs-world` has uncommitted work in the tree, and the rollout's
+one gate is a clean, current checkout.
+
 Mechanism complete: Phase A (probe), Phase B foundation + **acronym registry
 broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 **shared gate made repo-agnostic + run from `library-ci-reusable.yml`** so a
@@ -40,8 +58,8 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
-work only in a clean, current checkout). Next: the priority order below —
-`arguments`/`hex_grid`/`gridmesh` first. The genuine wait-for-their-agent case is
+work only in a clean, current checkout). Tier 1 is done except `hex_grid`
+(held — dirty monorepo); next: tier 2, `crypto`/`server`/`web`. The genuine wait-for-their-agent case is
 only the first-class *apps* (`dryopea`/`crawler`/`moros`), which loft merely cites.
 
 The loft **stdlib** was the starting library
@@ -349,8 +367,12 @@ covers it (no per-library `examples.sh` to wire).
 - **Validation per library:** gate green on that library **and** a deliberately
   deleted test makes a citation dangle.
 - **Priority order** (non-obvious usage first, where a real call site pays most):
-  1. `arguments`, `hex_grid`, `gridmesh` — stateful/geometry APIs where the shape of
-     a correct call is the whole question.
+  1. `arguments` (DONE, `@ARG-001..004`), `gridmesh` (DONE, `@GRM-001..005`),
+     `hex_grid` (HELD — `loft-libs-world` has uncommitted work in its tree) —
+     stateful/geometry APIs where the shape of a correct call is the whole
+     question. Confirmed by the two done: every tag is a contract a caller can get
+     wrong while type-checking (a forgotten `clear_dirty`, a halo cell emitted
+     twice, a stale cell index, a group rebuilt whole, a `-1` read as null).
   2. `crypto`, `server`, `web` — protocol/sequence APIs (order of calls matters).
   3. `markdown`, `graphics`, `random`, `shapes`, `game_protocol` — as they're touched.
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
