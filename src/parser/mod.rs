@@ -10187,15 +10187,31 @@ impl Parser {
             .package_declared_deps(cur_dir)
             .filter(|(_, deps)| deps.contains(id))
             .map(|(root, _)| root);
+        // loft#963 — except where the declaration points INTO the package.  A
+        // `{ path = "lib/mylib" }` dep is in-tree by definition, so the guard above
+        // matched the very directory the declaration named: `probe_manifest_path_dep`
+        // resolved it, the next sweep wiped it, `--lib lib/` resolved it again, and the
+        // sweep after that wiped it too.  The declaration was therefore strictly worse
+        // than saying nothing — without it `--lib` worked — and the error still read
+        // "searched lib/, lib_dirs, and sibling packages" while lib_dirs held the answer.
+        //
+        // The rule the guard is for is a stray same-named MODULE FILE (`use server` in a
+        // package that also has `server.loft`); a nested package the manifest points at
+        // is the opposite case, and it is named by exactly the path being exempted here.
+        let dep_root = self.declared_path_dep_root(id, cur_dir);
         let blocked = |candidate: &str| {
-            shadow_root.as_deref().is_some_and(|root| {
+            let cand = std::path::Path::new(candidate);
+            let cand = cand
+                .canonicalize()
+                .unwrap_or_else(|_| cand.to_path_buf());
+            if dep_root.as_ref().is_some_and(|r| cand.starts_with(r)) {
+                return false;
+            }
+            shadow_root
+                .as_deref()
                 // Canonicalize so relative candidates (cwd inside the
                 // package) and the canonical root compare in one space.
-                let cand = std::path::Path::new(candidate);
-                cand.canonicalize()
-                    .unwrap_or_else(|_| cand.to_path_buf())
-                    .starts_with(root)
-            })
+                .is_some_and(|root| cand.starts_with(root))
         };
 
         let mut f = Self::probe_project_lib(id);
@@ -10677,6 +10693,38 @@ impl Parser {
     /// `[library] entry`, defaulting to `src/<id>.loft`).  Registers the
     /// dep's manifest so its `#native` symbols resolve, mirroring
     /// `probe_sibling_package`.
+    /// Where the nearest enclosing manifest says dependency `id` lives, when it declares
+    /// it as a `{ path = … }` dep — canonicalized, or `None` for a registry dep or no
+    /// declaration at all.
+    ///
+    /// Read by the dep-shadowing guard in [`Self::lib_path`], which otherwise treats an
+    /// in-tree path dep as a file shadowing the dependency it IS (loft#963).  Walks to
+    /// the same manifest [`Self::probe_manifest_path_dep`] resolves against, so the
+    /// exemption and the resolution cannot name different directories.
+    fn declared_path_dep_root(&self, id: &str, cur_dir: &str) -> Option<std::path::PathBuf> {
+        if cur_dir.is_empty() {
+            return None;
+        }
+        let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+        loop {
+            let manifest_path = search_dir.join("loft.toml");
+            if manifest_path.exists() {
+                let rel = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                    .and_then(|m| {
+                        m.dependencies.iter().find_map(|(name, value)| {
+                            (name == id)
+                                .then(|| crate::manifest::extract_path_dep(value))
+                                .flatten()
+                                .map(str::to_string)
+                        })
+                    })?;
+                let root = search_dir.join(rel);
+                return root.canonicalize().ok().or(Some(root));
+            }
+            search_dir = search_dir.parent()?.to_path_buf();
+        }
+    }
+
     fn probe_manifest_path_dep(&mut self, id: &str, cur_dir: &str, f: &mut String) {
         if std::path::Path::new(f).exists() || cur_dir.is_empty() {
             return;
