@@ -398,7 +398,7 @@ impl Parser {
                 // User function with code (not a built-in op)
                 def.name().starts_with("n_")
                     && *def.code() != Value::Null
-                    && !self.answers_caller_buffer(args)
+                    && !self.answers_caller_buffer(*fn_nr, args)
             }
             // Struct constructor blocks allocate a store too — when assigned
             // to a field, the source store is a temporary that should be freed.
@@ -427,11 +427,45 @@ impl Parser {
     /// must not also be freed by the copy.  A callee with no hidden buffer allocates its
     /// own store and the caller has no free for it — that is the case the bit exists
     /// for, and it still gets it.
-    fn answers_caller_buffer(&self, args: &[Value]) -> bool {
-        crate::keys::retbuf_claim_guard_enabled()
-            && args
-                .iter()
-                .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
+    ///
+    /// # Why the return SHAPE is part of the question
+    ///
+    /// A buffer argument alone does not settle it, because the caller does not always
+    /// copy from the call.  `scopes.rs`'s `lift_owned_return` interposes a `__lift_N`
+    /// temp for a `Reference` / struct-`Enum` return, and that lift adopts the result
+    /// only when it is owned — when the value aliases an argument it takes a private
+    /// copy instead:
+    ///
+    /// ```text
+    /// let _src = n_pick(cell, var_t, var_i, var___ref_1);
+    /// if _src.store_nr == u16::MAX || _src.store_nr != var_t.store_nr { var___lift_1 = _src; }
+    /// else { var___lift_1 = OpDatabase(…); OpCopyRecord(_src, var___lift_1, 79); }
+    /// ```
+    ///
+    /// So by the time the copy runs, its source is a temp that OWNS its store, not the
+    /// caller's buffer, and claiming it is right.  A COLLECTION return has no such lift
+    /// — the value handed back is the buffer itself — which is why the cut is exactly
+    /// there.  `tests/use_analysis.rs`'s `collect` fixture is the witness for the lifted
+    /// side; loft#953's is the witness for the unlifted one.
+    fn answers_caller_buffer(&self, fn_nr: u32, args: &[Value]) -> bool {
+        if !crate::keys::retbuf_claim_guard_enabled() {
+            return false;
+        }
+        // Only the shapes `lift_owned_return` does NOT lift — a collection return, whose
+        // hidden buffer IS what the call answers.
+        if !matches!(
+            self.data.def(fn_nr).returned().base(),
+            Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        ) {
+            return false;
+        }
+        args.iter()
+            .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
     }
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {

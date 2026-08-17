@@ -13037,27 +13037,6 @@ impl Parser {
             );
             return Type::Unknown(0);
         };
-        let acc_type = types[1].clone();
-        // loft#951 — a COLLECTION accumulator is refused rather than mis-compiled.  Text
-        // is not: it is handled below, by the same work-buffer route an ordinary
-        // `acc = f(acc, x)` assignment takes.
-        //
-        // A collection is a different defect with a different shape, not the same one one
-        // size larger: `n.reduce([], f)` reads back EMPTY on the interpreter and is an
-        // internal compiler error on `--native` (*"Incorrect type Never"*), on released
-        // 2026.8.0 as well as here — so nothing about the buffer story explains it.  It is
-        // filed as loft#956; until it is fixed, say so rather than emit an ICE.
-        if Self::is_heap_storage(&acc_type) && !matches!(acc_type.base(), Type::Text(_)) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "`reduce` cannot fold into a `{}` accumulator yet — only scalars and \
-                 `text`. Write the loop instead: \
-                 `acc = <init>; for x in v {{ acc = f(acc, x); }}`",
-                acc_type.name(&self.data)
-            );
-            return acc_type;
-        }
         let (fn_param_types, _fn_ret_type) = if let Type::Function(params, ret, _) = &types[2] {
             (params.clone(), *ret.clone())
         } else {
@@ -13073,6 +13052,58 @@ impl Parser {
                 self.lexer,
                 Level::Error,
                 "reduce: function must take exactly two arguments (accumulator, element)"
+            );
+            return Type::Unknown(0);
+        }
+        // loft#956 — the FOLD FUNCTION's first parameter is what the accumulator type is.
+        //
+        // An empty `[]` written as the init argument carries no element type of its own, so
+        // it arrives here as `Unknown(0)` — and every question asked below is asked of the
+        // init's type.  `is_heap_storage` answers false for `Unknown`, so the collection
+        // refusal did not fire, and `reduce_acc` was minted with no type at all: the
+        // interpreter read it back EMPTY and `--native` reached `rust_type` with a `Never`
+        // and panicked (*"Incorrect type Never"*).  Both silent about the real cause, which
+        // is that nothing had said what `[]` was empty OF.
+        //
+        // The signature has always known.  `f: fn(U, T) -> U` names `U` in its first
+        // parameter, and the init only has to be assignable to it, so read the accumulator
+        // off the fold rather than off the literal.  That makes the diagnostic below name
+        // the type the program actually meant, and it is the inference the fold needs
+        // anyway on the day a collection accumulator is supported.
+        let mut acc_type = types[1].clone();
+        if acc_type.is_unknown() && !fn_param_types[0].is_unknown() {
+            acc_type = fn_param_types[0].without_deps();
+        }
+        // loft#951 — a COLLECTION accumulator is refused rather than mis-compiled.  Text
+        // is not: it is handled below, by the same work-buffer route an ordinary
+        // `acc = f(acc, x)` assignment takes.
+        //
+        // A collection is a different defect with a different shape, not the same one one
+        // size larger, which is why it is still refused after loft#951: the fold has to
+        // hand the callee a buffer per step, and a collection's is not the text one.
+        if Self::is_heap_storage(&acc_type) && !matches!(acc_type.base(), Type::Text(_)) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`reduce` cannot fold into a `{}` accumulator yet — only scalars and \
+                 `text`. Write the loop instead: \
+                 `acc = <init>; for x in v {{ acc = f(acc, x); }}`",
+                acc_type.source_name(&self.data)
+            );
+            return acc_type;
+        }
+        // Still unresolved: neither the init nor the signature said what this folds into.
+        // Refuse and name the hole — a variable with no type reaches codegen as `Never`,
+        // which is an internal compiler error on `--native` and an empty read on the
+        // interpreter (loft#956).
+        if acc_type.is_unknown() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`reduce` cannot tell what its accumulator holds — the initial value gives \
+                 no type (`[]` is empty of nothing in particular) and the fold function's \
+                 first parameter does not say either. Annotate it: \
+                 `acc: <type> = <init>; v.reduce(acc, f)`"
             );
             return Type::Unknown(0);
         }

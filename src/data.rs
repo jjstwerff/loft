@@ -2057,6 +2057,51 @@ impl Type {
         }
     }
 
+    /// The type the way the PROGRAM writes it — for a diagnostic a user has to act on.
+    ///
+    /// Identical to [`Type::name`] everywhere except the keyed collections, whose key list
+    /// `name` renders with `{:?}`: `index<Rec,[("id", true)]>` for what the source spells
+    /// `index<Rec[id]>`.  A `reduce` refusal naming its accumulator type (loft#956) is what
+    /// put that string in front of a user; loft#923's refusal worked around it by naming
+    /// only the KIND.
+    ///
+    /// Kept SEPARATE from `name` rather than fixing it in place, and that separation is the
+    /// whole point: `name` is not a renderer, it is the SCHEMA KEY.  `typedef.rs`'s wrapper
+    /// types are built from it (`main_vector<…>`) and `state` looks stores up by it
+    /// (`self.database.name(&tp.name(data))`), so re-spelling a keyed type there re-IDENTIFIES
+    /// it — generated `init()` replays a different type order and the emitted Rust references
+    /// a temp no line binds (rustc E0425, `tests/lazy_sql_source.rs`).  Two jobs, two
+    /// functions: `name` answers "which type is this?", this answers "what did they write?".
+    #[must_use]
+    pub fn source_name(&self, data: &Data) -> String {
+        /// `-` marks a descending field; `parse_fields` stores ascending as `true`.
+        fn ordered(keys: &[(String, bool)]) -> String {
+            keys.iter()
+                .map(|(k, asc)| if *asc { k.clone() } else { format!("-{k}") })
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+        match self {
+            Type::Sorted(tp, key, _) => {
+                format!("sorted<{}[{}]>", data.def(*tp).name, ordered(key))
+            }
+            Type::Index(tp, key, _) => {
+                format!("index<{}[{}]>", data.def(*tp).name, ordered(key))
+            }
+            // `hash` and `spatial` carry no direction, so their keys are plain names.
+            Type::Hash(tp, key, _) => {
+                format!("hash<{}[{}]>", data.def(*tp).name, key.join(", "))
+            }
+            Type::Radix(tp, key, _) => {
+                format!("spatial<{}[{}]>", data.def(*tp).name, key.join(", "))
+            }
+            // Everything else — `trie` included — already reads as the source writes it.
+            _ => self.name(data),
+        }
+    }
+
+    /// Which type is this?  The SCHEMA KEY, not a renderer — see [`Type::source_name`] for
+    /// the user-facing spelling and for what changing this one breaks.
     #[must_use]
     pub fn name(&self, data: &Data) -> String {
         match self {
@@ -8055,6 +8100,68 @@ mod type_name_user_facing_tests {
         let d = Data::new();
         let v = Type::Vector(Box::new(Type::Text(Deps::none())), Deps::none());
         assert_eq!(v.name(&d), "vector<text>");
+    }
+
+    /// loft#956 — the four keyed collection kinds carried their key list into a
+    /// diagnostic as a Rust debug dump: `index<Foo,[("id", true)]>` for what the
+    /// source spells `index<Foo[id]>`. `trie` alone was right, so the target
+    /// spelling was never in doubt. A `reduce` refusal naming the accumulator type
+    /// is what put the string in front of a user.
+    #[test]
+    fn keyed_collections_render_their_keys_the_way_the_source_writes_them() {
+        let d = make_data();
+        let foo = d.def_nr("Foo");
+        let asc = vec![("id".to_string(), true)];
+        assert_eq!(
+            Type::Index(foo, asc.clone(), Deps::none()).source_name(&d),
+            "index<Foo[id]>"
+        );
+        assert_eq!(
+            Type::Sorted(foo, asc, Deps::none()).source_name(&d),
+            "sorted<Foo[id]>"
+        );
+        // `hash` and `spatial` carry no direction, so their keys are plain names.
+        assert_eq!(
+            Type::Hash(foo, vec!["id".to_string()], Deps::none()).source_name(&d),
+            "hash<Foo[id]>"
+        );
+        assert_eq!(
+            Type::Radix(foo, vec!["pos".to_string()], Deps::none()).source_name(&d),
+            "spatial<Foo[pos]>"
+        );
+    }
+
+    /// A DESCENDING key is written `-key`, and a multi-key list keeps its order and
+    /// its per-field direction — the whole point of rendering the source spelling is
+    /// that `index<Foo[nr, -key]>` can be pasted back into a program.
+    #[test]
+    fn a_descending_key_renders_with_its_minus() {
+        let d = make_data();
+        let foo = d.def_nr("Foo");
+        let keys = vec![("nr".to_string(), true), ("key".to_string(), false)];
+        assert_eq!(
+            Type::Index(foo, keys, Deps::none()).source_name(&d),
+            "index<Foo[nr, -key]>"
+        );
+    }
+
+    /// `name` is the SCHEMA KEY, not a renderer: `typedef` builds wrapper type names
+    /// from it and `state` looks stores up by it. Re-spelling a keyed type here
+    /// re-identifies it — generated `init()` replays a different type order and the
+    /// emitted Rust references a temp no line binds (rustc E0425). This test exists
+    /// to make that cost visible at the point of temptation: the ugly spelling is
+    /// load-bearing, and `source_name` is where the pretty one lives.
+    #[test]
+    fn name_is_the_schema_key_and_keeps_its_spelling() {
+        let d = make_data();
+        let foo = d.def_nr("Foo");
+        assert_eq!(
+            Type::Index(foo, vec![("id".to_string(), true)], Deps::none()).name(&d),
+            r#"index<Foo,[("id", true)]>"#
+        );
+        // Everything that is not keyed answers identically through both.
+        let v = Type::Vector(Box::new(Type::Text(Deps::none())), Deps::none());
+        assert_eq!(v.source_name(&d), v.name(&d));
     }
 
     #[test]

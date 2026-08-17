@@ -2812,9 +2812,16 @@ fn keyed_collection_unknown_key_field_lists_the_fields_when_it_cannot_suggest() 
 /// is why it is refused rather than given storage, the same call
 /// DESIGN_DECISIONS C113 makes for two `index` members over one key.
 ///
-/// The message names the KIND rather than `Type::name`: a keyed type's
-/// registered name carries its key list in the schema's spelling
-/// (`sorted<E,[("k", true)]>`), which is not what the author wrote.
+/// The message names the KIND (`a `hash` cannot be…`) rather than the full type.
+/// The keys are not what is wrong here — no keyed collection of any shape has an
+/// element form — so naming them would only add width to a refusal that applies
+/// whatever they are.
+///
+/// It used to have a second reason: `Type::name` rendered a keyed type's key list
+/// in the schema's debug spelling (`sorted<E,[("k", true)]>`) rather than the
+/// source's (`sorted<E[k]>`). That is fixed (loft#956 carries it, where the same
+/// string reached a `reduce` refusal), so the workaround is no longer load-bearing
+/// — the choice above is.
 #[test]
 fn keyed_collection_as_a_vector_element_is_refused() {
     code!("struct Ent { k: integer, v: integer }\nfn test() { vh: vector<hash<Ent[k]>> = []; }")
