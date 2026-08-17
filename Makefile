@@ -794,6 +794,13 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:line -> blob link)
 	@bash scripts/check_doc_drift.sh write-examples-index
 
+# REPO defaults to this repo; point it at a library checkout to drive that repo's
+# rollout: make examples-progress REPO=../loft-libs-graphics
+REPO ?= .
+.PHONY: examples-index examples-progress
+examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
+	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
+
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft
 	@rc=0; for base in tests/fixtures/api_compat/*.api-baseline; do \

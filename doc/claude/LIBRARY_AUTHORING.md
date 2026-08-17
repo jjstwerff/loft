@@ -232,6 +232,16 @@ from the registry).  A generated `examples-index.tsv` at the repo root records w
 each tag lives (`tag ⇥ file:line ⇥ fn ⇥ git-link`) so a reader resolves it without a
 checkout; CI verifies the committed copy is current.
 
+**Recording that a package owes nothing.**  Because there is no retroactive sweep, an
+untagged package is ambiguous: nobody can tell *no function here needs an example* from
+*nobody has looked yet*.  Resolve it in one line in `examples-exempt.tsv` at your repo
+root — `package ⇥ exempt|deferred ⇥ reason` — where **exempt** means no function teaches
+more from a call site than from its signature, and **deferred** means one does but not
+yet, with the reason naming what unblocks it (the monthly review picks those up).
+Nothing gates on this file; it is what lets a whole repo be called done.
+`make examples-progress REPO=../<your-repo>` in a loft checkout lists every package as
+tagged / exempt / deferred / TODO.
+
 The automated gate only sees a citation that *dangles* or *duplicates* — staleness
 (still resolves, no longer matches the code) and quality (valid but no longer the
 clearest) are caught by the monthly by-hand pass in

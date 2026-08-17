@@ -378,6 +378,59 @@ covers it (no per-library `examples.sh` to wire).
   4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
      is finished; the ratchet only goes up).
 
+### Landing the rollout — one branch per repo, PR when the repo is complete
+
+**The PR unit is the REPO, not the library.** A per-library PR buys nothing: the
+gate is opt-in, so a half-adopted repo is already green, and each PR costs a full
+CI cycle to land a doc-comment and a test file. Batching by repo is the same
+bundle rule that governs plan closes, and it makes the PR mean something a
+reviewer can judge — *this repo has adopted the convention* — instead of
+*one more function got a comment*.
+
+**One branch per repo, continued across sessions and hosts.** If a rollout branch
+already exists, commit the next package onto **it** — never fork a second. A new
+one is named `worked-examples`, with **no host prefix**: the branch belongs to the
+work, not to the agent, and a host prefix is exactly what produces two
+half-finished rollout branches in one repo when the next session runs on another
+machine. (The two in flight predate this and keep their names:
+`mac-worked-examples` in `loft-libs-core`, `tuxedo-worked-examples` in
+`loft-libs-graphics`.) **Rebase onto `origin/main` before each package's commit** —
+these repos publish from `main` while the rollout runs, so one package's worth of
+divergence is the most that should ever need reconciling.
+
+**Done, defined so it can be checked.** Every package (a directory with a
+`loft.toml`) must carry one of three verdicts:
+
+| verdict | recorded where | means |
+|---|---|---|
+| **tagged** | the generated `examples-index.tsv` lists ≥1 tag under `<pkg>/` | it has its worked examples |
+| **exempt** | `examples-exempt.tsv` (repo root, hand-written) + a reason | no function here teaches more from a call site than from its signature — the convention's own no-retroactive-sweep clause, made explicit |
+| **deferred** | `examples-exempt.tsv` + a reason naming what unblocks it | one does owe an example, not in this pass; it returns via the monthly by-hand review |
+
+**Silence is not a verdict.** An untagged, unlisted package is TODO and holds the
+PR — which is the whole point: without a recorded *exempt*, "all libs done" would
+be indistinguishable from "nobody looked at the rest", and the rollout would ship
+a repo whose quiet packages had never been judged. Zero TODO ⇒ open the PR.
+
+```bash
+make examples-progress REPO=../loft-libs-graphics   # run it ON the rollout branch
+```
+
+The report reads the working tree, so on `main` a package whose tags live on the
+rollout branch reads TODO — check out the branch first. It **exits 0 always, is
+not part of `all`, and library CI never runs it**: a half-adopted repo must stay
+green, because the opt-in ratchet is what lets the rollout proceed one package at
+a time without reddening a neighbour.
+
+**Completion is frozen to the packages present when the branch opens.** A package
+added mid-rollout adopts later through the same ratchet. Without that, a 14-package
+repo (`loft-libs-world`) is a moving target that never converges.
+
+**Where that leaves the two branches in flight** (`make examples-progress`):
+`loft-libs-graphics` 1 tagged / 3 TODO (`graphics`, `imaging`, `shapes`);
+`loft-libs-core` 1 tagged (`arguments`, on its branch) / 5 TODO. Neither is ready;
+tier 2 (`crypto`, `server`, `web`) now doubles as *finish the repo you started*.
+
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
 **The shared gate now runs in every library's CI, from a single source.** The

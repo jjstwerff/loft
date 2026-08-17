@@ -26,6 +26,8 @@
 #   scripts/check_doc_drift.sh roadmap         # only ROADMAP/disk cross-check
 #   scripts/check_doc_drift.sh refs            # only finished/deferred refs
 #   scripts/check_doc_drift.sh examples        # only worked-example tag resolution
+#   EXAMPLES_REPO_ROOT=../loft-libs-x \
+#     scripts/check_doc_drift.sh examples-progress   # rollout REPORT: ready to PR?
 #
 # Exit code: 0 = clean (or only time-projection warnings), 1 = drift.
 
@@ -630,6 +632,61 @@ check_examples_index() {
   rm -f "$tmp"
 }
 
+# ---- Rollout progress: is a library repo ready to PR? (@PLN141) ----
+# The worked-example rollout lands ONE branch per library repo, opened as a PR when
+# every package in that repo has a VERDICT — either it carries tags, or it is recorded
+# in `examples-exempt.tsv` (repo root, hand-written: `package <TAB> exempt|deferred
+# <TAB> reason`).  `exempt` = no function here teaches more from a call site than from
+# its signature.  `deferred` = one does, but not in this pass; the reason names what
+# unblocks it, and the monthly by-hand review (LIBRARY_DOC_REVIEW.md) is where it comes
+# back.  Silence is neither: an unlisted, untagged package is TODO and holds the PR.
+#
+# This is a REPORT, not a gate.  It is deliberately NOT part of `all` and NOT run by
+# library CI, and it always exits 0: a half-adopted repo must stay green, because the
+# opt-in ratchet — one library adopting the convention cannot redden its neighbours —
+# is what lets the rollout proceed one package at a time.
+EXAMPLES_EXEMPT_FILE="${EXAMPLES_EXEMPT_FILE:-examples-exempt.tsv}"
+
+check_examples_progress() {
+  local root="${EXAMPLES_REPO_ROOT:-.}" reg="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
+  local name; name=$(basename "$(cd "$root" 2>/dev/null && pwd)")
+  say "=== Worked-example rollout progress ($name) ==="
+  local idx exempt d pkg tags row verdict reason
+  local n_tagged=0 n_exempt=0 n_deferred=0 n_todo=0
+  idx=$(mktemp); _examples_index_body "$root" "$reg" > "$idx"
+  exempt="$root/$EXAMPLES_EXEMPT_FILE"
+  for d in "$root"/*/; do
+    [ -f "$d/loft.toml" ] || continue          # a package is a dir with a manifest
+    pkg=$(basename "$d")
+    tags=$(awk -F'\t' -v p="$pkg/" 'index($2, p) == 1 {printf "%s ", $1}' "$idx")
+    if [ -n "$tags" ]; then
+      green "  tagged    $pkg — ${tags% }"
+      n_tagged=$((n_tagged + 1)); continue
+    fi
+    row=$(awk -F'\t' -v p="$pkg" '$1!~/^#/ && $1==p {print; exit}' "$exempt" 2>/dev/null)
+    if [ -z "$row" ]; then
+      red "  TODO      $pkg — no tags and no verdict in $EXAMPLES_EXEMPT_FILE"
+      n_todo=$((n_todo + 1)); continue
+    fi
+    verdict=$(printf '%s' "$row" | cut -f2); reason=$(printf '%s' "$row" | cut -f3)
+    case "$verdict" in
+      exempt)   say    "  exempt    $pkg — $reason"; n_exempt=$((n_exempt + 1)) ;;
+      deferred) yellow "  deferred  $pkg — $reason"; n_deferred=$((n_deferred + 1)) ;;
+      *)        red    "  TODO      $pkg — unknown verdict '$verdict' (exempt|deferred)"
+                n_todo=$((n_todo + 1)) ;;
+    esac
+  done
+  rm -f "$idx"
+  say ""
+  if [ $((n_tagged + n_exempt + n_deferred + n_todo)) -eq 0 ]; then
+    yellow "  no packages found under $root (is EXAMPLES_REPO_ROOT a library repo?)"
+  elif [ $n_todo -eq 0 ]; then
+    green "READY TO PR — $n_tagged tagged, $n_exempt exempt, $n_deferred deferred, 0 todo"
+  else
+    yellow "NOT READY — $n_todo package(s) still owe a verdict ($n_tagged tagged, $n_exempt exempt, $n_deferred deferred)"
+  fi
+}
+
 # Sep between sections (verbose mode only).
 sep() { [ $QUIET -eq 0 ] && echo; }
 
@@ -643,6 +700,7 @@ case "$CHECK" in
   examples) check_examples ;;
   examples-index) check_examples_index ;;
   write-examples-index) write_examples_index; exit 0 ;;
+  examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
   all)
     check_paths
     sep
@@ -661,7 +719,7 @@ case "$CHECK" in
     check_examples_index
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-index|write-examples-index]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-index|write-examples-index|examples-progress]" >&2
     exit 2
     ;;
 esac
