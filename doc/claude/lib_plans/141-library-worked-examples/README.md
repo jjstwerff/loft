@@ -151,7 +151,8 @@ absent.
 
 Built as `scripts/example_repos.tsv` (a loft-repo file for now, not yet the
 `loft-registry` shared home — see Open questions). Entered so far: `STD` loft ·
-`GIT` loft (the in-tree `lib/git`; one repo may own several acronyms) · `DRY`
+`GIT` loft (in-tree `lib/git`) · `LEX` loft (in-tree `lib/lexer`) · `ACR` loft
+(in-tree `lib/audience_crystal`) — one repo may own several acronyms · `DRY`
 dryopea · `CRW` crawler · `MOR` moros. To add as the rollout reaches them: `ARG`
 arguments · `CRY` crypto · `GMP` game_protocol · `GRM` gridmesh · `RND` random ·
 `SRV` server · `SHP` shapes · `WEB` web · `HXG` hex_grid · `HXT` hex_terrain · `HXW`
@@ -223,15 +224,26 @@ and files/IO (the missing-vs-empty `content`/`read_bytes`/`list_dir` contract
 @STD-011, the `FileResult`/`ok()` classify idiom @STD-012). The four stdlib clusters
 are covered; the rollout moves to the registered libraries below.
 
-**First library shipped: `lib/git`** (`@GIT-001..005`). The rollout's ideal
-source — not authored tests but **real, exercised call sites** in two in-tree
-consumers that run every `make index` / `make view`: `tools/indexer/src/scan.loft`
-(`tracked_files` @GIT-001) and `tools/viewer/refresh.loft` (`ahead_behind`
-@GIT-002, `log` vs `head` date @GIT-003, `changed` rename→new-path @GIT-004,
-`numstat` `-1`-is-binary @GIT-005) — each tag on the exact function whose silent
-trap the library's own doc calls out. `GIT` is registered → `loft` (a repo may
-own several acronyms; the def scan finds `tools/` too), so `idx tag:@GIT-002`
-resolves both citation and call site. Gate green, both consumers still run.
+**In-tree libraries shipping (edit-only-this-repo; cross-repo libs wait for their
+own agents).** Each anchors its tags on **real, exercised code** — a live
+consumer or a CI-run test — never a prose snippet:
+- **`lib/git`** (`@GIT-001..005`, registered `GIT`→loft): tags on live uses in two
+  consumers run every `make index` / `make view` — `scan.loft` (`tracked_files`
+  @GIT-001) and `refresh.loft` (`ahead_behind` @GIT-002, `log`-vs-`head`-date
+  @GIT-003, `changed` rename→new-path @GIT-004, `numstat` `-1`-is-binary @GIT-005).
+- **`lib/lexer`** (`@LEX-001`, `LEX`→loft): the core cursor idiom — `matches`
+  (consume-if-equal) vs `test` (peek) + `identifier` — tagged on `parser.loft`'s
+  `function` grammar rule, exercised by the `16-parser` doc test. (The
+  format-protocol / comment / backtracking functions owe examples too, but their
+  only current demo is the *rendered* `15-lexer` doc test, which must not carry a
+  tag — a noted coverage gap for a non-rendered demo.)
+- **`lib/audience_crystal`** (`@ACR-001..003`, `ACR`→loft): tagged on the
+  `01-editor-helpers` test (run both backends by `wrap.rs`) — `hex_at_world`
+  picking inverse @ACR-001, the `crystal_incr_new`/paint/rebuild/`full_mesh` +
+  `crystal_mesh_to_lines` stride-10 loop @ACR-002, `crystal_incr_erase`
+  edit-then-rebuild @ACR-003.
+
+All resolve through `idx` and the gate; each host program / test still runs.
 
 **In-tree libraries roll out first (edit-only-this-repo).** The priority order
 below leads with cross-repo registered libraries (`arguments`/`hex_grid`/…), but

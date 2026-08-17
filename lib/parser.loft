@@ -175,6 +175,11 @@ fn def_type(self: Parser, _public: boolean) -> boolean {
 }
 // <function> ::= 'fn' <identifier> '(' { <parameter> [ ',' ] } ')' [ '->' <type_def> ] <block>
 
+// @LEX-001 — drive a grammar rule off the lexer cursor: matches() consumes a
+// token only when it equals the argument (gate the rule on `matches("fn")`),
+// test() checks WITHOUT consuming (peek for `)` to spot an empty list), and
+// identifier() takes the next name. matches vs test is the distinction to get
+// right — one advances, one does not.
 fn function(self: Parser, _public: boolean) -> boolean {
   if !self.lexer.matches("fn") {
     return false;
