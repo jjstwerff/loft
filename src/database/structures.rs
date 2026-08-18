@@ -70,6 +70,34 @@ impl Stores {
         (parent_tp, *data)
     }
 
+    /// The type of the sub-record `record_new` / `record_finish` operate on: the parent
+    /// itself when `field == u16::MAX` (the element record IS the parent), otherwise that
+    /// field's own content type.
+    ///
+    /// One derivation, shared by both halves, so the record that gets created and the record
+    /// that gets inserted cannot disagree about their type.
+    ///
+    /// # Panics
+    /// When the parent record does not declare `field`. `field_type` answers `u16::MAX` for
+    /// a miss, which is a not-found sentinel and not a type — letting it through reaches the
+    /// type table as an index and reports `index out of bounds: … the index is 65535`, naming
+    /// neither the type nor the field it failed to find (loft#977).
+    fn sub_record_type(&self, parent_tp: u16, field: u16) -> u16 {
+        if field == u16::MAX {
+            return parent_tp;
+        }
+        let tp = self.field_type(parent_tp, field);
+        assert!(
+            (tp as usize) < self.types.len(),
+            "field {field} of '{}' has no storage in that type — a record operation named a \
+             field the type does not declare",
+            self.types
+                .get(parent_tp as usize)
+                .map_or("<unknown type>", |t| t.name.as_str())
+        );
+        tp
+    }
+
     /// Create a fresh record for a collection element / nullable field and return its `DbRef`.
     ///
     /// # Panics
@@ -88,12 +116,8 @@ impl Stores {
         // must keep `parent_tp`.  Non-nullable parents are unchanged (`key_owner` = identity).
         let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
         let data = &data_owned;
-        let tp = if field == u16::MAX {
-            // This case is when the top level is a data-structure
-            parent_tp
-        } else {
-            self.field_type(parent_tp, field)
-        };
+        // The top-level (`field == u16::MAX`) case is the parent itself; see `sub_record_type`.
+        let tp = self.sub_record_type(parent_tp, field);
         let d = self.field_ref(data, parent_tp, field);
         match self.types[tp as usize].parts {
             Parts::Sorted(c, _) => {
@@ -179,12 +203,8 @@ impl Stores {
         // element resolves on the payload's dense `S`, not the enum top level).
         let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
         let data = &data_owned;
-        let tp = if field == u16::MAX {
-            // This case is when the top level is a data-structure
-            parent_tp
-        } else {
-            self.field_type(parent_tp, field)
-        };
+        // The top-level (`field == u16::MAX`) case is the parent itself; see `sub_record_type`.
+        let tp = self.sub_record_type(parent_tp, field);
         let d = self.field_ref(data, parent_tp, field);
         self.insert_record(&d, rec, tp, false);
         if field != u16::MAX
@@ -1502,5 +1522,123 @@ impl Stores {
                 len as usize,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Stores;
+
+    /// Build `enum Shape { Words { ws: vector<text> }, Nums { ns: vector<float> } }` and
+    /// answer `(enum type, Words type, Nums type)`.
+    ///
+    /// Two variants each holding ONE collection is the arrangement `variant_owning_field`
+    /// has to tell apart: a collection field is a 4-byte handle laid down straight after the
+    /// discriminant, so both land at the same byte offset and only the content type
+    /// separates them.  The tests assert that collision rather than assume it.
+    fn shape_enum(stores: &mut Stores) -> (u16, u16, u16) {
+        let text_tp = stores.name("text");
+        let float_tp = stores.name("float");
+        let words_vec = stores.vector(text_tp);
+        let nums_vec = stores.vector(float_tp);
+        let enum_tp = stores.enumerate("ProbeShape");
+        let words_tp = stores.structure("ProbeShape::Words", 1);
+        stores.field(words_tp, "ws", words_vec);
+        let nums_tp = stores.structure("ProbeShape::Nums", 2);
+        stores.field(nums_tp, "ns", nums_vec);
+        stores.value(enum_tp, "Words", words_tp);
+        stores.value(enum_tp, "Nums", nums_tp);
+        stores.finish();
+        (enum_tp, words_tp, nums_tp)
+    }
+
+    /// The byte position and content type of one field of a built record type.
+    fn field_at(stores: &Stores, tp: u16, name: &str) -> (u16, u16) {
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+            &stores.types[tp as usize].parts
+        else {
+            panic!("'{name}' lives in a record type");
+        };
+        let f = fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no field '{name}'"));
+        (f.position, f.content)
+    }
+
+    /// loft#977 — a field written through the ENUM type resolves to the VARIANT that
+    /// declares it, and the offset alone is not enough to say which.
+    ///
+    /// Both fields sit at the same byte offset, so an offset-keyed lookup answers the FIRST
+    /// variant for both and every write lands in `Words`.  Only the content type separates
+    /// them, and the second assertion is the one that fails without it.
+    #[test]
+    fn a_struct_enum_field_resolves_to_the_variant_that_declares_it() {
+        let mut stores = Stores::new();
+        let (enum_tp, words_tp, nums_tp) = shape_enum(&mut stores);
+
+        let (ws_pos, ws_tp) = field_at(&stores, words_tp, "ws");
+        let (ns_pos, ns_tp) = field_at(&stores, nums_tp, "ns");
+        assert_eq!(
+            ws_pos, ns_pos,
+            "the two variants put their collection at the same offset — that is the point"
+        );
+        assert_ne!(ws_tp, ns_tp, "and they differ only in content type");
+
+        assert_eq!(
+            stores.variant_owning_field(enum_tp, ws_pos, ws_tp),
+            words_tp,
+            "the text collection resolves to Words"
+        );
+        assert_eq!(
+            stores.variant_owning_field(enum_tp, ns_pos, ns_tp),
+            nums_tp,
+            "and the float one to Nums, not to the first variant sharing its offset"
+        );
+    }
+
+    /// A field no variant declares leaves the type UNCHANGED, so the caller keeps whatever
+    /// behaviour it had — the redirect may never invent a record type.
+    #[test]
+    fn an_unclaimed_field_leaves_the_enum_type_alone() {
+        let mut stores = Stores::new();
+        let (enum_tp, _, nums_tp) = shape_enum(&mut stores);
+        let (ns_pos, ns_tp) = field_at(&stores, nums_tp, "ns");
+
+        assert_eq!(
+            stores.variant_owning_field(enum_tp, ns_pos + 64, ns_tp),
+            enum_tp,
+            "no variant has a field there"
+        );
+        assert_eq!(
+            stores.variant_owning_field(enum_tp, ns_pos, u16::MAX),
+            enum_tp,
+            "no variant has a field of that type"
+        );
+        let plain = stores.structure("ProbePlain", -1);
+        assert_eq!(
+            stores.variant_owning_field(plain, 0, ns_tp),
+            plain,
+            "a plain struct is not an enum and is answered unchanged"
+        );
+    }
+
+    /// loft#977 — the message when a record operation names a field its parent does not
+    /// declare.  `field_type` answers `u16::MAX` there, and letting that reach the type
+    /// table reported `index out of bounds: the len is 83 but the index is 65535`, naming
+    /// neither the type nor the field.
+    ///
+    /// No loft program can reach this any more — the parser resolves the variant before
+    /// emitting — so the guard has to be produced from here or not at all.
+    #[test]
+    #[should_panic(expected = "has no storage in that type")]
+    fn a_field_the_parent_cannot_hold_is_named_rather_than_indexed() {
+        let mut stores = Stores::new();
+        let (enum_tp, _, _) = shape_enum(&mut stores);
+        let rec = stores.database(8);
+        // The enum type itself holds no fields at all, which is exactly what the parser
+        // used to hand `record_new` for `c.limbs += [x]`.
+        stores.record_new(&rec, enum_tp, 0);
     }
 }

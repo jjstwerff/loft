@@ -3081,6 +3081,24 @@ impl Parser {
             // enum (`field_nr(enum, S_offset)` = 0 → `OpNewRecord(field=0)` = the wrong field).
             // `key_owner` maps a synth `__nullable<S>` to its payload struct; identity otherwise.
             let parent = self.database.key_owner(parent);
+            // loft#977 — the same fact for a USER struct-enum: `c.limbs` where `c: Shape`
+            // and `limbs` lives in the `Circle` variant.  The enum type carries a variant
+            // list and no fields, so resolving against it answers field 0 and a `u16::MAX`
+            // field type, which `record_new` then uses as a type-table index.  Redirect to
+            // the variant that declares the field, named by the offset AND the content type
+            // the read (`OpGetField(base, pos, content)`) already resolved — two variants
+            // each holding a collection put its handle at the same offset, so the offset
+            // alone picks the wrong one.  Identity for a plain struct, so both halves of the
+            // append still agree for every non-enum parent.
+            let parent = if let Value::Int(pos) = ps[1]
+                && let Some(Value::Int(content)) = ps.get(2)
+                && let Ok(pos) = u16::try_from(pos)
+                && let Ok(content) = u16::try_from(*content)
+            {
+                self.database.variant_owning_field(parent, pos, content)
+            } else {
+                parent
+            };
             let field_nr = if let Value::Int(pos) = ps[1] {
                 self.database.field_nr(parent, pos)
             } else {

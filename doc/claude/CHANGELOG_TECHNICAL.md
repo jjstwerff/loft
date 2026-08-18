@@ -9,6 +9,60 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Writing a collection field of a struct-enum panicked in the store layer (loft#977, 2026-08-18)
+
+```loft
+enum Shape { Circle { limbs: vector<float> }, Square { s: float } }
+c: Shape = Circle { limbs: [] };
+c.limbs += [1.0];     // index out of bounds: the len is 83 but the index is 65535
+```
+
+Both backends, no imports, no diagnostic and no source position — `65535` is `u16::MAX`
+reaching `self.types[tp as usize]` in `record_new`.
+
+`c.limbs` is written through the ENUM type, but the field lives in the `Circle` variant's
+own record. The enum type is `Parts::Enum` — a variant list, no fields — so resolving a
+field against it misses, and both resolvers hand back their not-found sentinel:
+`field_nr` says `0`, which is a real field number, and `field_type` says `u16::MAX`, which
+is then used as a type-table index. `field_ref` has the same miss and answers the record
+base, silently, so the sentinel was the loud half of a defect whose other half was not.
+
+The filed scope was a tenth of it. The issue reads "appending to a vector payload"; the
+boundary matrix says **every allocating write to every collection payload field, through
+every route** — `+=` and whole-assign alike, over `vector<float>` / `vector<record>` /
+`hash<T[k]>` / `vector<vector<…>>`, reached as a local, an element of a `vector<Shape>`,
+a function parameter or a struct field. An element write (`c.limbs[0] = …`) and a scalar
+field write (`c.s = …`) never call `record_new` and were correct throughout — the controls
+that place the defect in the allocating path rather than in struct-enum field access.
+
+- `Stores::variant_owning_field(enum_tp, position, content)` resolves a struct-enum field
+  to the variant that declares it, keyed on the byte offset **and** the content type —
+  never the offset alone, because every collection field is one 4-byte handle straight
+  after the discriminant, so two variants each holding one put it at the same offset.
+  Measured, with the resolver built offset-only: `enum Box { Listed { xs: vector<Item> },
+  Keyed { ys: hash<Item[name]> } }` resolves `ys` to `xs`, appends the record to the vector
+  instead of keying it, and the lookup answers nothing — silent at the write. Identity for
+  a non-enum parent and for a field no variant declares.
+- `new_record_field_op` applies it after `key_owner`, so `OpNewRecord` and `OpFinishRecord`
+  name the variant record. This is the same redirect @PLN25 already needed for a synth
+  `__nullable<S>` payload, now for the user-facing shape.
+- `record_new` / `record_finish` derive their sub-record type in one shared
+  `sub_record_type`, which refuses a not-found field type by name instead of indexing the
+  type table with it. The two halves cannot disagree, and the next instance of this class
+  says which type and which field rather than `the index is 65535`.
+
+Residual, filed as loft#980 rather than fixed here: field access on a struct-enum does not
+check the discriminant, so `c.limbs` on a `Square` value reads and writes `Circle`'s slot.
+That is the READ's long-standing behaviour — `len(c.limbs)` on a `Square` answered `0`
+silently before this fix too — and the write now merely agrees with it. Which of the three
+answers loft wants (refuse at compile time, check the tag at runtime, or allow a common
+prefix) is a language decision, not a patch.
+
+Guard: `tests/scripts/977-struct-enum-collection-field-write.loft` — eighteen cells on both
+backends, 45 assertions over value, length, ordering and the neighbouring fields — plus
+three unit tests in `src/database/structures.rs`: the resolver's ambiguity cell, its
+identity cases, and the guard's message, which no loft program can reach any more.
+
 ### An accessor's returned record borrows its container (loft#974, 2026-08-18)
 
 `fn get(b: Bag, k: text) -> Item? { b.items[k] }` declared

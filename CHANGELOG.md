@@ -26,6 +26,22 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Filling in a list inside an enum variant works
+
+A struct-enum whose variant carries a collection —
+
+```loft
+enum Shape { Circle { limbs: vector<float> }, Square { s: float } }
+```
+
+— could be built with its contents (`Circle { limbs: [1.0, 2.0] }`), but adding to that
+list afterwards, or replacing it, stopped the program with an internal message and no
+line number. It made no difference how the list was reached: a local, an element of a
+vector of shapes, a function parameter, a field of some other struct. Reading was fine,
+which is what made building the value up in steps look like a mistake in your own code.
+
+Both work now, for every kind of collection a variant can hold.
+
 ### A helper that looks something up no longer breaks what it looked in
 
 Reading a record out of a collection through your own small helper —

@@ -63,6 +63,17 @@ correctly on the same file.
 - Integer null: `i64::MIN` for a full-width `integer`; narrow integer aliases use the minimum of their storage width (`i32::MIN` for an `i32`-backed field). Float null: `f64::NAN`. Reference null: `store_nr == 0 && rec == 0`.
 - All arithmetic operations must propagate null (if either operand is null, result is null).
 - Never use `0` as a sentinel for integers or references in new code.
+- **A not-found answer must not be usable as an index, an offset, a length or a count.**
+  Diagnose the miss where it is produced, or route it into a message that names the type and
+  the field. `u16::MAX` flowing out of a lookup has cost this project a 59.6 GiB allocation
+  (loft#796, used as an offset) and an unattributable `index out of bounds: … the index is
+  65535` (loft#977, used as a type-table index).
+- **When one fact has several resolvers, they must agree on what a miss looks like.** Ask what
+  EVERY resolver answers, not just the one that crashed: in loft#977 the same missed field
+  gave `field_type` → `u16::MAX` (out of range, so it panicked) and `field_nr` → `0` and
+  `field_ref` → the record base (both in range, so they were silently wrong). The loud one
+  fired first and hid the other two; one more entry in the type table and there would have
+  been no panic at all, only writes landing in the wrong place.
 
 ---
 
