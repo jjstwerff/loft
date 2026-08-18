@@ -301,3 +301,107 @@ fn arc_c1_a_declared_scope_does_not_take_the_newest_cached() {
          answer past it:\n{all}"
     );
 }
+
+// ── arc D: `loft install` in a directory that is not a package declares one ────────
+
+/// Build a one-package registry on disk and return its `file://` index URL.
+///
+/// `file://` rather than a fixture HTTP server: `http_get_bytes` serves both the index
+/// and the tarball from it, so the whole install path runs — resolve, download, verify
+/// sha256, extract — with no socket and no second copy of a server in this file.
+fn file_registry(home: &Path, name: &str, version: &str) -> String {
+    let src = home.join("src_pkg");
+    write(
+        &src.join("loft.toml"),
+        &format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nloft = \">=0.8\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\n"
+        ),
+    );
+    write(
+        &src.join("src").join(format!("{name}.loft")),
+        &format!("pub fn probe_id() -> text {{ return \"{name}-{version}\"; }}\n"),
+    );
+    let served = home.join("served");
+    std::fs::create_dir_all(&served).expect("mkdir");
+    let out = loft::package::package_create(&src, Some(&served)).expect("package_create");
+    let index = served.join("index.json");
+    write(
+        &index,
+        &format!(
+            r#"{{"schema_version":1,"packages":{{"{name}":{{"description":"probe",
+               "versions":{{"{version}":{{"url":"file://{}","sha256":"{}","size":{},
+               "loft":">=0.8","published":"2026-08-18T00:00:00Z"}}}}}}}}}}"#,
+            out.tarball.display(),
+            out.sha256,
+            out.size
+        ),
+    );
+    format!("file://{}", index.display())
+}
+
+/// Run the `loft` CLI in `dir` against the private home + `url` registry.
+fn cli(home: &Path, dir: &Path, url: &str, args: &[&str]) -> String {
+    let out = Command::new(loft_bin())
+        .args(args)
+        .env("LOFT_HOME", home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("LOFT_REGISTRY_URL", url)
+        .env("LOFT_TIMEOUT", "120")
+        .current_dir(dir)
+        .output()
+        .expect("spawn loft");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// @PLN143 arc D — `loft install <pkg>@<version>` outside a package writes the manifest
+/// that makes its lock govern, and a later run honours the pin.
+///
+/// Without this the verb's pin was honoured only through the cwd `loft.lock` leg that C2
+/// deletes: an explicit version, asked for by hand, silently ignored on the next run —
+/// worse than the defect being fixed. So the install CREATES the declaration it needs,
+/// which makes the directory a package and leaves the scope table to decide the rest.
+///
+/// The second half is the half that matters: a NEWER version is put in the cache before
+/// the run, so "the pin held" cannot pass by there being nothing else to resolve to.
+#[test]
+fn arc_d_install_outside_a_package_declares_one_and_the_pin_holds() {
+    let home = empty_home("d_declare");
+    let url = file_registry(&home, "probepkg", "0.1.0");
+    let dir = home.join("scratch");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+
+    let installed = cli(&home, &dir, &url, &["install", "probepkg@0.1.0"]);
+    let manifest = std::fs::read_to_string(dir.join("loft.toml")).unwrap_or_default();
+    let lock = std::fs::read_to_string(dir.join("loft.lock")).unwrap_or_default();
+
+    // A newer copy in the cache: the pin below has to beat something.
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    probe_script(&dir);
+    let ran = run_env(&home, &dir, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        manifest.contains("[package]") && manifest.contains("probepkg = \"0.1.0\""),
+        "install into a directory with no manifest must WRITE one, declaring what it \
+         installed (@PLN143 arc D):\n{installed}\nloft.toml:\n{manifest}"
+    );
+    assert!(
+        installed.contains("created loft.toml"),
+        "and say so — a file appearing unannounced is the surprise this replaces:\n{installed}"
+    );
+    assert!(
+        lock.contains("0.1.0"),
+        "the lock still records the exact version:\n{lock}"
+    );
+    assert!(
+        ran.contains("probepkg-0.1.0"),
+        "the pin must govern the next run even with 0.2.0 sitting in the cache — that \
+         is what the manifest is FOR:\n{ran}"
+    );
+}

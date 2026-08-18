@@ -696,6 +696,46 @@ fn install_manifest_dependencies(opts: &loft::install::InstallOptions) {
     write_api_stubs(&cwd.join("loft.lock"), &cwd);
 }
 
+/// @PLN143 arc D — write the minimal `loft.toml` that makes `dir` a package, so the lock
+/// `loft install` is about to write has a root that governs it.
+///
+/// Minimal on purpose: a `[package]` name and version, and nothing else. This directory
+/// is where someone installed a dependency, not a library being authored — `loft new`
+/// writes the library skeleton, and inventing an `entry` here would claim a source file
+/// that does not exist.
+///
+/// The name is the directory's own, folded to what a package name may hold (lowercase
+/// ascii, digits, `_`); a directory whose name yields nothing usable is called `app`,
+/// because the name is a label for the manifest, not an identity anyone publishes.
+///
+/// Answers the name written, or `None` when the file could not be written — the install
+/// itself still stands, and the missing declaration is visible in the next run.
+#[cfg(feature = "registry")]
+fn manifest_for_new_package(dir: &std::path::Path, manifest: &std::path::Path) -> Option<String> {
+    let raw = dir.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+    let folded: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .skip_while(|c| !c.is_ascii_alphabetic() && *c != '_')
+        .collect();
+    let name = if folded.is_empty() || loft::libscan::is_reserved_package_name(&folded) {
+        "app".to_string()
+    } else {
+        folded
+    };
+    let body = format!(
+        "# Written by `loft install`: this directory's dependency declaration.\n\
+         [package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+    );
+    std::fs::write(manifest, body).ok().map(|()| name)
+}
+
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
 ///
 /// PKG.REG R4 (2026-05-24): the `loft install <name>` entry point in
@@ -748,9 +788,18 @@ fn install_from_registry_with_opts(args: &[String], opts: &loft::install::Instal
                     },
                     ToString::to_string,
                 );
-                let manifest = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("loft.toml");
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let manifest = cwd.join("loft.toml");
+                // @PLN143 arc D — install into a directory that is not a package, and the
+                // verb CREATES the declaration it needs. Without a `loft.toml` the walk-up
+                // finds no root, so the lock this install writes governs nothing: an
+                // explicit `loft install <pkg>@<version>` would be silently ignored on the
+                // next run, which is worse than the stray-lockfile defect it replaces.
+                if !manifest.exists() {
+                    if let Some(pkg) = manifest_for_new_package(&cwd, &manifest) {
+                        println!("  created loft.toml (package `{pkg}`)");
+                    }
+                }
                 if manifest.exists()
                     && loft::manifest::record_dependency(
                         &manifest.to_string_lossy(),
