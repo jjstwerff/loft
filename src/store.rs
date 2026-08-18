@@ -2531,7 +2531,11 @@ impl Store {
     }
 
     pub fn buffer(&mut self, rec: u32) -> &mut [u8] {
-        let size = *self.addr::<u32>(rec, 0) as usize * 8;
+        // The header word counts itself: `claim(n)` reserves `n` words at `rec*8`, of
+        // which the first IS the size word this reads.  The payload therefore starts one
+        // word in and is one word SHORTER than the record — a span of `size` bytes from
+        // offset 8 runs exactly 8 bytes past the record's end (loft#970).
+        let size = (*self.addr::<u32>(rec, 0) as usize).saturating_sub(1) * 8;
         // The length comes from the record's own header, so a corrupt header sizes
         // the slice — and a FREED record's header is negative, which reading it as
         // `u32` turns into a span of gigabytes.  Bound it before it becomes a slice.
