@@ -16,12 +16,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 83 tags across the ecosystem, with **Phase E under way**: `hex_form`
-(`@HXF-001..007`), `hex_place` (`@HXP-001..006`) and `hex_roof` (`@HXR-001..006`) are
-the first three of `loft-libs-world`'s twelve deferred packages to land. Writing them
-found a shipped parser that repaired seven malformed texts its own comment documents as
-refused, a seam-error number that reads exactly zero wherever a caller would naturally
-measure it, and a documented cure for a wobbly eave that silently buys it by ponding.
+(loft#973). 89 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`) and
+`hex_way` (`@HXY-001..006`) are the first four of `loft-libs-world`'s twelve deferred
+packages to land. Writing them found a shipped parser that repaired seven malformed texts
+its own comment documents as refused, a seam-error number that reads exactly zero wherever
+a caller would naturally measure it, a documented cure for a wobbly eave that silently buys
+it by ponding, and an offset that put every **arc** on the far side of the way from its
+straights while remaining exactly `d` from the centreline.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -29,8 +31,8 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Also open: Phase C's two follow-ups and Phase C2 (the feature catalogue, `FTR`,
-unstarted).
+Now at *6 tagged, 8 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -1018,7 +1020,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 3 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 4 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1084,20 +1086,78 @@ radius 3.00 while the outermost *interior* cell reaches 3.46, so no single radiu
 separates the two sets. `roof_hip` gets both because it never measures a radius — the
 boundary is ring 0 by definition. The comment now carries the cost beside the cure.
 
-**A method note worth keeping.** All three rows so far found their defect in the tag that
-had to demonstrate the package's most confidently stated promise — first a claim that was
-false (`hex_form`), then one whose units were unstated (`hex_place`), then one that was
-true and priced nothing (`hex_roof`). That is not luck: a worked example is the first
-thing that ever evaluates such a sentence against the code, and the sentences most worth
-working are the ones written with the most certainty.
+**Row 4 `hex_way` is DONE** (`@HXY-001..006`; *6 tagged, 8 deferred*), and it is the first
+row whose finding is a **wrong answer in shipped code** rather than a wrong sentence about
+it. `track_offset` is the function the whole package exists for — a way stores one exact
+centreline and every rail, kerb and platform face is this call at a different `d`. Its arc
+branch read the sweep direction the wrong way up, so **every turn's offset landed on the
+far side of the way from its straights**: a left rail that runs down the left of the
+straight and the right of the bend, with a `2d` jump where they meet.
+
+**What makes it a @PLN141 finding rather than an ordinary bug is what could not see it.**
+The property everyone checks is equidistance, and equidistance holds *exactly* on the
+wrong side — measured at 1.0000000000000009 for a requested 1.0. So:
+
+| checker | verdict on the broken code |
+|---|---|
+| `hex_way`'s own conformance suite (`01-hex-way.loft`) | green |
+| crawler's dedicated `I-EQUI` gate, over a straight+arc+straight track, 4 offsets × 21 samples | green |
+| `track_distance` from any point of the offset | exactly `d` |
+| the gap at the joint | **2d** |
+
+The number that sees it is not a distance to the line at all — it is the distance between
+the end of one offset segment and the start of the next. `@HXY-001` sweeps eight widths ×
+two turn directions × two sides and asserts that gap is zero, and it also pins the
+agreement between `seg_curvature`'s sign and which rail is the shorter one — the invariant
+the bug violated. Fixed in `hex_way` 0.1.1 (one sign), NOT republished. Restoring the bug
+turns two of the six examples red and leaves the conformance suite green, which is the
+whole thesis in one run.
+
+**Consumers, for the record** (reported here, not in their trees): moros' `hex_editor`
+offsets only straights, so it was never affected; crawler's `platformtest` offsets a single
+arc and calls the result "concentric — the right answer" without ever checking the side, so
+its platform was on the wrong side of the curve and nothing said so.
+
+**The row's second finding is a number the module header rounds off.** The header claims
+rasterising a band "bottoms out around 0.5 hex widths". Swept, the floor is not one number —
+it is the spacing of the cell centres *across* the way, so it is a function of the heading:
+**1.5 down a row, 0.866 down a column**, a factor of `sqrt(3)` apart. 0.5 hex widths is the
+best case quoted as the case. Measured, a 0.1-wide footpath and a 1.4999-wide lane along a
+row rasterise to the *identical* 17 cells. The same anisotropy returns end-on in `@HXY-006`:
+the shortest tread `way_steps` can carry is the spacing of the flight's own cells —
+`sqrt(3)` down a row, 1.5 down a column — so there is no tread that is fine enough for every
+heading, and 1.5 is exactly right along one and a double riser along the other. That
+function's own comment already knew this for treads; the module header had forgotten it for
+widths, one screen away.
+
+**And a vacuous instrument, caught in the act.** The first tread sweep read *worst riser =
+0* for every column-heading flight, which looks like a clean staircase and is not: at that
+halfwidth the column footprint is **disconnected** — only every other row has a cell at
+`x = 0` — so the riser instrument had no neighbouring pairs to compare and reported a
+perfect result over an empty set. `@HXY-006` therefore asserts `adjacent_pairs(...) > 0`
+before it measures anything. See [[absent-warning-is-not-a-pass]]: scoring on a channel
+that can be silently empty ranks the most broken cell best.
+
+**A method note worth keeping.** All four rows so far found their defect in the tag that
+had to demonstrate the package's most confidently stated promise — a claim that was
+false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
+priced nothing (`hex_roof`), and one the code simply did not implement (`hex_way`). That is
+not luck: a worked example is the first thing that ever evaluates such a sentence against
+the code, and the sentences most worth working are the ones written with the most certainty.
 
 **And a second note, about what these packages have in common.** Every finding so far is a
 call that produces a plausible wrong answer while passing every cheap check — a parse that
-repairs, a residual that reads zero, a roof that still sheds water. So the productive
-question for the remaining nine rows is not *"what does this function do"* but **"what is
-the nearest call that looks identical and is not, and what number distinguishes them?"**
-In `hex_roof` that number already existed and was simply not the one anyone read
-(`eave_spread`).
+repairs, a residual that reads zero, a roof that still sheds water, a rail that is exactly
+the right distance from the wrong side. So the productive question for the remaining eight
+rows is not *"what does this function do"* but **"what is the nearest call that looks
+identical and is not, and what number distinguishes them?"** In `hex_roof` that number
+already existed and was simply not the one anyone read (`eave_spread`); in `hex_way` it had
+to be constructed, because a joint gap is not a quantity anyone had thought to name.
+
+**The sharpest form of the rule, from row 4:** the property a package is *most* careful to
+guarantee is the one least able to catch its own violation, because everyone — the library's
+tests and the consumer's gate alike — checks the guarantee and nobody checks what the
+guarantee is silent about. Equidistance does not pick a side.
 
 Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
 and a signature carries least; every row below is a package that owes an example.
@@ -1107,7 +1167,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~1~~ | ~~`hex_form`~~ | 53 | **DONE** — `@HXF-001..007`. Rules **C1–C5** worked one by one; writing them found and fixed a reader that repaired seven texts it documents as refused | — |
 | ~~2~~ | ~~`hex_place`~~ | 17 | **DONE** — `@HXP-001..006`. The shared edge, order-freeness, levels, seating, the seam error and arbitration; `@HXP-001` and `@HXG-003` now name each other | — |
 | ~~3~~ | ~~`hex_roof`~~ | 15 | **DONE** — `@HXR-001..006`. The distance-source taxonomy, and the eave/drainage trade-off a quantised footprint forces on a point source | — |
-| 4 | `hex_way` | 20 | a way is authored as ONE exact centreline and every other line is an OFFSET of it — that is what escapes the hex quantisation floor, which bottoms out near half a hex. The floor is the number a caller needs | nothing |
+| ~~4~~ | ~~`hex_way`~~ | 20 | **DONE** — `@HXY-001..006`. Found and fixed an offset that put every arc on the far side of the way (0.1.1), and measured the quantisation floor the header rounds off: 1.5 down a row, 0.866 down a column | — |
 | 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
 | 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
 | 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
@@ -1120,8 +1180,9 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. With row 1 landed, rows 8 and 9 are unblocked too,
-so the only rows still gated on a decision are 6, 7, 10, 11 and 12.
+the only one waiting on a person. With rows 1 and 4 landed, rows 8 and 9 are unblocked too,
+so the only rows still gated on a decision are 6, 7, 10, 11 and 12 — and **row 5
+(`hex_shape`) is next**, being the last unblocked one that needs nothing chosen.
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1131,7 +1192,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *5 tagged, 9 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *6 tagged, 8 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
