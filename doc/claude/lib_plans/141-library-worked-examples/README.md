@@ -17,9 +17,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
 (loft#973). 83 tags across the ecosystem, with **Phase E under way**: `hex_form`
-(`@HXF-001..007`) is the first of `loft-libs-world`'s twelve deferred packages to
-land, and writing it found a shipped parser that repaired seven malformed texts its
-own comment documents as refused.
+(`@HXF-001..007`) and `hex_place` (`@HXP-001..006`) are the first two of
+`loft-libs-world`'s twelve deferred packages to land. Writing them found a shipped
+parser that repaired seven malformed texts its own comment documents as refused, and
+a seam-error number that reads exactly zero wherever a caller would naturally measure
+it.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -1016,7 +1018,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 1 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 2 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1047,13 +1049,36 @@ is most confidently written. `hex_fit`'s `draft_read` (row 8) states the same do
 over the same `word_int(…) ?? 0` helper and carries the same gap in its `wall` line —
 so the finding is a queue item, not a one-off.
 
+**Row 2 `hex_place` is DONE** (`@HXP-001..006`, acronym registered; *4 tagged, 10
+deferred*), and it produced the same shape of finding from the opposite direction —
+not a claim that was false, but a claim whose UNITS were unstated. `pose_residual` is
+documented as *"~machine ε in float"*, which reads like a constant. Swept against the
+evaluation point it is not: one 30-degree pose gives exactly `0.0` at (10,7),
+`2.3e-13` at (1000,700), `0.0` again at (10000,7000) and `2.3e-10` at (1e6,7e5) — a
+jagged, deterministic function of the point. So the natural way to calibrate a
+tolerance — measure it once, near the origin, where the thing under test lives —
+**reads exactly zero and concludes the transform is exact.** The comment now says
+which half is load-bearing (*AT ONE WORLD POINT*), and the example pins the contrast
+rather than any single value.
+
+The row also delivered the cross-citation the table asked for: `@HXP-001` and
+`@HXG-003` are one question at two scales — one wall between two hexes must resolve to
+one stored slot; one seam between two *stencils* should not be stored at all — and each
+names the other. The def scanner's first-tag rule keeps a sibling mention a mention;
+verified by running the gate for both packages rather than assuming it.
+
+**A method note worth keeping.** Both rows so far found their defect in the tag that had
+to demonstrate the package's most confidently stated promise. That is not luck: a worked
+example is the first thing that ever evaluates such a sentence against the code, and the
+sentences most worth working are the ones written with the most certainty.
+
 Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
 and a signature carries least; every row below is a package that owes an example.
 
 | # | package | pub fns | what its example must teach | blocked on |
 |---|---|---|---|---|
 | ~~1~~ | ~~`hex_form`~~ | 53 | **DONE** — `@HXF-001..007`. Rules **C1–C5** worked one by one; writing them found and fixed a reader that repaired seven texts it documents as refused | — |
-| 2 | `hex_place` | 17 | *"two stencils adjacent: who owns the shared edge?"* — the same question `@HXG-003` answers one level down, and the two should cite each other | nothing — `@HXG-003` now exists |
+| ~~2~~ | ~~`hex_place`~~ | 17 | **DONE** — `@HXP-001..006`. The shared edge, order-freeness, levels, seating, the seam error and arbitration; `@HXP-001` and `@HXG-003` now name each other | — |
 | 3 | `hex_roof` | 15 | one mechanism, several profiles: every roof form is the same function of a **distance**, and only the distance SOURCE changes. Which source a profile reads is the trap | nothing |
 | 4 | `hex_way` | 20 | a way is authored as ONE exact centreline and every other line is an OFFSET of it — that is what escapes the hex quantisation floor, which bottoms out near half a hex. The floor is the number a caller needs | nothing |
 | 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
@@ -1079,7 +1104,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *3 tagged, 11 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *4 tagged, 10 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
