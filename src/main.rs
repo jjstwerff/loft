@@ -731,6 +731,35 @@ fn install_from_registry_with_opts(args: &[String], opts: &loft::install::Instal
         match install_one(name, version, opts) {
             Ok(report) => {
                 print!("{}", format_report(&report));
+                // loft#968 — declare it.  Only `loft.lock` was written, so nothing in the
+                // project distinguished a dependency from a package that happened to be
+                // installed on the box: dropping the `[dependencies]` line changed
+                // nothing that could be observed.  An explicit version stays exactly as
+                // asked; without one, the compatible range around what was resolved —
+                // `loft.lock` is where the exact pin belongs.
+                let requirement = version.map_or_else(
+                    || {
+                        report
+                            .installed
+                            .iter()
+                            .chain(report.skipped_cached.iter())
+                            .find(|(n, _)| n == name)
+                            .map_or_else(|| "*".to_string(), |(_, v)| format!("^{v}"))
+                    },
+                    ToString::to_string,
+                );
+                let manifest = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("loft.toml");
+                if manifest.exists()
+                    && loft::manifest::record_dependency(
+                        &manifest.to_string_lossy(),
+                        name,
+                        &requirement,
+                    )
+                {
+                    println!("  declared in loft.toml: {name} = \"{requirement}\"");
+                }
             }
             Err(e) => {
                 eprintln!("loft install: {e}");

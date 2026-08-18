@@ -958,6 +958,67 @@ fn inline_field<'a>(value: &'a str, field: &str) -> Option<&'a str> {
     None
 }
 
+/// Record `name = "<requirement>"` under `[dependencies]` in the manifest at `path`.
+///
+/// loft#968 — the manifest is what makes a dependency PROVABLE. `loft install <pkg>`
+/// wrote only `loft.lock`, so a project could not distinguish *"we depend on this"* from
+/// *"this happens to be installed on the box that built it"*: dropping a `[dependencies]`
+/// line changed nothing, and the negative gate a consumer wanted — remove the dependency,
+/// the tests must stop compiling — could not be written. PKG_REGISTRY.md has described
+/// `loft install <name>` as "adds to `loft.toml`'s `[dependencies]` and installs" since
+/// 2026-05; this is that half.
+///
+/// A text edit rather than a re-serialisation: the manifest reader is a token walk with no
+/// writer, and rewriting the file from a parsed `Manifest` would drop every comment and
+/// reorder every key — a package's manifest is hand-written, and a tool that reformats it
+/// is a tool people stop running.
+///
+/// Answers whether it wrote: `false` when `name` is already declared (in any form,
+/// including a path dependency) or the file cannot be read.
+pub fn record_dependency(path: &str, name: &str, requirement: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let mut in_deps = false;
+    let mut section_end: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.split('#').next().unwrap_or("").trim();
+        if t.starts_with('[') {
+            if in_deps {
+                section_end = Some(i);
+                break;
+            }
+            in_deps = t == "[dependencies]";
+            continue;
+        }
+        if in_deps && t.split('=').next().is_some_and(|k| k.trim() == name) {
+            return false; // already declared — the manifest is already authoritative
+        }
+    }
+    let entry = format!("{name} = \"{requirement}\"");
+    let mut out: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
+    if in_deps {
+        // Land at the end of the section's declarations, before whatever blank lines
+        // separate it from the next section — so the file keeps its shape.
+        let mut at = section_end.unwrap_or(out.len());
+        while at > 0 && out[at - 1].trim().is_empty() {
+            at -= 1;
+        }
+        out.insert(at, entry);
+    } else {
+        // No `[dependencies]` at all: open one at the end.
+        if out.last().is_some_and(|l| !l.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push("[dependencies]".to_string());
+        out.push(entry);
+    }
+    let mut body = out.join("\n");
+    body.push('\n');
+    std::fs::write(path, body).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1434,5 +1495,66 @@ n_demo_fn_b = "demo_fn_b"
         // to the registry for something that is not there.
         assert_eq!(extract_version_req(r#"{ path = "../gridmesh" }"#), None);
         assert_eq!(extract_version_req(""), None);
+    }
+
+    fn temp_manifest(tag: &str, body: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "loft_968_{tag}_{}_{}.toml",
+            std::process::id(),
+            tag.len()
+        ));
+        std::fs::write(&p, body).expect("write manifest");
+        p
+    }
+
+    /// loft#968 — `loft install <pkg>` records the dependency, so removing the line is a
+    /// change the project can notice.
+    #[test]
+    fn record_dependency_opens_a_section_and_keeps_the_rest() {
+        let p = temp_manifest("new", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n");
+        assert!(record_dependency(p.to_str().unwrap(), "cbor", "^0.1.3"));
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("[dependencies]"), "{text}");
+        assert!(text.contains("cbor = \"^0.1.3\""), "{text}");
+        // Everything that was there is still there, unreordered.
+        assert!(text.starts_with("[package]\nname = \"app\""), "{text}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Into an existing section, at the end of its declarations — a hand-written manifest
+    /// that a tool reformats is a tool people stop running.
+    #[test]
+    fn record_dependency_appends_inside_an_existing_section() {
+        let p = temp_manifest(
+            "existing",
+            "[package]\nname = \"app\"\n\n[dependencies]\n# what we depend on\n             glb = \"^0.1\"\n\n[library]\nentry = \"src/app.loft\"\n",
+        );
+        assert!(record_dependency(p.to_str().unwrap(), "cbor", "0.1.2"));
+        let text = std::fs::read_to_string(&p).unwrap();
+        let deps_at = text.find("[dependencies]").expect("section");
+        let lib_at = text.find("[library]").expect("library section");
+        let cbor_at = text.find("cbor = \"0.1.2\"").expect("the new entry");
+        assert!(
+            deps_at < cbor_at && cbor_at < lib_at,
+            "the entry must land inside [dependencies]\n{text}"
+        );
+        assert!(text.contains("# what we depend on"), "comment kept\n{text}");
+        assert!(text.contains("glb = \"^0.1\""), "sibling kept\n{text}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Idempotent, and blind to the shape a declaration takes: a path dependency IS a
+    /// declaration, so re-recording it as a registry version would contradict the manifest.
+    #[test]
+    fn record_dependency_leaves_a_declared_name_alone() {
+        let p = temp_manifest(
+            "declared",
+            "[package]\nname = \"app\"\n\n[dependencies]\ncbor = { path = \"../cbor\" }\n",
+        );
+        assert!(!record_dependency(p.to_str().unwrap(), "cbor", "^0.1.3"));
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("path = \"../cbor\""), "{text}");
+        assert!(!text.contains("^0.1.3"), "{text}");
+        let _ = std::fs::remove_file(&p);
     }
 }

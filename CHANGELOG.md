@@ -26,6 +26,31 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### loft tells you when a library is not in your `loft.toml`
+
+`use hex_grid;` works even when your `loft.toml` never mentions `hex_grid`, as long as the
+package is installed on the machine. That is deliberate — it is what makes a one-file
+script Just Work — but in a project it meant nothing recorded whether you *depend* on a
+library or merely *have* it. You could delete a line from `[dependencies]` and every test
+still passed, so "is this dependency still load-bearing?" was a question no check could
+ask.
+
+Now it says so, once, and keeps running:
+
+```
+advice[undeclared-dependency]: `hex_grid` resolved from the registry, but
+  `…/loft.toml` does not declare it — so nothing here says whether the project
+  depends on `hex_grid` or merely runs on a box that has it installed
+  fix  run `loft install hex_grid` to record it under `[dependencies]`
+```
+
+Worth doing: an undeclared library is not pinned either. It resolves to the newest version
+present, so two machines can quietly build against two different versions of it.
+
+Single-file scripts hear nothing — there is no manifest to declare into — and neither do
+you about a library's own dependencies, which are its author's to record. Silence it with
+`LOFT_NO_UNDECLARED_DEP=1`.
+
 ### `loft install` installs what your project depends on
 
 Typed on its own in a project directory, `loft install` now reads your `loft.toml` and

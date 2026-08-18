@@ -365,6 +365,10 @@ pub struct Parser {
     /// package the author did not write.  Keeping the path is what lets the clash be
     /// reported as a clash, naming both files.
     use_paths: std::collections::HashMap<String, String>,
+    /// loft#968 — packages already reported as resolved-but-undeclared, so one `use`
+    /// speaks once.  Deliberately NOT carried by [`Self::seed_from`]: it is a parse-time
+    /// side map driving a diagnostic the base parse has already emitted.
+    undeclared_reported: std::collections::HashSet<String>,
     /// Root project's `[dependencies]` version constraints (name → req), read
     /// once from the main script's nearest-ancestor `loft.toml` (via
     /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
@@ -954,6 +958,7 @@ impl Parser {
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
             use_paths: std::collections::HashMap::new(),
+            undeclared_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
             auto_use_trigger_map: None,
@@ -10236,9 +10241,17 @@ impl Parser {
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
         self.probe_sidecar_lockfile(id, &mut f);
+        // loft#968 — everything above resolves from something the project SAYS: a path it
+        // declares, a `--lib` directory it was given, a sidecar lock it pinned.  What
+        // follows resolves from the registry, which is a property of the BOX.  So this is
+        // the one line where the two can be told apart.
+        let named_by_the_project = std::path::Path::new(&f).exists();
         self.probe_project_lockfile(id, &mut f);
         self.probe_registry_installed(id, &mut f);
         self.probe_auto_install(id, &mut f);
+        if !named_by_the_project && std::path::Path::new(&f).exists() {
+            self.undeclared_registry_dep(id, &cur_script);
+        }
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
         if blocked(&f) {
@@ -10577,6 +10590,70 @@ impl Parser {
              and a module's file name is shared across the whole dependency graph, so \
              this `use` binds the second one. {cure}"
         );
+    }
+
+    /// loft#968 — `use <pkg>` resolved a registry package the project's manifest never
+    /// declares.
+    ///
+    /// The resolution is deliberate and stays: a qualified `lib::fn()` auto-loads, and
+    /// self-healing `loft.lock` is a convenience worth keeping.  The silence is the
+    /// defect. Nothing in the project distinguished *"we depend on this"* from *"this
+    /// happens to be installed on the box that built it"*, so a consumer could delete a
+    /// `[dependencies]` line and every test still passed — measured on a 33 000-line
+    /// project with ten declared dependencies. The negative gate they wanted (*drop the
+    /// dependency and the tests must stop compiling*) could not be written, and a
+    /// dependency deleted by accident was invisible to every gate.
+    ///
+    /// `advice`, not `warning`: the program computes exactly what the language promises,
+    /// on this box, today.  What is wrong is that the manifest does not describe the
+    /// project — a build-reproducibility fact, not a wrong answer.
+    ///
+    /// Silent in the two places where there is nothing to declare **into**: a bare script
+    /// with no `loft.toml` above it (that is the `pip install` story working), and a
+    /// package being parsed out of the registry cache — that manifest belongs to someone
+    /// else, and its author is the only one who can act on it.
+    fn undeclared_registry_dep(&mut self, id: &str, cur_script: &str) {
+        if std::env::var_os("LOFT_NO_UNDECLARED_DEP").is_some() {
+            return;
+        }
+        if std::fs::canonicalize(cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache))
+        {
+            return;
+        }
+        let Some(root) = Self::find_project_root(cur_script) else {
+            return;
+        };
+        let manifest_path = root.join("loft.toml");
+        let Some(manifest) = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+        else {
+            return;
+        };
+        if manifest.dependencies.iter().any(|(name, _)| name == id) {
+            return;
+        }
+        if !self.undeclared_reported.insert(id.to_string()) {
+            return;
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "undeclared-dependency",
+            "`{id}` resolved from the registry, but `{}` does not declare it — so nothing \
+             here says whether the project depends on `{id}` or merely runs on a box that \
+             has it installed",
+            manifest_path.display()
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: format!("run `loft install {id}` to record it under `[dependencies]`"),
+            condition: None,
+            edit: None,
+            concept: "packages",
+            concept_ref: "@F55",
+        });
     }
 
     /// Do these two files belong to the same package — the same nearest `loft.toml`?
