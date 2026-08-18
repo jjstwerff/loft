@@ -9,6 +9,62 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A split-ownership return is decided per run (loft#981, loft#982, 2026-08-18)
+
+A heap return carries ONE static answer to *may the caller free this?*, read off the return
+deps — a dep naming a visible parameter means BORROW (never free), an empty one means OWNED.
+A return that is a view of a parameter on one path and a freshly minted store on the other
+has no correct static answer, and the one it got orphaned the minted store:
+
+```loft
+fn get(b: Bag, k: text) -> Item { b.items[k] ?? Item { name: "miss", limbs: [] } }
+fn pick(o: Outer, fresh: boolean) -> Outer { if !fresh { return o; } make_outer(99) }
+```
+
+`Item×41` for 41 misses, `Outer×N` for N calls — unbounded in a loop, both backends, exit 0,
+every value correct. Found in `loft-libs-world`'s `hex_field::stencil_rotate`, in a published
+library, invisibly: `loft test` runs the leak check under `--interpret` only and the leak
+surfaces at PROGRAM exit.
+
+loft#982 reads as the same defect for a different reason, and the measurement is the point:
+its arms do NOT split. `return o` over a by-value struct parameter is hoisted to
+`__ret_1 = o`, which DEEP-COPIES — so both paths deliver a fresh store, the caller gets a
+copy either way (`b.o_n = 777` leaves the argument at `2`), and the dep on `o` is simply
+STALE. That is why BOTH arms leaked, not just the fresh one, and why the runtime test is the
+right answer for it too: it asks *is this store mine?* rather than trusting the static class.
+
+**The cure reuses @P290 instead of adding a rung.** The call bracket already marks a caller's
+arguments "do not free mine" for the call's duration, and both backends' `OpCopyRecord`
+already refuse the `0x8000` source-free on a marked store (`state/io.rs::do_copy_record`,
+`codegen_runtime.rs::OpCopyRecord`). So the bit is SET at a bracketed call site and the run
+decides. No new opcode, and it scales to several witnesses where one `OpFreeRefIfDistinct`
+could not. `use_analysis::call_return_frees_source` is the one fact; three emitters read it
+(interp first-bind + reassign, native `generation/dispatch.rs`, which had no bracket and now
+emits the same one), and `protectable_ref_args` is the one derivation shared by the gate and
+the protection emit so the two cannot drift.
+
+**The bound that the suite found.** The witness set must span every argument the return could
+BORROW, not every argument the bracket accepts. The bracket takes `Reference`/`Vector`/`Enum`;
+a keyed collection (`hash`/`sorted`/`index`/`radix`/`trie`) is a borrow source it does not
+cover, and reading the narrower list as complete freed a hash parameter's element out from
+under the caller — `keyed_cells_poison_clean_*` and `consumed_lift_cells_poison_*` went red,
+`rec=0xDEADBEEF`. Coverage is now asked with `heap_dep()`, through `base()` so an `Optional`
+wrapper cannot hide the storage under it. An argument the bracket cannot name keeps the old
+conservative *never free*: the leak stays for that shape (a keyed-collection parameter)
+rather than risking a free of a store the caller still reaches.
+
+**`Store::free_protected` became `free_protect_depth`.** One call bracket inside another may
+protect the same store, and a boolean let the inner release drop the outer bracket's
+protection — after which the outer copy's source-free would free the caller's own argument.
+No probe in the suite distinguishes the two today; the depth closes it by construction.
+
+Guard: `tests/scripts/981-split-ownership-return.loft` + `tests/split_ownership_return.rs` —
+leak as the DETERMINISTIC oracle (the census at exit does not depend on slot reuse), poison
+and strict-stores for the opposite direction, and the keyed-collection control. Against a
+pre-fix binary it orphans 161 + 41 records on both backends while every value cell passes.
+`tests/scripts/978-…loft` now drives its return-position join down the fresh arm too — the
+exclusion its comment recorded was this leak.
+
 ### A package's own module wins its own `use` (loft#976, 2026-08-18)
 
 Two packages, neither depending on the other, each shipping `src/skin.loft` with DISJOINT

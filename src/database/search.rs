@@ -538,7 +538,7 @@ impl Stores {
             && !self.is_stack_store(value.store_nr)
             && !self.allocations[value.store_nr as usize].free
             && !self.allocations[value.store_nr as usize].read_only
-            && !self.allocations[value.store_nr as usize].free_protected
+            && !self.allocations[value.store_nr as usize].is_free_protected()
         {
             self.free(value);
         }

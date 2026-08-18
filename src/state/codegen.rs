@@ -2110,11 +2110,22 @@ impl State {
                     // borrowed — either canonical (same-store no-op gate in
                     // OpCopyRecord) or fresh S1, paired with the post-call
                     // sentinel reset below to clear the caller's slot.
-                    let is_borrowed_view = stack.data.def(*fn_nr).returns_borrowed_view();
-                    let tp_val = if is_borrowed_view {
-                        i32::from(tp_nr)
-                    } else {
+                    //
+                    // loft#981/#982 — a borrowed-view return is not always a borrow.
+                    // The callee may hand back either the parameter's store or one it
+                    // minted (a `??` whose arms split, or a `return o` the return hoist
+                    // materialises into a fresh `__ret_N`), and clearing the bit for
+                    // both leaked the minted one — once per call, unbounded in a loop.
+                    // When this site brackets EVERY ref argument with
+                    // `protect_store_frees` (below), the bit is safe to set: the
+                    // bracket refuses the free on a protected argument's store and
+                    // allows it on a callee-minted one, so the split is decided per
+                    // execution instead of by a static bit that cannot express it.
+                    let tp_val = if crate::use_analysis::call_return_frees_source(stack.data, value)
+                    {
                         i32::from(tp_nr) | 0x8000
+                    } else {
+                        i32::from(tp_nr)
                     };
                     // #360: the DESTINATION argument carries the slot re-init.
                     // `Call` lowers its arguments left-to-right, so the RHS
@@ -2134,30 +2145,11 @@ impl State {
                     // uses of that arg SIGSEGV in OpGetVector.  The first-assignment
                     // path brackets the call with locks on ref-typed args;
                     // the reassignment path needs the same treatment.
-                    let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
-                        let attrs = stack.data.def(*fn_nr).attributes().to_vec();
-                        args.iter()
-                            .enumerate()
-                            .filter_map(|(i, arg)| {
-                                let tp = attrs.get(i).map(|a| &a.typedef)?;
-                                if !matches!(
-                                    tp,
-                                    Type::Reference(_, _)
-                                        | Type::Vector(_, _)
-                                        | Type::Enum(_, true, _)
-                                ) {
-                                    return None;
-                                }
-                                if let Value::Var(av) = arg {
-                                    Some(*av)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
+                    // loft#981/#982 — ONE derivation, shared with the source-free gate
+                    // above (which asks whether these cover every ref argument) and with
+                    // the native backend.  Two lists of the same arguments drift.
+                    let ref_args: Vec<u16> =
+                        crate::use_analysis::protectable_ref_args(stack.data, value).0;
                     // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf
                     // work-ref args.  After the OpCopyRecord wrap frees
                     // the source store (via 0x8000), the caller's slot
@@ -2984,29 +2976,10 @@ impl State {
         self.code_add(tp_nr);
 
         // Collect ref-typed args of the call to bracket with lock/unlock
-        // so OpCopyRecord's `0x8000` source-free skips them.
-        let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
-            let attrs = stack.data.def(*fn_nr).attributes().to_vec();
-            args.iter()
-                .enumerate()
-                .filter_map(|(i, arg)| {
-                    let tp = attrs.get(i).map(|a| &a.typedef)?;
-                    if !matches!(
-                        tp,
-                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                    ) {
-                        return None;
-                    }
-                    if let Value::Var(av) = arg {
-                        Some(*av)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // so OpCopyRecord's `0x8000` source-free skips them.  loft#981/#982 — ONE
+        // derivation, shared with the source-free gate below (which asks whether these
+        // cover every ref argument) and with the native backend.
+        let ref_args: Vec<u16> = crate::use_analysis::protectable_ref_args(stack.data, value).0;
         // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf work-ref
         // args for the post-wrap sentinel reset (see the reassignment
         // path's matching comment for rationale).
@@ -3040,18 +3013,14 @@ impl State {
         // backend (`generation/dispatch.rs`).  Hidden-only deps are either
         // canonical (same-store no-op gate handles) or fresh S1 (0x8000 safely
         // frees, paired with caller_hidden_args reset below).
+        // loft#981/#982 — a borrowed-view return is not always a borrow; the bracket
+        // above decides per execution.  Same fact, same three emitters (the sibling
+        // reassignment path here, and native `generation/dispatch.rs`).
         #[cfg(not(feature = "wasm"))]
-        let tp_with_free = {
-            let is_borrowed_view = if let Value::Call(fn_nr, _) = value.unspan() {
-                stack.data.def(*fn_nr).returns_borrowed_view()
-            } else {
-                false
-            };
-            if is_borrowed_view {
-                i32::from(tp_nr)
-            } else {
-                i32::from(tp_nr) | 0x8000
-            }
+        let tp_with_free = if crate::use_analysis::call_return_frees_source(stack.data, value) {
+            i32::from(tp_nr) | 0x8000
+        } else {
+            i32::from(tp_nr)
         };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);

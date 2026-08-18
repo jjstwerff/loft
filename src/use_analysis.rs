@@ -2196,6 +2196,83 @@ pub enum HeapDelivery {
     View,
 }
 
+/// loft#981 / loft#982 — the @P290 call-bracket's COVERAGE question, in one place so
+/// the emit that PROTECTS a call's arguments and the gate that decides whether the
+/// returned store may be source-freed cannot drift apart (they are two reads of one
+/// fact, at opposite ends of the same emitted sequence).
+///
+/// Answers, for one call site: which ref-typed arguments can be bracketed with
+/// `protect_store_frees`, and do they cover EVERY ref-typed argument?
+///
+/// Coverage is what makes a BORROWED-VIEW return's source-free safe. A callee whose
+/// return dep names a visible parameter may hand back either that parameter's store
+/// (the borrow arm — the caller must not free it) or a store it minted itself (the
+/// owned arm — the caller must free it, or it leaks one store per call). No static
+/// bit can carry that split, so the decision is made at RUNTIME by the bracket: a
+/// returned store belonging to a protected argument is refused the free by
+/// `do_copy_record` / `OpCopyRecord`, and a callee-minted one is not protected and
+/// so is freed.
+///
+/// The bracket needs a SLOT to name, so only a bare `Var` argument can be protected.
+/// When some ref argument is not one, the witness set is incomplete and the caller
+/// keeps the old, conservative "never free" answer — the leak stays for that shape
+/// rather than risking a free of a store the caller still reaches.
+#[must_use]
+pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
+    let Value::Call(fn_nr, args) = call.unspan() else {
+        return (Vec::new(), false);
+    };
+    let attrs = data.def(*fn_nr).attributes();
+    let mut protectable = Vec::new();
+    let mut covers_all = true;
+    for (i, arg) in args.iter().enumerate() {
+        let Some(tp) = attrs.get(i).map(|a| &a.typedef) else {
+            continue;
+        };
+        // Can the callee's return borrow THIS argument's store?  `heap_dep` is the
+        // canonical "carries a store" question — and asking it through `base` as well,
+        // because an `Optional` wrapper hides the storage under it.  A scalar argument
+        // is no one's borrow source and neither protects nor blocks.
+        if tp.heap_dep().is_none() && tp.base().heap_dep().is_none() {
+            continue;
+        }
+        // The bracket protects only what its emit accepts.  A KEYED COLLECTION argument
+        // (`hash` / `sorted` / `index` / `radix` / `trie`) is a borrow source the emit
+        // does not cover, so it leaves the witness set incomplete — the narrower list
+        // read as complete is what freed a hash parameter's element out from under the
+        // caller (`fn take(h) -> R { h[k] ?? R{…} }`, tests/scripts/882-…). Deliberately
+        // NOT `unspan()` either: the emit matches a bare `Var`, and a spanned one it
+        // cannot name must read as UNCOVERED here, never as covered.
+        match arg {
+            Value::Var(av)
+                if matches!(
+                    tp,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                ) =>
+            {
+                protectable.push(*av);
+            }
+            _ => covers_all = false,
+        }
+    }
+    (protectable, covers_all)
+}
+
+/// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free
+/// bit on the store a call returned?
+///
+/// Yes for a return that borrows nothing (unchanged: the callee minted it and nobody
+/// else owns it), and yes for a BORROWED-VIEW return whose every ref argument this
+/// site protects — see [`protectable_ref_args`] for why the bracket is what decides
+/// the borrow/owned split at runtime. No otherwise.
+#[must_use]
+pub fn call_return_frees_source(data: &Data, call: &Value) -> bool {
+    let Value::Call(fn_nr, _) = call.unspan() else {
+        return false;
+    };
+    !data.def(*fn_nr).returns_borrowed_view() || protectable_ref_args(data, call).1
+}
+
 /// See [`HeapDelivery`].
 #[must_use]
 pub fn heap_return_delivery(data: &Data, d_nr: u32) -> HeapDelivery {

@@ -253,7 +253,12 @@ pub struct Store {
     /// own store per C60).  Cleared via `Stores::unlock_store(&r)`
     /// from `n_set_store_lock(r, false)`.  See @P290 for the
     /// rationale; replaced the prior origin-string discriminator.
-    pub free_protected: bool,
+    /// NESTING DEPTH, not a flag: one call bracket inside another may protect the
+    /// SAME store (`b = outer(a)` whose body binds `c = inner(a)`), and a boolean
+    /// let the inner `clear` release the outer bracket's protection — after which
+    /// the outer copy's source-free would free the caller's own argument.  Depth
+    /// makes the brackets nest: protection lifts when the LAST one closes.
+    pub free_protect_depth: u32,
     /// Root of the LLRB free-space tree (0 = empty).
     /// Populated lazily: `open()` calls `fl_rebuild()`; `new()` starts empty
     /// and the tree fills as blocks are freed.
@@ -487,7 +492,7 @@ impl Store {
             file: None,
             free: true,
             read_only: false,
-            free_protected: false,
+            free_protect_depth: 0,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -584,7 +589,7 @@ impl Store {
             // `free` until the database layer registers it.
             free: false,
             read_only: false,
-            free_protected: false,
+            free_protect_depth: 0,
             free_root: 0,
             needs_coalesce: false,
             released_bytes: 0,
@@ -659,7 +664,7 @@ impl Store {
             // A loaded store carries real data (like `open`), so it is in use.
             free: false,
             read_only: false,
-            free_protected: false,
+            free_protect_depth: 0,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -754,7 +759,7 @@ impl Store {
             file: None,
             free: false,
             read_only: false,
-            free_protected: false,
+            free_protect_depth: 0,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -1526,19 +1531,23 @@ impl Store {
     /// Cleared by `clear_free_protected()`.
     pub fn set_free_protected(&mut self, origin: impl Into<String>) {
         let origin = origin.into();
-        if !self.free_protected && crate::log_config::lock_trace_enabled() {
+        if self.free_protect_depth == 0 && crate::log_config::lock_trace_enabled() {
             crate::loft_eprintln!("[locks] FREE_PROTECT origin={origin:?}");
         }
-        self.free_protected = true;
+        self.free_protect_depth = self.free_protect_depth.saturating_add(1);
         self.lock_origin = origin;
     }
 
     /// @P290 — clear the call-bracket free-protection.
     pub fn clear_free_protected(&mut self) {
-        if self.free_protected && crate::log_config::lock_trace_enabled() {
+        self.free_protect_depth = self.free_protect_depth.saturating_sub(1);
+        if self.free_protect_depth > 0 {
+            // An enclosing bracket still holds this store; keep its origin.
+            return;
+        }
+        if crate::log_config::lock_trace_enabled() {
             crate::loft_eprintln!("[locks] FREE_UNPROTECT origin-was={:?}", self.lock_origin);
         }
-        self.free_protected = false;
         // Clear lock_origin only if the hard read_only lock isn't also
         // holding it (it shouldn't be — but be defensive).
         if !self.read_only {
@@ -1558,7 +1567,7 @@ impl Store {
     /// by a fn-call deep-copy bracket.  @P290.
     #[must_use]
     pub fn is_free_protected(&self) -> bool {
-        self.free_protected
+        self.free_protect_depth > 0
     }
 
     /// Has this store been freed?
@@ -1675,7 +1684,7 @@ impl Store {
             file: None,
             free: self.free,
             read_only: true,
-            free_protected: false,
+            free_protect_depth: 0,
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
             released_bytes: 0,
@@ -1716,7 +1725,7 @@ impl Store {
             file: None,
             free: self.free,
             read_only: false,
-            free_protected: self.free_protected,
+            free_protect_depth: self.free_protect_depth,
             borrowed: false,
             created_at: self.created_at,
             last_op_at: self.last_op_at,
@@ -1752,7 +1761,7 @@ impl Store {
             file: None,
             free: false,
             read_only: true,
-            free_protected: false,
+            free_protect_depth: 0,
             free_root: self.free_root,
             needs_coalesce: false,
             released_bytes: 0,

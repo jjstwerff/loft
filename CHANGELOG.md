@@ -60,6 +60,40 @@ variant declares is unaffected. What is new is that reading one only *some* of t
 now tells you, names which variants have it, and shows the `match` or `is` form that binds
 it for the variant you actually have. Set `LOFT_NO_VARIANT_FIELD=1` to turn it off.
 
+### A function that sometimes hands back what you gave it, and sometimes something new
+
+A helper with two ways out — one returning what it was passed, the other building a fresh
+value —
+
+```loft
+fn rotate(st: Stencil, seen: boolean) -> Stencil {
+  if !seen { return st; }      // hand back what came in
+  Stencil { cells: turned }    // or build a new one
+}
+```
+
+— never released the value it built. Every call left one behind, so a loop that rotated a
+stencil a few thousand times quietly grew by a few thousand stencils. Nothing was wrong
+with the answers, nothing was printed, and the program exited 0; it just used more and
+more memory the longer it ran. The same happened to the far more common lookup-with-a-
+fallback shape:
+
+```loft
+fn get(b: Bag, k: text) -> Item { b.items[k] ?? Item { name: "missing", limbs: [] } }
+```
+
+where every miss left its fallback record behind.
+
+The trouble was that a function got to give one answer, once, to "who cleans this up?" —
+and these functions need two, because which one is right depends on which way the call
+actually went. That is now decided per call instead: a value the function built is cleaned
+up by the caller, and one that was already yours is left alone. Writing the same thing in
+the caller was the workaround, and it is no longer needed.
+
+One shape is still left out and still leaks: a helper whose *collection parameter itself*
+is the thing looked in (`fn get(items: hash<Item[name]>, k: text)` rather than a struct
+holding it). Passing the struct, or binding the lookup in the caller, avoids it.
+
 ### An `if` that answers a new value on one side and an existing one on the other
 
 Choosing between building something and pointing at something already stored —

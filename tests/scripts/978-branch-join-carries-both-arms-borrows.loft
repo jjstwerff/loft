@@ -230,18 +230,17 @@ fn main() {
   // the container here — the point is the store traffic, which the strict-store and
   // leak cells in tests/branch_join.rs read.
   //
-  // `i978_returned` is deliberately NOT in this loop. Once its return correctly says it
-  // borrows `b`, the record its fresh arm mints is owned by nobody and leaks — which is
-  // not this fix's doing: the same happens to the fallback record of a plain
-  // `fn get(b, k) -> Item { b.items[k] ?? Item { … } }`, measured identical on the
-  // released binary and on `main` (loft#981). One escaping value cannot be given one
-  // static answer that is right for both of its arms; that needs the runtime adopt-or-
-  // materialise decision `OpBindOrCopy` already makes at BIND sites (@PLN85 `Own::Join`).
-  // Driving it here would assert a leak this guard did not cause and cannot fix.
+  // `i978_returned` drives the join in RETURN position, which this guard had to leave
+  // out while its fresh arm's record was owned by nobody: once the return correctly says
+  // it borrows `b`, one static answer covered both arms and the minted one leaked. That
+  // is loft#981/#982, fixed since by deciding at the call site per RUN rather than
+  // statically — so the shape belongs in this loop now, and the leak cell in
+  // tests/branch_join.rs reads it.
   for _ in 0..40 {
     _a = i978_if(b, true);
     _c = i978_match(b, true);
     _d = i978_via_accessor(b, true);
+    _e = i978_returned(b, true);
   }
 
   // The container itself must still be intact after all of that — the defect freed ITS

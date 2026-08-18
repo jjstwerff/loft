@@ -921,7 +921,7 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
         && !stores.is_stack_store(data.store_nr)
         && !stores.allocations[data.store_nr as usize].free
         && !stores.allocations[data.store_nr as usize].read_only
-        && !stores.allocations[data.store_nr as usize].free_protected
+        && !stores.allocations[data.store_nr as usize].is_free_protected()
     {
         stores.free(&data);
     }
@@ -952,7 +952,7 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
         && !stores.is_stack_store(src.store_nr)
         && !stores.allocations[src.store_nr as usize].free
         && !stores.allocations[src.store_nr as usize].read_only
-        && !stores.allocations[src.store_nr as usize].free_protected
+        && !stores.allocations[src.store_nr as usize].is_free_protected()
     {
         stores.free(&src);
     }
