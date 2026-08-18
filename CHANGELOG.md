@@ -26,6 +26,26 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A helper that looks something up no longer breaks what it looked in
+
+Reading a record out of a collection through your own small helper —
+
+```loft
+fn part(ps: PartSet, name: text) -> Part? { ps.parts[name] }
+```
+
+— handed back the right record and then, on the way out of the caller, released the
+storage it had borrowed from `ps`. Nothing said so: the first read was correct, and the
+next allocation anywhere in the program took over the freed space, so later reads
+answered out of whatever landed there. In dryopea a tower drew 96 triangles the first
+time and nothing the second. Writing the same lookup inline at the use site was correct,
+which is what made it look like a data problem rather than a language one.
+
+The signature now says what the helper hands back: a view into its argument, which the
+caller borrows and does not free. Both backends, and the same for a helper that binds a
+local first, reaches through two fields, takes the collection itself as the parameter, or
+is discharged with `?` or `??` at the call site.
+
 ### A one-file script takes the newest release, and stops writing files at you
 
 `use arguments;` in a script with no `loft.toml` already resolved the newest release —

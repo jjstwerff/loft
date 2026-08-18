@@ -610,6 +610,15 @@ impl Output<'_> {
                 Some(witness) => {
                     format!("_src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr")
                 }
+                // loft#974 — a callee that returns a VIEW hands back a pointer into a
+                // store the CALLER already owns, so the destination ALIASES it: that is
+                // what the borrow in the signature means, and it is what the interpreter
+                // emits here (a bare `PutRef`).  Copying instead mints a store the IR —
+                // which types the destination as a borrow and therefore emits no
+                // `OpFreeRef` — never frees: one leaked record per call, measured.  It
+                // also made the two backends disagree about what a view IS, so a write
+                // through the result would land on one and be lost on the other.
+                None if is_borrowed_view => "true".to_string(),
                 None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
             };
             // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces

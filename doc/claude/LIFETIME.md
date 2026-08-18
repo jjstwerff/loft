@@ -265,6 +265,33 @@ from freeing a store it does not own:
    work-ref, which NRVO-promotes into the caller-provided buffer
    (`materialize_view_return`, `src/parser/control.rs`).
 
+**A `?` on the return does not change rule 1 (loft#974).**  `fn get(b: Bag, k: text)
+-> Item? { b.items[k] }` is the same view of the same parameter as its non-nullable
+twin, and the borrow belongs to the STORAGE while the `?` belongs to the VALUE — but
+the whole promotion pass was gated on `ret_promo_base()`, which peels `Optional`
+for a collection only.  A nullable struct return therefore reached
+`classify_ret_promotion` never (`LOFT_TRACE_RETPROMO` printed no line at all), declared
+`optional(reference(Item, deps {}))`, and the caller read that empty dep list as OWNED:
+`OpFreeRef(it)` at scope exit released a store the CALLER still owned, and the next
+unrelated allocation took the recycled slot.  Silent on both backends — `2, 0, 0` where
+the inline spelling reads `2, 2, 2`, and correct again under `LOFT_NO_SLOT_REUSE=1`,
+which is why no poison or UAF sweep saw it.
+
+The two questions are now asked separately.  `Type::ret_dep_shape()` answers the
+SIGNATURE one — which shape carries the deps, looking through `?` for every heap kind —
+and marks the nullable struct/enum case `SignatureOnly`: `ref_return` records the borrow
+and makes **no placement decision**, because that shape already has loft#896's
+`__nullable<S>` delivery and a second one leaks a record per call (measured — widening
+`ret_promo_base` instead also re-typed the return non-nullable and diverged the
+backends on a missing key).  Native's first-bind then ALIASES such a return rather than
+deep-copying it (`generation/dispatch.rs`), which is what the interpreter already
+emitted (a bare `PutRef`) — without that the copy is a store the IR never frees.
+
+**Still open, and both are the same invariant reached through a different gate:** a
+nullable return whose tail is a BRANCH (one arm fresh, one borrowed) carries no deps at
+all, so `classify_reference_delivery` answers `AsIs` and nothing records a borrow; and a
+nullable struct-ENUM return has no arm in that chain at all.
+
 Var-to-var **re**assignment of same-struct references deep-copies (matching
 first assignment, `generate_set` reassignment arm) — the parser strips the
 LHS deps on that shape assuming a copy, so aliasing there let a later

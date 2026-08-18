@@ -1539,6 +1539,26 @@ pub enum Type {
     Optional(Box<Type>),
 }
 
+/// What peeling a `?` off a return type means for the promotion pass — loft#974.
+///
+/// The two peeled cases are NOT interchangeable, which is the whole point of naming them:
+/// a nullable collection is delivered through the caller's buffer like its non-null twin,
+/// while a nullable struct already has loft#896's `__nullable<S>` delivery and must keep
+/// it. Both still owe the caller the same SIGNATURE fact — which parameter the returned
+/// value borrows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetPeel {
+    /// No `?` was peeled — the return type is the shape itself.
+    None,
+    /// A `?` was peeled off a shape the delivery machinery peels too (`Optional(Vector)`):
+    /// the full promotion pass applies.
+    Delivered,
+    /// A `?` was peeled off a shape delivery does NOT peel (`Optional(Reference)`,
+    /// `Optional(Enum)`): record the borrow the signature owes the caller, and make no
+    /// placement decision — the shape already has a delivery, and a second one leaks.
+    SignatureOnly,
+}
+
 impl Type {
     /// @PLN104 — renumber a FRAME-variable index (`from` → `to`) through every
     /// [`Deps`] this type carries, recursing into nested element / argument / return
@@ -1644,6 +1664,45 @@ impl Type {
         match self {
             Type::Optional(inner) if matches!(inner.as_ref(), Type::Vector(_, _)) => inner,
             other => other,
+        }
+    }
+
+    /// How `ref_return` reads this return type: the heap shape whose DEPS it carries, and
+    /// what peeling to reach it means — loft#974.
+    ///
+    /// [`ret_promo_base`](Self::ret_promo_base) answers a DELIVERY question (does this
+    /// return get a `__retbuf` and a buffer-filling rewrite?) and deliberately peels
+    /// `Optional(Vector)` only: a nullable STRUCT return is loft#896's synthetic
+    /// `__nullable<S>`, which has its own delivery, and giving it a second one leaks a
+    /// record per call — measured, and the reason that peel is narrow.
+    ///
+    /// This answers a SIGNATURE question, which is not the same one: *does the returned
+    /// value borrow a parameter, and which?* That fact is true whatever the delivery is —
+    /// `fn get(b: Bag, k: text) -> Item? { b.items[k] }` hands back a view into `b`
+    /// whether or not a `?` is wrapped around it — and losing it makes the CALLER type
+    /// the result owned and free the caller's own record at scope exit (silent wrong
+    /// answers on both backends; a panic for the enum form).
+    ///
+    /// One function answers both halves, so "which shapes peel" and "did it peel" cannot
+    /// drift apart the way two `matches!` did.
+    #[must_use]
+    pub fn ret_dep_shape(&self) -> (&Type, RetPeel) {
+        match self {
+            Type::Optional(inner)
+                if crate::keys::nullable_ret_buffer()
+                    && matches!(inner.as_ref(), Type::Vector(_, _)) =>
+            {
+                (inner, RetPeel::Delivered)
+            }
+            Type::Optional(inner)
+                if matches!(
+                    inner.as_ref(),
+                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                ) =>
+            {
+                (inner, RetPeel::SignatureOnly)
+            }
+            other => (other, RetPeel::None),
         }
     }
 

@@ -9,6 +9,46 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An accessor's returned record borrows its container (loft#974, 2026-08-18)
+
+`fn get(b: Bag, k: text) -> Item? { b.items[k] }` declared
+`optional(reference(Item, deps {}))` — no dep — so the caller typed the result OWNED and
+emitted `OpFreeRef(it)` at scope exit, freeing a store the CALLER's `b` still owned. The
+next unrelated allocation claimed the recycled slot and every later lookup answered out
+of it: `2, 0, 0` where the same lookup written INLINE reads `2, 2, 2`. Silent, both
+backends, no imports; it survived dryopea's 1361-test suite.
+
+`LOFT_NO_SLOT_REUSE=1` reads correctly WITH the defect present (the freed bytes survive
+while nothing claims them), which is why no poison or UAF sweep ever saw it — the
+detectors all watch a freed store, and this one is freed and then legitimately
+re-occupied.
+
+Root cause: one selector answering two questions. `ret_promo_base()` decides DELIVERY
+(does this return get a `__retbuf`?) and peels `Optional(Vector)` only — deliberately, a
+nullable struct is loft#896's `__nullable<S>` with its own delivery. But the whole
+promotion pass was gated on it, so the SIGNATURE fact went with it: *which parameter
+does the returned view borrow?* — which is true whatever the delivery is.
+
+- `Type::ret_dep_shape() -> (&Type, RetPeel)` answers the signature question, peeling `?`
+  for `Reference` and struct-`Enum` too and marking those `SignatureOnly`.
+- `ref_return` under `SignatureOnly` records the borrow and skips every placement verdict
+  (`Rename` / `Bind` / `Grow`), so no second delivery is created and the ABI is unchanged.
+- `generation/dispatch.rs`: a first-bind from a callee that `returns_borrowed_view()` now
+  ALIASES instead of deep-copying — what the interpreter already emitted (`PutRef`).
+  Without it the copy is a store the IR never frees (one leaked record per call, caught
+  by the new `accessor_cells_leak_clean_native`).
+
+Widening the delivery peel instead was measured and rejected: it re-typed the return
+non-nullable (`-> Item["b"]`) and diverged the backends on a missing key.
+
+Guard: `tests/scripts/974-accessor-returned-record-borrows-its-container.loft` +
+`tests/accessor_borrow.rs` (static: the signature names the parameter and keeps its `?`;
+behavioural: both backends, strict-stores, native leak check; plus a harness control).
+⚠ The script is calibrated against the defect on BOTH backends — its first version put
+every read in one scope and passed against the bug, and a `churn()` helper made native
+pass while the interpreter still failed.
+
+
 ### Manifest-less resolution: one scope function, no lockfile written by running (@PLN143, 2026-08-18)
 
 `lib_path`'s registry legs were three probes that each re-derived their own lockfile

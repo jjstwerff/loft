@@ -11355,8 +11355,17 @@ impl Parser {
         // loft#938 gate 2 of 5, and the one that hid the rest: this guards the WHOLE
         // promotion pass, so a nullable return matched no arm and `classify_ret_promotion`
         // was never called for it — no output from `LOFT_TRACE_RETPROMO` at all.
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) =
-            ret.ret_promo_base()
+        //
+        // loft#974 — it is `ret_dep_shape`, not `ret_promo_base`, because two different
+        // questions were being asked with one selector.  A nullable STRUCT return
+        // (`-> Item?` reading `b.items[k]`) still owes its caller the SIGNATURE fact that
+        // the result borrows `b`; what it must NOT get is a second delivery.  Peeling it
+        // here with `signature_only` set records the borrow and makes no placement
+        // decision — widening the DELIVERY peel instead was measured, and it re-typed the
+        // return non-nullable and diverged the backends on a missing key.
+        let (dep_base, peel) = ret.ret_dep_shape();
+        let signature_only = peel == crate::data::RetPeel::SignatureOnly;
+        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = dep_base
         {
             let mut dep = cur.clone();
             // #306: a returned local can itself hold a view — its TYPE deps name
@@ -11426,11 +11435,20 @@ impl Parser {
                     | RetPromotion::SkipReassigned
                     | RetPromotion::MergeOnly
                     | RetPromotion::SkipInnerRef => {}
+                    // loft#974 — a shape that carries its own delivery takes the borrow
+                    // fact and nothing else: no buffer rename, no bind, no arity growth.
+                    // Every leg below rewrites where the value LIVES, and this return
+                    // already has somewhere to live.
+                    RetPromotion::Rename { .. } | RetPromotion::Bind { .. } if signature_only => {}
+                    RetPromotion::Grow if signature_only => {}
                     RetPromotion::MergeAttr { a, chain_site } => {
                         if !dep.contains(&a) {
                             dep.push(a);
                         }
-                        if chain_site && let Some(tail) = body.last_mut() {
+                        if chain_site
+                            && !signature_only
+                            && let Some(tail) = body.last_mut()
+                        {
                             Self::chain_site_set_shape(&ret, tail, *v);
                         }
                     }
@@ -11636,27 +11654,26 @@ impl Parser {
             // re-typing one must not drop the other.  Both calls are the identity when the
             // switch is off, so this arm reads as it always did.
             let rewrap = |t: Type| {
-                if ret.ret_promo_peels() {
-                    Type::optional(t)
-                } else {
+                if peel == crate::data::RetPeel::None {
                     t
+                } else {
+                    Type::optional(t)
                 }
             };
-            self.data.definitions[self.context as usize].returned =
-                match ret.ret_promo_base().clone() {
-                    Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
-                    Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
-                    Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
-                    _ => {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Unexpected return type in ref_return: {}",
-                            ret.name(&self.data)
-                        );
-                        return;
-                    }
-                };
+            self.data.definitions[self.context as usize].returned = match dep_base.clone() {
+                Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
+                Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
+                Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unexpected return type in ref_return: {}",
+                        ret.name(&self.data)
+                    );
+                    return;
+                }
+            };
         }
     }
 
