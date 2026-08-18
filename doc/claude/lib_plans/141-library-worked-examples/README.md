@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (6 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -882,10 +882,37 @@ was made. **My first hypothesis had this backwards** (I predicted scattered drop
 the mergeable ones) and the probe corrected it — recorded because the wrong version is the
 intuitive one.
 
-**Still to do:** the citations themselves, which are edits to loft-lang/features ISSUE
-BODIES — the canonical home, never the generated shadow. The first slice is the five
-features above plus F104's two `@FTR` lines. Then `make features-fetch && make
-features-gen`, and the gate validates them from the shadow.
+**THE FIRST SLICE IS APPLIED (2026-08-18).** Twelve pointers across six features, edited
+into the loft-lang/features ISSUE BODIES — the canonical home, never the shadow — and
+pulled through with `make features-fetch && make features-gen`:
+
+| feature | cites |
+|---|---|
+| F6 vector aggregates | `@STD-003` `@STD-004` |
+| F26 interfaces / bounded generics | `@STD-005` `@STD-006` |
+| F40 file & directory I/O | `@STD-010` `@STD-011` `@STD-012` |
+| F42 JSON | `@STD-007` `@STD-008` `@STD-009` |
+| F97 `len` vs `size` | `@STD-001` |
+| F104 `store_reclaim()` | `@FTR-001` `@FTR-002` |
+
+`check_doc_drift.sh` reads 28 citations, all resolving; `make features-check` is green.
+**F97 is the sharpest of the twelve** — the feature is about characters against bytes, and
+`@STD-001` is a scanner calling `starts_with_at` at a BYTE offset, which is the exact
+mistake the feature exists to prevent. That pairing existed in the repo for weeks with
+nothing joining the two.
+
+**The negative gate is proved on real content, not a fixture:** removing the `@FTR-001`
+tag from its demonstrator turns the gate red naming the feature doc AND the citation text
+(`doc/features/F104.md:43:Example: @FTR-001 — …`), and restoring it is clean. So a feature
+that cites a demonstrator someone later deletes cannot stay quietly wrong.
+
+**`store_reclaim`'s own doc comment is corrected too** (`default/02_files.loft`), since it
+was the source of the false calibration and it now cites `@FTR-001`/`@FTR-002` — the
+numbers in the prose cannot drift from the test without the gate saying so.
+
+**Still to do:** the other ~111 features. The first slice says the rollout is mostly a
+READING task rather than an authoring one — find the demonstrator that already exists,
+and only author an `@FTR` where none does.
 
 ### Phase C2 — the original design
 
