@@ -16,11 +16,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 129 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(loft#973). 141 tags across the ecosystem, with **Phase E under way**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
 (`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
-(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`) and `hex_body` (`@HXB-001..008`) are
-nine of `loft-libs-world`'s twelve deferred packages, leaving three. Writing
+(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`) and
+`hex_field` (`@HXL-001..012`) are **ten** of `loft-libs-world`'s twelve deferred packages,
+leaving two. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
@@ -30,7 +31,8 @@ failures they were built to catch, a wall with two legal names of which only one
 the round trip the whole text format exists for, and a recovery check whose two sides are a
 lattice rational and an irrational, so it could never have passed, and an invariant whose
 NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
-for a three-dimensional rig anyway.
+for a three-dimensional rig anyway, and a validator that refuses the multi-form chunk its
+own package exists to trace.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -38,7 +40,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *11 tagged, 3 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *12 tagged, 2 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1027,7 +1029,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 9 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 10 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1382,12 +1384,90 @@ and `rig_admissible` is the doorstep that catches it. That is exactly the split 
 halves — including what posing an inadmissible rig does, which is read a parent frame that does not
 exist yet and get zeros.
 
-**A method note worth keeping.** All nine rows so far found their defect in the tag that had to
+**Row 10 `hex_field` is DONE** (`@HXL-001..012`; *12 tagged, 2 deferred*) — the repo's largest
+surface, 82 public functions, and the one the table had flagged as *"a phase, not a row"*. It was
+a row. The tags do not track functions; they track the package's load-bearing promises, and there
+were twelve.
+
+**The blocker dissolved the same way rows 6 and 7's did.** The table said row 10 waited on
+*"choosing which golden fixture is small enough to read inside a test"* — the package has a real
+oracle, a Python implementation whose golden JSON it must reproduce byte for byte. The answer was
+not to shrink that fixture. It was to write one: a hex traces to six named lattice points,
+`(-1,-1) (0,-2) (1,-1) (1,1) (0,2) (-1,1)`, and shoelaces to exactly 12. The entire
+representation fits in one assertion, and the two hexes and the ring of six that follow are the
+smallest forms carrying an adjacency and a hole. **Three for three now: "small enough to assert
+against" has meant WRITTEN BY HAND every time, and a shrunken real thing has never been the
+answer.**
+
+**THE FINDING IS A PREMISE, and it is the first one in Phase E that was true of the author's
+shape and false of the package's own doctrine.** `validate` — *"what must hold before a renderer
+or mesh may consume it"* — read `outer != 1`, exactly one outer loop. That is a property of a
+CONNECTED form. This package's README says the opposite about itself in its own section heading:
+*"Bounded chunks on purpose … the same code serves a 32×32 world chunk and a one-off tower
+window"*, and *"forms spanning chunks are traced per chunk with a halo and stitched"*. A chunk
+holding two buildings, or one building the chunk edge cut in half, is therefore the ORDINARY case
+— and every such map was refused with code 5 while `trace` had produced it correctly and the
+exact integer area agreed: two disjoint hexes are two loops of 12, and 24 is 24. Measured on
+three shapes (two hexes, two donuts, two columns), all refused, all correct.
+
+The cure is where it gets interesting, because *weakening a gate until it passes* is the exact
+anti-pattern row 5 was about. `outer >= 1` does lose something real — a hole wound the same way as
+its outer loop, compensated by an extra outer loop, so the signed areas still sum. Deciding that
+needs each loop's NESTING, which the sign count never actually computed; the old rule only appeared
+to check it because it forbade the multi-component case outright. So the honest split is: code 5
+means *no* outer loop, `outline_count(v)` is exposed, and a caller who KNOWS its form is one piece
+keeps the stronger property by asserting on it. **The general shape: when a check both refuses
+correct data and catches something real, the answer is to separate the two claims and give the
+stronger one to the caller who has the knowledge it needs — not to pick one.**
+
+**Five more, all one family — a rule enforced on part of its surface:**
+
+| what | the number that shows it |
+|---|---|
+| a material past the slot DELETED the wall it was setting | the slot is a `u8` and the narrowing cast is CHECKED, so `?? 0` behind it wrote the one value that means NO WALL: `edge_set_mat(e, …, 300)` read back as open ground, and 257 did too, so it was not a low-byte truncation anyone could reason about |
+| `validate` never checked for a repeated vertex, which its README listed | two hexes emitted as two circuits joined at their shared corners: twelve legal hex-edge segments, shoelace exactly `12 × 2`, one positive loop — every other check passes it |
+| `stencil_rotate` / `stencil_mirror` carried each edge's MATERIAL and dropped its SURFACE | six turns returned the cells and materials exactly and the geometry as 0, under a comment reading *"A stencil must never lose data"*. The whole surface half of `EdgeSet` — five public functions — was uncovered by the suite |
+| `doc_read` took `w`/`h` on trust | a 32-byte file claiming 4000×4000 allocated sixteen million cells, plus heights, labels, edges and layers over the same extent, and only then reported a missing section. Reverting the fix now trips the **2 GiB store ceiling at 1.9 GiB** — the ceiling is the measurement |
+| the `EDGE` section copied the source layer's vector into a length derived from the FIELD | an `EdgeSet` at another extent has a different stride, so every material landed on a DIFFERENT edge: the file loaded with code 0, the wall count was right, and the walls were somewhere else |
+
+**And a units finding, the `hex_place` shape again.** `form_hexdisk(w, n)` counts hex STEPS;
+`form_circle(w, radius)` and `form_octagon(w, apothem)` measure LATTICE WORLD UNITS, the ones
+`x = k·√3/2, y = m/2` defines, in which a hex has circumradius 1. So one hex step is √3 ≈ 1.732
+world units, and the same `3` asks for 13 cells or 37. The README's own scale section said every
+threshold was *"dimensionless — hex steps or pure ratios"*, which sends a reader to the wrong one
+of the two. Both units are now named at both call sites, with the conversion.
+
+**Two side effects worth recording, because both generalise.**
+
+`hex_fit`'s `@HXI-007` (row 8) had **pinned the erasure as behaviour** — *"256 ERASES the wall — it
+does not wrap to 0 by luck"* — and row 10's fix turned that test red. That is the convention
+noticing its own subject move, which is the whole point of pinning; the tag's thesis (a material id
+is nominal, so its refusal offers nothing) survived unchanged and only the measurement behind it
+moved. **A worked example that documents a defect as behaviour is a bookmark, and the day the defect
+is fixed the bookmark is what tells you.**
+
+And a scratch file: `file(path)` opens an existing file to **APPEND**. A test that died before its
+own `delete` therefore handed the next run a header with a header in front of it — so the failure
+landed in a *different* test from the one that caused it, which is how a five-minute check becomes
+an hour. Both `tmp()` helpers in this package now clear the path before naming it. **A test's
+cleanup running only on the success path is not cleanup.**
+
+**A harness note, from this row's own non-vacuity pass.** The first run of the
+restore-the-pre-fix-code channel reported *no failures for all six reverts* — because the loop was
+missing the line that applied the revert. An empty result set read as "nothing broke". The pass was
+re-run with two guards: fail loudly if the patch script errors, and `cmp` the file against the
+fixed copy and skip the case if the revert was a no-op. **Prove the harness can fail — and for a
+harness that reports by ABSENCE, that means asserting the mutation actually happened, not just that
+the run finished.**
+
+**A method note worth keeping.** All ten rows so far found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
 priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
-CHECKS that answered *pass* on what they were written to fail (`hex_shape`), and a
-premise the package enforced on one half of its own text and not the other (`hex_fit`).
+CHECKS that answered *pass* on what they were written to fail (`hex_shape`), a
+premise the package enforced on one half of its own text and not the other (`hex_fit`),
+and one that was true of the shape its author had in mind and false of the shapes the
+package exists to hold (`hex_field`).
 That is not luck: a worked example is the first thing that ever evaluates such a sentence
 against the code, and the sentences most worth working are the ones written with the most
 certainty.
@@ -1428,29 +1508,34 @@ and a signature carries least; every row below is a package that owes an example
 | ~~7~~ | ~~`hex_body`~~ | 28 | **DONE** — `@HXB-001..008`. Two-bone arms at quarter turns were the fixture, and they found a 2-D walk that answers for a spatial rig 3.2 units away — collision proxy included — plus the family's third strict-reader claim. Coverage 21/32 → 36/36 | — |
 | ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
 | ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
-| 10 | `hex_field` | 82 | the **exactness** guarantee: it reproduces the Python oracle's golden JSON byte for byte, which is possible only because the whole representation is INTEGER | choosing which golden fixture is small enough to read inside a test |
+| ~~10~~ | ~~`hex_field`~~ | 82 | **DONE** — `@HXL-001..012`. The fixture question answered itself again (one hex, two hexes, a ring of six), and under it a validator refusing the multi-form chunk the package exists to trace, plus a material write that DELETED the wall it was setting and an extent taken on trust that allocated 16 M cells from a 32-byte file. 0.1.1, format unchanged byte for byte | — |
 | 11 | `hex_recover` | 33 | law **F** is injectivity, and its coverage is a MEASUREMENT over an admitted space | deciding what a fast, readable subset of that census looks like — the full one is a long-running test, not a teaching one |
 | 12 | `hex_edge` | 39 | the `sweep_path` resting-position trap, already written as prose in that package's README (moros#10): a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next `hex_at` may round to the far side | **an owner decision** — whether `hex_edge` should offer a `sweep_path_skin(…)` (or return a fraction already backed off), or every caller keeps its own skin. The example teaches a different thing under each answer |
 
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. **Rows 1–9 are done**, and both fixture questions answered themselves the moment they were
-asked: a hand-authored ramp for row 6, two-bone arms at quarter turns for row 7. Neither
-needed a generated world, which is worth remembering for row 10 — *what is small enough to
-assert against* is usually **what you can write by hand**, not a shrunken version of the real
-thing. The three that remain need a scoping decision about what a readable test is
-(10 `hex_field`, 11 `hex_recover`) or an owner's API call (12 `hex_edge`).
+the only one waiting on a person. **Rows 1–10 are done**, and every fixture question
+answered itself the moment it was asked: a hand-authored ramp for row 6, two-bone arms at
+quarter turns for row 7, and for row 10 one hex, two hexes, and a ring of six. None needed
+a generated world, and row 10 is the case that settles it — the package with a *real*
+oracle, a Python golden JSON, and the readable test turned out to be the one that names its
+six vertices in the source. **"Small enough to assert against" means WRITTEN BY HAND every
+time it has come up; a shrunken real thing has never once been the answer.** That is now
+three for three and can be used as a prior rather than re-derived on row 11.
 
-**Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
-larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
-it further is likely. And `hex_edge`'s block is the healthy case, not a stall: the
-convention asks *what does a caller get wrong*, and when the answer depends on an
-unmade API decision, writing the example anyway would pin the wrong behaviour into a
-test.
+**Row 10 also retired the "it is a phase, not a row" worry.** 82 public functions did not
+need splitting, because the tags do not track functions — they track the package's
+load-bearing PROMISES, and there were twelve. Coverage 69/89 → 84/89 came out of writing
+them rather than being aimed at.
+
+**`hex_edge`'s block is the healthy case, not a stall:** the convention asks *what does a
+caller get wrong*, and when the answer depends on an unmade API decision, writing the
+example anyway would pin the wrong behaviour into a test. Row 11 needs no one — only a
+decision about what a fast, readable subset of a census looks like.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *11 tagged, 3 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *12 tagged, 2 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
