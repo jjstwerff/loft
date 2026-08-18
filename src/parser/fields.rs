@@ -394,6 +394,7 @@ impl Parser {
                 // → "o cannot change type to vector<…>").  `get_field` (which needs
                 // the layout's `known_type`, assigned in `fill_all`) emits only in
                 // the second pass.
+                let enum_d = *enum_d_nr;
                 let dep = t.depend();
                 t = self.data.attr_type(found_d_nr, found_fnr);
                 for on in dep {
@@ -407,6 +408,7 @@ impl Parser {
                     // `change_var` does not re-type the receiver.
                     *code = Value::Null;
                 } else {
+                    self.warn_unchecked_variant_field(enum_d, &field, &t, code);
                     *code = self.get_field(found_d_nr, found_fnr, code.clone());
                     self.data.attr_used(found_d_nr, found_fnr);
                 }
@@ -703,6 +705,112 @@ impl Parser {
             }
         }
         self.lexer.token(")");
+    }
+
+    /// loft#980 — a struct-enum field access that only SOME variants answer.
+    ///
+    /// `c.field` resolves at COMPILE time to the first variant declaring the name, and
+    /// the layout gives a shared name+type one slot — so the read is right for the
+    /// variants that declare it and reads another variant's bytes for the rest. The tag
+    /// is never consulted, on either backend, and nothing said so: `a.n` on an `Anon`
+    /// answered `Anon.k`'s value as if it were `Named.n`, and `a.label = "x"` wrote into
+    /// a record whose tag still says `Anon` — after which `match` still reports `Anon`.
+    ///
+    /// Direct access STAYS. It is what [C89](../../doc/claude/DESIGN_DECISIONS.md)
+    /// permanently decided enum payloads are for — named fields you read straight,
+    /// with matching for *dispatch*, never for *extraction* — and the common-prefix case
+    /// (every variant declares it) is correct today and stays silent here. The silence
+    /// on the PARTIAL case was the defect.
+    ///
+    /// `warning`, not advice, by the tier rule: ignoring it can produce a wrong result,
+    /// and it already has — the value read is another variant's, typed as this one's.
+    /// Quiet for a synthetic `__nullable<S>`, whose payload access is @PLN25's null
+    /// model rather than a user-visible variant question.
+    fn warn_unchecked_variant_field(&mut self, enum_d: u32, field: &str, tp: &Type, recv: &Value) {
+        if self.first_pass || crate::keys::no_variant_field_warning() {
+            return;
+        }
+        let ename = self.data.def(enum_d).name.clone();
+        if ename.starts_with("__nullable<") {
+            return;
+        }
+        let (owning, total) = self.variants_declaring_field(enum_d, field, tp);
+        if owning.is_empty() || owning.len() >= total {
+            return;
+        }
+        let mut names: Vec<String> = owning
+            .iter()
+            .map(|&v| self.data.def(v).original_name().clone())
+            .collect();
+        names.sort();
+        let have = names.join("`, `");
+        let display = self.data.def(enum_d).original_name().clone();
+        let subject = match recv.unspan() {
+            Value::Var(v) if *v < self.vars.count() => self.vars.name(*v).to_string(),
+            _ => "the value".to_string(),
+        };
+        let first = names[0].clone();
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            code = "variant-field-unchecked",
+            "only `{have}` of `{display}`'s {total} variants declare `{field}`, and this \
+access does not check which variant `{subject}` holds — on any other one it reads that \
+variant's bytes at this field's offset, and a write lands there leaving the tag alone. \
+Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `match`"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: format!("bind `{field}` inside `if {subject} is {first} {{ {field} }}`"),
+            condition: Some(format!(
+                "if `{subject}` can only ever be `{first}` here, the read is already right \
+                 — say so with the pattern and the compiler checks it for you"
+            )),
+            edit: None,
+            concept: "pattern matching",
+            concept_ref: "@F29",
+        });
+    }
+
+    /// The variants of `enum_d_nr` that declare `field` at the same TYPE as
+    /// `(found_d_nr, found_fnr)`, and how many variants the enum has in total.
+    ///
+    /// A struct-enum field access resolves at compile time to the first variant
+    /// declaring the name, and the layout puts a shared name+type at a shared offset —
+    /// so the read is right for exactly these variants and reads another variant's
+    /// bytes for the rest (loft#980).  Equal counts mean every variant has it, which is
+    /// the common-prefix case C89 promises works and needs no tag check at all.
+    pub(crate) fn variants_declaring_field(
+        &self,
+        enum_d_nr: u32,
+        field: &str,
+        tp: &Type,
+    ) -> (Vec<u32>, usize) {
+        let mut owning = Vec::new();
+        let mut total = 0usize;
+        for a_nr in 0..self.data.attributes(enum_d_nr) {
+            let a_name = self.data.attr_name(enum_d_nr, a_nr);
+            let variant_d_nr = self.data.variant_of(enum_d_nr, &a_name);
+            if variant_d_nr == u32::MAX {
+                continue;
+            }
+            total += 1;
+            let f = self.data.attr(variant_d_nr, field);
+            // Compared WITHOUT deps: two variants declaring the same field differ in the
+            // borrow their access records, which says nothing about whether the layout
+            // gave them one slot — the question here.
+            if f != usize::MAX
+                && self
+                    .data
+                    .attr_type(variant_d_nr, f)
+                    .unrewritten()
+                    .without_deps()
+                    == tp.unrewritten().without_deps()
+            {
+                owning.push(variant_d_nr);
+            }
+        }
+        (owning, total)
     }
 
     /// Search for `field` in the variant structs of a polymorphic enum.

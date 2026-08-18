@@ -574,6 +574,27 @@ pub fn double_move_enabled() -> bool {
     *ON.get_or_init(|| !env_set("LOFT_NO_DOUBLE_MOVE"))
 }
 
+/// loft#980: the unchecked struct-enum variant field. Warns where `c.field` names a field
+/// only SOME variants declare — the access resolves at compile time to the first variant
+/// that has it, the layout gives a shared name+type one slot, and the tag is never
+/// consulted, so on any other variant the read answers that variant's bytes and a write
+/// lands in them with the tag left alone.
+///
+/// Direct payload access STAYS: C89 decided permanently that enum payloads are named
+/// fields you read straight, with matching for dispatch rather than extraction, and the
+/// common-prefix case (every variant declares the field) is correct today. The silence on
+/// the PARTIAL case was the defect.
+///
+/// `warning` tier, per the two-tier rule: ignoring it produces a wrong result. Quiet for a
+/// synthetic `__nullable<S>`, whose payload access is @PLN25's null model rather than a
+/// user-visible variant question. **Default ON**; `LOFT_NO_VARIANT_FIELD` opts out. One
+/// cached env read. See `parser::fields::warn_unchecked_variant_field`.
+#[must_use]
+pub fn no_variant_field_warning() -> bool {
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| env_set("LOFT_NO_VARIANT_FIELD"))
+}
+
 /// loft#894: the lost-temporary-write lint. Warns when a call writes through a by-value
 /// struct parameter whose argument is a value RETURNED by another call — `hurt(first(s),
 /// 10.0)`, where the returned struct is a copy that lives in a `__lift_N` temporary and is

@@ -268,6 +268,26 @@ enum Shape {
 }
 ```
 
+A variant's fields are read **directly** — `s.radius` — with `match` / `is` reserved for
+*dispatch* rather than extraction ([C89](DESIGN_DECISIONS.md#c89)).  A field EVERY variant
+declares shares one slot and reads correctly from any of them.
+
+**A field only SOME variants declare needs the variant to be known** (loft#980).  The
+access resolves at compile time to the variant that declares it and does not check the
+tag, so on any other variant it reads that variant's bytes at the same offset — and a
+write lands there with the tag untouched, after which `match` still reports the original
+variant.  `warning[variant-field-unchecked]` names each such access and the variants that
+have the field; reach it per-variant instead:
+
+```
+if s is Circle { radius } { area = PI * radius * radius }
+// or
+match s {
+    Circle { radius }            => …,
+    Rectangle { width, height }  => …,
+}
+```
+
 ### Struct types
 
 ```

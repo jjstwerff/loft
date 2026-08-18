@@ -26,6 +26,23 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Reading a field the value's variant doesn't have now says so
+
+Enum variants carry named fields you read directly:
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+```
+
+Reading `a.n` when `a` happens to be an `Anon` answered a number — `Anon`'s `k`, handed
+back as if it were `Named`'s `n` — and writing `a.label` stored the text in the `Anon`
+value, which went on calling itself an `Anon` ever after. Nothing said a word.
+
+Reading fields straight off an enum is still the way loft works, and a field that *every*
+variant declares is unaffected. What is new is that reading one only *some* of them have
+now tells you, names which variants have it, and shows the `match` or `is` form that binds
+it for the variant you actually have. Set `LOFT_NO_VARIANT_FIELD=1` to turn it off.
+
 ### An `if` that answers a new value on one side and an existing one on the other
 
 Choosing between building something and pointing at something already stored —

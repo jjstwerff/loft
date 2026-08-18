@@ -4553,7 +4553,7 @@ impl Parser {
     /// Mirrors the inline lookup the first pattern of an arm uses, factored out so
     /// the extra patterns of a `@PLN35` multi-pattern arm resolve their discs the
     /// same way.
-    fn variant_disc(
+    pub(crate) fn variant_disc(
         &self,
         e_nr: u32,
         is_struct: bool,
@@ -4577,7 +4577,7 @@ impl Parser {
     /// The integer-discriminant read `OpConvIntFromEnum(OpGetEnum(elem, 0))` for a
     /// struct-enum element value — the same tag read a top-level struct-enum match
     /// emits, used by a slice-element alternation to tag-test each branch.
-    fn elem_tag_int(&mut self, elem: Value) -> Value {
+    pub(crate) fn elem_tag_int(&mut self, elem: Value) -> Value {
         let get_enum = self.cl("OpGetEnum", &[elem, Value::Int(0)]);
         self.cl("OpConvIntFromEnum", &[get_enum])
     }

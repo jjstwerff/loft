@@ -12396,7 +12396,7 @@ impl Parser {
         self.vars.add_variable(name, var_type, &mut self.lexer)
     }
 
-    fn create_unique(&mut self, name: &str, var_type: &Type) -> u16 {
+    pub(crate) fn create_unique(&mut self, name: &str, var_type: &Type) -> u16 {
         self.vars.unique(name, var_type, &mut self.lexer)
     }
 

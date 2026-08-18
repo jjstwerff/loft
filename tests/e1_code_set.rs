@@ -179,6 +179,13 @@ const CODES: &[(&str, &str)] = &[
          fn main() { s = S { by_k: [E { k: 1, v: 10 }], by_v: [E { k: 2, v: 20 }] }; \
          print(\"{len(s.by_k)}\"); }",
     ),
+    // loft#980 — `n` is declared by `Named` only, and the value is an `Anon`; nothing
+    // between the two checks the tag, so the read answers `Anon`'s bytes.
+    (
+        "variant-field-unchecked",
+        "enum Node { Named { label: text, n: integer }, Anon { k: integer } }\n\
+         fn main() { a: Node = Anon { k: 7 }; print(\"{a.n}\"); }",
+    ),
     (
         "needless-reference-parameter",
         "fn f(x: &(integer, integer)) -> integer { x.0 }\n\

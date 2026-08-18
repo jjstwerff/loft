@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A struct-enum field access never checked the discriminant (loft#980, 2026-08-18)
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+a: Node = Anon { k: 7 };
+print("{a.n}");     // 7 — that is Anon's `k`, answered as Named's `n`
+a.label = "written";  // lands in the Anon record; the tag stays Anon
+```
+
+`c.field` resolves at COMPILE time to the first variant declaring the name, and the
+layout gives a shared name+type ONE slot — so the read is right for the variants that
+declare it and reads another variant's bytes for the rest. `match` afterwards still
+reports the original variant, because nothing changed the tag. Both backends, exit 0.
+
+**Direct payload access stays.** [C89](DESIGN_DECISIONS.md#c89) decided permanently that
+enum payloads are named fields you read straight, with matching for *dispatch* and never
+for *extraction* — refusing a bare `c.field` would force a matcher on every read, which
+is the thing C89 exists to prevent. And the common-prefix case is already correct:
+measured on variants whose preceding fields differ in width, a field every variant
+declares reads right from each of them. The **silence** on the partial case was the
+defect, and `variant-field-unchecked` closes it: `warning` tier by the two-tier rule,
+since ignoring it produces a wrong result. `LOFT_NO_VARIANT_FIELD` opts out.
+
+Quiet where the access is answerable, each exemption measured: every variant declares the
+field (one slot, any tag finds it); a `match` / `is` binding, which is per-arm and is the
+cure the message names; and a synthetic `__nullable<S>`, whose payload access is @PLN25's
+null model rather than a user-visible variant question.
+
+Swept before it spoke: the whole `.loft` corpus — `tests/scripts`, `tests/docs`, `lib/*`,
+`default/*` — holds **13** partial-variant accesses, all of them inside loft#977's own
+regression test, and every one on a value that IS the declaring variant. Partial access is
+rare precisely because `match` is the idiom.
+
+**What is still open** is the semantics, and it now has one answer rather than three. The
+issue offered refuse-at-compile-time (contrary to C89), a runtime tag check, or a
+common-prefix-only rule (restricts direct access the same way C89 rejects). The fault
+model picks the middle one's shape: C80/C85/C90 say an uncomputable read answers the
+type's null SENTINEL and the program keeps running — the same answer a hash miss, an
+out-of-range index and an overflow already give — which leaves the access type unchanged,
+so it breaks nothing. The read lowers with existing IR (`OpGetEnum` → `OpConvIntFromEnum`
+→ `OpEqInt`, the tag test a `match` already emits), so it needs no new opcode on either
+backend. The WRITE is what makes it design work: suppressing a write to a field the value
+does not have needs an lvalue notion the parser does not have — a guarded read is not a
+place, and the assignment path takes the parsed access as one.
+
 ### A branch whose arms disagree about ownership froze the wrong one (loft#978, 2026-08-18)
 
 ```loft
