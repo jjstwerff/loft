@@ -917,20 +917,42 @@ pub fn check_contract(required: &str, current: u32) -> ContractCheck {
 /// in `lib_dirs`.
 #[must_use]
 pub fn extract_path_dep(value: &str) -> Option<&str> {
+    inline_field(value, "path")
+}
+
+/// Extract the version requirement from a dependency value: the whole string for
+/// a plain `"0.1"` / `">=0.2"`, or the `version` field of an inline table
+/// (`{ path = "X", version = ">=0.2" }`).  `None` for an inline table that states
+/// no version — a pure path dependency, which is resolved by path and never by
+/// a registry lookup.
+#[must_use]
+pub fn extract_version_req(value: &str) -> Option<&str> {
+    let v = value.trim();
+    if v.starts_with('{') {
+        inline_field(v, "version")
+    } else if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// One field out of an inline-table dependency value (`{ path = "X", version = "Y" }`).
+///
+/// Both extractors above read the same syntax, so they share the reader: two copies
+/// drift, and a dependency value that one of them understood and the other did not
+/// would resolve differently depending on which asked.
+///
+/// Commas inside a quoted value would break the split — accept the limitation, paths
+/// and version requirements typically contain none.
+fn inline_field<'a>(value: &'a str, field: &str) -> Option<&'a str> {
     let v = value.trim();
     let inner = v.strip_prefix('{')?.strip_suffix('}')?.trim();
-    // Support multi-field inline tables like
-    // `{ path = "X", version = "Y" }` by splitting on `,`.  Commas
-    // inside the quoted path value would break this — accept the
-    // limitation for now, paths typically don't contain commas.
     for part in inner.split(',') {
         let part = part.trim();
-        if let Some(rhs) = part.strip_prefix("path") {
-            let rhs = rhs.trim();
-            let rhs = rhs.strip_prefix('=')?.trim();
-            // Strip surrounding quotes.
-            let path = rhs.trim_start_matches('"').trim_end_matches('"');
-            return Some(path);
+        if let Some(rhs) = part.strip_prefix(field) {
+            let rhs = rhs.trim().strip_prefix('=')?.trim();
+            return Some(rhs.trim_start_matches('"').trim_end_matches('"'));
         }
     }
     None
@@ -1392,5 +1414,25 @@ n_demo_fn_b = "demo_fn_b"
         // Plain version string (no inline table).
         assert_eq!(extract_path_dep(">=0.2"), None);
         assert_eq!(extract_path_dep("0.1"), None);
+    }
+
+    /// loft#966 — bare `loft install` asks each dependency value for the version it
+    /// requires, so the two shapes a value can take must give the same answer.
+    #[test]
+    fn extract_version_req_reads_both_dependency_shapes() {
+        // A plain string IS the requirement.
+        assert_eq!(extract_version_req(">=0.2"), Some(">=0.2"));
+        assert_eq!(extract_version_req("0.1.0"), Some("0.1.0"));
+        // …and so is the `version` field of an inline table, in either order.
+        assert_eq!(extract_version_req(r#"{ version = "0.1" }"#), Some("0.1"));
+        assert_eq!(
+            extract_version_req(r#"{ path = "../X", version = ">=0.2" }"#),
+            Some(">=0.2")
+        );
+        // A pure path dependency states no version: it is resolved by its path, and
+        // handing `install_one` a `{ path = … }` string as a requirement would send it
+        // to the registry for something that is not there.
+        assert_eq!(extract_version_req(r#"{ path = "../gridmesh" }"#), None);
+        assert_eq!(extract_version_req(""), None);
     }
 }

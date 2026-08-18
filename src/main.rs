@@ -305,11 +305,13 @@ fn print_help() {
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
     println!("                                test draw::f — run a single test function");
-    println!("  install [target]              install a package to ~/.loft/lib/ for global use");
-    println!("                                install .        — install package in current dir");
-    println!("                                install /p       — install package at /p");
+    println!("  install [target]              resolve this project's [dependencies]");
+    println!("                                install          — every dep the manifest declares");
     println!("                                install name     — download latest from registry");
     println!("                                install name@v   — download specific version");
+    println!("                                install .        — install THIS package into");
+    println!("                                                   ~/.loft/lib/ for global use");
+    println!("                                install /p       — install the package at /p");
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
@@ -599,6 +601,99 @@ fn install_package(pkg_path: &std::path::Path) {
         "installed {pkg_name} ({copied} files) → {}",
         target.display()
     );
+}
+
+/// loft#966 — bare `loft install`: resolve what the manifest DECLARES.
+///
+/// The npm/cargo reading of the verb, and the one `loft api` names when it reports a
+/// dependency unresolved. Bare install used to install the PROJECT into
+/// `~/.loft/lib/<name>`, so the tool's only hint pointed at the one command that does
+/// not fetch a dependency — and the copy it leaves behind shadows the registry copy of
+/// the same name (loft#667). `loft install .` still installs this package; that spelling
+/// always meant it.
+///
+/// A path dependency is resolved BY ITS PATH and needs no install, so it is reported only
+/// when the path does not lead to a package — which is the one thing a reader can act on.
+#[cfg(feature = "registry")]
+fn install_manifest_dependencies(opts: &loft::install::InstallOptions) {
+    use loft::install::{InstallReport, format_report, install_one};
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let manifest_file = cwd.join("loft.toml");
+    if !manifest_file.exists() {
+        eprintln!("loft install: no loft.toml in {}", cwd.display());
+        eprintln!("  loft install <pkg>   install a package from the registry");
+        eprintln!("  loft install .       install a package directory into ~/.loft/lib");
+        std::process::exit(1);
+    }
+    let manifest =
+        loft::manifest::read_manifest(&manifest_file.to_string_lossy()).unwrap_or_default();
+    let project = manifest
+        .name
+        .clone()
+        .unwrap_or_else(|| "this package".into());
+
+    if manifest.dependencies.is_empty() {
+        // Nothing to resolve — and the one reader who is surprised by that is the one who
+        // meant the old behaviour, so name its spelling here rather than on every run.
+        println!(
+            "{project} declares no dependencies.  \
+             (`loft install .` installs this package into ~/.loft/lib.)"
+        );
+        return;
+    }
+
+    let mut merged = InstallReport {
+        installed: Vec::new(),
+        skipped_cached: Vec::new(),
+        surface: Vec::new(),
+    };
+    let mut unresolved_paths: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for (name, value) in &manifest.dependencies {
+        if let Some(rel) = loft::manifest::extract_path_dep(value) {
+            // A path dep with a `version` too is still resolved by path; the version is a
+            // publish-time claim, not something to fetch.
+            let dir = cwd.join(rel);
+            if !dir.join("loft.toml").exists() {
+                unresolved_paths.push(format!("  {name}  NOT FOUND at `{rel}` — check the path"));
+            }
+            continue;
+        }
+        let req = loft::manifest::extract_version_req(value);
+        match install_one(name, req, opts) {
+            Ok(report) => {
+                merged.installed.extend(report.installed);
+                merged.skipped_cached.extend(report.skipped_cached);
+                merged.surface.extend(report.surface);
+            }
+            // Keep going: one unreachable package should not hide the state of the rest,
+            // which is what the reader needs to decide what to do next.
+            Err(e) => failed.push(format!("  {name}  {e}")),
+        }
+    }
+
+    if !merged.installed.is_empty() || !merged.skipped_cached.is_empty() {
+        print!("{}", format_report(&merged));
+    }
+    if !unresolved_paths.is_empty() {
+        eprintln!("loft install: path dependencies that do not lead to a package:");
+        for line in &unresolved_paths {
+            eprintln!("{line}");
+        }
+    }
+    if !failed.is_empty() {
+        eprintln!("loft install: could not resolve:");
+        for line in &failed {
+            eprintln!("{line}");
+        }
+    }
+    if !unresolved_paths.is_empty() || !failed.is_empty() {
+        std::process::exit(1);
+    }
+    // PKG.STUB — the in-project API stubs follow the lockfile this install just wrote,
+    // exactly as they do for `loft install <pkg>`.
+    write_api_stubs(&cwd.join("loft.lock"), &cwd);
 }
 
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
@@ -6975,19 +7070,29 @@ fn main() {
             // Local-path install (`.`, `./`, `../`, `/`, contains `/`)
             // takes exactly one arg.  Registry install accepts N names.
             let first = positional.first().map(|s| s.as_str()).unwrap_or("");
-            let is_local_path = first.is_empty()
-                || first.starts_with('/')
+            let is_local_path = first.starts_with('/')
                 || first.starts_with("./")
                 || first.starts_with("../")
                 || first == "."
                 || first.contains('/');
-            if is_local_path {
-                let pkg_path = if first.is_empty() {
-                    std::env::current_dir().unwrap_or_default()
-                } else {
-                    std::path::PathBuf::from(first)
-                };
-                install_package(&pkg_path);
+            if first.is_empty() {
+                // loft#966 — bare `loft install` resolves the manifest's
+                // `[dependencies]`, the npm/cargo reading of the verb and the one
+                // `loft api` promises when it reports a dependency unresolved.  It used
+                // to install the PROJECT, so the tool's only hint named the one command
+                // that did not address the case it was printed for — and following it
+                // left a copy in `~/.loft/lib/<name>` shadowing the registry (loft#667),
+                // twice, from a command run for a different purpose.  Install-this-project
+                // keeps its own spelling, `loft install .`, which always meant that.
+                #[cfg(feature = "registry")]
+                install_manifest_dependencies(&install_opts);
+                #[cfg(not(feature = "registry"))]
+                eprintln!(
+                    "loft install: this build has no registry support; \
+                     `loft install .` installs the package in this directory"
+                );
+            } else if is_local_path {
+                install_package(&std::path::PathBuf::from(first));
             } else {
                 // Registry install — multiple names allowed.
                 #[cfg(feature = "registry")]

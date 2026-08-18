@@ -26,6 +26,31 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `loft install` installs what your project depends on
+
+Typed on its own in a project directory, `loft install` now reads your `loft.toml` and
+resolves every dependency it declares — the same thing `npm install` and `cargo fetch`
+do, and the thing `loft api` has always told you to run when it reports a dependency as
+missing.
+
+It used to install **your own project** into `~/.loft/lib/`, and do nothing about the
+dependencies. So the one hint the tool gave was for the one case the command did not
+handle — and the copy it left behind could quietly take priority over the published
+version of a package with the same name.
+
+If you wanted the old behaviour, it has always had its own spelling:
+
+```bash
+loft install          # resolve what loft.toml declares
+loft install cbor     # install one package from the registry
+loft install .        # install THIS package into ~/.loft/lib for global use
+```
+
+A dependency declared as `{ path = "../somewhere" }` needs no install at all — it is
+read from the path it names — so `loft install` mentions one only when that path leads
+nowhere. And an install is now filed under the name in your `[package] name`, not under
+whatever your checkout directory happens to be called.
+
 ### A constant list with a negative number in it works
 
 ```loft
