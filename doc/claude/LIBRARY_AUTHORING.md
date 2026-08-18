@@ -229,6 +229,22 @@ test so the next reader never needs the pointer.
   [`scripts/example_repos.tsv`](../../scripts/example_repos.tsv) (monorepos map several
   acronyms to one repo).  A citation can point *across* repos and is still validated +
   linked; a foreign repo is read-only, never a build edge.
+  **Register the acronym in the same pass that writes the first tag** — the
+  registration lives in a different repo from the tags, so it is the step that gets
+  forgotten, and an unregistered acronym is a hard `unregistered` fault on every
+  citation using it.  `loft-libs-game`'s `fixstep` carried thirteen tags for weeks
+  with no `FIX` row; nothing said so, because the gate was not yet live in library
+  CI.  If your CI is green and you never touched the registry, that is not evidence.
+  It stopped being hypothetical on 2026-08-18: loft #971 made the gate live, and
+  `loft-libs-game`'s `main` went red on those thirteen citations the same day, with
+  `loft-libs-graphics` red beside it on an `examples-index.tsv` that was one line
+  stale.  Neither repo had changed — the CHECK arrived.  So the rule has a second
+  half, for whoever turns a ratchet on: **re-run the new gate against every repo that
+  already adopted the convention, on the day it goes live.**  Until then those repos
+  were green on a promise, and a promise and a check look identical in a CI badge.
+  The gate also runs on `pull_request`, so an unregistered acronym reddens the very PR
+  that would fix it: the registry row must merge FIRST, before any library PR carrying
+  its tags.
 
 **The gate runs in your CI already.**  Every `loft-libs-*` `library-ci.yml` is a thin
 caller of loft's reusable workflow, which checks loft out into `loft-src/` — so the
@@ -322,6 +338,16 @@ Before you ship a version:
 - [ ] `[package] description` is a real one-line summary (not the `loft new`
       placeholder) — it's the official registry catalog text (`loft search` /
       `loft api --registry`); registry tooling prefers it over the README.
+      **⚠ Adding this field where there was none OVERWRITES the catalogue text
+      already in the index.** A package that never declared one has its
+      description living only in `loft-registry/index.json`, and the first
+      `loft.toml` to declare one wins silently — the publish does not fail and
+      nothing warns. `loft-libs-net` lost three good descriptions this way
+      (which crate backs the library; `ssh`'s *"Native-only"*), caught only by
+      reading the publish diff afterwards. So before adding the field, read
+      what the index already says and merge rather than replace; if the text
+      there is already right, copy it in verbatim so a later edit cannot drop
+      it.
 - [ ] README, doc comments on every `pub fn` / `pub struct`.
 - [ ] CHANGELOG note for the version (free-form).
 - [ ] Local re-package produces a byte-identical sha256 across

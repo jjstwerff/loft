@@ -34,6 +34,10 @@
 set -u
 
 cd "$(dirname "$0")/.."
+# This checkout — the gate's OWN tree.  Recorded because the gate is repo-agnostic: it
+# runs against a library checkout that, in library CI, CONTAINS this one (`path:
+# loft-src`).  Anything scanning "the repo under test" has to be able to exclude it.
+LOFT_ROOT="$PWD"
 
 QUIET=0
 if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
@@ -461,8 +465,24 @@ has_header_docstring() {
 examples_defs_in_tree() {
   local root="$1"
   [ -d "$root" ] || return 0
-  ( cd "$root" 2>/dev/null && \
-    find . -name '*.loft' -not -path './.*' -not -path './target/*' -print0 2>/dev/null \
+  # The gate's own checkout is never part of the repo under test.  Library CI checks loft
+  # out INSIDE the workspace (`path: loft-src`) and points EXAMPLES_REPO_ROOT at that same
+  # workspace, so an unfiltered walk indexes loft's OWN @STD/@GIT/@LEX/@ACR/@EHK tags as
+  # the library's — and every library's `examples-index.tsv` then reads `stale` forever,
+  # naming rows (`loft-src/tests/scripts/945-…`) no library could ever commit.  Skipping by
+  # PATH rather than by the name `loft-src` keeps it true wherever the checkout is nested.
+  local abs_root; abs_root=$(cd "$root" 2>/dev/null && pwd) || return 0
+  local skip=""
+  if [ "${LOFT_ROOT:-}" != "$abs_root" ]; then
+    case "${LOFT_ROOT:-}" in "$abs_root"/*) skip="./${LOFT_ROOT#"$abs_root"/}" ;; esac
+  fi
+  ( cd "$root" 2>/dev/null || exit 0
+    if [ -n "$skip" ]; then
+      find . -name '*.loft' -not -path './.*' -not -path './target/*' \
+        -not -path "$skip/*" -print0 2>/dev/null
+    else
+      find . -name '*.loft' -not -path './.*' -not -path './target/*' -print0 2>/dev/null
+    fi \
     | xargs -0 awk '
         FNR==1 { f=FILENAME; sub(/^\.\//,"",f); p=""; cited=0 }
         /^[[:space:]]*\/\/.*Example:/ { p=""; cited=1; next }
@@ -509,13 +529,22 @@ check_examples_selftest() {
     > "$d/src/e.loft"
   printf '// Example: @TST-006 — the choice is read off the pixels, so one\n// alpha-0 pixel (@TST-007) makes the whole file RGBA.\nfn cite_continuation() { }\n' \
     > "$d/src/f.loft"
+  # 5. The gate's OWN checkout, when it sits INSIDE the scanned tree, defines nothing
+  #    for that tree.  This is the library-CI shape (`path: loft-src` under the same
+  #    workspace EXAMPLES_REPO_ROOT points at), and getting it wrong is invisible in
+  #    this repo — loft scanning itself has nothing to exclude — while making EVERY
+  #    library's examples-index.tsv permanently `stale` against rows naming loft's own
+  #    tests.  Pinned as an ABSENCE, so a scanner that stops filtering fails here.
+  mkdir -p "$d/loft-src/tests"
+  printf '// @TST-009 — the gate own tree; never the library under test.\nfn gate_own_tree() { }\n' \
+    > "$d/loft-src/tests/x.loft"
 
   local want got
   want=$(printf '@TST-001\tsrc/a.loft:1\tplain_def\n@TST-002\tsrc/b.loft:1\tfirst_wins\n')
-  got=$(examples_defs_in_tree "$d" | sort)
+  got=$(LOFT_ROOT="$d/loft-src" examples_defs_in_tree "$d" | sort)
   rm -rf "$d"
   if [ "$got" = "$want" ]; then
-    green "  ok — 5 fixtures, 4 rules (defines / first-tag-wins / blank-breaks / citation-block)"
+    green "  ok — 6 fixtures, 5 rules (defines / first-tag-wins / blank-breaks / citation-block / own-checkout)"
   else
     red "  selftest FAILED — the scanner no longer follows its documented rules:"
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^/      /'
