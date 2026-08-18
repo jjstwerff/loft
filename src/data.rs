@@ -4595,12 +4595,28 @@ impl Data {
     #[must_use]
     pub fn qualified_type_name(&self, d_nr: u32) -> String {
         let def = self.def(d_nr);
-        for (lib, &id) in &self.use_names {
-            if id == def.source && !lib.is_empty() && lib != "std" {
-                return format!("{lib}::{}", def.name);
-            }
+        // One source can be reachable under SEVERAL names — a package's own module is
+        // keyed `<pkg>::<module>` and also carries the short `<module>` qualifier
+        // (loft#976) — and `use_names` is a HashMap, so taking the first match made this
+        // answer depend on iteration order: the same program named the same definition
+        // `con::catalogue::part_list` on one run and `catalogue::part_list` on the next.
+        // Pick the MOST qualified spelling, ties broken alphabetically: it is the one that
+        // says where the definition actually lives, and it is stable.
+        let best = self
+            .use_names
+            .iter()
+            .filter(|(lib, id)| **id == def.source && !lib.is_empty() && lib.as_str() != "std")
+            .map(|(lib, _)| lib)
+            .max_by(|a, b| {
+                a.matches("::")
+                    .count()
+                    .cmp(&b.matches("::").count())
+                    .then_with(|| b.as_str().cmp(a.as_str()))
+            });
+        match best {
+            Some(lib) => format!("{lib}::{}", def.name),
+            None => format!("src{}::{}", def.source, def.name),
         }
-        format!("src{}::{}", def.source, def.name)
     }
 
     /// @P379 — the native backend emits each loft function as a flat

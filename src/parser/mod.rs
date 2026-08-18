@@ -9715,10 +9715,33 @@ impl Parser {
                     // the flat top-level comma list (`use lib::a, b`) is dropped (it
                     // read poorly — `b` didn't visually bind to `lib::`).
                     let spec = self.parse_import_spec(&id);
-                    // loft#912 — the name is taken, but by WHICH file?  If this
-                    // package has its own `<id>.loft`, the two are different modules
-                    // sharing one global name, and the import below binds the other
-                    // package's.  Say so; the resolution itself is unchanged.
+                    // loft#976 — a package's OWN module wins its own `use`.
+                    //
+                    // A module's file name is one global name across the whole
+                    // dependency graph, so two packages that each ship a `<id>.loft`
+                    // and each say a bare `use <id>` used to be resolved by whichever
+                    // loaded FIRST — a decision that belongs to the CONSUMER's `use`
+                    // order and is visible to neither author.  The loser's own module
+                    // never loaded, so its public surface was amputated in a build it
+                    // had nothing to do with, and a qualified `pkg::name` could not
+                    // rescue it: there was no second module to choose between.
+                    //
+                    // `use self::<id>` already bound the local file under a
+                    // package-qualified key, and the advice already recommended it.
+                    // This makes it what a bare `use` MEANS inside a package, so
+                    // `self::` is the explicit form for the rare case that wants a
+                    // stranger's module rather than the defensive form every library
+                    // author has to remember for every file they will ever add.
+                    if !self.package_declares_dep(&id)
+                        && let Some(pkg) = self.own_package_name()
+                        && let Some(f) = self.own_module_path(&id)
+                    {
+                        self.bind_own_module(&id, &pkg, &f, lib_alias.as_ref(), spec, "");
+                        continue;
+                    }
+                    // loft#912 — the name is taken, but by WHICH file?  A package with
+                    // its own `<id>.loft` took it above; reaching here means this file
+                    // has none, so the import binds whichever package's did load.
                     if self.data.use_exists(&id) {
                         self.module_name_clash(&id);
                     }
@@ -10434,11 +10457,38 @@ impl Parser {
             self.lexer.has_token(";");
             return;
         };
+        self.bind_own_module(&module, &pkg, &f, alias.as_ref(), spec, "self::");
+    }
+
+    /// Bind `<pkg>::<module>` to this package's own `<module>.loft` at `f`.
+    ///
+    /// The body of `use self::<module>`, and — since loft#976 — of a BARE `use
+    /// <module>` inside a package that ships one, which is the same request written
+    /// the short way.  Keyed by `<pkg>::<module>` rather than the bare name, so no
+    /// other package in the graph can take the name from under it.
+    fn bind_own_module(
+        &mut self,
+        module: &str,
+        pkg: &str,
+        f: &str,
+        alias: Option<&String>,
+        spec: Option<ImportSpec>,
+        spelling: &str,
+    ) {
+        // The SHORT spelling (`use math;`) has always also supplied the `math::` qualifier,
+        // and code inside the package writes it. Scoping the module must not take that
+        // away, so the bare name is registered as an alias onto the same source. It is a
+        // flat map, so two packages both spelling it short still share this ONE qualifier
+        // — unchanged from before, and now the only thing they share: each package's own
+        // module, and every bare name it exports, is its own.
+        let bare_qualifier = spelling.is_empty();
         let key = format!("{pkg}::{module}");
         if self.data.use_exists(&key) {
             let lib_source = self.data.get_source(&key);
-            if let Some(a) = &alias {
+            if let Some(a) = alias {
                 self.data.use_alias(a, lib_source);
+            } else if bare_qualifier {
+                self.data.use_alias(module, lib_source);
             }
             // Same rule as a bare `use`: a plain one wildcard-imports, an explicit
             // `::` spec is honoured, and an alias with neither gives ONLY the
@@ -10460,7 +10510,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Missing ';' after 'use self::{module}' — use statements must end with a semicolon"
+                    "Missing ';' after 'use {spelling}{module}' — use statements must end with a semicolon"
                 );
             }
             return;
@@ -10468,11 +10518,13 @@ impl Parser {
         let cur = self.lexer.pos().file.clone();
         self.todo_files.push((cur, self.data.source));
         self.data.use_add(&key);
-        self.record_use_path(&key, &f);
-        if let Some(a) = &alias {
+        self.record_use_path(&key, f);
+        if let Some(a) = alias {
             self.data.use_alias(a, self.data.source);
+        } else if bare_qualifier {
+            self.data.use_alias(module, self.data.source);
         }
-        self.switch_to_dep(&f);
+        self.switch_to_dep(f);
     }
 
     /// Remember which FILE a `use` short-name was loaded from (loft#912).
@@ -10543,6 +10595,19 @@ impl Parser {
     /// type key, which must be identical on every machine that reads the store.  The
     /// registry already enforces that names are unique, so `<name>::<module>` is a
     /// qualifier nothing else in the graph can spell by accident.
+    /// Does the package above this file DECLARE `id` as a dependency?
+    ///
+    /// A declared dependency beats a local file of the same name — the shadow guard in
+    /// `lib_path` settles that on purpose — so the own-module preference (loft#976) must
+    /// defer to it, or a package holding `src/<dep>.loft` would stop being able to reach
+    /// the `<dep>` it depends on.
+    fn package_declares_dep(&mut self, id: &str) -> bool {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        self.package_declared_deps(&cur_dir)
+            .is_some_and(|(_, deps)| deps.contains(id))
+    }
+
     fn own_package_name(&mut self) -> Option<String> {
         let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
         let cur_dir = script_dir(&cur_script).to_string();
@@ -12321,10 +12386,10 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Error,
-            "`{bare}` is declared by more than one module here — {}. A module taken \
-             with `use self::` has no bare qualifier of its own: alias yours \
-             (`use self::{module} as m;` then `m::{bare}`), or import the other one \
-             by name so only one `{bare}` is in scope",
+            "`{bare}` is declared by more than one module here — {}. A package's own \
+             module is scoped to it and has no bare qualifier, so nothing here picks \
+             between them: alias yours (`use self::{module} as m;` then `m::{bare}`), \
+             or import the other one by name so only one `{bare}` is in scope",
             spellings.join(" and ")
         );
     }

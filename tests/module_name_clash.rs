@@ -11,24 +11,27 @@
 //! write, may not have read, and cannot fix.  Nothing in the output said
 //! "collision", so the search went looking for a missing `pub` or a typo.
 //!
-//! The clash is now REPORTED by name, with both file paths in the message, and the
-//! resolution is unchanged — deliberately: a hard refusal breaks code that builds today
-//! — `graphics` <= 0.4.2 and `mesh3d` both ship `math` / `mesh` / `scene`, and this
-//! repo's own `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while
-//! carrying its own copies of all three.  Scoping module names to their package is the
-//! fix this is a signpost for.
+//! **The scoping fix has landed (loft#976).**  A bare `use <module>` inside a package now
+//! binds THAT package's own `src/<module>.loft` when it ships one, registered under
+//! `<package>::<module>` — which is what `use self::<module>` always did, and what the
+//! advice below always recommended.  So a package's public surface no longer depends on
+//! which siblings a consumer happens to pull, or in which order.
 //!
-//! The TIER depends on which way the capture runs (loft#949).  When the ROOT PROJECT's
-//! file wins and a DEPENDENCY's loses, a published package answers differently than it
-//! does on its own — a wrong result, so a `warning`.  The other way round it is `advice`,
-//! which is what keeps those shipped overlaps building: a sweep of every package in this
-//! workspace and the local registry produced four hits, all of them that direction.
+//! The diagnostic stays, for the case the scoping rule cannot reach: a file with no
+//! `<module>.loft` of its OWN still takes whichever the search finds, and two of those in
+//! one graph still resolve by load order.  Its two tiers (loft#949) stay as they were —
+//! `warning` when the ROOT PROJECT captures a name a DEPENDENCY was using, `advice` the
+//! other way round.
 //!
-//! So the `Unknown function` error still follows — the advice EXPLAINS it, it does
-//! not remove it.  These tests assert exactly that much and no more, because a test
-//! claiming the program now builds would be claiming the fix that has not landed.
-//! They also pin the three neighbouring shapes that must stay silent, since a check
-//! that fired on all of them would pass a test that only looked at the broken case.
+//! A DECLARED DEPENDENCY still beats a local file of the same name: that is `lib_path`'s
+//! own shadow guard, deliberate, and the scoping rule defers to it — otherwise a package
+//! holding `src/<dep>.loft` would stop being able to reach the `<dep>` it depends on.
+//!
+//! What the fix does NOT do is merge two modules into one name.  Where both packages'
+//! modules declare the SAME public name and a consumer calls it BARE, that call is now an
+//! explicit ambiguity error naming both — the missing error the pre-freeze mandate calls
+//! for (COMPATIBILITY.md § the error surface is one-directional), and strictly better than
+//! the arbitrary pick it replaces.
 
 extern crate loft;
 
@@ -89,11 +92,12 @@ fn parse_two_packages(tag: &str, extra: &[(&str, &str)], top_body: &str) -> (Lev
     out
 }
 
-/// The reported shape: the consumer grows a `src/catalogue.loft` of its own and
-/// `use`s it, while its dependency already has one.  The message must name the
-/// clash and BOTH files — the whole cost of this bug was that it named neither.
+/// The reported shape, and the one loft#976 fixes: the consumer grows a
+/// `src/catalogue.loft` of its own while its dependency already has one.  Each `use
+/// catalogue;` now binds the module of the package it is written in, so both packages
+/// keep their own — the consumer's `top_only` AND the dependency's `part_list`.
 #[test]
-fn clashing_module_basename_is_reported_naming_both_files() {
+fn a_packages_own_module_wins_its_own_use() {
     let (level, diag) = parse_two_packages(
         "clash",
         &[("catalogue.loft", "pub fn top_only() -> integer { 3 }\n")],
@@ -103,70 +107,52 @@ fn clashing_module_basename_is_reported_naming_both_files() {
     );
     let all = diag.join("\n");
     assert!(
-        all.contains("module 'catalogue' is declared by two files"),
-        "expected the clash to be named; got:\n{all}"
+        !all.contains("Unknown function"),
+        "neither package may lose its own module to the other — that amputation of a \
+         published surface is what loft#912/#976 were about:\n{all}"
     );
+    assert!(level < Level::Error, "and the tree must build:\n{all}");
+    // Nothing left to advise about: the two modules are two keys, not one contested name.
     assert!(
-        all.contains("pkg_top") && all.contains("pkg_dep"),
-        "both files must be named, so the reader does not have to find the second one:\n{all}"
+        !all.contains("module 'catalogue' is declared by two files"),
+        "a name each package resolves for itself is not a clash to report — a diagnostic \
+         that fires where there is nothing to fix teaches people to skip the ones where \
+         there is:\n{all}"
     );
-    // The clash must be reported as ADVICE.  Escalating it would break packages that
-    // build today, which is the whole reason the resolution is left alone for now.
-    assert!(
-        diag.iter()
-            .any(|d| d.starts_with("Advice[module-name-shadowed]")),
-        "the clash must be advice, not a gating tier:\n{all}"
-    );
-    // The symptom still follows — the advice explains it rather than removing it.
-    // Asserting its absence here would claim the scoping fix that has not landed.
-    assert!(
-        all.contains("Unknown function"),
-        "the underlying mis-resolution is unchanged; if this stopped happening the \
-         advice has become redundant and should be revisited:\n{all}"
-    );
-    let _ = level;
 }
 
-/// The same clash reached from the OTHER direction — the consumer's module is
-/// loaded first, so the DEPENDENCY's `use catalogue;` is the one that finds the
-/// name taken.  That is the direction the issue was filed from, where the error
-/// landed on a line inside the dependency.  Both orders must be caught, or the
-/// bug merely moves when a `use` is reordered.
-///
-/// And this direction is a **warning**, not advice (loft#949).  The two directions differ
-/// in who is harmed: here the ROOT PROJECT captured a name a DEPENDENCY was using, so a
-/// package that is published, versioned and green on its own answers differently because
-/// something downstream added a file — measured as 100 where the package alone computes
-/// 42.  A diagnostic gates exactly when ignoring it can produce a wrong result, and this
-/// one can.  The other direction — a package losing its own name to a dependency's file —
-/// stays advice, which is what keeps the shipped `graphics` ⟷ `mesh3d` overlaps building.
+/// The same tree with the two `use` lines REVERSED.  The whole defect was that this order
+/// — the CONSUMER's, invisible to both library authors — decided which package lost its
+/// module, so the two orders answering alike is the fix stated as a property.
 #[test]
-fn a_project_capturing_a_dependencys_module_name_is_a_warning() {
-    let (level, diag) = parse_two_packages(
-        "clash_rev",
+fn the_use_order_no_longer_decides_who_loses() {
+    let (level_a, diag_a) = parse_two_packages(
+        "order_a",
+        &[("catalogue.loft", "pub fn top_only() -> integer { 3 }\n")],
+        "use pkg_dep;\nuse catalogue;\n\
+         pub fn top_entry() -> integer { pkg_dep::part_list() }\n\
+         pub fn top_two() -> integer { top_only() }\n",
+    );
+    let (level_b, diag_b) = parse_two_packages(
+        "order_b",
         &[("catalogue.loft", "pub fn top_only() -> integer { 3 }\n")],
         "use catalogue;\nuse pkg_dep;\n\
          pub fn top_entry() -> integer { pkg_dep::part_list() }\n\
          pub fn top_two() -> integer { top_only() }\n",
     );
-    let all = diag.join("\n");
     assert!(
-        diag.iter()
-            .any(|d| d.starts_with("Warning[module-name-shadowed]")),
-        "the reversed load order must be caught, and at the gating tier:\n{all}"
-    );
-    // It must name the file the reader can actually edit.  They cannot add a `use self::`
-    // to a dependency they did not write, so a message that only names that cure is a
-    // message they cannot act on.
-    assert!(
-        all.contains("captured the module name 'catalogue'") && all.contains("pkg_top"),
-        "the warning must name the project's own file as the one that captured it:\n{all}"
+        level_a < Level::Error && level_b < Level::Error,
+        "both orders must build\nA:\n{}\nB:\n{}",
+        diag_a.join("\n"),
+        diag_b.join("\n")
     );
     assert!(
-        all.contains("use self::catalogue"),
-        "…and the durable cure, which is the dependency author's to apply:\n{all}"
+        !diag_a.join("\n").contains("Unknown function")
+            && !diag_b.join("\n").contains("Unknown function"),
+        "and neither may lose a module\nA:\n{}\nB:\n{}",
+        diag_a.join("\n"),
+        diag_b.join("\n")
     );
-    let _ = level;
 }
 
 /// Control — a DIFFERENT basename is the documented fix, and it must still work.
@@ -253,17 +239,19 @@ fn a_file_named_like_a_declared_dependency_is_not_a_clash() {
 /// function is `pub`, the dependency is green on its own, and the cure — rename your own new
 /// file — follows from nothing printed.
 ///
-/// The advice was produced all along; `loft test` collected it and dropped it on the failure
-/// path, printing only errors and warnings. So it appeared exactly when the build SURVIVED
-/// and vanished when it did not.
+/// loft#948's scaffold, which is the FATAL shape: the consumer's `src/catalogue.loft`
+/// declares something else entirely and is imported by nobody, so the dependency's
+/// `part_list` simply went missing and the package's own test suite failed.
 ///
 /// Driven through the BINARY rather than `Parser::parse`, and that is load-bearing: the
 /// shadowing file is never imported, so nothing reaches it by following `use` edges. It is
 /// loaded because building the package reads every file under `src/` — which is why the
-/// collision happens at all, and why this has to be tested at the `loft test` surface where
-/// the output was being dropped.
+/// collision happened at all.
+///
+/// Under loft#976 there is no collision left: `pkg_dep` binds its own `catalogue` and the
+/// consumer's same-named file is simply a different module.
 #[test]
-fn the_clash_is_reported_even_when_it_breaks_the_build() {
+fn the_collision_no_longer_breaks_the_build() {
     let root = std::env::temp_dir().join(format!("loft_948_fatal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let dep = root.join("pkg_dep");
@@ -332,23 +320,14 @@ fn the_clash_is_reported_even_when_it_breaks_the_build() {
     let _ = std::fs::remove_dir_all(&root);
 
     assert!(
-        all.contains("Unknown function part_list"),
-        "the scaffold no longer reproduces the collision at all:\n{all}"
+        !all.contains("Unknown function part_list"),
+        "loft#976 — `pkg_dep`'s `use catalogue::*` binds ITS OWN catalogue, so the \
+         consumer's unrelated file of that name can no longer take `part_list` away from \
+         it. The dependency answers 42 here exactly as it does alone:\n{all}"
     );
     assert!(
-        all.contains("module-name-shadowed"),
-        "the collision is unreported in exactly the case that is fatal — the reader gets \
-         `Unknown function` against a dependency's source and nothing naming the cause:\n{all}"
-    );
-    // The cure it names is `use self::` rather than a rename (loft#949).  Both packages
-    // here declare a `[package] name`, which is what `self::` qualifies with, so it is
-    // available — and it is the better answer: renaming churns a file and every `use` of
-    // it downstream, while `self::` keeps both modules reachable and puts the name beyond
-    // any consumer's reach.  A diagnostic that exists to be the signpost for an opt-in has
-    // to say the opt-in's name.
-    assert!(
-        all.contains("catalogue.loft") && all.contains("use self::catalogue"),
-        "the advice must name both files and the cure that keeps this package's answer:\n{all}"
+        all.contains("1 passed") || all.contains("test result: ok"),
+        "…and the package's own test suite therefore passes:\n{all}"
     );
 }
 
@@ -469,13 +448,13 @@ fn use_self_tree(tag: &str, dep_entry: &str) -> String {
     all
 }
 
-/// loft#949 — `use self::<module>` binds the package's OWN module, so a dependency
-/// answers the same in every consumer.
+/// loft#949/#976 — a dependency answers the same in every consumer, and BOTH spellings
+/// now say so.
 ///
-/// Both arms run, and the bare-`use` arm is what makes this a proof rather than an
-/// assertion: it pins that the scaffold still reproduces the wrong answer, so a green
-/// `self::` arm cannot come from a tree that stopped colliding. Same files, same
-/// dependency, one line different.
+/// `use self::<module>` always bound the package's own module; since loft#976 a bare `use
+/// <module>` inside a package means the same thing, so the two arms must agree. They are
+/// both run because the pair is the claim: one arm alone could be green on a tree that
+/// stopped colliding for some unrelated reason.
 #[test]
 fn use_self_binds_the_packages_own_module_not_a_consumers() {
     let bare = use_self_tree(
@@ -483,10 +462,10 @@ fn use_self_binds_the_packages_own_module_not_a_consumers() {
         "use catalogue::*;\npub fn dep_answer() -> integer { part_list() + 1 }\n",
     );
     assert!(
-        bare.contains("answer=100"),
-        "control: bare `use` must still bind the consumer's file — if this stopped \
-         happening the scaffold no longer reproduces #949 and the other arm proves \
-         nothing:\n{bare}"
+        bare.contains("answer=42"),
+        "loft#976 — a bare `use catalogue` inside pkg_dep binds pkg_dep's own \
+         catalogue.loft (41 + 1), whatever the consumer ships. Reading 100 here means the \
+         consumer's file captured the name again:\n{bare}"
     );
 
     let scoped = use_self_tree(
@@ -826,26 +805,175 @@ fn the_clash_advice_outside_a_package_does_not_prescribe_self() {
     );
 }
 
-/// The value the warning is about (loft#949): a dependency that is published, versioned
-/// and green on its own answers DIFFERENTLY once a consumer adds a file whose basename it
-/// was already using.  Nothing in the dependency changed; the consumer never imported the
-/// dependency's module; the two files share only a name.
+/// The value loft#949 was about, now from the other side: a dependency that is published,
+/// versioned and green on its own answers THE SAME once a consumer adds a file whose
+/// basename it was already using.  Nothing in the dependency changed, the consumer never
+/// imported the dependency's module, and the two files share only a name — so the two must
+/// not share a slot.
 ///
-/// Both numbers are asserted from ONE run, which is what makes the claim a comparison
-/// rather than an anecdote: `dep_answer()` reads 100 through the consumer's `part_list`
-/// while the consumer's own call reads the same 99 it always did — so the dependency is
-/// running on someone else's data, not merely failing.
-///
-/// Pinned as the CURRENT behaviour, deliberately, exactly as the parse-level tests above
-/// pin `Unknown function`: the resolution is unchanged and scoping module names to their
-/// package is the fix this warning is a signpost for.  When that lands this test goes red,
-/// which is the point — it is the reminder to revisit the warning, not a claim that the
-/// wrong answer is correct.
+/// Both numbers come from ONE run, which is what makes it a comparison rather than an
+/// anecdote: `dep_answer()` reads 42 through the dependency's own `part_list` while the
+/// consumer's own call reads its own 99.  Before loft#976 the first read 100 — the
+/// dependency running on someone else's data.
 #[test]
-fn a_captured_module_changes_what_the_dependency_answers() {
+fn a_dependency_answers_the_same_in_every_consumer() {
+    // The consumer's module declares its OWN name, so the only question this cell asks is
+    // whose `catalogue` the DEPENDENCY read. (Both declaring `part_list` is the next test.)
+    let all = captured_module_run(
+        "value",
+        "pub fn con_list() -> integer { 99 }\n",
+        "use catalogue;\nuse dep;\n\
+         fn main() { println(\"dep={dep_answer()} con={con_list()}\"); }\n",
+    );
+    assert!(
+        all.contains("dep=42 con=99"),
+        "the dependency must answer 42 — what it answers alone — while the consumer's own \
+         `part_list` still answers 99. `dep=100` is the captured-module wrong result \
+         (loft#949/#976):\n{all}"
+    );
+    assert!(
+        !all.contains("module-name-shadowed"),
+        "and there is nothing left to warn about: each package resolved its own file:\n{all}"
+    );
+}
+
+/// The shape the scoping rule deliberately does NOT merge: both packages' modules declare
+/// the SAME public name, and the consumer calls it BARE with both in scope.
+///
+/// That call has two answers and no rule picks between them, so it is an ERROR naming both
+/// — not the arbitrary pick it used to be. Adding it is the pre-freeze mandate for a
+/// surface that "produces a plausible-wrong value where it should reject"
+/// (COMPATIBILITY.md § the error surface is one-directional); the qualified spellings the
+/// message names both keep working.
+#[test]
+fn a_bare_call_matching_two_modules_is_refused_not_guessed() {
+    let all = captured_module_run(
+        "ambig",
+        "pub fn part_list() -> integer { 99 }\n",
+        "use catalogue;\nuse dep;\n\
+         fn main() { println(\"{part_list()}\"); }\n",
+    );
+    assert!(
+        all.contains("declared by more than one module"),
+        "a bare name two modules answer must be refused, not resolved by load order:\n{all}"
+    );
+    assert!(
+        all.contains("con::catalogue::part_list") && all.contains("dep::catalogue::part_list"),
+        "…and the message must name BOTH, since the reader's fix is to pick one:\n{all}"
+    );
+    assert!(
+        !all.contains("A module taken with `use self::`"),
+        "the message must not assume the reader wrote `self::` — since loft#976 a bare \
+         `use` inside a package scopes the same way:\n{all}"
+    );
+    // One source is now reachable under TWO names — `con::catalogue` and the short
+    // `catalogue` qualifier — and the name the message picks came from a HashMap walk, so
+    // it varied run to run. A diagnostic that renames the thing it is about between runs
+    // is a bug in the diagnostic, and a test that only ran once would report it as a flake.
+    let again = captured_module_run(
+        "ambig2",
+        "pub fn part_list() -> integer { 99 }\n",
+        "use catalogue;\nuse dep;\n\
+         fn main() { println(\"{part_list()}\"); }\n",
+    );
+    assert_eq!(
+        all.replace("ambig_", "T_").replace("ambig2_", "T_"),
+        again.replace("ambig_", "T_").replace("ambig2_", "T_"),
+        "the same program must name the same definitions every run"
+    );
+}
+
+/// loft#976's own shape: two SIBLING packages, neither depending on the other, with
+/// DISJOINT names inside the colliding module — and a consumer that pulls both.
+///
+/// This is the one a precedence rule between a package and its dependency cannot reach.
+/// Each package's own test suite was green, because a package's own graph holds only
+/// itself; the loser was decided by the CONSUMER's `use` order, which neither author can
+/// see, and a qualified `pkg::name` could not rescue it — the module never loaded, so
+/// there was no second name to choose between. Both orders are run, because the order
+/// being irrelevant IS the fix.
+#[test]
+fn two_sibling_packages_keep_their_own_same_named_modules() {
+    for (tag, uses) in [
+        ("ab", "use pkg_a;\nuse pkg_b;\n"),
+        ("ba", "use pkg_b;\nuse pkg_a;\n"),
+    ] {
+        let root = std::env::temp_dir().join(format!("loft_976_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (pkg, fname, body, entry) in [
+            (
+                "pkg_a",
+                "skin.loft",
+                "pub fn skin_a_only(v: float) -> float { v * 2.0 }\n",
+                "use skin;\npub fn a_entry(v: float) -> float { skin_a_only(v) }\n",
+            ),
+            (
+                "pkg_b",
+                "skin.loft",
+                "pub fn skin_b_only(v: float) -> float { v + 10.0 }\n",
+                "use skin;\npub fn b_entry(v: float) -> float { skin_b_only(v) }\n",
+            ),
+        ] {
+            let dir = root.join(pkg);
+            std::fs::create_dir_all(dir.join("src")).expect("mkdir pkg");
+            std::fs::write(
+                dir.join("loft.toml"),
+                format!(
+                    "[package]\nname = \"{pkg}\"\nversion = \"0.1.0\"\n\n\
+                     [library]\nentry = \"src/{pkg}.loft\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(dir.join("src").join(fname), body).unwrap();
+            std::fs::write(dir.join("src").join(format!("{pkg}.loft")), entry).unwrap();
+        }
+        let app = root.join("app");
+        std::fs::create_dir_all(app.join("src")).expect("mkdir app");
+        std::fs::write(
+            app.join("loft.toml"),
+            "[package]\nname = \"app976\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+             pkg_a = { path = \"../pkg_a\" }\npkg_b = { path = \"../pkg_b\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("src/main.loft"),
+            format!(
+                "{uses}fn main() {{ \
+                 println(\"a={{pkg_a::a_entry(1.0)}} b={{pkg_b::b_entry(1.0)}}\") }}\n"
+            ),
+        )
+        .unwrap();
+
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+            .args(["--interpret", "src/main.loft"])
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_TIMEOUT", "120")
+            .current_dir(&app)
+            .output()
+            .expect("spawn loft");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            all.contains("a=2 b=11"),
+            "[{tag}] both packages must reach their own `skin` — before loft#976 the \
+             second `use` found the name taken and that package's module never loaded, \
+             so its public surface was amputated in a build it had nothing to do \
+             with:\n{all}"
+        );
+    }
+}
+
+/// Build `dep` (its own `catalogue` answering 41) + `con` (a `catalogue` of its own, and
+/// `dep` as a path dependency), run `con`'s main, and return everything it said.
+fn captured_module_run(tag: &str, con_catalogue: &str, con_main: &str) -> String {
     use std::process::Command;
 
-    let root = std::env::temp_dir().join(format!("loft_949_value_{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("loft_949_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let dep = root.join("dep");
     let con = root.join("con");
@@ -875,17 +1003,8 @@ fn a_captured_module_changes_what_the_dependency_answers() {
          dep = { path = \"../dep\" }\n",
     )
     .unwrap();
-    std::fs::write(
-        con.join("src/catalogue.loft"),
-        "pub fn part_list() -> integer { 99 }\n",
-    )
-    .unwrap();
-    std::fs::write(
-        con.join("src/main.loft"),
-        "use catalogue;\nuse dep;\n\
-         fn main() { println(\"dep={dep_answer()} con={part_list()}\"); }\n",
-    )
-    .unwrap();
+    std::fs::write(con.join("src/catalogue.loft"), con_catalogue).unwrap();
+    std::fs::write(con.join("src/main.loft"), con_main).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .args(["--interpret", "src/main.loft"])
@@ -903,21 +1022,5 @@ fn a_captured_module_changes_what_the_dependency_answers() {
         String::from_utf8_lossy(&out.stderr)
     );
     let _ = std::fs::remove_dir_all(&root);
-
-    assert!(
-        all.contains("dep=100 con=99"),
-        "the dependency must be seen answering 100 where it answers 42 alone — if this \
-         now reads `dep=42`, module scoping has landed and this warning needs revisiting \
-         (loft#949):\n{all}"
-    );
-    assert!(
-        all.contains("warning[module-name-shadowed]"),
-        "…and the run must say so at the gating tier, because advice is routinely \
-         filtered and this one costs a wrong answer:\n{all}"
-    );
-    assert_eq!(
-        all.matches("warning[module-name-shadowed]").count(),
-        1,
-        "one collision, reported once — the `use` is walked by two parses:\n{all}"
-    );
+    all
 }

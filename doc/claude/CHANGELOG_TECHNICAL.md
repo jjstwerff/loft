@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A package's own module wins its own `use` (loft#976, 2026-08-18)
+
+Two packages, neither depending on the other, each shipping `src/skin.loft` with DISJOINT
+names inside, and each saying a bare `use skin;`. A consumer that pulls both:
+
+```
+error: unknown type 'PartBox'
+error: Unknown function skin_covers
+```
+
+Swap the consumer's two `use` lines and the OTHER package loses instead. A module's short
+name was one slot shared by the whole dependency graph, so the first loader took it and
+every other package's own module never loaded — its public surface amputated in a build it
+had nothing to do with, reported against a file its author had not touched. A qualified
+`hex_part::skin_covers` did not help: the module never loaded, so there was no second name
+to choose between. Each package's own test suite was green, because a package's own graph
+holds only itself.
+
+A bare `use <module>` inside a package now resolves that package's own
+`src/<module>.loft` first, binding it under `<package>::<module>` — which is exactly what
+`use self::<module>` already did (loft#949) and what the `module-name-shadowed` advice
+already recommended. `parse_use_self`'s tail is now `bind_own_module`, shared by both
+spellings, so `self::` is the explicit form for the rare case that wants a stranger's
+module rather than the defensive form every library author has to remember for every file
+they will ever add.
+
+**A declared dependency still beats a local file of the same name** — that is `lib_path`'s
+own shadow guard, deliberate — so the preference checks `package_declares_dep` first.
+Without that, a package holding `src/<dep>.loft` stopped being able to reach the `<dep>` it
+depends on; `a_file_named_like_a_declared_dependency_is_not_a_clash` caught it.
+
+**What it deliberately does not do is merge two modules into one name.** Where both
+packages' modules declare the same public name and a consumer calls it BARE with both in
+scope, that call is now an explicit ambiguity error naming both spellings, where before one
+was picked by load order. That is a tightening, and it is the one the pre-freeze mandate
+asks for: COMPATIBILITY.md § *the error surface is one-directional* says every place loft
+"produces a plausible-wrong value where it should reject" is a last-chance-to-add while
+contract 0 allows it. The ambiguity message no longer assumes the reader wrote `self::`,
+since a bare `use` now scopes the same way.
+
+`module-name-shadowed` stays for what the scoping rule cannot reach: a file with no
+`<module>.loft` of its own still takes whichever the search finds, and two of those in one
+graph still resolve by load order.
+
+Two things the short spelling has to keep, both found by the suite rather than by reading:
+
+- **the `<module>::` qualifier.** `use math;` has always supplied it and code inside the
+  package writes it, so the bare spelling registers the short name as an alias onto the
+  same source; without that the shipped `graphics` fixture failed with `Unknown library
+  'math'`. It is a flat map, so two packages both spelling it short still share that ONE
+  qualifier — unchanged from before, and now the only thing they share.
+- **a stable name in diagnostics.** One source reachable under two names met
+  `qualified_type_name`'s walk over a `HashMap`, which returned the first match: the same
+  program named the same definition `con::catalogue::part_list` on one run and
+  `catalogue::part_list` on the next. It now picks the most qualified spelling, ties broken
+  alphabetically. The order-sensitivity predates this change; a second key is what made it
+  observable, and it read as a flaky test.
+
+Guard: `tests/module_name_clash.rs` — the filed shape (two SIBLING packages, both `use`
+orders) plus the dependency-direction cases, rewritten from asserting the mis-resolution to
+asserting the fix. Those tests were written to go red when this landed and say so in their
+own docs.
+
 ### A struct-enum field access never checked the discriminant (loft#980, 2026-08-18)
 
 ```loft

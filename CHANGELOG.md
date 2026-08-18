@@ -26,6 +26,23 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A package keeps its own files, whoever else is in the build
+
+If two libraries both had a file called `skin.loft`, only one of them got to be `skin`.
+The other one's file never loaded, so the functions in it were simply missing — reported
+against a line inside a library whose author had never seen the problem, in a program they
+did not write. Which one lost depended on the order the *consumer* happened to list them
+in, and swapping those two lines moved the breakage to the other library.
+
+A library now always gets its own files. `use skin;` inside a package means *this
+package's* `skin.loft`, so two libraries can both have one and both work, in any order.
+Naming a dependency still wins over a file of the same name, so nothing can shadow what it
+depends on.
+
+One thing to know: if both files happen to export the *same* name and you call it without
+saying which you mean, you now get an error naming both, instead of one of them being
+picked for you. Give one an alias (`use skin as s;`) or import the name you want directly.
+
 ### Reading a field the value's variant doesn't have now says so
 
 Enum variants carry named fields you read directly:
