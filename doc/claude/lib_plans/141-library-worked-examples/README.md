@@ -17,11 +17,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
 (loft#973). 83 tags across the ecosystem, with **Phase E under way**: `hex_form`
-(`@HXF-001..007`) and `hex_place` (`@HXP-001..006`) are the first two of
-`loft-libs-world`'s twelve deferred packages to land. Writing them found a shipped
-parser that repaired seven malformed texts its own comment documents as refused, and
-a seam-error number that reads exactly zero wherever a caller would naturally measure
-it.
+(`@HXF-001..007`), `hex_place` (`@HXP-001..006`) and `hex_roof` (`@HXR-001..006`) are
+the first three of `loft-libs-world`'s twelve deferred packages to land. Writing them
+found a shipped parser that repaired seven malformed texts its own comment documents as
+refused, a seam-error number that reads exactly zero wherever a caller would naturally
+measure it, and a documented cure for a wobbly eave that silently buys it by ponding.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -1018,7 +1018,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 2 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 3 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1067,10 +1067,37 @@ one stored slot; one seam between two *stencils* should not be stored at all —
 names the other. The def scanner's first-tag rule keeps a sibling mention a mention;
 verified by running the gate for both packages rather than assuming it.
 
-**A method note worth keeping.** Both rows so far found their defect in the tag that had
-to demonstrate the package's most confidently stated promise. That is not luck: a worked
-example is the first thing that ever evaluates such a sentence against the code, and the
-sentences most worth working are the ones written with the most certainty.
+**Row 3 `hex_roof` is DONE** (`@HXR-001..006`; *5 tagged, 9 deferred*), and its finding
+is the same shape a third time, in its mildest and most useful form: a claim that was
+TRUE but priced nothing. `roof_cone`'s comment says clamping at `dmax` *"is what makes an
+eave LEVEL on a quantised footprint"* — correct, and silent about the cost. Swept across
+`dmax` on a 29-cell quantised disc:
+
+| `dmax` | `eave_spread` | `roof_ponds` | |
+|---|---|---|---|
+| ≤ 3.00 | 0 | 3–9 | level, and it leaks |
+| 3.25 | 0.25 | 1 | both wrong at once |
+| ≥ 3.50 | 0.5+ | 0 | drains, and the eave wobbles |
+
+**No setting gets both**, and the sweep says why: the innermost *boundary* cell sits at
+radius 3.00 while the outermost *interior* cell reaches 3.46, so no single radius
+separates the two sets. `roof_hip` gets both because it never measures a radius — the
+boundary is ring 0 by definition. The comment now carries the cost beside the cure.
+
+**A method note worth keeping.** All three rows so far found their defect in the tag that
+had to demonstrate the package's most confidently stated promise — first a claim that was
+false (`hex_form`), then one whose units were unstated (`hex_place`), then one that was
+true and priced nothing (`hex_roof`). That is not luck: a worked example is the first
+thing that ever evaluates such a sentence against the code, and the sentences most worth
+working are the ones written with the most certainty.
+
+**And a second note, about what these packages have in common.** Every finding so far is a
+call that produces a plausible wrong answer while passing every cheap check — a parse that
+repairs, a residual that reads zero, a roof that still sheds water. So the productive
+question for the remaining nine rows is not *"what does this function do"* but **"what is
+the nearest call that looks identical and is not, and what number distinguishes them?"**
+In `hex_roof` that number already existed and was simply not the one anyone read
+(`eave_spread`).
 
 Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
 and a signature carries least; every row below is a package that owes an example.
@@ -1079,7 +1106,7 @@ and a signature carries least; every row below is a package that owes an example
 |---|---|---|---|---|
 | ~~1~~ | ~~`hex_form`~~ | 53 | **DONE** — `@HXF-001..007`. Rules **C1–C5** worked one by one; writing them found and fixed a reader that repaired seven texts it documents as refused | — |
 | ~~2~~ | ~~`hex_place`~~ | 17 | **DONE** — `@HXP-001..006`. The shared edge, order-freeness, levels, seating, the seam error and arbitration; `@HXP-001` and `@HXG-003` now name each other | — |
-| 3 | `hex_roof` | 15 | one mechanism, several profiles: every roof form is the same function of a **distance**, and only the distance SOURCE changes. Which source a profile reads is the trap | nothing |
+| ~~3~~ | ~~`hex_roof`~~ | 15 | **DONE** — `@HXR-001..006`. The distance-source taxonomy, and the eave/drainage trade-off a quantised footprint forces on a point source | — |
 | 4 | `hex_way` | 20 | a way is authored as ONE exact centreline and every other line is an OFFSET of it — that is what escapes the hex quantisation floor, which bottoms out near half a hex. The floor is the number a caller needs | nothing |
 | 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
 | 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
@@ -1104,7 +1131,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *4 tagged, 10 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *5 tagged, 9 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
