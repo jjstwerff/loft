@@ -44,7 +44,7 @@ poor one for a *work queue*. The twelve are now **Phase E** below, in the order 
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
 **Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, **14 of 117 entries cited**).
+feature catalogue, `FTR`, **17 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (14 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (17 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -969,7 +969,36 @@ one that cannot regress a true positive: skip the report for a variable a closur
 (`!var.captured`), which stays silent only where a read exists that the counter cannot see.
 A genuinely dead pair BEFORE the capture still warns — that boundary is the test.
 
-**Still to do:** the other ~103 features, plus two pairings this slice deliberately did NOT
+**THE THIRD SLICE (2026-08-18) — F2, F5, F38, and a promise that is an INTEGER promise.**
+`@MSH-005` (mesh3d's degenerate camera) and `@TIM-002` (a date the user typed) were the
+demonstrators already in the tree; `@FTR-005` was authored because the correction needed a
+gate. **F38 said a calculation that cannot give a real answer produces `null` — "the way a
+spreadsheet shows an error in one cell while the rest of the sheet still works".** Measured,
+both backends:
+
+| | value | `?? fallback` fires? |
+|---|---|---|
+| `integer x / 0`, `x % 0`, overflow | null | yes |
+| `float 1.0 / 0.0` | `+inf` | **no** |
+| `float 0.0 / 0.0` | null (NaN is the null float) | yes |
+| `float 1.0e308 * 10.0` | `inf` | **no** |
+
+So whether `x / d ?? 0.0` defends anything depends on whether the NUMERATOR happened to be
+zero — which is not what the line says, and is exactly why `normalize3`'s guard is sound
+(a zero-length vector zeroes the numerator too) one component away from where it is not.
+F2 gained the same warning from the `??` side, and F5 gained the rule the pairing exposed:
+**whether a cast can refuse is the TARGET type's choice** — a `value struct` has no null, so
+`"next tuesday" as DateTime` is total and answers the epoch.
+
+**And a defect the row could not have found from the docs: loft#983.** The raw quotient
+reads as `null` once bound to a local or returned, while the same division keeps its
+infinity inline, through `??`, as an argument, and into a vector — one rule applied in some
+destinations and not others, identically on both backends. Narrowed by the next probe: a
+bound float OVERFLOW keeps the infinity, so it is the DIVIDE op's null-producing path that
+normalises, not the bind. `@FTR-005` asserts only the guarded shapes, so it stays honest
+whichever way #983 is settled.
+
+**Still to do:** the other ~100 features, plus two pairings this slice deliberately did NOT
 make. **F109 `#superseded`** has its real use in a shipped library (four marks in
 `regex`), but no tagged fn CALLS a superseded spelling, so the honest citation needs an
 `@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
