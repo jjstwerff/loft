@@ -34,9 +34,14 @@ does the returned view borrow?* — which is true whatever the delivery is.
 - `ref_return` under `SignatureOnly` records the borrow and skips every placement verdict
   (`Rename` / `Bind` / `Grow`), so no second delivery is created and the ABI is unchanged.
 - `generation/dispatch.rs`: a first-bind from a callee that `returns_borrowed_view()` now
-  ALIASES instead of deep-copying — what the interpreter already emitted (`PutRef`).
-  Without it the copy is a store the IR never frees (one leaked record per call, caught
-  by the new `accessor_cells_leak_clean_native`).
+  ALIASES instead of deep-copying **where the destination is one the emitter will not
+  free** (`variables.skip_free`) — what the interpreter already emitted (`PutRef`).
+  Without the alias the copy is a store the IR never frees (one leaked record per call,
+  caught by the new `accessor_cells_leak_clean_native`); without the `skip_free` half a
+  LIFTED call temporary (`__lift_1`, which the IR owns and frees) aliases the caller's
+  store and loft#677's guard reports `USE AFTER FREE (write) … killed by the free of
+  var___lift_1` on native. The copy decision now reads the same fact the free decision
+  reads, instead of a proxy for it.
 
 Widening the delivery peel instead was measured and rejected: it re-typed the return
 non-nullable (`-> Item["b"]`) and diverged the backends on a missing key.
