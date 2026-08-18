@@ -317,3 +317,72 @@ fn replace947(c: Cell947) { c = Cell947 { n: 555 }; }
 fn replace_ref947(c: &Cell947) { c = Cell947 { n: 555 }; }
 
 fn run947(f: fn()) { f(); }
+
+// @FTR-005 — "a calculation that cannot give a real answer produces null": true of
+// integers, and not of floats
+//
+// @F38 tells a reader that overflow and division by zero become `null`, which they
+// can then spot and handle — "the way a spreadsheet shows an error in one cell while
+// the rest of the sheet still works".  That is the INTEGER story exactly, in every
+// position: `1 / 0`, `7 % 0` and an overflowing sum are null, and `??` reaches all
+// three.
+//
+// A float does not follow it.  `1.0 / 0.0` is +INFINITY, which is a PRESENT value:
+// `??` does not fire, the comparison it feeds answers true, and it keeps spreading
+// through every later sum.  The one float shape that IS null is `0.0 / 0.0`, because
+// NaN is what loft uses for a null float — so whether the guard fires depends on
+// whether the NUMERATOR happened to be zero, which is not what a reader of
+// `x / d ?? 0.0` believes it depends on.
+//
+// The caller's rule, and what this test pins: **test the divisor; do not expect `??`
+// to catch a float divide by zero.**  It catches the integer one.
+//
+// (loft#983: the RAW quotient — bound straight to a local, or compared without a
+// `??` in between — reads as null instead, so `x = 1.0/0.0` and `1.0/0.0 ?? f` do
+// not agree about what happened.  This test asserts only the guarded form, which is
+// what a caller writes and is the same on both backends; the unguarded one is the
+// issue's to settle.  Either resolution leaves the lesson standing: `??` is not the
+// guard for a float divide.)
+//
+// Real use, in a shipped library: `mesh3d`'s `normalize3` divides each component by
+// the length and discharges with `?? 0.0` (@MSH-005), and a degenerate camera then
+// collapses the world onto the origin with no error anywhere.  It is sound there
+// only because a zero-length vector makes the numerator zero too — the division
+// really is `0.0 / 0.0`.  One component away from that shape, the same line guards
+// nothing.
+fn test_arithmetic_safety_answers_null_for_integers_and_infinity_for_floats() {
+  // Integers: every failing form answers null, and `??` supplies the fallback.
+  iz947 = 0;
+  assert(!(1 / iz947), "an integer divided by zero is null");
+  assert((1 / iz947 ?? -9) == -9, "and `??` reaches it, got {1 / iz947 ?? -9}");
+  assert(!(7 % iz947), "the same for a remainder by zero");
+  big947 = 9000000000000000000;
+  assert(!(big947 + big947), "an integer overflow is null");
+  assert((big947 + big947 ?? -9) == -9, "and `??` reaches that too");
+
+  // Floats: the guard is written the same way and does not fire.  What comes out
+  // of `?? -9.0` here is the INFINITY, not the fallback.
+  fz947: float = 0.0;
+  one947: float = 1.0;
+  assert((one947 / fz947 ?? -9.0) > 1.0e308,
+         "1.0 / 0.0 defended with `?? -9.0` is still +inf");
+  assert((one947 / fz947 ?? -9.0) != -9.0, "so the fallback never arrived");
+  assert(((0.0 - one947) / fz947 ?? -9.0) < -1.0e308, "the negative side answers -inf");
+  assert((one947 / fz947 ?? -9.0) + 1.0 > 1.0e308,
+         "and an infinity keeps spreading through every later sum");
+
+  // The one float shape that IS null: zero over zero, because a null float is NaN.
+  // Same line, same guard -- what decides is whether the NUMERATOR was zero.
+  assert((fz947 / fz947 ?? -9.0) == -9.0,
+         "0.0 / 0.0 is the null float, so `??` reaches this one");
+
+  // Float overflow behaves like the division, not like the integer overflow.
+  assert(1.0e308 * 10.0 > 1.0e308, "a float overflow answers inf, not null");
+
+  // The rule that holds: ask about the divisor, since the quotient cannot be asked.
+  assert(!can_divide947(one947, fz947), "test the divisor before dividing");
+  assert(can_divide947(one947, 2.0), "a real divisor is what makes the quotient askable");
+}
+
+// The guard @F38's `??` cannot be, for a float.
+fn can_divide947(cd_a: float, cd_b: float) -> boolean { cd_b != 0.0 }
