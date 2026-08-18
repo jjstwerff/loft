@@ -15,9 +15,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
-`-world` open as PRs alongside the loft-side registry PR they wait on
-(loft#973). 76 tags across the ecosystem. What remains is merging, in the order
-that PR states, and the twelve `deferred` rows in `loft-libs-world`.
+`-world` open as PRs alongside the loft-side registry PR they all wait on
+(loft#973). 76 tags across the ecosystem.
+
+**This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
+packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
+of the repo — and a verdict file beside the code is a good home for a *reason* and a
+poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
+can actually be done, and the plan stays open until
+`make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
+Also open: Phase C's two follow-ups and Phase C2 (the feature catalogue, `FTR`,
+unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -986,10 +994,15 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-graphics` | *(merged)* | **DONE + PUBLISHED** — 4 tagged, 0 todo; graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1 in the registry |
 | `loft-libs-net` | *(merged)* | **DONE + PUBLISHED** — 3 tagged, 1 exempt (`game_protocol`), 0 todo |
 | `loft-libs-core` | *(merged)* | **DONE + PUBLISHED** — 6 tagged, 0 todo |
-| `loft-libs-game` | `worked-examples` | **READY TO PR** — 3 tagged (`fixstep`, `input`, `time`), 0 todo; pushed, PR not opened |
-| `loft-libs-plugins` | `worked-examples` | **READY TO PR** — 1 tagged (`pluginabi`), 0 todo; pushed, PR not opened |
-| `loft-libs-assets` | `worked-examples` | **READY TO PR** — 2 tagged (`glb`, `mesh3d`), 0 todo; pushed, PR not opened |
-| `loft-libs-world` | — | TODO — 14 `hex_*` packages; **HELD**: its tree carries a consumer's uncommitted `sweep_path` finding and an open design question for its owner |
+| `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
+| `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
+| `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 2 tagged (`hex_grid`, `hex_world`), **12 deferred**, 0 todo — the twelve are Phase E below |
+
+All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
+carries the six registry rows **and** the fix for the gate bug that reddens every
+library's `examples-index` step. The gate fires on `pull_request`, so none of them
+can go green before it merges.
 
 `loft-libs-net` was the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
@@ -999,6 +1012,48 @@ reached zero TODO without needing the exempt column at all: each of its four
 packages had something a signature could not say. **Opening a PR needs an explicit
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
+
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN
+
+The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
+the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
+`examples-exempt.tsv`. That is a legitimate verdict, not a gap — but twelve is most
+of the repo, and a verdict file beside the code is a good home for a reason and a
+poor one for a work queue. So the queue lives here, and this plan stays open until
+it is empty.
+
+Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
+and a signature carries least; every row below is a package that owes an example.
+
+| # | package | pub fns | what its example must teach | blocked on |
+|---|---|---|---|---|
+| 1 | `hex_form` | 53 | rules **C1–C5** — integers only, fixed order, reduced forms, fixed layout, defaults omitted. Each rule is a way a hand-written form parses and means something else | nothing — next in line |
+| 2 | `hex_place` | 17 | *"two stencils adjacent: who owns the shared edge?"* — the same question `@HXG-003` answers one level down, and the two should cite each other | nothing — `@HXG-003` now exists |
+| 3 | `hex_roof` | 15 | one mechanism, several profiles: every roof form is the same function of a **distance**, and only the distance SOURCE changes. Which source a profile reads is the trap | nothing |
+| 4 | `hex_way` | 20 | a way is authored as ONE exact centreline and every other line is an OFFSET of it — that is what escapes the hex quantisation floor, which bottoms out near half a hex. The floor is the number a caller needs | nothing |
+| 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
+| 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
+| 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
+| 8 | `hex_fit` | 27 | a stencil description that carries linework, and a **round trip that notices** when it does not survive | follows `hex_form` (1) — a stencil's identity is its canonical text |
+| 9 | `hex_draw` | 23 | the inverse read: a wall's **analytic surface** recovered as the exact average of its stored edges, so a wall renders as ONE flat quad rather than a strip of them | follows `hex_fit` (8) and `hex_form` (1) — needs a drawn `Plan` |
+| 10 | `hex_field` | 82 | the **exactness** guarantee: it reproduces the Python oracle's golden JSON byte for byte, which is possible only because the whole representation is INTEGER | choosing which golden fixture is small enough to read inside a test |
+| 11 | `hex_recover` | 33 | law **F** is injectivity, and its coverage is a MEASUREMENT over an admitted space | deciding what a fast, readable subset of that census looks like — the full one is a long-running test, not a teaching one |
+| 12 | `hex_edge` | 39 | the `sweep_path` resting-position trap, already written as prose in that package's README (moros#10): a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next `hex_at` may round to the far side | **an owner decision** — whether `hex_edge` should offer a `sweep_path_skin(…)` (or return a fraction already backed off), or every caller keeps its own skin. The example teaches a different thing under each answer |
+
+**The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
+and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
+be written first; 10–11 need a scoping decision about what a readable test is; 12 is
+the only one waiting on a person.
+
+**Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
+larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
+it further is likely. And `hex_edge`'s block is the healthy case, not a stall: the
+convention asks *what does a caller get wrong*, and when the answer depends on an
+unmade API decision, writing the example anyway would pin the wrong behaviour into a
+test.
+
+**Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
+*14 tagged, 0 exempt, 0 deferred, 0 todo*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
