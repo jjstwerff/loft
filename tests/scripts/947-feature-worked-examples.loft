@@ -446,3 +446,56 @@ struct Acct947 {
   level: integer limit(0, 255),
   tag: text not null,
 }
+
+// @FTR-007 — what `x?` falls back TO, and what "a type with no default" means
+//
+// @F96 says `x?` discharges a nullable to its type's default — 0, "", false — and
+// then draws the line in the wrong place: "types with no default (a struct without
+// defaults for its fields) are a compile error rather than a guess".  A struct
+// without field defaults has one: every field takes its own type's zero, so a
+// missing element of a `vector<Point>` discharges to `Point { x: 0, y: 0 }`, nested
+// structs and vectors included.
+//
+// What has NO default is a FIELD whose type has none, and today that means one
+// thing: a plain `enum` with no variant chosen.  The compiler names it exactly —
+//
+//   `?` needs a default here, but record `WithEnum` has no default: field
+//   `c: Colour` is an enum with no explicit choice — add `c: Colour = <variant>`,
+//   or make it `Colour?` (defaults null)
+//
+// — so the rule to carry is "an enum field needs a chosen variant", not "a struct
+// needs field defaults".  The difference matters at the call site: the first is one
+// declaration away from working, the second would make `?` unusable on most records.
+fn test_what_the_default_fallback_falls_back_to() {
+  // The scalar defaults, one per type.
+  ni947: integer? = null;
+  nt947: text? = null;
+  nb947: boolean? = null;
+  nf947: float? = null;
+  assert(ni947? == 0, "an integer discharges to 0, got {ni947?}");
+  assert(nt947? == "", "text to the empty string, got [{nt947?}]");
+  assert(nb947? == false, "boolean to false");
+  assert(nf947? == 0.0, "float to 0.0, got {nf947?}");
+
+  // A record with no field defaults still HAS a default: every field's own zero.
+  empty947: vector<Pt947> = [];
+  p947 = empty947[0]?;
+  assert(p947.x == 0 && p947.y == 0, "a missing Point is the all-zero Point");
+
+  // ...including a nested record, a vector field and a text field.
+  none947: vector<Box947> = [];
+  b947 = none947[0]?;
+  assert(b947.inner.x == 0, "the nested record went to its own zero");
+  assert(len(b947.items) == 0, "the vector field to empty");
+  assert(b947.label == "", "and the text field to the empty string");
+
+  // A DECLARED default wins over the type's zero, which is the reason to write one.
+  dv947: vector<Cfg947> = [];
+  c947 = dv947[0]?;
+  assert(c947.retries == 3, "the declared default arrived, got {c947.retries}");
+  assert(c947.name == "unnamed", "and for the text field too, got [{c947.name}]");
+}
+
+struct Pt947 { x: integer, y: integer }
+struct Box947 { inner: Pt947, items: vector<integer>, label: text }
+struct Cfg947 { retries: integer = 3, name: text = "unnamed" }

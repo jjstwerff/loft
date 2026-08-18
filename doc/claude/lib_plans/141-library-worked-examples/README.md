@@ -44,7 +44,7 @@ poor one for a *work queue*. The twelve are now **Phase E** below, in the order 
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
 **Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, **19 of 117 entries cited**).
+feature catalogue, `FTR`, **22 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (19 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (22 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -1034,7 +1034,44 @@ shipped library: `get_pixel` answers 0 off the canvas and 0 is a colour the canv
 **F3 listed `single` in its title and never mentioned it in the body**; cited from `@MSH-002`,
 whose GPU upload buffer is a `vector<single>`.
 
-**Still to do:** the other ~98 features, plus two pairings this slice deliberately did NOT
+**THE FIFTH SLICE (2026-08-18) — F18, F23, F96, chosen by the ORACLE rather than by
+reading.** Every diagnostic fix line carries a `[concept · @Fnn]` ref, so
+`grep -rn 'concept_ref: "@' src/` ranks the catalogue by how much the compiler already says
+about each entry: F16 (8 diagnostics), F1 (7), F97 (6), F109 (6), F21 (5), F2 (5), F12 (5),
+F106 (5), F18 (4)… Working that list top-down is cheaper than reading entries at random,
+and it is what found F12 and F21.
+
+**F18's guarantee stops at the first call.** `const` on a parameter refuses every write
+THROUGH it — `Cannot modify const parameter 'a'` — and does not stop the parameter being
+handed to a callee that writes:
+
+```loft
+fn bump(a: Account) { a.balance = 999; }
+fn describe(acct: const Account) -> text { bump(acct); "…" }   // accepted, both backends
+// the caller's 500 becomes 999
+```
+
+Not filed: @PLN40 owns it, and its `const-model.md` **rule 4 names the wrong spelling** —
+"a `const` value may be passed to a `const` param but not a `&` param". `&` is not what
+lets a callee write; a plain struct parameter names the caller's record just as well (the
+slice-2 finding). Recorded there as a scope correction to steps 4–5: gate every writable
+argument position, not just `&`. The entry now says what `const` buys and what it does not.
+
+**F96 drew the line in the wrong place.** It said "types with no default (a struct without
+defaults for its fields) are a compile error"; measured, a record without field defaults
+discharges to every field's own zero (nested records, vectors and text included). What has
+no default is a FIELD whose type has none — a plain `enum` with no chosen variant — and the
+compiler already names exactly that. `@FTR-007` pins the table.
+
+**F23 gained the pairing that explains why it matters:** `@ZTX-004` (zttext takes `resolve`
+and `measure` as function parameters, so cross-target layout parity is a consequence of the
+signature) and `@EHK-001`. Its "keep it for later" claim was re-measured across all four
+storage shapes — local, vector element, struct field, argument — including a CAPTURING
+closure in a struct field, which works on both backends; the `@EHK-001` demonstrator's
+comment still blamed loft#313 for that, closed in June, and now says what the capture is
+actually for.
+
+**Still to do:** the other ~95 features, plus two pairings this slice deliberately did NOT
 make. **F109 `#superseded`** has its real use in a shipped library (four marks in
 `regex`), but no tagged fn CALLS a superseded spelling, so the honest citation needs an
 `@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
