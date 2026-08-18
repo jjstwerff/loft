@@ -31,11 +31,37 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
-**`loft-libs-graphics` is READY TO PR — the convention's SECOND complete repo, and
-the one that says what a worked example is worth.** `make examples-progress
-REPO=../loft-libs-graphics` reads *4 tagged, 0 exempt, 0 deferred, 0 todo* on branch
-`tuxedo-worked-examples` (pushed, PR not opened). `shapes` (`@SHP-001..003`),
-`imaging` (`@IMG-001..004`) and `graphics` (`@GFX-001..005`) joined `gridmesh`.
+**`loft-libs-graphics` is MERGED AND PUBLISHED — the convention's second complete
+repo, and the first one to reach consumers.** `shapes` (`@SHP-001..003`), `imaging`
+(`@IMG-001..004`) and `graphics` (`@GFX-001..005`) joined `gridmesh`; PRs #26 + #27
+merged, and **graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1** are
+signed into the registry (commit `ca7bb7f`, index + `.sig` in one commit, trust gate
+OK, 0 findings across 36 packages). Verified end to end rather than assumed: all four
+install pinned from a clean project, and a consumer program built on the published
+`imaging 0.2.2` decodes a 2×2 RGBA fixture to four correct pixels on BOTH backends
+(pre-fix: five, channels shifted a byte).
+
+**Publishing is what makes a citation reach anyone.** A `// Example:` line travels to
+consumers through `loft api` / `.loft/api/<name>.api`, which are generated from the
+published source's doc comments — confirmed by installing into a fresh project and
+reading the citations back out of its stubs. The tarball carries `tests/` too, so the
+demonstrator itself lands in `~/.loft/registry/<pkg>-<ver>/` beside the code that
+cites it. Until a release goes out, the convention is a private note.
+
+**Three gates, not one — each caught something the previous one could not.** This is
+the operational lesson of the release, and it cost two extra CI cycles to learn:
+
+| gate | what runs | what it caught |
+|---|---|---|
+| `loft test` (+ `--native`) | the INSTALLED loft | the ordinary suite |
+| library CI | `LOFT_DENY_WARNINGS=1 loft test` | `pct = 0;` before a file-handle block — a `dead-assignment` **warning**, invisible without the flag |
+| `registry_maintain.sh` | `<loft-checkout>/target/release/loft --interpret --tests tests` | a local named `now` (a stdlib fn) — *"Cannot redefine function 'now' as a variable"* |
+
+The last two rows both report version `2026.8.0` and disagree on the same program.
+The publish gate is the right authority — a published library must parse under
+whatever loft its CONSUMERS hold, not the one on the publishing machine — so its
+command is now on the LIBRARY_AUTHORING § 3 pre-release checklist, to be run BEFORE
+tagging rather than discovered after the release PR merges.
 
 **`imaging` is the row that pays for the whole plan: writing @IMG-002 found a
 silent decode bug that had shipped.** `decode_png` handed the png crate's raw
@@ -82,7 +108,15 @@ bounding-box substitute grows an invisible square shoulder on every corner @SHP-
 and has no CI demonstrator, so it carries no tags rather than tags pointing at a test
 that cannot exercise them — the same call as `server`'s multi-client event model.
 
-**Two tooling defects surfaced by this repo.** (1) `loft test` does **not** pick up an
+**Three tooling defects surfaced by this repo**, all filed rather than folded into
+the rollout. (0) `--native-wasm` cannot build ANY program that `use`s a package with
+a `[native] crate` — the emitter calls `loft::native_call::build_store`, which the
+wasm build gates out behind `native-extensions` (E0433). The control that pins it:
+pure-loft `shapes` builds AND runs on that target from the same tree. loft#967, and
+`imaging`'s README now marks the target blocked rather than claiming it. That one
+nearly slipped past, because **`loft test --native-wasm` silently ignores the flag**
+and runs the interpreter — its footer says so, but a reader scanning for a green
+`test result:` line reads it as a wasm pass. (1) `loft test` does **not** pick up an
 edit to a library's own `native/src/*.rs`: `auto_build_native` reuses the cached
 cdylib whenever the loft-ffi/RUSTFLAGS/codegen fingerprint matches and never stats
 the crate's Rust sources, so the imaging fix read as "no effect" through two runs and
@@ -656,8 +690,8 @@ repo (`loft-libs-world`) is a moving target that never converges.
 
 | repo | branch | state |
 |---|---|---|
+| `loft-libs-graphics` | *(merged)* | **DONE + PUBLISHED** — 4 tagged, 0 todo; graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1 in the registry |
 | `loft-libs-net` | `worked-examples` | **READY TO PR** — 3 tagged (`server`, `ssh`, `web`), 1 exempt (`game_protocol`), 0 todo |
-| `loft-libs-graphics` | `tuxedo-worked-examples` | **READY TO PR** — 4 tagged (`graphics`, `gridmesh`, `imaging`, `shapes`), 0 todo |
 | `loft-libs-core` | `mac-worked-examples` | 2 tagged (`arguments`, `crypto`) / 4 todo (`cbor`, `random`, `regex`, `zttext`) |
 
 `loft-libs-net` is the convention's first complete repo, which is what makes the
