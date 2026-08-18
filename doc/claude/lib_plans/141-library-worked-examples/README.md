@@ -16,11 +16,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 121 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(loft#973). 129 tags across the ecosystem, with **Phase E under way**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
 (`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
-(`@HXD-001..007`) and `hex_terrain` (`@HXT-001..008`) are the first eight of
-`loft-libs-world`'s twelve deferred packages to land. Writing
+(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`) and `hex_body` (`@HXB-001..008`) are
+nine of `loft-libs-world`'s twelve deferred packages, leaving three. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
@@ -29,7 +29,8 @@ that put every **arc** on the far side of the way from its straights while remai
 failures they were built to catch, a wall with two legal names of which only one survives
 the round trip the whole text format exists for, and a recovery check whose two sides are a
 lattice rational and an irrational, so it could never have passed, and an invariant whose
-NAME promises the opposite of the property it holds.
+NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
+for a three-dimensional rig anyway.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -37,7 +38,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *10 tagged, 4 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *11 tagged, 3 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1010,7 +1011,7 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 10 tagged, **4 deferred**, 0 todo — the remaining four are Phase E below |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 11 tagged, **3 deferred**, 0 todo — the remaining three are Phase E below |
 
 All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
 carries the six registry rows **and** the fix for the gate bug that reddens every
@@ -1026,7 +1027,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 8 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 9 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1339,7 +1340,49 @@ a global count. Comparing only the endpoints would have said *"the surface diffe
 nothing. Same instrument the profiler lesson asks for — measure where the effect ENTERS, not
 that it exists.
 
-**A method note worth keeping.** All eight rows so far found their defect in the tag that had to
+**Row 7 `hex_body` is DONE** (`@HXB-001..008`; *11 tagged, 3 deferred*), and it is the row with
+a **shipped wrong answer** in it — the second in Phase E after `hex_way`'s offset, and this one is
+silent in a way that reaches a consumer's collision layer.
+
+`rig_world_seg` composes joints by ADDING ANGLES, so it reads neither `oz` nor the stored revolute
+axis. Hand it a rig hinged about `+y` — perfectly admissible, built through the library's own
+`rig_bone3` — and it answers as though that hinge were about `+z`:
+
+| joint value | the 2-D walk says | the bone actually is | apart |
+|---|---|---|---|
+| 0.25 | (3, 2) | (3, 0, −1.5) | **2.5** |
+| 0.75 | (3, −2) | (3, 0, 2.5) | **3.2** |
+
+on a bone **2 long**. And `bone_obb` / `bone_shape_has` are built on that same walk, so the
+collision proxy boxes empty space and `I4`'s containment — *a proxy never misses an overlap* —
+quietly stops holding. The predicate that answers the question, `rig_planar`, already existed and
+its own comment names it (*"the question `rig_world_seg` implicitly asks of every rig it is
+handed"*) — but the three functions that ask it implicitly never mentioned it. **A precondition
+known to the author and absent from the call site is not a precondition**, and that is this row's
+generalisable half.
+
+**The second finding is the family's pattern for the third time.** Above `rig_read` stood *"STRICT
+PARSER — accepts exactly what `rig_write` emits … A lenient reader would void the byte diff."* It
+was wrong nine ways — `len 1.0`, `+1.5`, `01.5`, `1.50`, `1.5e0`, an empty field, a trailing space,
+an extra field, and `len x` → `len 0`, which in `hex_form` was *a side that is not there* and here
+is a BONE that is not. Same chokepoint, same cure (a re-spelling identity plus a field count),
+hex_body 0.3.1. **Three packages, three independent authors of the same sentence, three times
+wrong** — which retires any doubt that the doctrine sentence is where to look first.
+
+The narrowing exposed two hand-written fixtures in the package's own suites, one of them the
+CONTROL of the unknown-record test: it had been passing on a text the reader was about to stop
+taking. That is the third time in this plan that a fix's blast radius landed on a test written to
+prove something else.
+
+**And one claim corrected rather than enforced.** The design block said the parser refuses *"a bone
+out of order, or referring to a forward/absent parent"*. It refuses the first and not the second —
+and it is right not to: a forward parent round-trips FAITHFULLY, so it is not a spelling question,
+and `rig_admissible` is the doorstep that catches it. That is exactly the split `hex_fit`'s
+`@HXI-004` draws, so the same reasoning now appears in both packages, and `@HXB-008` measures both
+halves — including what posing an inadmissible rig does, which is read a parent frame that does not
+exist yet and get zeros.
+
+**A method note worth keeping.** All nine rows so far found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
 priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
@@ -1382,7 +1425,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~4~~ | ~~`hex_way`~~ | 20 | **DONE** — `@HXY-001..006`. Found and fixed an offset that put every arc on the far side of the way (0.1.1), and measured the quantisation floor the header rounds off: 1.5 down a row, 0.866 down a column | — |
 | ~~5~~ | ~~`hex_shape`~~ | 68 | **DONE** — `@HXS-001..009`. The split answer confirmed on all three primitives, and two of the package's own instruments found reading *pass* on what they were built to fail. Coverage 4/83 → 83/83 | — |
 | ~~6~~ | ~~`hex_terrain`~~ | 20 | **DONE** — `@HXT-001..008`. The scale boundary worked on a hand-authored ramp, and the package's headline invariant found to be determinism wearing the name of extent-independence: same content, two window sizes, 0 rivers against 5. Coverage 24/26 → 26/26 | — |
-| 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
+| ~~7~~ | ~~`hex_body`~~ | 28 | **DONE** — `@HXB-001..008`. Two-bone arms at quarter turns were the fixture, and they found a 2-D walk that answers for a spatial rig 3.2 units away — collision proxy included — plus the family's third strict-reader claim. Coverage 21/32 → 36/36 | — |
 | ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
 | ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
 | 10 | `hex_field` | 82 | the **exactness** guarantee: it reproduces the Python oracle's golden JSON byte for byte, which is possible only because the whole representation is INTEGER | choosing which golden fixture is small enough to read inside a test |
@@ -1392,11 +1435,12 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. **Rows 1–6, 8 and 9 are done.** Row 6's fixture question answered itself
-the moment it was asked — a hand-authored ramp, not a generated landscape — so the same
-move is what row 7 (`hex_body`) needs next: the smallest rig whose world frame can be
-computed on paper. After that, the three that remain need a scoping decision about what a
-readable test is (10 `hex_field`, 11 `hex_recover`) or an owner's API call (12 `hex_edge`).
+the only one waiting on a person. **Rows 1–9 are done**, and both fixture questions answered themselves the moment they were
+asked: a hand-authored ramp for row 6, two-bone arms at quarter turns for row 7. Neither
+needed a generated world, which is worth remembering for row 10 — *what is small enough to
+assert against* is usually **what you can write by hand**, not a shrunken version of the real
+thing. The three that remain need a scoping decision about what a readable test is
+(10 `hex_field`, 11 `hex_recover`) or an owner's API call (12 `hex_edge`).
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1406,7 +1450,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *10 tagged, 4 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *11 tagged, 3 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
