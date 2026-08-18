@@ -499,3 +499,85 @@ fn test_what_the_default_fallback_falls_back_to() {
 struct Pt947 { x: integer, y: integer }
 struct Box947 { inner: Pt947, items: vector<integer>, label: text }
 struct Cfg947 { retries: integer = 3, name: text = "unnamed" }
+
+// @FTR-008 — a superseded spelling, and what the steer is worth
+//
+// @F109's promise is that a better name can arrive after a library has shipped
+// without splitting its users: the old form keeps working, and whoever writes a NEW
+// call learns the better one from their own compiler.  The stdlib does this to
+// itself — `sum_of(v)` is `#superseded "sum"` and is a shim over `sum(v, 0)`, the
+// general form that works on any Addable type.
+//
+// Both of @F109's checks are real, and both were measured rather than assumed:
+//   - a successor that does not exist is an ERROR (`superseded-unknown-successor`:
+//     "the steer would ship dangling"), so the signpost cannot point at nothing;
+//   - a superseded body that never CALLS its successor is a warning
+//     (`superseded-not-folded`: "two implementations of one idea, and they will
+//     drift"), so the note cannot send a reader somewhere that behaves differently.
+//
+// What this test pins is the part a caller cares about: the old spelling still
+// answers, and it answers what the successor answers.  The steer itself is the
+// `@EXPECT_WARNING` below — the advice is the feature, so the file asserts it
+// instead of silencing it.
+// @EXPECT_WARNING: `sum_of` is superseded
+fn test_a_superseded_spelling_still_answers_what_its_successor_does() {
+  nums947 = [3, 1, 4, 1, 5];
+  assert(sum_of(nums947) == 14, "the superseded form still answers, got {sum_of(nums947)}");
+  assert(sum(nums947, 0) == sum_of(nums947),
+         "and it answers what its successor does: {sum(nums947, 0)} vs {sum_of(nums947)}");
+
+  // The successor is the general one — the reason the steer exists at all.
+  assert(sum([1.5, 2.5], 0.0) == 4.0, "`sum` takes any Addable type, got {sum([1.5, 2.5], 0.0)}");
+  assert(sum_of([]) == 0, "and the old form keeps its own empty-vector answer");
+}
+
+// @FTR-009 — the write that lands in a copy, and the tier that decides whether CI
+// stops
+//
+// @F100 describes the shape exactly — `d = self.data; d[i] = x` binds a COPY, so
+// the write is lost — and then says the lint is "advice-tier, so it never fails a
+// build".  Measured, both halves are WARNINGS:
+//
+//   warning[lost-write]: 'd' is mutated but its value is never read — the write is
+//     LOST. A whole-value bind (`d = …`) COPIES the heap value (C86) …
+//   warning[never-read]: Variable total is never read
+//
+// which is the right tier by loft's own rule — a diagnostic gates if and only if
+// ignoring it can produce a wrong result, and this one produces a drawing library
+// whose primitives are all no-ops.  `LOFT_NO_DEAD_STORES=1` is the opt-out.
+//
+// And the tier is only half the story: the lost-write lint runs on the PROGRAM path
+// and is silent under `loft test` (loft#985) — the very path a library's CI uses, so
+// `LOFT_DENY_WARNINGS=1 loft --tests tests` cannot stop on it today.  `never-read`
+// does fire there, which is what makes the gap hard to notice.
+//
+// The test below is the losing shape itself: the write happens and the source is
+// unchanged afterwards.  It asserts the WRONG RESULT rather than the diagnostic,
+// because the diagnostic is exactly what a test run does not get; the `never-read`
+// half is asserted, since that one does arrive.
+// @EXPECT_WARNING: Variable dropped947 is never read
+fn test_a_write_into_a_copy_is_lost_and_the_lint_says_so() {
+  canvas947 = Canvas947 { data: [0, 0, 0] };
+  paint947(canvas947, 1, 9);
+  assert(canvas947.data[1] == 0,
+         "the write landed in the copy, so the canvas never changed, got {canvas947.data[1]}");
+
+  // Written through the record itself, the same write lands.
+  canvas947.data[1] = 9;
+  assert(canvas947.data[1] == 9, "through the record it lands, got {canvas947.data[1]}");
+
+  // The other half of the lint: a local nothing ever reads.
+  dropped947 = 0;
+  for i947 in 0..3 { dropped947 += i947; }
+}
+
+struct Canvas947 { data: vector<integer> }
+
+// The shipped-library shape: bind the collection, then write the binding.  Run this
+// FILE as a program and the warning lands here, on the function that makes the copy
+// rather than at the call site.  Run it as a test suite and nothing is said at all
+// (loft#985), which is why the assertion below is the only thing holding the shape.
+fn paint947(c: Canvas947, at: integer, colour: integer) {
+  d = c.data;
+  d[at] = colour;
+}

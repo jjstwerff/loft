@@ -44,7 +44,7 @@ poor one for a *work queue*. The twelve are now **Phase E** below, in the order 
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
 **Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, **22 of 117 entries cited**).
+feature catalogue, `FTR`, **25 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (22 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (25 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -1071,9 +1071,50 @@ closure in a struct field, which works on both backends; the `@EHK-001` demonstr
 comment still blamed loft#313 for that, closed in June, and now says what the capture is
 actually for.
 
-**Still to do:** the other ~95 features, plus two pairings this slice deliberately did NOT
-make. **F109 `#superseded`** has its real use in a shipped library (four marks in
-`regex`), but no tagged fn CALLS a superseded spelling, so the honest citation needs an
+**THE SIXTH SLICE (2026-08-18) — F16, F100, F109, and a whole lint family that a test
+run cannot see.** The oracle picked them (F16 has 8 diagnostics pointing at it, F109 6,
+F100 2). Two demonstrators authored: `@FTR-008` (the stdlib supersedes its own `sum_of`
+with the general `sum`) and `@FTR-009` (the copy-mutate write).
+
+**loft#985 — the post-scope-check lints do not run under `loft test`.** One block in
+`src/main.rs` runs `warn_copies`, `warn_dead_stores` (lost-write), `warn_double_move`,
+`warn_lost_temp_writes` and `superseded_fold_diagnostics` on the PROGRAM path. Under
+`--tests` none of it runs — **including a hard error**:
+
+```loft
+fn doubled(v: integer) -> integer { scaled(v, 2) }
+#superseded "no_such_thing"
+fn test_it() { assert(doubled(21) == 42, "still answers"); }
+```
+
+`loft --tests` → `ok. 1 passed`, with the steer still saying *use `no_such_thing`*; the same
+file with a `main` → `error[superseded-unknown-successor] … the steer would ship dangling`,
+exit 1. `warning[never-read]` DOES fire under `--tests`, which is what makes the split hard
+to notice. It is the exact hole the lint was written for: @PLN107's motivating case is a
+published canvas that shipped every primitive as a no-op, and a library is checked by
+`LOFT_DENY_WARNINGS=1 loft --interpret --tests tests`.
+
+**F100 said the wrong tier.** "Advice-tier, so it never fails a build" — both halves are
+`warning` (`lost-write`, `never-read`), which is the right tier by loft's own rule and the
+opposite of what the entry promised. Corrected, with the real message text and the loft#985
+limit; `@FTR-009` asserts the wrong RESULT rather than the diagnostic, because the diagnostic
+is exactly what a test run does not get.
+
+**F16 gained the two facts a reader needs and it had neither:** a declared result must arrive
+on every path (a fall-through is a compile error, not a zero), and a result you IGNORE is
+discarded in silence — which `@ZTX-001` is the real use of, an editing engine of pure
+functions where a discarded return is an editor that does not type.
+
+**F109 was accurate** — its two checks are real, and both were measured rather than assumed
+(a missing successor is an error, an un-folded shim a warning). The gap was only the pointer,
+plus the loft#985 caveat. **A near-miss worth recording: the first read of the
+missing-successor probe was `head -6` and showed only the advice, which read as "the rule is
+not enforced". It is — the error was four lines further down.** Truncating a probe's output
+is the same failure as a vacuous channel: read the whole thing, and the exit code.
+
+**Still to do:** the other ~92 features, plus two pairings this slice deliberately did NOT
+make. **F109 `#superseded`** was one of them and is now cited from `@FTR-008` (the stdlib's
+own `sum_of` → `sum`); a second, cross-repo citation would still be worth having — an
 `@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
 shim answers what `search` does. **F43 is the catalogue's one unauthored stub** and is
 deliberately so (@PLN92: "random, deferred as a library") — it is the single entry the
