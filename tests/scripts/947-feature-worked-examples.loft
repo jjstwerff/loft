@@ -1,0 +1,162 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for FEATURE-CATALOGUE entries (@PLN141 C2) — the `@FTR-0NN`
+// family.  A feature issue in loft-lang/features carries a `Example: @FTR-0NN`
+// line naming the demonstrator that shows the feature carrying REAL work; the
+// generated shadow (doc/features/F###.md) repeats it, and
+// `scripts/check_doc_drift.sh examples` fails if the citation goes dangling.
+//
+// This file holds only the demonstrators authored FOR a feature.  Where a
+// feature's real use is already demonstrated elsewhere — a stdlib worked
+// example, a library's own tag — the issue cites THAT acronym and nothing is
+// added here; the catalogue's gap was usually the pointer, not the example.
+
+// @FTR-001 — `store_reclaim()`: what it gives back, and why the report over-promises
+//
+// The reader's question is not what the call does but WHEN it is worth making,
+// and the doc answers it with a rule of thumb: read `store_memory()` first,
+// because "its `tail%` is exactly what this call returns".  It is not, and the
+// gap is largest exactly where the decision is marginal.
+//
+// A reclaimed store lands at `tail 11%` — measured across eight shapes whose
+// tails before the call ran from 13% to 60%, always 11% after.  That 11% is a
+// growth reserve the allocator keeps, so the bytes handed back are
+// `tail_before - 11%` of the resulting capacity, never the whole tail.  At a
+// 13% tail the report suggests ~36 KB and the call returns under 6 KB.
+//
+// So: `tail%` ranks candidates, it does not size the return.  Treat a reading
+// near 11% as "nothing to get back" rather than "a little to get back".
+fn test_store_reclaim_leaves_a_growth_reserve_the_report_does_not_show() {
+  h: hash<Rec947[id]> = [];
+  for i in 0..4000 { h += [Rec947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 2000..4000 { h[i] = null }
+
+  before = pct947(store_memory(), "tail");
+  assert(before > 11, "a store with a dropped tail reads above the reserve, got {before}%");
+
+  freed = store_reclaim(h);
+  assert(freed > 0, "and reclaiming hands bytes back, got {freed}");
+
+  after = pct947(store_memory(), "tail");
+  assert(after == 11, "a reclaimed store lands on the 11% reserve, got {after}%");
+
+  // THE POINT: the reading before the call is not the size of the return.  The
+  // reserve is still there afterwards, so the tail that was readable and the
+  // tail that was RECLAIMABLE differ by it.
+  assert(after < before,
+         "the tail shrank but did not vanish -- {before}% became {after}%, not 0%");
+
+  // and the data is untouched: reclaim moves no record
+  live = 0;
+  for r in h { live = live + 1 - r.id * 0 }
+  assert(live == 2000, "every surviving record is still there, got {live}");
+  kept = h[7];
+  assert(kept != null && kept.label == "cell-7-padding-padding",
+         "and reads back its own value, not re-faulted bytes");
+
+  // a second call with nothing newly dropped gives back nothing
+  assert(store_reclaim(h) == 0, "a second reclaim finds no new tail");
+}
+
+// @FTR-002 — what `store_reclaim()` gives back depends on WHERE you dropped
+//
+// Two collections, the same 4000 records, the same 2000 dropped.  One drops a
+// contiguous region (a map area unloaded); the other drops every other record (a
+// filter applied across the set).  They do not reclaim the same:
+//
+//                     free-blk  mergeable | after reclaim: free-blk  bytes back
+//   contiguous 2000       2004       1997 |                       7      25 400
+//   scattered  2000       2002          5 |                    1997      16 312
+//
+// `mergeable` counts adjacent free neighbours that never coalesced, so it is a
+// measure of how CONTIGUOUS the drop was — and it is exactly the part reclaim can
+// fix.  A scattered drop leaves the store permanently in ~2000 pieces, with its
+// largest hole smaller than the contiguous case's, and no call repairs that: the
+// live records between the holes are what keeps them apart.
+//
+// So the report tells you, BEFORE you call, which kind of drop you made.  A high
+// `mergeable` says there is a contiguous run to merge; a low one on a store with
+// many free blocks says the space is there and will stay unusable for anything
+// bigger than one hole.
+fn test_what_reclaim_gives_back_depends_on_where_you_dropped() {
+  contiguous: hash<Rec947[id]> = [];
+  for i in 0..4000 { contiguous += [Rec947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 2000..4000 { contiguous[i] = null }
+
+  scattered: hash<Frag947[id]> = [];
+  for i in 0..4000 { scattered += [Frag947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 0..4000 { if i % 2 == 0 { scattered[i] = null } }
+
+  rep = store_memory();
+  assert(num947(rep, "free-blk") > 1000 && num947f(rep, "free-blk") > 1000,
+         "both dropped 2000 records and both hold ~2000 free blocks");
+  assert(num947(rep, "mergeable") > 1000,
+         "the contiguous drop left adjacent free neighbours, got"
+         + " {num947(rep, "mergeable")}");
+  assert(num947f(rep, "mergeable") < 100,
+         "the scattered one did not -- live records keep its holes apart, got"
+         + " {num947f(rep, "mergeable")}");
+
+  freed_c = store_reclaim(contiguous);
+  freed_s = store_reclaim(scattered);
+  rep2 = store_memory();
+
+  assert(num947(rep2, "free-blk") < 100,
+         "reclaim merges the contiguous run into a handful of blocks, got"
+         + " {num947(rep2, "free-blk")}");
+  assert(num947f(rep2, "free-blk") > 1000,
+         "and cannot merge the scattered one -- it stays in ~2000 pieces, got"
+         + " {num947f(rep2, "free-blk")}");
+  assert(num947(rep2, "mergeable") == 0 && num947f(rep2, "mergeable") == 0,
+         "neither store has an unmerged adjacent pair left");
+
+  assert(freed_c > freed_s,
+         "and the same number of dropped records gives back MORE when they were"
+         + " contiguous: {freed_c} against {freed_s}");
+}
+
+// One record type PER example.  `store_memory()` reports one line per live store and
+// the tests share a process, so a parser that takes the first line naming its type can
+// read the previous test's store instead of its own -- which reads as a wrong number
+// from the library rather than as a wrong number from the harness.
+struct Rec947 { const id: integer, const label: text }
+struct Frag947 { const id: integer, const label: text }
+
+// Read `<field>  NN%` out of the store report's line for THIS test's collection.
+// The report is one line per live store, so the type name is what selects ours.
+fn pct947(report: text, field: text) -> integer {
+  // The `??` must be discharged at the PARSE SITE, not around a parenthesised
+  // cast -- `(x as integer) ?? -1` is rejected, `x as integer ?? -1` is the form.
+  raw = word947(report, field).replace("%", "");
+  raw as integer ?? -1
+}
+
+fn num947(report: text, field: text) -> integer {
+  word947(report, field) as integer ?? -1
+}
+
+fn num947f(report: text, field: text) -> integer {
+  word947f(report, field) as integer ?? -1
+}
+
+// The token after `field` on the report line naming our collection's type.
+fn word947(report: text, field: text) -> text { field947(report, "hash<Rec947[id]>", field) }
+
+fn word947f(report: text, field: text) -> text { field947(report, "hash<Frag947[id]>", field) }
+
+fn field947(report: text, type_name: text, field: text) -> text {
+  line = "";
+  for l in report.split('\n') {
+    if l.contains(type_name) && line == "" { line = l }
+  }
+  out = "";
+  seen = false;
+  for w in line.split(' ') {
+    if w != "" {
+      if seen && out == "" { out = w }
+      if w == field { seen = true }
+    }
+  }
+  out
+}

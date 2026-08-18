@@ -820,7 +820,74 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S)
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY**
+
+**The mechanism half is built, self-tested and proved end to end (2026-08-18); what
+remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
+the tree as the generated shadow `doc/features/F###.md`, and is Markdown — so the
+citation scanner, which grepped `// Example:` in `*.loft` only, could never have seen
+one. Built:
+
+- **A second citation source**, `examples_cited_in_tree()`, scoped to
+  `EXAMPLES_FEATURE_DOCS` (default `doc/features`). Inert where the directory is absent,
+  which is every library — the same opt-in ratchet as the rest of the mechanism. A
+  `dangling` feature citation now names the feature doc and line
+  (`doc/features/F104.md:42`).
+- **Its own self-test**, `examples-cite-selftest`, five rules, **two of them ABSENCES**:
+  `## Example` is a heading and not a citation (81 feature docs carry one, so a scanner
+  that stopped requiring the colon would have every one of them citing whatever tag
+  appeared underneath), and the `//` code form shown INSIDE a fenced block is
+  documentation OF the convention, not a use of it. It earned its place on the first
+  run: `- **Example:** @TST-103` did not match, because the pattern allowed one run of
+  markdown markers and that line has two.
+- **`FTR` registered**, with the rule beside it: a feature whose real use is already
+  demonstrated cites THAT acronym, and only a demonstrator authored *for* a feature is
+  an `FTR`.
+- Proved end to end against a real feature doc: a citation resolves to
+  `tests/scripts/946-…:15`, a bad one goes red naming the doc, and removing it is clean
+  again.
+
+**THE FIRST SLICE NEEDS NO NEW TESTS, and that is the phase's first finding.** Eleven of
+the first twelve citations point at demonstrators that already existed — `@STD-010/011/012`
+for **F40** (file I/O), `@STD-007/008/009` for **F42** (JSON), `@STD-005/006` for **F26**
+(interfaces + bounded generics), `@STD-003/004` for **F6** (vector aggregates) and
+`@STD-001` for **F97** (`len` vs `size`, whose reader's mistake is exactly the byte offset
+that example scans). **The catalogue's gap was the POINTER, not the example** — which makes
+the rollout far cheaper than "author one in retrospect" implied, and says the two halves of
+@PLN141 were building the same thing from opposite ends without a link between them.
+
+**`@FTR-001`/`@FTR-002` are authored, for F104 `store_reclaim()` — and writing them found
+the doc's calibration sentence to be false.** The doc tells a reader how to decide whether
+the call is worth making: *"Read `store_memory()` first — its `tail%` is exactly what this
+call returns."* Measured across eight shapes whose tails ran from 13 % to 60 %, the store
+lands at **`tail 11%` every single time**: 11 % is a growth reserve the allocator keeps, so
+the bytes handed back are `tail_before − 11 %` of the resulting capacity and never the whole
+tail. At a 13 % tail the report suggests ~36 KB and the call returns **5 832 bytes** — a 6×
+over-promise, and it is worst exactly where the decision is marginal. `tail%` ranks
+candidates; it does not size the return.
+
+**And a second fact the docs do not carry: what you get back depends on WHERE you dropped,
+not how much.** Same 4000 records, same 2000 dropped:
+
+| drop | free-blk | mergeable | after reclaim: free-blk | bytes back |
+|---|---|---|---|---|
+| contiguous 2000 | 2004 | **1997** | **7** | 25 400 |
+| scattered 2000 | 2002 | **5** | **1997** | 16 312 |
+
+`mergeable` counts adjacent free neighbours that never coalesced, so it measures how
+CONTIGUOUS the drop was — and it is exactly the part `store_reclaim` can fix. A scattered
+drop leaves the store in ~2000 pieces permanently, because the live records between the
+holes are what keeps them apart. So the report says, before the call, which kind of drop
+was made. **My first hypothesis had this backwards** (I predicted scattered drops would be
+the mergeable ones) and the probe corrected it — recorded because the wrong version is the
+intuitive one.
+
+**Still to do:** the citations themselves, which are edits to loft-lang/features ISSUE
+BODIES — the canonical home, never the generated shadow. The first slice is the five
+features above plus F104's two `@FTR` lines. Then `make features-fetch && make
+features-gen`, and the gate validates them from the shadow.
+
+### Phase C2 — the original design
 
 The same mechanism applies to the **feature catalogue** (`loft-lang/features`,
 `@F<N>` feature / `@I<N>` infra), not just library functions — a reader learning a

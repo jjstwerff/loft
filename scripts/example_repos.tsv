@@ -25,6 +25,10 @@ GIT	loft	https://github.com/loft-lang/loft	main
 LEX	loft	https://github.com/loft-lang/loft	main
 ACR	loft	https://github.com/loft-lang/loft	main
 EHK	loft	https://github.com/loft-lang/loft	main
+# FTR — demonstrators authored FOR a feature-catalogue entry (@PLN141 C2).  A feature
+# issue cites the tag that shows the feature carrying REAL work; where that use already
+# exists the citation names its own acronym (@STD, @HXL, …) and no FTR tag is needed.
+FTR	loft	https://github.com/loft-lang/loft	main
 DRY	dryopea	https://github.com/jjstwerff/dryopea	main
 CRW	crawler	https://github.com/jjstwerff/crawler	main
 MOR	moros	https://github.com/jjstwerff/moros	main
