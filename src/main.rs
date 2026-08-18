@@ -11030,7 +11030,15 @@ fn resolve_test_target(arg: &str) -> String {
     let first = as_path
         .components()
         .find(|c| !matches!(c, std::path::Component::CurDir));
+    // `is_absolute()` is not the question — "is this a bare test NAME" is.  On Windows a
+    // path is absolute only WITH a drive prefix, so `/abs/x.loft` came back false and
+    // `loft test /abs/x.loft` looked in `tests//abs/x.loft` (loft#970 neighbours; the
+    // nightly's Windows leg). `has_root` answers for the rooted form on both platforms,
+    // and a bare `Prefix` covers the drive-relative `C:x.loft`, which is no more a name
+    // than `/abs` is.
     let rooted = as_path.is_absolute()
+        || as_path.has_root()
+        || matches!(first, Some(std::path::Component::Prefix(_)))
         || matches!(first, Some(std::path::Component::ParentDir))
         || first.is_some_and(|c| c.as_os_str() == TESTS_DIR);
     let mut out = String::new();
