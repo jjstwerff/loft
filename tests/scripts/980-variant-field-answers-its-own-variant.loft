@@ -1,0 +1,183 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#980 — a struct-enum field access answers for the variant the value HOLDS.
+//
+// `c.field` resolves at COMPILE time to the first variant declaring the name, and the
+// layout gives a shared name+type one slot — so the read was right for the variants that
+// declare it and read another variant's bytes for the rest, with the tag never consulted.
+// `a.n` on an `Anon` answered `Anon.k`'s `7` as if it were `Named.n`, and
+// `a.label = "written"` stored the text in the `Anon` record, which went on calling
+// itself an `Anon` ever after. Both backends, no diagnostic, exit 0.
+//
+// Direct payload access STAYS — C89 decided permanently that enum payloads are named
+// fields you read straight, with matching for DISPATCH and never for extraction, so
+// refusing `c.field` was never on the table. What changed is that a PARTIAL access now
+// checks the tag: the read answers null (the same answer C80 gives a hash miss or an
+// out-of-range index) and a write to a field the value does not have is suppressed.
+//
+// The guard sits on the RECEIVER — `if tag(c) ∈ declaring { c } else { null }` — because
+// a null receiver already reads as null and already swallows a write. That is what keeps
+// the access a PLACE, so the assignment path needs no notion of a guarded lvalue.
+//
+// The controls are the half that says this is a check and not a widening:
+//   * every variant declares the field  → no tag read at all, and it must still work
+//     even where the variants' preceding fields differ in width;
+//   * `match` / `is` bindings           → per-arm, untouched, and the cure the diagnostic
+//     names;
+//   * a synthetic `__nullable<S>`       → @PLN25's null model, not a variant question;
+//     guarding it would make `v[i].field` answer null;
+//   * a receiver that is not a PLACE    → the guard would evaluate it twice, so it keeps
+//     the unchecked access. `i980_calls` is the oracle: the call count must not double.
+
+enum I980Node {
+  Named { label: text, n: integer },
+  Anon  { k: integer },
+}
+
+// Same field NAME at a different TYPE in two variants — the row that reads garbage,
+// because a shared name only shares a slot when the type matches too.
+enum I980Diff {
+  X { v: integer },
+  Y { v: text },
+}
+
+// Every variant declares `tag`, and `A` carries 20 bytes before it: the common-prefix
+// case, correct today, and it must stay correct with no tag read.
+enum I980Common {
+  A { p1: integer, p2: integer, p3: float, tag: text },
+  B { tag: text },
+}
+
+struct I980Point { px: integer, py: integer }
+
+struct I980Sub { sv: integer }
+
+// A variant carrying a COLLECTION and a nested struct — the shapes an access is BUILT ON,
+// which all have to keep working because the guard sits on the receiver.
+enum I980Rich {
+  Full { s: I980Sub, items: vector<integer>, name: text },
+  Bare { b: integer },
+}
+
+// The same contract reached the OTHER way: a null `S?`. `s.v += [1]` on it indexed
+// `allocations[u16::MAX]` and took the interpreter down — on `main` too, so this cell is
+// not about enums at all. Absent is absent: the write is refused, not fatal.
+struct I980Holder { hv: vector<integer>, ha: integer }
+
+fn i980_takes(t: text) -> integer { len(t) }
+
+fn i980_anon() -> I980Node { Anon { k: 7 } }
+
+fn main() {
+  // ── The reproducer, read half ───────────────────────────────────────────────────
+  a: I980Node = Anon { k: 7 };
+  assert(a.k == 7, "the value's own field still reads: {a.k}");
+  assert("{a.n}" == "null", "a field only `Named` declares reads null on an `Anon`: {a.n}");
+  assert("{a.label}" == "null", "and so does its text field: {a.label}");
+
+  // ── The reproducer, write half. This is the corrupting one: the write landed in the
+  // `Anon` record and left the tag saying `Anon`.
+  a.label = "written";
+  a.n = 42;
+  assert("{a.label}" == "null", "a write to a field the variant lacks is ignored: {a.label}");
+  assert("{a.n}" == "null", "including a scalar one: {a.n}");
+  assert(a.k == 7, "and it did not land on the field that shares the offset: {a.k}");
+  match a {
+    Anon { k } => assert(k == 7, "the tag still says Anon, with its own value: {k}"),
+    Named { label, n } => assert(false, "the value must not have become a Named"),
+  }
+
+  // ── The declaring variant is untouched, read and write.
+  b: I980Node = Named { label: "hi", n: 3 };
+  assert(b.label == "hi", "the declaring variant reads: {b.label}");
+  assert(b.n == 3, "both its fields: {b.n}");
+  b.label = "set";
+  b.n = 9;
+  assert(b.label == "set", "and writes land: {b.label}");
+  assert(b.n == 9, "both of them: {b.n}");
+  match b {
+    Named { label, n } => assert(label == "set" && n == 9, "match sees the writes"),
+    Anon { k } => assert(false, "the value must still be a Named"),
+  }
+
+  // ── The name-at-a-different-type row.
+  x: I980Diff = X { v: 5 };
+  y: I980Diff = Y { v: "text" };
+  assert(x.v == 5, "the declaring variant's integer: {x.v}");
+  assert("{y.v}" == "null", "the same name at another TYPE reads null, not garbage: {y.v}");
+
+  // ── Control: the common prefix. No tag read, and the wide variant is the point —
+  // `A` carries 20 bytes before `tag`, so this is also the layout check.
+  ca: I980Common = A { p1: 1, p2: 2, p3: 0.5, tag: "ay" };
+  cb: I980Common = B { tag: "bee" };
+  assert(ca.tag == "ay", "every variant declares it, so it just reads: {ca.tag}");
+  assert(cb.tag == "bee", "from either variant: {cb.tag}");
+  cb.tag = "changed";
+  assert(cb.tag == "changed", "and writes still land: {cb.tag}");
+  ca.tag = "wide";
+  assert(ca.tag == "wide", "on the wide variant too: {ca.tag}");
+
+  // ── Control: `match` and `is` bindings are per-arm and untouched — the cure the
+  // diagnostic names has to keep working.
+  if a is Anon { k } { assert(k == 7, "`is` binds the variant's own field: {k}"); }
+  bound = match a { Anon { k } => k, Named { label, n } => -1 };
+  assert(bound == 7, "a match arm extracts it: {bound}");
+
+  // ── Control: @PLN25's nullable payload is not a variant question. Guarding it would
+  // make an in-range element read null, which is the opposite of the null model.
+  v: vector<I980Point> = [];
+  v += [I980Point { px: 1, py: 2 }];
+  assert(v[0].px == 1, "an in-range element still reads its field: {v[0].px}");
+  assert("{v[5].px}" == "null(oob)", "and an out-of-range one is still null: {v[5].px}");
+
+  // ── Control: a receiver that is not a place keeps the unchecked access, because the
+  // guard reads the receiver twice. The oracle is the CALL COUNT, not the value.
+  calls = 0;
+  for _ in 0..3 {
+    n = i980_anon().n ?? -1;
+    calls = calls + 1;
+  }
+  assert(calls == 3, "the receiver is evaluated once per iteration: {calls}");
+
+  // ── Composition: the guard is on the RECEIVER, so everything built ON the access has
+  // to keep working — a chain through it, an index into it, a compound assignment, a
+  // method call, and passing it as an argument.
+  f: I980Rich = Full { s: I980Sub { sv: 3 }, items: [], name: "abc" };
+  g: I980Rich = Bare { b: 9 };
+  f.items += [1];
+  f.items += [2];
+  assert(f.s.sv == 3, "a chain through a declared field: {f.s.sv}");
+  assert("{g.s.sv}" == "null", "and through one the variant lacks: {g.s.sv}");
+  assert(f.items[0] == 1, "an index into a declared collection: {f.items[0]}");
+  assert(len(f.items) == 2, "its length: {len(f.items)}");
+  assert(len(g.items) == 0, "a collection the variant lacks reads EMPTY: {len(g.items)}");
+  f.name += "d";
+  assert(f.name == "abcd", "a compound assignment lands: {f.name}");
+  g.name += "zz";
+  assert("{g.name}" == "null", "and is ignored where the variant lacks it: {g.name}");
+  assert(f.name.len() == 4, "a method on the field: {f.name.len()}");
+  assert(i980_takes(f.name) == 4, "and passing it as an argument: {i980_takes(f.name)}");
+
+  // Appending to a COLLECTION field the variant does not declare. This is the one that
+  // took the interpreter down rather than being suppressed — `OpNewRecord`'s default-init
+  // wrote through the absent receiver — so it is a "no runtime errors ever" cell, not
+  // only a correctness one.
+  g.items += [7];
+  assert(len(g.items) == 0, "the append is refused, not fatal: {len(g.items)}");
+  assert(g.b == 9, "and it did not land on the variant's own field: {g.b}");
+  match g {
+    Bare { b } => assert(b == 9, "the tag survived the refused append: {b}"),
+    Full { s, items, name } => assert(false, "the value must still be a Bare"),
+  }
+
+  // The same contract through @PLN25's null, which has nothing to do with enums and
+  // failed the same way on `main`.
+  h: I980Holder? = null;
+  h.ha = 5;
+  h.hv += [1];
+  assert("{h.ha}" == "null", "a scalar write through a null holder is ignored: {h.ha}");
+  assert(len(h.hv) == 0, "and a collection append is refused, not fatal: {len(h.hv)}");
+
+  print("980 variant field OK\n");
+}

@@ -272,12 +272,16 @@ A variant's fields are read **directly** — `s.radius` — with `match` / `is` 
 *dispatch* rather than extraction ([C89](DESIGN_DECISIONS.md#c89)).  A field EVERY variant
 declares shares one slot and reads correctly from any of them.
 
-**A field only SOME variants declare needs the variant to be known** (loft#980).  The
-access resolves at compile time to the variant that declares it and does not check the
-tag, so on any other variant it reads that variant's bytes at the same offset — and a
-write lands there with the tag untouched, after which `match` still reports the original
-variant.  `warning[variant-field-unchecked]` names each such access and the variants that
-have the field; reach it per-variant instead:
+**A field only SOME variants declare answers for the variant the value holds** (loft#980).
+The access resolves at compile time to the variant that declares it, and the tag is checked
+at run time: on any other variant the read answers **null** — the same answer a hash miss
+and an out-of-range index give — and a write to it is **ignored** rather than landing in
+that variant's bytes.  The value's own fields are untouched and its tag never changes.
+
+The access TYPE is unchanged, so the null is a value the type does not advertise, exactly
+as for an out-of-range index; `warning[variant-field-unchecked]` names each such access and
+the variants that have the field, because a silently ignored write is a lost write.  Reach
+it per-variant instead:
 
 ```
 if s is Circle { radius } { area = PI * radius * radius }

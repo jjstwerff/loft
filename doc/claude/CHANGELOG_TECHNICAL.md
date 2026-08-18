@@ -9,6 +9,71 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A struct-enum field access checks the tag (loft#980, 2026-08-18)
+
+`c.field` resolved at COMPILE time to the first variant declaring the name and read that
+offset whatever the tag said:
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+a: Node = Anon { k: 7 };
+a.n            // 7 — that is Anon's `k`, handed back as Named's `n`
+a.label = "x"  // stored in the Anon record, which goes on calling itself an Anon
+```
+
+Direct payload access STAYS — C89 decided permanently that enum payloads are named fields
+you read straight, with matching for DISPATCH and never for extraction, so refusing
+`c.field` (issue option 1) is the outcome that decision exists to prevent, and option 3
+restricts it the same way. C80/C85/C90 then fix what the check must ANSWER: a read that
+cannot be computed yields the type's null sentinel and the program keeps running, like a
+hash miss or an out-of-range index. So the access TYPE is unchanged, `a.n` on an `Anon`
+answers null, and a write to a field the value does not have is suppressed.
+
+**The guard goes on the RECEIVER, not the access** — `if tag(c) ∈ declaring { c } else
+{ null }` — which is what made the write half tractable. A null receiver ALREADY reads as
+null and ALREADY swallows a write, on both backends and with no new opcode, so both halves
+fall out of machinery that exists. And because only the receiver changed, the access is
+still a PLACE: the assignment path needs no notion of a guarded lvalue, which is what the
+issue recorded as the blocker (`if tag ∈ D { read } = rhs` cannot be an assignment target).
+The one seam it does touch is `lhs_base_var`, which now looks through the guard — recognised
+by its else arm being the zero-argument null sentinel, so an ordinary `if` on the left of an
+assignment is still not a place and is still refused.
+
+The guard is skipped, at no cost, where the question does not arise: every variant declares
+the field (the common-prefix case, correct today because a shared name+type shares a slot),
+a synthetic `__nullable<S>` (@PLN25's null model — guarding it would make `v[i].field`
+answer null), and a receiver that is not a place read. That last is a real bound: the guard
+reads the receiver twice — once for the tag, once as the value, which is what a struct-enum
+`match` does with its subject — so a receiver that is a CALL keeps the unchecked access, and
+the diagnostic says so rather than claiming a check that is not there.
+
+**`OpNullRefSentinel`, not `OpConvRefFromNull`.** The latter's `Stores::null()` is
+`database(u32::MAX)` — it ALLOCATES — so the first draft leaked one store per guarded
+access, caught by `loft_suite`'s per-script leak gate on this issue's own probe.
+
+**A write through an ABSENT destination was fatal, not refused** — and that one is not
+about enums. `set_default_value_nullable` wrote a field's default into the destination
+record without asking whether there IS one, so `allocations[u16::MAX]` panicked the
+interpreter. Two ways in, one contract: `s.v += [1]` on a null `S?` (which reproduces on
+`main`, independent of this issue), and — once the guard above exists — an append to a
+collection field the value's variant does not declare. The scalar write path already
+honoured the contract (`if db.rec != 0 { … }`); the default-init path honoured neither
+spelling of absence. One guard, sibling to the `tp == u16::MAX` return directly above it
+(nothing to write INTO rather than nothing to write), closes both. Found by this issue's
+own composition probe, which is why the guard is only correct WITH it: without it, the
+`c.field` fix turns silent corruption into a panic, which is the wrong trade.
+
+`variant-field-unchecked` stays a WARNING and its message was rewritten: a message
+describing behaviour the compiler no longer has is worse than none, and one derivation now
+decides both the guard and what the message says. Tier unchanged because a suppressed write
+is a lost write, which is the two-tier rule's own gating example. `LOFT_NO_VARIANT_FIELD`
+silences the message only — semantics must not depend on a diagnostic switch, pinned by
+`the_diagnostic_opt_out_does_not_change_the_answer`.
+
+Guards: `tests/scripts/980-variant-field-answers-its-own-variant.loft` +
+`tests/variant_field_semantics.rs` (behaviour); `tests/variant_field.rs` keeps the
+diagnostic.
+
 ### A split-ownership return is decided per run (loft#981, loft#982, 2026-08-18)
 
 A heap return carries ONE static answer to *may the caller free this?*, read off the return

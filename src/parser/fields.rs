@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I58 — Parser (two-pass recursive descent)
 
-use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_set};
+use super::{
+    DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_set,
+};
 
 // Field access, indexing, and iterator operations.
 
@@ -408,8 +410,8 @@ impl Parser {
                     // `change_var` does not re-type the receiver.
                     *code = Value::Null;
                 } else {
-                    self.warn_unchecked_variant_field(enum_d, &field, &t, code);
-                    *code = self.get_field(found_d_nr, found_fnr, code.clone());
+                    let recv = self.guard_variant_receiver(enum_d, &field, &t, code.clone());
+                    *code = self.get_field(found_d_nr, found_fnr, recv);
                     self.data.attr_used(found_d_nr, found_fnr);
                 }
                 return t;
@@ -726,16 +728,16 @@ impl Parser {
     /// and it already has — the value read is another variant's, typed as this one's.
     /// Quiet for a synthetic `__nullable<S>`, whose payload access is @PLN25's null
     /// model rather than a user-visible variant question.
-    fn warn_unchecked_variant_field(&mut self, enum_d: u32, field: &str, tp: &Type, recv: &Value) {
+    fn warn_unchecked_variant_field(
+        &mut self,
+        enum_d: u32,
+        field: &str,
+        owning: &[u32],
+        total: usize,
+        recv: &Value,
+        guarded: bool,
+    ) {
         if self.first_pass || crate::keys::no_variant_field_warning() {
-            return;
-        }
-        let ename = self.data.def(enum_d).name.clone();
-        if ename.starts_with("__nullable<") {
-            return;
-        }
-        let (owning, total) = self.variants_declaring_field(enum_d, field, tp);
-        if owning.is_empty() || owning.len() >= total {
             return;
         }
         let mut names: Vec<String> = owning
@@ -750,13 +752,26 @@ impl Parser {
             _ => "the value".to_string(),
         };
         let first = names[0].clone();
+        // Two different facts, and the message must not claim the other one's. A PLACE
+        // receiver is tag-guarded, so the miss is answerable — null, and the write ignored.
+        // A receiver that is a call is NOT guarded (the guard reads it twice), so it keeps
+        // the unchecked access, and the cure it needs is to bind it first.
+        let effect = if guarded {
+            "on any other one the read answers null and a write to it is IGNORED".to_string()
+        } else {
+            format!(
+                "and it is not a place, so the tag cannot be read without evaluating it \
+                 twice — on any other variant this reads THAT variant's bytes at \
+                 `{field}`'s offset, and a write lands there leaving the tag alone. Bind \
+                 it to a local first"
+            )
+        };
         diagnostic!(
             self.lexer,
             Level::Warning,
             code = "variant-field-unchecked",
             "only `{have}` of `{display}`'s {total} variants declare `{field}`, and this \
-access does not check which variant `{subject}` holds — on any other one it reads that \
-variant's bytes at this field's offset, and a write lands there leaving the tag alone. \
+access does not check which variant `{subject}` holds — {effect}. \
 Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `match`"
         );
         self.lexer.fix_last(crate::diagnostics::Fix {
@@ -770,6 +785,78 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             concept: "pattern matching",
             concept_ref: "@F29",
         });
+    }
+
+    /// loft#980 — make a PARTIAL struct-enum field access answer for the variant the
+    /// value actually holds.
+    ///
+    /// `c.field` resolves at COMPILE time to the first variant declaring the name and then
+    /// reads that offset whatever the tag says, so `a.n` on an `Anon` answered `Anon.k`'s
+    /// bytes as `Named.n`, and `a.label = "x"` wrote into a record whose tag still said
+    /// `Anon`. The tag was never consulted.
+    ///
+    /// The guard goes on the RECEIVER, not the access:
+    /// `if tag(c) ∈ declaring { c } else { null }`. A null receiver ALREADY reads as null
+    /// and ALREADY swallows a write, on both backends — so the read answers the type's
+    /// sentinel (the same answer C80 gives a hash miss or an out-of-range index) and the
+    /// write is suppressed, with no new opcode. And because only the receiver changed, the
+    /// access is still a PLACE: the assignment path needs no lvalue notion for a guarded
+    /// read, which is what made the write half unbuildable when the guard wrapped the
+    /// access instead.
+    ///
+    /// Returns the receiver UNCHANGED — no tag read, no cost — when the question does not
+    /// arise:
+    /// * every variant declares the field (the common-prefix case C89 promises, correct
+    ///   today because the layout gives a shared name+type one slot);
+    /// * the enum is a synthetic `__nullable<S>`, whose payload access is @PLN25's null
+    ///   model rather than a user-visible variant question (guarding it would make
+    ///   `v[i].field` answer null);
+    /// * the receiver is not a PLACE READ. The guard reads it twice — once for the tag,
+    ///   once as the value — which is what a struct-enum `match` does with its subject and
+    ///   is safe only for an expression that allocates nothing and calls nothing. A
+    ///   receiver that is a CALL keeps today's unchecked access, and the warning that names
+    ///   it, rather than being evaluated twice.
+    fn guard_variant_receiver(
+        &mut self,
+        enum_d: u32,
+        field: &str,
+        tp: &Type,
+        recv: Value,
+    ) -> Value {
+        if self.data.def(enum_d).name.starts_with("__nullable<") {
+            return recv;
+        }
+        let (owning, total) = self.variants_declaring_field(enum_d, field, tp);
+        if owning.is_empty() || owning.len() >= total {
+            return recv;
+        }
+        // ONE derivation decides both the guard and what the diagnostic says: a message
+        // describing behaviour the compiler no longer has is worse than none.
+        let guarded = recv.is_place_read(&self.data);
+        self.warn_unchecked_variant_field(enum_d, field, &owning, total, &recv, guarded);
+        if !guarded {
+            return recv;
+        }
+        let mut discs: Vec<i32> = owning
+            .iter()
+            .map(|&v| self.variant_disc(enum_d, true, v, ""))
+            .collect();
+        discs.sort_unstable();
+        discs.dedup();
+        // A disc of 0 is `variant_disc`'s "could not resolve" answer, not a real struct-enum
+        // tag (they are +1-biased). Guarding on it would test against a tag no value carries
+        // and turn every access into null, so leave the access unchecked instead.
+        if discs.contains(&0) {
+            return recv;
+        }
+        let tag = self.elem_tag_int(recv.clone());
+        let mut cond = self.cl("OpEqInt", &[tag.clone(), Value::Int(discs[0])]);
+        for &d in &discs[1..] {
+            let next = self.cl("OpEqInt", &[tag.clone(), Value::Int(d)]);
+            cond = v_if(cond, Value::Boolean(true), next);
+        }
+        let absent = self.cl("OpNullRefSentinel", &[]);
+        v_if(cond, recv, absent)
     }
 
     /// The variants of `enum_d_nr` that declare `field` at the same TYPE as

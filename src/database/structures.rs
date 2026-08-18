@@ -1340,6 +1340,14 @@ impl Stores {
         if tp == u16::MAX {
             return;
         }
+        // An ABSENT destination has no record to default — writing one indexes
+        // `allocations[u16::MAX]` and takes the interpreter down. Both spellings of
+        // absence count, exactly as on the read side (the null sentinel, and a record id
+        // of 0 for a field that is not there). Sibling of the `tp == u16::MAX` guard
+        // above: nothing to write INTO rather than nothing to write.
+        if rec.is_null() || rec.rec == 0 {
+            return;
+        }
         if tp <= 6 {
             match tp {
                 0 => {

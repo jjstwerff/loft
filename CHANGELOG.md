@@ -43,7 +43,7 @@ One thing to know: if both files happen to export the *same* name and you call i
 saying which you mean, you now get an error naming both, instead of one of them being
 picked for you. Give one an alias (`use skin as s;`) or import the name you want directly.
 
-### Reading a field the value's variant doesn't have now says so
+### Reading a field the value's variant doesn't have now answers null instead of nonsense
 
 Enum variants carry named fields you read directly:
 
@@ -57,8 +57,24 @@ value, which went on calling itself an `Anon` ever after. Nothing said a word.
 
 Reading fields straight off an enum is still the way loft works, and a field that *every*
 variant declares is unaffected. What is new is that reading one only *some* of them have
-now tells you, names which variants have it, and shows the `match` or `is` form that binds
-it for the variant you actually have. Set `LOFT_NO_VARIANT_FIELD=1` to turn it off.
+now **checks which variant you actually have**: the read answers `null` — the same answer
+you get from a missing key or an index past the end — and the write is ignored instead of
+landing in the wrong field. The value's own fields are left alone, and it goes on being
+the variant it was.
+
+You are still told about it, with the variants that have the field and the `match` or `is`
+form that binds it for the one you hold, because a write that quietly does nothing is
+rarely what anyone meant. Set `LOFT_NO_VARIANT_FIELD=1` to turn the message off; the check
+itself stays either way.
+
+One case is left unchecked, and it says so: when the thing you read the field *from* is
+itself a call (`shape_of(x).radius`), checking the tag would mean calling it twice. Bind it
+to a local first.
+
+Related, and fixed with it: adding to a list through something that isn't there —
+`s.v += [1]` where `s` is null — stopped the program with an internal message instead of
+doing nothing. Setting a plain field that way was already ignored; adding to a list now is
+too.
 
 ### A function that sometimes hands back what you gave it, and sometimes something new
 

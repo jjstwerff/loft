@@ -60,10 +60,20 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
 /// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
 /// write through a value-const binding can be rejected at its root.
-fn lhs_base_var(v: &Value) -> u16 {
+fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
-        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0]),
+        // loft#980 — see through the variant-field guard `if tag(c) ∈ declaring { c } else
+        // { null }`: the receiver is the THEN arm.  Recognised by its ELSE arm being the
+        // zero-argument null sentinel, so an ordinary `if` on the left of an assignment is
+        // still not a place and is still refused.
+        Value::If(_, then, els)
+            if matches!(els.unspan(), Value::Call(d, a)
+                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
+        {
+            lhs_base_var(then, data)
+        }
+        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0], data),
         _ => u16::MAX,
     }
 }
@@ -2594,7 +2604,7 @@ use a separate collection or add after the loop"
             // from inside a function is an assignment to a literal — and it is
             // an easy thing to write, because the same declaration for an
             // `integer` is refused with a message.
-            if var_nr == u16::MAX && lhs_base_var(to) == u16::MAX {
+            if var_nr == u16::MAX && lhs_base_var(to, &self.data) == u16::MAX {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -4843,7 +4853,7 @@ use a separate collection or add after the loop"
         // A rebind of the binding itself (`p = other`) re-points the slot and is allowed;
         // it is a bare-`Var` write handled by `const_write_blocked`, not this path.
         if !self.first_pass {
-            let base = lhs_base_var(to);
+            let base = lhs_base_var(to, &self.data);
             if base != u16::MAX && self.vars.is_value_const(base) {
                 diagnostic!(
                     self.lexer,
