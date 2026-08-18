@@ -16,11 +16,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 113 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(loft#973). 121 tags across the ecosystem, with **Phase E under way**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
-(`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`) and `hex_draw`
-(`@HXD-001..007`) are the first seven of `loft-libs-world`'s twelve deferred packages to
-land. Writing
+(`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
+(`@HXD-001..007`) and `hex_terrain` (`@HXT-001..008`) are the first eight of
+`loft-libs-world`'s twelve deferred packages to land. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
@@ -28,7 +28,8 @@ that put every **arc** on the far side of the way from its straights while remai
 `d` from the centreline, two of a package's own instruments reading *pass* on the exact
 failures they were built to catch, a wall with two legal names of which only one survives
 the round trip the whole text format exists for, and a recovery check whose two sides are a
-lattice rational and an irrational, so it could never have passed.
+lattice rational and an irrational, so it could never have passed, and an invariant whose
+NAME promises the opposite of the property it holds.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -36,7 +37,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *9 tagged, 5 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *10 tagged, 4 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1009,7 +1010,7 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 9 tagged, **5 deferred**, 0 todo — the remaining five are Phase E below |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 10 tagged, **4 deferred**, 0 todo — the remaining four are Phase E below |
 
 All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
 carries the six registry rows **and** the fix for the gate bug that reddens every
@@ -1025,7 +1026,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 7 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 8 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1294,7 +1295,51 @@ tread sweep again ([[absent-warning-is-not-a-pass]]), and the example now assert
 there before it measures anything. Coverage 3 of 26 public functions entered → all 26, and the
 last two came from reading the coverage list rather than the brief.
 
-**A method note worth keeping.** All seven rows so far found their defect in the tag that had to
+**Row 6 `hex_terrain` is DONE** (`@HXT-001..008`; *10 tagged, 4 deferred*), and the fixture
+that unblocked it turned out to be the cheapest possible one: a hand-authored ramp,
+`h(c,r) = 100c + 10r`, 500 m tiles, a sea column and one pit — every number in the eight
+tags is arithmetic that can be redone on paper, which is what made the finding legible.
+
+**The finding is a NAME, and the name is the load-bearing part of the doc.** The README and
+the module header both call the package's headline invariant **window independence**:
+*"every sample is a pure function of `(terrain, types, params, rivers, x, y)`"*. Read as
+written it is true, and the conformance suite holds it — by building the same world from the
+same seed twice and comparing samples, which measures DETERMINISM. Read as named it says the
+answer does not depend on the window you generated in, and the consumer who reads it that way
+is exactly the one tiling a large world.
+
+Measured on one authored ramp in a 5×5 and an 8×8 window:
+
+| measurement | 5×5 | 8×8 |
+|---|---|---|
+| accumulation at cell (2,1) | 5 tiles | 11 tiles |
+| that cell is water (`tp_acc_min` = 6) | no | **yes** |
+| its relief | 154.0 | **0.0** (water takes none) |
+| interior sample points that differ | — | **24 of 27**, by up to **15.1 m** |
+| river courses | **0** | **5** |
+
+Hydrology is a global pass and accumulation is a catchment property, so widening the map
+moves the rivers and the fine surface follows through the blend kernel. There is nothing to
+fix in the code — accumulation cannot be local — so the cure is the doc: which half is pure,
+which half is global, and the rule that follows (*generate the overland map once at its full
+extent; a window is a unit of sampling, never a unit of generation*).
+
+**Two more contracts that a signature cannot carry, and both are exact.** A cell's own centre
+reads **99.1034 m** where 100 m was authored, because the blend kernel has radius `1.02·tile`
+and therefore always overlaps the six neighbours — that overlap IS the seamless merge, and
+`100/(1 + 6w)` with `w = (1 − 1/1.02²)²` is its exact price, with the six neighbours picking
+up exactly what the cell lost. And a pit authored at 5 m returns from hydrology at **110.05**
+— its lowest rim plus the flood's epsilon — reclassified as a LAKE, with nothing in the record
+saying a pass has run.
+
+**A method note this row adds.** The finding was reached by ATTRIBUTION, not by inspection:
+the two windows were compared after each pass in turn (authored → hydrology → relief), which
+put the divergence on `terrain_relief_pass` reading a wetness flag that hydrology had set from
+a global count. Comparing only the endpoints would have said *"the surface differs"* and named
+nothing. Same instrument the profiler lesson asks for — measure where the effect ENTERS, not
+that it exists.
+
+**A method note worth keeping.** All eight rows so far found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
 priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
@@ -1336,7 +1381,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~3~~ | ~~`hex_roof`~~ | 15 | **DONE** — `@HXR-001..006`. The distance-source taxonomy, and the eave/drainage trade-off a quantised footprint forces on a point source | — |
 | ~~4~~ | ~~`hex_way`~~ | 20 | **DONE** — `@HXY-001..006`. Found and fixed an offset that put every arc on the far side of the way (0.1.1), and measured the quantisation floor the header rounds off: 1.5 down a row, 0.866 down a column | — |
 | ~~5~~ | ~~`hex_shape`~~ | 68 | **DONE** — `@HXS-001..009`. The split answer confirmed on all three primitives, and two of the package's own instruments found reading *pass* on what they were built to fail. Coverage 4/83 → 83/83 | — |
-| 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
+| ~~6~~ | ~~`hex_terrain`~~ | 20 | **DONE** — `@HXT-001..008`. The scale boundary worked on a hand-authored ramp, and the package's headline invariant found to be determinism wearing the name of extent-independence: same content, two window sizes, 0 rivers against 5. Coverage 24/26 → 26/26 | — |
 | 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
 | ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
 | ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
@@ -1347,12 +1392,11 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. **Rows 1–5, 8 and 9 are done**, which is every row that was
-unblocked. Each of the five that remain needs something CHOSEN before it can be
-written: a fixture (6 `hex_terrain`, 7 `hex_body`), a scoping decision about what a
-readable test is (10 `hex_field`, 11 `hex_recover`), or an owner's API call
-(12 `hex_edge`). Rows 6 and 7 are the cheapest of those — one fixture each — and are
-therefore next.
+the only one waiting on a person. **Rows 1–6, 8 and 9 are done.** Row 6's fixture question answered itself
+the moment it was asked — a hand-authored ramp, not a generated landscape — so the same
+move is what row 7 (`hex_body`) needs next: the smallest rig whose world frame can be
+computed on paper. After that, the three that remain need a scoping decision about what a
+readable test is (10 `hex_field`, 11 `hex_recover`) or an owner's API call (12 `hex_edge`).
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1362,7 +1406,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *9 tagged, 5 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *10 tagged, 4 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
