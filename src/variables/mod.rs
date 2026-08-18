@@ -1455,7 +1455,29 @@ impl Function {
         let key = format!("{name}#bind");
         if let Some(nr) = self.names.get(&key) {
             let nr = *nr;
-            if self.variables[nr as usize].type_def.is_unknown() {
+            // loft#950 — adopt pass 2's type when it carries DEPS the stored one lacks, not
+            // only when pass 1 left the slot unknown.
+            //
+            // A binding over a collection that is itself a view must depend on it, or scope
+            // exit frees a store the binding does not own.  `for_type` derives that dep from
+            // the collection's own — but the collection may only acquire it on PASS 2 (see
+            // `collections.rs`: "on the second pass in_type may carry __vdb_N dependencies
+            // that were not present on the first pass"), and a known-but-depless pass-1 type
+            // is not `is_unknown`, so the better answer was discarded.
+            //
+            // In moros' client that left `wc` in `for wc in st.tcams` marked OWNS with its
+            // DbRef carrying `st`'s store_nr: the loop's exit freed the CLIENT store, whose
+            // slot the next allocation reused, and every later `st.field` read float data.
+            // A smaller program was green only because pass 1 happened to know the dep
+            // already — the rule held by luck, which is why this reproduced in one program
+            // and not in a copy of the same function.
+            let stored_bare = self.variables[nr as usize]
+                .type_def
+                .deps_ref()
+                .is_none_or(|d| d.is_empty());
+            if self.variables[nr as usize].type_def.is_unknown()
+                || (stored_bare && type_def.deps_ref().is_some_and(|d| !d.is_empty()))
+            {
                 self.trace_type_change(nr, type_def, "loop_variable(reuse)");
                 self.variables[nr as usize].type_def = type_def.clone();
             }
