@@ -53,6 +53,24 @@ action items` to `ok — 13 citation(s) resolve`, and `write-examples-index` tak
 `loft-libs-net` and loft's own `main` are green; `loft-libs-plugins` and
 `loft-libs-assets` are green on `main` (their tags are still on the unmerged branch).
 
+**And the gate itself was wrong in library CI — found by opening the PRs.** Every
+library's `examples-index` step failed, whatever the repo contained. `library-ci-
+reusable.yml` checks loft out INSIDE the workspace (`path: loft-src`) and points
+`EXAMPLES_REPO_ROOT` at that same workspace, so `examples_defs_in_tree` walked loft's
+own tree and indexed `@STD`/`@GIT`/`@LEX`/`@ACR`/`@EHK` as the library's — the
+regenerated index carried rows like `loft-src/tests/scripts/945-…`, which no library
+could ever commit, so the committed copy read `stale` **forever**. Invisible in this
+repo, because loft scanning itself has nothing to exclude; invisible on the `examples`
+step, which iterates CITATIONS from the package-scoped `EXAMPLES_CITE_ROOTS` and never
+walks the tree. The fix is a path exclusion — *the gate's own checkout is never part of
+the repo under test* — filtered by PATH rather than by the name `loft-src`, so it holds
+wherever the checkout is nested. Reproduced in the real CI shape (a workspace holding
+the library plus a `loft-src/` running the gate) before and after, and pinned as the
+scanner self-test's **fifth rule**, an ABSENCE: remove the filter and the self-test
+fails naming the contaminant row. That the self-test needed a fifth rule at all is the
+same lesson a third time — **a repo-agnostic gate has to be exercised in the shape it
+runs in, not only in the repo that hosts it.**
+
 **The merge order is now a HARD constraint, not a preference.** Because the gate also
 fires on `pull_request`, a library PR carrying tags for an unregistered acronym is red
 **in its own PR** and cannot merge. So:
