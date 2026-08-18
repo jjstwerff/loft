@@ -73,6 +73,37 @@ a write reports failure, a read answers null, a size answers 0.  That is the
 deliberate rule (loft#709: one source runs on every target, so a call this
 target cannot serve answers at runtime rather than refusing the build).
 
+### A `[native] crate` package on `--native-wasm`
+
+`--native-wasm` is the one wasm target that runs a package's own Rust: loft
+cross-builds the `[native] crate` to `wasm32-wasip2` on demand and links its rlib
+into the program, so `#native` functions execute for real (`--html` cannot — it
+produces a standalone module with no crate to link, and routes through the
+package's `[wasm.bridge]` instead).
+
+Two shapes, and they have different requirements. A **scalar** `#native`
+(`fn answer() -> integer`) lowers to a plain `extern "C"` call and needs nothing
+from loft's runtime. One that **allocates into a loft store** — a `vector` return,
+a struct `Reference` argument — is wrapped in `loft::native_call::enter` +
+`build_store`, so the crate can claim records in the caller's store.
+
+Those two helpers used to sit behind the `native-extensions` cargo feature, and
+the wasm runtime rlib is built `--no-default-features --features random`
+(`WasmRuntimeShape::features`) because that feature buys `dlopen`, which wasm does
+not have. The result was that every store-touching native failed in `rustc`, inside
+generated code, with `E0433: cannot find native_call in loft` — while the scalar
+shape stayed green and reported the target as covered (loft#967). `native_call`
+opens nothing, so it is no longer gated.
+
+**The rule this leaves:** a `loft::<module>` path the generator writes into
+generated code must exist in the lean feature set, or the construct that emits it
+must be REFUSED before emission. `#c` bindings take the second route — `no_c_abi()`
+rejects a reachable one with a diagnostic naming the package (@PLN24 arc E), which
+is why `loft::c_call` may stay gated. `generated_loft_paths_survive_the_wasm_feature_set`
+(`tests/html_wasm.rs`) reads both gate sites — the declaration in `src/lib.rs` and a
+module file's own inner `#![cfg(…)]` — and is always-on, because the end-to-end
+wasip2 test self-skips wherever wasmtime is not installed.
+
 ### The page filesystem (`--html`)
 
 A page draws AND stores.  `--html` used to bind no filesystem at all: the file

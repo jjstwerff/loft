@@ -350,7 +350,9 @@ pub mod wasm_debug;
 // @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
 // at the crate root so generated native code can write
 // `use loft::native_call;` without coupling to the extensions module.
-#[cfg(feature = "native-extensions")]
+// Present in every build, including one without `native-extensions`: a
+// `wasm32-wasip2` binary links its `[native] crate` statically and still needs
+// the store handle (loft#967).
 pub use extensions::native_call;
 // @PLN53 F1/F2 — raw-source fuzz oracle + keyed-container generator; available
 // under cargo-fuzz (the `fuzzing` feature) and under `cargo test`.

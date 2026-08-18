@@ -1200,9 +1200,18 @@ fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
 /// @PLN26 phase 3 (#438) — a program that uses a `#native` (`[native] crate`) package
 /// compiles to `--native-wasm` and runs under wasmtime: loft cross-builds the package's
 /// native crate to `wasm32-wasip2` on demand and links its rlib (+ the host proc-macro
-/// deps).  `native_scalar_pkg` is a minimal wasm-clean fixture (one scalar `#native` fn,
-/// `native_answer() -> 42`), so this pins the loft cross-build PIPELINE, isolated from any
-/// heavy crate's own wasm-cleanliness.  Skipped when the wasip2 target or wasmtime is absent.
+/// deps).  `native_scalar_pkg` is a minimal wasm-clean fixture, so this pins the loft
+/// cross-build PIPELINE, isolated from any heavy crate's own wasm-cleanliness.  Skipped
+/// when the wasip2 target or wasmtime is absent.
+///
+/// Both native SHAPES, because they have different linkage requirements and only one of
+/// them was ever covered here (loft#967).  A scalar (`native_answer() -> 42`) compiles to
+/// a plain `extern "C"` call that asks nothing of loft's runtime.  A vector RETURN
+/// (`native_span(4)`) makes codegen wrap the call in `loft::native_call::enter` +
+/// `build_store` so the crate can allocate into a loft store — and those two helpers were
+/// gated behind `native-extensions`, a feature the wasm runtime rlib cannot enable
+/// (it buys `dlopen`).  So every store-touching native refused to build on this target
+/// while the scalar cell stayed green and reported the pipeline as covered.
 #[test]
 fn pln26_phase3_native_package_runs_on_wasm() {
     let Some(wasmtime) = which("wasmtime") else {
@@ -1228,10 +1237,13 @@ fn pln26_phase3_native_package_runs_on_wasm() {
     let tmp = std::env::temp_dir().join("loft_pln26_p3");
     let _ = std::fs::create_dir_all(&tmp);
     let prog = tmp.join("native_pkg_wasm.loft");
+    // Values, not just shapes: `native_span` returns `[100, 101, …]` deterministically,
+    // so a truncated or misordered store copy is visible rather than merely "non-empty".
     std::fs::write(
         &prog,
         "use native_scalar_pkg;\nfn main() {\n  answer = native_answer();\n  \
-         print(\"native-answer={answer}\\n\");\n}\n",
+         print(\"native-answer={answer}\\n\");\n  v = native_span(4);\n  \
+         print(\"native-span={len(v)}:{v[0]},{v[1]},{v[2]},{v[3]}\\n\");\n}\n",
     )
     .unwrap();
     let wasm = tmp.join("native_pkg_wasm.wasm");
@@ -1263,6 +1275,12 @@ fn pln26_phase3_native_package_runs_on_wasm() {
     assert!(
         stdout.contains("native-answer=42"),
         "wasm `#native` call returned wrong/no value: stdout={stdout:?} stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        stdout.contains("native-span=4:100,101,102,103"),
+        "loft#967 — a store-allocating `#native` returned the wrong vector on wasip2: \
+         stdout={stdout:?} stderr={}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -2078,5 +2096,137 @@ fn the_asyncify_save_region_is_outside_the_shadow_stack() {
     assert_ne!(
         region, 65536,
         "the region is back at the hardcoded 65536 fallback (loft#950)"
+    );
+}
+
+/// loft#967 — a `loft::<module>` path the generator writes into generated Rust must be
+/// reachable in the feature set the wasm runtime rlib is built with.
+///
+/// `WasmRuntimeShape::features()` builds that rlib `--no-default-features --features
+/// random`, so anything gated behind `native-extensions` (which buys `dlopen`, and wasm
+/// has none) is configured out — and the program that references it dies in `rustc`, in
+/// generated code, naming loft's internals rather than anything the author wrote.
+///
+/// It has happened twice from two different producers. @PLN24 arc E fixed the `#c` half
+/// by refusing the CALL (`Output::no_c_abi`, the only site that knows a binding is
+/// reachable); the `#native` half went on emitting `loft::native_call::enter` +
+/// `build_store`, so every store-allocating native — a vector return, a struct
+/// `Reference` argument — could not be built for `--native-wasm` at all.
+///
+/// This is the always-on half of the guard. `pln26_phase3_native_package_runs_on_wasm`
+/// proves the real thing end to end, but it self-skips without wasmtime and the wasip2
+/// target, which the per-PR CI leg does not install — so on the path where a regression
+/// is cheapest to catch, it reports nothing.
+///
+/// A gate is read at TWO sites, because the two producers were gated differently: the
+/// declaration in `src/lib.rs` (how `native_call` was hidden) and a leading inner
+/// `#![cfg(…)]` in the module's own file (how `c_call` is).
+#[test]
+fn generated_loft_paths_survive_the_wasm_feature_set() {
+    let root = repo_root();
+    // `c_call` is the ONE exception, and it is exempt because a call to it cannot be
+    // emitted for wasm: `no_c_abi()` refuses the `#c` binding first.  Asserted below, so
+    // the exemption cannot outlive its enforcement.
+    const REFUSED_BEFORE_EMISSION: &[&str] = &["c_call"];
+
+    let mut sources = vec![root.join("src/codegen_runtime.rs")];
+    let gen_dir = root.join("src/generation");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&gen_dir)
+        .expect("read src/generation")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    entries.sort();
+    sources.extend(entries);
+
+    // Every `loft::<ident>` in the generator.  A leading `.` means a loft FILENAME in a
+    // comment (`prog.loft::main`), not a Rust path.
+    let mut referenced: Vec<String> = Vec::new();
+    for src in &sources {
+        let text = std::fs::read_to_string(src).expect("read generator source");
+        let bytes = text.as_bytes();
+        for (at, _) in text.match_indices("loft::") {
+            if at > 0 && (bytes[at - 1] == b'.' || bytes[at - 1].is_ascii_alphanumeric()) {
+                continue; // `prog.loft::x`, or a longer identifier ending in `loft`
+            }
+            let rest = &text[at + "loft::".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+                .collect();
+            if !name.is_empty() && !referenced.contains(&name) {
+                referenced.push(name);
+            }
+        }
+    }
+    assert!(
+        referenced.iter().any(|m| m == "native_call"),
+        "the scan found no `loft::native_call` at all — it is the path loft#967 was \
+         about, so an empty scan means this test stopped reading the generator"
+    );
+
+    let lib_rs = std::fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+    let lines: Vec<&str> = lib_rs.lines().collect();
+    let mut gated: Vec<String> = Vec::new();
+    for name in &referenced {
+        if REFUSED_BEFORE_EMISSION.contains(&name.as_str()) {
+            continue;
+        }
+        let decl_mod = format!("pub mod {name};");
+        let decl_use = format!("::{name};");
+        let Some(at) = lines.iter().position(|l| {
+            let t = l.trim();
+            t == decl_mod || (t.starts_with("pub use ") && t.ends_with(&decl_use))
+        }) else {
+            continue; // not a crate-root item — an inherent path, nothing to gate
+        };
+        // Attributes sit directly above the declaration, interleaved with comments.
+        let mut j = at;
+        while j > 0 {
+            let t = lines[j - 1].trim();
+            if t.starts_with("#[") {
+                if t.contains("cfg(feature") {
+                    gated.push(format!("{name}: src/lib.rs:{} {t}", j));
+                }
+            } else if !t.starts_with("//") {
+                break;
+            }
+            j -= 1;
+        }
+        // …and the module's own file can gate itself with an inner attribute, which the
+        // declaration above says nothing about.
+        for cand in [format!("src/{name}.rs"), format!("src/{name}/mod.rs")] {
+            let Ok(body) = std::fs::read_to_string(root.join(&cand)) else {
+                continue;
+            };
+            if let Some(l) = body
+                .lines()
+                .take(40)
+                .find(|l| l.trim_start().starts_with("#![cfg(feature"))
+            {
+                gated.push(format!("{name}: {cand} {}", l.trim()));
+            }
+        }
+    }
+    assert!(
+        gated.is_empty(),
+        "generated code emits these `loft::` paths, but they are behind a cargo feature \
+         the wasm runtime rlib does not enable (it builds `--no-default-features \
+         --features random`), so `--native-wasm` / `--html` fails in rustc inside \
+         generated code (loft#967):\n  {}\n\nEither ungate the item, or refuse the \
+         construct that emits it before emission — the way `no_c_abi()` refuses a `#c` \
+         binding — and add it to REFUSED_BEFORE_EMISSION.",
+        gated.join("\n  ")
+    );
+
+    // The exemption's enforcement, pinned: `c_call` is safe to skip only while a
+    // reachable `#c` binding is REFUSED on a wasm target.
+    let gen_mod = std::fs::read_to_string(root.join("src/generation/mod.rs"))
+        .expect("read generation/mod.rs");
+    assert!(
+        gen_mod.contains("if self.no_c_abi() {"),
+        "`c_call` is exempt from the gate above because `no_c_abi()` refuses a reachable \
+         `#c` binding before any call can be emitted — that refusal is gone, so the \
+         exemption is now unbacked (loft#967, @PLN24 arc E)"
     );
 }

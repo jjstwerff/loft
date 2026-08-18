@@ -1688,7 +1688,10 @@ std::thread_local! {
 
 // Thread-local raw pointer to the interpreter's Stores during a native call.
 // Set before calling a native function, cleared after it returns.
-#[cfg(feature = "native-extensions")]
+//
+// Ungated on purpose, unlike the `ffi_*` callbacks below that read it: it is also
+// the backing store for [`native_call`], which generated code links on a target
+// that has no `dlopen` and therefore no `native-extensions` (loft#967).
 std::thread_local! {
     pub(crate) static CURRENT_STORES: std::cell::Cell<*mut crate::database::Stores> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
@@ -2449,7 +2452,13 @@ pub fn platform_lib_name(stem: &str) -> String {
 /// let r = unsafe { external_crate::n_some_fn(ls, arg1, arg2) };
 /// // _guard's Drop clears CURRENT_STORES.
 /// ```
-#[cfg(feature = "native-extensions")]
+///
+/// Not gated on `native-extensions`, though it sits among the loader's private
+/// helpers: that feature buys `dlopen`, and nothing here opens anything — it
+/// builds a `LoftStore` over a store loft already owns.  The generated code that
+/// calls it links the native crate STATICALLY on `wasm32-wasip2`, where `dlopen`
+/// does not exist, so gating it on the loader made `--native-wasm` refuse every
+/// program using a `[native] crate` package (loft#967).
 #[allow(dead_code)] // Consumed by generated native code (separate compilation unit),
 // not by the loft binary itself.  Clippy can't see those callers.
 pub mod native_call {
