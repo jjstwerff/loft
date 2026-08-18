@@ -9,6 +9,48 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Manifest-less resolution: one scope function, no lockfile written by running (@PLN143, 2026-08-18)
+
+`lib_path`'s registry legs were three probes that each re-derived their own lockfile
+path — beside the script, at the project root, and in the **cwd** — and a disagreement
+between them was silent: a different version loads and nothing errors.
+`resolution_scope(script) -> Package | PinnedScript | Bare`
+(`src/resolution_scope.rs`) answers it once, and the same value decides which lock may
+be WRITTEN, so read and write cannot drift. Two other copies of the walk-up went with
+it (`Parser::find_project_root`, main.rs's `find_project_root_from`).
+
+What changed behaviourally:
+
+- **The cwd leg is deleted.** A `loft.lock` in the directory you stand in governs
+  nothing. A bare script's first run no longer writes one either
+  (`skip_lockfile` is read off `lock_write_target`, one fact), so "latest" is
+  re-decided every run instead of being pinned by a file the run produced.
+- **`Bare` scope gains a cache fallback** (`registry_index::newest_cached_loadable`):
+  newest extracted, prereleases skipped, and any copy this build cannot load filtered
+  out through `manifest::check_version` / `check_contract` — the loader's own
+  functions, so the filter cannot drift from what the loader accepts. `Bare` only: a
+  declared scope has a constraint the fallback would answer past.
+- **`loft install <pkg>` outside a package writes a minimal `loft.toml`** so its lock
+  has a root that governs it, and prints `created loft.toml (package \`x\`)`.
+- **A governing pin behind the cached index prints one line** naming the cure the
+  scope takes (`loft install <pkg>` / `loft pin <script>`). Cache-only (never a
+  fetch), once per package per run, never for a dependency's own `use`, silent under
+  `LOFT_OFFLINE`, off-switch `LOFT_NO_UPGRADE_NOTICE=1`.
+- **`[registry] resolving <pkg> from registry` is gone**; `[registry] downloading
+  <pkg> <version>` prints where bytes are actually fetched. With nothing pinning a
+  bare script both parse passes re-decide, so the old line printed twice per run for
+  work a warm cache was not doing. The auto-install ANSWER is memoised per run for the
+  same reason — two passes must resolve the same file.
+- **Two index reads that trusted unchecked bytes are closed**: `load_index_inner`'s
+  `offline` branch now verifies like the other three, and `locked_hashes` takes the
+  `skip_lockfile` guard `held_versions` already had.
+
+Arc A (2026-08-18) preceded all of it: `probe_auto_install` no longer passes
+`allow_unsigned: true`. `loft install` keeps its own CLI default, and that asymmetry is
+the point — waiving is defensible for a verb a person typed, not for the path a bare
+`use` takes on its own.
+
+
 ### Every store access is bounded, on every target (loft#950, 2026-08-17)
 
 `Store::addr` and `addr_mut` bounded their offset with a `debug_assert!`, and loft's

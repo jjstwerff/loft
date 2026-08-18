@@ -26,6 +26,43 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A one-file script takes the newest release, and stops writing files at you
+
+`use arguments;` in a script with no `loft.toml` already resolved the newest release —
+and then left a `loft.lock` in whatever directory you happened to be standing in. That
+file pinned the script forever, from then on: the "latest" it took once became the
+version it took always, decided by something the run itself produced. Run the same
+script from a second directory and it re-resolved and dropped a second lock there.
+
+Now nothing is written by running. A script with no declaration means *the newest
+release, re-decided every run*; where you stand is not part of the answer; and if the
+registry cannot be reached, the newest copy already in your cache answers instead of a
+"library not found" in a directory holding five copies of it.
+
+Where you DO have a declaration — a `loft.toml` in the project, or a
+`<script>.loft.lock` from `loft pin` — nothing changes: it governs, exactly as before.
+`loft install cbor@0.1.2` in a directory that is not a package now writes the small
+`loft.toml` that makes that pin stick, and says so.
+
+### Your build says once when a pin has fallen behind
+
+A lockfile has no expiry, so a pinned version holds forever — including through a
+release that fixes something you would want. `cbor` 0.1.3 turned one encoder from
+O(n³) to O(n²) (a few hundred entries went from "effectively hung" to milliseconds)
+with no API change at all: a project pinned at 0.1.2 keeps hanging, and nothing it can
+read explains why.
+
+When a pin governs and the registry index you already have says there is a newer
+release, the build mentions it once:
+
+```
+[registry] cbor 0.1.2 is pinned; 0.1.3 is the newest release — run: loft install cbor
+```
+
+It never fetches anything to say this, never speaks for a library's own dependencies,
+stays quiet when you are current or offline, and can be turned off with
+`LOFT_NO_UPGRADE_NOTICE=1`.
+
 ### Adding a file no longer changes a library's answer in silence
 
 Two `.loft` files in different packages can share a basename, but only one of them can be
