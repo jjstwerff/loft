@@ -3117,3 +3117,57 @@ mod align_tests {
         assert_eq!(aligned_stack_step(0), 0);
     }
 }
+
+#[cfg(test)]
+mod loop_binding_dep_tests {
+    use super::Function;
+    use crate::data::{Deps, Type};
+    use crate::lexer::Lexer;
+
+    /// loft#950 — a `for` binding whose type pass 1 got RIGHT-SHAPED but DEPLESS must adopt
+    /// pass 2's dep-carrying answer.
+    ///
+    /// The binding is a view into the collection it iterates, so the dep is what stops scope
+    /// exit freeing a store it does not own.  `loop_variable` used to adopt only when pass 1
+    /// left the slot `Unknown`, and a known-but-depless type is not unknown — so the right
+    /// answer was computed on pass 2 and discarded, and moros' client freed its `Client`
+    /// store at the exit of `for wc in st.tcams`.
+    ///
+    /// ⚠ Asserted on the PREDICATE rather than through a program, deliberately.  Whether
+    /// pass 1 knows the dep is a property of the whole program — every reduction of the
+    /// reported function stayed green because pass 1 happened to know it there — so a
+    /// script-level guard would be pinning the luck, not the rule.
+    #[test]
+    fn a_depless_pass1_binding_adopts_pass2s_dep() {
+        let mut lexer = Lexer::default();
+        let mut f = Function::new("t", "t.loft");
+        let bare = Type::Reference(7, Deps::none());
+        let with_dep = Type::Reference(7, Deps::frame1(3));
+
+        let first = f.loop_variable("wc", &bare, &mut lexer);
+        let again = f.loop_variable("wc", &with_dep, &mut lexer);
+        assert_eq!(first, again, "the same loop must reuse its binding slot");
+        assert!(
+            f.tp(again).deps_ref().is_some_and(|d| !d.is_empty()),
+            "a binding over a view must carry the collection's dep, or its scope exit frees              a store it only borrows (loft#950)"
+        );
+    }
+
+    /// The other direction, so the adoption cannot be written as "always take the newer
+    /// type": a binding that already carries a dep keeps it when a depless type arrives.
+    #[test]
+    fn a_binding_that_has_a_dep_does_not_lose_it() {
+        let mut lexer = Lexer::default();
+        let mut f = Function::new("t", "t.loft");
+        let with_dep = Type::Reference(7, Deps::frame1(3));
+        let bare = Type::Reference(7, Deps::none());
+
+        let v = f.loop_variable("wc", &with_dep, &mut lexer);
+        let again = f.loop_variable("wc", &bare, &mut lexer);
+        assert_eq!(v, again);
+        assert!(
+            f.tp(again).deps_ref().is_some_and(|d| !d.is_empty()),
+            "a dep already established must not be dropped by a later depless type"
+        );
+    }
+}
