@@ -369,6 +369,11 @@ pub struct Parser {
     /// speaks once.  Deliberately NOT carried by [`Self::seed_from`]: it is a parse-time
     /// side map driving a diagnostic the base parse has already emitted.
     undeclared_reported: std::collections::HashSet<String>,
+    /// Module names already reported as captured by another file (loft#912 / loft#949),
+    /// for the same reason and with the same non-travel rule as `undeclared_reported`:
+    /// the `use` is walked by both the pre-scan and the definition loop, and one
+    /// collision printed twice reads as two separate collisions.
+    module_clash_reported: std::collections::HashSet<String>,
     /// Root project's `[dependencies]` version constraints (name → req), read
     /// once from the main script's nearest-ancestor `loft.toml` (via
     /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
@@ -959,6 +964,7 @@ impl Parser {
             pkg_dep_cache: std::collections::HashMap::new(),
             use_paths: std::collections::HashMap::new(),
             undeclared_reported: std::collections::HashSet::new(),
+            module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
             auto_use_trigger_map: None,
@@ -10525,7 +10531,7 @@ impl Parser {
     /// `self::` qualifies with `[package] name` and is refused without one — so a
     /// bare script hears the rename instead of a cure that would error.
     ///
-    /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
+    /// **Never an error, and the resolution is unchanged** — deliberately, on a
     /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
     /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
     /// `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while carrying
@@ -10570,6 +10576,59 @@ impl Parser {
         // advice they should ignore (loft#948).  A diagnostic that fires where there is
         // nothing to fix teaches people to skip the ones where there is.
         if Self::same_package(&own_canonical, &loaded) {
+            return;
+        }
+        if !self.module_clash_reported.insert(id.to_string()) {
+            return;
+        }
+        // loft#949 — WHICH WAY the capture runs decides both the tier and who is being
+        // told.  Two shapes reach this line:
+        //
+        //   (a) a package `use`s a name that another package in the graph also ships and
+        //       loaded first.  Both authors can see it in their own builds, and it is
+        //       what the corpus is full of — `graphics` ⟷ `mesh3d` over `math` / `mesh` /
+        //       `scene`, 19 sites in shipped library code.  Advice.
+        //
+        //   (b) the ROOT PROJECT added a file whose basename a DEPENDENCY was already
+        //       using, so the dependency's own module never loads and its `use` binds the
+        //       consumer's file.  The dependency is unchanged, published, and green on its
+        //       own; its answer changes because something downstream added a file.  That
+        //       is a wrong result — the filed case computed 100 where the package alone
+        //       computes 42 — and by the tier rule a diagnostic gates exactly when
+        //       ignoring it can produce one.  Warning.
+        //
+        // The split matters because advice is routinely filtered: the reporting consumer's
+        // harness pipes through `grep -viE "^  Warning"` and its build scripts drop
+        // `^advice`, so the only sign of a changed answer was being discarded by design.
+        // Keeping (a) at advice is what lets (b) gate without failing the CI of every
+        // library that ships an overlapping basename today.
+        let root_project = Self::find_project_root(&self.database.source_dir);
+        let inside = |file: &str, root: &std::path::Path| {
+            std::path::Path::new(file)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(file))
+                .starts_with(root)
+        };
+        let captured_by_root = root_project
+            .as_ref()
+            .is_some_and(|root| inside(&loaded, root) && !inside(&own_canonical, root));
+        if captured_by_root {
+            // The reader here is the CONSUMER, and the file they can edit is their own —
+            // they cannot add a `use self::` to a dependency they did not write.  Name the
+            // durable cure too, because it is the one that ends the class for everyone
+            // downstream of that package.
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                code = "module-name-shadowed",
+                "this project's '{loaded}' captured the module name '{id}', which \
+                 dependency module '{own_canonical}' was already using — a module's file \
+                 name is shared across the whole dependency graph, so that dependency's \
+                 own '{id}' never loads and this `use` binds the project's file instead. \
+                 The dependency now answers differently than it does on its own. Rename \
+                 this project's '{id}.loft'; the dependency's author can end it for every \
+                 consumer by writing `use self::{id}`"
+            );
             return;
         }
         // Name the cure that KEEPS this package's answer, not just the one that

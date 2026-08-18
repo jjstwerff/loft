@@ -26,6 +26,31 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Adding a file no longer changes a library's answer in silence
+
+Two `.loft` files in different packages can share a basename, but only one of them can be
+the module of that name — so if your project adds `src/catalogue.loft` and a library you
+depend on already had one, the library's own file never loads and *its* `use catalogue;`
+picks up yours. The library then computes with your data: in the reported case it answered
+100 where, on its own, it answers 42. Nothing in the library changed, and its own tests
+still pass.
+
+loft has named that collision for a while, but as `advice` — and advice is routinely
+filtered out of build logs, which is exactly what happened. When the file that wins is
+*your project's* and the one that loses belongs to a *dependency*, it is now a **warning**:
+
+```
+warning[module-name-shadowed]: this project's '…/src/catalogue.loft' captured the
+  module name 'catalogue', which dependency module '…/dep/src/catalogue.loft' was
+  already using … The dependency now answers differently than it does on its own.
+  Rename this project's 'catalogue.loft'; the dependency's author can end it for
+  every consumer by writing `use self::catalogue`
+```
+
+The other direction — your own module losing its name to a file elsewhere in the graph —
+stays advice, because published libraries legitimately overlap that way today and the cure
+there (`use self::<module>`) is yours to apply.
+
 ### loft tells you when a library is not in your `loft.toml`
 
 `use hex_grid;` works even when your `loft.toml` never mentions `hex_grid`, as long as the
