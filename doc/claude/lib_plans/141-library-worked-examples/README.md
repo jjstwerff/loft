@@ -19,9 +19,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 (loft#973). 141 tags across the ecosystem, with **Phase E under way**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
 (`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
-(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`) and
-`hex_field` (`@HXL-001..012`) are **ten** of `loft-libs-world`'s twelve deferred packages,
-leaving two. Writing
+(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`),
+`hex_field` (`@HXL-001..012`) and `hex_recover` (`@HXV-001..009`) are **eleven** of
+`loft-libs-world`'s twelve deferred packages, leaving one. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
@@ -32,7 +32,8 @@ the round trip the whole text format exists for, and a recovery check whose two 
 lattice rational and an irrational, so it could never have passed, and an invariant whose
 NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
 for a three-dimensional rig anyway, and a validator that refuses the multi-form chunk its
-own package exists to trace.
+own package exists to trace, and a verification step that discarded the exact answer it had
+just computed, because it re-drew into a window sized for the code it replaced.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -40,7 +41,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *12 tagged, 2 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *13 tagged, 1 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1013,7 +1014,7 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 11 tagged, **3 deferred**, 0 todo — the remaining three are Phase E below |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 13 tagged, **1 deferred**, 0 todo — the remaining one is Phase E row 12 below |
 
 All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
 carries the six registry rows **and** the fix for the gate bug that reddens every
@@ -1029,7 +1030,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 10 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 11 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1479,14 +1480,102 @@ fixed copy and skip the case if the revert was a no-op. **Prove the harness can 
 harness that reports by ABSENCE, that means asserting the mutation actually happened, not just that
 the run finished.**
 
-**A method note worth keeping.** All ten rows so far found their defect in the tag that had to
+**Row 11 `hex_recover` is DONE** (`@HXV-001..009`, acronym registered; *13 tagged, 1 deferred*),
+and its blocker dissolved by being MEASURED rather than scoped. The table said row 11 waited on
+*"deciding what a fast, readable subset of that census looks like — the full one is a long-running
+test"*. There is no subset to choose, because two different censuses had been conflated. The open-
+ended one — push the level ladder up and see where injectivity stops — is hexbody's exploration and
+belongs there. The one a CALLER needs is finite and already fixed by the build: **is `draw`
+injective over the set this build matches against?** That set is 119 forms, and `index_build`
+decides it for the whole space at once (two candidates sharing a digest overwrite each other in the
+map, so the build counts the clashes) in **18 ms** — which the row's own fix then took to **2 ms**.
+*"A census is slow"* was a property of a question nobody was asking.
+
+**THE FINDING IS A LIMIT INHERITED FROM THE CODE IT REPLACED, and it is the first in Phase E where
+the step that makes an answer trustworthy is the step that throws it away.** `rebuild_construct` is
+the package's headline: it reads `(h0, lens, turns)` off the field's own convex hull, *"enumerating
+nothing … in O(cells), independent of how large the admissible space is"*, and then re-draws once —
+*"the construction PROPOSES a form; one re-draw CONFIRMS it. That keeps `ρ = 0` a measured fact
+rather than a claim."* The redraw went into `FW/FH/FQ0/FR0`, a constant 25×25 window whose own
+comment reads *"a compact window: **every level-1 shape** is a handful of cells around the anchor"*
+— true of the enumeration, and false of the thing built to replace it. `form_fill` clips to its
+chunk silently, so:
+
+| form | cells | verdict | ρ |
+|---|---|---|---|
+| heading 0, side 12 | 91 | R1 | 0 |
+| heading 0, side 13 | 105 | **R2** | 2 |
+| heading 2, side 13 | 105 | **R2** | **196** |
+| heading 3, side 7 | **85** | **R2** | 3 |
+
+Every one of those had the correct form sitting in `rb_form` already; `rebuild_construct_text`
+returned `""`.
+
+**Three numbers say what could not see it.** First, `ρ = 2` on a 105-cell field reads like an
+almost-perfect fit — the natural reading of a small residual is *"nearly a stencil"*, and it was
+measuring the distance from the anchor to the edge of a constant. Second, `ρ = 196` on that same
+105-cell field is **more unexplained cells than there are cells**, which is a number that cannot
+mean what its name says: the clip moved the translation-normalisation origin by one, and one is
+the wrong parity, so not a single cell of 105 lined up (105 + 91 = 196, hand-computed and
+confirmed). Third and sharpest, the **85**-cell shape refused while the 105-cell one passed. The
+limit was never a size. An odd (vertex-direction) heading covers two rows per unit of side and an
+even one covers one, so the same stencil turned reached the window at half the length — and a
+stencil and its orientation-image are ONE stencil by this package's own law **I**. A recovery that
+depends on which way a stencil faces is not a recovery.
+
+Fixed at the one chokepoint: the window is now DERIVED from the form (`fit_chunk`, from
+`form_poly_k`/`form_poly_m` — every `head_step` moves `m` by a multiple of 3, so `r` is bounded
+exactly and `q` within one, with a one-cell pad). All three redraw sites take it, so `rebuild_with`
+and `index_build` lose the same latent trap the day `LEVEL` is raised. It is a pure narrowing and
+it is *faster*: the derived window is far smaller than the constant for the shapes that ship —
+70 728 fewer cells scanned across the candidate set, index build 18 ms → 2 ms. `hex_recover` 0.1.1,
+API additive.
+
+**The invariant the tags pin is not the fix.** On the verified path the redraw must CONTAIN the
+field — so ρ counts only what the hull ADDS and never what the chunk dropped. `@HXV-003` asserts
+that at all twelve headings, and carries the old 25×25 window inline as its own CONTROL: the same
+containment check against it must report a drop at every one of the twelve, or the assertion
+proves nothing. Which makes the residual readable at last: a ring of six scores **ρ = 1**, exactly
+the centre cell its hull adds — the smallest positive value there is, and a flat refusal, because
+no grammar form has a hole. `ρ` is a count, not a distance; it does not shrink towards a match.
+
+**A second, upstream finding, and it is loft#982 again — one row later, in a different package.**
+`hex_form`'s `form_canon` opened with `if n == 0 { return f; }` — the by-value parameter on one
+path, a freshly built `Form` on the other — and leaked one store per call on the path that IS
+taken. Every enumerator calls it once per admitted form, so the census leaked 1182 `Form`s on a
+single `candidate_forms()`. Row 10 filed the seam from `hex_field`'s stencil transforms; row 11
+found the second victim in the family without looking for it. Same verified workaround (build a
+fresh value on every path), measured 100 leaked → 0, `hex_form` 0.1.2. **The generalisable half is
+the search key, not the bug: `return <by-value struct param>;` beside a `return <fresh>;` is a
+grep, and it is worth running across a repo the first time the seam bites it.**
+
+**A note on where the row's questions came from.** The productive question was the one rows 1–10
+converged on — *"what is the nearest call that looks identical and is not?"* — and this package
+answers it in its own comments: three digests, all `HexSet -> vector<integer>`, and the file says
+using the wrong one *"reported 17 false law F failures on a 10-entry corpus before the distinction
+was drawn."* `@HXV-001` is that paragraph made executable; it also pins one digest as literal text
+(`640400.642003.643600`, the unit triangle's three cells at `(0,0)`, `(2,0)`, `(1,3)` under
+`(k+400)*1600 + (m+400)`), because *"EXACT, NOT HASHED"* is only a claim until a number you can
+derive by hand appears in a test.
+
+**Non-vacuity, nine for nine.** One targeted library mutation per tag — `field_exact` aliased to
+`field_norm`, the index keyed on the cell count, the constant window restored, the hull refusing
+4 sides, the verify accepting any residual, the cyclic test frozen at shift 0, the mirror test not
+reversing, `ri_fills` not counting, `forms_at_level` reading `<=` — each ran the suite and each
+turned it red naming its OWN test. The harness errors out if a mutation pattern is not found and
+`cmp`s the file to prove the edit landed (row 10's lesson, applied rather than re-learned).
+Coverage 17/46 → **46/46**.
+
+**A method note worth keeping.** All eleven rows so far found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
 priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
 CHECKS that answered *pass* on what they were written to fail (`hex_shape`), a
 premise the package enforced on one half of its own text and not the other (`hex_fit`),
-and one that was true of the shape its author had in mind and false of the shapes the
-package exists to hold (`hex_field`).
+one that was true of the shape its author had in mind and false of the shapes the
+package exists to hold (`hex_field`), and one true of the CONSTRUCTION and false of the
+ROUTINE, because the step that verifies it kept a limit from the code it replaced
+(`hex_recover`).
 That is not luck: a worked example is the first thing that ever evaluates such a sentence
 against the code, and the sentences most worth working are the ones written with the most
 certainty.
@@ -1494,8 +1583,8 @@ certainty.
 **And a second note, about what these packages have in common.** Every finding so far is a
 call that produces a plausible wrong answer while passing every cheap check — a parse that
 repairs, a residual that reads zero, a roof that still sheds water, a rail that is exactly
-the right distance from the wrong side. So the productive question for the remaining eight
-rows is not *"what does this function do"* but **"what is the nearest call that looks
+the right distance from the wrong side. So the productive question for every row after it
+is not *"what does this function do"* but **"what is the nearest call that looks
 identical and is not, and what number distinguishes them?"** In `hex_roof` that number
 already existed and was simply not the one anyone read (`eave_spread`); in `hex_way` it had
 to be constructed, because a joint gap is not a quantity anyone had thought to name.
@@ -1528,7 +1617,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
 | ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
 | ~~10~~ | ~~`hex_field`~~ | 82 | **DONE** — `@HXL-001..012`. The fixture question answered itself again (one hex, two hexes, a ring of six), and under it a validator refusing the multi-form chunk the package exists to trace, plus a material write that DELETED the wall it was setting and an extent taken on trust that allocated 16 M cells from a 32-byte file. 0.1.1, format unchanged byte for byte | — |
-| 11 | `hex_recover` | 33 | law **F** is injectivity, and its coverage is a MEASUREMENT over an admitted space | deciding what a fast, readable subset of that census looks like — the full one is a long-running test, not a teaching one |
+| ~~11~~ | ~~`hex_recover`~~ | 33 | **DONE** — `@HXV-001..009`. The blocker dissolved on measurement: the census a caller needs is the 119 forms this build matches against, decided in 2 ms. Under it, a verify step that clipped its own redraw into a window sized for the enumeration it replaced — refusing an 85-cell shape while passing a 105-cell one, and reporting 196 unexplained cells in a 105-cell field. 0.1.1; plus loft#982's second victim upstream (`hex_form` 0.1.2). Coverage 17/46 → 46/46 | — |
 | 12 | `hex_edge` | 39 | the `sweep_path` resting-position trap, already written as prose in that package's README (moros#10): a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next `hex_at` may round to the far side | **an owner decision** — whether `hex_edge` should offer a `sweep_path_skin(…)` (or return a fraction already backed off), or every caller keeps its own skin. The example teaches a different thing under each answer |
 
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
@@ -1554,7 +1643,8 @@ example anyway would pin the wrong behaviour into a test. Row 11 needs no one �
 decision about what a fast, readable subset of a census looks like.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *12 tagged, 2 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *13 tagged, 1 deferred* — only
+`hex_edge` (row 12) is left, and it is the one that waits on an owner decision.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
