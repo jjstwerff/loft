@@ -31,6 +31,51 @@ deleting the demonstrator file makes all four citations `dangling`. `loft test` 
 green** — the opt-in ratchet working as designed, so one library adopting the
 convention cannot redden its neighbours.
 
+**⚠ THE RATCHET ARMED ITSELF, AND TWO MERGED LIBRARY `main`s WENT RED — 2026-08-18.**
+loft **#971 merged the gate to `main` at 13:39**, and `library-ci-reusable.yml` builds
+loft from `loft-ref` (**default `main`**) and runs `check_doc_drift.sh examples` +
+`examples-index` as **gating** steps on `push: [main]` **and on `pull_request`**. Every
+repo that adopted the convention BEFORE the gate was live had therefore never been
+validated by it. Two were wrong, and neither is a bug in the work — both are the same
+sequencing hazard, now measured rather than predicted:
+
+| repo | gate | fault | cause |
+|---|---|---|---|
+| `loft-libs-game` @ `main` | `examples` | 13 × `unregistered: @FIX-0NN` | `fixstep` shipped 13 tags + 16 citations; `FIX` is not in `main`'s `scripts/example_repos.tsv` |
+| `loft-libs-game` @ `main` | `examples-index` | `missing: examples-index.tsv` | the repo defines tags and has no index file |
+| `loft-libs-graphics` @ `main` | `examples-index` | `stale` — all five `@GFX-00N` rows off by **+1 line** | PR #26 committed the test file and the index it was generated from in ONE commit, with a line added to `worked-examples.loft` in between |
+
+Both verified against pristine `origin/main` trees (`git archive` into a scratch dir,
+gate run from a detached `origin/main` worktree of loft), and both fixes verified to
+turn the gate green: the six registry rows take `loft-libs-game` from `DRIFT — 13
+action items` to `ok — 13 citation(s) resolve`, and `write-examples-index` takes
+`loft-libs-graphics` from `stale` to `ok — 17 tag(s), all current`. `loft-libs-core`,
+`loft-libs-net` and loft's own `main` are green; `loft-libs-plugins` and
+`loft-libs-assets` are green on `main` (their tags are still on the unmerged branch).
+
+**The merge order is now a HARD constraint, not a preference.** Because the gate also
+fires on `pull_request`, a library PR carrying tags for an unregistered acronym is red
+**in its own PR** and cannot merge. So:
+
+1. **loft first** — the six rows (`FIX` `INP` `TIM` `GLB` `MSH` `PAB`) land on loft
+   `main`. Nothing else can go green until they do.
+2. `loft-libs-graphics` — regenerate `examples-index.tsv` (independent of 1; `GFX` is
+   already registered).
+3. `loft-libs-game` / `-plugins` / `-assets` — the `worked-examples` PRs. game's also
+   supplies the `examples-index.tsv` its `main` is missing.
+
+**What this says about the mechanism.** The opt-in ratchet is what let the rollout
+proceed one package at a time, and it worked exactly as designed — a library with no
+citations stays vacuously green. What it does NOT cover is a library that opted in
+while the gate was still on an unmerged branch: for that window the ratchet was a
+promise, not a check, and the promise was kept by hand. The generalisable rule is in
+LIBRARY_AUTHORING § 2a — *register the acronym in the same pass that writes the first
+tag; if your CI is green and you never touched the registry, that is not evidence* —
+and the second half of it is now earned too: **re-run the gate against every already-
+adopted repo the day it goes live**, because that is the only moment the promises are
+converted into checks.
+
+
 **`loft-libs-graphics` is MERGED AND PUBLISHED — the convention's second complete
 repo, and the first one to reach consumers.** `shapes` (`@SHP-001..003`), `imaging`
 (`@IMG-001..004`) and `graphics` (`@GFX-001..005`) joined `gridmesh`; PRs #26 + #27
@@ -63,7 +108,19 @@ whatever loft its CONSUMERS hold, not the one on the publishing machine — so i
 command is now on the LIBRARY_AUTHORING § 3 pre-release checklist, to be run BEFORE
 tagging rather than discovered after the release PR merges.
 
-**`loft-libs-core` is READY TO PR — the third complete repo, and the one where the
+**`loft-libs-net` and `loft-libs-core` are MERGED AND RELEASED** (net PRs #18–#20;
+core PRs #29–#31, releasing arguments 0.2.1 / cbor 0.1.4 / crypto 0.3.8 / random
+0.3.1 / regex 0.3.0 / zttext 0.1.1). Both carried a follow-up commit worth naming,
+because it is a trap any repo in this rollout walks into: **adding a `description`
+to `loft.toml` makes `loft publish` authoritative and OVERWRITES the registry's
+existing catalogue line.** Three of net's descriptions were replaced by shorter ones
+written during the pass — the publish did not fail, and it was caught only by
+reading the publish diff. The old text knew things the new did not (which crate
+backs the library, `ssh`'s **"Native-only"**), so the fix was to merge the two, not
+revert. The general rule: a package with no `description` field has its catalogue
+text living only in the index, and the first `loft.toml` to declare one wins.
+
+**`loft-libs-core` was the third complete repo, and the one where the
 rollout paid in CI health rather than in bugs.** `@RND-001..003` (random),
 `@RGX-001..004` (regex), `@CBR-001..004` (cbor) and `@ZTX-001..004` (zttext) joined
 `arguments` and `crypto`: 6 tagged, 0 todo on `mac-worked-examples`.
@@ -98,6 +155,141 @@ wire (@CBR-002). `zttext` is the fourth shape, the gridmesh one: an ENGINE, wher
 what needs demonstrating is the shape of a correct call — an edit is a VALUE you
 have to keep, and `insert_text(d, 0, "x", 0);` as a statement compiles, runs and
 throws the document away (@ZTX-001).
+
+**`loft-libs-game` is READY TO PR — the fourth complete repo, and the first whose
+first package adopted the convention BEFORE the rollout arrived.** `fixstep` was
+written with `@FIX-001..013` from the start (a door-per-test file, `01-doors.loft`);
+this pass added `@TIM-001..005` (`time`) and `@INP-001..004` (`input`) on branch
+`worked-examples`, reaching 3 tagged / 0 todo.
+
+**And that early adoption is exactly what surfaced a hole in the mechanism: an
+acronym can carry tags in a library repo while being absent from
+`scripts/example_repos.tsv`, and nothing anywhere says so.** `FIX` was
+unregistered; the gate reports `unregistered` — one of its three hard-drift faults —
+so pointed at that repo it failed 13 times. It has not failed in CI only because
+**this whole plan is still on branch `mac-install-dylib-fix` and not on loft's
+`main`**, and the library-CI examples step comes from `library-ci-reusable.yml@main`.
+That is a merge-ordering constraint, not a detail: the moment this branch lands,
+every acronym already carrying tags in an adopting repo must be in the registry or
+that repo's CI goes red on a file nobody touched. `FIX`, `INP` and `TIM` are
+registered here.
+
+**`input` shipped a ⚠️ PARKED banner to consumers for two months.** Its source and
+its test both opened by declaring the library blocked on loft#248 and gated out of
+the suite by `LIB_PKGS_SKIP`. Both blockers (#248 and #266) were fixed and the skip
+list emptied on 2026-06-04 — and `input 0.2.0` was published after that, tarball and
+all, telling every reader the library does not run. The convention found it the
+ordinary way: writing an example means running the suite, and the suite passed.
+Replaced with what is true plus the one real limit (`input_tick` polls a live GL
+context and is the only function CI cannot reach).
+
+**A committed `loft.lock` made the local gate disagree with the one that decides.**
+`input/loft.lock` pinned `graphics 0.4.2`, which feeds a nullable into `rgba`'s
+non-null parameter — a WARNING, so `LOFT_DENY_WARNINGS=1` failed locally on both its
+test files while CI was green throughout, because CI resolves fresh and got 0.5.5
+where that line reads `?? 0`. The lock did not buy reproducibility, it bought a local
+red that CI hides — the mirror image of the usual failure, and worse, because a
+developer cannot pass a gate the merge button never runs. `-core`, `-net` and
+`-graphics` all already ignore `*/loft.lock`; this repo is the fourth to align, and
+`*/native-auto/` went with it.
+
+What the two new packages owe examples for is the ecosystem's most common shape in
+its purest form: **the type is a bare `integer` or a bare `text` standing for a
+convention.** In `time` a time, a span, a bucket key and a day count are all
+`integer`, so `deadline - 3` moves a reminder three MILLISECONDS while reading like
+three days @TIM-001; `parse`'s null means *not shaped like a date* and never *not a
+real date*, so `"2026-13-45"` answers 2027-02-14 past the documented `!result` check
+while `as DateTime` turns prose into the epoch @TIM-002; `days_between` counts
+MIDNIGHTS CROSSED, so a 26-hour span answers 2 where a 46-hour span answers 1
+@TIM-003; `to_local` shifts the INSTANT and `local_day` answers a bucket KEY that
+formats with a `Z` it does not mean @TIM-004; and an ISO week number is meaningless
+beside `year()`, which invents `2021-W53` and splits a real week in half @TIM-005. In
+`input` a name is a bare `text` that is never declared, so a misspelt action reads
+`false` — what an unpressed one reads — and a misspelt axis reads `0.0`, which is
+also what a centred axis and two cancelling keys read @INP-002; a button argument is
+a mask tested `& != 0`, so `MB_LEFT|MB_RIGHT` means *either* and its `just_pressed`
+MISSES the right button pressed while the left is held @INP-003; the TICK consumes an
+edge rather than the query, so two ticks in one frame hand the press to nobody
+@INP-001; and a rebind inherits the key tables, which is what stops a held key being
+stranded and also fires an edge the player never made @INP-004.
+
+**Four more doc claims wrong in the very functions being documented** — stale-doc-
+per-library is now five for five. `parse` and `combine` both said "null on malformed
+input" when they reject a mis-shaped string and never an impossible date;
+`days_between`'s "whole calendar days" reads as elapsed time when it counts
+boundaries; `seconds_between` had no doc at all and truncates toward zero.
+`input/README.md` was a nine-line stub and is written; `time`'s README carried the
+same `parse` claim.
+
+**`loft-libs-plugins` is READY TO PR — the fifth complete repo, and the smallest:
+one package, four tags.** `pluginabi` (`@PAB-001..004`) owes them because **a frame
+is `vector<u8>` and every payload is `text`**, and the signatures never say that the
+text must be BASE64. `request(OP_APPLY_OP, "hello", "")` is not an error — it is
+silent truncation to `"hell"`, because that prefix is one whole base64 quantum and
+the trailing `o` is an incomplete one, dropped; five characters reach the plugin as
+three bytes, the frame decodes, and `check_request` admits it @PAB-001. Only
+`reply_is_ok` classifies a reply: `reply_out_b64` answers `""` for a failure AND for
+a success carrying an empty payload, `reply_err_code` answers `""` for a success, so
+neither field is a verdict in either direction @PAB-002. `check_request` validates
+the ENVELOPE and `""` is its PASS — it returns the code to reply *with*, so it reads
+backwards from every boolean guard; a known op carrying bytes no plugin could load
+passes, an `arg` sent for an operation that reads none passes, and a REPLY frame
+handed to it comes back `unknown-op` because a reply decodes perfectly and simply
+has no `op` @PAB-003. That last one is recorded as the front door's honest limit
+rather than changed: the error codes are a published closed set, and a host chasing
+version skew when a frame is going the wrong way is a documentation problem, not an
+excuse to break the vocabulary. @PAB-004 TAGS the existing whole-plugin test instead
+of writing a second — what a protocol library owes a reader is not a signature but
+the shape of a whole exchange, and that test already is one.
+
+**`loft-libs-assets` is READY TO PR — the sixth complete repo, and the one where a
+single defect showed itself differently through two doors.** `mesh3d`
+(`@MSH-001..005`) and `glb` (`@GLB-001..004`), 2 tagged / 0 todo.
+
+The pairing is the finding worth keeping. An out-of-range triangle index — the
+easiest mistake to make in an index-addressed mesh builder — reaches `mesh3d`'s
+`mesh_to_floats`, which SKIPS the missing vertex, so the buffer comes out **30
+floats where 36 were meant**: short by one *vertex*, not one triangle, so it no
+longer divides into triangles and every float after the gap is read as part of the
+wrong one @MSH-001. The same mesh through `glb`'s `save_glb` is copied VERBATIM: a
+byte-perfect GLB container carrying index 5 against an accessor that declares three
+vertices @GLB-003. One defect, two exports, two unrelated-looking symptoms, and
+neither door says a word — which is why both examples end by handing the reader the
+same three-line validity check.
+
+The rest of `mesh3d` is the bare-type pattern again, at its purest: a stride that
+travels to the consumer by hand (6 vs 8, both `vector<single>`, and the buffer is
+sized by TRIANGLES so a cube's 24 stored vertices become 36 emitted ones) @MSH-002;
+a face whose direction is claimed TWICE, once by the stored vertex normal and once
+by the winding of `add_quad`, with nothing checking they agree — `plane` reverses
+its corners on purpose, and the natural order gives a geometric normal of -y beside
+a stored +y @MSH-003; `mat4_mul(A, B)` applying B first, so the same rotate and
+translate in the two orders land at (0,0,11) and (10,0,1) @MSH-004; and every
+degenerate input answering ZERO rather than an error, so `mat4_look_at(eye, eye,
+up)` builds a matrix that maps every point to the origin @MSH-005. `glb`'s own
+shape is that **its entire public surface is two functions that return nothing** —
+so the file is the only evidence @GLB-001, `save_glb` drops every non-geometry part
+of a scene @GLB-002, and an empty mesh writes a valid container around a glTF whose
+`"count":0` accessors the format forbids @GLB-004.
+
+**Repo hygiene, twice more.** `glb/tests/light_glb.loft` wrote two `.glb` files and
+never deleted them, unlike every other test in that repo — so the suite left
+artifacts in the working tree on every run, and both were sitting untracked in the
+checkout when the rollout arrived. Fixed, with `*/tests/*.glb` ignored for an
+aborted run. Both `loft-libs-game` and `loft-libs-assets` also gained the
+`.loft/` + `*/native-auto/` + `*/loft.lock` ignores the other four repos already
+had — the rollout keeps finding this because it is the first pass that runs every
+gate in a checkout somebody else set up.
+
+**`loft-libs-world` stays HELD, and the reason is worth stating precisely** because
+"dirty tree" undersells it: the uncommitted change is a **consumer's finding written
+into `hex_edge/README.md`** (from moros#10, 2026-07-28) — that a caller must not come
+to rest exactly at the fraction `sweep_path` returns, because that position is on the
+bisector between two cells and the next call's `hex_at` may round to the far side,
+putting the character through the wall. It ends by asking the library's owner whether
+a `sweep_path_skin` belongs here. That is somebody's work in progress and an open
+design question, not build residue, and creating a rollout branch in that checkout
+would carry it onto the branch. The hold is correct until it lands.
 
 **`imaging` is the row that pays for the whole plan: writing @IMG-002 found a
 silent decode bug that had shipped.** `decode_png` handed the png crate's raw
@@ -308,7 +500,11 @@ broadened** to the distributed monorepos, Phase C indexer ingestion, and the
 `@EHK-001..004` (in-tree libraries), `@ARG-001..004` + `@CRY-001..006`
 (`loft-libs-core`), `@GRM-001..005` + `@SHP-001..003` + `@IMG-001..004` +
 `@GFX-001..005` (`loft-libs-graphics`, complete), `@SRV-001..003` +
-`@WEB-001..003` + `@SSH-001..002` (`loft-libs-net`, complete). **The distributed libraries are this stream's
+`@WEB-001..003` + `@SSH-001..002` (`loft-libs-net`, complete),
+`@FIX-001..013` + `@TIM-001..005` + `@INP-001..004` (`loft-libs-game`,
+complete), `@PAB-001..004` (`loft-libs-plugins`, complete), `@MSH-001..005` +
+`@GLB-001..004` (`loft-libs-assets`, complete). Remaining: `loft-libs-world`
+(held). **The distributed libraries are this stream's
 to roll out** — they are shared code with their own validated contract (each
 `library-ci.yml` + the register's recorded `api`), not a per-agent private tree, so
 loft authors their tags in the canonical monorepo (per `loft-registry/index.json`;
@@ -667,8 +863,21 @@ covers it (no per-library `examples.sh` to wire).
      of 0 means "transparent" or "not there". `imaging` also showed the tier's own
      payoff: asking what an example should ASSERT is what surfaced a shipped
      decoder bug that the library's round-trip suite structurally could not see.
-  4. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
-     is finished; the ratchet only goes up).
+  4. **DONE for `loft-libs-game`** — `time` (`@TIM-001..005`) and `input`
+     (`@INP-001..004`) joined the `fixstep` (`@FIX-001..013`) that arrived already
+     adopted. Tier 4's addition to "gettable wrong while type-checking": the type is
+     a bare `integer` or a bare `text` naming a convention that is never declared —
+     a milliseconds-vs-days unit, a bucket key that is not an instant, an ISO year
+     that is not the calendar one, an action name no compiler ever sees.
+  5. **DONE for `loft-libs-plugins` and `loft-libs-assets`** — `pluginabi`
+     (`@PAB-001..004`), `mesh3d` (`@MSH-001..005`) and `glb` (`@GLB-001..004`).
+     Tier 5's addition: a defect can show itself DIFFERENTLY through two doors of the
+     same ecosystem, so an example belongs on each — one out-of-range vertex index
+     shears a GL buffer through `mesh3d` and writes a byte-perfect but invalid glTF
+     through `glb`, and neither symptom points at the other.
+  6. `hex_terrain`, `hex_world`, in-repo `moros_*` — opportunistic (opt in when a file
+     is finished; the ratchet only goes up), and blocked behind `loft-libs-world`'s
+     hold.
 
   Off the priority list but done, because finishing a REPO is what earns a PR:
   `ssh` (`@SSH-001..002`) and `game_protocol` (**exempt**), which together closed
@@ -723,22 +932,26 @@ a time without reddening a neighbour.
 added mid-rollout adopts later through the same ratchet. Without that, a 14-package
 repo (`loft-libs-world`) is a moving target that never converges.
 
-**Where that leaves the three branches in flight** (`make examples-progress`):
+**Where the ecosystem stands** (`make examples-progress REPO=…`):
 
 | repo | branch | state |
 |---|---|---|
 | `loft-libs-graphics` | *(merged)* | **DONE + PUBLISHED** — 4 tagged, 0 todo; graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1 in the registry |
-| `loft-libs-core` | `mac-worked-examples` | **READY TO PR** — 6 tagged (`arguments`, `cbor`, `crypto`, `random`, `regex`, `zttext`), 0 todo |
-| `loft-libs-net` | `worked-examples` | **READY TO PR** — 3 tagged (`server`, `ssh`, `web`), 1 exempt (`game_protocol`), 0 todo |
+| `loft-libs-net` | *(merged)* | **DONE + PUBLISHED** — 3 tagged, 1 exempt (`game_protocol`), 0 todo |
+| `loft-libs-core` | *(merged)* | **DONE + PUBLISHED** — 6 tagged, 0 todo |
+| `loft-libs-game` | `worked-examples` | **READY TO PR** — 3 tagged (`fixstep`, `input`, `time`), 0 todo; pushed, PR not opened |
+| `loft-libs-plugins` | `worked-examples` | **READY TO PR** — 1 tagged (`pluginabi`), 0 todo; pushed, PR not opened |
+| `loft-libs-assets` | `worked-examples` | **READY TO PR** — 2 tagged (`glb`, `mesh3d`), 0 todo; pushed, PR not opened |
+| `loft-libs-world` | — | TODO — 14 `hex_*` packages; **HELD**: its tree carries a consumer's uncommitted `sweep_path` finding and an open design question for its owner |
 
-`loft-libs-net` is the convention's first complete repo, which is what makes the
+`loft-libs-net` was the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
 handed *this repo has adopted the convention*, with a recorded reason for the one
 package that has nothing to demonstrate. `loft-libs-graphics` is the second, and it
 reached zero TODO without needing the exempt column at all: each of its four
-packages had something a signature could not say. **Opening either PR needs an
-explicit ask** (both branches are pushed and both reports are green; the plan's
-"zero TODO ⇒ open the PR" sets the readiness bar, not the permission).
+packages had something a signature could not say. **Opening a PR needs an explicit
+ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
+permission.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
