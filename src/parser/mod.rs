@@ -367,7 +367,10 @@ pub struct Parser {
     use_paths: std::collections::HashMap<String, String>,
     /// loft#968 — packages already reported as resolved-but-undeclared, so one `use`
     /// speaks once.  Deliberately NOT carried by [`Self::seed_from`]: it is a parse-time
-    /// side map driving a diagnostic the base parse has already emitted.
+    /// side map driving a diagnostic the base parse has already emitted.  Gated with its
+    /// only reader, so a `--no-default-features` build does not carry a field nothing
+    /// there can read.
+    #[cfg(feature = "registry")]
     undeclared_reported: std::collections::HashSet<String>,
     /// Module names already reported as captured by another file (loft#912 / loft#949),
     /// for the same reason and with the same non-travel rule as `undeclared_reported`:
@@ -963,6 +966,7 @@ impl Parser {
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
             use_paths: std::collections::HashMap::new(),
+            #[cfg(feature = "registry")]
             undeclared_reported: std::collections::HashSet::new(),
             module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
@@ -10671,6 +10675,7 @@ impl Parser {
     /// with no `loft.toml` above it (that is the `pip install` story working), and a
     /// package being parsed out of the registry cache — that manifest belongs to someone
     /// else, and its author is the only one who can act on it.
+    #[cfg(feature = "registry")]
     fn undeclared_registry_dep(&mut self, id: &str, cur_script: &str) {
         if std::env::var_os("LOFT_NO_UNDECLARED_DEP").is_some() {
             return;
@@ -10714,6 +10719,11 @@ impl Parser {
             concept_ref: "@F55",
         });
     }
+
+    /// No registry, no registry-resolved package to report (loft#968).
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn undeclared_registry_dep(&mut self, _id: &str, _cur_script: &str) {}
 
     /// Do these two files belong to the same package — the same nearest `loft.toml`?
     ///
@@ -11210,11 +11220,18 @@ impl Parser {
     ///   to the project root, so auto-installs in a project
     ///   context update the project's lockfile rather than cwd's.
     ///
+    /// - `module_name_clash` to tell a module name captured BY the root project from one
+    ///   captured FROM it, which decides the tier (loft#949).
+    ///
     /// Returns `None` for script-mode invocations (no `loft.toml`
     /// anywhere in the parent chain).  Script mode falls back to
     /// cwd's `loft.lock` (existing behaviour) or to the sidecar
     /// (when `loft pin <script>` has been run).
-    #[cfg(feature = "registry")]
+    ///
+    /// Not gated on `registry`, though its first two readers are: it walks up looking for
+    /// a `loft.toml` and asks the network nothing.  Gating it there put a plain path walk
+    /// out of reach of a `--no-default-features` build, which is the shape loft's own wasm
+    /// runtime rlib is compiled in — the same gated-by-association mistake as loft#967.
     fn find_project_root(script_path: &str) -> Option<std::path::PathBuf> {
         let p = std::path::Path::new(script_path);
         if script_path.is_empty() {
