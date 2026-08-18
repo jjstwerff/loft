@@ -1049,7 +1049,106 @@ fn exported_name_at(ptr: *const ()) -> Option<String> {
         .map(str::to_string)
 }
 
-#[cfg(all(feature = "native-extensions", not(unix)))]
+/// The Windows half of [`exported_name_at`] (loft#972).
+///
+/// There is no `dladdr` here, so the module's own PE export table answers instead:
+/// `GetModuleHandleExW(FROM_ADDRESS)` names the module the pointer lives in — and an
+/// `HMODULE` **is** that module's mapped base — then the export directory is walked for
+/// the export whose address equals the pointer.
+///
+/// Without it `--native` and `--interpret` called DIFFERENT functions on Windows: no
+/// remap was ever recorded, so codegen linked the `#native` string literally, which is
+/// the name a library that remaps (published `graphics`, for `save_png`) does NOT
+/// implement.
+///
+/// The loader is asked rather than the registration because the bridge's own identifier
+/// never crosses the ABI — `loft_register_bridges!` passes `(loft symbol, fn pointer)`,
+/// and the name is a macro token. Fixing it there instead would mean an ABI addition and
+/// a republish of every native library before any of them stopped mis-linking.
+///
+/// `UNCHANGED_REFCOUNT`: this only reads the module, so it must not pin it loaded.
+#[cfg(all(feature = "native-extensions", windows))]
+fn exported_name_at(ptr: *const ()) -> Option<String> {
+    const FROM_ADDRESS: u32 = 0x0000_0004;
+    const UNCHANGED_REFCOUNT: u32 = 0x0000_0002;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleExW(
+            flags: u32,
+            module_name: *const u16,
+            module: *mut *mut core::ffi::c_void,
+        ) -> i32;
+    }
+
+    let mut handle: *mut core::ffi::c_void = std::ptr::null_mut();
+    if unsafe {
+        GetModuleHandleExW(
+            FROM_ADDRESS | UNCHANGED_REFCOUNT,
+            ptr.cast::<u16>(),
+            &raw mut handle,
+        )
+    } == 0
+    {
+        return None;
+    }
+    let base = handle.cast::<u8>();
+    if base.is_null() {
+        return None;
+    }
+    // Every read below is an offset from the mapped base, and each is bounded by the
+    // header field that precedes it — a module whose headers do not parse yields `None`
+    // rather than a guess, which is the same answer the pre-loft#907 path gave.
+    let rd32 = |off: usize| -> u32 { unsafe { base.add(off).cast::<u32>().read_unaligned() } };
+    let rd16 = |off: usize| -> u16 { unsafe { base.add(off).cast::<u16>().read_unaligned() } };
+    if rd16(0) != 0x5A4D {
+        return None; // not `MZ` — not a PE image
+    }
+    let pe = rd32(0x3C) as usize;
+    if rd32(pe) != 0x0000_4550 {
+        return None; // not `PE  `
+    }
+    // The export directory's RVA sits at a different offset in PE32 vs PE32+, and the
+    // magic in the optional header is what tells them apart.
+    let opt = pe + 24;
+    let export_rva = match rd16(opt) {
+        0x20B => rd32(opt + 112) as usize, // PE32+
+        0x10B => rd32(opt + 96) as usize,  // PE32
+        _ => return None,
+    };
+    let export_size = match rd16(opt) {
+        0x20B => rd32(opt + 116) as usize,
+        _ => rd32(opt + 100) as usize,
+    };
+    if export_rva == 0 {
+        return None; // the module exports nothing
+    }
+    let names = rd32(export_rva + 32) as usize;
+    let name_count = rd32(export_rva + 24) as usize;
+    let functions = rd32(export_rva + 28) as usize;
+    let ordinals = rd32(export_rva + 36) as usize;
+    for i in 0..name_count {
+        let ordinal = rd16(ordinals + i * 2) as usize;
+        let func_rva = rd32(functions + ordinal * 4) as usize;
+        // An RVA inside the export directory is a FORWARDER string, not code — it names
+        // another module's export and has no address here.
+        if func_rva >= export_rva && func_rva < export_rva + export_size {
+            continue;
+        }
+        if !std::ptr::eq(unsafe { base.add(func_rva) }.cast::<()>().cast_const(), ptr) {
+            continue;
+        }
+        // Exact hit. Mirrors the `dli_saddr == ptr` requirement on unix: a near miss
+        // would hand codegen a `#[link_name]` for a neighbouring function.
+        let name_ptr = unsafe { base.add(rd32(names + i * 4) as usize) };
+        return unsafe { std::ffi::CStr::from_ptr(name_ptr.cast()) }
+            .to_str()
+            .ok()
+            .map(str::to_string);
+    }
+    None
+}
+
+#[cfg(all(feature = "native-extensions", not(unix), not(windows)))]
 fn exported_name_at(_ptr: *const ()) -> Option<String> {
     None
 }
