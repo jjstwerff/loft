@@ -516,8 +516,25 @@ pub fn store_verify(r: reference) -> boolean;
 //
 // You say when, because only the program knows whether a drop is permanent: a
 // collection that shrinks and grows again would just pay to re-grow. Read
-// `store_memory()` first — its `tail%` is exactly what this call returns, and
-// its `inner%` is the space BETWEEN records, which this does not touch.
+// `store_memory()` first, and read it as a RANKING rather than a quantity: its
+// `tail%` says which store is worth reclaiming, and it is NOT the size of the
+// return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator
+// keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the
+// whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13%
+// tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a
+// reading near 11% as nothing to get back, not a little. Its `inner%` is the space
+// BETWEEN records, which this does not touch — though the number RISES after a
+// reclaim, because the capacity it is a percentage of has shrunk.
+//
+// WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent
+// free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was,
+// and that is exactly the part this call can fix: the same 2000 records dropped
+// contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while
+// dropped alternately they leave 1997 blocks standing forever — the live records
+// between them are what keeps them apart — and hand back 16312.
+//
+// Example: @FTR-001
+// Example: @FTR-002
 //
 // You do NOT need this to right-size a file at the END of a run. A bound store
 // keeps its file AS the live arena, and the arena's capacity grows by 7/3 and
