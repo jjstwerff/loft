@@ -2959,10 +2959,15 @@ impl Store {
                 // after this 2-byte field (silent sibling corruption on a null store).
                 *self.addr_mut(rec, fld) = 0u16;
                 true
-            } else if val >= min && val <= min + 65536 {
+            } else if Self::short_fits(min, val) {
                 *self.addr_mut(rec, fld) = (val - min + 1) as u16;
                 true
             } else {
+                // loft#984 — OUT OF RANGE: the DEFAULT (lowest in range), encoded.  The
+                // old bound was off by TWO: this encoding is `val - min + 1` and reserves
+                // raw 0 for null, so `min + 65535` encodes to 0 (reads back as NULL) and
+                // `min + 65536` to 1 (reads back as `min`).
+                *self.addr_mut(rec, fld) = 1u16;
                 false
             }
         } else {
@@ -2993,13 +2998,20 @@ impl Store {
     #[inline]
     pub fn set_i16_raw(&mut self, rec: u32, fld: u32, min: i32, val: i32) -> bool {
         if rec != 0 && self.valid(rec, fld) {
-            let v: u16 = if val == i32::MIN {
-                u16::MAX
+            if val == i32::MIN {
+                *self.addr_mut(rec, fld) = u16::MAX;
+                true
+            } else if Self::short_raw_fits(min, val) {
+                *self.addr_mut(rec, fld) = (val - min) as u16;
+                true
             } else {
-                (val - min) as u16
-            };
-            *self.addr_mut(rec, fld) = v;
-            true
+                // loft#984 — this had NO range check: `(val - min) as u16` is a
+                // TRUNCATING cast, so `70000` into a `limit(0, 65535)` field silently
+                // became `4464`.  Out of range now stores the DEFAULT (lowest in range)
+                // and reports `false` so the caller warns.
+                *self.addr_mut(rec, fld) = 0u16;
+                false
+            }
         } else {
             false
         }
@@ -3033,6 +3045,31 @@ impl Store {
         }
     }
 
+    /// loft#984 — the ONE range predicate per narrow width, read by BOTH the setter
+    /// (which stores the type's default when it fails) and `Stores`' warning wrapper
+    /// (which says so).  Two derivations of "does this fit" is how a field came to be
+    /// stored three different wrong ways — aliased, wrapped, and dropped.
+    ///
+    /// `i32::MIN` is the intentional-null write, never an out-of-range one.
+    #[must_use]
+    pub const fn byte_fits(min: i32, val: i32) -> bool {
+        val == i32::MIN || (val >= min && val <= min + 255)
+    }
+
+    /// See [`byte_fits`](Self::byte_fits).  The `+1` encoding reserves raw 0 for null,
+    /// so the top of the range is `min + 65534`.
+    #[must_use]
+    pub const fn short_fits(min: i32, val: i32) -> bool {
+        val == i32::MIN || (val >= min && val <= min + 65534)
+    }
+
+    /// See [`byte_fits`](Self::byte_fits).  The raw encoding reserves nothing in the
+    /// non-null form, so it spans the whole 2 bytes.
+    #[must_use]
+    pub const fn short_raw_fits(min: i32, val: i32) -> bool {
+        val == i32::MIN || (val >= min && val <= min + 65535)
+    }
+
     #[inline]
     pub fn set_byte(&mut self, rec: u32, fld: u32, min: i32, val: i32) -> bool {
         if rec != 0 && self.valid(rec, fld) {
@@ -3042,10 +3079,17 @@ impl Store {
                 // fields after this one (silent sibling corruption on a null store).
                 *self.addr_mut(rec, fld) = 255u8;
                 true
-            } else if val >= min && val <= min + 256 {
+            } else if Self::byte_fits(min, val) {
                 *self.addr_mut(rec, fld) = (val - min) as u8;
                 true
             } else {
+                // loft#984 — OUT OF RANGE: store the type's DEFAULT, the lowest value in
+                // range, and report `false` so the caller warns.  Never the old two
+                // answers: `min + 256` used to be admitted and stored `256 as u8` = 0,
+                // so it ALIASED onto `min`; anything further out was dropped, leaving
+                // whatever the field held before.  A byte encodes `val - min`, so the
+                // range is `min ..= min + 255` — one value, not 257.
+                *self.addr_mut(rec, fld) = 0u8;
                 false
             }
         } else {

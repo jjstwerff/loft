@@ -516,10 +516,13 @@ fn main() {
 
 // ── Plan-07 phase 4f — float / single div / mod by zero raises ──────────────
 
-/// C80 / E-Uncomp — undefended float div by zero is null-and-continue (NaN is
-/// the float null sentinel), not a dev halt.
+/// C80 / E-Report — an undefended float div by zero REPORTS and continues; it is not a
+/// dev halt.  The VALUE is IEEE (loft#983): NaN is the float null, so `0.0 / 0.0` is null
+/// and `1.0 / 0.0` is `inf`.  This used to expect `null` here while
+/// `f4f_float_div_with_nullable_does_not_raise` below expected `inf` for the SAME
+/// expression — the two answers one operator gave depending on its destination.
 #[test]
-fn f4f_float_div_by_zero_null_continues() {
+fn f4f_float_div_by_zero_reports_and_continues() {
     let source = "\
 fn main() {
   z = 0.0;
@@ -531,11 +534,12 @@ fn main() {
     assert_eq!(
         code,
         Some(0),
-        "null-and-continue exits 0; got code={code:?}"
+        "report-and-continue exits 0; got code={code:?}"
     );
     assert!(
-        stdout.contains("bad=null"),
-        "float div0 yields null (NaN) and continues; got stdout={stdout:?}"
+        stdout.contains("bad=inf"),
+        "`1.0 / 0.0` is IEEE `inf` in EVERY destination — bound, returned or inline \
+         (loft#983); got stdout={stdout:?}"
     );
 }
 
@@ -598,7 +602,7 @@ fn main() {
 
 /// Single-precision div by zero is null-and-continue (C80).
 #[test]
-fn f4f_single_div_by_zero_null_continues() {
+fn f4f_single_div_by_zero_reports_and_continues() {
     let source = "\
 fn main() {
   z = 0.0f;
@@ -609,8 +613,9 @@ fn main() {
     let (stdout, _stderr, code) = run_with_warnings("4f_div_single", source);
     assert_eq!(code, Some(0));
     assert!(
-        stdout.contains("bad=null"),
-        "single div0 yields null and continues; got stdout={stdout:?}"
+        stdout.contains("bad=inf"),
+        "`single` mirrors `float`: IEEE `inf`, reported and continuing (loft#983); \
+         got stdout={stdout:?}"
     );
 }
 

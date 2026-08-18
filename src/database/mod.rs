@@ -1657,13 +1657,33 @@ impl Stores {
     /// diagnostic is added.  `val` is `i32::MIN` for an intentional null.
     pub fn set_byte_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
         self.warn_narrow_sentinel(val, min, 0xFF, pos);
-        self.store_mut(db).set_byte(db.rec, pos, min, val);
+        // loft#984 — a value the field cannot represent takes the type's DEFAULT, and for
+        // a NULLABLE field that default is `null`, not the bottom of the range: absence is
+        // a value this type can hold, and it is the honest one for "this did not fit".
+        // (The non-nullable setter defaults to `min` for the same reason — that is the
+        // only default IT has.)
+        let store = if crate::store::Store::byte_fits(min, val) {
+            val
+        } else {
+            i32::MIN
+        };
+        self.store_mut(db).set_byte(db.rec, pos, min, store);
     }
 
     /// 2-byte twin of [`Self::set_byte_nullable`]: the all-ones code is 65535.
     pub fn set_short_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
         self.warn_narrow_sentinel(val, min, 0xFFFF, pos);
-        self.store_mut(db).set_short(db.rec, pos, min, val);
+        // See [`Self::set_byte_nullable`] — nullable defaults to `null` (loft#984).  The
+        // `+1` encoding reserves raw 0, so `min + 65535` is the value that cannot be
+        // stored here; it read back as null before by COLLIDING with the sentinel, and now
+        // it is written as null deliberately.  Same observable answer, stated rather than
+        // stumbled into — `tests/scripts/389-narrow-runtime-collision.loft` pins it.
+        let store = if crate::store::Store::short_fits(min, val) {
+            val
+        } else {
+            i32::MIN
+        };
+        self.store_mut(db).set_short(db.rec, pos, min, store);
     }
 
     /// Emit the dev-only warning when a non-null `val` encodes onto the all-ones

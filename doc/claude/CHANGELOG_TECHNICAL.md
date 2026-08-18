@@ -74,6 +74,81 @@ Guards: `tests/scripts/980-variant-field-answers-its-own-variant.loft` +
 `tests/variant_field_semantics.rs` (behaviour); `tests/variant_field.rs` keeps the
 diagnostic.
 
+### Float `/0` is IEEE in every destination (loft#983, 2026-08-19)
+
+`1.0 / 0.0` was `inf` inline and `null` once bound, returned, or stored — one operator, two
+ops, and the DESTINATION picked between them: `OpDivFloat` forced `f64::NAN` on a zero
+divisor while the `OpDivFloatNullable` peer did raw IEEE, emitted at "defended" sites.
+
+The model is IEEE with **NaN as the one float null** (`doc/23-safety`: "NaN … is null"), so
+`0.0 / 0.0` is null and `1.0 / 0.0` is `inf`. Three things already said so and now agree:
+
+- `tests/scripts/02-floats.loft` pinned `1.0/0.0 is positive infinity`, `log(0)` as `-inf`
+  "(not null)", and IEEE infinity arithmetic — beside a `runtime_warnings` test demanding
+  the SAME expression be null when undefended. Both were green because the op split made
+  defended ≠ undefended; that is the bug, not a coincidence.
+- float OVERFLOW is the sibling: `1.0e308 * 10.0` is `inf` in every position and always
+  was, though it yields the identical IEEE value. That asymmetry named the defect.
+- `formal/types.md` DN3-Float, which introduced the nullable peers, says in bold that it
+  was a TYPE-level change and *"Runtime is UNCHANGED"*. The forced NaN was a runtime change
+  it had promised not to make.
+
+`??` was self-defeating under the old split: at a `a / b ?? 0.0` site the peer that never
+yields null was chosen, so the idiom every numeric library uses to defend a divide guarded
+nothing (`mesh3d::normalize3` was sound only because a zero-length vector zeroes the
+numerator too, making it a genuine `0.0 / 0.0`).
+
+`OpDiv/RemFloat` + `OpDiv/RemSingle` keep the C80/E-Report Warn on an unguarded zero
+divisor and return the IEEE result. The TYPE is untouched — `/` still types `float?`,
+because `0.0 / 0.0` still yields null — so `(N-Store)` still fires and
+`float_div_var_on_is_nullable` still counts its warning. The `*Nullable` peers are now
+behaviourally identical and are dead weight, a separable cleanup exactly as the integer
+split already is. **`src/fill.rs` is GENERATED** from these `#rust` bodies
+(`cargo test --test issues regen_fill_rs -- --ignored`) — hand-editing it is what
+`fill_rs_up_to_date` exists to catch.
+
+Guard: `tests/scripts/983-float-divide-by-zero-is-one-answer.loft` (every destination ×
+`inf`/NaN/overflow/`%`/`single`). Updated to the model, intent preserved: `runtime_warnings`
+f4f float+single (renamed `…_reports_and_continues`, still exit 0, still warning),
+`nullflow_phase3` float_div_var (still `warns == 1`), `184-i333` (its float cell split into
+an `inf` cell and a `0.0/0.0` null cell), and one golden baseline.
+
+### A limited field stores its default when a value does not fit (loft#984, 2026-08-19)
+
+`integer limit(lo, hi)` stored three different wrong things and reported none: `x.b = 256`
+on `limit(0,255)` ALIASED to `0` (`set_byte` admitted `min + 256`, storing `256 as u8` = 0,
+so the field read back as `min`); `x.b = 260` was DROPPED (the setter returned `false` and
+every caller ignored it, leaving the previous value); and `x.s = 70000` on `limit(0,65535)`
+WRAPPED to `4464` (`set_i16_raw` had NO range check — a truncating `(val - min) as u16`).
+
+Three encodings, three different range bugs, now one rule: a value the field cannot
+represent stores the type's **default** — the lowest value in its range, or **null** where
+the field is nullable, since absence is a value that type can hold and is the honest answer
+for "this did not fit". A slot never holds a value its type cannot represent.
+
+The bounds, each read off the encoding rather than assumed: `set_byte` stores `val - min` in
+a u8, so `min ..= min + 255` (not `+256`); `set_short` stores `val - min + 1` reserving raw
+0 for null, so `min ..= min + 65534` (the old bound was off by TWO); `set_i16_raw` stores
+`val - min` with no sentinel, so `min ..= min + 65535`. Each is now a `Store::*_fits`
+predicate read by BOTH the setter and the nullable wrapper — two derivations of "does this
+fit" is how one field came to be stored three ways.
+
+The width follows the SPAN, not the magnitude (`(L-Narrow)`): `limit(300, 400)` and
+`limit(-200, 0)` are one byte each and round-trip their whole declared range — a check
+written against the magnitude would break them, which is why the guard pins both.
+
+**Still open, and not pinned by the guard:** a value that fits the WIDTH but exceeds the
+declared `hi` (`m.v = 500` on a `limit(300,400)` byte encodes to 200 and reads back as 500).
+The store ops carry `min` but not `hi`, so the check cannot see it; the same gap leaves
+declared-range VARIABLES (`a: integer limit(0,255) = 7; a = 300`) unchecked entirely —
+`is_narrowing_int_store` gates on `forced_size`, which `limit(...)` never sets. Closing both
+wants one range-check op applied to the VALUE at a declared-range store, which reaches
+fields and variables alike.
+
+Guard: `tests/scripts/984-limit-field-out-of-range-defaults.loft`;
+`389-narrow-runtime-collision` pins the nullable half (it was what caught the first draft
+storing `min` where a nullable field owes `null`).
+
 ### A split-ownership return is decided per run (loft#981, loft#982, 2026-08-18)
 
 A heap return carries ONE static answer to *may the caller free this?*, read off the return

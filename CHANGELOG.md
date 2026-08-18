@@ -76,6 +76,40 @@ Related, and fixed with it: adding to a list through something that isn't there 
 doing nothing. Setting a plain field that way was already ignored; adding to a list now is
 too.
 
+### Dividing a float by zero gives one answer everywhere
+
+`1.0 / 0.0` answered two different things depending on where the result went. Written
+straight into a message it was `inf`; assigned to a variable, or handed back from a
+function, it was `null` — the same expression, both backends, nothing said a word. So a
+check that looked unnecessary on one line was load-bearing on the next.
+
+There is one answer now, and it is the one the rest of the language already used: `NaN`
+is the float null, so `0.0 / 0.0` is null, and `1.0 / 0.0` is `inf` — a real value, which
+is why `?? 0.0` does not replace it. That was already true of float *overflow*
+(`1.0e308 * 10.0` has always been `inf` wherever it went), so division now agrees with its
+own sibling. Dividing by zero without a guard still prints its warning and still keeps
+going.
+
+If you were relying on `?? 0.0` to catch a divide by zero, note that it only catches
+`0.0 / 0.0`. Test the divisor (`if d != 0.0`) when any numerator is possible.
+
+### A value that doesn't fit a limited field no longer becomes a different one
+
+For a field declared with a range —
+
+```loft
+struct Pixel { r: integer limit(0, 255) }
+```
+
+— writing something outside it did one of three things, and never said so: `256` came back
+as `0`, `260` left the old value untouched, and on a two-byte field `70000` came back as
+`4464`. A number you never wrote, sitting in a field that looks fine.
+
+Now anything the field cannot hold stores the field's **default** — the lowest value in
+its range, or `null` if the field is nullable. Nothing is wrapped, aliased, or quietly
+dropped. Ranges that don't start at zero are unaffected either way: `limit(300, 400)` and
+`limit(-200, 0)` still pack into a single byte and still hold every value they declare.
+
 ### A function that sometimes hands back what you gave it, and sometimes something new
 
 A helper with two ways out — one returning what it was passed, the other building a fresh

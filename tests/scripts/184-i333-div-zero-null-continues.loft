@@ -24,10 +24,22 @@ fn test_int_mod_zero_is_null() {
   assert(a == null, "undefended int % 0 is null and continues, got {a}");
 }
 
-fn test_float_div_zero_is_null() {
+// The float peer differs from the integer ones above, and the difference is the point:
+// an integer has no representable result for `n / 0`, so it is null.  A float HAS one —
+// IEEE `inf` — and NaN is what loft reserves for the float null (`doc/23-safety`), so
+// `5.0 / 0.0` is a value and `0.0 / 0.0` is the null.  Both report and continue.
+// Until loft#983 the undefended form answered null here while the same expression
+// answered `inf` inline and at any `??` site, which is the split that was fixed.
+fn test_float_div_zero_is_inf() {
   z = 0.0;
   a = 5.0 / z;
-  assert(!a, "undefended float / 0 is null (NaN) and continues, got {a}");
+  assert(a > 1.0e308, "undefended float / 0 is IEEE inf and continues, got {a}");
+}
+
+fn test_float_zero_over_zero_is_null() {
+  z = 0.0;
+  a = z / z;
+  assert(!a, "0.0 / 0.0 is NaN, which IS the float null, and continues, got {a}");
 }
 
 // Arithmetic overflow is uncomputable too: silent null + continue (C80 — silent
