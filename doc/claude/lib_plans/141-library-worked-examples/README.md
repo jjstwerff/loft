@@ -44,7 +44,7 @@ poor one for a *work queue*. The twelve are now **Phase E** below, in the order 
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
 **Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, **17 of 117 entries cited**).
+feature catalogue, `FTR`, **19 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (17 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (19 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -998,7 +998,43 @@ bound float OVERFLOW keeps the infinity, so it is the DIVIDE op's null-producing
 normalises, not the bind. `@FTR-005` asserts only the guarded shapes, so it stays honest
 whichever way #983 is settled.
 
-**Still to do:** the other ~100 features, plus two pairings this slice deliberately did NOT
+**THE FOURTH SLICE (2026-08-18) — F1, F3, F12, and a modifier that is a storage width.**
+`@IMG-004` and `@GFX-003` (graphics/imaging) and `@MSH-002` (mesh3d) were the demonstrators
+already in the tree; `@FTR-006` was authored for the settled half of F12.
+
+**F12 listed five field modifiers as if they were one kind of thing.** Measured:
+
+| modifier | when it is checked |
+|---|---|
+| `const` | compile time — assigning the field is an error |
+| `assert(...)` | RUN time — `field constraint failed on <Type>.<field>` stops the program |
+| `= default` / `computed(...)` | not checks at all: one fills an omitted field, one recomputes on access and stores nothing |
+| `limit(lo, hi)` | **never** — it selects the STORAGE WIDTH (`u8` *is* `integer limit(0, 255)`) |
+| `not null` | **never** — deprecated, no effect |
+
+An out-of-range write to a `limit` field is silently dropped (1-byte), silently wrapped
+(2-byte), or aliased onto `lo` at exactly `lo + 256` — `Store::set_byte` guards
+`val <= min + 256` against a range that holds `min..=min+255`, and discards the `false` it
+returns when the write is refused. Filed **loft#984** (the fix is a design choice: refuse at
+compile time like `u8` does, raise like `assert` does, or store null). `@IMG-004` had
+measured the construction half in a published library first — doubling a bright channel
+stores 0, so brightening turns the brightest pixels black, in a well-formed image with
+nothing on stderr.
+
+**And the oracle fired a second time.** `advice[not-null-deprecated]` reads *"`not null` is
+deprecated and has no effect"* and its fix line is tagged `[struct records · @F12]` — the
+entry it points at listed `not null` as a constraint. Two for two: **where a diagnostic names
+a catalogue entry, read that entry.** It is now the cheapest known way to find a wrong one.
+
+**F1's title promised "in-band sentinels" and its body never said what they are.** Added the
+table (integer's most-negative, NaN, `false` for a boolean, NUL for a character, a one-NUL
+text, record 0, enum 255) with the consequence that a value which IS the sentinel reads as
+absent — `false` being the one that bites. `@GFX-003` is the same shape one level up in a
+shipped library: `get_pixel` answers 0 off the canvas and 0 is a colour the canvas holds.
+**F3 listed `single` in its title and never mentioned it in the body**; cited from `@MSH-002`,
+whose GPU upload buffer is a `vector<single>`.
+
+**Still to do:** the other ~98 features, plus two pairings this slice deliberately did NOT
 make. **F109 `#superseded`** has its real use in a shipped library (four marks in
 `regex`), but no tagged fn CALLS a superseded spelling, so the honest citation needs an
 `@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
