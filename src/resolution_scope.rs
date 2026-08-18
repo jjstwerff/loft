@@ -55,6 +55,27 @@ impl ResolutionScope {
         }
     }
 
+    /// The version this scope's lockfile pins for `pkg`, if it names one.
+    ///
+    /// The declaration in force, read as a value rather than as a resolution: a lock
+    /// entry is an EXACT version, so it answers both "which file do I load" and — when
+    /// that file is not in the cache yet — "which version must be installed". Those were
+    /// two different questions with two different answers before @PLN143: the load
+    /// honoured the pin and the install ignored it, so a fresh box quietly ran a
+    /// different version of the program than the machine that pinned it.
+    ///
+    /// `None` in `Bare` scope (nothing is declared), for a lock that cannot be read, and
+    /// for a lock that does not name `pkg`.
+    #[must_use]
+    pub fn pinned_version(&self, pkg: &str) -> Option<String> {
+        let lock_path = self.governing_lock()?;
+        let lock = crate::lockfile::read_lockfile(&lock_path).ok()??;
+        lock.packages
+            .into_iter()
+            .find(|p| p.name == pkg)
+            .map(|p| p.version)
+    }
+
     /// Where an auto-install may record what it resolved — `None` when it may record
     /// nothing.
     ///
@@ -223,6 +244,45 @@ mod tests {
         assert_eq!(
             resolution_scope(&script.to_string_lossy()).governing_lock(),
             None
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A scope answers what its own lockfile pins — the sidecar for a pinned script, the
+    /// root lock for a package, nothing at all for a bare script.
+    #[test]
+    fn a_scope_answers_the_version_its_lock_pins() {
+        let root = tmp("pinned_version");
+        let lock = |name: &str, version: &str| {
+            format!(
+                "schema_version = 1\n\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\
+                 url = \"http://example.invalid/{name}-{version}.tar.gz\"\n\
+                 sha256 = \"00\"\nsource = \"registry\"\n"
+            )
+        };
+        write(&root.join("pkg/loft.toml"), "[package]\nname = \"p\"\n");
+        write(&root.join("pkg/loft.lock"), &lock("probepkg", "0.4.0"));
+        write(&root.join("pkg/src/s.loft"), "fn main() {}\n");
+        write(&root.join("pinned/s.loft"), "fn main() {}\n");
+        write(&root.join("pinned/s.loft.lock"), &lock("probepkg", "0.1.0"));
+        write(&root.join("bare/s.loft"), "fn main() {}\n");
+
+        let pinned = resolution_scope(&root.join("pinned/s.loft").to_string_lossy());
+        assert_eq!(pinned.pinned_version("probepkg").as_deref(), Some("0.1.0"));
+        assert_eq!(
+            pinned.pinned_version("other"),
+            None,
+            "a lock that does not name the package pins nothing"
+        );
+
+        let package = resolution_scope(&root.join("pkg/src/s.loft").to_string_lossy());
+        assert_eq!(package.pinned_version("probepkg").as_deref(), Some("0.4.0"));
+
+        let bare = resolution_scope(&root.join("bare/s.loft").to_string_lossy());
+        assert_eq!(
+            bare.pinned_version("probepkg"),
+            None,
+            "nothing is declared, so nothing is pinned — the newest release, every run"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

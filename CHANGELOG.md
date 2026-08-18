@@ -44,6 +44,19 @@ Where you DO have a declaration — a `loft.toml` in the project, or a
 `loft install cbor@0.1.2` in a directory that is not a package now writes the small
 `loft.toml` that makes that pin stick, and says so.
 
+### A pinned version is installed, not just loaded
+
+`loft pin my_script.loft` writes the versions that script runs against, and that held as
+long as those versions were already in your package cache. On a machine where they were
+not — a colleague's laptop, a fresh CI runner — the run installed the *newest* release
+instead and said nothing, so the same pinned script ran different code on two boxes. It
+now installs exactly what the pin names. The same applies to a project whose
+`loft.lock` names a version the box has not downloaded yet.
+
+If you have edited `loft.toml` since (say `^0.1` to `^0.2`) and not re-installed, the
+manifest still wins — a lockfile is the resolved form of what the manifest asks for, so
+it cannot outrank it.
+
 ### Your build says once when a pin has fallen behind
 
 A lockfile has no expiry, so a pinned version holds forever — including through a

@@ -41,6 +41,16 @@ What changed behaviourally:
   bare script both parse passes re-decide, so the old line printed twice per run for
   work a warm cache was not doing. The auto-install ANSWER is memoised per run for the
   same reason — two passes must resolve the same file.
+- **The governing lock decides the INSTALL, not only the load.** `lock_path` and
+  `skip_lockfile` are now separate questions — the lock that governs vs. whether this
+  resolution may write it — because reading them as one meant arc C2 (a run writes
+  nothing) also stopped a pinned script's sidecar from being read. A sidecar pinning
+  0.1.0 loaded 0.1.0 when the cache had it and INSTALLED the newest when it did not;
+  the same hole applied to a package whose locked version was not yet extracted.
+  `install::constraint_for` states the rule: an exact pin outranks a range, except a
+  pin the manifest has since excluded, which is a stale lock losing to what it derives
+  from. `install::options_for_use` makes the whole posture of the `use` path one tested
+  fact, and the sidecar now gets `check_against_lockfile`'s re-publish check as well.
 - **Two index reads that trusted unchecked bytes are closed**: `load_index_inner`'s
   `offline` branch now verifies like the other three, and `locked_hashes` takes the
   `skip_lockfile` guard `held_versions` already had.

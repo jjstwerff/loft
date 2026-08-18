@@ -559,6 +559,26 @@ Enumerated first, because this is where the design earns its shape:
    file nothing reads. `loft install` with no argument in such a directory keeps
    refusing; there is nothing to install.
 
+### A pin decides the install, not only the load
+
+The governing lock answers two questions, and they used to have different
+answers: *which file do I load* (it did) and *which version must be installed
+when that file is not in the cache yet* (it did not — the install resolved
+"newest satisfying the manifest", so a fresh box quietly ran a different version
+than the machine that pinned it). A lock entry is an EXACT version, so it is now
+the constraint the install runs under.
+
+The one case where it is not is a pin the manifest has since EXCLUDED — someone
+edited `^0.1` to `^0.2` and has not re-installed. A lockfile is the resolved form
+of the declaration above it, so it cannot outrank the declaration it derives
+from; the manifest wins and the lock is re-resolved.
+
+That split is why `InstallOptions` reads `lock_path` (the lock that GOVERNS) and
+`skip_lockfile` (whether this resolution may write it) as separate questions.
+Reading them as one is what made a pinned script's sidecar decide the load and
+nothing else — and it means the sidecar now gets the re-publish check too, since
+a lockfile pins the bytes as well as the version.
+
 ### The cache fallback is `Bare` scope only
 
 A fallback picks the newest cached version, and only where nothing is declared is
@@ -623,13 +643,11 @@ script on different days can get different versions, and the answer to that is
 - **In a declared scope, an unsatisfiable offline resolve still reports "library
   not found"** rather than naming the constraint it could not satisfy. The
   answer is right; the message is thin.
-- **A pinned SCRIPT whose version is not yet extracted installs the newest
-  release rather than its pin.** A package is covered — `install_one` reads the
-  held version from the project lock it is pointed at — but a sidecar is not
-  read by that path, so on a fresh box `loft pin` reproduces the build only once
-  the cache holds the pinned copy. Predates @PLN143 (the cwd lockfile it used to
-  read was not the sidecar either), and it cannot be tested here: the
-  auto-install path needs a validly signed index, which a test cannot produce.
+- **A transitive dependency is still resolved by the root manifest's range, not
+  by the lock that names it.** A package parsed out of the registry cache is
+  bound by neither lock (the only declaration above it is the cached
+  dependency's own), so a lock entry for a package nothing `use`s directly is a
+  record rather than a constraint.
 
 ---
 

@@ -11276,19 +11276,7 @@ impl Parser {
         // used to be a leg here reading the CWD's `loft.lock` — a file an earlier RUN
         // wrote, in a directory that is not even the program's, deciding which version
         // this run gets.
-        let Some(lock_path) = scope.governing_lock() else {
-            return false;
-        };
-        let lock = match crate::lockfile::read_lockfile(&lock_path) {
-            Ok(Some(l)) => l,
-            _ => return false,
-        };
-        let Some(version) = lock
-            .packages
-            .iter()
-            .find(|p| p.name == id)
-            .map(|p| p.version.clone())
-        else {
+        let Some(version) = scope.pinned_version(id) else {
             return false;
         };
         self.resolve_registry_installed(id, &version, f);
@@ -11380,62 +11368,6 @@ impl Parser {
         if std::env::var("LOFT_NO_AUTO_INSTALL").is_ok() {
             return;
         }
-        // Bootstrap state: the loft binary may not have an embedded
-        // trust root yet (K_tmp → K_real rotation per
-        // PKG_REGISTRY.md / REGISTRY_BOOTSTRAP.md).  Mirror what
-        // `loft install` / `loft search` / `loft info` do — accept
-        // unsigned indexes during the trust-bootstrap window.  Once
-        // the production key is embedded, signed indexes verify
-        // cleanly and this flag becomes a no-op for the happy path.
-        //
-        // Lockfile WRITE path: walk up from the script's directory
-        // looking for `loft.toml`.  Found → project mode — write to
-        // `<project_root>/loft.lock` so the project's manifest +
-        // lockfile stay co-located regardless of where loft was
-        // invoked from.  Not found → script mode — `lock_path: None`
-        // falls back to cwd's `loft.lock` (the existing default).
-        // A transitive dep discovered while parsing an ALREADY-CACHED package
-        // (`~/.loft/registry/<pkg>/src/...`) has no consumer project: the only
-        // `loft.toml` the walk-up finds is the cached dep's own, so writing a
-        // `loft.lock` there would mutate the immutable cache — a harmless stray
-        // file on Unix, but an ENOENT that aborts the whole resolution on Windows
-        // (nightly `moros_glb_cli_end_to_end`).  Install without recording.
-        let in_registry_cache = std::fs::canonicalize(cur_script)
-            .ok()
-            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
-            .is_some_and(|(script, cache)| script.starts_with(&cache));
-        // @PLN143 arc B — the same value that decides which lockfile is READ decides
-        // which one may be WRITTEN, so the two cannot drift apart.  Arc C2: `None` means
-        // RECORD NOTHING, not "fall back to the cwd" — one fact, so a run that may not
-        // declare cannot leave a declaration behind through the other door.
-        let lock_path = scope.lock_write_target(in_registry_cache);
-        let record_nothing = lock_path.is_none();
-        let opts = crate::install::InstallOptions {
-            // @PLN143 arc A — the auto-install path does NOT waive the index
-            // signature.  `loft install` still may (its own CLI default), and that
-            // asymmetry is the point: waiving it is defensible for a verb a person
-            // typed, and not for the path a bare `use` takes on its own.  This
-            // resolution is about to become the DEFAULT rather than a fallback
-            // nobody relies on, and widening the blast radius while leaving the
-            // bootstrap window open must not be two commits in that order.
-            //
-            // The window it used to hold open is closed: the comment this replaces
-            // said the flag "becomes a no-op for the happy path once the production
-            // key is embedded", and `registry_keys::TRUSTED_PUBLIC_KEYS` has carried
-            // four keys since 2026-06-14.  An INVALID signature was already a hard
-            // failure on every path; what this stops accepting is a MISSING or
-            // malformed one.
-            allow_unsigned: false,
-            refresh: false,
-            skip_lockfile: record_nothing,
-            // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
-            // fails fast and deterministically instead of fetching — what a
-            // test-spawned fixture (or an air-gapped box) wants.  Mirrors
-            // the CLI paths (src/main.rs) that already honour it.
-            offline: std::env::var_os("LOFT_OFFLINE").is_some(),
-            allow_prerelease: false,
-            lock_path,
-        };
         // Already decided this run: resolve to the SAME version rather than asking the
         // registry a second time.  Both parse passes walk this path, and a second
         // decision could answer differently — a run whose two passes read two different
@@ -11446,10 +11378,35 @@ impl Parser {
             }
             return;
         }
-        // Honour the root project's declared constraint for `id` (if any), so a
-        // consumer's pin — exact or ranged — wins over "resolve newest", even
-        // when `id` is pulled transitively by a lib that didn't pin it.
-        let pin = self.root_dep_constraint(id);
+        // A transitive dep discovered while parsing an ALREADY-CACHED package
+        // (`~/.loft/registry/<pkg>/src/...`) has no consumer project: the only
+        // `loft.toml` the walk-up finds is the cached dep's own, so recording there
+        // would mutate the immutable cache — a harmless stray file on Unix, but an
+        // ENOENT that aborts the whole resolution on Windows (nightly
+        // `moros_glb_cli_end_to_end`).  Install without recording.
+        let in_registry_cache = std::fs::canonicalize(cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache));
+        // What this path installs UNDER — which lock governs it, which one it may write,
+        // and the signature it never waives — is one tested fact rather than a literal
+        // buried here (@PLN143).
+        let opts = crate::install::options_for_use(
+            scope,
+            in_registry_cache,
+            std::env::var_os("LOFT_OFFLINE").is_some(),
+        );
+        // Honour the declaration in force.  Two of them can be, and they are not the
+        // same kind: the root project's `[dependencies]` range (which also reaches a
+        // transitively-pulled `id` a library never pinned), and the governing lock's
+        // EXACT version — the resolved form of that range.  @PLN143: the lock used to
+        // decide only which file LOADED, so a pinned version that was not extracted yet
+        // was installed as "newest", and a fresh box ran a different program than the
+        // machine that pinned it.
+        let pin = crate::install::constraint_for(
+            scope.pinned_version(id).as_deref(),
+            self.root_dep_constraint(id).as_deref(),
+        );
         match crate::install::auto_install_if_in_catalog(id, pin.as_deref(), &opts) {
             Ok(Some(report)) => {
                 // Resolve `f` straight from the install report's version — no
