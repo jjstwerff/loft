@@ -587,6 +587,11 @@ re-decides every run and cannot be behind. A pinned script is told to
 `loft pin <script>`, a package to `loft install <pkg>`. Off-switch:
 `LOFT_NO_UPGRADE_NOTICE=1`.
 
+It costs one parse of the cached index per run — measured at **10–20 ms** on a
+692 KB index (0.06–0.08 s → 0.08–0.12 s for a one-line script), paid only where a
+lock actually governs a package the program named. That is the honest price of
+the notice; the off-switch is the way out of it.
+
 Trust posture is the read-only one (`loft search` / `loft info`): a missing
 signature is tolerated, an invalid one degrades to silence. Nothing is installed
 from those bytes, and the cure it prints goes through the verifying path — where
@@ -602,7 +607,7 @@ a missing signature is refused (below).
 | Bare script, offline, versions extracted | fails to resolve ❌ | newest loadable cached ✅ |
 | Package / pinned script | its lock governs ✅ | unchanged ✅ |
 | A governing pin behind the registry | silent ❌ | one line, with the cure ✅ |
-| Cost of re-resolving each run (cache warm) | ~10 ms ✅ | ~10 ms, and one index read per run ✅ |
+| Cost of re-resolving each run (cache warm) | ~10 ms ✅ | ~20 ms — 0.07 s pinned vs 0.09 s bare, one index parse per run ✅ |
 
 The trade this makes is not speed — it is that two machines running the same bare
 script on different days can get different versions, and the answer to that is
