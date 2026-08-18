@@ -28,10 +28,13 @@ EHK	loft	https://github.com/loft-lang/loft	main
 DRY	dryopea	https://github.com/jjstwerff/dryopea	main
 CRW	crawler	https://github.com/jjstwerff/crawler	main
 MOR	moros	https://github.com/jjstwerff/moros	main
-# loft-libs-core (arguments, crypto, random, cbor, regex)
+# loft-libs-core (arguments, cbor, crypto, random, regex, zttext)
 ARG	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+CBR	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
 CRY	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+RGX	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
 RND	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+ZTX	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
 # loft-libs-graphics (graphics, gridmesh, shapes, imaging)
 GFX	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
 GRM	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
