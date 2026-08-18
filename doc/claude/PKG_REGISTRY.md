@@ -618,6 +618,13 @@ script on different days can get different versions, and the answer to that is
 - **In a declared scope, an unsatisfiable offline resolve still reports "library
   not found"** rather than naming the constraint it could not satisfy. The
   answer is right; the message is thin.
+- **A pinned SCRIPT whose version is not yet extracted installs the newest
+  release rather than its pin.** A package is covered — `install_one` reads the
+  held version from the project lock it is pointed at — but a sidecar is not
+  read by that path, so on a fresh box `loft pin` reproduces the build only once
+  the cache holds the pinned copy. Predates @PLN143 (the cwd lockfile it used to
+  read was not the sidecar either), and it cannot be tested here: the
+  auto-install path needs a validly signed index, which a test cannot produce.
 
 ---
 

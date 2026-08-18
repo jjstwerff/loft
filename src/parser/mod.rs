@@ -10277,17 +10277,24 @@ impl Parser {
         // follows resolves from the registry, which is a property of the BOX.  So this is
         // the one line where the two can be told apart.
         let mut named_by_the_project = std::path::Path::new(&f).exists();
+        // @PLN143 arc B — the scope is a property of the PROGRAM, so it is answered ONCE,
+        // here, and handed to each probe that needs it.  Re-deriving it inside a probe
+        // would put the old three-sites-must-agree brittleness back with one extra step
+        // between it and the reader.
+        let scope = crate::resolution_scope::resolution_scope(&cur_script);
         // A sidecar pin belongs on the project's side of that line: `loft pin <script>`
         // wrote it FOR this script, so it is a declaration the author made — even though
         // what it resolves to is a package in the registry cache.
-        if matches!(
-            self.probe_governing_lock(id, &mut f),
-            Some(crate::resolution_scope::ResolutionScope::PinnedScript(_))
-        ) {
+        if self.probe_governing_lock(id, &mut f, &cur_script, &scope)
+            && matches!(
+                scope,
+                crate::resolution_scope::ResolutionScope::PinnedScript(_)
+            )
+        {
             named_by_the_project = true;
         }
-        self.probe_auto_install(id, &mut f);
-        self.probe_cache_newest(id, &mut f);
+        self.probe_auto_install(id, &mut f, &cur_script, &scope);
+        self.probe_cache_newest(id, &mut f, &scope);
         if !named_by_the_project && std::path::Path::new(&f).exists() {
             self.undeclared_registry_dep(id, &cur_script);
         }
@@ -11251,34 +11258,45 @@ impl Parser {
     /// errors.  The cwd leg is the one that made the same script resolve two ways from
     /// two directories.
     ///
-    /// Answers the scope that resolved it — the caller needs to tell a version the AUTHOR
-    /// declared (a sidecar pin) from one the box merely happens to hold (loft#968).
+    /// Answers whether THIS probe resolved `id` — the caller needs to tell a version the
+    /// AUTHOR declared (a sidecar pin) from one the box merely happens to hold
+    /// (loft#968), and pairs that answer with the scope it already holds.
     #[cfg(feature = "registry")]
     fn probe_governing_lock(
         &mut self,
         id: &str,
         f: &mut String,
-    ) -> Option<crate::resolution_scope::ResolutionScope> {
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) -> bool {
         if std::path::Path::new(f).exists() {
-            return None;
+            return false;
         }
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        let scope = crate::resolution_scope::resolution_scope(&cur_script);
         // `None` is `Bare` scope: nothing is declared, so nothing pins this run.  There
         // used to be a leg here reading the CWD's `loft.lock` — a file an earlier RUN
         // wrote, in a directory that is not even the program's, deciding which version
         // this run gets.
-        let lock_path = scope.governing_lock()?;
+        let Some(lock_path) = scope.governing_lock() else {
+            return false;
+        };
         let lock = match crate::lockfile::read_lockfile(&lock_path) {
             Ok(Some(l)) => l,
-            _ => return None,
+            _ => return false,
         };
-        let version = lock.packages.iter().find(|p| p.name == id)?.version.clone();
+        let Some(version) = lock
+            .packages
+            .iter()
+            .find(|p| p.name == id)
+            .map(|p| p.version.clone())
+        else {
+            return false;
+        };
         self.resolve_registry_installed(id, &version, f);
         if std::path::Path::new(f).exists() {
-            self.pin_behind_notice(id, &version, &cur_script, &scope);
+            self.pin_behind_notice(id, &version, cur_script, scope);
+            return true;
         }
-        std::path::Path::new(f).exists().then_some(scope)
+        false
     }
 
     /// No-op when the registry feature is off — a lockfile pins a REGISTRY version, and
@@ -11289,8 +11307,10 @@ impl Parser {
         &mut self,
         _id: &str,
         _f: &mut String,
-    ) -> Option<crate::resolution_scope::ResolutionScope> {
-        None
+        _cur_script: &str,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) -> bool {
+        false
     }
 
     /// Point `f` at an installed registry package's extracted source, given the
@@ -11343,7 +11363,13 @@ impl Parser {
     /// "Downloading…" output); steady-state (cache hit, resolved by
     /// `probe_governing_lock`) is silent.
     #[cfg(feature = "registry")]
-    fn probe_auto_install(&mut self, id: &str, f: &mut String) {
+    fn probe_auto_install(
+        &mut self,
+        id: &str,
+        f: &mut String,
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
         if std::path::Path::new(f).exists() {
             return;
         }
@@ -11368,23 +11394,21 @@ impl Parser {
         // lockfile stay co-located regardless of where loft was
         // invoked from.  Not found → script mode — `lock_path: None`
         // falls back to cwd's `loft.lock` (the existing default).
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
         // A transitive dep discovered while parsing an ALREADY-CACHED package
         // (`~/.loft/registry/<pkg>/src/...`) has no consumer project: the only
         // `loft.toml` the walk-up finds is the cached dep's own, so writing a
         // `loft.lock` there would mutate the immutable cache — a harmless stray
         // file on Unix, but an ENOENT that aborts the whole resolution on Windows
         // (nightly `moros_glb_cli_end_to_end`).  Install without recording.
-        let in_registry_cache = std::fs::canonicalize(&cur_script)
+        let in_registry_cache = std::fs::canonicalize(cur_script)
             .ok()
             .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
             .is_some_and(|(script, cache)| script.starts_with(&cache));
-        // @PLN143 arc B — the same function that decides which lockfile is READ decides
+        // @PLN143 arc B — the same value that decides which lockfile is READ decides
         // which one may be WRITTEN, so the two cannot drift apart.  Arc C2: `None` means
         // RECORD NOTHING, not "fall back to the cwd" — one fact, so a run that may not
         // declare cannot leave a declaration behind through the other door.
-        let lock_path = crate::resolution_scope::resolution_scope(&cur_script)
-            .lock_write_target(in_registry_cache);
+        let lock_path = scope.lock_write_target(in_registry_cache);
         let record_nothing = lock_path.is_none();
         let opts = crate::install::InstallOptions {
             // @PLN143 arc A — the auto-install path does NOT waive the index
@@ -11446,7 +11470,7 @@ impl Parser {
                 self.auto_installed.insert(id.to_string(), resolved);
                 // Fallback for a normal (non-cache) install that DID write a lockfile:
                 // read back the lock this run just recorded the new entry in.
-                let _ = self.probe_governing_lock(id, f);
+                self.probe_governing_lock(id, f, cur_script, scope);
             }
             Ok(None) => {
                 // `id` is not a registry package; let the remaining
@@ -11469,7 +11493,14 @@ impl Parser {
     /// No-op when registry feature is off.
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
-    fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
+    fn probe_auto_install(
+        &mut self,
+        _id: &str,
+        _f: &mut String,
+        _cur_script: &str,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+    }
 
     /// @PLN143 arc E — say once when the declaration in force has fallen behind.
     ///
@@ -11559,14 +11590,16 @@ impl Parser {
     /// Runs after `probe_auto_install`, so an online run still resolves the newest
     /// RELEASE; the cache only answers when the registry could not.
     #[cfg(feature = "registry")]
-    fn probe_cache_newest(&mut self, id: &str, f: &mut String) {
+    fn probe_cache_newest(
+        &mut self,
+        id: &str,
+        f: &mut String,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
         if std::path::Path::new(f).exists() {
             return;
         }
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        if crate::resolution_scope::resolution_scope(&cur_script)
-            != crate::resolution_scope::ResolutionScope::Bare
-        {
+        if *scope != crate::resolution_scope::ResolutionScope::Bare {
             return;
         }
         let Some((version, _)) = crate::registry_index::newest_cached_loadable(id) else {
@@ -11579,7 +11612,13 @@ impl Parser {
     /// to.
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
-    fn probe_cache_newest(&mut self, _id: &str, _f: &mut String) {}
+    fn probe_cache_newest(
+        &mut self,
+        _id: &str,
+        _f: &mut String,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+    }
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {
