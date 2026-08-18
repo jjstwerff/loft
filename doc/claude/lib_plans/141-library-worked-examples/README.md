@@ -1452,6 +1452,25 @@ landed in a *different* test from the one that caused it, which is how a five-mi
 an hour. Both `tmp()` helpers in this package now clear the path before naming it. **A test's
 cleanup running only on the success path is not cleanup.**
 
+**And the row's seventh finding was upstream.** Both `stencil_rotate` and `stencil_mirror`
+opened with `if !seen { return st; }` — a stencil with no occupied cells has no bounding box to
+fit, so it came back unturned. That path is essentially never taken, and it leaked a `Stencil`
+**on every call**: 2000 rotations plus 2000 reflections left 4000 stores unfreed, in a published
+library, in the operation an editor performs constantly. The cause is a loft ownership seam — a
+function whose return paths disagree about ownership (the by-value parameter on one, a freshly
+built value on the other) never frees the fresh one, both backends — filed as **loft#982** with a
+twelve-row boundary matrix and a verified clean workaround, and the same seam as loft#978 in the
+opposite direction (that one over-frees a view; this one under-frees a fresh value). The library
+took the workaround: a zero-turn copy for the rotation, a `flip` flag for the reflection, measured
+at 4000 stores before and zero after.
+
+**Why it took a worked-example pass to see a leak that had been there all along:** `loft test`
+runs the store-leak check only under `--interpret`, and it reports at PROGRAM exit — which a test
+suite never reaches with a stencil still live. The leak was visible only from a standalone probe,
+and the reason to write one was that @HXL-007 needed `edgeset_equal` over a rotated stencil, which
+is what put a rotation in a loop in the first place. **The tag did not find the leak; wanting to
+assert the tag did.**
+
 **A harness note, from this row's own non-vacuity pass.** The first run of the
 restore-the-pre-fix-code channel reported *no failures for all six reverts* — because the loop was
 missing the line that applied the revert. An empty result set read as "nothing broke". The pass was
