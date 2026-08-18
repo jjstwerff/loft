@@ -360,6 +360,13 @@ fn load_index_inner(
                 idx_path.display()
             )
         })?;
+        // @PLN143 — verify here too.  This was the one branch of the four that read the
+        // cached index and trusted it unchecked, which put the whole signature gate
+        // behind a single environment variable: `LOFT_OFFLINE=1` and the bytes are
+        // whatever is on disk.  The cache is where a rejected fetch used to linger (see
+        // the fetch branch below), so it is not a place trust can be assumed.
+        let sig = std::fs::read(&sig_path).unwrap_or_default();
+        verify_or_explain(&content, &sig, opts)?;
         (content, false)
     } else if opts.refresh || index_stale(&idx_path) {
         match registry_index::fetch_index(&url) {

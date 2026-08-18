@@ -10265,6 +10265,7 @@ impl Parser {
             named_by_the_project = true;
         }
         self.probe_auto_install(id, &mut f);
+        self.probe_cache_newest(id, &mut f);
         if !named_by_the_project && std::path::Path::new(&f).exists() {
             self.undeclared_registry_dep(id, &cur_script);
         }
@@ -11430,6 +11431,46 @@ impl Parser {
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
     fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
+
+    /// @PLN143 arc C1 — a bare script falls back to the newest version already in the
+    /// cache.
+    ///
+    /// The failure path this exists for: offline (or a registry that cannot be reached),
+    /// a bare script, and the package sitting right there under `~/.loft/registry/`.
+    /// That answered *"Library 'x' not found — searched lib/, lib_dirs, and sibling
+    /// packages"* in a directory holding five extracted copies of it, which is the least
+    /// true message available.
+    ///
+    /// **`Bare` scope only, and that is the whole rule**: a fallback picks the newest
+    /// cached version, and only where nothing is declared is there no constraint it could
+    /// be violating. A package's manifest may say `^0.1`, and a pinned script names an
+    /// exact version — honouring the declaration is the point of having one, so a scope
+    /// that HAS one fails instead, and says what it could not satisfy.
+    ///
+    /// Runs after `probe_auto_install`, so an online run still resolves the newest
+    /// RELEASE; the cache only answers when the registry could not.
+    #[cfg(feature = "registry")]
+    fn probe_cache_newest(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        if crate::resolution_scope::resolution_scope(&cur_script)
+            != crate::resolution_scope::ResolutionScope::Bare
+        {
+            return;
+        }
+        let Some((version, _)) = crate::registry_index::newest_cached_loadable(id) else {
+            return;
+        };
+        self.resolve_registry_installed(id, &version, f);
+    }
+
+    /// No-op when the registry feature is off — there is no registry cache to fall back
+    /// to.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_cache_newest(&mut self, _id: &str, _f: &mut String) {}
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {

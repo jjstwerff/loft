@@ -55,7 +55,17 @@ fn fake_registry(tag: &str, sig: Option<&str>) -> PathBuf {
 
 /// Run `script` from `dir` against a private registry cache.
 fn run_in(home: &Path, dir: &Path, script: &str) -> String {
-    let out = Command::new(loft_bin())
+    run_env(home, dir, script, &[])
+}
+
+/// [`run_in`] plus `env` — `LOFT_OFFLINE=1` for the cells that must resolve with no
+/// registry at all.
+fn run_env(home: &Path, dir: &Path, script: &str, env: &[(&str, &str)]) -> String {
+    let mut cmd = Command::new(loft_bin());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd
         .args(["--interpret", script])
         .env("LOFT_HOME", home)
         .env("HOME", home)
@@ -137,5 +147,157 @@ fn arc_a_a_signed_index_gets_past_the_signature_gate() {
     assert!(
         !all.contains("resolved"),
         "the fixture's package cannot be downloaded, so nothing should resolve:\n{all}"
+    );
+}
+
+// ── arc C1: a bare script falls back to the newest version already cached ──────────
+
+/// A private `~/.loft` with no index at all — the cells below resolve from the extracted
+/// cache, which is what a bare script has to fall back on when the registry cannot be
+/// reached.
+fn empty_home(tag: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("loft_pln143_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".loft/registry")).expect("mkdir");
+    home
+}
+
+/// Extract a package into `home`'s cache by hand — exactly the shape `install_one`
+/// leaves behind. Its `probe_id()` answers `<name>-<version>`, so the RESOLVED VERSION is
+/// the value the script prints: a cell cannot pass by resolving the wrong copy.
+fn cache_pkg(home: &Path, name: &str, version: &str, loft_req: &str) {
+    let dir = home
+        .join(".loft/registry")
+        .join(format!("{name}-{version}"));
+    write(
+        &dir.join("loft.toml"),
+        &format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nloft = \"{loft_req}\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\n"
+        ),
+    );
+    write(
+        &dir.join("src").join(format!("{name}.loft")),
+        &format!("pub fn probe_id() -> text {{ return \"{name}-{version}\"; }}\n"),
+    );
+}
+
+/// A bare script that prints which version of `probepkg` it resolved.
+fn probe_script(dir: &Path) {
+    write(
+        &dir.join("s.loft"),
+        "use probepkg;\nfn main() { println(probe_id()); }\n",
+    );
+}
+
+/// @PLN143 arc C1 — offline, bare script, package already in the cache.
+///
+/// This answered *"Library 'probepkg' not found — searched lib/, lib_dirs, and sibling
+/// packages"* in a directory holding two extracted copies of it: the least true message
+/// available. The stray cwd `loft.lock` a first run wrote is what covered this case
+/// before, which is why the fallback has to land WITH the deletion of that leg and not
+/// after it.
+#[test]
+fn arc_c1_offline_resolves_the_newest_cached_version() {
+    let home = empty_home("c1_newest");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let dir = home.join("proj");
+    probe_script(&dir);
+    let all = run_env(&home, &dir, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.2.0"),
+        "the newest cached copy must resolve — 0.1.0 or a failure means the fallback \
+         did not fire (@PLN143 arc C1):\n{all}"
+    );
+}
+
+/// The two ways "newest" can be got wrong, in one cell because they compose: `0.10.0` is
+/// newer than `0.2.0` only under semver (string order says the opposite), and a
+/// prerelease is not a release — `find_best_version` skips one unless asked, and a
+/// fallback is not the place to opt someone in.
+#[test]
+fn arc_c1_newest_is_semver_and_skips_a_prerelease() {
+    let home = empty_home("c1_semver");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.10.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.11.0-beta.1", ">=0.8");
+    let dir = home.join("proj");
+    probe_script(&dir);
+    let all = run_env(&home, &dir, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.10.0"),
+        "0.10.0 is the newest RELEASE: lexicographic order would pick 0.2.0, and taking \
+         the beta would install a prerelease nobody asked for:\n{all}"
+    );
+}
+
+/// A cached copy this loft cannot load must not hide the older one that it can.
+///
+/// The loader rejects an unsatisfied `loft` requirement FATALLY, so picking the newest
+/// directory and letting the load decide would turn a working fallback into a hard error
+/// — the filter therefore asks the same `manifest::check_version` the loader asks, before
+/// choosing.
+#[test]
+fn arc_c1_a_version_this_loft_cannot_load_is_skipped() {
+    let home = empty_home("c1_floor");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.3.0", ">=9999");
+    let dir = home.join("proj");
+    probe_script(&dir);
+    let all = run_env(&home, &dir, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.2.0"),
+        "0.3.0 requires loft >=9999, so the newest LOADABLE copy is 0.2.0:\n{all}"
+    );
+    assert!(
+        !all.contains("requires loft"),
+        "and it is skipped silently — reaching the loader's fatal means the filter ran \
+         too late:\n{all}"
+    );
+}
+
+/// The boundary, and the whole rule: the fallback fires only where NOTHING is declared.
+///
+/// A package's manifest may say `^0.1` and a pinned script names an exact version;
+/// picking "the newest cached" there would answer past a declaration whose entire purpose
+/// is to be honoured. So a scope that HAS one fails instead — the same answer as before
+/// this arc.
+#[test]
+fn arc_c1_a_declared_scope_does_not_take_the_newest_cached() {
+    let home = empty_home("c1_boundary");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let pkg = home.join("proj");
+    write(
+        &pkg.join("loft.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[dependencies]\nprobepkg = \"^0.1\"\n",
+    );
+    // A lockfile that resolves nothing for `probepkg`: the declaration is in force and
+    // unsatisfied, which is exactly the case that must not fall back.
+    write(&pkg.join("loft.lock"), "schema_version = 1\n");
+    probe_script(&pkg.join("src"));
+    let all = run_env(&home, &pkg, "src/s.loft", &[("LOFT_OFFLINE", "1")]);
+    // The control that keeps this cell from passing on a broken fixture: the SAME cache
+    // and the SAME script, one directory over with nothing declared, must resolve.
+    let bare = home.join("bare");
+    probe_script(&bare);
+    let bare_out = run_env(&home, &bare, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        bare_out.contains("probepkg-0.2.0"),
+        "control: the cached copy IS resolvable, so a miss above would be about the \
+         scope and not about the fixture:\n{bare_out}"
+    );
+    assert!(
+        !all.contains("probepkg-0.2.0"),
+        "a package scope declares its own constraint — the cache fallback must not \
+         answer past it:\n{all}"
     );
 }
