@@ -41,6 +41,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     var_bool,
     put_bool,
     not,
+    range_default,
     const_int,
     const_short,
     const_tiny,
@@ -403,6 +404,27 @@ fn put_bool(s: &mut State) {
 fn not(s: &mut State) {
     let v_v1 = *s.get_stack::<u8>();
     let new_value = v_v1 != 1;
+    s.put_stack(new_value);
+}
+
+fn range_default(s: &mut State) {
+    let v_lo = s.code::<i64>();
+    let v_hi = s.code::<i64>();
+    let v_dflt = s.code::<i64>();
+    let v_val = *s.get_stack::<i64>();
+    let new_value = {
+        let _rv = v_val;
+        if _rv == i64::MIN || (_rv >= v_lo && _rv <= v_hi) {
+            _rv
+        } else {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {
+                value: _rv,
+                lo: v_lo,
+                hi: v_hi,
+            });
+            v_dflt
+        }
+    };
     s.put_stack(new_value);
 }
 

@@ -324,7 +324,8 @@ impl Logger {
             | Rk::NullDereference
             | Rk::NarrowCastOverflow { .. }
             | Rk::ShiftOutOfRange
-            | Rk::CastOutOfRange => Severity::Warn,
+            | Rk::CastOutOfRange
+            | Rk::RangeDefaulted { .. } => Severity::Warn,
         };
         let label = kind.label();
         let detail = kind.describe();

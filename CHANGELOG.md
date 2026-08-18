@@ -105,10 +105,22 @@ struct Pixel { r: integer limit(0, 255) }
 as `0`, `260` left the old value untouched, and on a two-byte field `70000` came back as
 `4464`. A number you never wrote, sitting in a field that looks fine.
 
-Now anything the field cannot hold stores the field's **default** — the lowest value in
-its range, or `null` if the field is nullable. Nothing is wrapped, aliased, or quietly
-dropped. Ranges that don't start at zero are unaffected either way: `limit(300, 400)` and
-`limit(-200, 0)` still pack into a single byte and still hold every value they declare.
+Now anything outside the declared range stores the field's **default** — the lowest value
+in that range, or `null` if it is nullable. Nothing is wrapped, aliased, or quietly
+dropped, and you get a warning saying so. Ranges that don't start at zero work the same:
+`limit(300, 400)` and `limit(-200, 0)` still pack into a single byte, still hold every
+value they declare, and now refuse the ones they don't — `500` into a `limit(300, 400)`
+gives you `300`, not `500`.
+
+The same is true of a **variable**, which used to ignore its range entirely:
+
+```loft
+count: integer limit(10, 20) = 12;
+count = 99;   // 10 — the bottom of its range, and a warning
+```
+
+In-range code is untouched and costs nothing: the check is only emitted where the value
+might actually fall outside.
 
 ### A function that sometimes hands back what you gave it, and sometimes something new
 

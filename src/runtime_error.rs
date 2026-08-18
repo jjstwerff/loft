@@ -93,6 +93,13 @@ pub enum RuntimeErrorKind {
     /// (@PLN102 D-op-null-2). Yields null and continues (like `÷0`), loudly
     /// rather than silently saturating or nulling a real value.
     CastOutOfRange,
+    /// loft#984 — a write left the DECLARED range of a range-limited slot
+    /// (`integer limit(lo, hi)`, a narrow width), so the slot took its type's
+    /// DEFAULT instead: the lowest value in range, or null where the type admits
+    /// it.  Reported rather than silent, because the value the program computed is
+    /// not the value the slot now holds — but recoverable, like every other
+    /// uncomputable: one value degrades and the run continues (C80).
+    RangeDefaulted { value: i64, lo: i64, hi: i64 },
     /// Recursion exceeded `State::MAX_CALL_DEPTH`.
     StackOverflow,
     /// `panic("msg")` builtin called from loft code.
@@ -114,6 +121,7 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::NarrowCastOverflow { .. } => "narrow_cast_overflow",
             RuntimeErrorKind::ShiftOutOfRange => "shift_out_of_range",
             RuntimeErrorKind::CastOutOfRange => "cast_out_of_range",
+            RuntimeErrorKind::RangeDefaulted { .. } => "range_defaulted",
             RuntimeErrorKind::StackOverflow => "stack_overflow",
             RuntimeErrorKind::UserPanic { .. } => "user_panic",
             RuntimeErrorKind::AssertionFailed { .. } => "assertion_failed",
@@ -135,6 +143,12 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::NullDereference => "null dereference".to_string(),
             RuntimeErrorKind::NarrowCastOverflow { value, target } => {
                 format!("value {value} overflows target type {target}")
+            }
+            RuntimeErrorKind::RangeDefaulted { value, lo, hi } => {
+                format!(
+                    "value {value} is outside the declared range {lo}..={hi}, so the slot \
+                     took its default instead"
+                )
             }
             RuntimeErrorKind::ShiftOutOfRange => {
                 "shift amount out of range [0,64) or result is the reserved null value".to_string()
@@ -299,6 +313,11 @@ mod tests {
             RuntimeErrorKind::NarrowCastOverflow {
                 value: 99_999,
                 target: "i8",
+            },
+            RuntimeErrorKind::RangeDefaulted {
+                value: 300,
+                lo: 0,
+                hi: 255,
             },
             RuntimeErrorKind::StackOverflow,
             RuntimeErrorKind::UserPanic {

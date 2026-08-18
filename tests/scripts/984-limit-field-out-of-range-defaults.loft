@@ -23,11 +23,17 @@
 // whole declared range, and that is what the middle section pins — a range check written
 // against the magnitude instead of the span would break them.
 //
-// NOT yet enforced, deliberately absent from this guard rather than pinned: a value that
-// fits the WIDTH but exceeds the declared `hi` (`m.v = 500` on a `limit(300, 400)` byte,
-// which encodes to 200 and reads back as 500). The store op carries `min` but not the
-// declared `hi`, so the check cannot see it yet; the same gap leaves declared-range
-// VARIABLES unchecked entirely.
+// Two layers, because one cannot see what the other does. The STORE knows the field's
+// width and nothing else, so it catches what the width cannot represent. The DECLARED
+// range lives in the type, so `OpRangeDefault` guards the VALUE on its way in — which is
+// what reaches a value that fits the width but exceeds `hi` (`m.v = 500` on a
+// `limit(300, 400)` byte encodes to 200 and used to read back as 500), and what reaches
+// VARIABLES at all: a local has no store op to carry a range, which is why a declared
+// range on one went unenforced entirely.
+//
+// The guard is emitted only where the value is not PROVABLY in range, so in-range code
+// pays nothing; and only for the `limit(...)` spelling, since a narrow alias (`u8`, `i16`)
+// is already refused at compile time and does not want a silent default on top.
 
 struct L984 {
   b: integer limit(0, 255),
@@ -99,6 +105,52 @@ fn main() {
   n = Null984 { x: 200, z: to_u16_984(65535) };
   assert(n.x == 200, "a nullable byte still round-trips an ordinary value: {n.x}");
   assert(n.z == null, "a value a nullable field cannot represent becomes null: {n.z}");
+
+  // ── The DECLARED range, not just what the width can hold ─────────────────────────
+  // 500 into a limit(300, 400) byte encodes to 200 and fits — the store layer cannot see
+  // that it is out of range, so the value is guarded on its way in instead.
+  sp.hi = 350;
+  sp.hi = 500;
+  assert(sp.hi == 300, "above the declared hi takes the default: {sp.hi}");
+  sp.lo = -100;
+  sp.lo = 5;
+  assert(sp.lo == -200, "above a negative range's hi takes its lo: {sp.lo}");
+
+  // A value the compiler cannot see through — not a literal — takes the same route.
+  runtime984 = 777;
+  sp.hi = 350;
+  sp.hi = runtime984;
+  assert(sp.hi == 300, "a runtime value out of range takes the default: {sp.hi}");
+
+  // The CONSTRUCTOR path, which the assignment seam does not reach.
+  ctor = Span984 { hi: 500, lo: 5 };
+  assert(ctor.hi == 300, "a struct literal's out-of-range field defaults: {ctor.hi}");
+  assert(ctor.lo == -200, "both of them: {ctor.lo}");
+
+  // ── VARIABLES, which had no enforcement of any kind ───────────────────────────────
+  v984: integer limit(0, 255) = 7;
+  v984 = 256;
+  assert(v984 == 0, "a variable's declared range is enforced: {v984}");
+  v984 = 300;
+  assert(v984 == 0, "further out too: {v984}");
+  v984 = -1;
+  assert(v984 == 0, "and below: {v984}");
+  v984 = 200;
+  assert(v984 == 200, "while an in-range value is untouched: {v984}");
+
+  // The default is the LOWEST VALUE IN RANGE, which is not the same as zero.
+  w984: integer limit(10, 20) = 12;
+  w984 = 99;
+  assert(w984 == 10, "the default is the range's low end, not 0: {w984}");
+  w984 = 15;
+  assert(w984 == 15, "in range, untouched: {w984}");
+
+  // A nullable target takes NULL rather than the low end — absence is a value it holds.
+  n984: integer limit(0, 255)? = 7;
+  n984 = 300;
+  assert(n984 == null, "a nullable slot defaults to null, not to `lo`: {n984}");
+  n984 = 42;
+  assert(n984 == 42, "in range, untouched: {n984}");
 
   print("984 limit field OK\n");
 }

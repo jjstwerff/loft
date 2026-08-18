@@ -3536,6 +3536,14 @@ impl Parser {
                 "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
             );
         }
+        // loft#984 — a value meeting a slot that DECLARES a range is guarded here, which
+        // is what reaches the shapes the assignment seam does not: a struct LITERAL's
+        // field, a call ARGUMENT, a return.  An explicit `as` is excluded — a cast has its
+        // own answer for a value that does not fit (`400 as u8` is null), and folding the
+        // default in would silently change it.
+        if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
+            self.guard_declared_range(code, should, is_type);
+        }
         if is_type.is_equal(should) {
             return true;
         }

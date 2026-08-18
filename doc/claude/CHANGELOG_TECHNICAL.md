@@ -137,13 +137,37 @@ The width follows the SPAN, not the magnitude (`(L-Narrow)`): `limit(300, 400)` 
 `limit(-200, 0)` are one byte each and round-trip their whole declared range — a check
 written against the magnitude would break them, which is why the guard pins both.
 
-**Still open, and not pinned by the guard:** a value that fits the WIDTH but exceeds the
-declared `hi` (`m.v = 500` on a `limit(300,400)` byte encodes to 200 and reads back as 500).
-The store ops carry `min` but not `hi`, so the check cannot see it; the same gap leaves
-declared-range VARIABLES (`a: integer limit(0,255) = 7; a = 300`) unchecked entirely —
-`is_narrowing_int_store` gates on `forced_size`, which `limit(...)` never sets. Closing both
-wants one range-check op applied to the VALUE at a declared-range store, which reaches
-fields and variables alike.
+**The DECLARED range needs a second layer, because the store cannot see it.** A store op
+carries the field's `min` and its width — so it catches what the width cannot represent,
+and nothing else. `m.v = 500` into a `limit(300, 400)` byte encodes to 200, fits, and used
+to read back as 500. And a declared range on a LOCAL had no store op at all to carry it, so
+`a: integer limit(0,255) = 7; a = 300` simply kept 300 — unenforced entirely, not merely
+mis-stored, because `is_narrowing_int_store` gates on `forced_size`, which `limit(...)`
+never sets.
+
+`OpRangeDefault(val, lo, hi, dflt)` closes both by guarding the **value** rather than the
+store: outside `lo..=hi` it reports `RangeDefaulted` (a Warn on the same recoverable channel
+as ÷0 — the run continues, exit 0) and answers `dflt`, the lowest value in range or the null
+sentinel where the slot admits null. A null passes straight through: whether a null may land
+there is `(N-Store)`'s question, and substituting `lo` would invent a value the program never
+computed.
+
+Two emit sites, because neither reaches the other's shapes: the assignment seam in
+`expressions.rs` (whose own comment records that it covers "both the annotated local and the
+field WRITE"), and `Parser::convert`, which reaches a struct LITERAL's field, a call
+argument and a return. The guard is idempotent, since both fire on a plain field write and a
+guard wrapping a guard would report twice.
+
+Two bounds, both measured rather than assumed:
+
+- **emitted only where the value is not PROVABLY in range**, read off the range the source
+  type already carries — so `x.b = 7` and `p.r = q.r` between two `limit(0,255)` fields emit
+  nothing and cost nothing;
+- **only for the `limit(...)` spelling** (`forced_size.is_none()`). A narrow ALIAS is already
+  refused at compile time (`cannot implicitly narrow integer to u8`), and layering a silent
+  default on it is both redundant and wrong — the first draft fired 24 times inside the
+  stdlib's own `i8` stores and handed them `-128`, which is what `behavior_golden` and the
+  nullflow suites caught.
 
 Guard: `tests/scripts/984-limit-field-out-of-range-defaults.loft`;
 `389-narrow-runtime-collision` pins the nullable half (it was what caught the first draft
