@@ -16,7 +16,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 76 tags across the ecosystem.
+(loft#973). 83 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(`@HXF-001..007`) is the first of `loft-libs-world`'s twelve deferred packages to
+land, and writing it found a shipped parser that repaired seven malformed texts its
+own comment documents as refused.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -1013,7 +1016,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 1 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1022,19 +1025,41 @@ of the repo, and a verdict file beside the code is a good home for a reason and 
 poor one for a work queue. So the queue lives here, and this plan stays open until
 it is empty.
 
+**Row 1 `hex_form` is DONE** (`@HXF-001..007`, acronym registered, `make
+examples-progress` reads *3 tagged, 0 exempt, 11 deferred, 0 todo*) — and it paid the
+convention's usual dividend in its sharpest form yet. The tag that had to say *"the
+reader accepts exactly what the writer emits"* found that the reader did not. Its own
+comment claimed strictness — *"anything it cannot round-trip must be refused rather
+than repaired"* — and a nineteen-cell acceptance matrix showed the claim wrong seven
+ways: a trailing space, an extra field, junk after the header, a non-integer length, an
+empty length, an unnormalised `h0` and a non-integer `h0` were all admitted and then
+re-written differently, so the byte-diff gate the whole format exists for could be
+defeated by whitespace. Six were spelling; **`len x` was repaired to `len 0`** — a side
+that is not there, admitted into the model without a word. Fixed at the one chokepoint
+by a re-spelling identity (a field is an integer only if printing the parse reproduces
+the original characters), a pure narrowing; `hex_form` 0.1.1. The same pass also
+retired a test that could not fail — the corner-invariance assertion compared
+`form_canon_text` of two *identical* forms.
+
+**The generalisable half:** a doctrine sentence in a source comment is a CLAIM until a
+worked example makes it a test, and the claim is likeliest to be false exactly where it
+is most confidently written. `hex_fit`'s `draft_read` (row 8) states the same doctrine
+over the same `word_int(…) ?? 0` helper and carries the same gap in its `wall` line —
+so the finding is a queue item, not a one-off.
+
 Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
 and a signature carries least; every row below is a package that owes an example.
 
 | # | package | pub fns | what its example must teach | blocked on |
 |---|---|---|---|---|
-| 1 | `hex_form` | 53 | rules **C1–C5** — integers only, fixed order, reduced forms, fixed layout, defaults omitted. Each rule is a way a hand-written form parses and means something else | nothing — next in line |
+| ~~1~~ | ~~`hex_form`~~ | 53 | **DONE** — `@HXF-001..007`. Rules **C1–C5** worked one by one; writing them found and fixed a reader that repaired seven texts it documents as refused | — |
 | 2 | `hex_place` | 17 | *"two stencils adjacent: who owns the shared edge?"* — the same question `@HXG-003` answers one level down, and the two should cite each other | nothing — `@HXG-003` now exists |
 | 3 | `hex_roof` | 15 | one mechanism, several profiles: every roof form is the same function of a **distance**, and only the distance SOURCE changes. Which source a profile reads is the trap | nothing |
 | 4 | `hex_way` | 20 | a way is authored as ONE exact centreline and every other line is an OFFSET of it — that is what escapes the hex quantisation floor, which bottoms out near half a hex. The floor is the number a caller needs | nothing |
 | 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
 | 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
 | 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
-| 8 | `hex_fit` | 27 | a stencil description that carries linework, and a **round trip that notices** when it does not survive | follows `hex_form` (1) — a stencil's identity is its canonical text |
+| 8 | `hex_fit` | 27 | a stencil description that carries linework, and a **round trip that notices** when it does not survive. Also inherits row 1's finding: `draft_read` states the same strictness doctrine over the same `word_int(…) ?? 0` helper, so its `wall` line has the same gap | nothing — row 1 landed |
 | 9 | `hex_draw` | 23 | the inverse read: a wall's **analytic surface** recovered as the exact average of its stored edges, so a wall renders as ONE flat quad rather than a strip of them | follows `hex_fit` (8) and `hex_form` (1) — needs a drawn `Plan` |
 | 10 | `hex_field` | 82 | the **exactness** guarantee: it reproduces the Python oracle's golden JSON byte for byte, which is possible only because the whole representation is INTEGER | choosing which golden fixture is small enough to read inside a test |
 | 11 | `hex_recover` | 33 | law **F** is injectivity, and its coverage is a MEASUREMENT over an admitted space | deciding what a fast, readable subset of that census looks like — the full one is a long-running test, not a teaching one |
@@ -1043,7 +1068,8 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person.
+the only one waiting on a person. With row 1 landed, rows 8 and 9 are unblocked too,
+so the only rows still gated on a decision are 6, 7, 10, 11 and 12.
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1053,7 +1079,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *3 tagged, 11 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 

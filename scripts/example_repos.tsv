@@ -54,7 +54,8 @@ GLB	loft-libs-assets	https://github.com/loft-lang/loft-libs-assets	main
 MSH	loft-libs-assets	https://github.com/loft-lang/loft-libs-assets	main
 # loft-libs-plugins (pluginabi)
 PAB	loft-libs-plugins	https://github.com/loft-lang/loft-libs-plugins	main
-# loft-libs-world (hex_grid, hex_terrain, hex_world)
+# loft-libs-world (hex_form, hex_grid, hex_terrain, hex_world)
+HXF	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
 HXG	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
 HXT	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
 HXW	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
