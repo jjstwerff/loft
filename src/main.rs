@@ -1787,7 +1787,7 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
             return 1;
         }
     };
-    let project_root = find_project_root_from(&cwd);
+    let project_root = loft::resolution_scope::project_root_from(&cwd);
     let lock_dir = project_root.as_ref().unwrap_or(&cwd);
     let lock_path = lock_dir.join("loft.lock");
 
@@ -2034,27 +2034,6 @@ fn strip_verbatim_disk(path: String) -> String {
         rest.to_string()
     } else {
         path
-    }
-}
-
-/// Walk up from `start` looking for the nearest directory that
-/// contains a `loft.toml`.  Returns `None` when reaching the
-/// filesystem root with no match.  Mirrors
-/// `parser::find_project_root` but reusable from main.rs
-/// (which can't reach into the parser's static helper).
-#[cfg(feature = "registry")]
-fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf> {
-    let abs = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
-    let mut cur = abs.as_path();
-    loop {
-        if cur.join("loft.toml").exists() {
-            return Some(cur.to_path_buf());
-        }
-        let parent = cur.parent()?;
-        if parent == cur {
-            return None;
-        }
-        cur = parent;
     }
 }
 
