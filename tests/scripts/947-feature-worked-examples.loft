@@ -386,3 +386,63 @@ fn test_arithmetic_safety_answers_null_for_integers_and_infinity_for_floats() {
 
 // The guard @F38's `??` cannot be, for a float.
 fn can_divide947(cd_a: float, cd_b: float) -> boolean { cd_b != 0.0 }
+
+// @FTR-006 — which field modifiers constrain, and which only choose the storage
+//
+// @F12 lists them in one breath — `const`, `= default`, `limit(lo, hi)` ("a range the
+// field must stay inside"), `not null`, `assert(...)` — and they are three different
+// kinds of thing:
+//
+//   const         COMPILE time: assigning the field is an error
+//   = default     fills the field when the literal leaves it out
+//   assert(...)   RUN time: a violating write stops the run with
+//                 "field constraint failed on <Type>.<field>"
+//   limit(lo, hi) NOT a constraint.  It selects the storage width, and a value
+//                 outside the range is neither refused nor reported (loft#984:
+//                 dropped on a 1-byte field, wrapped on a 2-byte one, and `lo+256`
+//                 aliases onto `lo`).
+//   not null      nothing at all — deprecated, and the compiler says so on sight
+//                 (`advice[not-null-deprecated]`, which this file expects below)
+//
+// The real use is @IMG-004: the published `imaging` library declares each channel
+// `integer limit(0, 255)`, and doubling a bright one stores 0 — so the brighter a
+// pixel was, the more likely brightening it turns it BLACK, in a well-formed image
+// with nothing on stderr.  The clamp belongs at the call site; `limit` will not do it.
+//
+// This test pins the parts that are settled — the default, the round-trip inside the
+// range, the clamp a caller has to write, and `not null`'s silence.  What an
+// out-of-range write does is loft#984's to decide, so it is described above and not
+// asserted here.
+// @EXPECT_WARNING: `not null` is deprecated and has no effect
+fn test_which_field_modifiers_constrain() {
+  // `= default` fills an omitted field; a field without one takes its type's zero.
+  acct = Acct947 { id: 7 };
+  assert(acct.name == "unnamed", "the declared default arrived, got [{acct.name}]");
+  assert(acct.note == "", "and a field with no default took the type's zero, got [{acct.note}]");
+  assert(acct.id == 7, "the const field holds what construction gave it");
+
+  // A `limit` field round-trips every value INSIDE its range, both ends included.
+  acct.level = 255;
+  assert(acct.level == 255, "the top of the range stores, got {acct.level}");
+  acct.level = 0;
+  assert(acct.level == 0, "and the bottom, got {acct.level}");
+
+  // The clamp is the caller's to write — this is the line @IMG-004 says the imaging
+  // library's own pixel maths is missing.
+  bright947 = 200;
+  acct.level = min(bright947 * 2, 255);
+  assert(acct.level == 255, "clamped at the call site it saturates, got {acct.level}");
+
+  // `not null` changes nothing: the field behaves exactly like a plain one.
+  assert(acct.tag == "", "a `not null` field starts at its type's zero, got [{acct.tag}]");
+  acct.tag = "set";
+  assert(acct.tag == "set", "and takes ordinary values, got [{acct.tag}]");
+}
+
+struct Acct947 {
+  const id: integer,
+  name: text = "unnamed",
+  note: text,
+  level: integer limit(0, 255),
+  tag: text not null,
+}
