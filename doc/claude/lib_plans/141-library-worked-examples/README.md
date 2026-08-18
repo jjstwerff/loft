@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (25 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (28 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -1124,6 +1124,100 @@ shadow generator skips, so `doc/features/` holds 116 pages for 117 issues.
 inside a callee (`fn f(s: S) { s = S { … } }`) loses the write silently — no `lost-write`,
 no dead-store. It is the one cell of the parameter matrix where the wrong model produces a
 wrong answer, and the natural home is @PLN107's dead-store lint.
+
+**Slice 7 — F17, F7, F37, and one class of bug behind all three.** Picked by the oracle
+(the diagnostics that name each entry), and every one of them fired again: three separate
+diagnostics point a reader at an entry that does not contain what the diagnostic says.
+
+**F17 was a fix, not a correction.** `render(cfg, dry: true)` compiled and
+`cfg.render(dry: true)` was a parse error — the same function, the same argument, the
+same default. `parse_call` collected `name: value`; `parse_method` never did, though
+`call_with_named` already took `is_method` and resolved names against the callee's own
+attributes. The gap mattered most exactly where loft sends an author to close it:
+`advice[trailing-boolean-parameters]` says *"give them defaults so callers pass only what
+they change"* and tags the fix `@F17`, and on a method only a named argument can change a
+flag that is not a PREFIX. Take the advice and the only spelling left was `f(false, true)`
+— the shape the advice complained about, now with a default in front of it.
+
+**The fix passed the codegen gate exactly**: `c.show(loud: true)` now emits IR + native
+Rust byte-identical to `show(c, loud: true)`, which was already correct, so the working
+bytecode was a SOURCE SHAPE rather than something to hand-write.
+
+**And it was WRONG on the first attempt, in a way only the matrix caught.** With
+`parse_method` fixed, `c.show(loud: true)` worked when `show` was declared ABOVE the caller
+and still failed below it — a fix that makes a program's legality depend on declaration
+order is worse than no fix. Pass 1 cannot resolve a forward-declared method, so the call
+never reaches `parse_method`; it reaches a FALLBACK that consumes the argument list
+without resolving anything, and that fallback had not been taught about named arguments.
+There were three such fallbacks, all copies of one loop. Two are now one
+(`skip_remaining_args`, which the `Type::Unknown` receiver path calls instead of its own
+copy), and the third — the index list — had the identical hole: **`grid.cells[1, 2]`, a
+compound-key lookup, parsed above its declarations and reported `Expect token ]` below
+them.**
+
+*Generalises:* **a fallback that consumes what it cannot resolve is invisible until a
+spelling it never learned walks into it, and it fails as an ORDERING dependency rather
+than as a missing feature.** The tell is a matrix cell that moves when you move the
+declaration and nothing else. Fixing the parse loop and not the fallback would have
+shipped a feature that works in the file you tested and not in the file you wrote.
+
+Error recovery improved with it: `s.nosuch(width: 3)` was five cascading errors with no
+`Unknown field` among them, and is now that one message.
+
+**F17's compatibility sentence was false at the boundary that matters.** *"Adding a new
+optional setting later never breaks the calls people already wrote"* — measured, a direct
+call is additive (`scale(5)` keeps answering 10), and a function used as a VALUE breaks:
+`expected fn(integer) -> integer, got fn(integer, integer) -> integer`, and a bound fn-ref
+`expects 2 argument(s), got 1`. A default is not part of the type, so a fn-ref caller must
+be rewritten to the new arity and pass the "optional" argument by hand. Growing the
+signature of something handed out as a value IS a breaking change, and @F23 (functions as
+values) is a first-class feature of the same catalogue.
+
+**F17 also surfaced a lint that told the author to delete a live parameter** — the same
+shape as the closure-capture false positive fixed the slice before. `fn window(rows:
+integer, height: integer = rows * 10)` warned *"Parameter rows is never read"* with the
+fix line *"drop the parameter `rows` — and its callers' argument"*; taking it deletes what
+the default reads. A default is parsed against TEMPORARY variables that are removed before
+the real parameter slots exist, so the read landed on a throwaway. It is answered off the
+stored signature instead (name → argument index → every attribute's default), which also
+covers a default lifted into a function of its own. A parameter nobody reads still warns,
+and one sitting beside a default-reader is still named individually.
+
+**F7 called an index a collection, and that is the sentence loft ships a diagnostic to
+correct.** Two `hash<Person[…]>` fields on one struct are not two collections: one append
+through either is visible through both and `len` moves on both — measured in both
+directions, so there is no primary. `advice[linked-group-double-fill]` says exactly this
+(*"a second route to `by_name`'s records, not a collection of its own"*) and both its fix
+lines are tagged `[keyed collections · @F7]`. Worth having as a CAPABILITY, not only a
+hazard: a multi-index table costs one field declaration and no extra records. The entry
+also never showed the plural its own TITLE promises — `hash<T[keys]>` takes a compound key,
+read `grid.cells[1, 2]` — and never said that `+=` on a key already present REPLACES,
+though its example only ever appends a fresh one.
+
+**F37 is accurate in nine shapes and deviates in exactly one.** Hand-computed against the
+convention a reader brings: `**` is right-associative (512), `+` binds tighter than `<<`
+(32), `and` tighter than `or`, `/` and `%` truncate toward zero (-3, -1, 1), `>>` is
+arithmetic (-4). The single deviation is the one loft warns about — a leading `-` is a
+SIGN, so `-x ** 2` is `(-x) ** 2` = 9 where reading it aloud gives -9 — and the same symbol
+with a left operand goes the other way (`0 - x ** 2` IS -9). `DIAGNOSTICS.md` tags that
+warning `@F37`; the entry did not mention it. **The warning is deliberately silent when the
+base is a LITERAL** (the code says so: *"-2 IS a number"*), which leaves the shortest
+spelling of the trap unmarked — `-3 ** 2` is 9 and `-1.5 ** 2.0` is +2.25, both silently.
+Left as designed and written into the entry, because the value is the same either way and
+the reasoning is stated; what was missing was the reader knowing it.
+
+**Not fixed, filed instead: an EMPTY struct literal cannot be written above its
+declaration.** `d = Dir { };` with `struct Dir` below it is `Expect token ;`, while
+`Dir { by_name: [] }` in the same position is fine — a fourth member of the same
+forward-reference class, with a different mechanism (the literal, not an argument list).
+Both backends, both binaries, pre-existing.
+
+**A trap this slice re-learned the expensive way:** the first run of the new demonstrator
+reported `Unknown field Cell947.x` and it read as a forward-reference gap. It was a NAME
+COLLISION — `Cell947` was already declared 400 lines up for `@FTR-003`. A shared
+demonstrator file has one namespace; the suffix convention does not make a name unique.
+The compound-index gap beside it WAS real, which is what made the misreading comfortable:
+grep the file for the name before adding a type to it.
 
 ### Phase C2 — the original design
 

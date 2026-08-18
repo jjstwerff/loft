@@ -13516,10 +13516,59 @@ impl Parser {
         // arg_pos aligns with `list` by index; slot 0 is the receiver (its
         // position is the method-name token, the best available caret).
         let mut arg_pos: Vec<Position> = vec![self.lexer.peek_pos().clone()];
+        // @F17 — named arguments reach the METHOD spelling too.  `parse_call` and
+        // this loop are the language's two argument lists, and only the free one
+        // collected `name: value`, so `show(c, loud: true)` compiled while
+        // `c.show(loud: true)` was a parse error — the same function, the same
+        // argument, the same default.  The gap was only ever this parse loop:
+        // `call_with_named` already takes `is_method` and resolves names against the
+        // callee's own attributes, so both spellings now emit the same call.
+        // It is the dot spelling that needs this most, because `advice[trailing-
+        // boolean-parameters]` sends a method's author here ("give them defaults so
+        // callers pass only what they change") and only a named argument can change
+        // one that is not a prefix.
+        let mut named_args: Vec<(String, Value, Type)> = Vec::new();
+        let mut in_named = false;
         if self.lexer.has_token(")") {
             return self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None);
         }
         loop {
+            if let Some(arg_name) = self.lexer.peek_named_arg() {
+                in_named = true;
+                self.lexer.has_identifier(); // consume name
+                self.lexer.has_token(":"); // consume :
+                // #432 seeding, keyed by NAME rather than by position — a named
+                // vector-literal or format-string argument builds at its own
+                // parameter's type, not at the one this slot would have held.
+                self.expected = Type::Unknown(0);
+                if md_nr != u32::MAX {
+                    let a = self.data.attr(md_nr, &arg_name);
+                    if a != usize::MAX {
+                        let expected = self.data.attr_type(md_nr, a);
+                        if Self::seeds_collection_hint(&expected)
+                            || self.interpolation_target(&expected) != u32::MAX
+                        {
+                            self.expected = expected;
+                        }
+                    }
+                }
+                let mut p = Value::Null;
+                let t = self.expression(&mut p);
+                self.expected = Type::Unknown(0);
+                named_args.push((arg_name, p, t));
+                // accept a trailing comma on the last named arg.
+                if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
+                    break;
+                }
+                continue;
+            }
+            if in_named && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Positional argument after named argument"
+                );
+            }
             // #432 — `list[0]` is the receiver (attribute 0), so `list.len()` is the
             // attribute index of the explicit argument about to be parsed.  Seed a
             // bare vector-literal argument's element width from that parameter type,
@@ -13549,7 +13598,13 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None)
+        if md_nr == u32::MAX {
+            // No callee to resolve names against — `call_with_named` would index a
+            // definition that is not there.  Hand it on unchanged; the missing method
+            // is what gets reported.
+            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None);
+        }
+        self.call_with_named(val, md_nr, &list, &types, &named_args, true, &arg_pos, None)
     }
 
     pub(crate) fn parse_parameters(&mut self) -> (Vec<Type>, Vec<Value>) {

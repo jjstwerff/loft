@@ -581,3 +581,187 @@ fn paint947(c: Canvas947, at: integer, colour: integer) {
   d = c.data;
   d[at] = colour;
 }
+
+// @FTR-010 — naming an argument, and the two spellings of one call
+//
+// @F17's promise is that a call site "reads like its own documentation" and that
+// you can "set just the one option you care about without listing everything
+// before it".  Measured, that held for a FREE call and not for the dot spelling:
+// `render947(r, dry: true)` compiled, `r.render947(dry: true)` was a parse error.
+// The same function, the same argument, the same default — `parse_call` collected
+// `name: value` and `parse_method` never did.
+//
+// The gap mattered most exactly where loft sends an author to close it.
+// `advice[trailing-boolean-parameters]` reads "give them defaults (`loud: boolean
+// = false`) so callers pass only what they change" and its fix line is tagged
+// `@F17` — but on a method, only a named argument can change a flag that is not a
+// PREFIX of the parameter list.  Take the advice on `fn f(self: T, loud: boolean =
+// false, dry: boolean = false)` and the only way to set `dry` was `f(false, true)`:
+// the `(…, true, false)` shape the advice complained about, now with a default in
+// front of it.  So the fix is in the parser, and this test is what holds it: both
+// spellings take the same arguments and answer the same thing.
+//
+// The measured facts about a default itself, none of them in the entry:
+//   - it may be a constant expression, a CALL, or an EARLIER PARAMETER;
+//   - it is evaluated at the CALL, once per call, and skipped when the argument is
+//     supplied (so a call-valued default has its side effect only when it is used);
+//   - naming is by parameter, so the order at the call site is the caller's choice.
+fn test_the_dot_spelling_and_the_free_spelling_take_the_same_arguments() {
+  r947 = Report947 { rows: 3 };
+
+  // The shape the entry describes: set the one option you care about.
+  assert(r947.render947(dry: true) == "text/3 dry=true",
+         "a named argument reaches the dot spelling, got {r947.render947(dry: true)}");
+  assert(render947(r947, dry: true) == r947.render947(dry: true),
+         "and the free spelling of the same call agrees: [{render947(r947, dry: true)}] vs [{r947.render947(dry: true)}]");
+
+  // Order is the caller's, because a name selects the slot.
+  assert(r947.render947(dry: true, format: "csv") == "csv/3 dry=true",
+         "named arguments carry their own order, got {r947.render947(dry: true, format: "csv")}");
+  assert(r947.render947("csv", dry: true) == r947.render947(dry: true, format: "csv"),
+         "positional-then-named reaches the same call");
+
+  // Nothing named at all still takes both declared defaults.
+  assert(r947.render947() == "text/3 dry=false", "both defaults, got {r947.render947()}");
+
+  // The default that is NOT a constant: `width947` defaults to `rows * 10`, an
+  // expression over an EARLIER parameter, computed at each call.
+  assert(width947(4) == 40, "a default may read an earlier parameter, got {width947(4)}");
+  assert(width947(4, 7) == 7, "and a supplied argument replaces it, got {width947(4, 7)}");
+
+  // A call-valued default runs once PER CALL, and not at all when the caller
+  // supplies the argument — the counter is what proves both halves.
+  ctr947 = Counter947 { n: 0 };
+  assert(seq947(ctr947) == 1, "first call takes the default");
+  assert(seq947(ctr947) == 2, "second call evaluates it again");
+  assert(seq947(ctr947, 99) == 99, "a supplied argument wins");
+  assert(ctr947.n == 2, "and the default was not evaluated for it, got {ctr947.n}");
+}
+
+struct Report947 { rows: integer }
+struct Counter947 { n: integer }
+
+fn render947(self: Report947, format: text = "text", dry: boolean = false) -> text {
+  "{format}/{self.rows} dry={dry}"
+}
+fn width947(rows: integer, width: integer = rows * 10) -> integer { width }
+fn bump947(c: Counter947) -> integer { c.n += 1; c.n }
+fn seq947(c: Counter947, at: integer = bump947(c)) -> integer { at }
+
+// @FTR-011 — a keyed collection is an INDEX, and two of them can be one table
+//
+// @F7 opens "A collection of records that you look up by a key field", and that
+// sentence is the model loft ships a diagnostic to correct.  Declare two
+// `hash<Person947[…]>` fields on one struct and they are not two collections:
+// they are two ROUTES to one record set.  One append through either is visible
+// through both, and `len` moves on both.
+//
+// `advice[linked-group-double-fill]` says so at the one shape where the mistake
+// costs something — a literal that fills BOTH members — and both of its fix lines
+// are tagged `[keyed collections · @F7]`.  So the entry is where the compiler sends
+// a reader to learn what a keyed collection is, and it is the one place that does
+// not say this.  It is worth knowing as a CAPABILITY, not just a hazard: a
+// multi-index table costs one extra field declaration and no extra records.
+//
+// Two more measured facts the entry's single-key example cannot show:
+//   - the type is `hash<T[keys]>` — a COMPOUND key is real (`hash<Tile947[x, y]>`,
+//     read `g.cells[1, 2]`), and the body only ever describes one field;
+//   - `+=` with a key already present REPLACES that record rather than adding one.
+//     The entry's example only ever `+=`s a fresh key ("Cy"), so a reader learns
+//     `+=` as "add" and gets an upsert.
+// A miss is null all the way down, and reading one mints nothing.
+fn test_two_keyed_fields_over_one_type_are_one_record_set() {
+  // Constructed the way LOFT.md spells a keyed group: each member `[]`.  (An
+  // EMPTY literal `Dir947 { }` cannot be written here at all — a struct declared
+  // BELOW its use parses only when the literal names a field, loft#986.)
+  d947 = Dir947 { by_name: [], by_tag: [] };
+  d947.by_name += [ Person947 { name: "Ada", tag: "math", age: 36 } ];
+
+  // One append, through ONE member — and the other member has it.
+  assert(len(d947.by_name) == 1, "the member appended to holds it, got {len(d947.by_name)}");
+  assert(len(d947.by_tag) == 1, "and so does the other member, got {len(d947.by_tag)}");
+  assert(d947.by_tag["math"].age == 36,
+         "reachable by the OTHER key, got {d947.by_tag["math"].age}");
+
+  // It works in both directions: the group has one record set, not a primary.
+  d947.by_tag += [ Person947 { name: "Bo", tag: "art", age: 20 } ];
+  assert(len(d947.by_name) == 2, "appending through by_tag grew by_name too, got {len(d947.by_name)}");
+  assert(d947.by_name["Bo"].age == 20, "and by_name finds it, got {d947.by_name["Bo"].age}");
+
+  // `+=` on a key already present REPLACES — the count does not move.
+  d947.by_name += [ Person947 { name: "Ada", tag: "math", age: 99 } ];
+  assert(len(d947.by_name) == 2, "a duplicate key did not add a record, got {len(d947.by_name)}");
+  assert(d947.by_name["Ada"].age == 99, "it replaced the old one, got {d947.by_name["Ada"].age}");
+  seen947 = 0;
+  for p947 in d947.by_name { if p947.name == "Ada" { seen947 += 1; } }
+  assert(seen947 == 1, "and walking the set finds exactly one Ada, got {seen947}");
+
+  // A miss is null, and reading through it stays null rather than faulting.
+  assert(d947.by_name["Zed"] == null, "a miss answers null");
+  assert(d947.by_name["Zed"].age == null, "and a field off the miss is null too");
+  assert(len(d947.by_name) == 2, "reading a miss minted nothing, got {len(d947.by_name)}");
+
+  // The plural in `hash<T[keys]>`: a compound key, read as one lookup.
+  g947 = Board947 { cells: [] };
+  g947.cells += [ Tile947 { x: 1, y: 2, what: "tree" }, Tile947 { x: 2, y: 1, what: "rock" } ];
+  assert(g947.cells[1, 2].what == "tree", "compound key, got {g947.cells[1, 2].what}");
+  assert(g947.cells[2, 1].what == "rock", "and the axes are not interchangeable, got {g947.cells[2, 1].what}");
+  assert(g947.cells[9, 9] == null, "a compound miss is null too");
+}
+
+struct Person947 { name: text, tag: text, age: integer }
+struct Dir947 { by_name: hash<Person947[name]>, by_tag: hash<Person947[tag]> }
+struct Tile947 { x: integer, y: integer, what: text }
+struct Board947 { cells: hash<Tile947[x, y]> }
+
+// @FTR-012 — the one operator that does not read the way you say it aloud
+//
+// @F37's promise is "familiar spelling and sensible precedence, so expressions read
+// the way you would say them aloud".  Measured across the set, that is true
+// everywhere but ONE place, and loft ships a warning for exactly that place:
+//
+//   warning[unary-minus-binds-tighter]: `-x ** y` parses as `(-x) ** y` — the
+//   leading `-` binds to `x` as a sign (tighter than `**`), not `-(x ** y)`
+//
+// So `-x ** 2` with x = 3 is 9, where the reading aloud ("minus x squared") is -9.
+// The same symbol with a left operand goes the other way — `0 - x ** 2` IS -9 —
+// so `-` reads two ways in one expression language, and the entry does not
+// mention it while `DIAGNOSTICS.md` tags the warning `@F37`.
+//
+// The warning is deliberately silent when the base is a LITERAL, on the reasoning
+// that "-3 IS a number" and the grouping is then unsurprising.  That leaves the
+// shortest spelling of the trap unmarked: `-3 ** 2` is 9 with nothing said, and
+// `-1.5 ** 2.0` is +2.25 where a formula transcribed from a page means -2.25.
+// Both cells are asserted below, because the pair is the whole boundary.
+//
+// Every other shape checked here matches the convention a reader brings:
+// `**` is right-associative, `+` binds tighter than `<<`, `and` tighter than `or`,
+// integer division and `%` truncate toward zero, and `>>` is arithmetic.
+// @EXPECT_WARNING: `-x ** y` parses as `(-x) ** y`
+fn test_the_sign_is_the_one_operator_that_reads_the_other_way() {
+  x947: integer = 3;
+
+  // The warned cell: the sign belongs to the BASE.
+  assert(-x947 ** 2 == 9, "`-x ** 2` is (-3)**2, got {-x947 ** 2}");
+  assert(-(x947 ** 2) == -9, "parenthesised, it is the reading aloud, got {-(x947 ** 2)}");
+
+  // The same symbol, with a left operand, binds the other way — and says nothing.
+  assert(0 - x947 ** 2 == -9, "binary minus is looser than `**`, got {0 - x947 ** 2}");
+  assert(1 - x947 ** 2 == -8, "in an expression too, got {1 - x947 ** 2}");
+
+  // The unwarned cells: a literal base takes the same grouping, silently.
+  assert(-3 ** 2 == 9, "a literal base groups identically, got {-3 ** 2}");
+  assert(-1.5 ** 2.0 == 2.25, "and a float literal flips the sign of the answer, got {-1.5 ** 2.0}");
+
+  // Everything else in the set reads as expected.
+  assert(2 ** 3 ** 2 == 512, "`**` is right-associative, got {2 ** 3 ** 2}");
+  assert(2 + 3 * 4 == 14, "`*` binds tighter than `+`, got {2 + 3 * 4}");
+  assert(1 << 2 + 3 == 32, "`+` binds tighter than `<<`, got {1 << 2 + 3}");
+  assert(true or false and false, "`and` binds tighter than `or`");
+  assert(-7 / 2 == -3, "integer division truncates toward zero, got {-7 / 2}");
+  assert(-7 % 3 == -1, "and `%` takes the sign of the left side, got {-7 % 3}");
+  assert(7 % -3 == 1, "not of the right side, got {7 % -3}");
+  assert(-8 >> 1 == -4, "`>>` is arithmetic, got {-8 >> 1}");
+  assert((6 ^ 3) == 5, "`^` is xor, got {6 ^ 3}");
+  assert(!(x947 > 2) == false, "`!` negates, got {!(x947 > 2)}");
+}

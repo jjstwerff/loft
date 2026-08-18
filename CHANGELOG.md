@@ -521,6 +521,34 @@ release, the build mentions it once:
 It never fetches anything to say this, never speaks for a library's own dependencies,
 stays quiet when you are current or offline, and can be turned off with
 `LOFT_NO_UPGRADE_NOTICE=1`.
+### `x.method(name: value)` — named arguments reach the method spelling
+
+loft has had named arguments for a while, and they only worked on the free spelling of a
+call. `render(cfg, dry: true)` compiled; `cfg.render(dry: true)` was a parse error — the
+same function, the same argument, the same default. Both work now, in any order, mixed
+with positional arguments, on both backends.
+
+It mattered most where loft sends you to use it. When a function ends in two boolean
+parameters, loft advises *"give them defaults so callers pass only what they change"* —
+but on a method, only a named argument can change a flag that is not the first one. Take
+the advice and the only spelling left was `f(false, true)`: the very shape the advice was
+complaining about, now with a default in front of it.
+
+Two smaller things fell out of the same seam, both of which made a legal program depend on
+where its types were DECLARED rather than on what it said:
+
+* `grid.cells[1, 2]` — a lookup in a collection with a compound key — parsed only when the
+  types were declared above the caller, and reported `Expect token ]` below it.
+* An unresolved method called with a named argument cascaded into five errors that never
+  mentioned the real one. `s.nosuch(width: 3)` now reports `Unknown field S.nosuch`, once.
+
+### A default that reads an earlier parameter is a read
+
+`fn window(rows: integer, height: integer = rows * 10)` was reported as *"Parameter rows is
+never read"*, offering to drop `rows` and its callers' argument — which deletes what the
+default reads. A default is an expression evaluated at the call, and reading a parameter
+there counts. A parameter genuinely nobody reads still warns.
+
 ### A closure capture is no longer reported as a dead assignment
 
 `s = 10; show = fn() -> integer { s }; s = 20;` hands `show` the 10 — and loft used to

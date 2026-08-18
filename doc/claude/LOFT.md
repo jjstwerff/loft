@@ -2143,6 +2143,25 @@ connect("example.com", tls: false)             // skip port
 connect(host: "example.com", port: 443)        // all named
 ```
 
+Both spellings of a call take names, including the method one — `cfg.render(dry: true)`
+and `render(cfg, dry: true)` are the same call.  The receiver is argument 0, so naming
+it (`render(self: cfg)`) is the one thing that does not work: it is already provided.
+
+A default is an **expression**, evaluated at the call rather than stored as a constant.
+It runs once per call, not at all when the caller supplies the argument, and it may read
+a parameter declared before it:
+
+```
+fn window(rows: integer, height: integer = rows * 10) -> integer { height }
+window(4)      // 40 — the default reads `rows`
+window(4, 7)   // 7  — the default is not evaluated
+```
+
+A default is **not part of the function's type**.  Adding one to an existing function
+keeps every direct call working, but a fn-ref of type `fn(integer) -> integer` stops
+matching the moment a second parameter arrives however optional it is — so growing the
+signature of something handed out as a VALUE is a breaking change ([INTERFACES.md](INTERFACES.md)).
+
 ---
 
 ## Assertions

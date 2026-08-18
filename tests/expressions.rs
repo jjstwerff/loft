@@ -401,8 +401,7 @@ fn closure_capture_after_change() {
     // write overwritten before any read, and advertised deleting the line that
     // supplies the answer.  A lint that must never make a program wrong stays
     // silent on a captured variable (`Variables::track_write`).
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
-        .result(Value::Int(15));
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)").result(Value::Int(15));
 }
 
 #[test]
