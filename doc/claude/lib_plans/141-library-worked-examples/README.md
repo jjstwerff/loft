@@ -16,12 +16,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 141 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(loft#973). 152 tags across the ecosystem, and **Phase E is DONE**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
 (`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
 (`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`),
-`hex_field` (`@HXL-001..012`) and `hex_recover` (`@HXV-001..009`) are **eleven** of
-`loft-libs-world`'s twelve deferred packages, leaving one. Writing
+`hex_field` (`@HXL-001..012`), `hex_recover` (`@HXV-001..009`) and `hex_edge`
+(`@HXE-001..011`) are **all twelve** of `loft-libs-world`'s deferred packages, so
+**Phase E is complete** — the repo reads *14 tagged, 0 exempt, 0 deferred, 0 todo*. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
@@ -32,8 +33,9 @@ the round trip the whole text format exists for, and a recovery check whose two 
 lattice rational and an irrational, so it could never have passed, and an invariant whose
 NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
 for a three-dimensional rig anyway, and a validator that refuses the multi-form chunk its
-own package exists to trace, and a verification step that discarded the exact answer it had
-just computed, because it re-drew into a window sized for the code it replaced.
+own package exists to trace, a verification step that discarded the exact answer it had
+just computed because it re-drew into a window sized for the code it replaced, and a
+resting position that lands on the wrong side of a wall every time rather than sometimes.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -41,7 +43,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *13 tagged, 1 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+**Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1014,7 +1016,7 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 13 tagged, **1 deferred**, 0 todo — the remaining one is Phase E row 12 below |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — **14 tagged, 0 exempt, 0 deferred, 0 todo** — Phase E complete |
 
 All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
 carries the six registry rows **and** the fix for the gate bug that reddens every
@@ -1030,7 +1032,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 11 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — **DONE, 12 of 12**
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1566,16 +1568,100 @@ turned it red naming its OWN test. The harness errors out if a mutation pattern 
 `cmp`s the file to prove the edit landed (row 10's lesson, applied rather than re-learned).
 Coverage 17/46 → **46/46**.
 
-**A method note worth keeping.** All eleven rows so far found their defect in the tag that had to
+**Row 12 `hex_edge` is DONE** (`@HXE-001..011`, acronym registered), and **Phase E is
+complete**: `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 exempt,
+0 deferred, 0 todo*. `examples-exempt.tsv` is now empty of verdict rows.
+
+**The blocker was an owner decision, and the measurement refuted BOTH options it offered.**
+The queue held row 12 on *"whether `hex_edge` should offer a `sweep_path_skin(…)` … or every
+caller keeps its own skin"* — the resting-position trap moros#10 reported: a caller must not
+come to rest exactly at the fraction `sweep_path` returns, because that point is on the
+bisector and the next `hex_at` may round to the far side. Two things came out of measuring it
+rather than reasoning about it.
+
+**First, "may round" is wrong — it rounds to the far side EVERY time.** Over all six
+directions, a head-on stop leaves the position at exactly `t = 0.5`, `hex_at` there names the
+FAR cell six times out of six, and the very next sweep then reports `dir = -1, t = 1.0`: the
+whole segment clear, straight through the wall. It is not a rounding coin-flip that bites
+sometimes; it is deterministic, and the consumer's *"collision does not work"* is the exact
+truth — it worked for one step.
+
+**Second, the skin both options depend on has no correct value.** The smallest backoff that
+works is not a geometric clearance, it is a float-resolution floor, so it scales with where in
+the world you are standing:
+
+| where | smallest skin that works |
+|---|---|
+| at the origin | 1e-15 |
+| ~1.7e3 world units out | 1e-11 |
+| ~1.7e6 world units out | 1e-9 |
+
+A constant calibrated at the origin fails 18 of 30 cases at 1.7e3 units out. So *"the library
+offers a skin"* and *"every caller keeps its own"* are the same wrong answer wearing two hats
+— neither party can pick the number, and moros's 1 cm is safe only because it is enormously
+larger than the floor at moros's extent, which is luck rather than reasoning.
+
+**The exact option neither branch considered: `sweep_path` already RETURNS the cell.** It
+hands back `(t, cq, cr, dir)`, and the ambiguity exists only because the next call throws
+`(cq, cr)` away and re-derives it from a float. So the cure is to thread it —
+`sweep_path_from(e, cq, cr, …)`, added as a purely additive `pub fn` with `sweep_path` kept
+byte-identical in behaviour as the `hex_at` wrapper over it. Pressing on into the wall then
+answers `t = 0` in the cell you are in, which is the honest answer, and it needs no tolerance
+anywhere. Verified across all six directions and at four extents: exact from the origin out
+to 3e6 cells. `hex_edge` 0.2.0.
+
+**And the far-field limit, which is the honest part.** Past roughly 5e6 cells the threaded
+version degrades too — so it is not a property of the API choice. TWO in-algorithm
+explanations were tested and BOTH refuted: scaling the epsilons relative to the coordinate
+magnitude made it *worse* (8 of 30 failing at 1e3 cells, where the shipped code is clean), and
+recentring the bisector solve on the current cell's centre — which does make the crossing
+parameter exactly 0.5 at every extent, against a shipped drift of 8.6e-9 at 1e8 cells — moved
+the boundary not at all. What survives is measured directly: the offset a double position can
+recover at that magnitude loses 2.9e-10 at 3e6 cells and 6.4e-10 at 1e7, crossing the code's
+1e-9 tolerance exactly where the walk-throughs start. **The position itself is the limit, and
+the answer is to recentre the world, not the arithmetic.** No fix was shipped for it, because
+the fix would have been for something that is not the cause.
+
+**A second finding, and it is left as BEHAVIOUR rather than fixed, because fixing it is
+another owner decision.** `material_set_solid` is documented as the dynamic-material
+mechanism — *"a level-crossing barrier, a door, a portcullis … flipping the table entry
+retargets every edge already carrying this id"* — and **movement does not read it**.
+`passable` and `sweep_path` take an `EdgeSet` and no `Materials` at all, so lowering `solid`
+to false leaves `passable` false and the sweep stopping at exactly the same `t = 0.25`.
+Raising the portcullis does not open it. Meanwhile `sight_clear` *is* material-aware, so the
+package has one query that honours the material vector and one that cannot see it; of the six
+transmission terms, two (`opacity`, `height`) change an answer here and four are data for a
+consumer. `@HXE-010` pins the asymmetry as behaviour — a bookmark, in row 10's sense — and
+the API question (should movement take a `Materials`?) is recorded, not answered.
+
+**Three hypotheses were tested and refuted in this row and none became a finding.** Besides
+the two above, `sight_clear`'s 0.2-unit sampled walk was checked against the claim in its own
+comment — *"a hex inradius is 0.866, so consecutive samples cannot skip a cell"* — over 600
+sight lines and 7644 cell transitions: **zero** non-adjacent hops, and zero disagreements with
+the exact sweep over 400 crossing lines. The claim is true and now measured. Worth recording
+because the row's write-up would read better with a fourth defect in it, and there wasn't one.
+
+**Non-vacuity, eleven for eleven**, each mutation naming its own test. Coverage 25/40 →
+**40/40**.
+
+**A harness note.** The first full both-backend sweep reported `hex_roof` red on native while
+the mutation harness was running concurrently in the same repo — the harness rewrites a source
+file eleven times, and a native build that reads a tree mid-write fails for reasons that have
+nothing to do with the change under test. Re-run serially it is green, as are all fourteen
+packages on both backends. **Never read a full-suite verdict that was taken while something
+else was editing the tree.**
+
+**A method note worth keeping.** All twelve rows found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
 priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
 CHECKS that answered *pass* on what they were written to fail (`hex_shape`), a
 premise the package enforced on one half of its own text and not the other (`hex_fit`),
 one that was true of the shape its author had in mind and false of the shapes the
-package exists to hold (`hex_field`), and one true of the CONSTRUCTION and false of the
+package exists to hold (`hex_field`), one true of the CONSTRUCTION and false of the
 ROUTINE, because the step that verifies it kept a limit from the code it replaced
-(`hex_recover`).
+(`hex_recover`), and one hedged as *"may"* that turns out to happen every time
+(`hex_edge`).
 That is not luck: a worked example is the first thing that ever evaluates such a sentence
 against the code, and the sentences most worth working are the ones written with the most
 certainty.
@@ -1618,7 +1704,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
 | ~~10~~ | ~~`hex_field`~~ | 82 | **DONE** — `@HXL-001..012`. The fixture question answered itself again (one hex, two hexes, a ring of six), and under it a validator refusing the multi-form chunk the package exists to trace, plus a material write that DELETED the wall it was setting and an extent taken on trust that allocated 16 M cells from a 32-byte file. 0.1.1, format unchanged byte for byte | — |
 | ~~11~~ | ~~`hex_recover`~~ | 33 | **DONE** — `@HXV-001..009`. The blocker dissolved on measurement: the census a caller needs is the 119 forms this build matches against, decided in 2 ms. Under it, a verify step that clipped its own redraw into a window sized for the enumeration it replaced — refusing an 85-cell shape while passing a 105-cell one, and reporting 196 unexplained cells in a 105-cell field. 0.1.1; plus loft#982's second victim upstream (`hex_form` 0.1.2). Coverage 17/46 → 46/46 | — |
-| 12 | `hex_edge` | 39 | the `sweep_path` resting-position trap, already written as prose in that package's README (moros#10): a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next `hex_at` may round to the far side | **an owner decision** — whether `hex_edge` should offer a `sweep_path_skin(…)` (or return a fraction already backed off), or every caller keeps its own skin. The example teaches a different thing under each answer |
+| ~~12~~ | ~~`hex_edge`~~ | 39 | **DONE** — `@HXE-001..011`. The owner decision was refuted on both branches: the skin either option needs has no correct value (1e-15 at the origin, 1e-9 at 1.7e6 units out), and `sweep_path` already returns the cell the ambiguity comes from throwing away. `sweep_path_from` threads it — exact, no tolerance, 0.2.0. Plus a portcullis whose raising opens nothing, pinned as behaviour. Coverage 25/40 → 40/40 | — |
 
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
@@ -1643,8 +1729,7 @@ example anyway would pin the wrong behaviour into a test. Row 11 needs no one �
 decision about what a fast, readable subset of a census looks like.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *13 tagged, 1 deferred* — only
-`hex_edge` (row 12) is left, and it is the one that waits on an owner decision.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. **Reached 2026-08-18.**
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
