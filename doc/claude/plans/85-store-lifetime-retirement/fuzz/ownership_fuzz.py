@@ -19,6 +19,9 @@ Violation modes (the four the invariant can break into):
   CRASH       : a backend exits non-zero (139 = SIGSEGV → UAF/over-free)
   LEAK        : "stores not freed" on a backend's stderr
   DIVERGENCE  : interp stdout != native stdout, or success disagrees (silent two-owner corruption)
+  WRONG       : a cell's OWN assertion failed — the answer is wrong even where the two
+                backends agree about it (added 2026-08-18, loft#974: aligning the backends
+                removed the disagreement that had been the only way this was visible)
 
 Positive control (--self-test) — CONTROL PAIRS, re-pinned 2026-07-03 after the join_own
 default-ON flip (and this week's ungated fixes) cleaned the P14 probe file on BOTH
@@ -26,8 +29,14 @@ configurations; re-pinned again 2026-07-04 when the #497 reassignment deep-copy 
 every crash cell even under LOFT_NO_JOIN_OWN=1 — the buggy config now disables BOTH
 preservation gates (LOFT_NO_JOIN_OWN + LOFT_NO_REASSIGN_COPY).  The controls anchor on
 GENERATED cells that still reproduce on the preserved raw path, one per detector channel:
-  crash/divergence : elem_accumulate__struct__heavy — SIGSEGV + divergence gate-OFF,
-                     clean on the default gate;
+  wrong/divergence : elem_accumulate__struct__heavy — gate-OFF the cell computes the wrong
+                     answer; clean on the default gate.  It anchored the DIVERGENCE
+                     spelling until 2026-08-18, when loft#974 made native stop masking the
+                     corruption with a defensive copy: both backends then failed the same
+                     assertion, the disagreement vanished, and the channel read CLEAN on a
+                     cell that still reproduces.  The cell was right and the ORACLE was
+                     short a channel — so `WRONG` was added rather than the control
+                     re-pinned a third time;
   leak             : local_source__struct__none — both-backends LEAK gate-OFF,
                      clean on the default gate.
 Each is a PAIR: (1) the buggy config must be FLAGGED (the detector can fire — not vacuous);
@@ -46,6 +55,8 @@ LOFT = os.environ.get("LOFT", "target/release/loft")
 TO_INTERP = os.environ.get("FUZZ_TIMEOUT_INTERP", "60")
 TO_NATIVE = os.environ.get("FUZZ_TIMEOUT_NATIVE", "120")
 LEAK_SIGNAL = "stores not freed"          # identical on both backends (src/state/mod.rs, generation/mod.rs)
+# The cell's own value oracle failing — loft renders it `error: assertion failed: <msg>`.
+ASSERT_SIGNAL = "assertion failed"
 RANGE_RE = re.compile(r"\b0\.\.(\d+)\b")  # `0..N` loop/pressure bounds — the churn axis
 
 
@@ -54,7 +65,11 @@ def normalise(s: str) -> str:
 
 
 def run(mode: str, path: str):
-    """Run one program on one backend; return (exit_code, normalised_stdout, leaked)."""
+    """Run one program on one backend; return (exit_code, normalised_stdout, leaked, wrong).
+
+    `wrong` is the cell's OWN value oracle: every generated cell asserts what its shape
+    must compute, so a failed assertion is a WRONG ANSWER, not a program that merely
+    exited non-zero (a compile error does that too, and the grammar produces some)."""
     env = dict(os.environ)
     env["LOFT_TIMEOUT"] = TO_INTERP if mode == "--interpret" else TO_NATIVE
     # Gate hygiene: the bytecode cache key does NOT include semantic env gates
@@ -68,8 +83,13 @@ def run(mode: str, path: str):
         p = subprocess.run([LOFT, mode, path], capture_output=True, text=True,
                            env=env, timeout=int(env["LOFT_TIMEOUT"]) + 15)
     except subprocess.TimeoutExpired:
-        return (-99, "", False)  # hang = a violation (treated as CRASH by the caller)
-    return (p.returncode, normalise(p.stdout), LEAK_SIGNAL in p.stderr)
+        return (-99, "", False, False)  # hang = a violation (treated as CRASH by the caller)
+    both = (p.stdout or "") + (p.stderr or "")
+    # The interpreter renders it as `error: assertion failed: <msg>`; native raises it as a
+    # Rust panic carrying the same message, which exits 101.  Either is the cell saying its
+    # own answer is wrong.
+    wrong = ASSERT_SIGNAL in both or (mode == "--native" and p.returncode == 101)
+    return (p.returncode, normalise(p.stdout), LEAK_SIGNAL in p.stderr, wrong)
 
 
 def is_crash(rc: int) -> bool:
@@ -81,21 +101,33 @@ def is_crash(rc: int) -> bool:
 
 
 def judge(path: str, native_replay: bool):
-    """Return a list of violation strings for `path` (empty = clean / backends-agree)."""
+    """Return a list of violation strings for `path` (empty = clean / backends-agree).
+
+    Four channels, and the fourth was added 2026-08-18 (loft#974): a cell that fails its
+    OWN assertion is WRONG, whether or not the two backends agree about it.  Until then
+    the map read "both backends wrong in the same way" as CLEAN — the corruption was only
+    visible while ONE backend still masked it (native's defensive copy), so ALIGNING the
+    backends silenced the control cell that had anchored this channel since 2026-07-04.
+    A wrong answer is the thing the whole gate exists to catch; it must not depend on a
+    disagreement to be seen."""
     viol = []
-    ie, iout, ileak = run("--interpret", path)
+    ie, iout, ileak, iwrong = run("--interpret", path)
     if is_crash(ie):
         viol.append(f"CRASH(interp signal={-ie if ie < 0 else ie - 128})")
     if ileak:
         viol.append("LEAK(interp)")
+    if iwrong:
+        viol.append("WRONG(interp assertion)")
     # Run native to cross-check whenever interp did anything non-clean, or when sampling.
     # (A clean interp success is only cross-checked under --native-replay — the slow stage.)
     if ie != 0 or ileak or native_replay:
-        ne, nout, nleak = run("--native", path)
+        ne, nout, nleak, nwrong = run("--native", path)
         if is_crash(ne):
             viol.append(f"CRASH(native signal={-ne if ne < 0 else ne - 128})")
         if nleak:
             viol.append("LEAK(native)")
+        if nwrong:
+            viol.append("WRONG(native assertion)")
         if (ie == 0) != (ne == 0):
             viol.append(f"DIVERGENCE(interp exit={ie} ≠ native exit={ne})")
         elif ie == 0 and ne == 0 and iout != nout:
@@ -169,7 +201,13 @@ def main():
             v_leak = judge(leak_cell, native_replay=True)
             del os.environ["LOFT_NO_JOIN_OWN"]
             del os.environ["LOFT_NO_REASSIGN_COPY"]
-            crash_fires = any("CRASH" in x or "DIVERGENCE" in x for x in v_crash)
+            # loft#974 — the channel this cell anchors is "the program computed the wrong
+            # thing", which CRASH and DIVERGENCE are only two spellings of.  WRONG is the
+            # third, and it is what remained once both backends started reporting the same
+            # corruption instead of one of them masking it.
+            crash_fires = any(
+                "CRASH" in x or "DIVERGENCE" in x or "WRONG" in x for x in v_crash
+            )
             leak_fires = any("LEAK" in x for x in v_leak)
             print(f"crash-control (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY) elem_accumulate/struct/heavy: "
                   f"{v_crash or 'CLEAN'}")
