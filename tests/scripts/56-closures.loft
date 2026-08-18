@@ -42,7 +42,10 @@ fn test_text_capture_deep_copy() {
   assert(make_msg("Bob") == "Hello, Bob!", "deep copy: {make_msg("Bob")}");
 }
 
-// @EXPECT_WARNING: Dead assignment
+// No dead-assignment warning on `base` below: the capture READS the 10, which the
+// assertion proves (15 is 10 + 5).  This test used to expect one — the capture is
+// deliberately not counted as a use, so the check saw a write overwritten before any
+// read and advertised deleting the line that supplies the answer.
 fn test_capture_timing() {
   base = 10;
   add_base = fn(cl_n: integer) -> integer {

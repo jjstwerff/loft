@@ -160,3 +160,160 @@ fn field947(report: text, type_name: text, field: text) -> text {
   }
   out
 }
+
+// @FTR-003 — handing a value to a function: what the callee can change
+//
+// The catalogue told a reader that a parameter is a copy: @F21 said "without `&`,
+// the function only sees a copy and your original is left alone", @F95 promised a
+// value struct is one you can "hand to somebody and they cannot change yours", and
+// @F106's two rules — a whole-value bind copies, an element read is a view — never
+// mentioned a call at all.  Measured, that model holds for a SCALAR and for one
+// other case; for everything with a store behind it a callee's field or element
+// write lands in the caller's record, `&` or no `&`.
+//
+//                       callee writes a FIELD/ELEMENT   callee REPLACES the binding
+//   integer / text          (no field to write)          lost         `&` → lands
+//   vector                  lands, with or without `&`   lost         `&` → lands
+//   struct                  lands, with or without `&`   lost         `&` → lands
+//   value struct            lands, with or without `&`   lost         `&` → lands
+//
+// So `&` buys exactly two things: a SCALAR write-back, and replacing the whole
+// binding.  It buys nothing for a field write — and loft says so itself, in
+// `advice[slow-reference-parameter]`, whose text is "field mutation already
+// propagates to the caller without it" and whose fix line points at @F21.  The
+// catalogue entry the advice sends the reader to said the opposite.
+//
+// The one place a value struct is a copy is a BIND: `p = path.pts[0]` snapshots,
+// which is @F95's own example — and handing `path.pts[0]` straight to a callee is
+// not that bind, so it writes through.  Both are asserted below, because the pair
+// is the whole distinction.
+// @EXPECT_WARNING: only slows it down here
+fn test_a_parameter_is_a_link_unless_it_is_a_scalar() {
+  // A SCALAR is a copy: the callee's arithmetic has to be RETURNED to reach you.
+  n947 = 11;
+  got = add_inside947(n947);
+  assert(got == 777, "the callee computed 11 + 766, got {got}");
+  assert(n947 == 11, "and the caller's integer is untouched, got {n947}");
+
+  // ...unless the parameter is `&`, which is what `&` is for.
+  m947 = 11;
+  add_through947(m947);
+  assert(m947 == 777, "a `&integer` writes back, got {m947}");
+
+  // A STRUCT parameter names the caller's record — plain and `&` alike.
+  s947 = Cell947 { n: 11 };
+  poke947(s947);
+  assert(s947.n == 777, "a plain struct parameter wrote through, got {s947.n}");
+  t947 = Cell947 { n: 11 };
+  poke_ref947(t947);
+  assert(t947.n == 888, "and the `&` spelling does the same thing, got {t947.n}");
+
+  // A VECTOR parameter, likewise: the element write lands.
+  v947: vector<integer> = [11, 12];
+  poke_vec947(v947);
+  assert(v947[0] == 777 && len(v947) == 2,
+         "the callee's element write reached the caller's vector, got {v947[0]}");
+
+  // A VALUE STRUCT parameter is a link too — `hand one over and they cannot
+  // change yours` is false for the hand-over...
+  p947 = Point947 { x: 11 };
+  poke_value947(p947);
+  assert(p947.x == 777, "the callee changed the caller's value struct, got {p947.x}");
+
+  // ...and true for the BIND, which is the copy @F95's example shows.  Same
+  // element, two spellings, opposite answers.
+  line947 = Line947 { pts: [Point947 { x: 11 }, Point947 { x: 12 }] };
+  bound = line947.pts[0];      // a bind: an independent copy
+  poke_value947(bound);
+  assert(bound.x == 777, "the copy moved, got {bound.x}");
+  assert(line947.pts[0].x == 11,
+         "and the element it was copied FROM did not, got {line947.pts[0].x}");
+  poke_value947(line947.pts[1]);   // no bind: the place itself is handed over
+  assert(line947.pts[1].x == 777,
+         "handing the element straight over writes through it, got {line947.pts[1].x}");
+
+  // REPLACING the whole binding is the other thing `&` is for: without it the
+  // callee's new value dies with the call, and nothing at the call site says so.
+  r947 = Cell947 { n: 11 };
+  replace947(r947);
+  assert(r947.n == 11, "a plain parameter cannot be re-pointed, got {r947.n}");
+  q947 = Cell947 { n: 11 };
+  replace_ref947(q947);
+  assert(q947.n == 555, "a `&` parameter can, got {q947.n}");
+}
+
+// @FTR-004 — capturing a value in a closure: what the closure shares
+//
+// @F22 says a closure "captures its values when it's made", so it "keeps behaving
+// the same even if those values change afterwards".  That is true of a scalar and
+// false of everything else: a struct or collection capture travels as a store
+// reference, so the closure and the enclosing scope hold ONE value — writes cross
+// in both directions, for as long as both are alive.
+//
+// It is not a defect, it is what makes a real kernel work: the audience-demo
+// server (@EHK-001) hands `engine_host::run` a closure that captures `world` and
+// appends a player to it on every connect.  If the capture were the snapshot @F22
+// describes, every connection would be forgotten as the handler returned.
+//
+// The scalar half is the one the catalogue's example shows, and it is what this
+// test pins beside the other: same syntax, opposite sharing.
+fn test_a_capture_shares_a_store_and_snapshots_a_scalar() {
+  // A SCALAR is taken at definition time — a later reassignment is not seen.
+  sc947 = 10;
+  read_it = fn() -> integer { sc947 };
+  sc947 = 20;
+  assert(read_it() == 10, "the closure kept the value it captured, got {read_it()}");
+  assert(sc947 == 20, "while the variable moved on, got {sc947}");
+
+  // A STRUCT capture is shared: the closure's write reaches the enclosing scope...
+  w947 = Cell947 { n: 1 };
+  bump = fn() { w947.n = 777; };
+  run947(bump);
+  assert(w947.n == 777, "the closure wrote into the captured record, got {w947.n}");
+
+  // ...and a change made OUT here is seen IN there, which is the exact opposite
+  // of "keeps behaving the same even if those values change afterwards".
+  w947.n = 555;
+  read_w = fn() -> integer { w947.n };
+  w947.n = 999;
+  assert(read_w() == 999, "the closure reads the record as it is NOW, got {read_w()}");
+
+  // A COLLECTION capture is shared the same way — this is the shape the server
+  // kernel depends on.
+  seen947: vector<integer> = [1];
+  record = fn() { seen947 += [9]; };
+  run947(record);
+  run947(record);
+  assert(len(seen947) == 3, "both calls appended to the caller's vector, got {len(seen947)}");
+  assert(seen947[2] == 9, "and the appended element is the closure's, got {seen947[2]}");
+}
+
+struct Cell947 { n: integer }
+value struct Point947 { x: integer }
+struct Line947 { pts: vector<Point947> }
+
+// A scalar has to travel home in the RETURN...
+fn add_inside947(v: integer) -> integer {
+  v = v + 766;
+  v
+}
+
+// ...or through a `&`, which is the one spelling that writes a scalar back.
+fn add_through947(v: &integer) { v = v + 766; }
+
+fn poke947(c: Cell947) { c.n = 777; }
+
+// `&` on a parameter whose only write is a FIELD earns the advice this file
+// expects: it costs an indirection and changes nothing.
+fn poke_ref947(c: &Cell947) { c.n = 888; }
+
+fn poke_vec947(v: vector<integer>) { v[0] = 777; }
+
+fn poke_value947(p: Point947) { p.x = 777; }
+
+// Replacing the whole binding: the plain form cannot reach the caller.
+fn replace947(c: Cell947) { c = Cell947 { n: 555 }; }
+
+fn replace_ref947(c: &Cell947) { c = Cell947 { n: 555 }; }
+
+fn run947(f: fn()) { f(); }

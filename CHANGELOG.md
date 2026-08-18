@@ -521,6 +521,13 @@ release, the build mentions it once:
 It never fetches anything to say this, never speaks for a library's own dependencies,
 stays quiet when you are current or offline, and can be turned off with
 `LOFT_NO_UPGRADE_NOTICE=1`.
+### A closure capture is no longer reported as a dead assignment
+
+`s = 10; show = fn() -> integer { s }; s = 20;` hands `show` the 10 — and loft used to
+call that first line a dead assignment and offer to delete it. The offer was wrong: the
+capture reads the value where it is written, which is what makes a snapshot a snapshot,
+and taking the advice changes what the program answers. The warning now stays silent on
+any variable a closure captures. A variable no closure touches is unaffected.
 
 ### Adding a file no longer changes a library's answer in silence
 

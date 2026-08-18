@@ -44,7 +44,7 @@ poor one for a *work queue*. The twelve are now **Phase E** below, in the order 
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
 **Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, unstarted).
+feature catalogue, `FTR`, **14 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (6 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (14 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -913,6 +913,74 @@ numbers in the prose cannot drift from the test without the gate saying so.
 **Still to do:** the other ~111 features. The first slice says the rollout is mostly a
 READING task rather than an authoring one — find the demonstrator that already exists,
 and only author an `@FTR` where none does.
+
+**THE SECOND SLICE IS APPLIED (2026-08-18) — eight entries, and four of them described
+loft as copy-by-default.** The pairing pass was again mostly READING: `@GIT-001..005` for
+**I117** (git natives — the entry's own "first consumers" section already named the two
+programs the tags sit in), `@EHK-001..004` for **I85**, `@RGX-001` for **F47**,
+`@SSH-002` for **F97**, `@RND-002` for **F106**, `@TIM-001` for **F95**. Two new
+demonstrators were authored, `@FTR-003` / `@FTR-004`, because the rest of the slice was a
+correction and a correction needs a test that can go red.
+
+| feature | cites | what the entry said |
+|---|---|---|
+| F21 references `&T` | `@FTR-003` | *"without `&`, the function only sees a copy and your original is left alone"* |
+| F22 closures | `@EHK-001` `@FTR-004` | *"it keeps behaving the same even if those values change afterwards"* |
+| F47 imports | `@RGX-001` | (nothing about resolution order — added) |
+| F95 value structs | `@TIM-001` `@FTR-003` | *"hand one to somebody and they cannot change yours"* |
+| F97 `len` vs `size` | `@SSH-002` | (second citation, a real byte stream) |
+| F106 copy/move | `@RND-002` `@FTR-003` `@FTR-004` | *"**Two** rules decide whether two names share data"* — a call is not one of them |
+| I85 engine-host natives | `@EHK-001..004` | (locator named only the Rust file; the typed surface added) |
+| I117 git natives | `@GIT-001..005` | — |
+
+**The measured rule, both backends** (the matrix is `@FTR-003`):
+
+| | callee writes a FIELD / ELEMENT | callee REPLACES the binding |
+|---|---|---|
+| `integer` / `text` | — | lost; `&` → lands |
+| `vector` | **lands, `&` or not** | lost; `&` → lands |
+| `struct` | **lands, `&` or not** | lost; `&` → lands |
+| `value struct` | **lands, `&` or not** | lost; `&` → lands |
+
+So `&` buys a scalar write-back and whole-binding replacement, nothing else — and a
+closure capture splits the same way (`@FTR-004`): a scalar is a snapshot, a struct or
+collection is shared in both directions, which is what makes the audience-demo kernel's
+handler (`@EHK-001`) able to append to the world it captured.
+
+**The finding that ties the four together: loft's own compiler already says it.**
+`advice[slow-reference-parameter]` reads *"field mutation already propagates to the caller
+without it"* and its fix line is tagged `[reference · @F21]` — the diagnostic sends the
+reader to the entry that denied it. A catalogue is checked against the code it describes
+only where something crosses the two; nothing did here, and the entries were internally
+consistent all the way to the wrong model. **Where a diagnostic names a doc, that pairing
+is a cheap oracle: read the doc it points at and check it agrees.**
+
+**A test can pin a defect as a promise.** Three tests asserted the dead-assignment warning
+that fires on `s = 10; f = fn() { s }; s = 20;` — and each of them ALSO asserted the value
+that proves the capture read the 10 (`add_base(5) == 15`). A self-contradicting test reads
+as coverage. Fixed in the same session (see below), which is what made `@FTR-004` writable
+at all: the demonstrator tripped the false positive it was written to describe.
+
+**Fixed here: the dead-assignment lint counted a closure capture as no read** (`warning` tier,
+so it gates a library's CI). `Variables::track_write` compares `uses` against `uses_at_write`,
+and the capture site deliberately does not touch `uses` — with the comment *"Do NOT call
+var_usages — that would interfere with the dead-assignment check"*. The narrow cure is the
+one that cannot regress a true positive: skip the report for a variable a closure captured
+(`!var.captured`), which stays silent only where a read exists that the counter cannot see.
+A genuinely dead pair BEFORE the capture still warns — that boundary is the test.
+
+**Still to do:** the other ~103 features, plus two pairings this slice deliberately did NOT
+make. **F109 `#superseded`** has its real use in a shipped library (four marks in
+`regex`), but no tagged fn CALLS a superseded spelling, so the honest citation needs an
+`@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
+shim answers what `search` does. **F43 is the catalogue's one unauthored stub** and is
+deliberately so (@PLN92: "random, deferred as a library") — it is the single entry the
+shadow generator skips, so `doc/features/` holds 116 pages for 117 issues.
+
+**One diagnostic gap noticed while measuring, not filed:** replacing a whole binding
+inside a callee (`fn f(s: S) { s = S { … } }`) loses the write silently — no `lost-write`,
+no dead-store. It is the one cell of the parameter matrix where the wrong model produces a
+wrong answer, and the natural home is @PLN107's dead-store lint.
 
 ### Phase C2 — the original design
 

@@ -1328,7 +1328,14 @@ impl Function {
         // passes — this one runs DURING the body parse, which is why it reaches user
         // code that has not been parsed yet.
         let here = lexer.at();
-        if var.write_source != (0, 0) && var.uses == var.uses_at_write {
+        // A CLOSURE CAPTURE is a read, and it is deliberately not counted in `uses`
+        // (the capture site in `parser/vectors.rs` says so, to keep this check from
+        // seeing a capture as an ordinary use).  So a captured variable's earlier
+        // write can never be shown dead here: `s = 10; f = fn() { s }; s = 20;`
+        // hands `f` the 10, and reporting that write as dead advertises a deletion
+        // that changes the answer.  Silence on a captured variable is the safe
+        // direction for a lint that must never make a program wrong.
+        if var.write_source != (0, 0) && var.uses == var.uses_at_write && !var.captured {
             // Variable was written before but not read since — dead assignment
             let name = var.name.clone();
             let prev_source = var.write_source;
