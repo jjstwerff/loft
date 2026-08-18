@@ -8313,37 +8313,9 @@ fn main() {
     if let Some(map) = script_line_map.as_deref() {
         p.diagnostics.remap_lines(&abs_file, map);
     }
-    // loft#883 — every lint below reads the RESOLVED types and the ownership verdicts
-    // derived from them. An aborting error means resolution did not finish, so those
-    // inputs are known-bad: an unresolved type carries empty deps, `ownership_of` reads
-    // empty deps as OWNED, and a borrowing `for` loop variable in an unrelated library
-    // then reads as a lost write. The compile is already failing and the user has one
-    // thing to fix; a warning derived from the wreckage points them at the wrong file.
-    //
-    // The gate is the whole set, not the one lint that was reported: they share the
-    // precondition, and the reason the false positive survived this long is that a green
-    // suite never aborts, so no warning-clean gate can reach this state.
-    if p.diagnostics.level() < Level::Error {
-        // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
-        // through the Warning channel so it surfaces with the other diagnostics.
-        // Gated (no-op unless LOFT_WARN_COPIES); disjoint borrows of `p`'s fields.
-        loft::use_analysis::warn_copies(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
-        // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
-        loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN139 stage G — the double-move lint. Runs here for the same reason the dead-store
-        // one does: the hand-offs it counts are the materialised `OpCopyRecord`s, which only
-        // exist once the program is scope-checked.
-        loft::use_analysis::warn_double_move(&p.data, &mut p.diagnostics, &abs_file);
-        // loft#894 — the lost-temporary-write lint. Runs here for the same reason its two
-        // neighbours do: the `__lift_N` temporaries it keys on are minted by `scopes`, so
-        // they exist only once the program is scope-checked.
-        loft::use_analysis::warn_lost_temp_writes(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol in owned source must resolve
-        // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
-        // symbol is marked, so a no-op for every program today.
-        loft::use_analysis::superseded_fold_diagnostics(&p.data, &mut p.diagnostics, &abs_file);
-    }
+    // loft#985 — the post-scope-check lint family lives in ONE place, so the program path
+    // here and `loft test` run the same set; the error gate (loft#883) travels with it.
+    loft::use_analysis::post_scope_lints(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN24 arc B — the interpreter calls `#c` bindings for real now; what
     // remains gated is the ONE shape the contract does not cover.
     //

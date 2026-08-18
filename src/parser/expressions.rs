@@ -1205,7 +1205,11 @@ impl Parser {
         // unbounded-loop diagnostic points at the `while` itself.
         let while_pos = self.lexer.peek_pos().clone();
         let mut cond = Value::Null;
+        // loft#986 — see `in_control_head`: the `{` after the condition opens the body.
+        let outer_head = self.in_control_head;
+        self.in_control_head = true;
         self.expression(&mut cond);
+        self.in_control_head = outer_head;
         if !self.first_pass && matches!(cond, Value::Null) {
             diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
             return;

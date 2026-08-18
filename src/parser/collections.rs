@@ -2101,7 +2101,11 @@ use #count instead"
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
+            // loft#986 — see `in_control_head`: the `{` after the iterable opens the body.
+            let outer_head = self.in_control_head;
+            self.in_control_head = true;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
+            self.in_control_head = outer_head;
             // if #fields was detected, take the compile-time unrolling path.
             if self.fields_of != u32::MAX {
                 let struct_def_nr = self.fields_of;

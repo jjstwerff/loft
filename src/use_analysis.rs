@@ -2631,6 +2631,49 @@ pub fn dump_all(data: &Data) {
 /// (`_`/`#` temporaries, arguments, closure-captured, global shadows). The `reads==0 &&
 /// write_targets>0` signal implies `uses>0`, so this lint and `test_used` (`uses==0`) are
 /// disjoint. Populates `diags`; the caller renders them. Sibling of [`warn_copies`].
+/// loft#985 — the post-scope-check lint family, in ONE place so every path that loads a
+/// program runs the same set.
+///
+/// These five share a precondition — they read the ownership verdicts and the materialised
+/// copies that only exist once `scopes::check` has run — so they cannot live with the
+/// parse-time diagnostics, and they had come to live in `main.rs`'s program path alone.
+/// `loft test` / `--tests`, which is the path a LIBRARY's CI takes, ran none of them: a
+/// library could ship a `#superseded` steer pointing at nothing (a hard ERROR on the
+/// program path) and writes that land in a copy, with a green suite. That is exactly the
+/// hole @PLN107's lint was written for — its motivating case is a published `graphics`
+/// canvas whose every drawing primitive was a no-op through the copy-mutate shape.
+///
+/// Call it ONCE per loaded program, after `scopes::check`. Not once per test: each test
+/// compiles its own bytecode from the same `Data`, so a per-test call would report every
+/// finding N times.
+///
+/// The error gate is part of the fact, not the caller's business (loft#883): every lint
+/// below reads RESOLVED types, and an aborting error means resolution did not finish — an
+/// unresolved type carries empty deps, `ownership_of` reads empty deps as OWNED, and a
+/// borrowing `for` variable in an unrelated library then reads as a lost write. The gate is
+/// the whole set rather than the lint that was reported, because they share the
+/// precondition.
+pub fn post_scope_lints(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if diags.level() >= crate::diagnostics::Level::Error {
+        return;
+    }
+    // @PLN90 W5 — the enforced copy lint (gated `LOFT_WARN_COPIES`).
+    warn_copies(data, diags, fallback_file);
+    // @PLN107 S4a — the dead-store / lost-write lint (gated `LOFT_DEAD_STORES`).
+    warn_dead_stores(data, diags, fallback_file);
+    // @PLN139 stage G — the double-move lint.
+    warn_double_move(data, diags, fallback_file);
+    // loft#894 — the lost-temporary-write lint.
+    warn_lost_temp_writes(data, diags, fallback_file);
+    // @PLN102 arc C step 4 — the `#superseded` fold lint, including its hard ERROR for a
+    // steer whose successor does not resolve.
+    superseded_fold_diagnostics(data, diags, fallback_file);
+}
+
 pub fn warn_dead_stores(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,

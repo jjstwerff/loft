@@ -76,6 +76,32 @@ Related, and fixed with it: adding to a list through something that isn't there 
 doing nothing. Setting a plain field that way was already ignored; adding to a list now is
 too.
 
+### Writing `Thing { }` works wherever the struct is declared
+
+An empty struct literal — the way you ask for a value with every field at its default —
+was a parse error if the struct happened to be declared *below* the function using it:
+
+```loft
+fn main() { a = Cfg { }; }
+struct Cfg { port: integer }        // declared after — used to break the line above
+```
+
+Naming a single field (`Cfg { port: 0 }`) worked, and moving the struct above worked, so
+the error pointed at a line that had nothing wrong with it. Both spellings now work in
+either order.
+
+### Tests now see the same warnings a program does
+
+A handful of checks — the lost-write warning, the double-move warning, and the
+`#superseded` signpost check — only ran when you ran your code as a *program*. Under
+`loft test` they were silent, which is the wrong way round: a library is checked by its
+tests, so exactly the code most in need of them was the code that never got them. A
+library could publish a signpost pointing at a function that does not exist, or a helper
+whose writes all land in a copy, with a completely green suite.
+
+They now run on both paths, once per file, and `--deny-warnings` fails on them as you
+would expect.
+
 ### Dividing a float by zero gives one answer everywhere
 
 `1.0 / 0.0` answered two different things depending on where the result went. Written

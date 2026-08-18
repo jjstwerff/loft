@@ -143,6 +143,15 @@ pub struct Parser {
     pub lexer: Lexer,
     /// Are we currently allowing break/continue statements?
     in_loop: bool,
+    /// loft#986 — we are parsing a control-flow HEAD (an `if`/`while` condition, a `for`
+    /// iterable), where the `{` that follows opens a BLOCK, not a struct literal.
+    ///
+    /// Only the EMPTY-literal case consults it. `T { }` has no `field:` to shape-check, so
+    /// the fallback that consumes an unresolved `Name { … }` cannot tell it from the body
+    /// of `if b { }` with an undefined `b` — and without this it swallowed the block and
+    /// answered `Expect token {` where the useful message is `Unknown variable 'b'`.
+    /// Saved and restored around the head, like `in_loop`.
+    in_control_head: bool,
     /// Cognitive complexity per definition — `context` → score, accumulated AS THE SOURCE IS
     /// PARSED.
     ///
@@ -924,6 +933,7 @@ impl Parser {
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
+            in_control_head: false,
             complexity: HashMap::new(),
             cc_deepest: HashMap::new(),
             cc_nest: 0,

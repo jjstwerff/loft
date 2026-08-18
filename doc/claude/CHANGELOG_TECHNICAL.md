@@ -74,6 +74,65 @@ Guards: `tests/scripts/980-variant-field-answers-its-own-variant.loft` +
 `tests/variant_field_semantics.rs` (behaviour); `tests/variant_field.rs` keeps the
 diagnostic.
 
+### The post-scope lints run under `loft test` too (loft#985, 2026-08-19)
+
+Five lints share one precondition — they read the ownership verdicts and the materialised
+copies that exist only after `scopes::check` — so they sat in one block on `main.rs`'s
+PROGRAM path. `loft test` / `--tests`, which is the path a LIBRARY's CI takes, ran none of
+them: a library could ship a `#superseded` steer pointing at nothing (a hard ERROR anywhere
+else) and writes that land in a copy, with a green suite. That is the hole @PLN107's lint
+was written for — its motivating case is a published `graphics` canvas that shipped every
+drawing primitive as a no-op through the copy-mutate shape, checked by
+`LOFT_DENY_WARNINGS=1 loft --interpret --tests tests`.
+
+What hid it is that the split is INSIDE the diagnostic set: `warning[never-read]` reached
+`--tests` and always did, so "tests are quiet" was never the rule.
+
+`use_analysis::post_scope_lints` is now the ONE home for the set, error gate included
+(loft#883: they all read RESOLVED types, and an aborting error means resolution did not
+finish, so an unresolved type's empty deps read as OWNED and an unrelated library's `for`
+variable reads as a lost write). `main.rs` and `test_runner.rs` both call it — two callers,
+one list, so the sets cannot drift apart again.
+
+**The ordering was the actual fix.** `scopes::check` ran in the test runner AFTER test
+discovery, while diagnostics are collected into `FileResult` well before that — so a lint
+reporting there wrote into a struct nobody read again. The scope check now runs directly
+after the parse and before the collection, which is also where its own diagnostics become
+visible. Called once per FILE, not per test: each test compiles its own bytecode from one
+`Data`, so a per-test call would report every finding N times
+(`one_finding_is_reported_once_across_many_tests` pins 3 tests → 1 report).
+
+Guard: `tests/post_scope_lints_under_tests.rs` — the dangling steer FAILS the run, the lost
+write is reported, `LOFT_DENY_WARNINGS=1` goes red on it, the count is one across three
+tests, and `never-read` still reaches the test path (the control for the split that hid it).
+
+### An empty struct literal parses before its declaration (loft#986, 2026-08-19)
+
+`T { }` was a parse error when `T` was declared BELOW the use, while `T { port: 0 }` in the
+same position was fine and `T { }` was fine with `T` declared above — `error: Expect token ;`
+pointing at the line rather than the type, so it read as a syntax mistake in code that has
+none. Legality by declaration ORDER, for the spelling that asks for the whole default record.
+
+A type pass 1 cannot resolve falls to a fallback that consumes the `Name { … }` body, and
+that fallback recognised a literal by SHAPE — an identifier followed by `:` or `,`. An empty
+body has no field to shape-check, so it did not match, the `{` went unconsumed, and the
+statement failed. (Fourth member of the family where a pass-1 fallback accepts fewer
+spellings than the construct has; the other three were named arguments in the method
+spelling, the shared argument-list skipper, and the compound-key index.)
+
+The shape check is what keeps a control-flow body from reading as a literal, and an empty
+body cannot be told from one that way — `if b { }` with an undefined `b` is identical. So
+the head of an `if` / `while` / `for` sets `in_control_head` (saved/restored, like
+`in_loop`) and only the empty-literal case consults it. Measured both directions: without
+it, `if b { }` answered `Expect token {` where the useful message is `Unknown variable 'b'`.
+
+The pre-existing sibling is left alone and noted: `if b { x: 1 }` with an undefined `b`
+already read as a struct literal before this change, and still does.
+
+Guard: `tests/scripts/986-empty-struct-literal-before-its-declaration.loft` — the empty
+literal below its declaration, with a declared field default, nested, as an argument and a
+return, plus the control-flow controls.
+
 ### Float `/0` is IEEE in every destination (loft#983, 2026-08-19)
 
 `1.0 / 0.0` was `inf` inline and `null` once bound, returned, or stored — one operator, two

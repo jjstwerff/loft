@@ -3008,7 +3008,12 @@ impl Parser {
 
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
+        // loft#986 — the `{` after this condition opens a BLOCK; an empty `{ }` must not
+        // read as a struct literal here.
+        let outer_head = self.in_control_head;
+        self.in_control_head = true;
         let tp = self.expression(&mut test);
+        self.in_control_head = outer_head;
         self.convert(&mut test, &tp, &Type::Boolean);
         // @PLN25 DN3: a non-null proof from the condition narrows the proven var inside the
         // matching branch (then for `!= null`/truthy, else for `== null`).

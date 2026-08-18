@@ -1864,14 +1864,28 @@ impl Parser {
     }
 
     /// Peek past a `{` to decide whether it opens a struct literal (`{ field:
-    /// … }` / `{ field, … }`) rather than a control-flow block.  Non-consuming
-    /// (uses a lexer link/revert); mirrors the disambiguation in `parse_block`.
+    /// … }` / `{ field, … }` / `{ }`) rather than a control-flow block.
+    /// Non-consuming (uses a lexer link/revert); mirrors the disambiguation in
+    /// `parse_block`.
+    ///
+    /// loft#986 — an EMPTY body is a struct literal too, and it is the one spelling the
+    /// field-shape test cannot recognise: `T { }` asks for the whole default record, so
+    /// there is no `field:` or `field,` to look at.  Without this the `{` went
+    /// unconsumed and the statement failed with `Expect token ;` pointing at the line
+    /// rather than at the type — but ONLY when `T` was declared BELOW the use, since a
+    /// declared type never reaches this fallback at all.  Legality by declaration order,
+    /// for the spelling a reader reaches for first.
+    ///
+    /// Checked BEFORE the identifier peek, which consumes.  The caller has already ruled
+    /// out a known variable (`items { … }` opening a loop body), so a bare unknown name
+    /// followed by `{ }` here is a construction of a type that does not exist yet.
     fn peek_struct_literal_body(&mut self) -> bool {
         let link = self.lexer.link();
         self.lexer.token("{");
-        let looks_like_struct = self.lexer.has_identifier().is_some()
-            && ((self.lexer.peek_token(":") && !self.lexer.peek_token(":="))
-                || self.lexer.peek_token(","));
+        let looks_like_struct = (self.lexer.peek_token("}") && !self.in_control_head)
+            || (self.lexer.has_identifier().is_some()
+                && ((self.lexer.peek_token(":") && !self.lexer.peek_token(":="))
+                    || self.lexer.peek_token(",")));
         self.lexer.revert(link);
         looks_like_struct
     }
