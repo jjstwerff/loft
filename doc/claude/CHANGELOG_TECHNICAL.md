@@ -9,6 +9,64 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A branch whose arms disagree about ownership froze the wrong one (loft#978, 2026-08-18)
+
+```loft
+fn read(b: Bag, fresh: boolean) -> integer {
+  // ONE arm is a fresh record, the other a view into `b`
+  it = if fresh { Item { name: "fresh", limbs: [] } } else { b.items["one"] ?? Item {} };
+  len(it.limbs)
+}
+// prints `2 0 0` where the same program without the fresh arm prints `2 2 2`
+```
+
+Silent, both backends, exit 0. `it` recorded no dependency at all, an empty dep list is
+the OWNED reading at every free site, and scope exit released the container's record; the
+next unrelated allocation claimed the recycled slot and every later read answered out of
+it. `LOFT_NO_SLOT_REUSE=1` read *correctly* with the defect present, which is why no
+poison or use-after-free sweep saw it — the store was freed and then legitimately
+re-occupied.
+
+The defect was **arm-order sensitive**, and that is what named the cause. Writing the view
+first read correctly. `parse_if` parses the `else` block with the THEN arm's type as its
+expected type, and `block_result` adopted that expected type WHOLE — deps included. An
+expected type says what shape belongs in a position; it was written before the value in
+hand existed, so it cannot say what that value aliases. Whichever arm came second got its
+sibling's borrow list, and with the fresh arm first that list was empty.
+
+- `Type::with_deps_of` keeps the block's own tail deps when it adopts an expected type,
+  applied to the `else` arm alone — the only block handed a sibling EXPRESSION as its
+  expected type. Every other caller's is a DECLARED type whose deps are attribute indices,
+  and grafting frame vars onto those is the cross-space read loft#666 was made of.
+- `Type::joined_deps` unions the arms' borrows at the `if`/`else`, at the `else if` chain
+  (whose type is deliberately not adopted as `false_type`, so what it borrows had to reach
+  the join another way), and at all six `match` arm sites.
+- `Parser::arm_join_type` filters what an arm CONTRIBUTES: a dep naming a store the arm
+  itself mints is its ownership marker, not a borrow (`[]` lowers to `OpDatabase(__vdb_N,
+  …)` and types as a dep on it). Importing one told the return machinery the value views a
+  local and turned @PLN85's `deliver` return from `["__retbuf", "e"]` into an unresolvable
+  `["??"]`. The minted set comes from `use_analysis::minted_vars`, the same `collect_defs`
+  walk the ownership classifier reads.
+- `Type::with_deps` is now the one list of which variants carry a dep list; `depending`
+  delegates to it.
+
+Measured boundary — eighteen shapes, all previously wrong, all now correct on both
+backends: the join construct (`if`/`else`, `else if`, `match`, nested), where the view
+comes from (hash lookup, vector element, struct field), how it arrives (projection,
+accessor return, parameter), and what the local is used for (collection field, scalar
+field, returned). Controls that must stay green and do: two fresh arms are genuinely
+owned and still freed; two views of one base were never in doubt.
+
+Guard: `tests/branch_join.rs` + `tests/scripts/978-branch-join-carries-both-arms-borrows.loft`
+— a static oracle on the recorded type (deterministic, unlike the value cells, which depend
+on a freed slot being reused), the value cells on both backends, a strict-store run and a
+leak run. Both oracles were checked against a pre-fix binary and fail there.
+
+Residual filed as **loft#981**: an escaping join — a *return* whose arms disagree — has no
+static answer that is right for both arms, so taking the borrow leaks the record the fresh
+arm mints. Predates this fix; a plain `fn get(b, k) -> Item { b.items[k] ?? Item { … } }`
+leaks identically on the released binary.
+
 ### Writing a collection field of a struct-enum panicked in the store layer (loft#977, 2026-08-18)
 
 ```loft

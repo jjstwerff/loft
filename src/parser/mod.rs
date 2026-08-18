@@ -13112,6 +13112,16 @@ fn emit_fn_ref_field_write(
     }
 }
 
+/// The type of an `if`/`else` whose arms have been unified: the THEN arm's shape,
+/// carrying what EITHER arm can alias.
+///
+/// The shape comes from `a` because the arms are already unified by the time this
+/// runs; only the borrow list has two answers to merge.  It is a UNION, not a
+/// pick: an arm yielding a fresh record has an empty dep list, which every free
+/// site reads as owned, so taking that arm's answer for the whole join freed a
+/// container view the other arm had delivered (loft#978 — silent, both backends).
+/// Text was the only type this merged until then, so the rule existed but reached
+/// one variant of the many that carry deps.
 fn merge_dependencies(a: &Type, b: &Type) -> Type {
     // Never (return/break/continue) defers to the other branch's type.
     if matches!(a, Type::Never) {
@@ -13120,18 +13130,7 @@ fn merge_dependencies(a: &Type, b: &Type) -> Type {
     if matches!(b, Type::Never) {
         return a.clone();
     }
-    if let (Type::Text(da), Type::Text(db)) = (a, b) {
-        let mut d = HashSet::new();
-        for v in da {
-            d.insert(*v);
-        }
-        for v in db {
-            d.insert(*v);
-        }
-        Type::Text(Deps::frame(d.into_iter().collect()))
-    } else {
-        a.clone()
-    }
+    a.joined_deps(b)
 }
 
 fn field_id(key: &[(String, bool)], name: &mut String) {

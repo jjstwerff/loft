@@ -1,0 +1,253 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#978 — a local fed by a branch whose arms DISAGREE about ownership borrows
+// whatever any arm can hand it.
+//
+// One arm builds a fresh record, the other yields a view into a container. Which one
+// ran is a run-time fact, so the local's type has to say it can alias the container.
+// It said the opposite: `parse_if` parses the `else` block with the THEN arm's type as
+// its expected type, and a block adopted that expected type WHOLE — deps included. A
+// fresh-record then-arm therefore published an EMPTY dep list for the else arm's view,
+// every free site reads an empty dep list as owned, and scope exit released the
+// container's record. The next unrelated allocation claimed the recycled slot and every
+// later read answered out of it: `2, 0, 0` where the same program without the fresh arm
+// reads `2, 2, 2`. Silent, both backends, exit 0.
+//
+// The measured boundary — the axes that do NOT matter, one moved per probe: the join
+// construct (`if`/`else`, an `else if` chain, `match`, one nested a level down); where
+// the view comes from (hash lookup, vector element, plain struct field); how it arrives
+// (direct projection, an accessor's return, a parameter); and what the local is then
+// used for (a collection field, a scalar field, being returned). All eighteen failed.
+//
+// The one axis that DID matter is ARM ORDER, which is what named the cause: with the
+// view in the THEN arm the program read correctly, because then the FRESH arm was the
+// one being handed the sibling's dep list. That asymmetry is a hint being taken for a
+// lifetime fact, not a join being computed wrong.
+//
+// Both-arms-agree are the controls and must stay green: two fresh arms are genuinely
+// owned (freeing is correct — a fix that simply stopped freeing would leak here), and
+// two views of one base were never in doubt.
+
+struct I978Item {
+  name:  text,
+  limbs: vector<float>,
+}
+
+struct I978Bag {
+  items: hash<I978Item[name]>,
+  vec:   vector<I978Item>,
+  one:   I978Item,
+}
+
+// The unrelated allocation: it only has to CLAIM a store, and stay live.
+struct I978Sink {
+  vals: vector<float>,
+}
+
+fn i978_seed() -> I978Bag {
+  b = I978Bag { items: [], vec: [], one: I978Item { name: "one", limbs: [] } };
+  h = I978Item { name: "one", limbs: [] };
+  h.limbs += [1.0];
+  h.limbs += [2.0];
+  b.items += [h];
+  v = I978Item { name: "one", limbs: [] };
+  v.limbs += [1.0];
+  v.limbs += [2.0];
+  b.vec += [v];
+  b.one.limbs += [1.0];
+  b.one.limbs += [2.0];
+  b
+}
+
+// ── The join constructs ─────────────────────────────────────────────────────────────
+// `fresh` is always false at the call sites below, so every one of these takes the VIEW
+// arm; the fresh arm is there to be the sibling whose empty dep list did the erasing.
+
+fn i978_if(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { b.items["one"] ?? I978Item { name: "", limbs: [] } };
+  len(it.limbs)
+}
+
+// Arm order reversed — the cell that read correctly against the defect, kept because it
+// is the control that says the two orders must agree.
+fn i978_if_reversed(b: I978Bag, fresh: boolean) -> integer {
+  it = if !fresh { b.items["one"] ?? I978Item { name: "", limbs: [] } } else { I978Item { name: "f", limbs: [] } };
+  len(it.limbs)
+}
+
+fn i978_else_if(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f1", limbs: [] } } else if !b.items["one"] { I978Item { name: "f2", limbs: [] } } else { b.items["one"] ?? I978Item { name: "", limbs: [] } };
+  len(it.limbs)
+}
+
+fn i978_match(b: I978Bag, fresh: boolean) -> integer {
+  it = match fresh { true => I978Item { name: "f", limbs: [] }, false => b.items["one"] ?? I978Item { name: "", limbs: [] } };
+  len(it.limbs)
+}
+
+fn i978_nested(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { if len(b.items) > 0 { b.items["one"] ?? I978Item { name: "", limbs: [] } } else { I978Item { name: "e", limbs: [] } } };
+  len(it.limbs)
+}
+
+// ── Where the view comes from ───────────────────────────────────────────────────────
+
+fn i978_vector_elem(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { b.vec[0] ?? I978Item { name: "", limbs: [] } };
+  len(it.limbs)
+}
+
+fn i978_struct_field(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { b.one };
+  len(it.limbs)
+}
+
+// ── How the view arrives ────────────────────────────────────────────────────────────
+
+fn i978_get(b: I978Bag) -> I978Item { b.items["one"] ?? I978Item { name: "", limbs: [] } }
+
+fn i978_via_accessor(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { i978_get(b) };
+  len(it.limbs)
+}
+
+fn i978_pick(v: I978Item, fresh: boolean) -> integer {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { v };
+  len(it.limbs)
+}
+
+fn i978_via_param(b: I978Bag, fresh: boolean) -> integer {
+  i978_pick(b.items["one"] ?? I978Item { name: "", limbs: [] }, fresh)
+}
+
+// ── What the local is used for ──────────────────────────────────────────────────────
+
+fn i978_scalar_read(b: I978Bag, fresh: boolean) -> text {
+  it = if fresh { I978Item { name: "f", limbs: [] } } else { b.items["one"] ?? I978Item { name: "", limbs: [] } };
+  it.name
+}
+
+fn i978_tail(b: I978Bag, fresh: boolean) -> I978Item {
+  if fresh { I978Item { name: "f", limbs: [] } } else { b.items["one"] ?? I978Item { name: "", limbs: [] } }
+}
+
+fn i978_returned(b: I978Bag, fresh: boolean) -> integer { len(i978_tail(b, fresh).limbs) }
+
+// ── The both-arms-agree controls ────────────────────────────────────────────────────
+
+// Genuinely OWNED: nothing here may be kept alive by the join rule, or the fix has
+// traded an over-free for a leak. The leak-check cell in tests/branch_join.rs is what
+// reads this one's other half.
+fn i978_both_fresh(b: I978Bag, fresh: boolean) -> integer {
+  n = len(b.items);
+  it = if fresh { I978Item { name: "a", limbs: [] } } else { I978Item { name: "b", limbs: [] } };
+  len(it.limbs) + n - n
+}
+
+fn i978_both_views(b: I978Bag, fresh: boolean) -> integer {
+  it = if fresh { b.items["one"] ?? I978Item { name: "", limbs: [] } } else { b.items["one"] ?? I978Item { name: "", limbs: [] } };
+  len(it.limbs)
+}
+
+fn main() {
+  b = i978_seed();
+
+  // ⚠ Three properties of the shape below are load-bearing, each measured against the
+  // defect on BOTH backends (the same three loft#974's guard is calibrated on):
+  //   * the reader is its own FUNCTION — the wrong free fires at ITS scope exit;
+  //   * the unrelated allocation sits HERE, in the caller, between two calls, and stays
+  //     LIVE — the freed slot only misreads once something else claims it;
+  //   * it is the ALLOCATION that matters, not a write.
+
+  assert(i978_if(b, false) == 2, "if/else, first: {i978_if(b, false)}");
+  s1 = I978Sink { vals: [] };
+  s1.vals += [0.0];
+  assert(i978_if(b, false) == 2, "if/else, after an unrelated allocation");
+  assert(i978_if(b, false) == 2, "if/else, third");
+
+  assert(i978_if_reversed(b, false) == 2, "arms reversed, first");
+  s2 = I978Sink { vals: [] };
+  s2.vals += [0.0];
+  assert(i978_if_reversed(b, false) == 2, "arms reversed, after an allocation");
+
+  assert(i978_else_if(b, false) == 2, "else-if chain, first");
+  s3 = I978Sink { vals: [] };
+  s3.vals += [0.0];
+  assert(i978_else_if(b, false) == 2, "else-if chain, after an allocation");
+
+  assert(i978_match(b, false) == 2, "match arms, first");
+  s4 = I978Sink { vals: [] };
+  s4.vals += [0.0];
+  assert(i978_match(b, false) == 2, "match arms, after an allocation");
+
+  assert(i978_nested(b, false) == 2, "nested if, first");
+  s5 = I978Sink { vals: [] };
+  s5.vals += [0.0];
+  assert(i978_nested(b, false) == 2, "nested if, after an allocation");
+
+  assert(i978_vector_elem(b, false) == 2, "vector element view, first");
+  s6 = I978Sink { vals: [] };
+  s6.vals += [0.0];
+  assert(i978_vector_elem(b, false) == 2, "vector element view, after an allocation");
+
+  assert(i978_struct_field(b, false) == 2, "struct field view, first");
+  s7 = I978Sink { vals: [] };
+  s7.vals += [0.0];
+  assert(i978_struct_field(b, false) == 2, "struct field view, after an allocation");
+
+  assert(i978_via_accessor(b, false) == 2, "view via an accessor, first");
+  s8 = I978Sink { vals: [] };
+  s8.vals += [0.0];
+  assert(i978_via_accessor(b, false) == 2, "view via an accessor, after an allocation");
+
+  assert(i978_via_param(b, false) == 2, "view as a parameter, first");
+  s9 = I978Sink { vals: [] };
+  s9.vals += [0.0];
+  assert(i978_via_param(b, false) == 2, "view as a parameter, after an allocation");
+
+  // A SCALAR field read is wrong in the same way — the record is gone, not just its
+  // collection field, so the whole hash entry stops resolving.
+  assert(i978_scalar_read(b, false) == "one", "scalar field read, first");
+  s10 = I978Sink { vals: [] };
+  s10.vals += [0.0];
+  assert(i978_scalar_read(b, false) == "one", "scalar field read, after an allocation");
+
+  assert(i978_returned(b, false) == 2, "join in tail position, first");
+  s11 = I978Sink { vals: [] };
+  s11.vals += [0.0];
+  assert(i978_returned(b, false) == 2, "join in tail position, after an allocation");
+
+  // Controls: arms that AGREE. Both-fresh is owned and must answer the fresh record's
+  // own (empty) length rather than the container's, or the join rule has started
+  // borrowing where there is nothing to borrow.
+  assert(i978_both_fresh(b, false) == 0, "both arms fresh: {i978_both_fresh(b, false)}");
+  assert(i978_both_fresh(b, true) == 0, "both arms fresh, other arm");
+  assert(i978_both_views(b, false) == 2, "both arms views");
+  assert(i978_both_views(b, true) == 2, "both arms views, other arm");
+
+  // The joins above, driven down their FRESH arm this time. Nothing is asserted about
+  // the container here — the point is the store traffic, which the strict-store and
+  // leak cells in tests/branch_join.rs read.
+  //
+  // `i978_returned` is deliberately NOT in this loop. Once its return correctly says it
+  // borrows `b`, the record its fresh arm mints is owned by nobody and leaks — which is
+  // not this fix's doing: the same happens to the fallback record of a plain
+  // `fn get(b, k) -> Item { b.items[k] ?? Item { … } }`, measured identical on the
+  // released binary and on `main` (loft#981). One escaping value cannot be given one
+  // static answer that is right for both of its arms; that needs the runtime adopt-or-
+  // materialise decision `OpBindOrCopy` already makes at BIND sites (@PLN85 `Own::Join`).
+  // Driving it here would assert a leak this guard did not cause and cannot fix.
+  for _ in 0..40 {
+    _a = i978_if(b, true);
+    _c = i978_match(b, true);
+    _d = i978_via_accessor(b, true);
+  }
+
+  // The container itself must still be intact after all of that — the defect freed ITS
+  // store, so this is the same fact asked from the other end.
+  final = b.items["one"] ?? I978Item { name: "", limbs: [] };
+  assert(len(final.limbs) == 2, "the container survived: {len(final.limbs)}");
+  assert(final.name == "one", "the container's record is still the one that was put in");
+  print("978 branch join OK\n");
+}

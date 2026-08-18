@@ -1713,6 +1713,20 @@ impl FillOps {
     }
 }
 
+/// Every variable `node` MINTS a fresh store into (an `OpDatabase` destination).
+///
+/// The ownership marker in dep form: `[]` lowers to `OpDatabase(__vdb_N, …)` and the
+/// value then types as a dep on `__vdb_N`, which says *I own this store* — the opposite
+/// of the borrow a dep normally records. A branch join has to tell the two apart before
+/// it can union its arms' deps (loft#978, `Parser::arm_join_type`), and this answers it
+/// from the SAME walk the ownership classifier reads, so the two cannot drift.
+#[must_use]
+pub(crate) fn minted_vars(data: &Data, node: &Value) -> HashSet<u16> {
+    let mut out = Defs::default();
+    collect_defs(node, &FillOps::of(data), &mut out);
+    out.db_vars
+}
+
 fn collect_defs(node: &Value, ops: &FillOps, out: &mut Defs) {
     match node.unspan() {
         Value::Set(v, rhs) => {

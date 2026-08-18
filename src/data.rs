@@ -1436,6 +1436,48 @@ impl Deps {
         }
     }
 
+    /// A copy carrying every entry of `other` that is not already here, appended
+    /// in `other`'s order; inherits THIS value's space.
+    ///
+    /// The join rule for a branch whose arms disagree about ownership: a value
+    /// that is a fresh record on one arm and a view into `b` on the other can
+    /// alias `b` at run time, so the merged type must say so.  An empty list is
+    /// the OWNED reading, and owned-∪-borrowed is borrowed — which is why the
+    /// union is taken over the arms rather than the intersection.
+    #[must_use]
+    pub fn union(&self, other: &Deps) -> Deps {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            self.items.is_empty()
+                || other.items.is_empty()
+                || self.space == other.space
+                || self.space == DepSpace::Unknown
+                || other.space == DepSpace::Unknown,
+            "dep-space violation: union of {:?} deps with {:?} deps",
+            self.space,
+            other.space
+        );
+        let mut items = self.items.clone();
+        for e in &other.items {
+            if !items.contains(e) {
+                items.push(*e);
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            let space = if self.items.is_empty() {
+                other.space
+            } else {
+                self.space
+            };
+            Deps { items, space }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Deps { items }
+        }
+    }
+
     /// A copy extended with `on` at the front (the `depending()` shape);
     /// inherits this value's space.
     #[must_use]
@@ -1898,7 +1940,24 @@ impl Type {
     /// `u16::MAX` markers).
     pub fn depending(&self, on: u16) -> Type {
         assert_ne!(on, u16::MAX, "Unknown depended on variable");
-        let v = Deps::frame1(on);
+        self.with_deps(&Deps::frame1(on))
+    }
+
+    /// The same type carrying `deps` as ITS OWN borrow list — the one place that
+    /// says which variants hold a dep list, so [`Type::depending`] and the branch
+    /// join below cannot drift apart about it.
+    ///
+    /// SHALLOW: a vector's ELEMENT type is left alone, because a container's own
+    /// borrow and its elements' are different axes ([`Type::without_deps`] is the
+    /// deep, hint-shaped rule and stays separate for that reason).  `Optional` and
+    /// `RefVar` are dep-transparent — deps are a lifetime property and a
+    /// nullability marker does not change what a value aliases (without this an
+    /// `Optional` borrow such as `e = v[i]` under DN1 loses its dep and the deps
+    /// pass reads it as OWNING).  A `Tuple` has no list of its own, so the deps
+    /// spread to its elements, where [`Type::depend`] unions them back.
+    #[must_use]
+    pub fn with_deps(&self, deps: &Deps) -> Type {
+        let v = deps.clone();
         match self {
             Type::Text(_) => Type::Text(v),
             Type::Reference(t, _) => Type::Reference(*t, v),
@@ -1908,18 +1967,87 @@ impl Type {
             Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), v),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
-            Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
+            Type::Vector(t, _) => Type::Vector(t.clone(), v),
             Type::Function(params, ret, _) => Type::Function(params.clone(), ret.clone(), v),
-            Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
-            // @PLN25 — `Optional` is a compile-time nullability marker over the base's
-            // runtime representation; deps are a lifetime property, agnostic to it, so a
-            // borrow attaches to the base and the wrapper is transparent (like `RefVar`).
-            // Without this an `Optional`-typed borrow (`e = v[i]` under DN1) silently loses
-            // its dep, and the deps pass treats it as OWNING → wrong store alloc / corruption.
-            Type::Optional(tp) => Type::optional(tp.depending(on)),
-            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
+            Type::RefVar(tp) => Type::RefVar(Box::new(tp.with_deps(deps))),
+            Type::Optional(tp) => Type::optional(tp.with_deps(deps)),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.with_deps(deps)).collect()),
             _ => self.clone(),
         }
+    }
+
+    /// What this type BORROWS, looking through the `Rewritten` marker.
+    ///
+    /// `Rewritten` records that the expression was built in place — a fact about
+    /// its construction, not about what it aliases — so a borrow question must
+    /// see past it (loft#943 makes the same distinction for signatures).
+    #[must_use]
+    pub fn borrow_deps(&self) -> Option<Deps> {
+        match self {
+            Type::Rewritten(inner) => inner.borrow_deps(),
+            other => other.deps_ref().cloned(),
+        }
+    }
+
+    /// [`Type::with_deps`] through a `Rewritten` wrapper, which it preserves.
+    #[must_use]
+    pub(crate) fn rewrap_deps(&self, deps: &Deps) -> Type {
+        match self {
+            Type::Rewritten(inner) => Type::Rewritten(Box::new(inner.rewrap_deps(deps))),
+            other => other.with_deps(deps),
+        }
+    }
+
+    /// This type's SHAPE carrying what `src` borrows (loft#978).
+    ///
+    /// For the places that take an EXPECTED type from their context and hand it
+    /// back as the value's type.  An expected type says what shape belongs here;
+    /// it cannot say what the value in hand aliases, because it was written
+    /// before that value existed.  Adopting it whole silently republishes some
+    /// other expression's borrow list — which is how an `if` arm came to carry
+    /// its SIBLING's deps.  `src` carrying no dep list at all leaves this type
+    /// alone (a diverging or scalar tail has no borrow to state).
+    #[must_use]
+    pub fn with_deps_of(&self, src: &Type) -> Type {
+        match src.borrow_deps() {
+            Some(d) => self.rewrap_deps(&d),
+            None => self.clone(),
+        }
+    }
+
+    /// This type widened to borrow whatever EITHER side borrows — the type-level
+    /// half of a branch join (loft#978).
+    ///
+    /// An `if`/`match` arm that yields a fresh record and one that yields a view
+    /// into a container deliver the SAME local, and which one ran is a run-time
+    /// fact.  Taking one arm's deps therefore under-states what the value can
+    /// alias, and an empty dep list is read as owned — so the local was freed at
+    /// scope exit and took the container's record with it.  The union is the
+    /// conservative reading that no arm can contradict: it can only keep a store
+    /// alive longer than one arm needed, never free one another arm still holds.
+    ///
+    /// `other` must carry only what that arm borrows from OUTSIDE itself — a dep naming
+    /// a variable the arm's own body defines is that arm's OWNERSHIP marker (an `[]`
+    /// literal types as a dep on the `__vdb_N` it just minted), and importing one here
+    /// would tell the return machinery this value views a local. `Parser::arm_join_type`
+    /// is what strips them; `self` is kept whole, because its own marker is how the
+    /// result carries what IT owns.
+    #[must_use]
+    pub fn joined_deps(&self, other: &Type) -> Type {
+        // A tuple carries no list of its own — join element-wise, where the deps live.
+        if let (Type::Tuple(a), Type::Tuple(b)) = (self, other)
+            && a.len() == b.len()
+        {
+            return Type::Tuple(a.iter().zip(b).map(|(x, y)| x.joined_deps(y)).collect());
+        }
+        // Nothing to merge, or nowhere on this shape to put it.
+        let (Some(mine), Some(theirs)) = (self.borrow_deps(), other.borrow_deps()) else {
+            return self.clone();
+        };
+        if theirs.is_empty() {
+            return self.clone();
+        }
+        self.rewrap_deps(&mine.union(&theirs))
     }
 
     #[must_use]

@@ -1479,7 +1479,22 @@ impl Parser {
                     self.validate_convert(context, t, result, tail_pos);
                 }
             }
-            tp = result.clone();
+            // loft#978 — an `else` arm is the ONE block handed a SIBLING EXPRESSION as
+            // its expected type (`parse_if` passes the THEN arm's), and an expected type
+            // cannot say what the value in hand borrows: it was written before that value
+            // existed.  Taking it whole republished the then-arm's dep list as the else
+            // arm's, so a fresh-record then-arm erased the container view the else arm
+            // actually delivered, the local read as owned, and scope exit freed the
+            // container's record.  Every OTHER caller's expected type is a DECLARED one
+            // (`return from block`, a `for` body), whose deps are attribute indices in a
+            // different space entirely — grafting frame vars onto those is the
+            // cross-space read loft#666 was made of, so the shape alone is taken there,
+            // exactly as before.
+            tp = if context == "else" {
+                result.with_deps_of(t)
+            } else {
+                result.clone()
+            };
         }
         // I9-var: skip ref_return/text_return for generic templates.
         // The return type T = Reference(tv_nr) triggers ref_return which promotes local
@@ -3055,6 +3070,8 @@ impl Parser {
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
+        // What an `else if` CHAIN borrows, when its type is not adopted as `false_type`.
+        let mut chain_borrow: Option<Type> = None;
         // @PLN25 DN1: whether there is a REAL user `else`. An if-WITHOUT-else in value position is
         // already an error and synthesises a `null` else for recovery; the DN1 widening below must
         // NOT treat that synthesised null as a nullable branch (it would add a spurious `τ?`).
@@ -3079,6 +3096,13 @@ impl Parser {
                 let chain_type = self.parse_if(&mut false_code);
                 if true_type == Type::Unknown(0) {
                     false_type = chain_type;
+                } else {
+                    // loft#978 — the chain's TYPE deliberately stays out of `false_type`
+                    // (above), but what it BORROWS is still a value this if-expression can
+                    // deliver, so it has to reach the join below.  Without it an
+                    // `else if` arm yielding a container view was erased by a plain
+                    // `if` arm yielding a fresh record, and the local read as owned.
+                    chain_borrow = Some(chain_type);
                 }
             } else {
                 false_type = self.parse_block("else", &mut false_code, &true_type);
@@ -3127,6 +3151,9 @@ impl Parser {
         // the caller to declare `τ?` or discharge. Only fires when exactly one branch yields null
         // and the other is a non-null scalar (heap types stay nullable; both-null stays as-is).
         let mut result_tp = merge_dependencies(&true_type, &false_type);
+        if let Some(chain) = &chain_borrow {
+            result_tp = result_tp.joined_deps(chain);
+        }
         if had_else && crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
             let t_null = self.branch_yields_null(&true_code);
             let f_null = self.branch_yields_null(&false_code);
@@ -3408,6 +3435,10 @@ impl Parser {
                     self.expression(&mut arm_body)
                 };
                 self.vars.restore_write_state(&arm_write_state);
+                // loft#978 — every arm can deliver this match's value, so the result carries
+                // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
+                // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
+                result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
                 if result_type == Type::Void || result_type == Type::Null {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
@@ -3878,6 +3909,10 @@ impl Parser {
             // current `Null` result like `Void` for promotion, and skip the unify
             // check when this arm is itself `null`.  Without this, struct-or-null
             // enum matches were rejected ("cannot unify: S and null", #365).
+            // loft#978 — every arm can deliver this match's value, so the result carries
+            // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
+            // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
+            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
@@ -4120,6 +4155,9 @@ impl Parser {
         } else {
             self.expression(&mut arm_code)
         };
+        // loft#978 — see the arm sites above: the wildcard is an arm like any other.
+        let joined = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+        *result_type = joined;
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
         } else if !self.first_pass
@@ -6851,6 +6889,10 @@ impl Parser {
             // the first CONCRETE arm's type (else `match c { false => null, true
             // => S{…} }` resolves to `Null`, `build_scalar_chain` can't type the
             // null sentinel, and the value arm returns null — silently wrong).
+            // loft#978 — every arm can deliver this match's value, so the result carries
+            // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
+            // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
+            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
@@ -7853,6 +7895,10 @@ impl Parser {
             } else {
                 self.expression(&mut arm_code)
             };
+            // loft#978 — every arm can deliver this match's value, so the result carries
+            // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
+            // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
+            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -8163,6 +8209,10 @@ impl Parser {
                 )
             };
 
+            // loft#978 — every arm can deliver this match's value, so the result carries
+            // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
+            // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
+            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -9400,6 +9450,38 @@ impl Parser {
     /// outer local / param returned by the block) — a genuine borrow to keep.
     fn block_defines_var(l: &[Value], v: u16) -> bool {
         l.iter().any(|op| Self::stmt_defines_var(op, v))
+    }
+
+    /// What an `if`/`match` arm contributes to its branch JOIN: the deps it borrows from
+    /// OUTSIDE itself (loft#978).
+    ///
+    /// A dep naming a store the arm's own body MINTS is that arm's ownership marker, not
+    /// a borrow: `[]` lowers to `OpDatabase(__vdb_N, …)` and the value types as a dep on
+    /// `__vdb_N`, which is how it says *I own this store*. Joining that into a sibling's
+    /// type publishes it as something the joined value VIEWS, and the return machinery
+    /// then reads the result as a view of a local — a different delivery question, and
+    /// one with no answer here (`deliver`'s return went from `["__retbuf", "e"]` to an
+    /// unresolvable `["??"]`).
+    ///
+    /// Only the CONTRIBUTED side is filtered. The arm the result type is taken from
+    /// keeps its own marker, because that is what says which store the result owns.
+    fn arm_join_type(&self, arm: &Value, tp: &Type) -> Type {
+        let Some(deps) = tp.borrow_deps() else {
+            return tp.clone();
+        };
+        if deps.is_empty() {
+            return tp.clone();
+        }
+        let minted = crate::use_analysis::minted_vars(&self.data, arm);
+        if minted.is_empty() {
+            return tp.clone();
+        }
+        let mut kept = deps.clone();
+        kept.retain(|v| !minted.contains(v));
+        if kept.len() == deps.len() {
+            return tp.clone();
+        }
+        tp.rewrap_deps(&kept)
     }
 
     /// loft#918 — the variable a block hands back, when its tail is nothing but a

@@ -26,6 +26,25 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### An `if` that answers a new value on one side and an existing one on the other
+
+Choosing between building something and pointing at something already stored —
+
+```loft
+it = if fresh { Item { name: "fresh", limbs: [] } } else { b.items["one"]? };
+```
+
+— quietly threw away the record `it` was pointing at, once the function returned.  The
+first read was correct; the next allocation anywhere in the program took over the freed
+space, and every read after that answered out of whatever landed there.  The entry could
+even stop being found in the collection it was still filed under.
+
+The giveaway was that swapping the two sides around fixed it, which is nobody's idea of a
+difference that should matter.  It doesn't now.  A value that could have come from either
+side of an `if`, an `else if`, or a `match` is treated as possibly pointing at whatever
+either side points at — so nothing it might still be using is released.  Building on both
+sides is unaffected: those really are new values, and they are still cleaned up.
+
 ### Filling in a list inside an enum variant works
 
 A struct-enum whose variant carries a collection —
