@@ -13,6 +13,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
+**ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
+`-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
+`-world` open as PRs alongside the loft-side registry PR they wait on
+(loft#973). 76 tags across the ecosystem. What remains is merging, in the order
+that PR states, and the twelve `deferred` rows in `loft-libs-world`.
+
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
 page is done** (LIBRARY_AUTHORING.md § 2a). First distributed library **`arguments`
@@ -299,15 +305,38 @@ aborted run. Both `loft-libs-game` and `loft-libs-assets` also gained the
 had — the rollout keeps finding this because it is the first pass that runs every
 gate in a checkout somebody else set up.
 
-**`loft-libs-world` stays HELD, and the reason is worth stating precisely** because
-"dirty tree" undersells it: the uncommitted change is a **consumer's finding written
-into `hex_edge/README.md`** (from moros#10, 2026-07-28) — that a caller must not come
-to rest exactly at the fraction `sweep_path` returns, because that position is on the
-bisector between two cells and the next call's `hex_at` may round to the far side,
-putting the character through the wall. It ends by asking the library's owner whether
-a `sweep_path_skin` belongs here. That is somebody's work in progress and an open
-design question, not build residue, and creating a rollout branch in that checkout
-would carry it onto the branch. The hold is correct until it lands.
+**`loft-libs-world` is DONE — the seventh and last repo, and the hold was wrong
+about one thing.** It had been held because `hex_edge/README.md` was modified and
+unstaged: a consumer's finding from moros#10 (a caller must not come to rest exactly
+at the fraction `sweep_path` returns, because that point is on the bisector and the
+next `hex_at` may round to the far side, putting the character through the wall),
+ending with an open design question for the owner. The hold read that as work in
+progress. **Its mtime was 2026-07-28 — three weeks old.** Not work in progress:
+work STRANDED, one careless `git checkout` from gone, and the correct handling was
+to commit it unchanged as its own commit rather than to keep tiptoeing around it.
+The design question stays open and is recorded as what blocks `hex_edge`'s verdict
+row. Generalised: *"would anyone lose anything"* is the right question, and the
+answer for an untracked file that has not moved in three weeks is **yes — by
+leaving it there**.
+
+**What the last repo added to the convention.** Fourteen packages, ~478 public
+functions, all geometry — the tier where a call site teaches most. Tagged
+`hex_grid` (`@HXG-001..006`, the tier-1 package every other one is expressed in)
+and `hex_world` (`@HXW-001..005`); the other twelve are recorded **`deferred`**,
+never `exempt`, each row naming what its example would teach and what unblocks it.
+Two carry real ordering constraints (`hex_fit` follows `hex_form`, `hex_draw`
+follows both) and one is blocked on the owner's `sweep_path_skin` decision.
+
+The finding worth carrying: **one repository can hold two lattices that share a
+type and a spelling.** `hex_grid`'s `(q, r)` are odd-r OFFSET with parity-dependent
+diagonal deltas; `hex_world`'s `(q, r)` are AXIAL with no parity term at all. Both
+are `(integer, integer)`, both spelled `q` and `r`, both in `loft-libs-world`, and
+nothing catches a coordinate handed from one to the other. `@HXG-001` and
+`@HXW-002` are the two halves of that, and the deeper one is `@HXG-001`: within a
+SINGLE module, `hex_round` answers axial while every other function takes offset,
+so the mistake lands you on the **west neighbour** — a real cell, adjacent, with
+every downstream call still working. That is the failure mode this convention
+exists for, and no signature in either package hints at it.
 
 **`imaging` is the row that pays for the whole plan: writing @IMG-002 found a
 silent decode bug that had shipped.** `decode_png` handed the png crate's raw
@@ -857,8 +886,8 @@ covers it (no per-library `examples.sh` to wire).
 - **Validation per library:** gate green on that library **and** a deliberately
   deleted test makes a citation dangle.
 - **Priority order** (non-obvious usage first, where a real call site pays most):
-  1. `arguments` (DONE, `@ARG-001..004`), `gridmesh` (DONE, `@GRM-001..005`),
-     `hex_grid` (HELD — `loft-libs-world` has uncommitted work in its tree) —
+  1. **DONE** — `arguments` (`@ARG-001..004`), `gridmesh` (`@GRM-001..005`),
+     `hex_grid` (`@HXG-001..006`) —
      stateful/geometry APIs where the shape of a correct call is the whole
      question. Confirmed by the two done: every tag is a contract a caller can get
      wrong while type-checking (a forgotten `clear_dirty`, a halo cell emitted
