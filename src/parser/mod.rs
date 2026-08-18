@@ -379,6 +379,15 @@ pub struct Parser {
     /// must resolve the same file, and re-deciding gives them two chances not to.
     #[cfg(feature = "registry")]
     auto_installed: std::collections::HashMap<String, Option<String>>,
+    /// Packages already told about in the "this pin has fallen behind" notice (@PLN143
+    /// arc E), for the same reason `undeclared_reported` exists: both parse passes walk
+    /// the resolution path, and one pin reported twice reads as two.
+    #[cfg(feature = "registry")]
+    pin_behind_reported: std::collections::HashSet<String>,
+    /// Newest release per package as the CACHED index knows it, read at most once per run
+    /// and only when a pin is actually in force (@PLN143 arc E).  `None` until asked.
+    #[cfg(feature = "registry")]
+    newest_releases: Option<std::collections::BTreeMap<String, String>>,
     /// Module names already reported as captured by another file (loft#912 / loft#949),
     /// for the same reason and with the same non-travel rule as `undeclared_reported`:
     /// the `use` is walked by both the pre-scan and the definition loop, and one
@@ -977,6 +986,10 @@ impl Parser {
             undeclared_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             auto_installed: std::collections::HashMap::new(),
+            #[cfg(feature = "registry")]
+            pin_behind_reported: std::collections::HashSet::new(),
+            #[cfg(feature = "registry")]
+            newest_releases: None,
             module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
@@ -11262,6 +11275,9 @@ impl Parser {
         };
         let version = lock.packages.iter().find(|p| p.name == id)?.version.clone();
         self.resolve_registry_installed(id, &version, f);
+        if std::path::Path::new(f).exists() {
+            self.pin_behind_notice(id, &version, &cur_script, &scope);
+        }
         std::path::Path::new(f).exists().then_some(scope)
     }
 
@@ -11454,6 +11470,76 @@ impl Parser {
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
     fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
+
+    /// @PLN143 arc E — say once when the declaration in force has fallen behind.
+    ///
+    /// A `loft.lock` has no expiry, so a pin holds forever and nothing about the
+    /// program's own code will ever say why: `cbor` 0.1.3 turned canonical map encode
+    /// from O(n³) to O(n²) with no API change at all, and a consumer pinned at 0.1.2
+    /// keeps hanging. `loft check` reports it, but that is a verb you have to think to
+    /// run — it only helps someone who already suspects what it would tell them.
+    ///
+    /// What it costs is what shapes it:
+    ///
+    /// - **No fetch.** It speaks only when the cached index ALREADY knows (the index has
+    ///   its own 1-hour TTL); with no cache there is nothing to compare and it is silent.
+    /// - **Once per package per run**, not once per parse pass — and never for a
+    ///   dependency's own `use`, because "latest" is about what the PROGRAM named, and a
+    ///   deep graph would otherwise turn every build into a report.
+    /// - **Silent under `LOFT_OFFLINE`**: someone who has opted out of the registry for
+    ///   this run has not asked what the registry now holds.
+    /// - **Silent where nothing is pinned.** A bare script re-decides every run, so it
+    ///   cannot be behind — the notice exists for the scope that HAS a declaration.
+    ///
+    /// It names the cure the scope actually takes: `loft install <pkg>` updates a
+    /// package's lock beside its manifest, while a pinned script is re-pinned with
+    /// `loft pin <script>`.
+    ///
+    /// Off-switch: `LOFT_NO_UPGRADE_NOTICE=1`.
+    #[cfg(feature = "registry")]
+    fn pin_behind_notice(
+        &mut self,
+        id: &str,
+        version: &str,
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+        if std::env::var_os("LOFT_NO_UPGRADE_NOTICE").is_some()
+            || std::env::var_os("LOFT_OFFLINE").is_some()
+        {
+            return;
+        }
+        // A `use` inside an already-cached package is the dependency's own; its pins are
+        // its author's business, and the consumer cannot act on them.
+        if std::fs::canonicalize(cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache))
+        {
+            return;
+        }
+        if !self.pin_behind_reported.insert(id.to_string()) {
+            return;
+        }
+        let newest = self
+            .newest_releases
+            .get_or_insert_with(crate::install::newest_cached_releases);
+        let Some(newest) = newest.get(id) else {
+            return;
+        };
+        if crate::registry_index::compare_semver(newest, version) != std::cmp::Ordering::Greater {
+            return;
+        }
+        let cure = match scope {
+            crate::resolution_scope::ResolutionScope::PinnedScript(_) => {
+                format!("loft pin {cur_script}")
+            }
+            _ => format!("loft install {id}"),
+        };
+        eprintln!(
+            "[registry] {id} {version} is pinned; {newest} is the newest release — run: {cure}"
+        );
+    }
 
     /// @PLN143 arc C1 — a bare script falls back to the newest version already in the
     /// cache.

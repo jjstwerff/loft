@@ -730,6 +730,42 @@ pub fn auto_install_if_in_catalog(
     Ok(Some(report))
 }
 
+/// The newest release of every package the CACHED index knows — @PLN143 arc E.
+///
+/// The input to the "your pin has fallen behind" notice, and every property of it follows
+/// from what that notice is allowed to cost:
+///
+/// - **Cache only, never a fetch.** The index already refreshes on a 1-hour TTL with a
+///   conditional GET; an advisory line may not add a network round trip to a program run.
+///   No cached index means an empty map, which means silence.
+/// - **`allow_unsigned`**, the posture every read-only registry command takes
+///   (`loft search`, `loft info`, `loft api --registry`): a MISSING signature is
+///   tolerated, an INVALID one still hard-fails — and here that failure degrades to an
+///   empty map, so tampered bytes produce silence rather than a message. Nothing is
+///   installed from this, and the cure it prints goes through the verifying path.
+/// - The version is picked by [`registry_index::find_best_version`], so "newest" means
+///   exactly what it means everywhere else — yanked skipped, prerelease skipped — rather
+///   than a second rule that could drift from the resolver's.
+#[must_use]
+pub fn newest_cached_releases() -> std::collections::BTreeMap<String, String> {
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        offline: true,
+        ..Default::default()
+    };
+    let Ok(index) = load_index(&opts) else {
+        return std::collections::BTreeMap::new();
+    };
+    index
+        .packages
+        .iter()
+        .filter_map(|(name, pkg)| {
+            registry_index::find_best_version(pkg, "*", false)
+                .map(|v| (name.clone(), v.semver.clone()))
+        })
+        .collect()
+}
+
 /// Render a human-readable summary of an install.
 #[must_use]
 pub fn format_report(report: &InstallReport) -> String {

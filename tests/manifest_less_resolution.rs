@@ -503,3 +503,173 @@ fn arc_c2_the_same_script_resolves_the_same_from_two_directories() {
         "only the lock the fixture WROTE may be there: a run declares nothing"
     );
 }
+
+// ── arc E: a pin that has fallen behind says so, once ──────────────────────────────
+
+/// Write the cached `index.json` these cells compare against — the map-keyed shape the
+/// real index has, and the one `parse_index` reads.
+fn cached_index(home: &Path, name: &str, newest: &str) {
+    write(
+        &home.join(".loft/registry/index.json"),
+        &format!(
+            r#"{{"schema_version":1,"packages":{{"{name}":{{"description":"probe",
+               "versions":{{"{newest}":{{"url":"http://127.0.0.1:1/{name}-{newest}.tar.gz",
+               "sha256":"0000000000000000000000000000000000000000000000000000000000000000",
+               "size":1,"loft":">=0.8","published":"2026-08-18T00:00:00Z"}}}}}}}}}}"#
+        ),
+    );
+}
+
+/// A package whose lock pins `version`, with a script under `src/`.
+fn pinned_package(home: &Path, version: &str) -> PathBuf {
+    let pkg = home.join("proj");
+    write(
+        &pkg.join("loft.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[dependencies]\nprobepkg = \"*\"\n",
+    );
+    write(
+        &pkg.join("loft.lock"),
+        &format!(
+            "schema_version = 1\n\n[[package]]\nname = \"probepkg\"\nversion = \"{version}\"\n\
+             url = \"http://127.0.0.1:1/probepkg-{version}.tar.gz\"\n\
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+             source = \"registry\"\n"
+        ),
+    );
+    probe_script(&pkg.join("src"));
+    pkg
+}
+
+/// @PLN143 arc E — a lock has no expiry, so a pin holds forever and the program's own
+/// code never says why.
+///
+/// `cbor` 0.1.3 turned canonical map encode from O(n³) to O(n²) with NO API change: a
+/// consumer pinned at 0.1.2 keeps hanging and nothing it can read explains it. This is the
+/// one line that does — said once, from the cached index, with no fetch added to the run.
+#[test]
+fn arc_e_a_pin_behind_the_registry_says_so_once() {
+    let home = empty_home("e_behind");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let pkg = pinned_package(&home, "0.1.0");
+    let all = run_env(&home, &pkg, "src/s.loft", &[]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.1.0"),
+        "the pin still governs — the notice reports, it does not resolve:\n{all}"
+    );
+    assert!(
+        all.contains("probepkg 0.1.0 is pinned; 0.2.0 is the newest release"),
+        "a governing pin behind the cached index must say so (@PLN143 arc E):\n{all}"
+    );
+    assert!(
+        all.contains("loft install probepkg"),
+        "and name the cure the scope actually takes:\n{all}"
+    );
+    assert_eq!(
+        all.matches("is the newest release").count(),
+        1,
+        "exactly one line — both parse passes walk this path, and a doubled notice reads \
+         as two findings:\n{all}"
+    );
+}
+
+/// The three silences, which are most of the design: current, offline, and nothing
+/// pinned. Each is a separate reason, and any one of them failing would make the notice
+/// the kind of output people learn to filter.
+#[test]
+fn arc_e_is_silent_when_current_offline_or_unpinned() {
+    // Current: the pin IS the newest release.
+    let home = empty_home("e_current");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let pkg = pinned_package(&home, "0.2.0");
+    let current = run_env(&home, &pkg, "src/s.loft", &[]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // Offline: this run has opted out of the registry, so it is not asking what the
+    // registry now holds.
+    let home = empty_home("e_offline");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let pkg = pinned_package(&home, "0.1.0");
+    let offline = run_env(&home, &pkg, "src/s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // Unpinned: a bare script re-decides every run, so it cannot be behind.
+    let home = empty_home("e_bare");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let dir = home.join("bare");
+    probe_script(&dir);
+    let bare = run_env(&home, &dir, "s.loft", &[]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    for (label, out) in [
+        ("a current pin", &current),
+        ("an offline run", &offline),
+        ("a bare script", &bare),
+    ] {
+        assert!(
+            !out.contains("is the newest release"),
+            "{label} has nothing to act on and must be silent:\n{out}"
+        );
+    }
+    assert!(
+        current.contains("probepkg-0.2.0") && offline.contains("probepkg-0.1.0"),
+        "and each still resolved what its declaration names:\n{current}\n---\n{offline}"
+    );
+}
+
+/// The off-switch, verified by its EFFECT: the same fixture that speaks above is silent
+/// with it set.
+#[test]
+fn arc_e_the_off_switch_silences_it() {
+    let home = empty_home("e_off");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let pkg = pinned_package(&home, "0.1.0");
+    let all = run_env(
+        &home,
+        &pkg,
+        "src/s.loft",
+        &[("LOFT_NO_UPGRADE_NOTICE", "1")],
+    );
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.1.0") && !all.contains("is the newest release"),
+        "LOFT_NO_UPGRADE_NOTICE must silence the notice without changing what resolves:\n{all}"
+    );
+}
+
+/// The other scope that carries a declaration, and the other cure: a pinned script is
+/// re-pinned with `loft pin`, not with `loft install` — which after arc D would create a
+/// package around a script that never asked to be one.
+#[test]
+fn arc_e_a_pinned_script_is_told_to_re_pin() {
+    let home = empty_home("e_sidecar");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cached_index(&home, "probepkg", "0.2.0");
+    let dir = home.join("script");
+    probe_script(&dir);
+    write(
+        &dir.join("s.loft.lock"),
+        "schema_version = 1\n\n[[package]]\nname = \"probepkg\"\nversion = \"0.1.0\"\n\
+         url = \"http://127.0.0.1:1/probepkg-0.1.0.tar.gz\"\n\
+         sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+         source = \"registry\"\n",
+    );
+    let all = run_env(&home, &dir, "s.loft", &[]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // The path is the resolved one rather than the spelling typed, so the command works
+    // from wherever the reader is standing when they run it.
+    assert!(
+        all.contains("0.2.0 is the newest release")
+            && all.contains("run: loft pin ")
+            && all.contains("s.loft"),
+        "a sidecar pin behind the registry must name `loft pin`:\n{all}"
+    );
+}
