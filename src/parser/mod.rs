@@ -11509,7 +11509,21 @@ impl Parser {
         };
         let lock_path = project_root.as_ref().map(|p| p.join("loft.lock"));
         let opts = crate::install::InstallOptions {
-            allow_unsigned: true,
+            // @PLN143 arc A — the auto-install path does NOT waive the index
+            // signature.  `loft install` still may (its own CLI default), and that
+            // asymmetry is the point: waiving it is defensible for a verb a person
+            // typed, and not for the path a bare `use` takes on its own.  This
+            // resolution is about to become the DEFAULT rather than a fallback
+            // nobody relies on, and widening the blast radius while leaving the
+            // bootstrap window open must not be two commits in that order.
+            //
+            // The window it used to hold open is closed: the comment this replaces
+            // said the flag "becomes a no-op for the happy path once the production
+            // key is embedded", and `registry_keys::TRUSTED_PUBLIC_KEYS` has carried
+            // four keys since 2026-06-14.  An INVALID signature was already a hard
+            // failure on every path; what this stops accepting is a MISSING or
+            // malformed one.
+            allow_unsigned: false,
             refresh: false,
             skip_lockfile: in_registry_cache,
             // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
