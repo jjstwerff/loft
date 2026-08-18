@@ -1909,12 +1909,33 @@ fn store_release_keeps_every_record_and_reference_both_backends() {
             "unbound 0 live 1",
             "{backend}: releasing a heap collection is a no-op, not a fault: {out}"
         );
-        assert_eq!(
-            line(&out, "released_positive"),
-            "released_positive true",
-            "{backend}: a bound store built to 400 records had pages to drop — 0 here \
-             means the call ships and buys nothing: {out}"
-        );
+        // `release_resident` has a body only where there is a file to flush to AND
+        // `madvise` to drop with — `#[cfg(all(feature = "mmap", unix))]`.  Off unix it is a
+        // DOCUMENTED no-op returning 0, on the same reasoning the call itself carries: it
+        // is a hint about residency, and a program running where the hint cannot be
+        // honoured is not a program that is wrong.  Asserting a positive release
+        // everywhere therefore asserted a capability the platform does not have, and the
+        // nightly's Windows leg failed on it.
+        //
+        // The no-op is PINNED rather than skipped: `false` is the contract off unix, so a
+        // platform that silently started releasing would be a change worth seeing.  Every
+        // other assertion here is platform-independent and stays unconditional.
+        if cfg!(all(feature = "mmap", unix)) {
+            assert_eq!(
+                line(&out, "released_positive"),
+                "released_positive true",
+                "{backend}: a bound store built to 400 records had pages to drop — 0 here \
+                 means the call ships and buys nothing: {out}"
+            );
+        } else {
+            assert_eq!(
+                line(&out, "released_positive"),
+                "released_positive false",
+                "{backend}: off unix `release_resident` is a no-op by construction — a \
+                 positive release here means it grew a body this test does not know about: \
+                 {out}"
+            );
+        }
 
         // The claim that matters. `held` was taken before a release and read after
         // one, and it is checked by VALUE: a re-faulted page hands back a plausible

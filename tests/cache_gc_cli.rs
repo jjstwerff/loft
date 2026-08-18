@@ -48,11 +48,34 @@ fn fake_home(name: &str) -> PathBuf {
     home
 }
 
+/// `PATH` with the test binary's own directory removed.
+///
+/// The refusal under test asks "is the running loft the one on `PATH`", and this suite's
+/// premise is that it is not.  On Unix that held by accident of environment; on Windows
+/// **cargo puts the target directory on `PATH`** so a test can resolve its DLLs, which
+/// makes the dev build genuinely the loft on `PATH` — so the guard answered `Some(true)`,
+/// prune proceeded, and the test failed on the nightly's Windows leg.
+///
+/// Filtered rather than emptied: a Windows child still needs `System32` on `PATH` to
+/// start at all, so clearing it would trade one platform artefact for another.
+fn path_without_the_test_binary() -> std::ffi::OsString {
+    let own = loft_bin().parent().map(Path::to_path_buf);
+    let kept: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .filter(|d| own.as_deref().is_none_or(|o| d != o))
+                .collect()
+        })
+        .unwrap_or_default();
+    std::env::join_paths(kept).expect("rejoin PATH")
+}
+
 fn run(home: &Path, args: &[&str]) -> (String, bool) {
     let out = Command::new(loft_bin())
         .args(args)
         // `loft_home()` appends `.loft` itself, so this is the level ABOVE it.
         .env("LOFT_HOME", home)
+        .env("PATH", path_without_the_test_binary())
         .output()
         .expect("spawn loft");
     (
