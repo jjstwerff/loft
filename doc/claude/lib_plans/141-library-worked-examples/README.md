@@ -63,6 +63,42 @@ whatever loft its CONSUMERS hold, not the one on the publishing machine — so i
 command is now on the LIBRARY_AUTHORING § 3 pre-release checklist, to be run BEFORE
 tagging rather than discovered after the release PR merges.
 
+**`loft-libs-core` is READY TO PR — the third complete repo, and the one where the
+rollout paid in CI health rather than in bugs.** `@RND-001..003` (random),
+`@RGX-001..004` (regex), `@CBR-001..004` (cbor) and `@ZTX-001..004` (zttext) joined
+`arguments` and `crypto`: 6 tagged, 0 todo on `mac-worked-examples`.
+
+**This repo's `main` was already RED when the rollout reached it, in two packages,
+and neither red was about examples.** `random` had `for i in 0..200` with `i` never
+read — a `never-read` WARNING, and library CI runs `LOFT_DENY_WARNINGS=1`. `regex`
+was red because loft grew `shadowed-by-method` (loft#940) on 2026-08-16 and it fires
+on exactly the two functions that library had ALREADY deprecated for that reason:
+`find` / `split`, kept as `#superseded` spellings because deleting them is an API
+break. Both fixed here — the second by ASSERTING the warning with `@EXPECT_WARNING`
+rather than suppressing it, so the annotation goes red and asks to be removed if the
+shadow ever disappears. Worth naming the shape: a new diagnostic can turn a
+correctly-written published library red with no green path except an API break, and
+the assert-don't-suppress move is the one that keeps the information while restoring
+the gate.
+
+`cbor` carried a third kind of debt the pass surfaced: a tracked `.allow_warnings`
+opting the whole package out of the warning gate, for a `v[i]` lint that no longer
+fires. Removed — it was silently covering every FUTURE warning too. It also had no
+README and no `[package] description` (the registry's catalogue line), and neither
+did `zttext`; both written.
+
+What the four new packages owe examples for is worth recording as a pattern, because
+it is the same one three times: **the library offers two doors and nothing in the
+types says which one a call site needs.** `random` has a shared global generator and
+an owned stream (@RND-001); `regex` has a stdlib method spelling and a library
+function that a bare call cannot reach — `find("[0-9]+", "abc123")` compiles and
+answers null where `"abc123".search("[0-9]+")` answers 3 (@RGX-001); `cbor` has
+`CBytes` and `CText` for the same payload bytes, which is a different record on the
+wire (@CBR-002). `zttext` is the fourth shape, the gridmesh one: an ENGINE, where
+what needs demonstrating is the shape of a correct call — an edit is a VALUE you
+have to keep, and `insert_text(d, 0, "x", 0);` as a statement compiles, runs and
+throws the document away (@ZTX-001).
+
 **`imaging` is the row that pays for the whole plan: writing @IMG-002 found a
 silent decode bug that had shipped.** `decode_png` handed the png crate's raw
 output buffer through and `n_load_png` re-cut it into three-byte `Pixel`s — correct
@@ -623,7 +659,8 @@ covers it (no per-library `examples.sh` to wire).
      that means something other than what a caller assumes.
   3. **DONE for `loft-libs-graphics`** — `graphics` (`@GFX-001..005`), `shapes`
      (`@SHP-001..003`) and `imaging` (`@IMG-001..004`), which closed that repo.
-     Remaining here: `markdown`, `random`, and `game_protocol` (already **exempt**).
+     Remaining across the ecosystem: `markdown`, and `game_protocol` (already
+     **exempt**). `loft-libs-core` is complete as of this pass.
      What tier 3 added to "gettable wrong while type-checking": the type is not
      merely uninformative, it is a *bare integer standing for a convention* — which
      byte of a colour is alpha, which end of a span is included, whether an answer
@@ -691,8 +728,8 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | repo | branch | state |
 |---|---|---|
 | `loft-libs-graphics` | *(merged)* | **DONE + PUBLISHED** — 4 tagged, 0 todo; graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1 in the registry |
+| `loft-libs-core` | `mac-worked-examples` | **READY TO PR** — 6 tagged (`arguments`, `cbor`, `crypto`, `random`, `regex`, `zttext`), 0 todo |
 | `loft-libs-net` | `worked-examples` | **READY TO PR** — 3 tagged (`server`, `ssh`, `web`), 1 exempt (`game_protocol`), 0 todo |
-| `loft-libs-core` | `mac-worked-examples` | 2 tagged (`arguments`, `crypto`) / 4 todo (`cbor`, `random`, `regex`, `zttext`) |
 
 `loft-libs-net` is the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
