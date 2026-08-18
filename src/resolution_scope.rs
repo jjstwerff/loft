@@ -55,13 +55,14 @@ impl ResolutionScope {
         }
     }
 
-    /// Where an auto-install records what it resolved: the lock beside the manifest that
-    /// declares the dependency, which is the same file `loft install` writes.
+    /// Where an auto-install may record what it resolved — `None` when it may record
+    /// nothing.
     ///
-    /// `None` leaves the caller's own default in force — today the cwd's `loft.lock`.
-    /// @PLN143 arc C2 gives `None` its final meaning, *record nothing*: a pinned script
-    /// already carries its declaration, and a bare script has none, so writing one on the
-    /// program's behalf is what makes a first run decide every run after it.
+    /// Only a package has a place to record: the lock beside the manifest that declares
+    /// the dependency, which is the same file `loft install` writes. A pinned script
+    /// already carries its declaration, and a bare script has none — writing one on the
+    /// program's behalf is what made a first run decide every run after it, which is the
+    /// invariant this plan exists for.
     ///
     /// `in_registry_cache` is the one case that overrides the scope: a transitive dep
     /// discovered while parsing a file that already lives under `~/.loft/registry/` has

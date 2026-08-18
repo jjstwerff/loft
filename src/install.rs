@@ -199,6 +199,14 @@ pub fn install_one(
                 r.name, r.version.semver
             ));
         } else {
+            // @PLN143 — the one line the registry prints on the resolution path, and it
+            // speaks where bytes are actually fetched.  `[registry] resolving <pkg>` used
+            // to print BEFORE this, so a warm cache announced work it was not doing —
+            // twice per run once a bare `use` re-decides on every parse pass, which is
+            // noise on a program that has nothing to report (GOALS.md: loft is noticed in
+            // its absence).  Downloading a tarball is worth a line; finding it already
+            // extracted is not.
+            eprintln!("[registry] downloading {} {}", r.name, r.version.semver);
             registry_index::download_tarball(&r.version.url, &tarball_path)?
         };
         crate::integrity::verify_sha256(&bytes, &r.version.sha256)?;
@@ -545,6 +553,13 @@ fn check_against_lockfile(graph: &[ResolvedPackage], opts: &InstallOptions) -> R
 /// Every `name -> (version, sha256)` a lockfile pins, for [`check_against_lockfile`].
 fn locked_hashes(opts: &InstallOptions) -> std::collections::BTreeMap<String, (String, String)> {
     use std::collections::BTreeMap;
+    // @PLN143 — the same guard `held_versions` carries, and for the same reason: a
+    // resolution that may RECORD nothing has no project lock to be checked against
+    // either.  Without it the cwd fallback below reads a `loft.lock` that governs
+    // nothing, and a stray one could refuse an install over a hash it does not speak for.
+    if opts.skip_lockfile {
+        return BTreeMap::new();
+    }
     let lock_path = match &opts.lock_path {
         Some(p) => p.clone(),
         None => std::env::current_dir()
@@ -708,7 +723,6 @@ pub fn auto_install_if_in_catalog(
     if name == crate::self_update::TOOLCHAIN_PKG || !index.packages.contains_key(name) {
         return Ok(None);
     }
-    eprintln!("[registry] resolving {name} from registry");
     let report = install_one(name, constraint, opts)?;
     for (n, v) in &report.installed {
         eprintln!("[registry] installed {n} {v}");

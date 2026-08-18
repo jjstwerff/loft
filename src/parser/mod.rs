@@ -372,6 +372,13 @@ pub struct Parser {
     /// there can read.
     #[cfg(feature = "registry")]
     undeclared_reported: std::collections::HashSet<String>,
+    /// What an auto-install already answered this run: `id -> Some(version)`, or `None`
+    /// for a name the registry does not carry.  @PLN143 — a bare `use` is decided by
+    /// `probe_auto_install` on EVERY parse pass now that no lockfile pins it, and asking
+    /// the registry twice is both the cost and a correctness question: the two passes
+    /// must resolve the same file, and re-deciding gives them two chances not to.
+    #[cfg(feature = "registry")]
+    auto_installed: std::collections::HashMap<String, Option<String>>,
     /// Module names already reported as captured by another file (loft#912 / loft#949),
     /// for the same reason and with the same non-travel rule as `undeclared_reported`:
     /// the `use` is walked by both the pre-scan and the definition loop, and one
@@ -968,6 +975,8 @@ impl Parser {
             use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             undeclared_reported: std::collections::HashSet::new(),
+            #[cfg(feature = "registry")]
+            auto_installed: std::collections::HashMap::new(),
             module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
@@ -11242,13 +11251,11 @@ impl Parser {
         }
         let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
         let scope = crate::resolution_scope::resolution_scope(&cur_script);
-        let lock_path = match scope.governing_lock() {
-            Some(p) => p,
-            // @PLN143 arc C2 deletes this leg.  In `Bare` scope nothing is declared, and
-            // the cwd's `loft.lock` is a file an earlier RUN wrote — so it decides which
-            // version this run gets, from a directory that is not even the program's.
-            None => env::current_dir().ok()?.join("loft.lock"),
-        };
+        // `None` is `Bare` scope: nothing is declared, so nothing pins this run.  There
+        // used to be a leg here reading the CWD's `loft.lock` — a file an earlier RUN
+        // wrote, in a directory that is not even the program's, deciding which version
+        // this run gets.
+        let lock_path = scope.governing_lock()?;
         let lock = match crate::lockfile::read_lockfile(&lock_path) {
             Ok(Some(l)) => l,
             _ => return None,
@@ -11357,9 +11364,12 @@ impl Parser {
             .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
             .is_some_and(|(script, cache)| script.starts_with(&cache));
         // @PLN143 arc B — the same function that decides which lockfile is READ decides
-        // which one may be WRITTEN, so the two cannot drift apart.
+        // which one may be WRITTEN, so the two cannot drift apart.  Arc C2: `None` means
+        // RECORD NOTHING, not "fall back to the cwd" — one fact, so a run that may not
+        // declare cannot leave a declaration behind through the other door.
         let lock_path = crate::resolution_scope::resolution_scope(&cur_script)
             .lock_write_target(in_registry_cache);
+        let record_nothing = lock_path.is_none();
         let opts = crate::install::InstallOptions {
             // @PLN143 arc A — the auto-install path does NOT waive the index
             // signature.  `loft install` still may (its own CLI default), and that
@@ -11377,7 +11387,7 @@ impl Parser {
             // malformed one.
             allow_unsigned: false,
             refresh: false,
-            skip_lockfile: in_registry_cache,
+            skip_lockfile: record_nothing,
             // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
             // fails fast and deterministically instead of fetching — what a
             // test-spawned fixture (or an air-gapped box) wants.  Mirrors
@@ -11386,6 +11396,16 @@ impl Parser {
             allow_prerelease: false,
             lock_path,
         };
+        // Already decided this run: resolve to the SAME version rather than asking the
+        // registry a second time.  Both parse passes walk this path, and a second
+        // decision could answer differently — a run whose two passes read two different
+        // files is a worse failure than the one this probe exists to prevent.
+        if let Some(known) = self.auto_installed.get(id).cloned() {
+            if let Some(version) = known {
+                self.resolve_registry_installed(id, &version, f);
+            }
+            return;
+        }
         // Honour the root project's declared constraint for `id` (if any), so a
         // consumer's pin — exact or ranged — wins over "resolve newest", even
         // when `id` is pulled transitively by a lib that didn't pin it.
@@ -11398,15 +11418,16 @@ impl Parser {
                 // freshly-installed transitive dep unresolved (`use <dep>` → "not
                 // found") even though it is on disk. The report carries the exact
                 // version, whether newly installed or already cached.
-                if let Some((_, version)) = report
+                let resolved = report
                     .installed
                     .iter()
                     .chain(report.skipped_cached.iter())
                     .find(|(n, _)| n == id)
-                {
-                    let version = version.clone();
-                    self.resolve_registry_installed(id, &version, f);
+                    .map(|(_, v)| v.clone());
+                if let Some(ref version) = resolved {
+                    self.resolve_registry_installed(id, version, f);
                 }
+                self.auto_installed.insert(id.to_string(), resolved);
                 // Fallback for a normal (non-cache) install that DID write a lockfile:
                 // read back the lock this run just recorded the new entry in.
                 let _ = self.probe_governing_lock(id, f);
@@ -11414,7 +11435,9 @@ impl Parser {
             Ok(None) => {
                 // `id` is not a registry package; let the remaining
                 // resolution strategies handle it (or fail with
-                // the standard "library not found" diagnostic).
+                // the standard "library not found" diagnostic).  Recorded so the second
+                // parse pass does not re-read the index to be told the same thing.
+                self.auto_installed.insert(id.to_string(), None);
             }
             Err(e) => {
                 // Network failure, sig mismatch, or similar.

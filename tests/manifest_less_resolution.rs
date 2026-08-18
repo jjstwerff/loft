@@ -14,8 +14,18 @@
 //! thing it governs.
 //!
 //! Hermetic throughout: `LOFT_HOME` points at a per-test cache and `LOFT_REGISTRY_URL` at
-//! a path that cannot be fetched, so every cell measures resolution rather than the
-//! network.
+//! a path that cannot be fetched (or a `file://` fixture registry), so every cell measures
+//! resolution rather than the network.
+//!
+//! ⚠ **What these cells cannot measure, and why.** Arc A makes the auto-install path
+//! refuse an index without a VALID signature, and a test cannot forge one — the trust root
+//! is compiled in. So the cells reach resolution through the extracted cache and through
+//! the real `loft install` CLI (which keeps its own `--allow-unsigned` default), never
+//! through a bare `use` that installs. The write half of the invariant — *a run leaves no
+//! lockfile behind* — is therefore pinned by the `lock_write_target` unit tests in
+//! `src/resolution_scope.rs`, plus a measurement against the real registry recorded in the
+//! arc C2 commit: before it, one run of `use arguments;` left `./loft.lock`; after it, the
+//! directory holds only the script.
 
 #![cfg(feature = "registry")]
 
@@ -403,5 +413,93 @@ fn arc_d_install_outside_a_package_declares_one_and_the_pin_holds() {
         ran.contains("probepkg-0.1.0"),
         "the pin must govern the next run even with 0.2.0 sitting in the cache — that \
          is what the manifest is FOR:\n{ran}"
+    );
+}
+
+// ── arc C2: the cwd is not a scope, and running declares nothing ───────────────────
+
+/// @PLN143 arc C2 — a `loft.lock` in the directory you happen to be standing in does not
+/// decide which version a program gets.
+///
+/// This was the defect that defeated the feature with the feature: a bare script took
+/// "latest" exactly once, wrote `./loft.lock`, and was pinned by that file forever. The
+/// value oracle is the version itself — 0.1.0 is what the stray lock names, 0.2.0 is what
+/// "newest, re-decided every run" means.
+#[test]
+fn arc_c2_a_cwd_lockfile_does_not_pin_a_bare_script() {
+    let home = empty_home("c2_cwd");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let dir = home.join("proj");
+    probe_script(&dir);
+    write(
+        &dir.join("loft.lock"),
+        "schema_version = 1\n\n[[package]]\nname = \"probepkg\"\nversion = \"0.1.0\"\n\
+         url = \"http://127.0.0.1:1/probepkg-0.1.0.tar.gz\"\n\
+         sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+         source = \"registry\"\n",
+    );
+    let all = run_env(&home, &dir, "s.loft", &[("LOFT_OFFLINE", "1")]);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.2.0"),
+        "nothing declares anything here — a lockfile in the cwd is not a declaration, \
+         and 0.1.0 means the deleted leg is still deciding (@PLN143 arc C2):\n{all}"
+    );
+}
+
+/// The same script, run from two directories, resolves the same way.
+///
+/// Cwd-dependence is the other half of the same defect: one of these directories holds a
+/// lock and the other does not, and before this arc that alone changed which version
+/// loaded — from a file neither the script nor its author named.
+#[test]
+fn arc_c2_the_same_script_resolves_the_same_from_two_directories() {
+    let home = empty_home("c2_two_dirs");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let script_dir = home.join("script");
+    probe_script(&script_dir);
+    let script = script_dir.join("s.loft");
+    let elsewhere = home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir");
+    write(
+        &elsewhere.join("loft.lock"),
+        "schema_version = 1\n\n[[package]]\nname = \"probepkg\"\nversion = \"0.1.0\"\n\
+         url = \"http://127.0.0.1:1/probepkg-0.1.0.tar.gz\"\n\
+         sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+         source = \"registry\"\n",
+    );
+
+    let from_home = run_env(
+        &home,
+        &script_dir,
+        &script.to_string_lossy(),
+        &[("LOFT_OFFLINE", "1")],
+    );
+    let from_elsewhere = run_env(
+        &home,
+        &elsewhere,
+        &script.to_string_lossy(),
+        &[("LOFT_OFFLINE", "1")],
+    );
+    // Nothing may appear in either directory as a result of running.
+    let left_behind: Vec<String> = [&script_dir, &elsewhere]
+        .iter()
+        .flat_map(|d| std::fs::read_dir(d).expect("read_dir"))
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .filter(|n| n == "loft.lock" || n == "loft.toml")
+        .collect();
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        from_home.contains("probepkg-0.2.0") && from_elsewhere.contains("probepkg-0.2.0"),
+        "one script, one answer, wherever it is run from:\n{from_home}\n---\n{from_elsewhere}"
+    );
+    assert_eq!(
+        left_behind,
+        vec!["loft.lock".to_string()],
+        "only the lock the fixture WROTE may be there: a run declares nothing"
     );
 }
