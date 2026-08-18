@@ -51,6 +51,72 @@ fn seeded_hasher(seed: u64) -> SipHasher13 {
     hasher
 }
 
+// ─── The one place a `LOFT_*` switch is read ────────────────────────────────────
+//
+// loft#950 — every diagnostic in this file used to call `std::env::var` directly, and
+// `std::env` on `wasm32-unknown-unknown` is a stub that always answers nothing.  So a
+// browser page could not arm ANY of the 47 switches below, and the store guard's own
+// advice — *"run with LOFT_STRICT_STORES=1 to name the free"* — named a thing that target
+// cannot do.  Three separate instruments were built for one browser bug because the page
+// could not be told anything.
+//
+// One accessor, so a switch works everywhere or nowhere by construction: hosted targets
+// read the process environment; a browser page reads a table its host installs before the
+// program starts (see `install_page_env`).  Nothing else in this file spells `std::env`.
+
+/// Switch settings handed in by the host of a browser page, as `NAME=VALUE` pairs.
+/// Empty on every other target, where the process environment answers instead.
+static PAGE_ENV: OnceLock<Vec<(String, String)>> = OnceLock::new();
+
+/// Install a page's switch settings, as a `NAME=VALUE` line per switch.
+///
+/// Called once, from the generated program's entry point, BEFORE anything reads a switch —
+/// the readers below memoize in `OnceLock`s, so a later install would be ignored by
+/// whichever switch had already been asked.  A second call is a no-op for the same reason.
+///
+/// Blank lines and lines without `=` are skipped rather than refused: the blob comes from a
+/// URL query string, and one malformed pair should not cost the reader the others.
+pub fn install_page_env(blob: &str) {
+    let _ = PAGE_ENV.set(
+        blob.lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let (k, v) = line.split_once('=')?;
+                let k = k.trim();
+                (!k.is_empty()).then(|| (k.to_string(), v.trim().to_string()))
+            })
+            .collect(),
+    );
+}
+
+/// The VALUE of a `LOFT_*` switch, or `None` when it is not set.
+#[must_use]
+pub fn env_value(name: &str) -> Option<String> {
+    // An installed table wins, then the process environment.  One path rather than a
+    // `cfg!`-split pair: a page has no environment to fall through to, a hosted target
+    // never installs a table, and a single path is the only one this file's own tests
+    // can reach — a browser-only branch is a branch nothing here could ever run.
+    if let Some(kv) = PAGE_ENV.get()
+        && let Some((_, v)) = kv.iter().find(|(k, _)| k == name)
+    {
+        return Some(v.clone());
+    }
+    std::env::var(name).ok()
+}
+
+/// Whether a `LOFT_*` switch is SET AT ALL — the `var_os(..).is_some()` question, so a
+/// switch spelled `LOFT_X=` (empty value) still counts as armed.
+#[must_use]
+pub fn env_set(name: &str) -> bool {
+    if PAGE_ENV
+        .get()
+        .is_some_and(|kv| kv.iter().any(|(k, _)| k == name))
+    {
+        return true;
+    }
+    std::env::var_os(name).is_some()
+}
+
 /// `LOFT_HASH_SEED`, read once: the fixed seed every hash uses instead of an
 /// unpredictable one.  Accepts decimal or the `0x` hex spelling; `None` (unset
 /// or empty) keeps the random default.
@@ -77,7 +143,7 @@ fn seeded_hasher(seed: u64) -> SipHasher13 {
 fn fixed_seed() -> Option<u64> {
     static FIXED: OnceLock<Option<u64>> = OnceLock::new();
     *FIXED.get_or_init(|| {
-        let raw = std::env::var("LOFT_HASH_SEED").ok()?;
+        let raw = env_value("LOFT_HASH_SEED")?;
         let v = raw.trim();
         if v.is_empty() {
             return None;
@@ -90,7 +156,7 @@ fn fixed_seed() -> Option<u64> {
                 |hex| u64::from_str_radix(hex, 16).ok(),
             );
         if parsed.is_none() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "warning: LOFT_HASH_SEED={raw:?} is not a 64-bit number — hashing stays \
                  random, so a persisted store will NOT be byte-reproducible"
             );
@@ -370,7 +436,7 @@ fn float_cmp(v1: f64, v2: f64) -> Ordering {
 /// panic lands AT the offending free.  One cached env read; off by default.
 pub fn uaf_check_enabled() -> bool {
     static UAF: OnceLock<bool> = OnceLock::new();
-    *UAF.get_or_init(|| std::env::var_os("LOFT_UAF").is_some())
+    *UAF.get_or_init(|| env_set("LOFT_UAF"))
 }
 
 /// `LOFT_UAF_SRC` — the cheap companion to `LOFT_UAF`: record each free's pc and
@@ -379,7 +445,7 @@ pub fn uaf_check_enabled() -> bool {
 /// the faulting copy is reached).  Enables the same `uaf_freed_this_op` recording.
 pub fn uaf_src_enabled() -> bool {
     static UAF_SRC: OnceLock<bool> = OnceLock::new();
-    *UAF_SRC.get_or_init(|| std::env::var_os("LOFT_UAF_SRC").is_some())
+    *UAF_SRC.get_or_init(|| env_set("LOFT_UAF_SRC"))
 }
 
 /// Either UAF instrument is on (gates the `uaf_freed_this_op` recording in `free_named`).
@@ -400,7 +466,7 @@ pub fn uaf_any_enabled() -> bool {
 #[must_use]
 pub fn poison_enabled() -> bool {
     static POISON: OnceLock<bool> = OnceLock::new();
-    *POISON.get_or_init(|| std::env::var_os("LOFT_POISON").is_some())
+    *POISON.get_or_init(|| env_set("LOFT_POISON"))
 }
 
 /// `LOFT_COPY_DUMP=1` (@PLN90 phase 1) — print one line per executed deep STRUCTURE copy
@@ -411,7 +477,7 @@ pub fn poison_enabled() -> bool {
 #[must_use]
 pub fn copy_dump_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
+    *ON.get_or_init(|| env_set("LOFT_COPY_DUMP"))
 }
 
 /// `LOFT_NO_BRIDGE_ORPHAN_FREE=1` — @PLN118 arc F opt-out / differential switch. The shared-store
@@ -424,7 +490,7 @@ pub fn copy_dump_enabled() -> bool {
 #[must_use]
 pub fn bridge_orphan_free_disabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_BRIDGE_ORPHAN_FREE").is_some())
+    *ON.get_or_init(|| env_set("LOFT_NO_BRIDGE_ORPHAN_FREE"))
 }
 
 /// `LOFT_REPORT_COPIES=1` (or the `--report-copies` CLI flag) — @PLN90 Step 5. The USER-FACING
@@ -435,7 +501,7 @@ pub fn bridge_orphan_free_disabled() -> bool {
 #[must_use]
 pub fn report_copies_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
+    *ON.get_or_init(|| env_set("LOFT_REPORT_COPIES"))
 }
 
 /// `LOFT_EXPLAIN=1` (or `--explain`) — @PLN131: print the FIX line(s) under each diagnostic
@@ -451,7 +517,7 @@ pub fn report_copies_enabled() -> bool {
 #[must_use]
 pub fn explain_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_EXPLAIN").is_some())
+    *ON.get_or_init(|| env_set("LOFT_EXPLAIN"))
 }
 
 /// `LOFT_COPY_MANIFEST=1` — @PLN130: the emission-manifest GUARD. Each generator records every
@@ -464,7 +530,7 @@ pub fn explain_enabled() -> bool {
 #[must_use]
 pub fn copy_manifest_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_MANIFEST").is_some())
+    *ON.get_or_init(|| env_set("LOFT_COPY_MANIFEST"))
 }
 
 /// `LOFT_WARN_COPIES=1` — @PLN90 W5: the ENFORCED copy lint. Routes the user-facing copy report's
@@ -477,7 +543,7 @@ pub fn copy_manifest_enabled() -> bool {
 #[must_use]
 pub fn warn_copies_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_WARN_COPIES").is_some())
+    *ON.get_or_init(|| env_set("LOFT_WARN_COPIES"))
 }
 
 /// @PLN107: the dead-store lint. Warns when a non-escaping local OWNS a copy that is mutated via
@@ -489,7 +555,7 @@ pub fn warn_copies_enabled() -> bool {
 #[must_use]
 pub fn dead_stores_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_DEAD_STORES"))
 }
 
 /// @PLN139 stage G: the double-move lint. Warns when one droppable value is handed to TWO
@@ -505,7 +571,7 @@ pub fn dead_stores_enabled() -> bool {
 #[must_use]
 pub fn double_move_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DOUBLE_MOVE").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_DOUBLE_MOVE"))
 }
 
 /// loft#894: the lost-temporary-write lint. Warns when a call writes through a by-value
@@ -525,7 +591,7 @@ pub fn double_move_enabled() -> bool {
 #[must_use]
 pub fn lost_temp_writes_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_LOST_TEMP_WRITE").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_LOST_TEMP_WRITE"))
 }
 
 /// loft#914: the omitted-constructor-field nudge. A struct literal that names SOME fields and
@@ -551,7 +617,7 @@ pub fn lost_temp_writes_enabled() -> bool {
 #[must_use]
 pub fn omitted_field_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OMITTED_FIELD").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_OMITTED_FIELD"))
 }
 
 /// loft#926 — one struct literal filling TWO members of a linked collection group.
@@ -575,7 +641,7 @@ pub fn omitted_field_lint_enabled() -> bool {
 #[must_use]
 pub fn linked_group_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_LINKED_GROUP").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_LINKED_GROUP"))
 }
 
 /// loft#940 — a library's free function that no bare call can reach.
@@ -604,7 +670,7 @@ pub fn linked_group_lint_enabled() -> bool {
 #[must_use]
 pub fn shadowed_by_method_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_SHADOWED_BY_METHOD").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_SHADOWED_BY_METHOD"))
 }
 
 /// A NULLABLE COLLECTION return gets the same hidden `__retbuf` the non-nullable one gets —
@@ -659,7 +725,7 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 #[must_use]
 pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLABLE_RETBUF").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_NULLABLE_RETBUF"))
 }
 
 /// `LOFT_OPTIONAL_DEP_PEEL=1` — loft#938, HALF ONE of the `LOFT_NULLABLE_RETBUF` blocker.
@@ -690,7 +756,7 @@ pub fn nullable_ret_buffer() -> bool {
 #[must_use]
 pub fn optional_dep_peel() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_OPTIONAL_DEP_PEEL").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_OPTIONAL_DEP_PEEL"))
 }
 
 /// `LOFT_TRACE_RETPROMO=1` — name every candidate the return-buffer promotion classifies,
@@ -710,7 +776,7 @@ pub fn optional_dep_peel() -> bool {
 #[must_use]
 pub fn trace_ret_promotion() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_RETPROMO").is_some())
+    *ON.get_or_init(|| env_set("LOFT_TRACE_RETPROMO"))
 }
 
 /// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
@@ -725,7 +791,7 @@ pub fn trace_ret_promotion() -> bool {
 #[must_use]
 pub fn link_widen_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_LINK_WIDEN").is_some())
+    *ON.get_or_init(|| env_set("LOFT_LINK_WIDEN"))
 }
 
 /// `LOFT_DUMP_LINK_OBS=1` — @PLN102 transparent-link widening, build step 3 (the observability
@@ -735,7 +801,7 @@ pub fn link_widen_enabled() -> bool {
 /// of the source counts). Drives NO codegen — byte-identical. Pinned by `tests/link_obs_oracle.rs`.
 #[must_use]
 pub fn dump_link_obs() -> bool {
-    std::env::var_os("LOFT_DUMP_LINK_OBS").is_some()
+    env_set("LOFT_DUMP_LINK_OBS")
 }
 
 /// `LOFT_DUMP_LINK_SAFE=1` — @PLN102 transparent-link widening, build step 2 (the safety oracle).
@@ -745,7 +811,7 @@ pub fn dump_link_obs() -> bool {
 /// byte-identical to today. Pinned against the safety matrix by `tests/link_safe_oracle.rs`.
 #[must_use]
 pub fn dump_link_safe() -> bool {
-    std::env::var_os("LOFT_DUMP_LINK_SAFE").is_some()
+    env_set("LOFT_DUMP_LINK_SAFE")
 }
 
 /// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
@@ -760,7 +826,7 @@ pub fn dump_link_safe() -> bool {
 #[must_use]
 pub fn a1b_materialise_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_A1B").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_A1B"))
 }
 
 /// loft#872: a work-ref mint may not RE-TYPE an argument — **DEFAULT ON**. `ref_return` promotes a
@@ -774,7 +840,7 @@ pub fn a1b_materialise_enabled() -> bool {
 #[must_use]
 pub fn work_ref_stepover_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_WORKREF_STEPOVER").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_WORKREF_STEPOVER"))
 }
 
 /// loft#953: a copy may not claim a buffer the CALLER owns — **DEFAULT ON**. `OpCopyRecord`'s
@@ -791,7 +857,7 @@ pub fn work_ref_stepover_enabled() -> bool {
 #[must_use]
 pub fn retbuf_claim_guard_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_RETBUF_CLAIM_GUARD").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_RETBUF_CLAIM_GUARD"))
 }
 
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a
@@ -803,7 +869,7 @@ pub fn retbuf_claim_guard_enabled() -> bool {
 #[must_use]
 pub fn move_elide_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_MOVE_ELIDE").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_MOVE_ELIDE"))
 }
 
 /// `LOFT_MOVE_ELIDE=1` — the MOVE-PLAN detection DUMP (a diagnostic). Opt-IN and independent of the
@@ -811,7 +877,7 @@ pub fn move_elide_enabled() -> bool {
 #[must_use]
 pub fn move_elide_dump_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_MOVE_ELIDE").is_some())
+    *ON.get_or_init(|| env_set("LOFT_MOVE_ELIDE"))
 }
 
 /// `LOFT_PLN25_OPT=1` (@PLN25 slice a, IN PROGRESS) — make the scalar/field postfix `?`
@@ -853,7 +919,7 @@ pub fn pln25_dn3_enabled() -> bool {
 #[must_use]
 pub fn nullflow_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_NULLFLOW"))
 }
 
 /// `LOFT_NO_STEER=1` (@PLN102 arc C — the recommended-idiom steer channel) — DEFAULT ON, opt OUT.
@@ -865,7 +931,7 @@ pub fn nullflow_enabled() -> bool {
 #[must_use]
 pub fn steer_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STEER").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_STEER"))
 }
 
 /// `LOFT_NO_CALLARG_NSTORE=1` (@PLN102 gate-2 residual — the call-arg N-Store hole) — DEFAULT ON,
@@ -880,7 +946,7 @@ pub fn steer_enabled() -> bool {
 #[must_use]
 pub fn callarg_nstore_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CALLARG_NSTORE").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_CALLARG_NSTORE"))
 }
 
 /// `LOFT_NO_QQ_NULL=1` (@PLN102 gate-2 residual — the `?? null` typing soundness fix) — DEFAULT
@@ -894,7 +960,7 @@ pub fn callarg_nstore_enabled() -> bool {
 #[must_use]
 pub fn qq_null_typing_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_QQ_NULL").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_QQ_NULL"))
 }
 
 /// `LOFT_NO_MATH_DOMAIN=1` (@PLN102 case B — soften-nullflow-discharge.md) — DEFAULT ON, opt
@@ -906,7 +972,7 @@ pub fn qq_null_typing_enabled() -> bool {
 /// `sqrt(sum) ?? d` from newly warning under `LOFT_DENY_WARNINGS`.
 pub fn math_domain_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_MATH_DOMAIN"))
 }
 
 /// The cognitive-complexity score at which a function earns a split nudge.
@@ -940,7 +1006,7 @@ pub const BOOL_FLAG_ADVICE_AT: u32 = 2;
 /// thing standing between the feature and its users is knowing it is there.
 pub fn default_params_lint_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEFAULT_HINT").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_DEFAULT_HINT"))
 }
 
 /// The count of REQUIRED parameters at which a function earns a bundle-them nudge.
@@ -969,7 +1035,7 @@ pub const PARAM_ADVICE_AT: u32 = 8;
 /// caller must know", so it is applied rather than assumed away.
 pub fn param_count_lint_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_PARAM_COUNT").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_PARAM_COUNT"))
 }
 
 /// `LOFT_NO_COMPLEXITY=1` opts OUT of the function-complexity ADVICE — default ON.
@@ -988,7 +1054,7 @@ pub fn param_count_lint_enabled() -> bool {
 /// speaks for ~3% — few enough that each one is worth reading.
 pub fn complexity_lint_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_COMPLEXITY").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_COMPLEXITY"))
 }
 
 /// `LOFT_LINT_STRICT_INDEX=1` (@PLN102 case D audit) — opt-in, DEFAULT OFF. The index-trust
@@ -1000,7 +1066,7 @@ pub fn complexity_lint_enabled() -> bool {
 /// (tightening the trust to a proof would break the ubiquitous `for i in 0..n { v[i] }` idiom).
 pub fn strict_index_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_LINT_STRICT_INDEX").is_some())
+    *ON.get_or_init(|| env_set("LOFT_LINT_STRICT_INDEX"))
 }
 
 /// `LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a) — the TEXT strict-index units lint, DEFAULT ON
@@ -1013,7 +1079,7 @@ pub fn strict_index_lint_enabled() -> bool {
 /// collection.
 pub fn text_index_units_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STRICT_INDEX_TEXT").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_STRICT_INDEX_TEXT"))
 }
 
 /// `LOFT_NO_CONST_EFFECT` — the re-evaluated-constant lint, DEFAULT ON (opt-out).
@@ -1034,7 +1100,7 @@ pub fn text_index_units_lint_enabled() -> bool {
 #[must_use]
 pub fn const_effect_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CONST_EFFECT").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_CONST_EFFECT"))
 }
 
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
@@ -1055,7 +1121,7 @@ pub fn const_effect_lint_enabled() -> bool {
 #[must_use]
 pub fn join_own_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_JOIN_OWN").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_JOIN_OWN"))
 }
 
 /// #497 — the reassignment-path adopt-vs-copy fix: a Reference local
@@ -1068,7 +1134,7 @@ pub fn join_own_enabled() -> bool {
 #[must_use]
 pub fn reassign_copy_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NO_REASSIGN_COPY").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_NO_REASSIGN_COPY"))
 }
 
 #[must_use]
@@ -1079,7 +1145,7 @@ pub fn pln25_dn1_enabled() -> bool {
     // (`LOFT_PLN25_OPT`/`_DN3`/`_DN1`) are now redundant no-ops. `LOFT_PLN25_OFF` still
     // toggles the model off, but F1b(b)'s stdlib `τ?` overloads collide when `Optional`
     // is a no-op, so the stdlib no longer LOADS gate-OFF — the escape hatch is retired.
-    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_OFF").is_none())
+    *ON.get_or_init(|| !env_set("LOFT_PLN25_OFF"))
 }
 
 /// @PLN25 F2 — the RANGE RECONCILIATION, FLIPPED DEFAULT-ON (2026-07-02): a plain
@@ -1103,7 +1169,7 @@ pub fn pln25_f2_enabled() -> bool {
 /// caught before the fault. (A same-type reuse slips through, but that wouldn't fault.)
 pub fn uaf_reuse_enabled() -> bool {
     static UAF_REUSE: OnceLock<bool> = OnceLock::new();
-    *UAF_REUSE.get_or_init(|| std::env::var_os("LOFT_UAF_REUSE").is_some())
+    *UAF_REUSE.get_or_init(|| env_set("LOFT_UAF_REUSE"))
 }
 
 /// `LOFT_UAF_GEN` (detector c) — the SOUND reused detector: a per-slot generation
@@ -1112,7 +1178,7 @@ pub fn uaf_reuse_enabled() -> bool {
 /// pushed. Catches the reused read that `store_nr` alone cannot — no `DbRef` widening.
 pub fn uaf_gen_enabled() -> bool {
     static UAF_GEN: OnceLock<bool> = OnceLock::new();
-    *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
+    *UAF_GEN.get_or_init(|| env_set("LOFT_UAF_GEN"))
 }
 
 /// `LOFT_NO_SLOT_REUSE=1` — @PLN118 arc D: never reclaim a freed store slot (always
@@ -1123,7 +1189,7 @@ pub fn uaf_gen_enabled() -> bool {
 #[must_use]
 pub fn no_slot_reuse() -> bool {
     static NR: OnceLock<bool> = OnceLock::new();
-    *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some() || strict_stores())
+    *NR.get_or_init(|| env_set("LOFT_NO_SLOT_REUSE") || strict_stores())
 }
 
 /// `LOFT_TRACE_DB=1` — print every record allocation (`OpDatabase`) with the type it
@@ -1139,7 +1205,7 @@ pub fn no_slot_reuse() -> bool {
 #[must_use]
 pub fn trace_db() -> bool {
     static TD: OnceLock<bool> = OnceLock::new();
-    *TD.get_or_init(|| std::env::var_os("LOFT_TRACE_DB").is_some())
+    *TD.get_or_init(|| env_set("LOFT_TRACE_DB"))
 }
 
 /// `LOFT_STRICT_STORES=1` (@PLN130 F8) — strict store lifetime, for PROBES.
@@ -1161,7 +1227,7 @@ pub fn trace_db() -> bool {
 #[must_use]
 pub fn strict_stores() -> bool {
     static SS: OnceLock<bool> = OnceLock::new();
-    *SS.get_or_init(|| std::env::var_os("LOFT_STRICT_STORES").is_some())
+    *SS.get_or_init(|| env_set("LOFT_STRICT_STORES"))
 }
 
 /// Violations recorded by [`strict_stores`] mode, so one run surfaces every site rather
@@ -1230,12 +1296,12 @@ pub fn strict_store_violation(
                  freed at pc={freed_pc}, {what} now at pc={now_pc}"
             )
         };
-        eprintln!(
+        crate::loft_eprintln!(
             "[strict-store] USE AFTER FREE ({what}) store #{store_nr} type={type_name} \
              rec={rec} pos={pos}\n  killed by the free of `{who}`\n{where_}"
         );
     } else if n == 20 {
-        eprintln!("[strict-store] ... further use-after-free reports suppressed");
+        crate::loft_eprintln!("[strict-store] ... further use-after-free reports suppressed");
     }
 }
 
@@ -1283,11 +1349,7 @@ pub fn stack_free_refusals() -> usize {
 #[must_use]
 pub fn watch_store() -> Option<u16> {
     static WATCH: OnceLock<Option<u16>> = OnceLock::new();
-    *WATCH.get_or_init(|| {
-        std::env::var("LOFT_WATCH_STORE")
-            .ok()
-            .and_then(|s| s.trim().parse::<u16>().ok())
-    })
+    *WATCH.get_or_init(|| env_value("LOFT_WATCH_STORE").and_then(|s| s.trim().parse::<u16>().ok()))
 }
 
 thread_local! {
@@ -1406,7 +1468,7 @@ pub fn uaf_move_shadow(from: u32, to: u32) {
 #[must_use]
 pub fn uaf_gen_inject_enabled() -> bool {
     static INJ: OnceLock<bool> = OnceLock::new();
-    *INJ.get_or_init(|| std::env::var_os("LOFT_UAF_GEN_INJECT").is_some())
+    *INJ.get_or_init(|| env_set("LOFT_UAF_GEN_INJECT"))
 }
 
 /// Consume the shadow stamp at `off` (called on a DbRef POP). The stack is LIFO, so a
@@ -1786,13 +1848,13 @@ pub const DEFAULT_MAX_OPS: u64 = 4_000_000_000;
 pub fn max_ops() -> u64 {
     static MAX: OnceLock<u64> = OnceLock::new();
     *MAX.get_or_init(|| {
-        let Ok(v) = std::env::var("LOFT_MAX_OPS") else {
+        let Some(v) = env_value("LOFT_MAX_OPS") else {
             return DEFAULT_MAX_OPS;
         };
         if let Ok(n) = v.trim().parse::<u64>() {
             n
         } else {
-            eprintln!(
+            crate::loft_eprintln!(
                 "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
                  keeping the default {DEFAULT_MAX_OPS}"
             );

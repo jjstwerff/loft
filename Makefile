@@ -80,7 +80,10 @@
 #                        so the gate is deterministic regardless of whether
 #                        `make wasm` last stomped the rlib with the
 #                        wasm-bindgen variant.
-#   make install         System-wide install (sudo).
+#   make install         System-wide install to /usr/local (sudo if not writable).
+#   make install-user    Sudo-free install to ~/.local (PREFIX=$$HOME/.local).
+#   make install-user-fast  As install-user, but native-only (no wasm) — fast
+#                        reinstall for the after-each-PR-merge loop.
 #   make test-gl-golden  Pixel-compare the smoke-test screenshot (Xvfb).
 #   make fill            Regenerate src/fill.rs from default/*.loft annotations.
 #   make pdf             Rebuild the printable reference PDF.
@@ -134,7 +137,27 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens
+# Install prefix.  Default is system-wide /usr/local; override with a user-writable
+# prefix for a sudo-free install:  make install PREFIX=$$HOME/.local  (or the
+# `install-user` shortcut).  No code change is needed — the runtime finds its stdlib
+# and rlibs RELATIVE to the binary: a loft at <PREFIX>/bin/loft searches
+# <PREFIX>/share/loft and .../deps (src/cache.rs, src/native_lib.rs).
+PREFIX ?= /usr/local
+
+# Root is needed only when PREFIX is not writable by the invoking user — computed,
+# never assumed.  Walk up to the first existing ancestor and test it: a user prefix
+# (~/.local) is writable → no sudo; a user-owned Homebrew /usr/local → no sudo; a
+# root-owned /usr/local → sudo; and under `sudo make install` we are already root, so
+# the ancestor is writable and nothing extra runs.  Empty = run the copies directly.
+SUDO := $(shell d="$(PREFIX)"; while [ -n "$$d" ] && [ "$$d" != / ] && [ ! -e "$$d" ]; do d=$$(dirname "$$d"); done; if [ -w "$$d" ]; then echo ""; else echo "sudo"; fi)
+
+# Native-only install: skip the wasm + html-mt browser runtimes — the slow part of
+# the build — for a FAST reinstall.  The result runs loft programs and builds library
+# cdylibs (all a dev needs after a PR merge); only `--html` / wasm export needs the
+# skipped runtimes.  Set by `make install-native` / `install-user-fast`.
+NATIVE_ONLY ?=
+
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-user install-native install-user-fast install-artifacts install-artifacts-native install-wasm-artifacts uninstall uninstall-user debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -218,48 +241,57 @@ install-artifacts: check-targets all wasm-html-mt-lib
 	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
 	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
 
+# Native-only artifacts: the same install-lib rlib, but WITHOUT the two wasm target
+# builds, the wasm-target check, or the html-mt build-std runtime.  `all` builds the
+# native binary + lib; this adds the feature-complete install-lib rlib the copies
+# need.  Same stale-loft_ffi prune as the full target.
+install-artifacts-native: all
+	@cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
+	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
+	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
+
 install:
-	@sudo true || { \
-		echo "ERROR: 'make install' needs root to write /usr/local/{bin,share}/loft."; \
-		echo "Re-run where you can elevate (e.g. as a sudoer, or 'sudo make install')."; \
-		exit 1; \
-	}
-	@$(AS_USER) $(MAKE) --no-print-directory install-artifacts
+	@if [ -n "$(SUDO)" ]; then \
+		sudo true || { \
+			echo "ERROR: writing $(PREFIX) needs root — it is not writable by you."; \
+			echo "Re-run with sudo, or install to a user-writable prefix (no sudo):"; \
+			echo "    make install-user           # => \$$HOME/.local"; \
+			echo "    make install PREFIX=DIR     # => any writable DIR"; \
+			exit 1; }; \
+	else \
+		echo "install: writing $(PREFIX) as $$(id -un) — no sudo needed"; \
+	fi
+	@$(AS_USER) $(MAKE) --no-print-directory $(if $(NATIVE_ONLY),install-artifacts-native,install-artifacts)
 	@$(AS_USER) $(MAKE) --no-print-directory rebuild-native-cdylibs
-	@sudo install -d /usr/local/share/loft/deps
-	@sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
-	@sudo rm -rf /usr/local/share/loft/default
-	@sudo cp -r default /usr/local/share/loft/
-	@sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
-	@sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
-	@sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
+	@$(SUDO) install -d $(PREFIX)/share/loft/deps
+	@$(SUDO) rm -rf $(PREFIX)/share/loft/default
+	@$(SUDO) cp -r default $(PREFIX)/share/loft/
+	@$(SUDO) install -m 644 target/install-lib/release/libloft.rlib $(PREFIX)/share/loft/
+	@$(SUDO) rm -f $(PREFIX)/share/loft/deps/*.rlib $(PREFIX)/share/loft/deps/*.so $(PREFIX)/share/loft/deps/*.dylib
+	@$(SUDO) cp target/install-lib/release/deps/*.rlib $(PREFIX)/share/loft/deps/
 	@if ls target/install-lib/release/deps/*.so >/dev/null 2>&1; then \
-		sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ || { \
+		$(SUDO) cp target/install-lib/release/deps/*.so $(PREFIX)/share/loft/deps/ || { \
 			echo "ERROR: failed to install dependency .so files (rights?)."; exit 1; }; \
 	fi
-	@sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
-	@sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
-	@sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
-	@sudo install -d /usr/local/share/loft/wasm32-unknown-unknown/deps
-	@sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
-	@sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
-	@sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
-	@if [ -f target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib ]; then \
-	  echo "install: shipping the threaded browser runtime (html-mt)"; \
-	  sudo install -d /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps; \
-	  sudo install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
-	    /usr/local/share/loft/html-mt/wasm32-unknown-unknown/; \
-	  sudo rm -f /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
-	  sudo cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
-	    /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
-	else \
-	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
+	@# Proc-macro deps (e.g. displaydoc) are host dylibs — `.dylib` on macOS,
+	@# `.so` on Linux (copied above).  A cdylib's `extern crate loft;` needs them,
+	@# so omitting the macOS `.dylib` broke every library native build with
+	@# E0463 "can't find crate for displaydoc" (see plans/user-local-install).
+	@if ls target/install-lib/release/deps/*.dylib >/dev/null 2>&1; then \
+		$(SUDO) cp target/install-lib/release/deps/*.dylib $(PREFIX)/share/loft/deps/ || { \
+			echo "ERROR: failed to install dependency .dylib files (rights?)."; exit 1; }; \
 	fi
-	@sudo chmod -R a+rX /usr/local/share/loft
-	@sudo install -m 755 target/release/loft /usr/local/bin/loft
+	@if [ -n "$(NATIVE_ONLY)" ]; then \
+		echo "install: native-only — skipping wasm + html-mt runtimes ('--html'/wasm export unavailable)"; \
+	else \
+		$(MAKE) --no-print-directory install-wasm-artifacts PREFIX="$(PREFIX)"; \
+	fi
+	@$(SUDO) chmod -R a+rX $(PREFIX)/share/loft
+	@$(SUDO) install -d $(PREFIX)/bin
+	@$(SUDO) install -m 755 target/release/loft $(PREFIX)/bin/loft
 	@smoke="$${TMPDIR:-/tmp}/loft-install-smoke.loft"; \
 	printf 'fn main() {\n    println("loft install smoke ok")\n}\n' > "$$smoke"; \
-	if ! /usr/local/bin/loft --interpret "$$smoke" >/dev/null 2>"$$smoke.err"; then \
+	if ! $(PREFIX)/bin/loft --interpret "$$smoke" >/dev/null 2>"$$smoke.err"; then \
 		echo "ERROR: 'make install' left a broken binary<->stdlib pair —"; \
 		echo "the installed loft cannot run the installed stdlib:"; \
 		sed 's/^/    /' "$$smoke.err"; \
@@ -281,7 +313,7 @@ install:
 	printf '[package]\nname = "smokelib"\nversion = "0.1.0"\nloft = ">=0.8"\n[library]\nentry = "src/smokelib.loft"\n' > "$$sdir/libs/smokelib/loft.toml"; \
 	printf 'pub fn smoke_sum(v: vector<integer>) -> integer {\n  t = 0;\n  for e in v { t += e; }\n  t\n}\n' > "$$sdir/libs/smokelib/src/smokelib.loft"; \
 	printf 'use smokelib;\nstruct SmIn { items: vector<integer> }\nstruct SmOut { inner: SmIn }\nfn smk() -> SmOut { SmOut { inner: SmIn { items: [1, 2, 3] } } }\nfn app(f: fn(float) -> float, x: float) -> float { f(x) }\nfn main() {\n  o = smk();\n  w = o.inner;\n  g = fn(a: float) -> float { a + (len(w.items) as float) };\n  println("smoke {app(g, 1.0)} {smoke_sum([1, 2, 3])}");\n}\n' > "$$sdir/main.loft"; \
-	if ! /usr/local/bin/loft --interpret --lib "$$sdir/libs" "$$sdir/main.loft" >/dev/null 2>"$$sdir/err"; then \
+	if ! $(PREFIX)/bin/loft --interpret --lib "$$sdir/libs" "$$sdir/main.loft" >/dev/null 2>"$$sdir/err"; then \
 		echo "ERROR: 'make install' left a broken binary<->rlib pair —"; \
 		echo "the installed loft cannot build a library cdylib against the installed libloft.rlib:"; \
 		sed 's/^/    /' "$$sdir/err"; \
@@ -290,9 +322,79 @@ install:
 	fi; \
 	rm -rf "$$sdir"; \
 	echo "install: cdylib smoke OK (a library builds against the installed rlib)"
+	@# PATH check — the freshly installed loft must be the one the shell resolves.
+	@# Two ways it isn't: $(PREFIX)/bin not on PATH, or an older loft earlier on PATH
+	@# shadowing it.  We report both, with the OS/shell-appropriate rc file, and edit
+	@# nothing ourselves.
+	@bindir="$(PREFIX)/bin"; \
+	on_path=0; case ":$$PATH:" in *":$$bindir:"*) on_path=1 ;; esac; \
+	resolved=$$(command -v loft 2>/dev/null || true); \
+	if [ "$$on_path" = 1 ] && [ "$$resolved" = "$$bindir/loft" ]; then \
+		echo "install: PATH OK — 'loft' resolves to the just-installed $$bindir/loft"; \
+	else \
+		case "$$SHELL" in \
+			*/zsh)  rc="~/.zprofile" ;; \
+			*/bash) if [ "$$(uname -s)" = Darwin ]; then rc="~/.bash_profile"; else rc="~/.bashrc"; fi ;; \
+			*)      rc="~/.profile" ;; \
+		esac; \
+		if [ "$$on_path" = 0 ]; then \
+			echo "NOTE: $$bindir is not on your PATH — the loft just installed will not be found."; \
+		else \
+			echo "NOTE: 'loft' resolves to $${resolved:-<none>}, not the just-installed"; \
+			echo "      $$bindir/loft — an earlier PATH entry is shadowing it."; \
+		fi; \
+		echo "      Add to $$rc, then restart your shell (or 'hash -r'):"; \
+		echo "          export PATH=\"$$bindir:\$$PATH\""; \
+		if [ "$$(uname -s)" = Darwin ]; then \
+			echo "      (macOS system-wide alternative: a file under /etc/paths.d/)"; \
+		fi; \
+	fi
+
+# Copy the wasm (wasm32-wasip2, wasm32-unknown-unknown) + html-mt browser runtimes
+# into the install prefix.  Split out of `install` so a native-only install can skip
+# it; called with the same PREFIX/SUDO the parent resolved.
+install-wasm-artifacts:
+	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-wasip2/deps
+	@$(SUDO) install -m 644 target/wasm32-wasip2/release/libloft.rlib $(PREFIX)/share/loft/wasm32-wasip2/
+	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-wasip2/deps/*.rlib
+	@$(SUDO) cp target/wasm32-wasip2/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-wasip2/deps/
+	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-unknown-unknown/deps
+	@$(SUDO) install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/
+	@$(SUDO) rm -f $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/*.rlib
+	@$(SUDO) cp target/wasm32-unknown-unknown/release/deps/*.rlib $(PREFIX)/share/loft/wasm32-unknown-unknown/deps/
+	@if [ -f target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib ]; then \
+	  echo "install: shipping the threaded browser runtime (html-mt)"; \
+	  $(SUDO) install -d $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps; \
+	  $(SUDO) install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
+	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/; \
+	  $(SUDO) rm -f $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
+	  $(SUDO) cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
+	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
+	else \
+	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
+	fi
+
+# Sudo-free install into the user's home prefix — reinstall as often as you like
+# (e.g. after each PR merge) with no root.  Just `make install` with PREFIX pointed
+# at ~/.local, which is user-writable so $(SUDO) resolves empty.
+install-user:
+	@$(MAKE) --no-print-directory install PREFIX=$(HOME)/.local
+
+# Fast reinstalls: skip the wasm + html-mt runtimes.  `install-native` respects
+# PREFIX (system by default); `install-user-fast` is the sudo-free ~/.local variant —
+# the one to run after each PR merge when you only need to run + build loft locally.
+install-native:
+	@$(MAKE) --no-print-directory install NATIVE_ONLY=1
+
+install-user-fast:
+	@$(MAKE) --no-print-directory install PREFIX=$(HOME)/.local NATIVE_ONLY=1
+
 uninstall:
-	sudo rm -f /usr/local/bin/loft
-	sudo rm -rf /usr/local/share/loft
+	$(SUDO) rm -f $(PREFIX)/bin/loft
+	$(SUDO) rm -rf $(PREFIX)/share/loft
+
+uninstall-user:
+	@$(MAKE) --no-print-directory uninstall PREFIX=$(HOME)/.local
 
 debug:
 	RUSTFLAGS=-g RUST_BACKTRACE=1 cargo build -v
@@ -337,7 +439,8 @@ rebuild-native-cdylibs:
 	@# drops the wasm std but leaves target/wasm32-*/, so the old `[ -d … ]`
 	@# heuristic hard-failed with a buried E0463).  Installed → rebuild;
 	@# stale artefact but std gone → warn with the fix and SKIP; neither → skip.
-	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+	@if [ -n "$(NATIVE_ONLY)" ]; then :; \
+	elif rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 	  cargo build --release --target wasm32-unknown-unknown \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-unknown-unknown rlib rebuild"; exit 1; \
@@ -346,7 +449,8 @@ rebuild-native-cdylibs:
 	  echo "WARN: wasm32-unknown-unknown std not installed — skipping wasm rlib refresh"; \
 	  echo "      (stale target/wasm32-unknown-unknown/ present; run: rustup target add wasm32-unknown-unknown)"; \
 	fi
-	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-wasip2; then \
+	@if [ -n "$(NATIVE_ONLY)" ]; then :; \
+	elif rustup target list --installed 2>/dev/null | grep -qx wasm32-wasip2; then \
 	  cargo build --release --target wasm32-wasip2 \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-wasip2 rlib rebuild"; exit 1; \
@@ -465,7 +569,7 @@ wasm:
 # start loft's pool automatically when crossOriginIsolated.  Needs the same
 # nightly + rust-src toolchain as `wasm-mt`.
 gallery-mt:
-	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
@@ -686,6 +790,16 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 	    exit 1; \
 	fi
 	@echo "features shadow in sync with index/features.json."
+
+examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:line -> blob link)
+	@bash scripts/check_doc_drift.sh write-examples-index
+
+# REPO defaults to this repo; point it at a library checkout to drive that repo's
+# rollout: make examples-progress REPO=../loft-libs-graphics
+REPO ?= .
+.PHONY: examples-index examples-progress
+examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
+	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft
@@ -1101,6 +1215,16 @@ WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
   -C link-arg=--export=__stack_pointer
 
+# `-Z build-std` reads the std SOURCE from the sysroot of the rustc cargo spawns
+# — NOT the rustc `rustup run nightly` selected for cargo itself.  On a box whose
+# PATH carries a toolchain's real bin dir (e.g. `.rustup/toolchains/stable/bin`)
+# instead of the `~/.cargo/bin` rustup proxies, that bare `rustc` resolves to
+# STABLE, whose rust-src omits `library/Cargo.lock` (build-std is nightly-only),
+# and every build-std recipe dies with "Cargo.lock does not exist".  Pinning
+# RUSTC to nightly's own rustc closes the leak regardless of PATH shape.
+# `$$(...)` runs in the recipe shell, so it costs nothing until a target uses it.
+NIGHTLY_RUSTC = "$$(rustup run nightly rustc --print sysroot)/bin/rustc"
+
 # @PLN117 — prove `par` still computes the right answers in a build WITHOUT the
 # threading feature (the shape `make wasm` ships to the browser).  CI only
 # `cargo check`s that configuration, which is how a par that returned garbage
@@ -1155,7 +1279,7 @@ wasm-html-mt-lib:
 	  echo "      installing without it — 'loft --html --threads' will report the missing runtime."; \
 	else \
 	  echo "building the threaded browser runtime (html-mt) — build-std, one-time"; \
-	  RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	  RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	  rustup run nightly cargo build --release --lib --target wasm32-unknown-unknown \
 	    --no-default-features --features "random wasm-native-threads" \
 	    --target-dir target/loft/html-mt -Zbuild-std=panic_abort,std \
@@ -1163,13 +1287,13 @@ wasm-html-mt-lib:
 	fi
 
 check-wasm-threads:
-	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' \
+	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly cargo check --lib --target wasm32-unknown-unknown \
 	--no-default-features --features "random wasm-native-threads" \
 	--target-dir target/loft/html-mt -Zbuild-std=panic_abort,std
 
 wasm-mt:
-	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' RUSTC=$(NIGHTLY_RUSTC) \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std

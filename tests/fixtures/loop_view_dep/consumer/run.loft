@@ -1,0 +1,38 @@
+// loft#969 / loft#950 — the value half of "a loop binding over a view is a view".
+//
+// Two functions walk the SAME `vector<Item>` field of one struct: `holder_span`
+// in the library, `emit` here.  Each alone repeats correctly for ever; only the
+// interleaving corrupts, and after it the vector reads as ONE element.
+//
+// Prints three lines so a failure says WHICH call went wrong rather than only
+// that the run differed.
+use holderlib;
+
+struct V1 { vx: float }
+struct Sink { sk_vs: vector<V1> }
+
+fn v1(x: float) -> V1 { V1 { vx: x } }
+fn add_v(m: Sink, v: V1) -> integer { m.sk_vs += [v]; len(m.sk_vs) }
+
+// The emitter.  Its loop body hands a value read from the binding to a NESTED
+// call chain — that is what makes the binding's dep load-bearing here, and a
+// body that only appends to a local field does not reproduce.
+fn emit(m: Sink, h: Holder) -> integer {
+  n = 0;
+  for it in h.hd_items { add_v(m, v1(it.it_x)); n += 1; }
+  n
+}
+
+fn main() {
+  s = shelf_new();
+  h = holder_new("one");
+  h = holder_item(h, 1.0); h = holder_item(h, 2.0); h = holder_item(h, 3.0);
+  shelf_add(s, h);
+  // fetched back out of the keyed collection, as the reporting consumer does
+  g = shelf_get(s, "one") ?? Holder {};
+  m1 = Sink { sk_vs: [] };
+  println("1 emit={emit(m1, g)}");
+  println("2 span={holder_span(g)}");
+  m2 = Sink { sk_vs: [] };
+  println("3 emit={emit(m2, g)}");
+}

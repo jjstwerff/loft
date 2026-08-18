@@ -1200,9 +1200,18 @@ fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
 /// @PLN26 phase 3 (#438) — a program that uses a `#native` (`[native] crate`) package
 /// compiles to `--native-wasm` and runs under wasmtime: loft cross-builds the package's
 /// native crate to `wasm32-wasip2` on demand and links its rlib (+ the host proc-macro
-/// deps).  `native_scalar_pkg` is a minimal wasm-clean fixture (one scalar `#native` fn,
-/// `native_answer() -> 42`), so this pins the loft cross-build PIPELINE, isolated from any
-/// heavy crate's own wasm-cleanliness.  Skipped when the wasip2 target or wasmtime is absent.
+/// deps).  `native_scalar_pkg` is a minimal wasm-clean fixture, so this pins the loft
+/// cross-build PIPELINE, isolated from any heavy crate's own wasm-cleanliness.  Skipped
+/// when the wasip2 target or wasmtime is absent.
+///
+/// Both native SHAPES, because they have different linkage requirements and only one of
+/// them was ever covered here (loft#967).  A scalar (`native_answer() -> 42`) compiles to
+/// a plain `extern "C"` call that asks nothing of loft's runtime.  A vector RETURN
+/// (`native_span(4)`) makes codegen wrap the call in `loft::native_call::enter` +
+/// `build_store` so the crate can allocate into a loft store — and those two helpers were
+/// gated behind `native-extensions`, a feature the wasm runtime rlib cannot enable
+/// (it buys `dlopen`).  So every store-touching native refused to build on this target
+/// while the scalar cell stayed green and reported the pipeline as covered.
 #[test]
 fn pln26_phase3_native_package_runs_on_wasm() {
     let Some(wasmtime) = which("wasmtime") else {
@@ -1228,10 +1237,13 @@ fn pln26_phase3_native_package_runs_on_wasm() {
     let tmp = std::env::temp_dir().join("loft_pln26_p3");
     let _ = std::fs::create_dir_all(&tmp);
     let prog = tmp.join("native_pkg_wasm.loft");
+    // Values, not just shapes: `native_span` returns `[100, 101, …]` deterministically,
+    // so a truncated or misordered store copy is visible rather than merely "non-empty".
     std::fs::write(
         &prog,
         "use native_scalar_pkg;\nfn main() {\n  answer = native_answer();\n  \
-         print(\"native-answer={answer}\\n\");\n}\n",
+         print(\"native-answer={answer}\\n\");\n  v = native_span(4);\n  \
+         print(\"native-span={len(v)}:{v[0]},{v[1]},{v[2]},{v[3]}\\n\");\n}\n",
     )
     .unwrap();
     let wasm = tmp.join("native_pkg_wasm.wasm");
@@ -1263,6 +1275,12 @@ fn pln26_phase3_native_package_runs_on_wasm() {
     assert!(
         stdout.contains("native-answer=42"),
         "wasm `#native` call returned wrong/no value: stdout={stdout:?} stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        stdout.contains("native-span=4:100,101,102,103"),
+        "loft#967 — a store-allocating `#native` returned the wrong vector on wasip2: \
+         stdout={stdout:?} stderr={}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -1920,5 +1938,295 @@ fn html_a_clean_page_reports_no_panic() {
     assert!(
         !all.contains("panicked at") && !all.contains("TRAP"),
         "a clean page must report no panic\n{all}"
+    );
+}
+
+/// The wasm module's shadow-stack top (`__stack_pointer`'s initial value) and the linear
+/// address of the asyncify canary, decoded straight from the artefact.
+///
+/// A second, independent walk for the reason `wasm_function_names` gives: the assertion
+/// below is about what the emitted module says, and a shared decoder would let one bug
+/// stand on both sides of it.  Returns `None` when either cannot be found.
+fn wasm_stack_top_and_canary(wasm: &[u8]) -> (Option<u32>, Option<u32>) {
+    fn uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let (mut v, mut shift) = (0u64, 0u32);
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            v |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(v);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    // `i32.const <sleb> end` — the only initialiser shape a data offset or a
+    // pointer-valued global uses.
+    fn i32_const(b: &[u8], p: &mut usize) -> Option<i64> {
+        if *b.get(*p)? != 0x41 {
+            return None;
+        }
+        *p += 1;
+        let (mut v, mut shift) = (0i64, 0u32);
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            v |= i64::from(byte & 0x7f) << shift;
+            shift += 7;
+            if byte & 0x80 == 0 {
+                if shift < 64 && byte & 0x40 != 0 {
+                    v |= -(1i64 << shift);
+                }
+                return Some(v);
+            }
+        }
+    }
+    const CANARY: &[u8] = b"LOFT950!";
+    let mut stack_top = None;
+    let mut canary_at = None;
+    let mut p = 8usize;
+    while p < wasm.len() {
+        let Some(&id) = wasm.get(p) else { break };
+        p += 1;
+        let Some(size) = uleb(wasm, &mut p).and_then(|s| usize::try_from(s).ok()) else {
+            break;
+        };
+        let (start, Some(end)) = (p, p.checked_add(size).filter(|e| *e <= wasm.len())) else {
+            break;
+        };
+        // Global section: the FIRST i32 mutable global a Rust wasm module declares is
+        // `__stack_pointer`, initialised to the top of the shadow stack.
+        if id == 6 && stack_top.is_none() {
+            let mut q = start;
+            if uleb(wasm, &mut q).is_some_and(|n| n > 0) {
+                q += 2; // value type + mutability
+                if let Some(v) = i32_const(wasm, &mut q) {
+                    stack_top = u32::try_from(v).ok();
+                }
+            }
+        }
+        // Data section: find the segment holding the canary and turn its index within
+        // that segment into a linear address.
+        if id == 11 && canary_at.is_none() {
+            let mut q = start;
+            let count = uleb(wasm, &mut q).unwrap_or(0);
+            for _ in 0..count {
+                if uleb(wasm, &mut q) != Some(0) {
+                    break; // only the active-at-a-constant form is emitted here
+                }
+                let Some(off) = i32_const(wasm, &mut q) else {
+                    break;
+                };
+                if wasm.get(q) != Some(&0x0b) {
+                    break;
+                }
+                q += 1;
+                let Some(len) = uleb(wasm, &mut q).and_then(|l| usize::try_from(l).ok()) else {
+                    break;
+                };
+                let Some(body) = wasm.get(q..q.saturating_add(len)) else {
+                    break;
+                };
+                if let Some(idx) = body.windows(CANARY.len()).position(|w| w == CANARY) {
+                    canary_at = u32::try_from(off)
+                        .ok()
+                        .and_then(|o| u32::try_from(idx).ok().and_then(|i| o.checked_add(i)));
+                }
+                q += len;
+            }
+        }
+        p = end;
+    }
+    (stack_top, canary_at)
+}
+
+// loft#950 — the asyncify save region must be memory the MODULE owns.
+//
+// `wasm-opt --asyncify` spills the whole wasm stack into a caller-chosen buffer on every
+// suspend and reads it back on resume.  The JS driver used to choose that address:
+// `__heap_base` when the module exported it, and the literal `65536` when it did not.  It
+// never did — that export rides in `WASM_THREAD_FLAGS`, which only the THREADED `--html`
+// link passes — so every ordinary page took the fallback, and `65536` is not in the heap.
+// `__stack_pointer` starts at `0x100000`, so the shadow stack is `[0, 0x100000)` growing
+// DOWN and the region sat 966,648 bytes into it: a page whose stack ever reached that
+// depth had asyncify writing saved frames over live locals and reading live locals back
+// as saved frames.  Browser-only, because no other target runs asyncify.
+//
+// ⚠ THE ASSERTION IS THE ADDRESS, not the presence of the exports.  A page that exports
+// all three and still hands the driver an address inside the shadow stack has exactly the
+// bug this is written against, and an export-name check would pass it.  The region is
+// derived from the CANARY's linear address, so it is read out of the artefact the browser
+// actually gets rather than from anything this build could assert about itself.
+#[test]
+fn the_asyncify_save_region_is_outside_the_shadow_stack() {
+    let Some((stdout, stderr, ok)) = run_html_wasm(
+        "asyncify_region",
+        "fn main() {\n  v: vector<integer> = [];\n  for i in 0..64 { v += [i]; }\n  \
+         print(\"len {len(v)}\\n\");\n}\n",
+    ) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok && all.contains("len 64"), "the page must run\n{all}");
+
+    let wasm = std::fs::read(extracted_wasm("asyncify_region")).expect("read extracted wasm");
+    let (stack_top, canary_at) = wasm_stack_top_and_canary(&wasm);
+    let stack_top = stack_top.expect("__stack_pointer initialiser present");
+    let canary_at = canary_at.expect(
+        "the asyncify canary must be in the module's data — without it the region is not \
+         reserved and the driver is choosing an address again",
+    );
+
+    // The canary sits immediately after the 8-byte control struct and the save area.
+    let size = 16384u32;
+    let region = canary_at
+        .checked_sub(size + 8)
+        .expect("canary cannot precede the region it guards");
+
+    assert!(
+        region >= stack_top,
+        "the asyncify save region is at 0x{region:x}, inside the shadow stack \
+         [0, 0x{stack_top:x}) — a suspend will overwrite live locals (loft#950)"
+    );
+    // The fallback address the bug shipped with, pinned by value: a regression that
+    // restores it lands here with a name rather than as a browser-only wrong answer.
+    assert_ne!(
+        region, 65536,
+        "the region is back at the hardcoded 65536 fallback (loft#950)"
+    );
+}
+
+/// loft#967 — a `loft::<module>` path the generator writes into generated Rust must be
+/// reachable in the feature set the wasm runtime rlib is built with.
+///
+/// `WasmRuntimeShape::features()` builds that rlib `--no-default-features --features
+/// random`, so anything gated behind `native-extensions` (which buys `dlopen`, and wasm
+/// has none) is configured out — and the program that references it dies in `rustc`, in
+/// generated code, naming loft's internals rather than anything the author wrote.
+///
+/// It has happened twice from two different producers. @PLN24 arc E fixed the `#c` half
+/// by refusing the CALL (`Output::no_c_abi`, the only site that knows a binding is
+/// reachable); the `#native` half went on emitting `loft::native_call::enter` +
+/// `build_store`, so every store-allocating native — a vector return, a struct
+/// `Reference` argument — could not be built for `--native-wasm` at all.
+///
+/// This is the always-on half of the guard. `pln26_phase3_native_package_runs_on_wasm`
+/// proves the real thing end to end, but it self-skips without wasmtime and the wasip2
+/// target, which the per-PR CI leg does not install — so on the path where a regression
+/// is cheapest to catch, it reports nothing.
+///
+/// A gate is read at TWO sites, because the two producers were gated differently: the
+/// declaration in `src/lib.rs` (how `native_call` was hidden) and a leading inner
+/// `#![cfg(…)]` in the module's own file (how `c_call` is).
+#[test]
+fn generated_loft_paths_survive_the_wasm_feature_set() {
+    let root = repo_root();
+    // `c_call` is the ONE exception, and it is exempt because a call to it cannot be
+    // emitted for wasm: `no_c_abi()` refuses the `#c` binding first.  Asserted below, so
+    // the exemption cannot outlive its enforcement.
+    const REFUSED_BEFORE_EMISSION: &[&str] = &["c_call"];
+
+    let mut sources = vec![root.join("src/codegen_runtime.rs")];
+    let gen_dir = root.join("src/generation");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&gen_dir)
+        .expect("read src/generation")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    entries.sort();
+    sources.extend(entries);
+
+    // Every `loft::<ident>` in the generator.  A leading `.` means a loft FILENAME in a
+    // comment (`prog.loft::main`), not a Rust path.
+    let mut referenced: Vec<String> = Vec::new();
+    for src in &sources {
+        let text = std::fs::read_to_string(src).expect("read generator source");
+        let bytes = text.as_bytes();
+        for (at, _) in text.match_indices("loft::") {
+            if at > 0 && (bytes[at - 1] == b'.' || bytes[at - 1].is_ascii_alphanumeric()) {
+                continue; // `prog.loft::x`, or a longer identifier ending in `loft`
+            }
+            let rest = &text[at + "loft::".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+                .collect();
+            if !name.is_empty() && !referenced.contains(&name) {
+                referenced.push(name);
+            }
+        }
+    }
+    assert!(
+        referenced.iter().any(|m| m == "native_call"),
+        "the scan found no `loft::native_call` at all — it is the path loft#967 was \
+         about, so an empty scan means this test stopped reading the generator"
+    );
+
+    let lib_rs = std::fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+    let lines: Vec<&str> = lib_rs.lines().collect();
+    let mut gated: Vec<String> = Vec::new();
+    for name in &referenced {
+        if REFUSED_BEFORE_EMISSION.contains(&name.as_str()) {
+            continue;
+        }
+        let decl_mod = format!("pub mod {name};");
+        let decl_use = format!("::{name};");
+        let Some(at) = lines.iter().position(|l| {
+            let t = l.trim();
+            t == decl_mod || (t.starts_with("pub use ") && t.ends_with(&decl_use))
+        }) else {
+            continue; // not a crate-root item — an inherent path, nothing to gate
+        };
+        // Attributes sit directly above the declaration, interleaved with comments.
+        let mut j = at;
+        while j > 0 {
+            let t = lines[j - 1].trim();
+            if t.starts_with("#[") {
+                if t.contains("cfg(feature") {
+                    gated.push(format!("{name}: src/lib.rs:{} {t}", j));
+                }
+            } else if !t.starts_with("//") {
+                break;
+            }
+            j -= 1;
+        }
+        // …and the module's own file can gate itself with an inner attribute, which the
+        // declaration above says nothing about.
+        for cand in [format!("src/{name}.rs"), format!("src/{name}/mod.rs")] {
+            let Ok(body) = std::fs::read_to_string(root.join(&cand)) else {
+                continue;
+            };
+            if let Some(l) = body
+                .lines()
+                .take(40)
+                .find(|l| l.trim_start().starts_with("#![cfg(feature"))
+            {
+                gated.push(format!("{name}: {cand} {}", l.trim()));
+            }
+        }
+    }
+    assert!(
+        gated.is_empty(),
+        "generated code emits these `loft::` paths, but they are behind a cargo feature \
+         the wasm runtime rlib does not enable (it builds `--no-default-features \
+         --features random`), so `--native-wasm` / `--html` fails in rustc inside \
+         generated code (loft#967):\n  {}\n\nEither ungate the item, or refuse the \
+         construct that emits it before emission — the way `no_c_abi()` refuses a `#c` \
+         binding — and add it to REFUSED_BEFORE_EMISSION.",
+        gated.join("\n  ")
+    );
+
+    // The exemption's enforcement, pinned: `c_call` is safe to skip only while a
+    // reachable `#c` binding is REFUSED on a wasm target.
+    let gen_mod = std::fs::read_to_string(root.join("src/generation/mod.rs"))
+        .expect("read generation/mod.rs");
+    assert!(
+        gen_mod.contains("if self.no_c_abi() {"),
+        "`c_call` is exempt from the gate above because `no_c_abi()` refuses a reachable \
+         `#c` binding before any call can be emitted — that refusal is gone, so the \
+         exemption is now unbacked (loft#967, @PLN24 arc E)"
     );
 }

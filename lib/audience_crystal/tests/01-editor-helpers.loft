@@ -9,6 +9,9 @@
 use audience_crystal::*;
 use gridmesh;
 
+// @ACR-001 — hex_at_world is the INVERSE of cell_wx/cell_wz: a world (x,z) back
+// to the hex (x,y) that owns it, exact across the odd-row shift — the call the
+// editor makes to turn a pointer position into a cell.
 fn test_pick_roundtrip() {
   // Every hex centre picks back to itself, and a small offset near the
   // centre still resolves to the same hex — exact across the odd-row shift.
@@ -24,6 +27,10 @@ fn test_pick_roundtrip() {
   }
 }
 
+// @ACR-002 — the incremental editor loop: crystal_incr_new() makes an editable
+// crystal, paint() marks cells dirty, rebuild() re-meshes only the dirty chunks,
+// full_mesh() reads the SegMesh, and crystal_mesh_to_lines() flattens it to GL
+// line vertices — 2 verts/segment × 10 floats (pos3 + pad3 + rgba4), hence %20.
 fn test_mesh_to_lines() {
   state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
   c = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },
@@ -39,6 +46,9 @@ fn test_mesh_to_lines() {
   assert(len(v) % 20 == 0, "stride-10 line pairs expected, got {len(v)}");
 }
 
+// @ACR-003 — crystal_incr_erase() removes a painted cell; the mesh only shrinks
+// after the next rebuild() (erase marks dirty, rebuild re-meshes) — the edit and
+// the re-mesh are two steps, not one.
 fn test_erase_shrinks() {
   state = CrystalState{ main_x: [], main_y: [], main_d: [], birth_tick: [] };
   c = crystal_incr_new(CellSnap{ xs: [], ys: [], colors: [] },

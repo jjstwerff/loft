@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for stdlib functions (@PLN141) — text, collection
+// aggregates, and JSON.  Each test is a real, runnable use of a function
+// whose correct call shape is NOT obvious from its signature — the kind of
+// function a reader (often an AI agent) knows exists yet cannot use without
+// seeing it in action.  The function's doc comment (in default/03_text.loft,
+// default/01_code.loft, or default/06_json.loft) cites the tag here via
+// `// Example: @STD-00N`, and `scripts/check_doc_drift.sh examples` fails
+// if a citation goes dangling (no test carries the tag).
+
+// @STD-001 — is a token present at a given BYTE offset? (scanner idiom)
+fn test_starts_with_at_scans_a_token() {
+  line = "  let x = 5";
+  // starts_with_at asks "does `prefix` sit at byte `pos`?" without slicing.
+  assert(line.starts_with_at(2, "let"), "'let' begins at byte 2");
+  assert(!line.starts_with_at(0, "let"), "byte 0 is a space, not 'let'");
+  // Past the end is false, never an error.
+  assert(!line.starts_with_at(20, "five"), "past the end is false, not a crash");
+}
+
+// @STD-002 — build text from a Unicode CODE POINT (decode an escape / entity)
+fn test_chr_builds_text_from_a_code_point() {
+  // chr is the inverse of `ch as integer`: a number in, its character out.
+  assert(chr(65) == "A", "U+0041 is 'A'");
+  assert(chr(233) == "é", "U+00E9 is e-acute");
+  assert(chr(20013) == "中", "U+4E2D");
+  // A code point that names no character yields the empty text, never a crash.
+  assert(chr(-1) == "", "negative code point is empty text");
+}
+
+// @STD-003 — join vector<text> with a separator (build a delimited line)
+fn test_join_builds_a_delimited_line() {
+  parts: vector<text> = ["usr", "local", "bin"];
+  assert(parts.join("/") == "usr/local/bin", "path segments joined by '/'");
+  empty: vector<text> = [];
+  assert(empty.join(",") == "", "empty vector joins to empty text");
+}
+
+// @STD-004 — smallest / largest of a vector, NULL when empty (guard with ??)
+fn test_min_of_max_of_are_null_on_empty() {
+  v: vector<integer> = [3, 1, 4, 1, 5];
+  assert((min_of(v) ?? 0) == 1, "min of a non-empty vector");
+  assert((max_of(v) ?? 0) == 5, "max of a non-empty vector");
+  // Empty is NOT zero — it is null, so choose the fallback explicitly with ??.
+  empty: vector<integer> = [];
+  assert((min_of(empty) ?? -1) == -1, "min of empty is null → the ?? fallback");
+}
+
+// @STD-005 — sum with a caller-supplied identity (works for any Addable type)
+fn test_sum_takes_an_identity() {
+  ints: vector<integer> = [10, 20, 12];
+  assert(sum(ints, 0) == 42, "integer sum starts from the 0 identity");
+  // The identity fixes the element type AND the empty-vector answer.
+  floats: vector<float> = [1.5, 2.5];
+  assert(sum(floats, 0.0) == 4.0, "float sum starts from 0.0");
+  none: vector<integer> = [];
+  assert(sum(none, 0) == 0, "empty sum is the identity");
+}
+
+// A struct for the JSON round-trip example below.  Reflection reads its
+// fields — no annotations, no code generation on the struct itself.
+struct Widget { id: integer, name: text, tags: vector<text> }
+
+// @STD-007 — parse JSON, then navigate + typed-extract (config / API-response idiom)
+fn test_json_parse_navigates_and_extracts() {
+  // A backtick raw string carries literal JSON; `{{`/`}}` are literal braces.
+  raw = `{{"name": "ada", "scores": [10, 20, 30], "active": true}}`;
+  root = json_parse(raw);
+  // field() indexes a JObject, item() a JArray; you take a typed leaf at the
+  // end with as_text / as_long / as_bool / as_number.
+  assert(root.field("name").as_text() == "ada", "string leaf: field()+as_text()");
+  assert(root.field("scores").item(1).as_long() == 20, "array leaf: item()+as_long()");
+  assert(root.field("active").as_bool(), "bool leaf: as_bool()");
+  // A missing path is JNull, never a trap — the chain stays safe to the end.
+  assert(root.field("missing").kind() == "JNull", "absent field navigates to JNull");
+  // A clean parse leaves no error trail; json_errors() reads it after the fact.
+  assert(json_errors() == "", "a successful parse has an empty error trail");
+}
+
+// @STD-008 — build a JSON tree with the constructors, then serialise it
+fn test_json_builders_compose_and_serialise() {
+  // JObject fields are JsonField { name, value }; each value comes from a
+  // json_* constructor, and json_array / json_object nest to any depth.
+  tree = json_object([
+    JsonField { name: "id", value: json_number(7.0) },
+    JsonField { name: "tags", value: json_array([json_string("a"), json_string("b")]) },
+  ]);
+  // to_json renders canonical RFC 8259 text in insertion order; an
+  // integer-valued number prints without a fractional part.
+  assert(tree.to_json() == `{{"id":7,"tags":["a","b"]}}`, "builders serialise canonically");
+  // Full round-trip: parse what we just built and read a leaf back out.
+  built = json_parse(tree.to_json());
+  assert(built.field("tags").item(0).as_text() == "a", "build → serialise → parse round-trips");
+}
+
+// @STD-009 — a user struct ↔ JSON, both directions (reflection, no annotations)
+fn test_struct_json_round_trip() {
+  // Stage through json_parse() rather than the auto-wrapping Widget.parse(text):
+  // the explicit form routes parse AND schema errors to json_errors().
+  w = Widget.parse(json_parse(`{{"id": 3, "name": "gear", "tags": ["x", "y"]}}`));
+  assert(w.id == 3, "integer field parsed");
+  assert(w.name == "gear", "text field parsed");
+  assert(w.tags[1] == "y", "vector field parsed");
+  // Serialise any struct back with the ':j' format flag (backed by struct_to_json).
+  assert("{w:j}" == `{{"id":3,"name":"gear","tags":["x","y"]}}`, "struct → JSON via :j");
+}

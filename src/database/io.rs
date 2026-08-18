@@ -670,7 +670,7 @@ impl Stores {
                         // a Windows runner with a transient FS refusal).
                         // Warn and skip the write (the recoverable-fault
                         // posture); the next write retries the create.
-                        eprintln!(
+                        crate::loft_eprintln!(
                             "loft: cannot create {resolved_name} for writing: {e} — write skipped"
                         );
                         return false;

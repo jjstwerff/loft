@@ -694,3 +694,49 @@ cross_mode!(
     }
     "#
 );
+
+// ─── loft#970 — a read whose result ends at the store's end ──────────────────
+//
+// `read_bytes` panicked *"Store access out of bounds … the reference is corrupt"* as soon
+// as the vector it allocates ended exactly at the store's last byte.  The reference was
+// fine; the WIDTH was one word too many.  `Store::buffer` read the record's size word —
+// which counts itself, since `claim_block` sets `claimed_end = pos + size_word` — and then
+// spanned that many bytes starting 8 bytes in, so the slice it handed back always ran one
+// word past the record.  `slice::from_raw_parts_mut` beyond an allocation is UB whether or
+// not anything reads it, so this was latent from the start and merely invisible: the
+// overrun only leaves the STORE when the record happens to be the last one in it.
+//
+// That is why the reporter measured a boundary in store SLACK rather than in file size —
+// 1352 bytes fine, 1353 fatal in a five-line program; 328/329 in one that had allocated a
+// vector first.  It surfaced when @PLN950's always-on bound replaced a `debug_assert!` that
+// loft's own library build compiles out, which is exactly what that change was for.
+//
+// The sizes below are chosen to LAND on the boundary rather than to be round: a cell at a
+// comfortable size passes on the broken binary and would pin nothing.  Both are asserted
+// byte-exact, because a fix that returned a short buffer would satisfy a length check that
+// only asked for "not a panic".
+
+cross_mode!(
+    c970_read_bytes_at_the_store_boundary,
+    r#"
+    fn test() {
+        // 1353 is the first size that faulted in the reporter's five-line program; 328/329
+        // straddle the boundary in one that allocates first, which is this shape.
+        for n in [328, 329, 1352, 1353, 2000] {
+            p = "biom_970_{n}.bin";
+            delete(p);
+            blob: vector<u8> = [];
+            i = 0;
+            while i < n { blob += [(i & 255) as u8]; i = i + 1; }
+            assert(write_bytes(p, blob), "wrote {n}");
+            back = read_bytes(p) ?? [];
+            assert(len(back) == n, "read_bytes({n}) gave {len(back)}");
+            // Byte-exact at both ends: the last byte is the one a short buffer loses.
+            assert(back[0] == blob[0], "first byte of {n}");
+            assert(back[n - 1] == blob[n - 1], "last byte of {n}");
+            delete(p);
+        }
+        print("c970 boundary reads ok\n");
+    }
+    "#
+);

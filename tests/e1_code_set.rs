@@ -266,6 +266,10 @@ const CODES: &[(&str, &str)] = &[
         "fn main() { print(\"needs a two-package dependency graph\"); }",
     ),
     (
+        "undeclared-dependency",
+        "fn main() { print(\"needs a project manifest and an installed registry package\"); }",
+    ),
+    (
         "persist-bind-through-field",
         "struct Inner { k: integer }\n\
          struct Outer { items: hash<Inner[k]> }\n\
@@ -304,6 +308,14 @@ const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
         // the two-package tree and asserts both load orders.
         "module-name-shadowed",
         "requires a two-package dependency graph",
+    ),
+    (
+        // loft#968 — needs a `loft.toml` with no `[dependencies]` AND a package resolving
+        // from the registry cache, which is two files plus a private `LOFT_HOME`. A single
+        // source file has neither. Covered instead by `tests/undeclared_dependency.rs`,
+        // which builds both and pins the declared / undeclared pair.
+        "undeclared-dependency",
+        "requires a project manifest plus a registry-resolved package",
     ),
     (
         // loft#940 — fires only for a LIBRARY source (@PLN102 C97 module-scoping). The same

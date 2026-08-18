@@ -17,6 +17,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+use loft_ffi::{LoftRef, LoftStore};
 use loft_ffi_macros::loft_native;
 
 // `i64`, NOT `i32`: the loft declaration types this `integer`, and loft maps `integer`
@@ -36,6 +37,24 @@ pub extern "C" fn n_native_answer() -> i64 {
 #[no_mangle]
 pub extern "C" fn n_native_sentinel() -> i64 {
     -1
+}
+
+/// Returns `[100, 101, …, 100 + n - 1]`, allocated in the caller's loft store.
+///
+/// The store-handle shape of this fixture: a vector return makes loft's codegen wrap the
+/// call in `loft::native_call::enter` / `build_store`, which the scalar fns above never
+/// reach.  Deterministic so the test can assert the elements, not just the count.
+/// A non-positive or null `n` yields an empty vector.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_native_span(mut store: LoftStore, n: i64) -> LoftRef {
+    let count = if n == i64::MIN || n <= 0 { 0 } else { n as usize };
+    // 8-byte slots: loft's `vector<integer>` narrow-record layout.
+    let mut vec = unsafe { store.alloc_vector(8, count as u32) };
+    for i in 0..count {
+        unsafe { store.vector_push_long(&mut vec, 100 + i as i64) };
+    }
+    vec
 }
 
 // The `loft_ffi::loft_register! { … }` + `loft_register_bridges! { … }`

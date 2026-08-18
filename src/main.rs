@@ -305,11 +305,13 @@ fn print_help() {
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
     println!("                                test draw::f — run a single test function");
-    println!("  install [target]              install a package to ~/.loft/lib/ for global use");
-    println!("                                install .        — install package in current dir");
-    println!("                                install /p       — install package at /p");
+    println!("  install [target]              resolve this project's [dependencies]");
+    println!("                                install          — every dep the manifest declares");
     println!("                                install name     — download latest from registry");
     println!("                                install name@v   — download specific version");
+    println!("                                install .        — install THIS package into");
+    println!("                                                   ~/.loft/lib/ for global use");
+    println!("                                install /p       — install the package at /p");
     println!("  pin <script.loft>             pin every registry library the script uses");
     println!("                                writes <script>.loft.lock next to the script;");
     println!("                                subsequent runs use the pinned versions");
@@ -553,12 +555,21 @@ fn install_package(pkg_path: &std::path::Path) {
         println!("loft install: no loft.toml found in {}", pkg_path.display());
         std::process::exit(1);
     }
-    // Derive package name from the directory name.
-    let pkg_name = pkg_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    // loft#966 — the name is the MANIFEST's, not the checkout directory's.  A package
+    // whose directory differs from `[package] name` installed under a name nothing else
+    // refers to: `loft api` kept reporting the dependency unresolved, because the copy
+    // was filed under a name no `use` can reach.  The directory is only the fallback for
+    // a manifest that declares no name.
+    let pkg_name = loft::manifest::read_manifest(&manifest_file.to_string_lossy())
+        .and_then(|m| m.name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            pkg_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        });
     if pkg_name.is_empty() {
         println!("loft install: cannot determine package name from path");
         std::process::exit(1);
@@ -590,6 +601,99 @@ fn install_package(pkg_path: &std::path::Path) {
         "installed {pkg_name} ({copied} files) → {}",
         target.display()
     );
+}
+
+/// loft#966 — bare `loft install`: resolve what the manifest DECLARES.
+///
+/// The npm/cargo reading of the verb, and the one `loft api` names when it reports a
+/// dependency unresolved. Bare install used to install the PROJECT into
+/// `~/.loft/lib/<name>`, so the tool's only hint pointed at the one command that does
+/// not fetch a dependency — and the copy it leaves behind shadows the registry copy of
+/// the same name (loft#667). `loft install .` still installs this package; that spelling
+/// always meant it.
+///
+/// A path dependency is resolved BY ITS PATH and needs no install, so it is reported only
+/// when the path does not lead to a package — which is the one thing a reader can act on.
+#[cfg(feature = "registry")]
+fn install_manifest_dependencies(opts: &loft::install::InstallOptions) {
+    use loft::install::{InstallReport, format_report, install_one};
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let manifest_file = cwd.join("loft.toml");
+    if !manifest_file.exists() {
+        eprintln!("loft install: no loft.toml in {}", cwd.display());
+        eprintln!("  loft install <pkg>   install a package from the registry");
+        eprintln!("  loft install .       install a package directory into ~/.loft/lib");
+        std::process::exit(1);
+    }
+    let manifest =
+        loft::manifest::read_manifest(&manifest_file.to_string_lossy()).unwrap_or_default();
+    let project = manifest
+        .name
+        .clone()
+        .unwrap_or_else(|| "this package".into());
+
+    if manifest.dependencies.is_empty() {
+        // Nothing to resolve — and the one reader who is surprised by that is the one who
+        // meant the old behaviour, so name its spelling here rather than on every run.
+        println!(
+            "{project} declares no dependencies.  \
+             (`loft install .` installs this package into ~/.loft/lib.)"
+        );
+        return;
+    }
+
+    let mut merged = InstallReport {
+        installed: Vec::new(),
+        skipped_cached: Vec::new(),
+        surface: Vec::new(),
+    };
+    let mut unresolved_paths: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for (name, value) in &manifest.dependencies {
+        if let Some(rel) = loft::manifest::extract_path_dep(value) {
+            // A path dep with a `version` too is still resolved by path; the version is a
+            // publish-time claim, not something to fetch.
+            let dir = cwd.join(rel);
+            if !dir.join("loft.toml").exists() {
+                unresolved_paths.push(format!("  {name}  NOT FOUND at `{rel}` — check the path"));
+            }
+            continue;
+        }
+        let req = loft::manifest::extract_version_req(value);
+        match install_one(name, req, opts) {
+            Ok(report) => {
+                merged.installed.extend(report.installed);
+                merged.skipped_cached.extend(report.skipped_cached);
+                merged.surface.extend(report.surface);
+            }
+            // Keep going: one unreachable package should not hide the state of the rest,
+            // which is what the reader needs to decide what to do next.
+            Err(e) => failed.push(format!("  {name}  {e}")),
+        }
+    }
+
+    if !merged.installed.is_empty() || !merged.skipped_cached.is_empty() {
+        print!("{}", format_report(&merged));
+    }
+    if !unresolved_paths.is_empty() {
+        eprintln!("loft install: path dependencies that do not lead to a package:");
+        for line in &unresolved_paths {
+            eprintln!("{line}");
+        }
+    }
+    if !failed.is_empty() {
+        eprintln!("loft install: could not resolve:");
+        for line in &failed {
+            eprintln!("{line}");
+        }
+    }
+    if !unresolved_paths.is_empty() || !failed.is_empty() {
+        std::process::exit(1);
+    }
+    // PKG.STUB — the in-project API stubs follow the lockfile this install just wrote,
+    // exactly as they do for `loft install <pkg>`.
+    write_api_stubs(&cwd.join("loft.lock"), &cwd);
 }
 
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
@@ -627,6 +731,35 @@ fn install_from_registry_with_opts(args: &[String], opts: &loft::install::Instal
         match install_one(name, version, opts) {
             Ok(report) => {
                 print!("{}", format_report(&report));
+                // loft#968 — declare it.  Only `loft.lock` was written, so nothing in the
+                // project distinguished a dependency from a package that happened to be
+                // installed on the box: dropping the `[dependencies]` line changed
+                // nothing that could be observed.  An explicit version stays exactly as
+                // asked; without one, the compatible range around what was resolved —
+                // `loft.lock` is where the exact pin belongs.
+                let requirement = version.map_or_else(
+                    || {
+                        report
+                            .installed
+                            .iter()
+                            .chain(report.skipped_cached.iter())
+                            .find(|(n, _)| n == name)
+                            .map_or_else(|| "*".to_string(), |(_, v)| format!("^{v}"))
+                    },
+                    ToString::to_string,
+                );
+                let manifest = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("loft.toml");
+                if manifest.exists()
+                    && loft::manifest::record_dependency(
+                        &manifest.to_string_lossy(),
+                        name,
+                        &requirement,
+                    )
+                {
+                    println!("  declared in loft.toml: {name} = \"{requirement}\"");
+                }
             }
             Err(e) => {
                 eprintln!("loft install: {e}");
@@ -975,10 +1108,27 @@ fn api_command(target: Option<&str>) {
         if manifest.dependencies.is_empty() {
             println!("  (none)");
         }
-        for (name, _constraint) in &manifest.dependencies {
+        for (name, constraint) in &manifest.dependencies {
             match api_resolve_pkg_dir(name) {
                 Some(dir) => println!("  {name}  {}", dir.display()),
-                None => println!("  {name}  NOT INSTALLED — run `loft install`"),
+                // loft#966 — name a command that resolves THIS dependency.  This used to
+                // say `run \`loft install\`` for every unresolved dep, and bare
+                // `loft install` installs the PROJECT into `~/.loft/lib`; it does not
+                // fetch anything the manifest declares.  So the one hint the tool gave
+                // was for the one case it does not address — and following it leaves a
+                // copy in `~/.loft/lib/<name>` that shadows the registry, which is
+                // loft#667.
+                //
+                // A path dep needs no install at all: it resolves from the path it names
+                // (loft#963).  Unresolved means the path is wrong, so say that instead of
+                // sending the reader to the registry for a package that is not there.
+                None => {
+                    if let Some(rel) = loft::manifest::extract_path_dep(constraint) {
+                        println!("  {name}  NOT FOUND at `{rel}` — check the path");
+                    } else {
+                        println!("  {name}  NOT INSTALLED — run `loft install {name}`");
+                    }
+                }
             }
         }
     }
@@ -6949,19 +7099,29 @@ fn main() {
             // Local-path install (`.`, `./`, `../`, `/`, contains `/`)
             // takes exactly one arg.  Registry install accepts N names.
             let first = positional.first().map(|s| s.as_str()).unwrap_or("");
-            let is_local_path = first.is_empty()
-                || first.starts_with('/')
+            let is_local_path = first.starts_with('/')
                 || first.starts_with("./")
                 || first.starts_with("../")
                 || first == "."
                 || first.contains('/');
-            if is_local_path {
-                let pkg_path = if first.is_empty() {
-                    std::env::current_dir().unwrap_or_default()
-                } else {
-                    std::path::PathBuf::from(first)
-                };
-                install_package(&pkg_path);
+            if first.is_empty() {
+                // loft#966 — bare `loft install` resolves the manifest's
+                // `[dependencies]`, the npm/cargo reading of the verb and the one
+                // `loft api` promises when it reports a dependency unresolved.  It used
+                // to install the PROJECT, so the tool's only hint named the one command
+                // that did not address the case it was printed for — and following it
+                // left a copy in `~/.loft/lib/<name>` shadowing the registry (loft#667),
+                // twice, from a command run for a different purpose.  Install-this-project
+                // keeps its own spelling, `loft install .`, which always meant that.
+                #[cfg(feature = "registry")]
+                install_manifest_dependencies(&install_opts);
+                #[cfg(not(feature = "registry"))]
+                eprintln!(
+                    "loft install: this build has no registry support; \
+                     `loft install .` installs the package in this directory"
+                );
+            } else if is_local_path {
+                install_package(&std::path::PathBuf::from(first));
             } else {
                 // Registry install — multiple names allowed.
                 #[cfg(feature = "registry")]
@@ -7795,6 +7955,37 @@ fn main() {
 
     // Handle --tests before requiring an input file
     if let Some(ref test_dir) = tests_dir {
+        // loft#964 — refuse a compile-target flag the test runner does not implement,
+        // rather than accepting it and running something else.
+        //
+        // `loft test --native-wasm` exited 0, reported success, and ran the INTERPRETER.
+        // The banner did say "ran on the interpreter only", but it says that on every
+        // interpreter run, so it reads as a suggestion for a run you did not ask for
+        // rather than as notice that the flag you passed was dropped — a library author
+        // could green-light the wasm column of the target matrix on a run that never
+        // touched it.
+        //
+        // Refused as a group, not one flag at a time: this is the third flag found
+        // silently dropped on the test path (#860 `LOFT_PROFILE`, #865), so what needs
+        // to hold is *the test runner rejects what it cannot honour*, and a per-flag
+        // patch would leave the next one to be discovered the same way.
+        for (flag, set) in [
+            ("--native-wasm", native_wasm.is_some()),
+            ("--html", html_out.is_some()),
+            ("--native-android", native_android.is_some()),
+            ("--native-emit", native_emit.is_some()),
+        ] {
+            if set {
+                eprintln!(
+                    "loft test: `{flag}` is not supported by the test runner — it compiles \
+                     a program, and a test run has no single program to compile.\n\
+                     Run the suite on a backend it does have (`loft test` for the \
+                     interpreter, `loft test --native` for native), or build the target \
+                     from a program entry (`loft {flag} <program>.loft`)."
+                );
+                std::process::exit(2);
+            }
+        }
         // @PLAN49 T3 — default the timeout ON under `loft test` / `--tests`.
         // This is the auto-mode case the watchdog exists for: a hung test or a
         // looping compile in the suite can't be killed interactively, so a
@@ -9424,6 +9615,7 @@ fn main() {
         };
         // The asyncify async→sync bridge (AsyncifyCtrl), shared by the GL and the
         // headless templates.  gl_js references it, so it is emitted FIRST.
+        let env_js = include_str!("../doc/loft-env.js");
         let asyncify_js =
             include_str!("../doc/loft-asyncify.js").replace("export { AsyncifyCtrl };", "");
         // loft#851 — the page's filesystem.  Emitted BEFORE gl_js, whose
@@ -9557,6 +9749,7 @@ fn main() {
 </head><body><pre id="out"></pre>
 <script>
 {asyncify_js}
+{env_js}
 {reader_js}
 {thread_js}
 {fs_js}
@@ -9681,6 +9874,7 @@ const imports={{loft_io:{{
 // exactly as before (par then runs sequentially, same results).
 loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
+  loftInstallEnv(instance, mem);
   // If the wasm was asyncify-instrumented (wasm-opt --asyncify present), drive it
   // through AsyncifyCtrl so store_load_url_trusted can suspend for an async
   // fetch().  Progress after the first suspend is EVENT-driven: each
@@ -9705,6 +9899,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
 <pre id="out"></pre>
 <script>
 {asyncify_js}
+{env_js}
 {reader_js}
 {thread_js}
 {fs_js}
@@ -9731,6 +9926,7 @@ for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
 // exactly as before (par then runs sequentially, same results).
 loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
+  loftInstallEnv(instance, mem);
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
   ctrl.assets=await decodeLoftAssets(ctrl.assets);

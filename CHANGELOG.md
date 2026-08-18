@@ -26,6 +26,81 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Adding a file no longer changes a library's answer in silence
+
+Two `.loft` files in different packages can share a basename, but only one of them can be
+the module of that name — so if your project adds `src/catalogue.loft` and a library you
+depend on already had one, the library's own file never loads and *its* `use catalogue;`
+picks up yours. The library then computes with your data: in the reported case it answered
+100 where, on its own, it answers 42. Nothing in the library changed, and its own tests
+still pass.
+
+loft has named that collision for a while, but as `advice` — and advice is routinely
+filtered out of build logs, which is exactly what happened. When the file that wins is
+*your project's* and the one that loses belongs to a *dependency*, it is now a **warning**:
+
+```
+warning[module-name-shadowed]: this project's '…/src/catalogue.loft' captured the
+  module name 'catalogue', which dependency module '…/dep/src/catalogue.loft' was
+  already using … The dependency now answers differently than it does on its own.
+  Rename this project's 'catalogue.loft'; the dependency's author can end it for
+  every consumer by writing `use self::catalogue`
+```
+
+The other direction — your own module losing its name to a file elsewhere in the graph —
+stays advice, because published libraries legitimately overlap that way today and the cure
+there (`use self::<module>`) is yours to apply.
+
+### loft tells you when a library is not in your `loft.toml`
+
+`use hex_grid;` works even when your `loft.toml` never mentions `hex_grid`, as long as the
+package is installed on the machine. That is deliberate — it is what makes a one-file
+script Just Work — but in a project it meant nothing recorded whether you *depend* on a
+library or merely *have* it. You could delete a line from `[dependencies]` and every test
+still passed, so "is this dependency still load-bearing?" was a question no check could
+ask.
+
+Now it says so, once, and keeps running:
+
+```
+advice[undeclared-dependency]: `hex_grid` resolved from the registry, but
+  `…/loft.toml` does not declare it — so nothing here says whether the project
+  depends on `hex_grid` or merely runs on a box that has it installed
+  fix  run `loft install hex_grid` to record it under `[dependencies]`
+```
+
+Worth doing: an undeclared library is not pinned either. It resolves to the newest version
+present, so two machines can quietly build against two different versions of it.
+
+Single-file scripts hear nothing — there is no manifest to declare into — and neither do
+you about a library's own dependencies, which are its author's to record. Silence it with
+`LOFT_NO_UNDECLARED_DEP=1`.
+
+### `loft install` installs what your project depends on
+
+Typed on its own in a project directory, `loft install` now reads your `loft.toml` and
+resolves every dependency it declares — the same thing `npm install` and `cargo fetch`
+do, and the thing `loft api` has always told you to run when it reports a dependency as
+missing.
+
+It used to install **your own project** into `~/.loft/lib/`, and do nothing about the
+dependencies. So the one hint the tool gave was for the one case the command did not
+handle — and the copy it left behind could quietly take priority over the published
+version of a package with the same name.
+
+If you wanted the old behaviour, it has always had its own spelling:
+
+```bash
+loft install          # resolve what loft.toml declares
+loft install cbor     # install one package from the registry
+loft install .        # install THIS package into ~/.loft/lib for global use
+```
+
+A dependency declared as `{ path = "../somewhere" }` needs no install at all — it is
+read from the path it names — so `loft install` mentions one only when that path leads
+nowhere. And an install is now filed under the name in your `[package] name`, not under
+whatever your checkout directory happens to be called.
+
 ### A constant list with a negative number in it works
 
 ```loft

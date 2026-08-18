@@ -86,6 +86,8 @@ consumer's loft itself carries the needed compiler support.)
      `json.dump`, then verify with `git diff` that ONLY your entry (+ `updated`) changed.  The
      convention has flipped once (a hard "always ensure_ascii=True" rule here rewrote every
      description line against a raw-unicode index) — the diff check is the invariant, not the flag.
+     Safer still for a small edit: substitute the STRINGS in place and never re-serialise, so the
+     formatting, key order and convention cannot move at all.
    - **Re-sign, then verify** (the maintainer key; this is the step that breaks all installs if
      skipped — see below). The routine above (`registry-sign.sh`) wraps these two with the
      signing-gate confirmation described above; the raw commands are:
@@ -105,6 +107,46 @@ reports **"registry index signature INVALID."** This happened in @PLN84 (a `cryp
 merged into the index un-re-signed and broke installs until a re-sign PR fixed it). So: **every
 change to `index.json` is followed immediately by a re-sign.** Treat them as one atomic edit.
 
+## The first-`description` gotcha (a publish that succeeds and still loses data)
+
+This one is **by design**, which is why nothing reports it.  `registry_maintain.sh` treats
+a `[package] description` in `loft.toml` as authoritative and *refreshes it on every
+publish*, so that correcting the manifest propagates to the catalogue.  A README-scraped
+fallback deliberately does the opposite — it only seeds a brand-new package and never
+clobbers an existing entry.
+
+The hazard sits exactly in that gap: a package registered **without** a manifest
+description still has one in the index, seeded from its README on first publish or written
+by hand.  The day you add the field to `loft.toml`, the authoritative path takes over and
+**replaces** that text.
+
+Nothing flags it.  The publish exits 0, every sha256 matches, the signature verifies, the
+coverage check is clean and the pinned installs work — none of them look at the
+description.  It surfaces only in a before/after diff of `index.json`.
+
+It cost four entries on one run: `cbor` lost its canonical-ordering / byte-identical /
+native==wasm guarantees, `server` and `web` lost the crates backing them, and `ssh` lost
+**"Native-only"** — the one fact a consumer needs before choosing it.
+
+**So: before adding a `description` for the first time, read what the index already says**
+
+```
+curl -fsSL https://raw.githubusercontent.com/loft-lang/registry/main/index.json \
+  | jq -r '.packages.<pkg>.description'
+```
+
+and merge rather than replace.  The existing text tends to say what the library GUARANTEES
+or how it is built; a fresh one tends to say what it is FOR.  A catalogue line should carry
+both.
+
+Not every old line is worth keeping — check it against the code before preserving it.  Two
+of the six on that run were wrong or empty (`game_protocol` advertised "ack/retransmit" it
+has no code for; `zttext` said "loft library zttext"), and replacing those was the fix.
+
+(This is the maintainer path only.  A foreign `submissions/` entry's `description` is
+ignored when the package already exists — see REGISTRY_SUBMIT.md — so the hazard does not
+arise there.)
+
 ## The CDN-staleness gotcha (don't misread it as a failed publish)
 
 `loft install` reads `index.json` through the raw-GitHub CDN with roughly a **1-hour cache**
@@ -116,6 +158,25 @@ the publish failed from a stale edge read.
 
 ## Verification before you call it shipped
 
+Every item below is something the publish itself will NOT tell you.  It exits 0, matches
+every sha256, verifies the signature and reports zero findings whether or not these hold —
+so "the publish succeeded" is not one of the checks.
+
 - `loft-keygen verify` passes on the re-signed index (signature matches).
+- `index.json` and `index.json.sig` are in **one commit** (`git show --stat`) — a split
+  leaves a valid-looking index with a stale signature and breaks *every* install.
+- **Diff the index against the previous commit and read what changed.**  Confirm no
+  package or version disappeared and no description was rewritten:
+
+  ```
+  git diff <prev>..<new> -- index.json | grep '^-' | grep -v '^---'
+  ```
+
+  A large deletion count is usually harmless key reordering, but it hides real loss —
+  compare the parsed package/version SETS, not the diff text.
 - `loft install <lib>@<version>` succeeds from a clean cache (sha256 + size check pass).
+  Pin the exact version; `@latest` can read a stale CDN edge.
+- **A concurrent publish survived.**  The registry has real concurrent writers (two of
+  three consecutive runs hit one).  The signer rebases and re-signs, or refuses — but
+  confirm the other party's entry is still in the index afterwards.
 - The parity gate (in SKILL.md) is green on every target the entry claims.

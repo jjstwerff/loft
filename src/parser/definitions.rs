@@ -1028,22 +1028,43 @@ impl Parser {
                          already defined at {prev_pos} — pick a different name"
                     );
                 }
-            } else if matches!(tp.base(), Type::Vector(_, _)) {
-                // loft#702 — adopt the SECOND pass's initialiser for a VECTOR constant,
-                // the one kind the constant store pre-builds.  Struct layouts do not
-                // exist yet in the first pass, so every field write it emits carries the
-                // `u16::MAX` placeholder offset instead of the field's real one.  Kept,
-                // that IR says a struct element is one value at an impossible offset:
-                // `ITEMS = [It { a: 3, b: 4 }]` pre-built as TWO records, `b` reappearing
-                // as the next element's `a` and every second field reading 0.  Scalars
-                // hid it — their one write is at offset 0 in both passes.
+            } else {
+                // The SECOND pass's initialiser is the one that gets pasted — for every
+                // kind of constant, not just the vector one.
                 //
-                // Only the vector kind: a text constant's buffer numbering is settled on
-                // the first pass (folded, or checked rebindable), and a struct-valued one
-                // is refused above — re-storing either changes what a use site pastes for
-                // no gain.
+                // A constant is stored as IR and inlined at each reference, so whatever
+                // the declaration resolved to is what every use gets.  Pass 1 resolves it
+                // against an INCOMPLETE definition table by construction: a name declared
+                // later in the file, or in a sibling module the aggregator has not
+                // finished exporting, is not there yet.  `create_var` answers `u16::MAX`
+                // at file scope (no frame to allocate in), so the unresolved name froze
+                // into the stored IR as `Var(u16::MAX)` and the type froze as `Unknown`.
+                // Pass 2 derived the right value and threw it away.
+                //
+                // What that cost, all from one mechanism (loft#962): an integer or single
+                // constant panicked the variable allocator at `index 65535`, a text or
+                // boolean one printed EMPTY, and one initialised from a function declared
+                // below it printed `null` — no diagnostic on any of the silent three.
+                //
+                // loft#702 fixed the vector kind alone, for the same reason in a different
+                // costume (pass-1 field offsets are placeholders).  One rule for one fact:
+                // pass 2 sees every declaration, so pass 2's answer wins.  The type is
+                // re-stored with it — `const N = later() * 2;` picks its operator from the
+                // callee's return type, which pass 1 does not have.
+                //
+                // Not the struct-valued kind.  That one is REFUSED at the declaration
+                // above — a record cannot be materialised at each use — so its stored IR
+                // is never pasted by a program that compiles, and re-storing it only
+                // moves the diagnostics of one that does not.
                 let c_nr = self.data.def_nr(&id);
-                if c_nr != u32::MAX && self.data.def(c_nr).def_type() == DefType::Constant {
+                if c_nr != u32::MAX
+                    && self.data.def(c_nr).def_type() == DefType::Constant
+                    && !matches!(tp.base(), Type::Reference(_, _))
+                {
+                    // Written straight into the slot rather than through `set_returned`,
+                    // which is set-once: `data.reset()` between passes keeps definitions,
+                    // so pass 1's answer is still sitting there and this is a REPLACEMENT.
+                    self.data.definitions[c_nr as usize].returned = tp;
                     self.data.definitions[c_nr as usize].code = val;
                 }
             }

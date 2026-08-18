@@ -217,6 +217,34 @@ unsafe extern "C" {
     pub(crate) safe fn loft_host_fs_get_cursor(path_ptr: *const u8, path_len: usize) -> f64;
 }
 
+/// `eprintln!` that a browser page can actually be read from (loft#950).
+///
+/// On `wasm32-unknown-unknown` std's stderr is the `unsupported` backend: a write succeeds
+/// and goes nowhere, and std owns it, so there is nothing to intercept.  A `--html` page
+/// therefore ran every diagnostic in this crate into a sink — the switch was armed, the
+/// work was done, and the finding was discarded.  That is worse than an unarmed switch,
+/// because it reads as the instrument having nothing to say.
+///
+/// The page already binds `loft_io.loft_host_print`; a panic has reached the console
+/// through it since loft#950's first instrument.  This routes the ordinary diagnostics the
+/// same way, so `LOFT_STRICT_STORES=1` in a page prints what it prints on a desktop.
+///
+/// Hosted targets — native, `wasm32-wasip2`, and the `wasm` feature's own bridge — keep
+/// `eprintln!` exactly, so nothing about their output moves.
+#[macro_export]
+macro_rules! loft_eprintln {
+    ($($arg:tt)*) => {{
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+        {
+            $crate::live_dispatch::wasm_host_log(&format!("{}\n", format_args!($($arg)*)));
+        }
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+        {
+            eprintln!($($arg)*);
+        }
+    }};
+}
+
 #[macro_use]
 pub mod diagnostics;
 pub mod api_diff;
@@ -322,7 +350,9 @@ pub mod wasm_debug;
 // @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
 // at the crate root so generated native code can write
 // `use loft::native_call;` without coupling to the extensions module.
-#[cfg(feature = "native-extensions")]
+// Present in every build, including one without `native-extensions`: a
+// `wasm32-wasip2` binary links its `[native] crate` statically and still needs
+// the store handle (loft#967).
 pub use extensions::native_call;
 // @PLN53 F1/F2 — raw-source fuzz oracle + keyed-container generator; available
 // under cargo-fuzz (the `fuzzing` feature) and under `cargo test`.

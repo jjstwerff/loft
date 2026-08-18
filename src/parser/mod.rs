@@ -365,6 +365,18 @@ pub struct Parser {
     /// package the author did not write.  Keeping the path is what lets the clash be
     /// reported as a clash, naming both files.
     use_paths: std::collections::HashMap<String, String>,
+    /// loft#968 — packages already reported as resolved-but-undeclared, so one `use`
+    /// speaks once.  Deliberately NOT carried by [`Self::seed_from`]: it is a parse-time
+    /// side map driving a diagnostic the base parse has already emitted.  Gated with its
+    /// only reader, so a `--no-default-features` build does not carry a field nothing
+    /// there can read.
+    #[cfg(feature = "registry")]
+    undeclared_reported: std::collections::HashSet<String>,
+    /// Module names already reported as captured by another file (loft#912 / loft#949),
+    /// for the same reason and with the same non-travel rule as `undeclared_reported`:
+    /// the `use` is walked by both the pre-scan and the definition loop, and one
+    /// collision printed twice reads as two separate collisions.
+    module_clash_reported: std::collections::HashSet<String>,
     /// Root project's `[dependencies]` version constraints (name → req), read
     /// once from the main script's nearest-ancestor `loft.toml` (via
     /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
@@ -954,6 +966,9 @@ impl Parser {
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
             use_paths: std::collections::HashMap::new(),
+            #[cfg(feature = "registry")]
+            undeclared_reported: std::collections::HashSet::new(),
+            module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
             auto_use_trigger_map: None,
@@ -10187,15 +10202,29 @@ impl Parser {
             .package_declared_deps(cur_dir)
             .filter(|(_, deps)| deps.contains(id))
             .map(|(root, _)| root);
+        // loft#963 — except where the declaration points INTO the package.  A
+        // `{ path = "lib/mylib" }` dep is in-tree by definition, so the guard above
+        // matched the very directory the declaration named: `probe_manifest_path_dep`
+        // resolved it, the next sweep wiped it, `--lib lib/` resolved it again, and the
+        // sweep after that wiped it too.  The declaration was therefore strictly worse
+        // than saying nothing — without it `--lib` worked — and the error still read
+        // "searched lib/, lib_dirs, and sibling packages" while lib_dirs held the answer.
+        //
+        // The rule the guard is for is a stray same-named MODULE FILE (`use server` in a
+        // package that also has `server.loft`); a nested package the manifest points at
+        // is the opposite case, and it is named by exactly the path being exempted here.
+        let dep_root = Self::declared_path_dep_root(id, cur_dir);
         let blocked = |candidate: &str| {
-            shadow_root.as_deref().is_some_and(|root| {
+            let cand = std::path::Path::new(candidate);
+            let cand = cand.canonicalize().unwrap_or_else(|_| cand.to_path_buf());
+            if dep_root.as_ref().is_some_and(|r| cand.starts_with(r)) {
+                return false;
+            }
+            shadow_root
+                .as_deref()
                 // Canonicalize so relative candidates (cwd inside the
                 // package) and the canonical root compare in one space.
-                let cand = std::path::Path::new(candidate);
-                cand.canonicalize()
-                    .unwrap_or_else(|_| cand.to_path_buf())
-                    .starts_with(root)
-            })
+                .is_some_and(|root| cand.starts_with(root))
         };
 
         let mut f = Self::probe_project_lib(id);
@@ -10222,9 +10251,17 @@ impl Parser {
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
         self.probe_sidecar_lockfile(id, &mut f);
+        // loft#968 — everything above resolves from something the project SAYS: a path it
+        // declares, a `--lib` directory it was given, a sidecar lock it pinned.  What
+        // follows resolves from the registry, which is a property of the BOX.  So this is
+        // the one line where the two can be told apart.
+        let named_by_the_project = std::path::Path::new(&f).exists();
         self.probe_project_lockfile(id, &mut f);
         self.probe_registry_installed(id, &mut f);
         self.probe_auto_install(id, &mut f);
+        if !named_by_the_project && std::path::Path::new(&f).exists() {
+            self.undeclared_registry_dep(id, &cur_script);
+        }
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
         if blocked(&f) {
@@ -10498,7 +10535,7 @@ impl Parser {
     /// `self::` qualifies with `[package] name` and is refused without one — so a
     /// bare script hears the rename instead of a cure that would error.
     ///
-    /// **Advice, not an error, and the resolution is unchanged** — deliberately, on a
+    /// **Never an error, and the resolution is unchanged** — deliberately, on a
     /// measurement.  A hard refusal breaks code that builds today: `graphics` ≤ 0.4.2
     /// and `mesh3d` both ship `math` / `mesh` / `scene`, and this repo's own
     /// `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while carrying
@@ -10545,6 +10582,59 @@ impl Parser {
         if Self::same_package(&own_canonical, &loaded) {
             return;
         }
+        if !self.module_clash_reported.insert(id.to_string()) {
+            return;
+        }
+        // loft#949 — WHICH WAY the capture runs decides both the tier and who is being
+        // told.  Two shapes reach this line:
+        //
+        //   (a) a package `use`s a name that another package in the graph also ships and
+        //       loaded first.  Both authors can see it in their own builds, and it is
+        //       what the corpus is full of — `graphics` ⟷ `mesh3d` over `math` / `mesh` /
+        //       `scene`, 19 sites in shipped library code.  Advice.
+        //
+        //   (b) the ROOT PROJECT added a file whose basename a DEPENDENCY was already
+        //       using, so the dependency's own module never loads and its `use` binds the
+        //       consumer's file.  The dependency is unchanged, published, and green on its
+        //       own; its answer changes because something downstream added a file.  That
+        //       is a wrong result — the filed case computed 100 where the package alone
+        //       computes 42 — and by the tier rule a diagnostic gates exactly when
+        //       ignoring it can produce one.  Warning.
+        //
+        // The split matters because advice is routinely filtered: the reporting consumer's
+        // harness pipes through `grep -viE "^  Warning"` and its build scripts drop
+        // `^advice`, so the only sign of a changed answer was being discarded by design.
+        // Keeping (a) at advice is what lets (b) gate without failing the CI of every
+        // library that ships an overlapping basename today.
+        let root_project = Self::find_project_root(&self.database.source_dir);
+        let inside = |file: &str, root: &std::path::Path| {
+            std::path::Path::new(file)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(file))
+                .starts_with(root)
+        };
+        let captured_by_root = root_project
+            .as_ref()
+            .is_some_and(|root| inside(&loaded, root) && !inside(&own_canonical, root));
+        if captured_by_root {
+            // The reader here is the CONSUMER, and the file they can edit is their own —
+            // they cannot add a `use self::` to a dependency they did not write.  Name the
+            // durable cure too, because it is the one that ends the class for everyone
+            // downstream of that package.
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                code = "module-name-shadowed",
+                "this project's '{loaded}' captured the module name '{id}', which \
+                 dependency module '{own_canonical}' was already using — a module's file \
+                 name is shared across the whole dependency graph, so that dependency's \
+                 own '{id}' never loads and this `use` binds the project's file instead. \
+                 The dependency now answers differently than it does on its own. Rename \
+                 this project's '{id}.loft'; the dependency's author can end it for every \
+                 consumer by writing `use self::{id}`"
+            );
+            return;
+        }
         // Name the cure that KEEPS this package's answer, not just the one that
         // renames around the collision (loft#949).  `use self::<id>` binds the local
         // file under `<package>::<id>`, so both modules stay reachable and no
@@ -10564,6 +10654,76 @@ impl Parser {
              this `use` binds the second one. {cure}"
         );
     }
+
+    /// loft#968 — `use <pkg>` resolved a registry package the project's manifest never
+    /// declares.
+    ///
+    /// The resolution is deliberate and stays: a qualified `lib::fn()` auto-loads, and
+    /// self-healing `loft.lock` is a convenience worth keeping.  The silence is the
+    /// defect. Nothing in the project distinguished *"we depend on this"* from *"this
+    /// happens to be installed on the box that built it"*, so a consumer could delete a
+    /// `[dependencies]` line and every test still passed — measured on a 33 000-line
+    /// project with ten declared dependencies. The negative gate they wanted (*drop the
+    /// dependency and the tests must stop compiling*) could not be written, and a
+    /// dependency deleted by accident was invisible to every gate.
+    ///
+    /// `advice`, not `warning`: the program computes exactly what the language promises,
+    /// on this box, today.  What is wrong is that the manifest does not describe the
+    /// project — a build-reproducibility fact, not a wrong answer.
+    ///
+    /// Silent in the two places where there is nothing to declare **into**: a bare script
+    /// with no `loft.toml` above it (that is the `pip install` story working), and a
+    /// package being parsed out of the registry cache — that manifest belongs to someone
+    /// else, and its author is the only one who can act on it.
+    #[cfg(feature = "registry")]
+    fn undeclared_registry_dep(&mut self, id: &str, cur_script: &str) {
+        if std::env::var_os("LOFT_NO_UNDECLARED_DEP").is_some() {
+            return;
+        }
+        if std::fs::canonicalize(cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache))
+        {
+            return;
+        }
+        let Some(root) = Self::find_project_root(cur_script) else {
+            return;
+        };
+        let manifest_path = root.join("loft.toml");
+        let Some(manifest) = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+        else {
+            return;
+        };
+        if manifest.dependencies.iter().any(|(name, _)| name == id) {
+            return;
+        }
+        if !self.undeclared_reported.insert(id.to_string()) {
+            return;
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "undeclared-dependency",
+            "`{id}` resolved from the registry, but `{}` does not declare it — so nothing \
+             here says whether the project depends on `{id}` or merely runs on a box that \
+             has it installed",
+            manifest_path.display()
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: format!("run `loft install {id}` to record it under `[dependencies]`"),
+            condition: None,
+            edit: None,
+            concept: "packages",
+            concept_ref: "@F55",
+        });
+    }
+
+    /// No registry, no registry-resolved package to report (loft#968).
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn undeclared_registry_dep(&mut self, _id: &str, _cur_script: &str) {}
 
     /// Do these two files belong to the same package — the same nearest `loft.toml`?
     ///
@@ -10677,6 +10837,38 @@ impl Parser {
     /// `[library] entry`, defaulting to `src/<id>.loft`).  Registers the
     /// dep's manifest so its `#native` symbols resolve, mirroring
     /// `probe_sibling_package`.
+    /// Where the nearest enclosing manifest says dependency `id` lives, when it declares
+    /// it as a `{ path = … }` dep — canonicalized, or `None` for a registry dep or no
+    /// declaration at all.
+    ///
+    /// Read by the dep-shadowing guard in [`Self::lib_path`], which otherwise treats an
+    /// in-tree path dep as a file shadowing the dependency it IS (loft#963).  Walks to
+    /// the same manifest [`Self::probe_manifest_path_dep`] resolves against, so the
+    /// exemption and the resolution cannot name different directories.
+    fn declared_path_dep_root(id: &str, cur_dir: &str) -> Option<std::path::PathBuf> {
+        if cur_dir.is_empty() {
+            return None;
+        }
+        let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+        loop {
+            let manifest_path = search_dir.join("loft.toml");
+            if manifest_path.exists() {
+                let rel = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                    .and_then(|m| {
+                        m.dependencies.iter().find_map(|(name, value)| {
+                            (name == id)
+                                .then(|| crate::manifest::extract_path_dep(value))
+                                .flatten()
+                                .map(str::to_string)
+                        })
+                    })?;
+                let root = search_dir.join(rel);
+                return root.canonicalize().ok().or(Some(root));
+            }
+            search_dir = search_dir.parent()?.to_path_buf();
+        }
+    }
+
     fn probe_manifest_path_dep(&mut self, id: &str, cur_dir: &str, f: &mut String) {
         if std::path::Path::new(f).exists() || cur_dir.is_empty() {
             return;
@@ -11028,11 +11220,18 @@ impl Parser {
     ///   to the project root, so auto-installs in a project
     ///   context update the project's lockfile rather than cwd's.
     ///
+    /// - `module_name_clash` to tell a module name captured BY the root project from one
+    ///   captured FROM it, which decides the tier (loft#949).
+    ///
     /// Returns `None` for script-mode invocations (no `loft.toml`
     /// anywhere in the parent chain).  Script mode falls back to
     /// cwd's `loft.lock` (existing behaviour) or to the sidecar
     /// (when `loft pin <script>` has been run).
-    #[cfg(feature = "registry")]
+    ///
+    /// Not gated on `registry`, though its first two readers are: it walks up looking for
+    /// a `loft.toml` and asks the network nothing.  Gating it there put a plain path walk
+    /// out of reach of a `--no-default-features` build, which is the shape loft's own wasm
+    /// runtime rlib is compiled in — the same gated-by-association mistake as loft#967.
     fn find_project_root(script_path: &str) -> Option<std::path::PathBuf> {
         let p = std::path::Path::new(script_path);
         if script_path.is_empty() {

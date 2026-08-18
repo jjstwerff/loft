@@ -117,19 +117,78 @@ jobs:
       # brand-new package passes it on day one.  Verified across all 25 published
       # packages on both backends before it was turned on: zero failures, one advisory
       # note (`cbor`).
+      # Both legs below report WHY they failed into the run summary, not only into
+      # their own job log.
+      #
+      # `fail-fast: false` above already keeps every package's verdict — but the run
+      # page then shows N red dots and nothing else, so telling two failures apart
+      # means opening two logs and scrolling each.  That is the difference between
+      # "regex and random are red" and the actionable version: regex is two
+      # `shadowed-by-method` warnings on free functions no bare call can reach, while
+      # random is one `never-read` variable in a test file.  Same colour, unrelated
+      # work, and the summary is what says so at a glance.
+      #
+      # The gated lines are the ones a reader acts on — `FAIL` (which file, and the
+      # gate that rejected it), `Warning[...]` (what `--deny-warnings` tripped on) and
+      # `error`.  Capped, because a summary that dumps a whole log is a log.
       - name: Interpret — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         env:
           LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
           LOFT_STORE_GUARD: 1
-        run: loft --interpret --tests tests
+        run: |
+          set -o pipefail
+          loft --interpret --tests tests 2>&1 | tee "$RUNNER_TEMP/interpret.log" && exit 0
+          status=$?
+          {
+            echo "### ❌ \`${{ matrix.package }}\` — interpret"
+            echo
+            echo '```'
+            grep -E '^[[:space:]]*(FAIL|Warning\[|error)' "$RUNNER_TEMP/interpret.log" | head -40 \
+              || echo "(no FAIL/Warning line — see the job log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
       - name: Native — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         env:
           LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
           LOFT_STORE_GUARD: 1
-        run: LOFT_TIMEOUT=240 loft --native --tests tests
+        run: |
+          set -o pipefail
+          LOFT_TIMEOUT=240 loft --native --tests tests 2>&1 | tee "$RUNNER_TEMP/native.log" && exit 0
+          status=$?
+          {
+            echo "### ❌ \`${{ matrix.package }}\` — native"
+            echo
+            echo '```'
+            grep -E '^[[:space:]]*(FAIL|Warning\[|error)' "$RUNNER_TEMP/native.log" | head -40 \
+              || echo "(no FAIL/Warning line — see the job log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      # Worked-example citations resolve (@PLN141) — the SAME shared gate loft runs on
+      # its own tree, pointed at this package.  Every `// Example: @AAA-###` on a fn must
+      # resolve to exactly one `// @AAA-###`-tagged fn in the repo the acronym names
+      # (dangling / duplicate / unregistered = drift, red).  The logic + the acronym
+      # registry live in loft-src, so all libraries share ONE gate — no per-repo copy to
+      # drift.  Vacuously green for a package with no citations, so it is safe on every
+      # library from day one and only begins gating once the package opts in by authoring
+      # a citation.  REPO_ROOT is the library checkout; the acronym resolves in place.
+      # Two checks, both gating and both vacuously green until the package authors tags:
+      #   examples       — every `// Example: @AAA-###` citation resolves to a tagged fn
+      #   examples-index — the committed examples-index.tsv (tag -> file:line -> blob link)
+      #                    is current (regenerate with `make examples-index` in loft-src,
+      #                    or let the pre-commit hook do it).
+      - name: Worked-example tags resolve — ${{ matrix.package }}
+        env:
+          EXAMPLES_REPO_ROOT: ${{ github.workspace }}
+          EXAMPLES_CITE_ROOTS: ${{ matrix.package }}/src ${{ matrix.package }}/tests
+        run: |
+          bash loft-src/scripts/check_doc_drift.sh examples
+          bash loft-src/scripts/check_doc_drift.sh examples-index
 
       # Library compatibility contract, step 4 — ADVISORY, never gating.
       #

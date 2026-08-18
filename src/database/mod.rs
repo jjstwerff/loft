@@ -1598,7 +1598,7 @@ impl Stores {
                 lg.log_runtime_kind(&kind, None);
             }
             if dev_soft_halt {
-                eprintln!("soft-halt: {}", kind.describe());
+                crate::loft_eprintln!("soft-halt: {}", kind.describe());
             }
             self.had_fatal = true;
             return;
@@ -1619,7 +1619,7 @@ impl Stores {
         // recording it for a check nobody runs (pre-fix, `5 / 0` printed
         // a wrong value and exited 0 on --native).
         if NATIVE_FAIL_FAST.load(std::sync::atomic::Ordering::Relaxed) {
-            eprintln!("error: {}", err.message);
+            crate::loft_eprintln!("error: {}", err.message);
             std::process::exit(1);
         }
         self.runtime_error = Some(Box::new(err));

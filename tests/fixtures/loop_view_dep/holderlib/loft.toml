@@ -1,0 +1,6 @@
+[package]
+name = "holderlib"
+version = "0.1.0"
+
+[library]
+entry = "src/holderlib.loft"

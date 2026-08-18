@@ -11,12 +11,18 @@
 //! write, may not have read, and cannot fix.  Nothing in the output said
 //! "collision", so the search went looking for a missing `pub` or a typo.
 //!
-//! The clash is now REPORTED by name, with both file paths in the message.  It is
-//! `advice` and the resolution is unchanged, deliberately: a hard refusal breaks
-//! code that builds today — `graphics` <= 0.4.2 and `mesh3d` both ship `math` /
-//! `mesh` / `scene`, and this repo's own `tests/fixtures/libs/graphics` depends on
-//! the registry `mesh3d` while carrying its own copies of all three.  Scoping module
-//! names to their package is the fix this advice is a signpost for.
+//! The clash is now REPORTED by name, with both file paths in the message, and the
+//! resolution is unchanged — deliberately: a hard refusal breaks code that builds today
+//! — `graphics` <= 0.4.2 and `mesh3d` both ship `math` / `mesh` / `scene`, and this
+//! repo's own `tests/fixtures/libs/graphics` depends on the registry `mesh3d` while
+//! carrying its own copies of all three.  Scoping module names to their package is the
+//! fix this is a signpost for.
+//!
+//! The TIER depends on which way the capture runs (loft#949).  When the ROOT PROJECT's
+//! file wins and a DEPENDENCY's loses, a published package answers differently than it
+//! does on its own — a wrong result, so a `warning`.  The other way round it is `advice`,
+//! which is what keeps those shipped overlaps building: a sweep of every package in this
+//! workspace and the local registry produced four hits, all of them that direction.
 //!
 //! So the `Unknown function` error still follows — the advice EXPLAINS it, it does
 //! not remove it.  These tests assert exactly that much and no more, because a test
@@ -126,8 +132,16 @@ fn clashing_module_basename_is_reported_naming_both_files() {
 /// name taken.  That is the direction the issue was filed from, where the error
 /// landed on a line inside the dependency.  Both orders must be caught, or the
 /// bug merely moves when a `use` is reordered.
+///
+/// And this direction is a **warning**, not advice (loft#949).  The two directions differ
+/// in who is harmed: here the ROOT PROJECT captured a name a DEPENDENCY was using, so a
+/// package that is published, versioned and green on its own answers differently because
+/// something downstream added a file — measured as 100 where the package alone computes
+/// 42.  A diagnostic gates exactly when ignoring it can produce a wrong result, and this
+/// one can.  The other direction — a package losing its own name to a dependency's file —
+/// stays advice, which is what keeps the shipped `graphics` ⟷ `mesh3d` overlaps building.
 #[test]
-fn clash_is_caught_when_the_dependency_loses() {
+fn a_project_capturing_a_dependencys_module_name_is_a_warning() {
     let (level, diag) = parse_two_packages(
         "clash_rev",
         &[("catalogue.loft", "pub fn top_only() -> integer { 3 }\n")],
@@ -137,13 +151,20 @@ fn clash_is_caught_when_the_dependency_loses() {
     );
     let all = diag.join("\n");
     assert!(
-        all.contains("module 'catalogue' is declared by two files"),
-        "the reversed load order must be caught too; got:\n{all}"
+        diag.iter()
+            .any(|d| d.starts_with("Warning[module-name-shadowed]")),
+        "the reversed load order must be caught, and at the gating tier:\n{all}"
+    );
+    // It must name the file the reader can actually edit.  They cannot add a `use self::`
+    // to a dependency they did not write, so a message that only names that cure is a
+    // message they cannot act on.
+    assert!(
+        all.contains("captured the module name 'catalogue'") && all.contains("pkg_top"),
+        "the warning must name the project's own file as the one that captured it:\n{all}"
     );
     assert!(
-        diag.iter()
-            .any(|d| d.starts_with("Advice[module-name-shadowed]")),
-        "the clash is advice in both directions:\n{all}"
+        all.contains("use self::catalogue"),
+        "…and the durable cure, which is the dependency author's to apply:\n{all}"
     );
     let _ = level;
 }
@@ -802,5 +823,101 @@ fn the_clash_advice_outside_a_package_does_not_prescribe_self() {
     assert!(
         all.contains("Rename one file"),
         "so it must hear the cure that does work for it:\n{all}"
+    );
+}
+
+/// The value the warning is about (loft#949): a dependency that is published, versioned
+/// and green on its own answers DIFFERENTLY once a consumer adds a file whose basename it
+/// was already using.  Nothing in the dependency changed; the consumer never imported the
+/// dependency's module; the two files share only a name.
+///
+/// Both numbers are asserted from ONE run, which is what makes the claim a comparison
+/// rather than an anecdote: `dep_answer()` reads 100 through the consumer's `part_list`
+/// while the consumer's own call reads the same 99 it always did — so the dependency is
+/// running on someone else's data, not merely failing.
+///
+/// Pinned as the CURRENT behaviour, deliberately, exactly as the parse-level tests above
+/// pin `Unknown function`: the resolution is unchanged and scoping module names to their
+/// package is the fix this warning is a signpost for.  When that lands this test goes red,
+/// which is the point — it is the reminder to revisit the warning, not a claim that the
+/// wrong answer is correct.
+#[test]
+fn a_captured_module_changes_what_the_dependency_answers() {
+    use std::process::Command;
+
+    let root = std::env::temp_dir().join(format!("loft_949_value_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dep = root.join("dep");
+    let con = root.join("con");
+    std::fs::create_dir_all(dep.join("src")).expect("mkdir dep");
+    std::fs::create_dir_all(con.join("src")).expect("mkdir con");
+
+    std::fs::write(
+        dep.join("loft.toml"),
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/dep.loft\"\n",
+    )
+    .unwrap();
+    // 41 + 1 = 42 when the dependency reads its OWN catalogue.
+    std::fs::write(
+        dep.join("src/dep.loft"),
+        "use catalogue;\npub fn dep_answer() -> integer { part_list() + 1 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/catalogue.loft"),
+        "pub fn part_list() -> integer { 41 }\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        con.join("loft.toml"),
+        "[package]\nname = \"con\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+         dep = { path = \"../dep\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        con.join("src/catalogue.loft"),
+        "pub fn part_list() -> integer { 99 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        con.join("src/main.loft"),
+        "use catalogue;\nuse dep;\n\
+         fn main() { println(\"dep={dep_answer()} con={part_list()}\"); }\n",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret", "src/main.loft"])
+        // No program cache: a directory that has been run before under a different
+        // arrangement of `use` lines answers from the cache, and the cached answer is the
+        // OTHER cell of this matrix.
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "120")
+        .current_dir(&con)
+        .output()
+        .expect("spawn loft");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        all.contains("dep=100 con=99"),
+        "the dependency must be seen answering 100 where it answers 42 alone — if this \
+         now reads `dep=42`, module scoping has landed and this warning needs revisiting \
+         (loft#949):\n{all}"
+    );
+    assert!(
+        all.contains("warning[module-name-shadowed]"),
+        "…and the run must say so at the gating tier, because advice is routinely \
+         filtered and this one costs a wrong answer:\n{all}"
+    );
+    assert_eq!(
+        all.matches("warning[module-name-shadowed]").count(),
+        1,
+        "one collision, reported once — the `use` is walked by two parses:\n{all}"
     );
 }

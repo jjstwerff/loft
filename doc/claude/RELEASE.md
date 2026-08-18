@@ -61,6 +61,19 @@ began with the `2026-07` cycle) is described in
   and the real HTTP server (@PLN4). Explicitly **not** `2026-07` work. Full
   rationale + critical path: [BROADENING.md § Better PHP](BROADENING.md#better-php--the-2026-08-cycle-theme).
 
+### Monthly library-documentation review (by hand)
+
+Each cycle, before tagging, run the **library-documentation review** —
+[LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md). The automated
+`check_doc_drift.sh examples` gate (blocked on by CI) catches worked-example tags
+that *dangle* or *duplicate*, but not the two failures only a human sees: a doc
+that still resolves yet no longer describes what the code does (**staleness**),
+and an example that is valid but no longer the clearest one (**quality**). The
+pass is a **hygiene ratchet, never a release blocker**: a watermark + a
+changed-since worklist (`scripts/doc-review.sh --since <watermark>`) bound it to
+what actually moved, so a quiet month is a five-minute pass. Fix XS drift on the
+spot; bump the watermark; route M+ findings to an issue.
+
 ### What forces a release — keep the list bounded
 
 *Producing* a release is cheap — CI builds every target binary automatically — but every **category of

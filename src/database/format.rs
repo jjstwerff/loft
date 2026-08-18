@@ -497,7 +497,20 @@ impl Stores {
     */
     #[must_use]
     pub fn os_variables(&mut self) -> DbRef {
-        let elm = self.name("Variable");
+        // The stdlib type is `EnvVariable` (`default/02_files.loft`).  This asked for
+        // `Variable`, which no longer exists, and `Data::name` answers `u16::MAX` for
+        // a name it does not know — a sentinel, not a type.  That sentinel sized the
+        // element at 0, so the vector's first `claim(0)` raised `Incomplete record`
+        // from `Store::claim` and `env_variables()` was unusable on every backend
+        // (loft#961).  The rename is the fix; the assert is so the NEXT rename says
+        // which type went missing instead of surfacing as a store fault three frames
+        // away.
+        let elm = self.name("EnvVariable");
+        assert!(
+            elm != u16::MAX,
+            "env_variables: the stdlib type `EnvVariable` is not loaded — \
+             `default/02_files.loft` declares it and this lookup must match its name"
+        );
         let size = u32::from(self.size(elm));
         let vec = self.database(size);
         self.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);

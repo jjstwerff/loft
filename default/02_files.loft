@@ -45,6 +45,7 @@ pub enum FileResult {
 }
 
 // True when the result is `FileResult.Ok`. Use to test a file op for success.
+// Example: @STD-012
 pub fn ok(self: FileResult) -> boolean {
   self == FileResult.Ok
 }
@@ -131,7 +132,7 @@ fn OpMkdirAll(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
-
+// Example: @STD-010
 pub fn content(self: File) -> text?fs#read {
   // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
   // so a missing config is not silently indistinguishable from an empty one.
@@ -155,7 +156,7 @@ pub fn content(self: File) -> text?fs#read {
 // Reads the file and splits it into lines.
 // Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce
 // identical results. Use when processing line-by-line (logs, CSV, etc.).
-
+// Example: @STD-011
 pub fn lines(self: File) -> vector<text> fs#read {
   result = [];
   // @PLN102 H4 — content() is now `text?`; a missing file has no lines.
@@ -310,6 +311,7 @@ pub fn is_file(path: text) -> boolean fs#read;
 // sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct
 // from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape.
 // Use to enumerate a directory; join with `path` to build full child paths.
+// Example: @STD-010
 pub fn list_dir(path: text) -> vector<text> ?fs#read;
 #rust"stores.fs_list_dir(@path)"
 #impure(io)
@@ -317,6 +319,7 @@ pub fn list_dir(path: text) -> vector<text> ?fs#read;
 // file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []`
 // to keep the old shape.  Binary-exact (round-trips with write_bytes); use for
 // non-UTF-8 data — for text prefer `file(path).content()`.
+// Example: @STD-010
 pub fn read_bytes(path: text) -> vector<u8> ?fs#read;
 #rust"stores.fs_read_bytes(@path)"
 #impure(io)

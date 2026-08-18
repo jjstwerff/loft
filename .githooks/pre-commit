@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# Keep examples-index.tsv current on every commit (@PLN141).  The worked-example tag
+# index (`@AAA-### -> file:line -> git blob link`) is GENERATED, never hand-edited — so
+# regenerate it here and stage the result, so every commit (and thus every PR) carries a
+# current index without anyone remembering to run `make examples-index`.  The CI gate
+# (`check_doc_drift.sh examples-index`) is the backstop for a commit made without this
+# hook installed.
+#
+# Never BLOCKS: a derived index is not worth refusing a commit over, and any staleness it
+# would leave is caught (red) by the CI gate anyway.  Install: `make hooks`.
+
+set -u
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -x "$root/scripts/check_doc_drift.sh" ] || exit 0
+
+f="$root/examples-index.tsv"
+before=""; [ -f "$f" ] && before=$(cat "$f")
+( cd "$root" && bash scripts/check_doc_drift.sh -q write-examples-index >/dev/null 2>&1 ) || exit 0
+after=""; [ -f "$f" ] && after=$(cat "$f")
+
+if [ "$before" != "$after" ]; then
+  ( cd "$root" && git add examples-index.tsv ) 2>/dev/null || true
+  echo "pre-commit: refreshed examples-index.tsv (@PLN141)" >&2
+fi
+exit 0

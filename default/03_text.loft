@@ -16,6 +16,7 @@
 // "prefix too long for input" case.
 //
 // Faster than comparing characters one at a time for a known prefix at `pos`.
+// Example: @STD-001
 pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean {
   pl = prefix.size();
   sl = self.size();
@@ -172,6 +173,7 @@ pub fn is_control(self: character) -> boolean;
 #null_safe
 // Joins parts with sep between each consecutive pair. Returns "" for an empty vector.
 // Use to build comma-separated lists, path segments, or any delimited output.
+// Example: @STD-003
 pub fn join(self: vector<text>, sep: text) -> text {
   result = "";
   for p in self {
@@ -230,6 +232,7 @@ pub fn text_from_bytes(bytes: vector<u8>) -> text;
 // also 0, because `character` uses 0 as its null and text iteration stops
 // there, so a NUL built here could not be read back.  If you need an embedded
 // NUL, go through the byte route: `text_from_bytes([0])` carries one.
+// Example: @STD-002
 pub fn chr(cp: integer) -> text {
   "{cp as character}"
 }

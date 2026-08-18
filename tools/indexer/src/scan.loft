@@ -58,6 +58,7 @@ use git;
 // git would CARRY.  A file added but not yet committed is part of
 // the work and gets indexed; a build artefact `.gitignore` names is
 // not.  That distinction is git's to make.
+// @GIT-001 — ask git for what it would carry, rather than hand-maintain a skip list.
 fn indexable_files() -> vector<text> {
     out: vector<text> = [];
     for p in git::tracked_files() {
@@ -106,6 +107,9 @@ fn is_segment_char_b(b: integer) -> boolean {
     if is_word_char_b(b) { return true; }
     b == 46                                  // .
 }
+// True for an ASCII uppercase letter — the acronym class in the
+// worked-example `@AAA-###` tag family (@PLN141).
+fn is_upper_b(b: integer) -> boolean { b >= 65 && b <= 90 }
 
 // Build the set of valid P-issue numbers from PROBLEMS.md.
 // Each row starts `| <num> | **@P<num>** — ...`; the leading
@@ -497,6 +501,32 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             }
             // Trailing boundary failed; skip past `@F`/`@I` and resume.
             i = i + 2;
+            continue;
+        }
+        // @AAA-### — worked-example tag (@PLN141): three uppercase letters, a
+        // hyphen, then three digits (e.g. `@STD-011`), so `idx tag:@STD-011`
+        // resolves the demonstrating fn.  The interior hyphen makes it
+        // unambiguous with @P / @PLAN / @F / @GH (none of which carries one),
+        // and it is checked AFTER them so `@FTR-001` is not eaten by the @F
+        // branch (that needs a DIGIT at i+2, here `T`).  Same trailing-`\b` rule.
+        if i + 8 <= n
+            && is_upper_b(line.byte_at(i + 1))
+            && is_upper_b(line.byte_at(i + 2))
+            && is_upper_b(line.byte_at(i + 3))
+            && line.byte_at(i + 4) == BYTE_HYPHEN
+            && is_digit_b(line.byte_at(i + 5))
+            && is_digit_b(line.byte_at(i + 6))
+            && is_digit_b(line.byte_at(i + 7)) {
+            j = i + 8;
+            if j == n || !is_word_char_b(line.byte_at(j)) {
+                tag = line[i..j];
+                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
+                i = j;
+                continue;
+            }
+            // Trailing boundary failed (e.g. `@STD-0110`); skip the `@`, resume.
+            i = i + 1;
             continue;
         }
         }  // end if b == BYTE_AT

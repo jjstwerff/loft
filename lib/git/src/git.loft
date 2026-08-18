@@ -100,6 +100,7 @@ pub fn has_ref(name: text) -> boolean {
 }
 
 // How far `HEAD` is from `base`.  Both zero when `base` does not resolve.
+// Example: @GIT-002
 pub fn ahead_behind(base: text) -> Counts {
   line = one_line(ask(4, base, "", 0));
   // `--left-right --count` prints "<left>\t<right>": commits only in BASE
@@ -124,6 +125,7 @@ fn to_int(s: text) -> integer {
 // A rename arrives as three tab-separated fields (`R100  <old>  <new>`) and the
 // path a reader wants is the NEW one — a consumer that takes field two links at
 // a path that no longer exists.
+// Example: @GIT-004
 pub fn changed(base: text) -> vector<Change> {
   out: vector<Change> = [];
   for line in ask(5, base, "", 0).split('\n') {
@@ -149,6 +151,7 @@ pub fn changed_names(base: text) -> vector<text> {
 //
 // The fields are separated by `\x1f`, not by a tab: a commit SUBJECT may contain
 // a tab, and then a tab-separated reader silently shifts every field after it.
+// Example: @GIT-003
 pub fn log(n: integer) -> vector<Commit> {
   out: vector<Commit> = [];
   for line in ask(6, "", "", n).split('\n') {
@@ -194,6 +197,7 @@ pub fn diff_file(base: text, path: text) -> text {
 // "ignored" (`target`, `node_modules`, `pkg`, a worktree, whatever the next
 // build tool adds), and that list is a copy of `.gitignore` maintained by hand
 // and out of date the moment someone edits the real one.
+// Example: @GIT-001
 pub fn tracked_files() -> vector<text> {
   out: vector<text> = [];
   for line in ask(13, "", "", 0).split('\n') {
@@ -209,6 +213,7 @@ pub fn show(sha: text) -> text {
 
 // One commit's per-file line counts.  A binary file reports -1 for both, which
 // is what git's `-` means.
+// Example: @GIT-005
 pub fn numstat(sha: text) -> vector<Stat> {
   out: vector<Stat> = [];
   for line in ask(10, sha, "", 0).split('\n') {

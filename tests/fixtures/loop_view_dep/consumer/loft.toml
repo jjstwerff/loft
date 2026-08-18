@@ -1,0 +1,6 @@
+[package]
+name = "loopviewcon"
+version = "0.1.0"
+
+[dependencies]
+holderlib = { path = "../holderlib" }

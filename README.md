@@ -78,7 +78,15 @@ cargo build --release     # binary at target/release/loft
 
 # try an example
 ./target/release/loft examples/hello.loft
+
+# install the CLI without sudo, into ~/.local (reinstall freely after each update):
+make install-user         # full install; install-user-fast skips the wasm runtimes
 ```
+
+`make install-user` needs no root — it installs to `~/.local/bin` and
+`~/.local/share/loft`, and tells you if `~/.local/bin` isn't yet on your `PATH`.
+`make install` (system-wide `/usr/local`) still works and elevates only when the
+prefix isn't writable.
 
 Pre-built binaries on the [Releases](https://github.com/loft-lang/loft/releases) page.
 

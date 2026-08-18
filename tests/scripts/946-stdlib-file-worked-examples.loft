@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for stdlib file-I/O functions (@PLN141) — the filesystem
+// cluster, kept apart from 945 because these tests write and delete scratch
+// files.  Each is a real, runnable use of a function whose correct call shape
+// is NOT obvious from its signature (the reader — often an AI agent — knows it
+// exists yet cannot use it without seeing it in action).  Its doc comment in
+// default/02_files.loft cites the tag here via `// Example: @STD-0NN`, and
+// `scripts/check_doc_drift.sh examples` fails if a citation goes dangling.
+//
+// Scratch files use a per-test prefix and are deleted at both ends, matching
+// 562-file-read-missing-null.loft — the suite runs with the repo root as cwd.
+
+// @STD-011 — read a text file line-by-line; CRLF and LF are normalised alike
+fn test_lines_normalises_crlf() {
+  delete("std011_lines.txt");
+  // A Windows file (CRLF) and a Unix file (LF) must read identically: lines()
+  // strips the trailing '\r' so downstream code never sees the line-ending.
+  { f = file("std011_lines.txt"); f.write("alpha\r\nbeta\ngamma"); }
+  ls = file("std011_lines.txt").lines();
+  assert(len(ls) == 3, "three lines regardless of the ending mix");
+  assert(ls[0] == "alpha", "CRLF line has no trailing carriage return");
+  assert(ls[1] == "beta", "LF line reads verbatim");
+  assert(ls[2] == "gamma", "a final line with no newline still counts");
+  assert(delete("std011_lines.txt").ok(), "cleanup");
+}
+
+// @STD-012 — a filesystem mutation answers a CLASSIFIABLE result, not a bool
+fn test_fileresult_classifies_a_mutation() {
+  // delete / move / mkdir return a FileResult, not a boolean: ok() is the quick
+  // yes/no, but the specific variant lets a caller tell WHY it failed.
+  missing = delete("std012_no_such_file_xyz.txt");
+  assert(!missing.ok(), "deleting an absent file is not ok()");
+  assert(missing == FileResult.NotFound, "and the reason is NotFound, not a bare false");
+  // A present file deletes cleanly → FileResult.Ok.
+  { g = file("std012_present.txt"); g.write("x"); }
+  present = delete("std012_present.txt");
+  assert(present.ok(), "deleting a present file is ok()");
+  assert(present == FileResult.Ok, "the Ok variant, matchable like any other");
+}

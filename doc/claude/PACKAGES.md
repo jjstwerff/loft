@@ -1833,7 +1833,26 @@ loft --native my_program.loft  # native: link graphics_native.rlib
 loft --native-wasm out.wasm my_program.loft  # wasm: link wasm variant
 ```
 
+### The three spellings of `loft install`
+
+| command | what it does |
+|---|---|
+| `loft install` | resolve every dependency this project's `loft.toml` declares |
+| `loft install <pkg>[@<v>]` | install one package from the registry, and record it |
+| `loft install .` / `loft install <dir>` | copy THAT package into `~/.loft/lib/<name>` for global use |
+
+Bare install is the npm/cargo reading, and the one `loft api` names when it reports a
+dependency unresolved. It used to do the third thing (loft#966), which left a copy in
+`~/.loft/lib/<name>` shadowing the registry copy of the same name — loft#667, reached from
+a command whose name reads like *install my dependencies*. A path dependency needs no
+install: it resolves from the path it names, so bare install reports one only when the
+path leads to no package.
+
+The name an install is filed under is the manifest's `[package] name`, not the checkout
+directory's — a package whose directory differs landed under a name no `use` can reach.
+
 ### What `loft install` does
+
 
 ```
 1. Locate package (local path, or future: registry)

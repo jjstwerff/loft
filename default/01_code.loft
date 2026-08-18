@@ -1643,6 +1643,7 @@ fn OpReserveVector(r: vector, count: integer, elem_size: const u16);
 // --- Vector aggregates ---
 // Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+// Example: @STD-004
 pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() {
@@ -1653,6 +1654,7 @@ pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
 #pure
 // Largest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+// Example: @STD-004
 pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() {
@@ -1663,6 +1665,7 @@ pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
 #pure
 // Sum of vector elements with caller-supplied identity.  Works on any Addable type.
 // Example: sum([10, 20, 12], 0) == 42
+// Example: @STD-005
 pub fn sum < T: Addable > (v: vector<T>, init: T) -> T {
   result = init;
   for i in 0..v.len() { result = result + v[i] };
@@ -1683,6 +1686,7 @@ pub interface Walkable {
   fn children(self: Self) -> vector<Self>
 }
 
+// Example: @STD-006
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
   wk_order = [wk_root];
   for wk_i in 0..cap {

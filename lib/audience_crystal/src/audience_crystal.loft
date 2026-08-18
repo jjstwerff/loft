@@ -874,6 +874,7 @@ fn crystal_incr_rebuild_chunks(
 
 // Build a CrystalIncr from an initial snapshot (may be empty), full-building
 // every chunk's mesh once.  chunk_shift / group_dim / halo_k are the dials.
+// Example: @ACR-002
 pub fn crystal_incr_new(
   snap: CellSnap,
   chunk_shift: integer,
@@ -919,6 +920,7 @@ pub fn crystal_incr_paint(c: CrystalIncr, x: integer, y: integer, color: integer
 // rebuild re-emits the affected chunks WITHOUT it.  Flows through the SAME
 // crystal_incr_rebuild path as a paint.  The snap slot is left orphaned (cell
 // indices stay stable — the projector's per-cell bloom births key on them).
+// Example: @ACR-003
 pub fn crystal_incr_erase(c: CrystalIncr, x: integer, y: integer) {
   field_remove_cell(c.field, x, y);
 }
@@ -1138,6 +1140,7 @@ fn iround(v: float) -> integer {
 // `cell_wx`/`cell_wz`: estimate the row/column, then pick the nearest of
 // the 3×3 candidate centres so it is correct at hex boundaries regardless
 // of the odd-row offset.
+// Example: @ACR-001
 pub fn hex_at_world(wx: float, wz: float) -> (integer, integer) {
   cy_f = wz / (1.5 * HEX_SIZE);
   best_cx = 0;
@@ -1171,6 +1174,7 @@ pub fn hex_at_world(wx: float, wz: float) -> (integer, integer) {
 // two vertices per segment, palette-coloured.  Draw with
 // `gl_draw_mode(vao, len/10, DRAW_LINES)`.  A lightweight alternative to
 // the projector's 3D-beam baking for a quick top-down viewer/editor.
+// Example: @ACR-002
 pub fn crystal_mesh_to_lines(m: SegMesh) -> vector<single> {
   out: vector<single> = [];
   for cml_i in 0..seg_len(m) {

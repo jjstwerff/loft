@@ -469,8 +469,12 @@ coexist.
 
 ## Manifest-less resolution — a bare script takes the latest release
 
-**Status: DESIGN, not built.** The behaviour below is the target; the
-"Where it stands today" table says what actually runs.
+**Status: DESIGN, not built — tracked as @PLN143.** The behaviour below is the
+target; the "Where it stands today" table says what actually runs.  The plan
+carries the phase cuts, one precondition this section does not state
+(`probe_auto_install` passes `allow_unsigned: true`, which is defensible for a
+fallback and not for a default), and a second half: a `loft.lock` has no expiry,
+so a pin that has fallen behind is silent in PACKAGE scope too.
 
 A script with no `loft.toml` is loft's `python script.py` case: one file, a
 `use`, run it. It should mean *"the newest release of that library"*, every run,
@@ -1110,7 +1114,7 @@ by actual ecosystem growth.  The MVP commits to neither.
 | **R3** | Registry repo bootstrap docs | XS | **DONE 2026-05-24** — `doc/claude/REGISTRY_BOOTSTRAP.md` runbook + `doc/claude/registry_sample.json` template.  The actual GitHub repo creation is a maintainer-driven manual op. |
 | **R3.5** | Index signing (Ed25519) | S | **DONE 2026-05-24; trust root BOOTSTRAPPED 2026-06-14 (PR #371)** — `src/registry_keys.rs` `TRUSTED_PUBLIC_KEYS` now holds **4 independent keys** (2 software laptop signers `K_laptop`/`K_laptop_tuxedo` + 2 on-card YubiKeys `K_yubiA`/`K_yubiB`; [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)), `src/registry_signing.rs` `verify_index` (4 tests). Live index signed; `scripts/registry-sign.sh` is the review-then-sign path (default on-card, local-key fallback, trust-gated against `TRUSTED_PUBLIC_KEYS`). Activates on the next loft release. |
 | **R4** | `loft install <name>[@<v>]` — index fetch, sig verify, resolve, download, extract | M | **DONE 2026-05-24** — `src/registry_index.rs` (schema + parser + version constraint resolver + HTTPS fetcher + tarball extractor, 12 tests) + `src/install.rs` (orchestrator, 3 tests).  CLI flags wired: `--refresh`, `--offline`, `--prerelease`, `--allow-unsigned`, `--require-signature`.  Falls back to legacy text-format registry when `LOFT_LEGACY_REGISTRY` is set (preserves existing tooling). |
-| **R5** | `loft install` (no args; reads project loft.toml) | S | **DONE 2026-05-24** (subsumed by R4 — `install_one` consults project `loft.toml`'s `[dependencies]` via the resolver, writes `loft.lock` atomically). |
+| **R5** | `loft install` (no args; reads project loft.toml) | S | **DONE 2026-08-18** (loft#966).  Marked done in 2026-05 as "subsumed by R4", which was a misreading: R4 gave `install_one` the transitive resolver, but the no-args ENTRY POINT was never wired to it — bare `loft install` installed the PROJECT into `~/.loft/lib/<dir>` instead, so the row above ("Reads `loft.toml`, resolves, installs") described a path no code took for three months, while `loft api` recommended the command for exactly the case it did not address.  `install_manifest_dependencies` (`src/main.rs`) now walks `[dependencies]`: registry deps through `install_one` with the declared requirement, path deps reported only when the path leads to no package.  `loft install .` keeps install-this-project.  Guarded by `tests/install_naming.rs`. |
 | **R6** | `loft update [<name>]` | S | **DEFERRED** — re-runs the R4 flow with `--refresh`; needs a one-line subcommand to invalidate the lockfile pin for `<name>` before resolution.  Trivial extension once the registry is live; not blocking other phases. |
 | **R7** | Diamond / transitive resolution | S | **DONE 2026-05-24** — `install::resolve_recursive` walks `deps` from each resolved version.  Diamond conflict detection (re-check the new constraint against the existing pin) is the next refinement; today the resolver picks the FIRST satisfying version per name. |
 | **R8** | `loft search`, `loft info` | XS | **DONE 2026-05-24** — `loft search [query]` (case-insensitive match on name + description + categories) and `loft info <name>` (homepage, categories, latest, deps, version table with yanked/prerelease tags). |

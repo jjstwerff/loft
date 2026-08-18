@@ -137,6 +137,10 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
   world.planes[cid].z = parts.z;
 }
 
+// @EHK-003 — declare the sync lanes BEFORE run(): fast_lane(id) puts every
+// message of that id on the state bus, fast_lane_keyed(id) keeps only the
+// latest value per key (poses). Declared once here, so every send below is
+// ordinary — the lane, not the call site, decides the delivery discipline.
 fn main() {
   println("probe_server (kernel): sight 80 m, tick 30 Hz");
 

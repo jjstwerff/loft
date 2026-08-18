@@ -175,6 +175,11 @@ fn def_type(self: Parser, _public: boolean) -> boolean {
 }
 // <function> ::= 'fn' <identifier> '(' { <parameter> [ ',' ] } ')' [ '->' <type_def> ] <block>
 
+// @LEX-001 — drive a grammar rule off the lexer cursor: matches() consumes a
+// token only when it equals the argument (gate the rule on `matches("fn")`),
+// test() checks WITHOUT consuming (peek for `)` to spot an empty list), and
+// identifier() takes the next name. matches vs test is the distinction to get
+// right — one advances, one does not.
 fn function(self: Parser, _public: boolean) -> boolean {
   if !self.lexer.matches("fn") {
     return false;
@@ -321,6 +326,12 @@ fn if_statement(self: Parser) -> boolean {
 }
 // <object> ::= '{' { <identifier> ':' <expression> [ ';' ] } '}'
 
+// @LEX-002 — speculative parse with backtracking: anchor() captures the cursor
+// BEFORE an ambiguous rule is attempted, and revert() rewinds to that exact spot
+// when the shape turns out not to match, so another rule can retry the same
+// tokens. Here `{ … }` is attempted as an object literal; the instant a field
+// fails to be `identifier ':'`, revert(before) unwinds every token consumed and
+// object() reports no match, leaving the block for a different rule to claim.
 fn object(self: Parser) -> boolean {
   before = self.lexer.anchor();
   if !self.lexer.matches("{{") {

@@ -289,7 +289,7 @@ publishing is the **loft-ship skill** (touch-gated signing). REPL: [REPL.md](doc
 
 **Process / issues / release:** [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) workflow ·
 [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) (open→Issues, closed→[PROBLEMS.md](doc/claude/PROBLEMS.md)) ·
-[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
+[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (monthly by-hand library-doc staleness/example review — `scripts/doc-review.sh`) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) ·
 [DOC.md](doc/claude/DOC.md) · [LAVITION.md](doc/claude/LAVITION.md) · [PROMPTS.md](doc/PROMPTS.md).
 
@@ -374,6 +374,16 @@ nothing at the literal says so. Quiet on a member written `[]`, which is how eve
 constructed, and quiet when only one member is filled — those are the deliberate uses.
 `advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
 produce a result the language did not promise; what is wrong is the author's model) ·
+`LOFT_NO_UNDECLARED_DEP` (loft#968 `undeclared-dependency` ADVICE: `use <pkg>` resolved a
+REGISTRY package the project's `loft.toml` never declares — so nothing distinguishes "we
+depend on this" from "this happens to be installed on the box that built it", the negative
+gate *drop the dependency and the tests must stop compiling* cannot be written, and an
+undeclared package is not pinned either (measured: it resolves to the NEWEST installed).
+The resolution stays — auto-load is deliberate; the silence was the defect. Quiet for a
+bare script with no manifest above it, and for a package parsed out of the registry cache,
+whose manifest is someone else's to fix. `advice`, not `warning`: the program computes
+what the language promises on this box, and what is wrong is that the manifest does not
+describe the project) ·
 `LOFT_NO_SHADOWED_BY_METHOD` (loft#940 `shadowed-by-method` WARNING: a LIBRARY's free
 `fn f(x: τ, …)` that no bare call can reach, because `find_fn` resolves the method
 spelling `t_<τ>_f` before the free `n_f` and reaches it through the stdlib row from

@@ -2410,6 +2410,130 @@ extern crate loft;"
     /// world) and `init` is skipped — the parse already seeded it.  The leak
     /// check is also skipped live: the parked interpreter's machinery stores
     /// are not program leaks.
+    /// loft#950 — the channel a browser page arms a `LOFT_*` switch through.
+    ///
+    /// `std::env` on `wasm32-unknown-unknown` is a stub, so a page could set none of the
+    /// 47 switches `keys.rs` reads, and the store guard's own advice — *"run with
+    /// LOFT_STRICT_STORES=1 to name the free"* — named something the target cannot do.
+    /// Every instrument this issue needed had to be built twice for that reason.
+    ///
+    /// The module owns the buffer and the host fills it, the same shape the asyncify
+    /// region uses: the page writes `NAME=VALUE` lines from its query string and calls
+    /// `loft_env_commit(len)` BEFORE `loft_start`.  `keys.rs` memoizes each switch on
+    /// first read, so anything installed after the program starts would be ignored by
+    /// whichever switch had already been asked — committing before entry is what makes
+    /// the setting mean what it says.
+    ///
+    /// Deliberately NOT a generation-time bake.  Baking works (it is how
+    /// `LOFT_PROGRAM_RELATIVE` travels) but costs a full rebuild per setting, and a
+    /// rebuild per diagnostic is exactly what made the browser expensive to debug.
+    /// `index.html?LOFT_STRICT_STORES=1` costs a reload.
+    fn emit_page_env_region(w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(
+            w,
+            "\n// loft#950 — switch settings the host writes in before `loft_start`.\n\
+             const LOFT_ENV_CAP: usize = 4096;\n\
+             static mut LOFT_ENV_BUF: [u8; LOFT_ENV_CAP] = [0; LOFT_ENV_CAP];\n\
+             \n\
+             /// Where to write the `NAME=VALUE` lines.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_buf() -> u32 {{\n    \
+             (&raw const LOFT_ENV_BUF).cast::<u8>() as usize as u32\n\
+             }}\n\
+             \n\
+             /// How many bytes that buffer holds.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_cap() -> u32 {{\n    \
+             LOFT_ENV_CAP as u32\n\
+             }}\n\
+             \n\
+             /// Adopt the first `len` bytes as this program's switch settings.  A length\n\
+             /// past the buffer is clamped rather than refused: the host wrote what it\n\
+             /// wrote, and truncating costs a setting where trusting it costs memory.\n\
+             /// Invalid UTF-8 is ignored, so a mangled query string leaves the program\n\
+             /// running with no switches instead of not running.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_commit(len: u32) {{\n    \
+             let n = (len as usize).min(LOFT_ENV_CAP);\n    \
+             let bytes = unsafe {{ &(&raw const LOFT_ENV_BUF).cast::<[u8; LOFT_ENV_CAP]>().read()[..n] }};\n    \
+             if let Ok(text) = core::str::from_utf8(bytes) {{\n        \
+             loft::keys::install_page_env(text);\n    \
+             }}\n\
+             }}"
+        )
+    }
+
+    /// loft#950 — reserve the asyncify save region INSIDE the module, and export where
+    /// it is.
+    ///
+    /// `wasm-opt --asyncify` spills the whole wasm stack into a caller-chosen buffer on
+    /// every suspend and reads it back on resume, so that buffer has to be memory nothing
+    /// else owns.  The JS driver used to pick the address itself: `__heap_base` when the
+    /// module exported it, and the literal `65536` when it did not.  It never did — that
+    /// export rides in `WASM_THREAD_FLAGS`, which only the THREADED `--html` link passes
+    /// — so every ordinary page took the fallback, and `65536` is not in the heap at all.
+    /// `__stack_pointer` starts at `0x100000`, so the shadow stack is `[0, 0x100000)`
+    /// growing DOWN and the save region sat 966,648 bytes into it: a page whose stack
+    /// ever reached that depth had asyncify writing its saved frames over live locals,
+    /// and reading live locals back as saved frames.
+    ///
+    /// A static owns its address instead.  The allocator cannot hand it out, the shadow
+    /// stack cannot grow into it, and there is no arithmetic in JS to get wrong — the
+    /// driver asks the module and the module answers.
+    ///
+    /// The trailing CANARY is the other half.  Moving the buffer says nothing about it
+    /// being big enough, and an overflow of the old one was silent for the same reason
+    /// the misplacement was: it corrupts whatever is next and the failure surfaces
+    /// somewhere else entirely.  `loft_asyncify_ok` reports it, so a stack deeper than
+    /// the region gets a sentence instead of a wrong answer somewhere downstream.
+    ///
+    /// One buffer per MODULE, which is what the `__heap_base` scheme was too: in a
+    /// threaded page every worker shares this linear memory, so two suspending at once
+    /// would still share the region.  Not a regression, and not this fix's job.
+    fn emit_asyncify_region(w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(
+            w,
+            "\n// loft#950 — the asyncify save region, owned by the module rather than\n\
+             // chosen by the JS driver.  `loft_asyncify_data` is the 8-byte control\n\
+             // struct asyncify takes; the save area follows it, and a canary follows\n\
+             // that so an overflow is reported instead of silently overwriting the\n\
+             // next static.\n\
+             const LOFT_ASYNCIFY_SAVE: usize = 16384;\n\
+             const LOFT_ASYNCIFY_CANARY: [u8; 8] = [0x4c, 0x4f, 0x46, 0x54, 0x39, 0x35, 0x30, 0x21];\n\
+             #[repr(C, align(16))]\n\
+             struct LoftAsyncifyRegion {{\n    \
+             ctrl: [u8; 8],\n    \
+             save: [u8; LOFT_ASYNCIFY_SAVE],\n    \
+             canary: [u8; 8],\n\
+             }}\n\
+             static mut LOFT_ASYNCIFY_REGION: LoftAsyncifyRegion = LoftAsyncifyRegion {{\n    \
+             ctrl: [0; 8],\n    \
+             save: [0; LOFT_ASYNCIFY_SAVE],\n    \
+             canary: LOFT_ASYNCIFY_CANARY,\n\
+             }};\n\
+             \n\
+             /// Address of the 8-byte asyncify control struct.  The save area is the\n\
+             /// `loft_asyncify_size()` bytes after it.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_asyncify_data() -> u32 {{\n    \
+             (&raw const LOFT_ASYNCIFY_REGION).cast::<u8>() as usize as u32\n\
+             }}\n\
+             \n\
+             /// Size of the save area, so the driver never carries its own copy of it.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_asyncify_size() -> u32 {{\n    \
+             LOFT_ASYNCIFY_SAVE as u32\n\
+             }}\n\
+             \n\
+             /// False once a suspend has spilled more than the save area holds.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_asyncify_ok() -> i32 {{\n    \
+             let canary = unsafe {{ (&raw const LOFT_ASYNCIFY_REGION.canary).read() }};\n    \
+             i32::from(canary == LOFT_ASYNCIFY_CANARY)\n\
+             }}"
+        )
+    }
+
     /// @PLN98 P3.4 — emit the browser (`--html`) `loft_start` export.  WASM has no
     /// argv (so `arguments()` is `[]`) and no filesystem.  Two shapes gated on the
     /// `--debug` opt-in (`emit_live`):
@@ -2422,6 +2546,8 @@ extern crate loft;"
     ///   Falls back to `Stores::new()` if the embedded bootstrap fails.
     fn emit_wasm_start(&self, w: &mut dyn Write) -> std::io::Result<()> {
         let (prelude, args) = self.entry_call_extra_args();
+        Self::emit_asyncify_region(w)?;
+        Self::emit_page_env_region(w)?;
         if self.emit_live {
             let name = self.debug_name.as_deref().unwrap_or("");
             let src = self.program_src.as_deref().unwrap_or("");

@@ -1688,7 +1688,10 @@ std::thread_local! {
 
 // Thread-local raw pointer to the interpreter's Stores during a native call.
 // Set before calling a native function, cleared after it returns.
-#[cfg(feature = "native-extensions")]
+//
+// Ungated on purpose, unlike the `ffi_*` callbacks below that read it: it is also
+// the backing store for [`native_call`], which generated code links on a target
+// that has no `dlopen` and therefore no `native-extensions` (loft#967).
 std::thread_local! {
     pub(crate) static CURRENT_STORES: std::cell::Cell<*mut crate::database::Stores> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
@@ -2061,6 +2064,15 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
                 if lib.exists()
                     && rlib.exists()
                     && crate::cache::native_artifact_fingerprint_matches(&dir, fp)
+                    // loft#965 — and the crate's OWN Rust sources are not newer.  The
+                    // fingerprint answers "same loft-ffi ABI, RUSTFLAGS and codegen
+                    // version", which are all questions about the environment; it says
+                    // nothing about the hand-written code being compiled.  So editing a
+                    // `#native` package's `native/src/lib.rs` and running `loft test`
+                    // loaded the PREVIOUS build and passed — a false GREEN, and one only
+                    // a local author sees, because a clean CI checkout has no artifact
+                    // to reuse.
+                    && !native_crate_newer_than(pkg_dir, &lib)
                 {
                     return Some(lib.to_string_lossy().to_string());
                 }
@@ -2275,6 +2287,47 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
 /// the current loft-ffi ABI key, else freshly cross-built.  Best-effort — a missing
 /// toolchain/target, or a crate that is not wasm-clean, returns `false` (the caller then
 /// emits the "no wasm build" notice rather than dying on a bare `E0463`).
+/// Whether anything in `<pkg_dir>/native/` is newer than `artifact` — the crate's own
+/// hand-written Rust, which no other freshness check looks at (loft#965).
+///
+/// The sibling walk for GENERATED code (`native_lib.rs::source_newer_than`) covers
+/// `*.loft` and `loft.toml` and explicitly SKIPS the `native` directory, and the artifact
+/// fingerprint answers a question about the environment (loft-ffi ABI, RUSTFLAGS, codegen
+/// version) rather than about the sources.  So between them a `#native` package's own
+/// `src/lib.rs` was the one input nothing watched.
+///
+/// `target/` is skipped: it is the build's own output, and it is always newer.
+/// Unreadable metadata answers "newer", so the failure mode is a rebuild, never a reuse
+/// of something stale.
+fn native_crate_newer_than(pkg_dir: &str, artifact: &std::path::Path) -> bool {
+    let Ok(art) = artifact.metadata().and_then(|m| m.modified()) else {
+        return true;
+    };
+    let mut stack = vec![std::path::PathBuf::from(pkg_dir).join("native")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            if e.file_name() == "target" {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                stack.push(e.path());
+                continue;
+            }
+            if e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|mt| mt > art)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn auto_build_native_target(pkg_dir: &str, stem: &str, target: &str) -> bool {
     use std::path::PathBuf;
     let pkg = PathBuf::from(pkg_dir);
@@ -2294,7 +2347,10 @@ pub fn auto_build_native_target(pkg_dir: &str, stem: &str, target: &str) -> bool
     let rlib = out_dir.join(&rlib_name);
     let fp = crate::cache::native_artifact_cache_key();
     let fresh = |out: &std::path::Path| {
-        out.join(&rlib_name).exists() && crate::cache::native_artifact_fingerprint_matches(out, fp)
+        out.join(&rlib_name).exists()
+            && crate::cache::native_artifact_fingerprint_matches(out, fp)
+            // loft#965 — same hole, same cure, on the cross-target path.
+            && !native_crate_newer_than(pkg_dir, &out.join(&rlib_name))
     };
     if fresh(&out_dir) {
         return true;
@@ -2396,7 +2452,13 @@ pub fn platform_lib_name(stem: &str) -> String {
 /// let r = unsafe { external_crate::n_some_fn(ls, arg1, arg2) };
 /// // _guard's Drop clears CURRENT_STORES.
 /// ```
-#[cfg(feature = "native-extensions")]
+///
+/// Not gated on `native-extensions`, though it sits among the loader's private
+/// helpers: that feature buys `dlopen`, and nothing here opens anything — it
+/// builds a `LoftStore` over a store loft already owns.  The generated code that
+/// calls it links the native crate STATICALLY on `wasm32-wasip2`, where `dlopen`
+/// does not exist, so gating it on the loader made `--native-wasm` refuse every
+/// program using a `[native] crate` package (loft#967).
 #[allow(dead_code)] // Consumed by generated native code (separate compilation unit),
 // not by the loft binary itself.  Clippy can't see those callers.
 pub mod native_call {
@@ -2659,5 +2721,88 @@ mod c_lib_beside_tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod native_freshness_tests {
+    use super::native_crate_newer_than;
+    use std::io::Write;
+
+    /// Build `<root>/native/src/lib.rs` plus an artifact, and return both paths.
+    fn fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("loft_965_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("native/src")).expect("mkdir");
+        std::fs::create_dir_all(root.join("native/target/release")).expect("mkdir target");
+        let src = root.join("native/src/lib.rs");
+        std::fs::File::create(&src)
+            .and_then(|mut f| f.write_all(b"// crate source\n"))
+            .expect("write source");
+        (root, src)
+    }
+
+    /// Write the artifact AFTER the sources, which is what a real build leaves behind.
+    fn artifact_after(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+        // A coarse filesystem timestamp would make "written after" indistinguishable
+        // from "written at the same moment", and the comparison is `>`.  Sleep past the
+        // granularity rather than assert on a tie whose direction is the platform's
+        // choice.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let art = root.join(name);
+        std::fs::write(&art, b"artifact").expect("write artifact");
+        art
+    }
+
+    /// The reuse case: sources older than the artifact, so the cached cdylib stands.
+    #[test]
+    fn an_untouched_crate_is_not_newer() {
+        let (root, _src) = fixture("fresh");
+        let art = artifact_after(&root, "libx.so");
+        assert!(!native_crate_newer_than(&root.to_string_lossy(), &art));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// loft#965 itself: the crate's own Rust edited after the artifact was built.  This
+    /// is what `loft test` used to answer "reuse" to, running the previous build against
+    /// code no longer in the tree.
+    #[test]
+    fn an_edited_crate_source_is_newer() {
+        let (root, src) = fixture("edited");
+        let art = artifact_after(&root, "libx.so");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::File::create(&src)
+            .and_then(|mut f| f.write_all(b"// edited\n"))
+            .expect("re-write source");
+        assert!(native_crate_newer_than(&root.to_string_lossy(), &art));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// ⚠ `native/target/` is the build's OWN output and is always newer than the
+    /// artifact's siblings.  Counting it would report every crate as stale forever —
+    /// a rebuild on every run, which is the failure mode a careless fix has.
+    #[test]
+    fn the_crates_own_target_dir_does_not_count() {
+        let (root, _src) = fixture("target");
+        let art = artifact_after(&root, "libx.so");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("native/target/release/stamp"), b"x").expect("write stamp");
+        assert!(
+            !native_crate_newer_than(&root.to_string_lossy(), &art),
+            "output under native/target must not make the crate look stale"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A package with no native crate at all answers "not newer" rather than walking
+    /// nothing and defaulting to a rebuild.
+    #[test]
+    fn a_package_without_a_native_crate_is_not_newer() {
+        let root = std::env::temp_dir().join(format!("loft_965_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let art = artifact_after(&root, "libx.so");
+        assert!(!native_crate_newer_than(&root.to_string_lossy(), &art));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

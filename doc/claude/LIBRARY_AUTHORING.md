@@ -190,6 +190,71 @@ $ LOFT=target/release/loft \
   scripts/lib_warning_scan.py scan <pkg-dir> --label source
 ```
 
+### 2a. Worked examples — point at a real call site
+
+When a function's **correct use is not obvious from its signature and doc**, point
+the reader at a **real call site** instead of a prose snippet.  A snippet rots
+silently at the first signature change; a tagged test cannot drift, because it **is**
+working code that runs every CI.  This is the shared `@PLN141` convention — one tag
+family, one gate, across the whole loft library ecosystem.
+
+**Scope — the whole discipline.** Tag a function **only where a real call site
+teaches more than its signature does**.  A one-line accessor, a function whose use is
+self-evident from its type, needs none — the doc already suffices.  There is no
+retroactive sweep of every `pub fn`; the gate would go red on hundreds of obvious
+functions the day it landed.  The signal for *which* functions owe an example is
+concrete: **a reader — often an AI agent — who knows the function exists but cannot
+use it from its doc alone, and only succeeds once shown a program that already uses
+it**, is exactly the case that owes a worked example.  Lift that usage into a tagged
+test so the next reader never needs the pointer.
+
+**How it works — two halves and a registry.**
+
+- **Citation** — a comment `// Example: @AAA-###` directly above the documented
+  `pub fn` in `src/`.
+- **Definition** — the tag `// @AAA-###` in the comment block directly above the `fn`
+  that demonstrates it: a `test_*` in your `tests/` (author one in retrospect if none
+  is clear), or a real function in a first-class application's own source.
+- **Naming a tag in prose** — a comment block directly above a `fn` *defines* the
+  first tag it names, so a passing mention there ("see @ARG-004 for the failure
+  path") would claim that tag.  Two rules keep ordinary cross-referencing safe: the
+  **first** tag in a block is the one it defines, and a block containing an
+  `// Example:` line is a **citation** — it defines nothing, before or after that
+  line.  So mention a sibling freely inside an example's own prose or under a
+  citation; just never open a block above a `fn` with a tag you do not mean to
+  define.
+- **Acronym** — `AAA` is three uppercase letters, hyphen, three digits — distinct
+  from loft's `@P`/`@PLN`/`@F`/`@GH` families (none has that interior hyphen).  Each
+  acronym names **one repo, ecosystem-globally**, registered once in loft's
+  [`scripts/example_repos.tsv`](../../scripts/example_repos.tsv) (monorepos map several
+  acronyms to one repo).  A citation can point *across* repos and is still validated +
+  linked; a foreign repo is read-only, never a build edge.
+
+**The gate runs in your CI already.**  Every `loft-libs-*` `library-ci.yml` is a thin
+caller of loft's reusable workflow, which checks loft out into `loft-src/` — so the
+shared gate `loft-src/scripts/check_doc_drift.sh examples` and the acronym registry
+are present in your CI run with no per-repo copy.  It is **vacuously green until you
+author your first citation**, then begins gating.  Faults: `dangling` (cited, no fn
+carries it), `duplicate` (one tag on two fns here), `unregistered` (acronym missing
+from the registry).  A generated `examples-index.tsv` at the repo root records where
+each tag lives (`tag ⇥ file:line ⇥ fn ⇥ git-link`) so a reader resolves it without a
+checkout; CI verifies the committed copy is current.
+
+**Recording that a package owes nothing.**  Because there is no retroactive sweep, an
+untagged package is ambiguous: nobody can tell *no function here needs an example* from
+*nobody has looked yet*.  Resolve it in one line in `examples-exempt.tsv` at your repo
+root — `package ⇥ exempt|deferred ⇥ reason` — where **exempt** means no function teaches
+more from a call site than from its signature, and **deferred** means one does but not
+yet, with the reason naming what unblocks it (the monthly review picks those up).
+Nothing gates on this file; it is what lets a whole repo be called done.
+`make examples-progress REPO=../<your-repo>` in a loft checkout lists every package as
+tagged / exempt / deferred / TODO.
+
+The automated gate only sees a citation that *dangles* or *duplicates* — staleness
+(still resolves, no longer matches the code) and quality (valid but no longer the
+clearest) are caught by the monthly by-hand pass in
+[LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md).
+
 ## 3. Pre-release checklist
 
 **Declare your three compatibility levels first.** They are required before a package may be
@@ -238,6 +303,21 @@ Before you ship a version:
 - [ ] `LOFT_DENY_WARNINGS=1 loft test` is green (or you've
       kept `.allow_warnings` as an opt-out only when the
       package isn't ready yet).
+- [ ] **The publish gate's own command is green** — it is a *different* gate
+      from `loft test`, and it is the one that can stop a release:
+
+      ```
+      $ <loft-checkout>/target/release/loft --interpret --tests tests
+      ```
+
+      `loft test` runs the **installed** loft; `registry_maintain.sh` runs the
+      loft built in the **checkout it is invoked from**, and the two can
+      disagree while both report the same version — a local shadowing a stdlib
+      function name (`now = …`) passed every `loft test` and blocked the
+      publish of `imaging` 0.2.2 with *"Cannot redefine function 'now' as a
+      variable"*. The gate is the right authority: a published library must
+      parse under whatever loft its **consumers** hold, not just the one on the
+      publishing machine. Run it before tagging, not after.
 - [ ] `loft.toml` has the new version under `[package] version`.
 - [ ] `[package] description` is a real one-line summary (not the `loft new`
       placeholder) — it's the official registry catalog text (`loft search` /

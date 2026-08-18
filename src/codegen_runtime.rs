@@ -311,9 +311,12 @@ pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i3
     // Without it the switch went quiet the moment a call crossed into a package's
     // shared library — which is where the slot-adoption it exists to show lives.
     if crate::keys::trace_db() {
-        eprintln!(
+        crate::loft_eprintln!(
             "[db] native OpDatabase db_tp={db_tp} ({}) db=#{}@{},{} size={size}",
-            stores.types[db_tp as usize].name, db.store_nr, db.rec, db.pos,
+            stores.types[db_tp as usize].name,
+            db.store_nr,
+            db.rec,
+            db.pos,
         );
     }
     if db.store_nr == u16::MAX {
@@ -896,9 +899,14 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     let tp = raw_tp & 0x7FFF;
     let size = u32::from(stores.size(tp));
     if std::env::var("LOFT_TRACE_COPY").is_ok() {
-        eprintln!(
+        crate::loft_eprintln!(
             "[copy] OpCopyRecord src=#{}@{},{} dst=#{}@{},{} tp={tp} size={size} free_src={free_source}",
-            data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
+            data.store_nr,
+            data.rec,
+            data.pos,
+            to.store_nr,
+            to.rec,
+            to.pos,
         );
     }
     stores.remove_claims(&to, tp);
@@ -1325,7 +1333,7 @@ pub fn read_file_text_into(path: &str, buf: &mut String) {
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
             buf.clear();
             let size = std::fs::metadata(path).map_or(0, |m| m.len());
-            eprintln!(
+            crate::loft_eprintln!(
                 "warning: file({path:?}).content() got non-UTF-8 bytes ({size} bytes in \
                  file) — returning null. Read the bytes exactly with `read_bytes(path)`, \
                  or a field at a time with `f#format = LittleEndian; f#read(n)` (or \
@@ -1421,7 +1429,7 @@ pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
     } else if let Some(f) = &mut stores.files[file_ref as usize]
         && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
     {
-        eprintln!("file seek error: {e}");
+        crate::loft_eprintln!("file seek error: {e}");
     }
 }
 
@@ -1613,7 +1621,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             f_nr
         }
         Err(e) => {
-            eprintln!("file open error for {file_name:?}: {e}");
+            crate::loft_eprintln!("file open error for {file_name:?}: {e}");
             i32::MIN
         }
     }
@@ -1648,7 +1656,7 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             f_nr
         }
         Err(e) => {
-            eprintln!("file open error for {file_name:?}: {e}");
+            crate::loft_eprintln!("file open error for {file_name:?}: {e}");
             i32::MIN
         }
     }
@@ -2130,7 +2138,7 @@ pub fn OpWriteFile<T: FileVal>(
         .and_then(|x| x.as_mut())
         && let Err(e) = f.write_all(&data)
     {
-        eprintln!("file write error: {e}");
+        crate::loft_eprintln!("file write error: {e}");
     }
     // Update #next to reflect the end of this write.
     stores
@@ -4989,18 +4997,18 @@ fn cr_stack_overflow(name: &str, file: &str, line: u32, depth: usize) -> ! {
     if in_lazy_driver() {
         std::panic::panic_any(format!("stack_overflow: call stack overflow in {name}"));
     }
-    eprintln!(
+    crate::loft_eprintln!(
         "error: call stack overflow — exceeded {} nested calls",
         crate::state::State::MAX_CALL_DEPTH
     );
-    eprintln!("  in {name} ({file}:{line})");
+    crate::loft_eprintln!("  in {name} ({file}:{line})");
     CALL_STACK.with(|s| {
         let b = s.borrow();
         for (nm, f, ln) in b.iter().rev().take(10) {
-            eprintln!("        fn {nm}() ({f}:{ln})");
+            crate::loft_eprintln!("        fn {nm}() ({f}:{ln})");
         }
         if depth > 10 {
-            eprintln!("        … ({} more frames)", depth - 10);
+            crate::loft_eprintln!("        … ({} more frames)", depth - 10);
         }
     });
     std::process::exit(1);

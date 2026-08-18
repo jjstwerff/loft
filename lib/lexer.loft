@@ -246,12 +246,12 @@ fn scan(self: Lexer) {
   self.index += 1;
 }
 // Test if there is a specific token, do not skip it.
-
+// Example: @LEX-001
 pub fn test(self: Lexer, with: text) -> boolean {
   self.data[self.start..self.index] == with
 }
 // Test if there is a specific token or keyword in the file, skip this if it matches.
-
+// Example: @LEX-001
 pub fn matches(self: Lexer, with: text) -> boolean {
   if self.test(with) { self.scan(); true } else { false }
 }
@@ -267,7 +267,7 @@ pub fn position(self: Lexer) -> text {
   "{self.file}:{self.line}:{self.pos}"
 }
 // Get an identifier and skip it.
-
+// Example: @LEX-001
 pub fn identifier(self: Lexer) -> text? {
   if self.scanned != Identifier { return null; }
   result = self.data[self.start..self.index];
@@ -370,10 +370,12 @@ pub fn comment_behind(self: Lexer) -> boolean {
   self.behind
 }
 
+// Example: @LEX-002
 pub fn anchor(self: Lexer) -> Anchor {
   Anchor { index: self.index, line: self.line, pos: self.pos }
 }
 
+// Example: @LEX-002
 pub fn revert(self: Lexer, to: Anchor) {
   self.index = to.index;
   self.line = to.line;

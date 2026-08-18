@@ -18,3 +18,16 @@ pub fn native_answer() -> integer;
 // `server::listen`, whose `handle >= 0` check it silently defeated on --native).
 pub fn native_sentinel() -> integer;
 #native
+
+// The STORE-handle shape.  `native_answer` / `native_sentinel` above are scalars: the
+// generated call is a plain `extern "C"` call and needs nothing from loft's runtime.  A
+// vector RETURN does — the native crate allocates into a loft store, so codegen emits
+// `loft::native_call::enter` + `build_store` around the call.  That is a different
+// linkage requirement, and the scalar fns cannot witness it: on `wasm32-wasip2` those
+// two helpers were compiled out of loft's runtime rlib, so every store-touching native
+// refused to build while `native_answer()` stayed green (loft#967).
+//
+// Deterministic on purpose — `100, 101, …` rather than a shuffle — so the test asserts
+// VALUES, not just a length: a wrong element ordering or a truncated copy is visible.
+pub fn native_span(n: integer) -> vector<integer>;
+#native

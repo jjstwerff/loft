@@ -1,0 +1,28 @@
+// `Holder` names `vector<Item>` BEFORE `Item` exists — the forward reference is
+// the whole fixture: it is what leaves pass 1 without the field's dep.
+pub struct Holder {
+  hd_name:  text,
+  hd_items: vector<Item>,
+}
+pub struct Item { it_x: float }
+pub struct Shelf { sh_all: hash<Holder[hd_name]> }
+
+pub fn holder_new(name: text) -> Holder { Holder { hd_name: name, hd_items: [] } }
+pub fn holder_item(h: Holder, x: float) -> Holder { h.hd_items += [Item { it_x: x }]; h }
+pub fn shelf_new() -> Shelf { Shelf { sh_all: [] } }
+pub fn shelf_add(s: Shelf, h: Holder) { s.sh_all += [h]; }
+pub fn shelf_get(s: Shelf, name: text) -> Holder? { s.sh_all[name] }
+
+// The MEASURING walk over the same field the consumer emits from.
+pub fn holder_span(h: Holder) -> float {
+  if len(h.hd_items) == 0 { return 0.0; }
+  lo = 0.0; hi = 0.0;
+  for it in h.hd_items {
+    if it#first { lo = it.it_x; hi = it.it_x; }
+    else {
+      if it.it_x < lo { lo = it.it_x; }
+      if it.it_x > hi { hi = it.it_x; }
+    }
+  }
+  hi - lo
+}

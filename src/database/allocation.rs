@@ -75,7 +75,7 @@ pub fn timeline_summary(real_leaked: usize) {
         } else {
             format!("{real_leaked} user store(s) LEAKED — see the leak warning for which")
         };
-        eprintln!(
+        crate::loft_eprintln!(
             "[timeline] SUMMARY: {} allocs, {} frees, peak {} concurrently-live (working set) — {verdict}",
             t.total_alloc, t.total_free, t.peak_live
         );
@@ -205,7 +205,7 @@ impl Stores {
         }
         if SEEN.with(|s| s.borrow_mut().insert((rec.store_nr, rec.rec, rec.pos))) {
             let tn = self.types.get(tp as usize).map_or("?", |t| t.name.as_str());
-            eprintln!(
+            crate::loft_eprintln!(
                 "loft: BUG (#796): refused to walk a {kind} edge of `{tn}` (kt={tp}) at \
                  store #{}, rec={}, pos={} — it points at record {cur}, outside the store \
                  (capacity {} words). The record holds a stale interior claim: its slot was \
@@ -799,15 +799,17 @@ impl Stores {
         match std::env::var("LOFT_STORES").as_deref() {
             Ok("log") => {
                 let label = if name.is_empty() { "" } else { name };
-                eprintln!(
+                crate::loft_eprintln!(
                     "[store] + alloc #{} {label:>12} | active={active:<4} max={:<4} size={size}",
-                    result.store_nr, self.max
+                    result.store_nr,
+                    self.max
                 );
             }
             Ok("warn") if active > 30 => {
-                eprintln!(
+                crate::loft_eprintln!(
                     "[store] WARNING: {active} active stores (max={}) — possible leak at alloc #{}",
-                    self.max, result.store_nr
+                    self.max,
+                    result.store_nr
                 );
             }
             Ok("timeline") => {
@@ -821,7 +823,7 @@ impl Stores {
                     s
                 });
                 let label = if name.is_empty() { "·" } else { name };
-                eprintln!(
+                crate::loft_eprintln!(
                     "[timeline] alloc #{}.{seq}  {label:<14} live={active} size={size}",
                     result.store_nr
                 );
@@ -864,7 +866,7 @@ impl Stores {
             use std::sync::atomic::{AtomicBool, Ordering};
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!(
+                crate::loft_eprintln!(
                     "loft: BUG (#405): refused free of out-of-range store #{al} \
                      (allocations.len={}, rec={}, pos={}, var='{name}') — wrong/stale \
                      ref; further such frees are silently refused this run",
@@ -907,11 +909,12 @@ impl Stores {
             } else {
                 format!(", op={op}")
             };
-            eprintln!(
+            crate::loft_eprintln!(
                 "loft: BUG (#306): refused to free the stack store (#0) \
                  (rec={}, pos={}, var='{name}', at {at}{op}) — a stack-record ref was \
                  treated as an owned heap store",
-                db.rec, db.pos,
+                db.rec,
+                db.pos,
             );
             // Record it as a free site even though the free was REFUSED: the
             // refusal keeps store 0 alive, but whatever produced this ref is
@@ -1006,9 +1009,10 @@ impl Stores {
             Ok("log") => {
                 let active = self.allocations.iter().filter(|s| !s.free).count();
                 let label = if name.is_empty() { "" } else { name };
-                eprintln!(
+                crate::loft_eprintln!(
                     "[store] - free   #{al} {label:>12} | active={:<4} max={}",
-                    active, self.max
+                    active,
+                    self.max
                 );
             }
             Ok("timeline") => {
@@ -1023,7 +1027,9 @@ impl Stores {
                 });
                 let seq = seq.map_or_else(|| "?".to_string(), |s| s.to_string());
                 let label = if name.is_empty() { "·" } else { name };
-                eprintln!("[timeline] free  #{al}.{seq}  {label:<14} live={live_after}");
+                crate::loft_eprintln!(
+                    "[timeline] free  #{al}.{seq}  {label:<14} live={live_after}"
+                );
             }
             _ => {}
         }
@@ -1456,9 +1462,11 @@ impl Stores {
         }
         #[cfg(debug_assertions)]
         if s.free && !crate::keys::strict_stores() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[store] ACCESS FREED store #{} rec={} pos={} — data will be garbage",
-                r.store_nr, r.rec, r.pos
+                r.store_nr,
+                r.rec,
+                r.pos
             );
         }
         s
@@ -1813,9 +1821,11 @@ impl Stores {
         }
         #[cfg(debug_assertions)]
         if self.allocations[r.store_nr as usize].free && !crate::keys::strict_stores() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[store] WRITE TO FREED store #{} rec={} pos={} — corruption",
-                r.store_nr, r.rec, r.pos
+                r.store_nr,
+                r.rec,
+                r.pos
             );
         }
         &mut self.allocations[r.store_nr as usize]
@@ -2100,33 +2110,39 @@ impl Stores {
             return;
         }
         if rec.store_nr as usize >= self.allocations.len() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[cr-check] {path}: ref #{}.{},{} — store out of range",
-                rec.store_nr, rec.rec, rec.pos
+                rec.store_nr,
+                rec.rec,
+                rec.pos
             );
             *problems += 1;
             return;
         }
         let store = &self.allocations[rec.store_nr as usize];
         if store.free {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[cr-check] {path}: ref #{}.{},{} — store FREED",
-                rec.store_nr, rec.rec, rec.pos
+                rec.store_nr,
+                rec.rec,
+                rec.pos
             );
             *problems += 1;
             return;
         }
         let cap = store.capacity_words();
         if rec.rec >= cap || u64::from(rec.rec) * 8 + u64::from(rec.pos) >= u64::from(cap) * 8 {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[cr-check] {path}: ref #{}.{},{} — record beyond store capacity ({cap} words)",
-                rec.store_nr, rec.rec, rec.pos
+                rec.store_nr,
+                rec.rec,
+                rec.pos
             );
             *problems += 1;
             return;
         }
         if (tp as usize) >= self.types.len() {
-            eprintln!("[cr-check] {path}: type {tp} out of range");
+            crate::loft_eprintln!("[cr-check] {path}: type {tp} out of range");
             *problems += 1;
             return;
         }
@@ -2134,7 +2150,7 @@ impl Stores {
             Parts::Base if tp == 5 => {
                 let cur = store.get_u32_raw(rec.rec, rec.pos);
                 if cur != 0 && cur >= cap {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: text offset {cur} beyond store #{} capacity {cap}",
                         rec.store_nr
                     );
@@ -2161,7 +2177,7 @@ impl Stores {
                     return;
                 }
                 if cur >= cap {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: vector rec {cur} beyond store #{} capacity {cap}",
                         rec.store_nr
                     );
@@ -2171,7 +2187,7 @@ impl Stores {
                 let len = store.get_u32_raw(cur, 4);
                 let size = u32::from(self.size(*v));
                 if u64::from(len) * u64::from(size) > u64::from(cap) * 8 {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: vector rec {cur} len {len} (elem size {size}) \
                          exceeds store #{} capacity {cap} words",
                         rec.store_nr
@@ -2198,7 +2214,7 @@ impl Stores {
                     return;
                 }
                 if r >= cap {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: child rec {r} beyond store #{} capacity {cap}",
                         rec.store_nr
                     );
@@ -2236,7 +2252,7 @@ impl Stores {
                     return;
                 }
                 if cur >= cap {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: hash bucket rec {cur} beyond store #{} capacity {cap}",
                         rec.store_nr
                     );
@@ -2252,7 +2268,7 @@ impl Stores {
                 // debug-assertions gate ("Fld 0 is outside of record N").
                 let room = store.record_words(cur);
                 if room < crate::hash::RESERVED_WORDS || u64::from(room) > u64::from(cap) {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: hash bucket rec {cur} insane room {room} (cap {cap})",
                     );
                     *problems += 1;
@@ -2268,7 +2284,7 @@ impl Stores {
                 let stride = crate::hash::stride(store, cur);
                 let dir = store.get_u32_raw(cur, crate::arena::DIR_FLD);
                 if stride != 0 && dir >= cap {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[cr-check] {path}: hash arena directory {dir} beyond store #{} capacity {cap}",
                         rec.store_nr
                     );
@@ -2297,7 +2313,7 @@ impl Stores {
                         }
                     };
                     if entry >= cap {
-                        eprintln!(
+                        crate::loft_eprintln!(
                             "[cr-check] {path}: hash entry rec {entry} beyond store #{} capacity {cap}",
                             rec.store_nr
                         );
@@ -2954,7 +2970,7 @@ impl Stores {
                 let sl = vector::length_vector(src, &self.allocations);
                 let dl = vector::length_vector(dst, &self.allocations);
                 if sl != dl && seen.insert(path.clone()) {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (vector elem kt={v})"
                     );
                 }
@@ -2984,7 +3000,7 @@ impl Stores {
                 let sl = vector::length_vector(src, &self.allocations);
                 let dl = vector::length_vector(dst, &self.allocations);
                 if sl != dl && seen.insert(path.clone()) {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[copy_check] MISMATCH {path}: src_len={sl} dst_len={dl} (array/ordered kt={v})"
                     );
                 }
@@ -3001,7 +3017,7 @@ impl Stores {
                 let s_len = self.store(src).get_u32_raw(s_cur, 4);
                 let d_len = self.store(dst).get_u32_raw(d_cur, 4);
                 if s_len != d_len && seen.insert(format!("{path}#count")) {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "[copy_check] MISMATCH {path}: src_count={s_len} dst_count={d_len} (hash)"
                     );
                 }
@@ -3152,13 +3168,15 @@ impl Stores {
                                 std::cell::RefCell::new(std::collections::HashSet::new());
                         }
                         if RPT.with(|s| s.borrow_mut().insert((rec.store_nr, rec.rec, rec.pos))) {
-                            eprintln!(
+                            crate::loft_eprintln!(
                                 "[uaf-claim] remove_claims: TEXT field at store #{} rec={} pos={} \
                                  holds STALE pointer cur={cur} past store end (cap_words={cap}; \
                                  slot free={sfree} known_type={skt} rec_pos_valid={rec_ok}) — dst \
                                  record has a dangling interior claim (reused-slot or borrowed-ref \
                                  over-free); skipping delete to avoid SIGSEGV",
-                                rec.store_nr, rec.rec, rec.pos,
+                                rec.store_nr,
+                                rec.rec,
+                                rec.pos,
                             );
                         }
                         self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
@@ -3263,11 +3281,12 @@ impl Stores {
         }
         if RPT_W.with(|s| s.borrow_mut().insert((to.store_nr, to.rec, bad_pos))) {
             let (s_nr, s_rec, s_pos) = src.map_or((u16::MAX, 0, 0), |s| (s.store_nr, s.rec, s.pos));
-            eprintln!(
+            crate::loft_eprintln!(
                 "[watch-store/{ctx}] OOB text-ptr now in watched store #{}: dst rec={} field \
                  pos={bad_pos} holds ptr={bad_cur} (cap_words={cap}, tp={tp}) — src=#{s_nr}(rec={s_rec},\
                  pos={s_pos}) src_oob_text={src_oob:?} — at pc={pc} (line {line})",
-                to.store_nr, to.rec,
+                to.store_nr,
+                to.rec,
             );
         }
     }
@@ -3343,7 +3362,7 @@ impl Stores {
             // the live store simply keeps the better layout too.
             let laid = self.relayout_trees(slot);
             if laid > 0 && std::env::var_os("LOFT_LOADER_STATS").is_some() {
-                eprintln!("store_persist_bind: laid out {laid} tree(s) for paging");
+                crate::loft_eprintln!("store_persist_bind: laid out {laid} tree(s) for paging");
             }
             // FRESH PATH — snapshot current bytes, size the image to the data,
             // write to disk, then re-open via mmap.
@@ -3435,7 +3454,7 @@ impl Stores {
         if preserved.0 != u16::MAX {
             let id = crate::schema_sidecar::LayoutIdentity::of(self, &[preserved.0]);
             if id.write_beside(path).is_err() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
-                eprintln!(
+                crate::loft_eprintln!(
                     "store_persist_bind: could not write layout sidecar beside {}",
                     path.display()
                 );
@@ -3522,13 +3541,13 @@ impl Stores {
         // image written by this call is exactly the one that gets served.
         let id = crate::schema_sidecar::LayoutIdentity::of(self, &[tp]);
         if id.write_beside(path).is_err() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_persist_copy: could not write layout sidecar beside {}",
                 path.display()
             );
         }
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_persist_copy: wrote {} bytes, laid out {laid} tree(s) for paging",
                 padded.len()
             );
@@ -3608,8 +3627,10 @@ impl Stores {
             // Say WHY when it does not run: a refusal that reads the same as a
             // dense store is a refusal nobody can test or diagnose.
             match self.compact_slot(slot) {
-                Ok(words) => eprintln!("store_load: compacted #{slot} — {words} words returned"),
-                Err(why) => eprintln!("store_load: not compacted #{slot} — {why}"),
+                Ok(words) => {
+                    crate::loft_eprintln!("store_load: compacted #{slot} — {words} words returned")
+                }
+                Err(why) => crate::loft_eprintln!("store_load: not compacted #{slot} — {why}"),
             }
         } else if Self::compact_on_load_enabled() {
             let _ = self.compact_slot(slot);
@@ -3643,7 +3664,7 @@ impl Stores {
             Ok(words) => words,
             Err(why) => {
                 if stats {
-                    eprintln!("store_persist_bind: not compacted #{slot} — {why}");
+                    crate::loft_eprintln!("store_persist_bind: not compacted #{slot} — {why}");
                 }
                 return;
             }
@@ -3693,12 +3714,14 @@ impl Stores {
             // compacted ones if it did — so the collection is file-backed
             // either way.
             if !self.rebind(slot, path) && stats {
-                eprintln!("store_persist_bind: #{slot} could not be re-bound after compaction");
+                crate::loft_eprintln!(
+                    "store_persist_bind: #{slot} could not be re-bound after compaction"
+                );
             }
             return;
         }
         if stats {
-            eprintln!("store_persist_bind: compacted #{slot} — {saved} words returned");
+            crate::loft_eprintln!("store_persist_bind: compacted #{slot} — {saved} words returned");
         }
     }
 
@@ -4325,12 +4348,12 @@ impl Stores {
         let bytes = match crate::net::fetch_bytes(url) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("store loader: refusing {url} — fetch failed: {e}");
+                crate::loft_eprintln!("store loader: refusing {url} — fetch failed: {e}");
                 return false;
             }
         };
         if let Err(e) = crate::integrity::verify_sha256(&bytes, sha256_hex) {
-            eprintln!("store loader: refusing {url} — {e}");
+            crate::loft_eprintln!("store loader: refusing {url} — {e}");
             return false;
         }
         self.load_bytes(slot, &bytes)
@@ -4357,7 +4380,7 @@ impl Stores {
         let bytes = match crate::net::fetch_bytes(url) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("store loader: {url} — fetch failed: {e}");
+                crate::loft_eprintln!("store loader: {url} — fetch failed: {e}");
                 return false;
             }
         };
@@ -4432,7 +4455,7 @@ impl Stores {
             }
             _ => "its recorded layout could not be read".to_string(),
         };
-        eprintln!(
+        crate::loft_eprintln!(
             "store_load: refusing {} — it was written with a different layout than this \
              program reads it with, so its records would be read at the wrong stride \
              ({detail}).  Rebuild the store with this program, or load it with the \
@@ -4579,7 +4602,7 @@ impl Stores {
         }
 
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_load_range: [{lo},{hi}] loaded={count} bytes_fetched={} file={}",
                 reader.provider().bytes_fetched(),
                 reader.size()
@@ -4741,7 +4764,7 @@ impl Stores {
     /// `null`.
     #[cfg(paged_store)]
     fn refuse_paged(&mut self, path: &str, reason: &str) {
-        eprintln!(
+        crate::loft_eprintln!(
             "store loader: refusing {path} — {reason}; loaded NOTHING (a refusal, \
              not an absent key)"
         );
@@ -4907,7 +4930,7 @@ impl Stores {
         if let Some(why) = self.unservable_kind(coll, source) {
             self.lazy_sources
                 .remove(&(coll.store_nr, coll.rec, coll.pos));
-            eprintln!("store_bind_lazy: refusing `{source}` — {why}");
+            crate::loft_eprintln!("store_bind_lazy: refusing `{source}` — {why}");
             self.lazy_refuse((coll.store_nr, coll.rec, coll.pos), &why);
             return false;
         }
@@ -5262,7 +5285,7 @@ impl Stores {
             }
         }
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_load_prefix: {pre:?} limit={limit} loaded={loaded} bytes_fetched={} requests={} file={}",
                 reader.provider().bytes_fetched(),
                 reader.provider().requests(),
@@ -5366,7 +5389,7 @@ impl Stores {
             }
         }
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_load_box: {from:?}..{till:?} limit={limit} loaded={loaded} bytes_fetched={} requests={} file={}",
                 reader.provider().bytes_fetched(),
                 reader.provider().requests(),
@@ -5503,7 +5526,7 @@ impl Stores {
         // Observability for the "bytes fetched ≪ file" invariant: at scale N
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} depth={} distinct={} file={} reads={:?}",
                 keys_vals.len(),
                 reader.provider().bytes_fetched(),

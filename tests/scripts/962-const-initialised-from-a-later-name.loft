@@ -1,0 +1,73 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#962 — a file-scope constant whose initialiser reads a name declared LATER.
+//
+// A constant is stored as IR and pasted at every reference, and `parse_constant` stored
+// that IR on PASS 1 only.  Pass 1 resolves names against an incomplete definition table by
+// construction, so a name declared further down was simply not there — and at file scope
+// `create_var` has no frame to allocate in, so it answered `u16::MAX`, the "no slot"
+// sentinel.  That sentinel froze into the stored initialiser.  Pass 2 derived the RIGHT
+// value from the complete table and threw it away.
+//
+// ⚠ THE SILENT CELLS ARE WHY THIS FILE COVERS FIVE TYPES, not just the filed one.  One
+// mechanism, five different-looking symptoms:
+//
+//   integer / single   panicked the variable allocator — "index out of bounds: the len is
+//                      1 but the index is 65535", pointing at an unrelated function's
+//                      RETURN TYPE, one file away from the constant that failed;
+//   text / boolean     printed EMPTY, with no diagnostic at all;
+//   forward fn call    printed `null`, likewise silent — pass 1 could not type the call,
+//                      so the whole constant froze as the wrong type;
+//   vector             already correct, and that is the tell: loft#702 had fixed exactly
+//                      this for the vector kind alone (pass-1 field offsets are
+//                      placeholders there) and left the other four frozen.
+//
+// So an all-integer version of this file would guard a third of the defect and read as if
+// it guarded all of it.  Each cell below fails differently without the fix.
+//
+// The declaration ORDER is the axis: every constant here is initialised from something
+// spelled below it.  Reversing any pair makes that cell pass with the fix reverted, which
+// is what made the package-level report (a sibling module reached through the aggregator)
+// look like a packaging bug rather than a two-pass one.
+
+// @EXPECT_WARNING: constant 'F_LATER' is re-evaluated at EVERY reference
+
+const I_LATER: integer = I_BASE * 2;
+const I_BASE: integer = 21;
+
+const S_LATER: single = S_BASE * 2.0f;
+const S_BASE: single = 1.5f;
+
+const T_LATER: text = T_BASE + "!";
+const T_BASE: text = "hi";
+
+const B_LATER: boolean = !B_BASE;
+const B_BASE: boolean = true;
+
+const V_LATER: vector<integer> = [V_BASE, 2];
+const V_BASE: integer = 7;
+
+// The type, not just the value: pass 1 cannot type a call to a function it has not seen,
+// so the constant froze as the wrong type and every use read `null`.
+const F_LATER: integer = twenty_one() * 2;
+
+fn twenty_one() -> integer { 21 }
+
+fn main() {
+  assert(I_LATER == 42, "integer constant from a later constant is {I_LATER}");
+  assert(S_LATER == 3.0f, "single constant from a later constant is {S_LATER}");
+  assert(T_LATER == "hi!", "text constant from a later constant is '{T_LATER}'");
+  assert(B_LATER == false, "boolean constant from a later constant is {B_LATER}");
+  assert(len(V_LATER) == 2, "vector constant has {len(V_LATER)} elements");
+  assert(V_LATER[0] == 7, "vector constant's first element is {V_LATER[0]}");
+  assert(F_LATER == 42, "constant from a later function is {F_LATER}");
+
+  // The control the fix must not break: the same constants read in the ordinary
+  // direction.  Pass 1 got these right by luck, and a fix that made pass 2 authoritative
+  // could still have changed them.
+  assert(I_BASE == 21, "backward-facing constant is {I_BASE}");
+  assert(T_BASE == "hi", "backward-facing text constant is '{T_BASE}'");
+
+  print("962 ok\n");
+}

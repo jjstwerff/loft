@@ -1,0 +1,51 @@
+# Worked-example acronym registry (@PLN141) — maps a tag acronym to the repo that
+# owns it, so a `// Example: @AAA-###` citation resolves to a real test/function and
+# produces a real link.  Tab-separated:  acronym <TAB> repo <TAB> git_url <TAB> branch
+#
+# Projects are assumed to be checked out as SIBLINGS in one parent directory, so the
+# local checkout is simply `../<repo>` — no per-entry path navigation.  A present
+# sibling is validated OFFLINE against its checkout (preferred over online); a missing
+# one is reported unvalidated (a warning, never a hard failure), with the link still
+# emitted from git_url.  The acronym namespace is ecosystem-global: one acronym names
+# one repo everywhere.
+#
+# MONOREPO libraries: several packages share one git repo (e.g. loft-libs-graphics
+# holds graphics + gridmesh + shapes).  The `repo` column is that monorepo's checkout
+# dir (`../loft-libs-graphics`), so multiple acronyms map to it — the gate scans the
+# whole tree for the acronym's `// @AAA-###` tag and emits a repo-relative blob link
+# (`.../blob/main/gridmesh/tests/x.loft#L12`), so no per-package path column is needed.
+# The rows below stake the ecosystem-global acronym claim so no other repo reuses them.
+# The distributed LIBRARIES are loft's to roll out (shared code, each guarded by its own
+# validated contract); the first-class APPS (DRY/CRW/MOR) are their own agents' to author
+# — loft only CITES those.  Which acronyms carry tags today: each repo's examples-index.tsv.
+#
+# acronym	repo	git_url	branch
+STD	loft	https://github.com/loft-lang/loft	main
+GIT	loft	https://github.com/loft-lang/loft	main
+LEX	loft	https://github.com/loft-lang/loft	main
+ACR	loft	https://github.com/loft-lang/loft	main
+EHK	loft	https://github.com/loft-lang/loft	main
+DRY	dryopea	https://github.com/jjstwerff/dryopea	main
+CRW	crawler	https://github.com/jjstwerff/crawler	main
+MOR	moros	https://github.com/jjstwerff/moros	main
+# loft-libs-core (arguments, cbor, crypto, random, regex, zttext)
+ARG	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+CBR	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+CRY	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+RGX	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+RND	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+ZTX	loft-libs-core	https://github.com/loft-lang/loft-libs-core	main
+# loft-libs-graphics (graphics, gridmesh, shapes, imaging)
+GFX	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
+GRM	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
+IMG	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
+SHP	loft-libs-graphics	https://github.com/loft-lang/loft-libs-graphics	main
+# loft-libs-net (game_protocol, server, web, ssh)
+GMP	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
+SRV	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
+WEB	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
+SSH	loft-libs-net	https://github.com/loft-lang/loft-libs-net	main
+# loft-libs-world (hex_grid, hex_terrain, hex_world)
+HXG	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
+HXT	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
+HXW	loft-libs-world	https://github.com/loft-lang/loft-libs-world	main
