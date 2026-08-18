@@ -570,7 +570,7 @@ mod tests {
             p.database.names.len(),
             "names map size changed across round-trip"
         );
-        eprintln!(
+        crate::loft_eprintln!(
             "stdlib_schema_round_trips: {} types, {} names, {} bytes",
             restored.types.len(),
             restored.names.len(),

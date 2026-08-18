@@ -9481,6 +9481,7 @@ fn main() {
         };
         // The asyncify async→sync bridge (AsyncifyCtrl), shared by the GL and the
         // headless templates.  gl_js references it, so it is emitted FIRST.
+        let env_js = include_str!("../doc/loft-env.js");
         let asyncify_js =
             include_str!("../doc/loft-asyncify.js").replace("export { AsyncifyCtrl };", "");
         // loft#851 — the page's filesystem.  Emitted BEFORE gl_js, whose
@@ -9614,6 +9615,7 @@ fn main() {
 </head><body><pre id="out"></pre>
 <script>
 {asyncify_js}
+{env_js}
 {reader_js}
 {thread_js}
 {fs_js}
@@ -9738,6 +9740,7 @@ const imports={{loft_io:{{
 // exactly as before (par then runs sequentially, same results).
 loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
+  loftInstallEnv(instance, mem);
   // If the wasm was asyncify-instrumented (wasm-opt --asyncify present), drive it
   // through AsyncifyCtrl so store_load_url_trusted can suspend for an async
   // fetch().  Progress after the first suspend is EVENT-driven: each
@@ -9762,6 +9765,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
 <pre id="out"></pre>
 <script>
 {asyncify_js}
+{env_js}
 {reader_js}
 {thread_js}
 {fs_js}
@@ -9788,6 +9792,7 @@ for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
 // exactly as before (par then runs sequentially, same results).
 loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
+  loftInstallEnv(instance, mem);
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
   ctrl.assets=await decodeLoftAssets(ctrl.assets);

@@ -372,7 +372,7 @@ impl Drop for Store {
             // callback fires.  By design.
             if self.durable_meta_path.is_some() && !self.read_only {
                 if let Err(e) = self.flush_durable_sidecar() {
-                    eprintln!(
+                    crate::loft_eprintln!(
                         "store_durable: clean-close sidecar write failed: {e}; \
                          next open will treat the store as corrupt"
                     );
@@ -1501,7 +1501,7 @@ impl Store {
         // `compile.rs` const-store init, `native.rs` worker
         // store init) are visible too.
         if !self.read_only && crate::log_config::lock_trace_enabled() {
-            eprintln!("[locks] LOCK   origin={origin:?}");
+            crate::loft_eprintln!("[locks] LOCK   origin={origin:?}");
         }
         self.read_only = true;
         self.lock_origin = origin;
@@ -1511,7 +1511,7 @@ impl Store {
     /// on a const variable).
     pub fn unlock(&mut self) {
         if self.read_only && crate::log_config::lock_trace_enabled() {
-            eprintln!("[locks] UNLOCK origin-was={:?}", self.lock_origin);
+            crate::loft_eprintln!("[locks] UNLOCK origin-was={:?}", self.lock_origin);
         }
         self.read_only = false;
         self.lock_origin.clear();
@@ -1527,7 +1527,7 @@ impl Store {
     pub fn set_free_protected(&mut self, origin: impl Into<String>) {
         let origin = origin.into();
         if !self.free_protected && crate::log_config::lock_trace_enabled() {
-            eprintln!("[locks] FREE_PROTECT origin={origin:?}");
+            crate::loft_eprintln!("[locks] FREE_PROTECT origin={origin:?}");
         }
         self.free_protected = true;
         self.lock_origin = origin;
@@ -1536,7 +1536,7 @@ impl Store {
     /// @P290 — clear the call-bracket free-protection.
     pub fn clear_free_protected(&mut self) {
         if self.free_protected && crate::log_config::lock_trace_enabled() {
-            eprintln!("[locks] FREE_UNPROTECT origin-was={:?}", self.lock_origin);
+            crate::loft_eprintln!("[locks] FREE_UNPROTECT origin-was={:?}", self.lock_origin);
         }
         self.free_protected = false;
         // Clear lock_origin only if the hard read_only lock isn't also

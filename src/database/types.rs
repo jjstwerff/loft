@@ -42,7 +42,7 @@ pub(crate) const DBREF_BORROW: &str = "dbref_borrow";
 /// assertion instead of a thing to read.
 fn schema_trace(event: &str, name: &str, nr: u16) {
     if std::env::var_os("LOFT_TRACE_SCHEMA").is_some() {
-        eprintln!("[schema] {event} {name:?} -> {nr}");
+        crate::loft_eprintln!("[schema] {event} {name:?} -> {nr}");
     }
 }
 
@@ -72,7 +72,7 @@ fn mint_trace(kind: &str, name: &str, found: Option<u16>, len: usize) {
         .take(4)
         .map(str::trim)
         .collect();
-    eprintln!(
+    crate::loft_eprintln!(
         "[mint] {kind} {name:?} {what} len={len} <- {}",
         frames.join(" | ")
     );
@@ -571,7 +571,7 @@ impl Stores {
         if std::env::var("LOFT_TRACE_FINISH").is_ok()
             && self.types[t_nr].name.starts_with("__tuple<")
         {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[finish_type] ENTER t_nr={t_nr} name={} size_before={} groups_before={}",
                 self.types[t_nr].name,
                 self.types[t_nr].size,
@@ -716,7 +716,7 @@ impl Stores {
             self.types[t_nr].align = alignment;
         }
         if std::env::var("LOFT_TRACE_FINISH").is_ok() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[finish_type] t_nr={t_nr} name={} size={} align={} groups={}",
                 self.types[t_nr].name,
                 self.types[t_nr].size,
@@ -930,7 +930,7 @@ impl Stores {
         // `spatial<T[x,y]>`, and a tuple key field), and both times the symptom was a
         // collection read from the wrong store rather than anything naming the keys.
         if std::env::var_os("LOFT_TRACE_KEYS").is_some() && !self.types[t_nr].keys.is_empty() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[keys] t_nr={t_nr} {} -> {:?}",
                 self.types[t_nr].name,
                 self.types[t_nr]
@@ -1939,7 +1939,7 @@ impl Stores {
                 std::env::var_os("LOFT_STRICT_SCHEMA_IDS").is_none(),
                 "{msg}"
             );
-            eprintln!("loft: {msg}");
+            crate::loft_eprintln!("loft: {msg}");
             // One report is the diagnosis; the rest of the table is downstream
             // of the same shift and would only bury it.
             return;

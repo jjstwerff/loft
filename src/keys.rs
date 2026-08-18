@@ -64,14 +64,6 @@ fn seeded_hasher(seed: u64) -> SipHasher13 {
 // read the process environment; a browser page reads a table its host installs before the
 // program starts (see `install_page_env`).  Nothing else in this file spells `std::env`.
 
-/// True when this build is a browser page — `wasm32-unknown-unknown`, where `std::env` is
-/// a stub.  `wasm32-wasip2` has a real environment and is deliberately NOT included.
-macro_rules! page_build {
-    () => {
-        cfg!(all(target_arch = "wasm32", not(target_os = "wasi")))
-    };
-}
-
 /// Switch settings handed in by the host of a browser page, as `NAME=VALUE` pairs.
 /// Empty on every other target, where the process environment answers instead.
 static PAGE_ENV: OnceLock<Vec<(String, String)>> = OnceLock::new();
@@ -100,11 +92,14 @@ pub fn install_page_env(blob: &str) {
 /// The VALUE of a `LOFT_*` switch, or `None` when it is not set.
 #[must_use]
 pub fn env_value(name: &str) -> Option<String> {
-    if page_build!() {
-        return PAGE_ENV
-            .get()
-            .and_then(|kv| kv.iter().find(|(k, _)| k == name))
-            .map(|(_, v)| v.clone());
+    // An installed table wins, then the process environment.  One path rather than a
+    // `cfg!`-split pair: a page has no environment to fall through to, a hosted target
+    // never installs a table, and a single path is the only one this file's own tests
+    // can reach — a browser-only branch is a branch nothing here could ever run.
+    if let Some(kv) = PAGE_ENV.get()
+        && let Some((_, v)) = kv.iter().find(|(k, _)| k == name)
+    {
+        return Some(v.clone());
     }
     std::env::var(name).ok()
 }
@@ -113,10 +108,11 @@ pub fn env_value(name: &str) -> Option<String> {
 /// switch spelled `LOFT_X=` (empty value) still counts as armed.
 #[must_use]
 pub fn env_set(name: &str) -> bool {
-    if page_build!() {
-        return PAGE_ENV
-            .get()
-            .is_some_and(|kv| kv.iter().any(|(k, _)| k == name));
+    if PAGE_ENV
+        .get()
+        .is_some_and(|kv| kv.iter().any(|(k, _)| k == name))
+    {
+        return true;
     }
     std::env::var_os(name).is_some()
 }
@@ -160,7 +156,7 @@ fn fixed_seed() -> Option<u64> {
                 |hex| u64::from_str_radix(hex, 16).ok(),
             );
         if parsed.is_none() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "warning: LOFT_HASH_SEED={raw:?} is not a 64-bit number — hashing stays \
                  random, so a persisted store will NOT be byte-reproducible"
             );
@@ -1300,12 +1296,12 @@ pub fn strict_store_violation(
                  freed at pc={freed_pc}, {what} now at pc={now_pc}"
             )
         };
-        eprintln!(
+        crate::loft_eprintln!(
             "[strict-store] USE AFTER FREE ({what}) store #{store_nr} type={type_name} \
              rec={rec} pos={pos}\n  killed by the free of `{who}`\n{where_}"
         );
     } else if n == 20 {
-        eprintln!("[strict-store] ... further use-after-free reports suppressed");
+        crate::loft_eprintln!("[strict-store] ... further use-after-free reports suppressed");
     }
 }
 
@@ -1858,7 +1854,7 @@ pub fn max_ops() -> u64 {
         if let Ok(n) = v.trim().parse::<u64>() {
             n
         } else {
-            eprintln!(
+            crate::loft_eprintln!(
                 "loft: LOFT_MAX_OPS='{v}' is not a count (try 4000000000 or 0) — \
                  keeping the default {DEFAULT_MAX_OPS}"
             );

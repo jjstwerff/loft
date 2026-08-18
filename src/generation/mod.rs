@@ -2410,6 +2410,59 @@ extern crate loft;"
     /// world) and `init` is skipped — the parse already seeded it.  The leak
     /// check is also skipped live: the parked interpreter's machinery stores
     /// are not program leaks.
+    /// loft#950 — the channel a browser page arms a `LOFT_*` switch through.
+    ///
+    /// `std::env` on `wasm32-unknown-unknown` is a stub, so a page could set none of the
+    /// 47 switches `keys.rs` reads, and the store guard's own advice — *"run with
+    /// LOFT_STRICT_STORES=1 to name the free"* — named something the target cannot do.
+    /// Every instrument this issue needed had to be built twice for that reason.
+    ///
+    /// The module owns the buffer and the host fills it, the same shape the asyncify
+    /// region uses: the page writes `NAME=VALUE` lines from its query string and calls
+    /// `loft_env_commit(len)` BEFORE `loft_start`.  `keys.rs` memoizes each switch on
+    /// first read, so anything installed after the program starts would be ignored by
+    /// whichever switch had already been asked — committing before entry is what makes
+    /// the setting mean what it says.
+    ///
+    /// Deliberately NOT a generation-time bake.  Baking works (it is how
+    /// `LOFT_PROGRAM_RELATIVE` travels) but costs a full rebuild per setting, and a
+    /// rebuild per diagnostic is exactly what made the browser expensive to debug.
+    /// `index.html?LOFT_STRICT_STORES=1` costs a reload.
+    fn emit_page_env_region(w: &mut dyn Write) -> std::io::Result<()> {
+        writeln!(
+            w,
+            "\n// loft#950 — switch settings the host writes in before `loft_start`.\n\
+             const LOFT_ENV_CAP: usize = 4096;\n\
+             static mut LOFT_ENV_BUF: [u8; LOFT_ENV_CAP] = [0; LOFT_ENV_CAP];\n\
+             \n\
+             /// Where to write the `NAME=VALUE` lines.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_buf() -> u32 {{\n    \
+             (&raw const LOFT_ENV_BUF).cast::<u8>() as usize as u32\n\
+             }}\n\
+             \n\
+             /// How many bytes that buffer holds.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_cap() -> u32 {{\n    \
+             LOFT_ENV_CAP as u32\n\
+             }}\n\
+             \n\
+             /// Adopt the first `len` bytes as this program's switch settings.  A length\n\
+             /// past the buffer is clamped rather than refused: the host wrote what it\n\
+             /// wrote, and truncating costs a setting where trusting it costs memory.\n\
+             /// Invalid UTF-8 is ignored, so a mangled query string leaves the program\n\
+             /// running with no switches instead of not running.\n\
+             #[unsafe(no_mangle)]\n\
+             pub extern \"C\" fn loft_env_commit(len: u32) {{\n    \
+             let n = (len as usize).min(LOFT_ENV_CAP);\n    \
+             let bytes = unsafe {{ &(&raw const LOFT_ENV_BUF).cast::<[u8; LOFT_ENV_CAP]>().read()[..n] }};\n    \
+             if let Ok(text) = core::str::from_utf8(bytes) {{\n        \
+             loft::keys::install_page_env(text);\n    \
+             }}\n\
+             }}"
+        )
+    }
+
     /// loft#950 — reserve the asyncify save region INSIDE the module, and export where
     /// it is.
     ///
@@ -2494,6 +2547,7 @@ extern crate loft;"
     fn emit_wasm_start(&self, w: &mut dyn Write) -> std::io::Result<()> {
         let (prelude, args) = self.entry_call_extra_args();
         Self::emit_asyncify_region(w)?;
+        Self::emit_page_env_region(w)?;
         if self.emit_live {
             let name = self.debug_name.as_deref().unwrap_or("");
             let src = self.program_src.as_deref().unwrap_or("");

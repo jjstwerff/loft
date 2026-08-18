@@ -542,7 +542,7 @@ impl Stores {
         // `a += b` stride bug (rows strode by the 4-byte field-slot size
         // instead of the read path's clamped content size).
         if vadd_trace_enabled() {
-            eprintln!(
+            crate::loft_eprintln!(
                 "[vadd] db={db:?} o_db={o_db:?} known={} size={} linked={} parts={:?}",
                 known,
                 self.size(known),
@@ -562,7 +562,7 @@ impl Stores {
         // `Stores` has no `State`; the source location is the compile-time decision's job
         // (COPY_DIAGNOSTICS.md phase 2).
         if keys::copy_dump_enabled() {
-            eprintln!("[copy] vector-append elements={o_length}  tp={known}");
+            crate::loft_eprintln!("[copy] vector-append elements={o_length}  tp={known}");
         }
         // @P376 — when `known` is "linked" (multiple containers share this
         // content type), `vector<known>` was promoted to `Array(known)` in
