@@ -16,14 +16,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 89 tags across the ecosystem, with **Phase E under way**: `hex_form`
-(`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`) and
-`hex_way` (`@HXY-001..006`) are the first four of `loft-libs-world`'s twelve deferred
-packages to land. Writing them found a shipped parser that repaired seven malformed texts
-its own comment documents as refused, a seam-error number that reads exactly zero wherever
-a caller would naturally measure it, a documented cure for a wobbly eave that silently buys
-it by ponding, and an offset that put every **arc** on the far side of the way from its
-straights while remaining exactly `d` from the centreline.
+(loft#973). 98 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
+(`@HXY-001..006`) and `hex_shape` (`@HXS-001..009`) are the first five of
+`loft-libs-world`'s twelve deferred packages to land — the repo is now half tagged. Writing
+them found a shipped parser that repaired seven malformed texts its own comment documents as
+refused, a seam-error number that reads exactly zero wherever a caller would naturally
+measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
+that put every **arc** on the far side of the way from its straights while remaining exactly
+`d` from the centreline, and two of a package's own instruments reading *pass* on the exact
+failures they were built to catch.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -31,7 +33,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *6 tagged, 8 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *7 tagged, 7 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1020,7 +1022,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 4 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 5 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1138,12 +1140,66 @@ perfect result over an empty set. `@HXY-006` therefore asserts `adjacent_pairs(.
 before it measures anything. See [[absent-warning-is-not-a-pass]]: scoring on a channel
 that can be silently empty ranks the most broken cell best.
 
-**A method note worth keeping.** All four rows so far found their defect in the tag that
-had to demonstrate the package's most confidently stated promise — a claim that was
+**Row 5 `hex_shape` is DONE** (`@HXS-001..009`; *7 tagged, 7 deferred* — the repo is half
+tagged), and it moved the finding one level up: from *the code is wrong* to **the package's own
+INSTRUMENTS report pass on the exact failures they were built to catch.** Two of them, in
+different modules, found the same way — by running the measurement on inputs nobody had run it
+on.
+
+| instrument | built to catch | reads on correct/broken input |
+|---|---|---|
+| `wall_along_max` | the "picket comb" — edges marked ACROSS the wall instead of along it, `\|dot\| ~ 1` | **0.97 on a correct in-between wall.** Only 3 of its 25 edges are above 0.9, but the statistic is the MAX |
+| `set_connected` | a wall with a gap in it | **true on a ring with a cell removed** — a broken ring is still one connected chain, just not a loop |
+
+Neither is a bug in the function: `wall_along_max` measures the wobble correctly and
+`set_connected` answers connectivity correctly. What was wrong is that each was written up as
+*the* verdict. On the twelve EXACT headings the along test tops out at 0.5 or 0.866 and nothing
+reaches 0.9, so whoever calibrated it was right — and never ran it on the other twelve, where a
+shallow line genuinely has to cross the vertical edge between two cells of the same row and
+that edge's dot is `cos(13.9°)`. The verdict that holds for all 24 is the CHAIN property
+(`wall_chain_ends == 2`, `wall_chain_branches == 0`), exact and tolerance-free; for the ring it
+is `flood_outside` + `leak_count`, which on one cell removed from twenty-two reports the
+outside reaching **all twenty-seven** courtyard cells. Both comments now say which half is
+load-bearing, and `@HXS-004`/`@HXS-007` pin the contrast rather than the number.
+
+**The package's own thesis, made numeric.** Every primitive takes a CONTINUOUS parameter the
+lattice cannot represent continuously, so every answer is split — which is the row's brief and
+it held everywhere it was checked:
+
+- an arc's **centre** is exact; its **radius** is a grid. Over 0.5–4.5 world units there are
+  exactly FOUR admissible radii (shells 0, 12, 36, 48), and `arc_fill(…, 16, …)` draws shell 12
+  and reports 12 — the 16 is stored nowhere and nothing says it was discarded (`@HXS-001`).
+- a run's **line** is exact; **which end you called the start** is not — the field cannot store
+  an orientation, so `wall_read_run` returns `d` or `d + 12` with the other endpoint as anchor.
+  Writing `d = 0` reads back `12`, so the obvious round-trip assertion `read.d == d` fails on
+  the very first direction (`@HXS-005`).
+- twelve directions are **exact** and twelve are **1.1021° off**, and only three values of `N`
+  occur across all 24 with no pair commensurable — which is the integer reason `WALL_W` is a
+  world-unit constant and not a count of lattice rows (`@HXS-002`).
+- a legal run length depends on the **starting corner**: `wall_min_p` is 1 from one vertex of a
+  hex and 2 from the next, for the same direction (`@HXS-003`).
+- the twelve box angles are **two families of six** — 33 cells against 31, related by no exact
+  map (`@HXS-006`).
+
+**A stale number is a claim too, and one change left three.** Moving the in-between direction
+vector from `N = 21` to `N = 39` updated the design block that argued for it and left three
+downstream comments quoting the old consequences: the angle error as "~4.11 degrees" (measured
+1.1021), and the δ = 0 class as "the N=21 in-between" (measured 39). All three are one screen
+apart from the block that superseded them. The lesson is narrow and repeatable: **when a value
+changes, grep for its CONSEQUENCES, not for the value** — 4.11 does not contain the string 21.
+
+Coverage went from 4 of 83 public functions entered to **all 83**, which is what pushed the
+last two examples (`@HXS-008` the mouse's three stacked snaps, `@HXS-009` the door as an
+annotation) into existence: they were not on the plan's brief and the coverage hole is what
+named them.
+
+**A method note worth keeping.** All five rows so far found their defect in the tag that had to
+demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
-priced nothing (`hex_roof`), and one the code simply did not implement (`hex_way`). That is
-not luck: a worked example is the first thing that ever evaluates such a sentence against
-the code, and the sentences most worth working are the ones written with the most certainty.
+priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), and two
+CHECKS that answered *pass* on what they were written to fail (`hex_shape`). That is not
+luck: a worked example is the first thing that ever evaluates such a sentence against the
+code, and the sentences most worth working are the ones written with the most certainty.
 
 **And a second note, about what these packages have in common.** Every finding so far is a
 call that produces a plausible wrong answer while passing every cheap check — a parse that
@@ -1159,6 +1215,14 @@ guarantee is the one least able to catch its own violation, because everyone —
 tests and the consumer's gate alike — checks the guarantee and nobody checks what the
 guarantee is silent about. Equidistance does not pick a side.
 
+**And row 5 turns it on the checks themselves.** A gate is calibrated on the inputs its author
+had, and its threshold silently inherits that sample: `wall_along_max` separates a chain from a
+comb beautifully on the twelve headings anyone tried it on, and not at all on the twelve they
+did not. So the question to ask of any instrument is **"what is the widest input it was
+calibrated against, and what does it read just outside that?"** — which is a sweep, and it is
+the same sweep rows 3 and 4 needed for a parameter. An instrument is a claim with a number
+attached, and it decays exactly like the prose does.
+
 Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
 and a signature carries least; every row below is a package that owes an example.
 
@@ -1168,7 +1232,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~2~~ | ~~`hex_place`~~ | 17 | **DONE** — `@HXP-001..006`. The shared edge, order-freeness, levels, seating, the seam error and arbitration; `@HXP-001` and `@HXG-003` now name each other | — |
 | ~~3~~ | ~~`hex_roof`~~ | 15 | **DONE** — `@HXR-001..006`. The distance-source taxonomy, and the eave/drainage trade-off a quantised footprint forces on a point source | — |
 | ~~4~~ | ~~`hex_way`~~ | 20 | **DONE** — `@HXY-001..006`. Found and fixed an offset that put every arc on the far side of the way (0.1.1), and measured the quantisation floor the header rounds off: 1.5 down a row, 0.866 down a column | — |
-| 5 | `hex_shape` | 68 | from a run of slots marked ROUNDED, are centre and radius recoverable **exactly** (R1) or only as a **fit** (R2)? The file says the answer is split, and a split answer is precisely what a signature cannot carry | nothing |
+| ~~5~~ | ~~`hex_shape`~~ | 68 | **DONE** — `@HXS-001..009`. The split answer confirmed on all three primitives, and two of the package's own instruments found reading *pass* on what they were built to fail. Coverage 4/83 → 83/83 | — |
 | 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
 | 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
 | 8 | `hex_fit` | 27 | a stencil description that carries linework, and a **round trip that notices** when it does not survive. Also inherits row 1's finding: `draft_read` states the same strictness doctrine over the same `word_int(…) ?? 0` helper, so its `wall` line has the same gap | nothing — row 1 landed |
@@ -1180,9 +1244,12 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. With rows 1 and 4 landed, rows 8 and 9 are unblocked too,
-so the only rows still gated on a decision are 6, 7, 10, 11 and 12 — and **row 5
-(`hex_shape`) is next**, being the last unblocked one that needs nothing chosen.
+the only one waiting on a person. **All five unblocked rows are now done**, so every
+remaining row needs something chosen: a fixture (6 `hex_terrain`, 7 `hex_body`), a scoping
+decision (10 `hex_field`, 11 `hex_recover`), or an owner's API call (12 `hex_edge`) — except
+**rows 8 (`hex_fit`) and 9 (`hex_draw`), which row 1 unblocked and which are therefore next**.
+Row 8 also inherits row 1's finding, already written down: `draft_read` states the same
+strictness doctrine over the same `word_int(…) ?? 0` helper.
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1192,7 +1259,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *6 tagged, 8 deferred*.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *7 tagged, 7 deferred* — half way.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
