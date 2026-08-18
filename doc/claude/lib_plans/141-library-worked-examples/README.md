@@ -16,16 +16,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
 `-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 98 tags across the ecosystem, with **Phase E under way**: `hex_form`
+(loft#973). 106 tags across the ecosystem, with **Phase E under way**: `hex_form`
 (`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
-(`@HXY-001..006`) and `hex_shape` (`@HXS-001..009`) are the first five of
-`loft-libs-world`'s twelve deferred packages to land — the repo is now half tagged. Writing
+(`@HXY-001..006`), `hex_shape` (`@HXS-001..009`) and `hex_fit` (`@HXI-001..008`) are the
+first six of `loft-libs-world`'s twelve deferred packages to land. Writing
 them found a shipped parser that repaired seven malformed texts its own comment documents as
 refused, a seam-error number that reads exactly zero wherever a caller would naturally
 measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
 that put every **arc** on the far side of the way from its straights while remaining exactly
-`d` from the centreline, and two of a package's own instruments reading *pass* on the exact
-failures they were built to catch.
+`d` from the centreline, two of a package's own instruments reading *pass* on the exact
+failures they were built to catch, and a wall with two legal names of which only one
+survives the round trip the whole text format exists for.
 
 **This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
 packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
@@ -33,7 +34,7 @@ of the repo — and a verdict file beside the code is a good home for a *reason*
 poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
 can actually be done, and the plan stays open until
 `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-Now at *7 tagged, 7 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
+Now at *8 tagged, 6 deferred*. Also open: Phase C's two follow-ups and Phase C2 (the
 feature catalogue, `FTR`, unstarted).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
@@ -1006,7 +1007,7 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 2 tagged (`hex_grid`, `hex_world`), **12 deferred**, 0 todo — the twelve are Phase E below |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — 8 tagged, **6 deferred**, 0 todo — the remaining six are Phase E below |
 
 All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
 carries the six registry rows **and** the fix for the gate bug that reddens every
@@ -1022,7 +1023,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 5 of 12 DONE
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — OPEN, 6 of 12 DONE
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
@@ -1051,7 +1052,8 @@ retired a test that could not fail — the corner-invariance assertion compared
 worked example makes it a test, and the claim is likeliest to be false exactly where it
 is most confidently written. `hex_fit`'s `draft_read` (row 8) states the same doctrine
 over the same `word_int(…) ?? 0` helper and carries the same gap in its `wall` line —
-so the finding is a queue item, not a one-off.
+so the finding was filed as a queue item rather than a one-off, and **row 8 collected it**:
+ten repairs there against seven here, one of them a wall pointing somewhere else.
 
 **Row 2 `hex_place` is DONE** (`@HXP-001..006`, acronym registered; *4 tagged, 10
 deferred*), and it produced the same shape of finding from the opposite direction —
@@ -1193,13 +1195,71 @@ last two examples (`@HXS-008` the mouse's three stacked snaps, `@HXS-009` the do
 annotation) into existence: they were not on the plan's brief and the coverage hole is what
 named them.
 
-**A method note worth keeping.** All five rows so far found their defect in the tag that had to
+**Row 8 `hex_fit` is DONE** (`@HXI-001..008`; *8 tagged, 6 deferred*) — the first row taken
+out of the table's ORDER, because row 1 unblocked it and it inherited a filed finding. It
+repaid that twice over: the finding arrived exactly where row 1 said it would, and a second
+one was waiting underneath it that nothing had predicted.
+
+**The predicted one first.** `draft_read` states row 1's doctrine — *"the reader refuses
+anything else rather than repairing it"* — over the same `word_int(…) ?? 0` helper. A
+nineteen-cell acceptance matrix admitted **ten** texts `draft_write` cannot emit and re-wrote
+each of them differently. Six were spelling (a trailing space, an extra field, `+3`, `003`, an
+empty field from a double space, a `wall` line placed between two `side` lines). The other
+was not: `wall d x a -6 b 9 p 1` parsed as `d 0` — where row 1's `len x` was *a side that is
+not there*, this is **a wall pointing somewhere else**, and `a x` moves it instead. Same
+chokepoint, same re-spelling identity, plus the two structural rules the writer obeys (nine
+fields; the wall line LAST). A pure narrowing: `d 99` and `p -1` still read, because a
+spelling gate is not a doorstep — which became `@HXI-004`.
+
+**And the one nothing predicted, which is the row's real finding.** The format's premise is
+that a `diff` means *the model changed*, and that needs every model to have exactly ONE text.
+The form half has had that since `form_canon`. The RUN half never did, and a run has exactly
+two spellings — `(d, A, p)` and `(d + 12, B, p)` — because A-to-B and B-to-A mark the same
+edges and the field stores no orientation. Measured over all 24 directions, both spellings of
+each wall:
+
+| measurement | result |
+|---|---|
+| edges the two spellings differ in | **0** of 48 |
+| spellings of a wall that survive the text round trip | exactly **one**, 24 of 24 walls — never both, never neither |
+| `draft_write` == `draft_rebuild_text` | 24 of 48 |
+| the doorstep admits it | 48 of 48 |
+
+So an author who wrote the wall from its other end got *the model changed* out of a byte diff
+on a model that had not changed at all — and by law C1's own wording (*fits? must agree with
+whether the model round-trips; a FALSE ACCEPT is the dangerous direction*) **half of every
+legal run is a false accept**. The cure is the canon the form half already had:
+`draft_canon` / `draft_canon_text`, with the canonical spelling **read off the field** — it is
+what the reader answers, so it cannot drift from the reader the way a rule computed beside it
+could. All 48 spellings now canonicalise to one text, stable across two chunk geometries.
+
+**What hid it is worth more than the bug.** The workshop's own round-trip gate covers this
+exact call and is green, because it builds its expected text from `wall_read_run`'s answer
+rather than from what an author would write — a workaround for the defect, written into the
+gate, in the one place that would otherwise have caught it. Row 5 found instruments calibrated
+on a sample that excluded their failure cases; this is the next form of the same thing: **a
+gate that has already routed around the defect it was built to find.** The question to ask of
+a passing gate is therefore not only *what does it measure* but **"what does it CONSTRUCT
+rather than take from the caller?"** — every such step is a place the caller's mistake cannot
+reach.
+
+A third, smaller finding: `arc_fit_n`'s comment says the author "sees both candidates' cost",
+and the API carried only one of them. `arc_snap_n` / `arc_snap_residual` supply the other —
+what an unrefused radius actually draws — validated against `arc_fill` over every radius 0..64
+rather than against the shell formula it would otherwise share with `arc_fits`. The prices are
+not close: `N = 35` is offered 36 at a residual of 1 and would silently have drawn **12**, an
+error of 23, because 12 and 36 are neighbouring shells. hex_fit 0.1.1, not republished.
+Coverage 8 of 30 functions entered → all 37.
+
+**A method note worth keeping.** All six rows so far found their defect in the tag that had to
 demonstrate the package's most confidently stated promise — a claim that was
 false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
-priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), and two
-CHECKS that answered *pass* on what they were written to fail (`hex_shape`). That is not
-luck: a worked example is the first thing that ever evaluates such a sentence against the
-code, and the sentences most worth working are the ones written with the most certainty.
+priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
+CHECKS that answered *pass* on what they were written to fail (`hex_shape`), and a
+premise the package enforced on one half of its own text and not the other (`hex_fit`).
+That is not luck: a worked example is the first thing that ever evaluates such a sentence
+against the code, and the sentences most worth working are the ones written with the most
+certainty.
 
 **And a second note, about what these packages have in common.** Every finding so far is a
 call that produces a plausible wrong answer while passing every cheap check — a parse that
@@ -1235,7 +1295,7 @@ and a signature carries least; every row below is a package that owes an example
 | ~~5~~ | ~~`hex_shape`~~ | 68 | **DONE** — `@HXS-001..009`. The split answer confirmed on all three primitives, and two of the package's own instruments found reading *pass* on what they were built to fail. Coverage 4/83 → 83/83 | — |
 | 6 | `hex_terrain` | 20 | the **scale boundary**: a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine. The trap is a coordinate crossing it — the third lattice in a repo that already has two (`@HXG-001`, `@HXW-002`) | a terrain fixture small enough to assert against |
 | 7 | `hex_body` | 28 | a body is a **RIG** — bones and joint limits — never a pose; the pose is COMPUTED from the current rig | a rig small enough to hand-compute a world frame for; 0.3.0 made the frame checkable |
-| 8 | `hex_fit` | 27 | a stencil description that carries linework, and a **round trip that notices** when it does not survive. Also inherits row 1's finding: `draft_read` states the same strictness doctrine over the same `word_int(…) ?? 0` helper, so its `wall` line has the same gap | nothing — row 1 landed |
+| ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
 | 9 | `hex_draw` | 23 | the inverse read: a wall's **analytic surface** recovered as the exact average of its stored edges, so a wall renders as ONE flat quad rather than a strip of them | follows `hex_fit` (8) and `hex_form` (1) — needs a drawn `Plan` |
 | 10 | `hex_field` | 82 | the **exactness** guarantee: it reproduces the Python oracle's golden JSON byte for byte, which is possible only because the whole representation is INTEGER | choosing which golden fixture is small enough to read inside a test |
 | 11 | `hex_recover` | 33 | law **F** is injectivity, and its coverage is a MEASUREMENT over an admitted space | deciding what a fast, readable subset of that census looks like — the full one is a long-running test, not a teaching one |
@@ -1244,12 +1304,11 @@ and a signature carries least; every row below is a package that owes an example
 **The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
 and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
 be written first; 10–11 need a scoping decision about what a readable test is; 12 is
-the only one waiting on a person. **All five unblocked rows are now done**, so every
-remaining row needs something chosen: a fixture (6 `hex_terrain`, 7 `hex_body`), a scoping
-decision (10 `hex_field`, 11 `hex_recover`), or an owner's API call (12 `hex_edge`) — except
-**rows 8 (`hex_fit`) and 9 (`hex_draw`), which row 1 unblocked and which are therefore next**.
-Row 8 also inherits row 1's finding, already written down: `draft_read` states the same
-strictness doctrine over the same `word_int(…) ?? 0` helper.
+the only one waiting on a person. **Rows 1–5 and 8 are done**, so **row 9 (`hex_draw`)
+is next** — it needs a drawn `Plan`, which rows 1 and 8 have now both supplied. After
+that every remaining row needs something chosen: a fixture (6 `hex_terrain`,
+7 `hex_body`), a scoping decision (10 `hex_field`, 11 `hex_recover`), or an owner's API
+call (12 `hex_edge`).
 
 **Two constraints worth keeping visible.** `hex_field` alone is 82 public functions —
 larger than most repos in this ecosystem — so it is a phase, not a row, and splitting
@@ -1259,7 +1318,7 @@ unmade API decision, writing the example anyway would pin the wrong behaviour in
 test.
 
 **Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
-*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *7 tagged, 7 deferred* — half way.
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. Now at *8 tagged, 6 deferred*.
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 
