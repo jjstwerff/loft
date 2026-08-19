@@ -1909,10 +1909,14 @@ inserts-or-replaces, and `xs[x, y] = null` removes — the same three roles
 `h[k]` has on a `hash`.  Note the point subscript takes the coordinates as
 separate subscripts (`xs[3, 6]`), where the range forms below parenthesise
 them.  Proximity queries use range-slice
-syntax instead of new keywords or methods: `xs[(x,y)..]` (open outward walk,
-caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]`
-(bounding box — the raw Morton-code interval, a superset of the geometric
-box).  See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
+syntax instead of new keywords or methods: `xs[(x1,y1)..(x2,y2)]` is the
+bounding box and gives exactly what is inside it (loft#800), while
+`xs[(x,y)..]` and `xs[(x,y)..:n]` walk ONWARD along the collection's Morton
+order from that point — a tail, not a circle, so a record just behind the
+query is not returned however close it is, and `..:n` answers fewer than `n`
+near the end of the curve (loft#1002).  Reach for a symmetric box,
+`xs[(x-r, y-r)..(x+r, y+r)]`, when the answer must cover every direction.
+See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
 for the full syntax table.
 
 **`trie<T[field]>` keys on ONE text field** and shares the same radix tree as

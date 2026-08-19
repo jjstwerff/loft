@@ -372,18 +372,29 @@ coordinate key fields (@PLN48):
 | `m = xs[x, y]` | Look up the record at exactly that point; `null` when nothing sits there. Note the coordinates are separate subscripts (`xs[3, 6]`), not the parenthesised pair the range forms use. |
 | `xs[x, y] = mob` | Insert-or-replace at that point (the key comes from `mob`'s own coordinate fields, as for `hash`/`sorted`/`index`). |
 | `xs[x, y] = null` | Remove the record at that point; a no-op when the point is empty. |
-| `xs[(x,y)..]` | Open outward walk from a point; caller `break`s to stop. |
+| `xs[(x,y)..]` | Walk ONWARD along the collection's Morton order from that point; caller `break`s to stop. |
 | `xs[(x,y)..:n]` | Same, capped at `n` records. |
-| `xs[(x1,y1)..(x2,y2)]` | Bounding-box range. |
+| `xs[(x1,y1)..(x2,y2)]` | Bounding-box range — exactly what is inside the box. |
 
 There are no `.near`/`.within`/`.nearest` methods — proximity is ordinary
-range slicing. All three slice forms are the raw Morton-code interval: a
-bounding box is a *superset* of the geometric box (Z-order threads through
-codes outside it, same as any keyed range slice being the raw key range) —
-filter or `break` inside the loop for an exact shape. A slice is a
-`for`-loop iterator, not a value, same as other keyed range slices. See
-[DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers) for
-the implementation.
+range slicing. The BOX form gives exactly the records inside the box and
+nothing outside it, in the collection's own order (loft#800 — it used to
+answer the raw code interval between the corners, a strict superset, because
+Z-order threads out of the box and back). A corner-swapped axis names the
+same box.
+
+The two OPEN forms are the Morton **tail**: they yield only records at or
+after the query point in the collection's order, so what you get depends on
+where that point sits in the curve, and a record just BEHIND it is not
+returned however close it is. `..:n` therefore under-delivers near the end of
+the curve — over five records it answers 3, 3, 3, 2, 1, 0 as the query moves
+along — and a query past every record answers nothing (loft#1002). For a
+neighbourhood in every direction use a symmetric box, `xs[(x-r, y-r)..(x+r,
+y+r)]`.
+
+A slice is a `for`-loop iterator, not a value, same as other keyed range
+slices. See [DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers)
+for the implementation.
 
 A text key is refused here — `spatial<Word[w]>` names `trie<Word[w]>` instead
 (loft#799).  Before that, it compiled and then answered `null` for a key just

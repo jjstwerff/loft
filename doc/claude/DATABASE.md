@@ -1224,10 +1224,16 @@ Supported operations, all working on both backends:
 - **Length**: `xs.len()` — O(1), reads the tree's cached length word.
 - **Range slices** — the language surface for proximity queries (no
   `.near`/`.within`/`.nearest` methods; spatial reuses ordinary slicing):
-  `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped
-  at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box). Slices carry up to 3 axes.
-  The two OPEN forms are the raw Morton walk onward from a corner — that is what
-  makes `..:n` a proximity query, and filtering them would be wrong. The BOX form
+  `xs[(x,y)..]` (onward walk along the collection's order, caller `break`s),
+  `xs[(x,y)..:n]` (capped at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box).
+  Slices carry up to 3 axes.
+  The two OPEN forms are the raw Morton walk onward from a corner, and filtering
+  them would be wrong — but *onward* is the whole of it: they are a TAIL, so a
+  record one code behind the query never appears and `..:n` answers fewer than
+  `n` near the end of the curve (measured 3, 3, 3, 2, 1, 0 over five records as
+  the query moves along; a query past every record answers nothing). The
+  two-cursor walk that would answer *outward* exists — `spatial::near`,
+  `src/spatial.rs` — and no loft program can reach it (loft#1002). The BOX form
   is the geometric box exactly: it walks only the box, seeking over the runs
   Z-order threads outside it (@PLN136, `radix_db::box_walk`), where it used to
   read the whole code interval between the corners and filter afterwards

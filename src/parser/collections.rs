@@ -2288,10 +2288,12 @@ use #count instead"
                 } else {
                     "n_hash_sorted"
                 };
-                // @PLN48 S3 — `for m in xs.within(…)`: the `.within` intercept already
-                // rewrote `expr` to an `n_spatial_within(…)` call that BUILDS the
-                // ordered scratch.  Use it directly — do not wrap it in n_radix_sorted
-                // (which would walk the scratch as if it were a tree).
+                // @PLN48 S3 — a spatial range slice (`xs[(x,y)..]`, `xs[(x,y)..:n]`,
+                // `xs[(x1,y1)..(x2,y2)]`) and a trie prefix slice have ALREADY been
+                // rewritten to a call that BUILDS the ordered scratch.  Use it directly
+                // — do not wrap it in n_radix_sorted, which would walk the scratch as
+                // if it were a tree.  (There is no `.within` / `.near` / `.nearest`
+                // method: proximity is ordinary range slicing.)
                 let already_scratch = matches!(
                     expr.unspan(),
                     Value::Call(d, _) if matches!(self.data.def(*d).name(), "n_spatial_range" | "n_trie_prefix")
