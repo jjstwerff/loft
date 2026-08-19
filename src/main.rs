@@ -10073,6 +10073,14 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     }
                     test_fns.push((d_nr, def.name.clone()));
                 }
+                // loft#1010 — same rule as the CLI runner (`test_runner.rs`): a file that
+                // names any `test_*` has said which functions are tests, so a helper with
+                // no arguments is not one.  Kept in step with that site deliberately — a
+                // generated entry point that runs a different SET than the interpreter is
+                // a backend divergence the suite reads as a wrong answer.
+                if test_fns.iter().any(|(_, n)| n.starts_with("n_test_")) {
+                    test_fns.retain(|(_, n)| n.starts_with("n_test_"));
+                }
                 if !test_fns.is_empty() {
                     let _ = writeln!(f, "\nfn main() {{");
                     // P199 — wrap Stores in UnsafeCell so the native ABI

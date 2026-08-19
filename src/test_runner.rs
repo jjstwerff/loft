@@ -1262,6 +1262,27 @@ pub(crate) fn run_tests(
                 test_fns.push((d_nr, user_name.to_string()));
             }
 
+            // loft#1010 — when the file names its tests, arity stops deciding.  Every
+            // zero-parameter function used to be an entry point, so a `setup` helper ran
+            // (and its `assert` could fail the suite), a `main` ran alongside the tests
+            // with whatever it prints or writes, and the total counted both.  A parameter
+            // was the only way to say "not a test", which is not something a reader would
+            // guess.
+            //
+            // A file that declares at least one `test_*` has said which functions are
+            // tests, so those are the whole set — @F89's rule, and what every runner one
+            // language over does.  A file that declares NONE keeps arity: that is the
+            // demonstration/script shape (1785 files in this corpus against 216 naming
+            // `test_*`), and it is the only reason `--tests` can be pointed at a plain
+            // program at all.
+            //
+            // Deliberately NOT the wrap harness's rule ("if `main` exists, only `main`
+            // runs") — see TESTING.md § the two runners.  That one answers a different
+            // question: the harness drives whole SCRIPTS, where `main` is the program.
+            if test_fns.iter().any(|(_, n)| n.starts_with("test_")) {
+                test_fns.retain(|(_, n)| n.starts_with("test_"));
+            }
+
             // Apply function name filter (from "file.loft::name" syntax).
             if let Some(ref filter) = fn_filter {
                 test_fns.retain(|(_, name)| filter.iter().any(|f| name == f));
@@ -1346,7 +1367,22 @@ pub(crate) fn run_tests(
                     // Generate Rust source.
                     let end_def = native_data.definitions();
                     let main_nr = native_data.def_nr("n_main");
-                    let has_main = main_nr < end_def && native_data.def(main_nr).name == "n_main";
+                    // loft#1010 — the file's own `main` is the crate's entry point only when
+                    // this run means to CALL it.  It used to be enough that `n_main` existed:
+                    // the generated binary then ran `main` and nothing else, exited 0, and the
+                    // harness reported every `test_*` as passed WITHOUT running one.  A test
+                    // asserting `1 == 2` beside a `main` was green on `--native` and red on the
+                    // interpreter — a false green, which is the one failure mode a test runner
+                    // may not have.
+                    //
+                    // `native_fns` is the authority on what this run calls (loft#1010 narrows it
+                    // to `test_*` whenever the file names any).  When `main` is not in it, the
+                    // harness supplies the crate's `main` below and the generator's own bootstrap
+                    // is suppressed — the path #621 already built for a package whose `src/`
+                    // entry also carries an `n_main`.
+                    let has_main = main_nr < end_def
+                        && native_data.def(main_nr).name == "n_main"
+                        && native_fns.iter().any(|(_, n)| n == "main");
                     let entry_defs: Vec<u32> = if has_main {
                         vec![main_nr]
                     } else {
