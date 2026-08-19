@@ -308,7 +308,8 @@ with a message that says so.
 
 | Function | Description |
 |----------|-------------|
-| `sum_of(v: vector<integer>) -> integer` | Sum of all elements; returns 0 for an empty vector. |
+| `sum<T: Addable>(v: vector<T>, init: T? = null) -> T` | Sum of all elements. `init` is the identity to start from; leave it out and the element type's own zero is used (`0`, `0.0`, `""`). |
+| `sum_of(v: vector<integer>) -> integer` | Superseded by `sum` — kept working. Sum of all elements; returns 0 for an empty vector. |
 | `min_of<T: Ordered>(v: vector<T>) -> T?` | Smallest element, or **null** when the vector is empty (the type is honest about the empty case — @PLN102). |
 | `max_of<T: Ordered>(v: vector<T>) -> T?` | Largest element, or **null** when the vector is empty (@PLN102). |
 

@@ -2084,6 +2084,44 @@ impl Parser {
                 nc
             }
         };
+        // loft#1013 — a CALL default needs an owner when the RESULT is a BORROW.
+        //
+        // `x = v[i] ?? mk()` types the result from the SUBJECT, which names the vector
+        // (`ref(S)["v"]`), so the consumer reads `x` as a borrow and frees nothing.  On
+        // the MISS path the value is a store `mk()` freshly allocated and handed back,
+        // owned by no one: one leaked record per miss, unbounded in a loop.  A struct
+        // LITERAL default was always clean for the opposite reason — `parse_object`
+        // allocates it into a work-ref this frame already frees — and the compiler's
+        // refusal of a struct-valued constant prescribes the CALL spelling, so the
+        // leaking form is the one it tells you to write.
+        //
+        // The buffer to bind is the one the call ALREADY carries: a heap-returning
+        // callee is given a hidden `__ref_N` destination the caller mints and frees
+        // (`add_defaults`), and the only thing missing is capturing what the call
+        // answered into it.  Reusing it keeps ONE owner and ONE free — a freshly minted
+        // second work-ref would double-free the callee that DOES deliver through its
+        // buffer.
+        //
+        // Only when the result BORROWS: an owned subject makes the result owned and the
+        // consumer's own free claims the store.  And only for a callee that does not
+        // return a borrowed VIEW of its arguments, which nothing here may free.
+        if !self.first_pass
+            && matches!(result_type.base(), Type::Reference(_, _))
+            && !result_type.depend().is_empty()
+            && self.is_struct_returning_call(&rhs)
+            && let Value::Call(d_nr, args) = rhs.unspan()
+            && !self.data.def(*d_nr).returns_borrowed_view()
+            && let Some(buf) = args.iter().find_map(|a| match a.unspan() {
+                Value::Var(w) if self.vars.is_caller_hidden_buf(*w) => Some(*w),
+                _ => None,
+            })
+        {
+            rhs = v_block(
+                vec![v_set(buf, rhs.clone()), Value::Var(buf)],
+                result_type.clone(),
+                "ncc-default-owner",
+            );
+        }
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
             let mut lhs = code.clone();
@@ -2367,6 +2405,25 @@ impl Parser {
                 let t = self.emit_variant_value(*enum_nr, &first, &mut v);
                 Some((v, t))
             }
+            // A TYPE VARIABLE has no default of its own.  `construct_default` is a
+            // function of the CONCRETE type (types.md `(D-Scalar)` … `(D-Rec)`), and
+            // inside a template `T` is an attribute-less placeholder STRUCT — which the
+            // record arm below defaults, perfectly happily, to an empty record of the
+            // placeholder's own store type.  That is what shipped: `g<T>(v, a: T? = null)
+            // { a? }` allocated a `__typevar_T` record, leaked it, and read it back as
+            // whatever the instantiation's type is — `34359738369` for `integer`, a
+            // denormal for `float`, a SIGSEGV for `text`.
+            //
+            // So mark the site instead and leave it to the monomorph, where `T` is
+            // concrete and `has_default` is decidable
+            // ([`Parser::rewrite_generic_type_defaults`]).  The placeholder record is
+            // still built underneath, because a template's IR is type-checked and
+            // slot-allocated even though it never runs (loft#1016).
+            Type::Reference(d_nr, _) if self.data.is_type_var_placeholder(*d_nr) => {
+                let name = self.data.def(*d_nr).name().to_string();
+                let (v, t) = self.subparse_default(&format!("{name} {{}}"), tp);
+                Some((v_block(vec![v], t.clone(), Self::TV_DEFAULT_BLOCK), t))
+            }
             // A record defaults to `S{}` — every field defaulted, exactly the value a
             // bare `S{}` literal builds (`has_default` has already verified each field
             // has a default).  Parsed from the synthetic `S {}` source so it reuses
@@ -2389,7 +2446,7 @@ impl Parser {
     /// reuses `parse_object`'s construction AND its work-ref ownership / freeing.
     /// The parse runs in the SAME function context (only the lexer is swapped), so
     /// its work-refs, types and pass state are all correct; `hint` types the parse.
-    fn subparse_default(&mut self, src: &str, hint: &Type) -> (Value, Type) {
+    pub(crate) fn subparse_default(&mut self, src: &str, hint: &Type) -> (Value, Type) {
         let saved = std::mem::take(&mut self.lexer);
         self.lexer.parse_string(&format!("{src}\n"), "<x?-default>");
         let mut rhs = Value::Null;

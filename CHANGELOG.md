@@ -37,7 +37,65 @@ f();                  // was 65535 on the interpreter — now 0
 `--native` compiling the program at all. Passing the argument explicitly, and the same thing
 written as a local, were always correct — it was only the omitted-default path.
 
-`character?` still has this problem and is tracked separately.
+`character?` had two problems of its own, now fixed with it — see below.
+
+### An omitted `character?` argument, and a `character?` discharge on `--native`
+
+`character`'s null is codepoint 0 — the same `'\0'` its default is. Three places in loft agreed
+on that and two did not, so `a == null` on an omitted `character? = null` answered `true` on the
+interpreter and `false` on `--native`:
+
+```loft
+fn f(a: character? = null) -> boolean { a == null }
+f();                  // was false on --native — now true on both
+```
+
+Separately, discharging one with `?` would not compile on `--native` at all — in any form,
+including inside a comparison:
+
+```loft
+fn g(a: character? = null) -> boolean { (a?) == '\0' }
+```
+
+Note the one thing that has NOT changed: a `character` holding `'\0'` reads as null, because
+that codepoint IS the reserved sentinel. `'\0' as integer` therefore answers `null` rather than
+`0`, on both backends — the documented cost of storing the null inside the value.
+
+### A generic `T? = null` parameter you leave out gives you `T`'s zero
+
+The same shape as the first entry, once the type is a type variable:
+
+```loft
+pub fn g<T>(v: vector<T>, a: T? = null) -> T { a? }
+g([1]);               // was 34359738369 — now 0
+g([1.5]);             // was a denormal  — now 0.0
+g(["q"]);             // was a crash     — now ""
+```
+
+A record `T` now gets its own field defaults, where before it got an empty record of the type
+VARIABLE — a value of no type at all, which also leaked.
+
+### `sum(v)` — the identity is optional now
+
+```loft
+sum([10, 20, 12])      // 42   — the element type's own zero starts it
+sum([10, 20, 12], 0)   // 42   — unchanged
+sum([1.5, 2.5])        // 4.0  — and for float that zero is 0.0
+```
+
+This is also what makes `loft fix` able to apply the one rewrite it offers on `sum_of`:
+`sum_of(v)` becomes `sum(v)`, and the fix now verifies instead of being rejected for a missing
+argument. Every existing `sum(v, init)` call is unchanged.
+
+### A `??` default that calls a function no longer leaks
+
+```loft
+m = v[i] ?? mk();     // one leaked record per index MISS, unbounded in a loop
+```
+
+A struct **literal** default was always fine, and the compiler's refusal of a struct-valued
+constant points you at the function spelling — so the leaking form was the recommended one.
+Fixed for both backends; the hit path and the literal default are unchanged.
 
 ### `loft fix` can repair a text slice that stops short
 

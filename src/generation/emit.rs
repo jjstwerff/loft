@@ -11,8 +11,8 @@ use std::io::Write;
 
 use super::text::count_format_ops;
 use super::{
-    Output, block_needs_i64_widen, block_tail_cast, default_native_value, narrow_int_cast,
-    rust_type, sanitize,
+    Output, block_needs_i64_widen, block_tail_cast, default_native_value, default_native_value_in,
+    narrow_int_cast, rust_type, sanitize,
 };
 
 impl Output<'_> {
@@ -1248,7 +1248,15 @@ impl Output<'_> {
         match tp {
             // @PLN25 slice (b): `Optional(τ)`'s null is its base's sentinel (same storage).
             Type::Optional(inner) => Self::write_typed_null_in(w, inner, storage),
-            Type::Character => write!(w, "i32::MIN"),
+            // types.md pins `Char`'s in-band sentinel at CODEPOINT 0 — the same
+            // `'\0'` that `op_conv_bool_from_character` tests for and that the
+            // interpreter's `OpConvCharacterFromNull` pushes.  `i32::MIN` was a
+            // fourth spelling nothing else recognised, so `a == null` on an
+            // omitted `character? = null` answered FALSE here and `true` on the
+            // interpreter; worse, `ops::to_char` reaches it via
+            // `from_u32_unchecked`, for which `0x8000_0000` is undefined
+            // behaviour (loft#1014).
+            Type::Character => write!(w, "0"),
             Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
@@ -1518,7 +1526,7 @@ impl Output<'_> {
             if f_vars.contains(&v) && !self.declared.contains(&v) {
                 let name = sanitize(variables.name(v));
                 let tp_str = rust_type(variables.tp(v), &Context::Variable);
-                let default = default_native_value(variables.tp(v));
+                let default = default_native_value_in(variables.tp(v), &Context::Variable);
                 writeln!(w, "let mut var_{name}: {tp_str} = {default};")?;
                 self.indent(w)?;
                 self.declared.insert(v);

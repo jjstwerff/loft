@@ -1773,9 +1773,19 @@ impl State {
             Type::Reference(_, _) | Type::Enum(_, true, _) => {
                 self.emit_push_sentinel(stack);
             }
-            Type::Integer(_) | Type::Character => {
+            Type::Integer(_) => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
+            }
+            // types.md — `Char`'s in-band sentinel is CODEPOINT 0, and it is a
+            // 4-byte slot, so the integer arm was wrong on both counts: it pushed
+            // eight bytes of `i64::MIN` where four are read.  It happened to read
+            // as null only because the low word of `i64::MIN` is zero on a
+            // little-endian box.  `OpConvCharacterFromNull` is the same `'\0'` the
+            // parser's own `null()` emits for a `character` — one fact, one
+            // spelling, and the width the slot actually holds (loft#1014).
+            Type::Character => {
+                stack.add_op("OpConvCharacterFromNull", self);
             }
             Type::Float => {
                 stack.add_op("OpConstFloat", self);

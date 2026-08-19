@@ -1041,15 +1041,31 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
 ///   `floatvar = null` is type-rejected.  Do NOT route a live scalar null
 ///   through this — it would diverge from `emit_typed_null`.
 pub(super) fn default_native_value(tp: &Type) -> String {
+    default_native_value_in(tp, &Context::Result)
+}
+
+/// [`default_native_value`] in the context the destination is DECLARED in.
+///
+/// Only `text` spells its null differently per context — `Str` in a return, `String` in a
+/// local — and a declaration site that paired `rust_type(tp, &Context::Variable)` with the
+/// context-free literal emitted `let mut var_x: String = Str::new(…)`, which is rustc
+/// E0308.  The tuple arm below had already patched exactly this by hand for its elements;
+/// this is the same fact, asked once (loft#1016).
+pub(super) fn default_native_value_in(tp: &Type, context: &Context) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),
         Type::Single => "0.0_f32".into(),
         // @PLN17: a boolean's null default is the 255 sentinel (storage form u8).
         Type::Boolean => "255u8".into(),
+        // A local / variable slot is a `String` (`rust_type`'s Variable context), a
+        // return is a `Str` — the null CONTENT is the same sentinel either way.
+        Type::Text(_) if context == &Context::Variable => {
+            "loft::state::STRING_NULL.to_string()".into()
+        }
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
         // @PLN25 slice (c): `Optional(τ)` has `τ`'s native default (a `text?` null is the
         // `Str` sentinel, exactly like `text`) — without this it fell to the `0` catch-all.
-        Type::Optional(inner) => default_native_value(inner),
+        Type::Optional(inner) => default_native_value_in(inner, context),
         Type::Routine(_) => "0_u32".into(),
         Type::Function(_, _, _) => "(0_u32, DbRef::NULL)".into(),
         Type::Reference(_, _)
@@ -1074,10 +1090,7 @@ pub(super) fn default_native_value(tp: &Type) -> String {
             // and won't fit a `String`-typed tuple slot.
             let parts: Vec<String> = elems
                 .iter()
-                .map(|e| match e {
-                    Type::Text(_) => "String::new()".to_string(),
-                    other => default_native_value(other),
-                })
+                .map(|e| default_native_value_in(e, &Context::Variable))
                 .collect();
             format!("({})", parts.join(", "))
         }

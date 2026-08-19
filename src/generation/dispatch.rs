@@ -10,7 +10,7 @@ use std::io::Write;
 
 use super::calls::contains_op_database;
 use super::{
-    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+    Output, block_needs_i64_widen, default_native_value_in, narrow_int_cast, rust_type, sanitize,
 };
 
 impl Output<'_> {
@@ -1002,8 +1002,9 @@ impl Output<'_> {
             let lv = format!("var_{name}");
             self.emit_null_dbref(w, var, &name, &lv, first_assign)?;
         } else if to == &Value::Null {
-            // Emit the null sentinel for the variable's type, not bare `()`.
-            let null_val = default_native_value(variables.tp(var));
+            // Emit the null sentinel for the variable's type, not bare `()` — in the
+            // VARIABLE context, which is the one the declaration above was written in.
+            let null_val = default_native_value_in(variables.tp(var), &Context::Variable);
             write!(w, "{null_val}")?;
         } else {
             // @PLN17: a boolean variable's storage form is u8.  The RHS may be a

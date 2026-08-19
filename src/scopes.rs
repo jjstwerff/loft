@@ -4229,6 +4229,16 @@ impl Scopes {
                             // valid witness into the @P378(a) branch below.
                             let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
                             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
+                            // A buffer is never its own witness.  The pairing exists to
+                            // skip the buffer's free when ANOTHER variable adopted its
+                            // store; `__ref_N = f(__ref_N)` has no other variable, and
+                            // the guard then compares the store with itself and never
+                            // frees at all — the buffer's own store leaks (loft#1013,
+                            // where capturing the call's answer into the buffer it was
+                            // handed is what gives the value an owner).
+                            if av == v {
+                                continue;
+                            }
                             if (publishes_through_ref && function.is_argument(v))
                                 || (v_scope <= av_scope && v_scope != u16::MAX)
                             {

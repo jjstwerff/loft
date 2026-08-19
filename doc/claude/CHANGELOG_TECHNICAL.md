@@ -9,6 +9,133 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `sum`'s identity got a default, so the one `#superseded` fix loft ships can be applied (loft#1003, 2026-08-20)
+
+`superseded-call` is the only ADVICE-level fix carrying a machine `edit`, and it was **always
+rejected**: the edit is a bare rename, `sum_of` is the only `#superseded` symbol in the stdlib,
+and `sum<T: Addable>(v, init: T)` had no default for `init` — so the verified rewrite `sum(v)`
+was *"missing argument for parameter 'init'"* on every program that triggered it.
+
+```console
+$ loft fix s.loft
+  s.loft:1  call `sum` instead  [REJECTED (the rewrite introduces an error)]     # before
+  s.loft:1  call `sum` instead  [verified]                                       # after
+```
+
+`init: T? = null` with `result = init?`. A literal default is not spellable (`init: T = 0` is
+*"expected T, got integer on default value"*), so the nullable-with-discharge form is the only
+one available — and it is exactly the declaration loft#1016 had to fix first, which is why the
+two land together. Additive per COMPATIBILITY.md: adding a default keeps every existing
+`sum(v, init)` caller working.
+
+This closes the "always rejected" half of loft#1003. The larger half — 20 fixes advertised
+MECHANICAL in DIAGNOSTICS.md that carry no `edit`, and no gate asserting they must — is
+untouched.
+
+
+### `character`'s null had four spellings and the backends picked different ones (loft#1014, 2026-08-20)
+
+`types.md` pins one: `Char`'s in-band sentinel is CODEPOINT 0 — the same `'\0'` that
+`construct_default(Character)` answers, that `op_conv_bool_from_character` tests for, and that
+the parser's `null()` emits as `OpConvCharacterFromNull`. Two of the five sites disagreed, in
+different directions, so the same program answered differently per backend.
+
+- **Interpreter** — `emit_typed_null` grouped `Character` with `Integer` and pushed EIGHT bytes
+  of `i64::MIN` into a FOUR-byte slot. It read as null only because the low word of `i64::MIN`
+  is zero on a little-endian box: right by accident, at the wrong width. Now
+  `OpConvCharacterFromNull`, the spelling the parser already uses.
+- **`--native`** — `write_typed_null_in` wrote `i32::MIN`, which is not codepoint 0 at all, so
+  `a == null` on an omitted `character? = null` answered FALSE while the interpreter said true.
+  Worse, `ops::to_char` reaches that value through `from_u32_unchecked`, for which `0x8000_0000`
+  is undefined behaviour — the release optimiser is entitled to fold the sentinel test away.
+  Now `0`.
+
+**And a `character?` DISCHARGE would not compile on `--native` in any form.** The `ops::to_char`
+wrap that converts the i32 storage form to the `char` an op template wants was chosen by IR NODE
+KIND — four arms (`Var`, `TupleGet`, `Call`, `Block`), each added when a new shape turned up.
+The `?` discharge lowers to an `If`, which was on none of them, so the template compared an
+`i32` against `char::from(0)` and rustc rejected the whole build. It is a TYPE test now: an
+operand of a character-typed parameter arrives as the i32 storage form whatever produced it, and
+only the bare integer literal (which constructs a `char` directly) is excluded. An allow-list
+here costs correctness, not an optimisation — the opposite of the hoist gate's allow-list, and
+the reason this one had to go.
+
+Not changed, and asserted so it stays visible: a `character` holding `'\0'` reads as null,
+because that codepoint IS the reserved sentinel — so `'\0' as integer` answers `null` on both
+backends. The issue read that cell as a discharge failure; a literal `'\0'` behaves identically,
+so it is the documented in-band collision, not this bug.
+
+
+### `x?` on a generic parameter discharged with the type VARIABLE's default (loft#1016, 2026-08-20)
+
+`x?` is `x ?? construct_default(T)` (`types.md` `(N-Default)`) and `construct_default` is a
+function of the CONCRETE type. Inside a template `T` is an attribute-less placeholder STRUCT,
+and `build_default`'s record arm defaulted it perfectly happily — to an empty record of the
+placeholder's own store type. Substitution then retyped the slot and left the allocation, so the
+monomorph read a `__typevar_T` record back as whatever `T` became:
+
+| `T` | answered |
+|---|---|
+| `integer` | `34359738369` (a zero-filled DbRef read as a number) |
+| `float` | a denormal |
+| a record `P` | `4294967198`, **plus a leaked `__typevar_T` record** |
+| `text` | SIGSEGV |
+
+The rule was simply not applied where it is decidable. `build_default` now MARKS such a site
+(a block named `TV_DEFAULT_BLOCK`) and `rewrite_generic_type_defaults` answers it per monomorph
+— in the MONOMORPH's own frame, via the `self.vars` / `self.context` swap the drop-cascade
+builder uses, because a record default parses `S {}` and its work-ref belongs to the function
+the code lands in. A nested generic (`concrete` still a type variable) re-marks and stays
+deferred until the outer instantiation names a real type.
+
+⚠ **A second defect sat behind it, reachable only once `T = text` stopped crashing.** The
+declaration sites paired `rust_type(tp, &Context::Variable)` with the context-free
+`default_native_value`, which answers the `Str` form — `let mut var_x: String =
+Str::new(STRING_NULL)`, rustc E0308. The tuple arm had already patched exactly this by hand for
+its elements. `default_native_value_in` asks the question once now, and the tuple arm calls it.
+
+**Still open, found while measuring this and filed rather than fixed:** `a == null` on a generic
+`T?` picks `OpRefIsNull` at TEMPLATE time (the operand is `Optional(Reference(tv))`, so the
+reference arm of the `== null` dispatch wins) and the monomorph keeps it — a 12-byte DbRef read
+out of an 8-byte integer slot. Same root class, but curing it means extracting the five-branch
+null-test dispatch so a monomorph can re-run it, which is its own change.
+
+
+### A `??` default that CALLS a function leaked its record, once per index miss (loft#1013, 2026-08-20)
+
+`x = v[i] ?? mk()` types its result from the SUBJECT, which names the vector (`ref(S)["v"]`), so
+the consumer reads `x` as a borrow and frees nothing. On the miss path the value is a store
+`mk()` freshly allocated and handed back — owned by no one. One record per MISS, unbounded in a
+loop, identical on both backends.
+
+The boundary says it is not `??` in general and not calls in general: a struct LITERAL default
+is clean, and the same call bound plainly is clean. The literal is clean for the opposite
+reason — `parse_object` allocates it into a work-ref this frame already frees — which is exactly
+the model `build_null_coalesce_default`'s own comments state ("the default arm keeps its own
+owner, freed independently"). A call default simply had none. And the compiler's refusal of a
+struct-valued constant prescribes the call spelling, so the leaking form is the one it tells you
+to write.
+
+The buffer to bind is the one the call ALREADY carries: a heap-returning callee is given a
+hidden `__ref_N` destination the caller mints and frees (`add_defaults`), and the only thing
+missing was capturing what the call answered into it. Reusing that buffer keeps ONE owner and
+ONE free — a freshly minted second work-ref would double-free the callee that DOES deliver
+through its buffer. Guarded on a BORROWING result (an owned subject makes the result owned and
+the consumer's own free claims the store) and on a callee that does not return a borrowed view.
+
+⚠ **That exposed a second half in `scopes.rs`.** `paired_witness` made the buffer its OWN
+witness for `__ref_N = f(__ref_N)`, so the scope-exit `OpFreeRefIfDistinct(__ref_1, __ref_1)`
+compared the store with itself and never fired — the leak survived the parser fix unchanged. The
+pairing exists to skip the buffer's free when ANOTHER variable adopted its store; a buffer is
+never its own witness.
+
+**Still open, found while measuring this:** the same mixed-ownership merge written as a plain
+`if` — `m = if i < len(v) { v[i] } else { mk() }` — leaks identically. The ownership inspector
+names the shape (`m  Join(base=v)`), and it is the leak face of the corruption loft#1017
+reports. Curing the class means giving the OWNING arm of any such join a frame owner, which is a
+change to the ownership merge itself.
+
+
 ### An omitted `τ? = null` argument arrived as the wrong kind of null (loft#1015, 2026-08-19)
 
 `fn f(a: integer? = null) -> integer { a? }` called as `f()` answered **65535** on the

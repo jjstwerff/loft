@@ -5323,6 +5323,12 @@ impl Parser {
         }
     }
 
+    /// The `Block` name [`build_default`](Parser::build_default) stamps on an `x?`
+    /// default it could not decide — the operand's type is a type VARIABLE, so the
+    /// answer belongs to the monomorph.  [`rewrite_generic_type_defaults`] finds it by
+    /// this name once `T` is concrete (loft#1016).
+    pub(crate) const TV_DEFAULT_BLOCK: &'static str = "tvdefault";
+
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
@@ -5494,6 +5500,17 @@ impl Parser {
             &self.data,
             &mut self.database,
         );
+        // loft#1016 — fill in every `x?` whose default the TEMPLATE could not decide.
+        // Runs in the MONOMORPH's frame (the `self.vars` / `self.context` swap the
+        // drop-cascade builder uses), because a record default parses `S {}` and its
+        // work-ref belongs to the function the code lands in, not to whoever happens to
+        // be calling.
+        let outer_vars = std::mem::replace(&mut self.vars, vars);
+        let outer_context = self.context;
+        self.context = d_nr;
+        let new_code = self.rewrite_generic_type_defaults(new_code, &concrete);
+        let vars = std::mem::replace(&mut self.vars, outer_vars);
+        self.context = outer_context;
         self.data.definitions[d_nr as usize].code = new_code;
         self.data.definitions[d_nr as usize].variables = vars;
         // @PLN85 category A — engage the text-return promotion the parse-time
@@ -6479,6 +6496,108 @@ impl Parser {
             ),
             other => other,
         }
+    }
+
+    /// loft#1016 — replace every deferred `x?` default with the one the CONCRETE
+    /// type has.
+    ///
+    /// `x?` is `x ?? construct_default(T)` (types.md `(N-Default)`), and
+    /// `construct_default` is a function of `T`.  In a template `T` is a type
+    /// VARIABLE, so the answer does not exist yet; [`Parser::build_default`] stamps
+    /// those sites [`TV_DEFAULT_BLOCK`](Parser::TV_DEFAULT_BLOCK) and this pass answers
+    /// them here, where the monomorph knows what `T` became.
+    ///
+    /// Runs AFTER type substitution, so a nested generic (`concrete` still a type
+    /// variable — `fn outer<S>(s: S?) { inner(s?) }`) re-marks the site and stays
+    /// deferred until the outer instantiation names a real type.
+    fn rewrite_generic_type_defaults(&mut self, val: Value, concrete: &Type) -> Value {
+        match val {
+            Value::Block(bl) if bl.name == Self::TV_DEFAULT_BLOCK => {
+                match self.monomorph_default(concrete) {
+                    Some((v, _)) => v,
+                    // No default for this `T` — `has_default` refuses a bare reference,
+                    // and the template could not have known.  Leave the site as parsed
+                    // rather than dropping the value: the call is already an error.
+                    None => Value::Block(bl),
+                }
+            }
+            Value::Block(bl) => {
+                let bl = *bl;
+                Value::Block(Box::new(crate::data::Block {
+                    operators: self.rewrite_default_list(bl.operators, concrete),
+                    result: bl.result,
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
+            Value::Loop(lp) => {
+                let lp = *lp;
+                Value::Loop(Box::new(crate::data::Block {
+                    operators: self.rewrite_default_list(lp.operators, concrete),
+                    result: lp.result,
+                    name: lp.name,
+                    scope: lp.scope,
+                    var_size: lp.var_size,
+                }))
+            }
+            Value::If(c, t, f) => Value::If(
+                Box::new(self.rewrite_generic_type_defaults(*c, concrete)),
+                Box::new(self.rewrite_generic_type_defaults(*t, concrete)),
+                Box::new(self.rewrite_generic_type_defaults(*f, concrete)),
+            ),
+            Value::Set(v, expr) => Value::Set(
+                v,
+                Box::new(self.rewrite_generic_type_defaults(*expr, concrete)),
+            ),
+            Value::Return(expr) => Value::Return(Box::new(
+                self.rewrite_generic_type_defaults(*expr, concrete),
+            )),
+            Value::Drop(expr) => Value::Drop(Box::new(
+                self.rewrite_generic_type_defaults(*expr, concrete),
+            )),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                Value::Span(Box::new((
+                    pos,
+                    self.rewrite_generic_type_defaults(inner, concrete),
+                )))
+            }
+            Value::Call(d, args) => Value::Call(d, self.rewrite_default_list(args, concrete)),
+            Value::CallRef(v, args) => Value::CallRef(v, self.rewrite_default_list(args, concrete)),
+            Value::Insert(ops) => Value::Insert(self.rewrite_default_list(ops, concrete)),
+            other => other,
+        }
+    }
+
+    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) over a
+    /// list of sub-values.
+    fn rewrite_default_list(&mut self, vals: Vec<Value>, concrete: &Type) -> Vec<Value> {
+        vals.into_iter()
+            .map(|v| self.rewrite_generic_type_defaults(v, concrete))
+            .collect()
+    }
+
+    /// `construct_default(concrete)` as a VALUE, for a monomorph's deferred `x?`.
+    ///
+    /// [`build_default`](Parser::build_default) answers every type except the
+    /// collections, which it leaves to the caller because a collection default is a real
+    /// empty collection whose construction has to be parsed in the position it lands in
+    /// (a standalone `[]` leaks).  Here that position IS this parse, so the same
+    /// sub-parse route serves both.
+    fn monomorph_default(&mut self, concrete: &Type) -> Option<(Value, Type)> {
+        if matches!(
+            concrete,
+            Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        ) {
+            return Some(self.subparse_default("[]", concrete));
+        }
+        self.build_default(concrete)
     }
 
     /// P241 fix (2026-05-11) — slice 2: integer-only.  POST-PASS that
