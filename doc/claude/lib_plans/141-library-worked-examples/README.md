@@ -1248,16 +1248,23 @@ mistakes are answered unequally: a stray `}` gets that coded mechanical fix, a s
 gets `Formatter error` plus a cascade (loft#989).
 
 **F35's real finding is the dedent, and it took three rounds to state correctly.** The
-rule is not the "common leading indentation" LOFT.md described: it is
+rule was not the "common leading indentation" LOFT.md described: it was
 *(closing-backtick column − 1)* spaces, removed from a line only if that many of its
-leading bytes are all spaces. So a line indented LESS keeps everything while its siblings
-lose theirs (two lines four spaces apart in the source come out level), and a TAB-indented
-line is never dedented. **Then the amended entry example failed to dedent at all, and the
-difference was the `{name}` in it: one interpolation anywhere switches the strip off
-completely, trailing blank line included (loft#990).** The strip amount comes from the
-CLOSING backtick and a hole makes the lexer emit text before that column is known — so the
-dedent serves the block with no values in it and silently stops serving the template, which
-is the shape the feature is advertised for.
+leading bytes were all spaces. So a line indented LESS kept everything while its siblings
+lost theirs (two lines four spaces apart in the source came out level), and a TAB-indented
+line was never dedented. **Then the amended entry example failed to dedent at all, and the
+difference was the `{name}` in it: one interpolation anywhere switched the strip off
+completely, trailing blank line included (loft#990).** The strip amount came from the
+CLOSING backtick and a hole made the lexer emit text before that column was known — so the
+dedent served the block with no values in it and silently stopped serving the template,
+which is the shape the feature is advertised for.
+
+**loft#990 is fixed on `main`, and the slice's own test went RED on the rebase** — which is
+the lesson worth keeping. The cells pinned the broken rule as a promise (`size == 19` for a
+held block, `size == 16` for the uneven one), so the fix that made them right made them
+fail. The base is now the FIRST CONTENT LINE, interpolation is no exception, and only the
+TAB edge survives. *A test written against measured-but-wrong behaviour is a tripwire on
+the fix, not a guard — say in the cell which side of a known issue it is pinning.*
 
 *Generalises:* **the doc example you write to illustrate a fix is itself a probe — run it.**
 The interpolation finding exists only because the amended entry example was executed

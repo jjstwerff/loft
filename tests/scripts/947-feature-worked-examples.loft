@@ -940,21 +940,19 @@ fn name947(v: integer) -> text { "n{v}" }
 // code and no mention of doubling (loft#989).
 //
 // The second promise is "the text you write looks like the text you get", and a
-// backtick block does the OPPOSITE of that on purpose — it dedents.  The rule is not
-// the "common leading indentation" LOFT.md described: it is exactly
-// `closing-backtick column - 1` spaces, removed from a line ONLY IF that many of its
-// leading bytes are all spaces, and otherwise the line is left completely alone.
-// Two consequences, both silent:
+// backtick block does the OPPOSITE of that on purpose — it dedents.  The base is the
+// FIRST CONTENT LINE: however many leading spaces it has come off every line that has
+// them, a line indented less comes out flush, a deeper line keeps the difference, and a
+// whitespace-only first or last line is dropped.  Where the CLOSING backtick sits does
+// not enter into it.
 //
-//   * a line indented LESS than the closing backtick keeps ALL its indentation while
-//     its siblings lose theirs — so a line that was outdented in the source can come
-//     out level with one that was indented past it;
-//   * a TAB-indented line is never dedented, so a block that looks aligned in an
-//     editor comes out with the tabbed line as the only indented one.
-//
-// Put the closing backtick on its own line and the common case is exactly right,
-// which is what the entry should say.  Leave it at the end of the last content line
-// — the shape LOFT.md's own second example uses — and nothing is stripped at all.
+// It was the closing backtick's column until loft#990, and that rule had two silent
+// consequences the cells below used to pin: a line indented less than the backtick kept
+// ALL its indentation while its siblings lost theirs, and — the one that mattered — a
+// single `{expr}` anywhere switched the strip off entirely, trailing blank line included,
+// so the dedent served a shader and silently stopped serving a template.  Both are gone;
+// the cells now assert the rule that replaced them.  One edge survives, and it is still
+// silent: a TAB-indented line is never dedented, because a tab is not a space.
 fn test_a_literal_brace_is_doubled_and_a_backtick_block_dedents() {
   // `{{` and `}}` are the escapes the entry does not mention.  The expected value
   // is built from code points rather than written out: a bare `"{ }"` on the other
@@ -976,38 +974,42 @@ fn test_a_literal_brace_is_doubled_and_a_backtick_block_dedents() {
   assert(own947 == "alpha{nl947()}beta", "fully dedented, got [{own947}]");
   assert(size(own947) == 10, "5 + 1 + 4 bytes, got {size(own947)}");
 
-  // Closing backtick at the END of a content line: its column is past the content's
-  // indentation, so no line matches and NOTHING is stripped.
+  // Closing backtick at the END of a content line.  Since loft#990 the base comes from the
+  // first CONTENT line rather than from the backtick's column, so this lays out the same as
+  // the form above — which is the point of the fix: where the closing backtick sits no
+  // longer changes the text.
   tail947 = `alpha
   beta`;
-  assert(size(tail947) == 12, "the two leading spaces survive, got {size(tail947)}");
-  assert(tail947 != own947, "the same two lines, laid out two ways, are different text");
+  assert(size(tail947) == 10, "dedented like its twin, got {size(tail947)}");
+  assert(tail947 == own947, "the same two lines, laid out two ways, are the same text");
 
-  // strip = 4 here.  `four` and `six` lose four spaces; `two` has only two, so it is
-  // left alone — and comes out at the same column as `six`, which it was four spaces
-  // short of in the source.
+  // The base is the FIRST content line, so it is 4 here.  `four` and `six` lose four
+  // spaces; `two` has only two, which is less than the base, so it comes out flush rather
+  // than keeping what it had.  Relative depth is preserved for everything at or below the
+  // base and collapsed for anything above it.
   uneven947 = `
     four
   two
       six
     `;
-  assert(size(uneven947) == 16, "got {size(uneven947)}");
+  assert(size(uneven947) == 14, "got {size(uneven947)}");
   lines947 = split(uneven947, nl947()[0]);
   assert(len(lines947) == 3, "three lines, got {len(lines947)}");
-  assert(lines947[0] == "four", "the matching line is fully dedented, got [{lines947[0]}]");
-  assert(lines947[1] == "  two", "the short line keeps everything, got [{lines947[1]}]");
-  assert(lines947[2] == "  six", "the deep line keeps the remainder, got [{lines947[2]}]");
-  // The inversion: in the SOURCE `two` sat four spaces shallower than `six`.  Here
-  // they are at the SAME column, because only one of them was dedented.
-  assert(size(lines947[1]) == size(lines947[2]),
-         "`two` and `six` end up level: {size(lines947[1])} vs {size(lines947[2])}");
+  assert(lines947[0] == "four", "the base line is fully dedented, got [{lines947[0]}]");
+  assert(lines947[1] == "two", "the shallower line comes out flush, got [{lines947[1]}]");
+  assert(lines947[2] == "  six", "the deeper line keeps the remainder, got [{lines947[2]}]");
+  // In the SOURCE `two` sat four spaces shallower than `six`; here it is two shallower,
+  // because the base was taken off `six` and `two` had less than the base to give.
+  assert(size(lines947[2]) == size(lines947[1]) + 2,
+         "`six` sits two past `two`: {size(lines947[1])} vs {size(lines947[2])}");
 
-  // THE CELL THAT MATTERS MOST: one `{expr}` anywhere in the block switches the
-  // dedent off completely — and keeps the trailing whitespace-only line as well.
-  // The strip amount comes from the CLOSING backtick, and a hole forces the lexer to
-  // emit the text before it long before that column is known (loft#990).  So the
-  // dedent serves the block with no values in it — a shader, a config — and silently
-  // stops serving the template, which is the shape the feature is advertised for.
+  // THE CELL THAT MATTERS MOST, and it is now the boring one: a block with a `{expr}` in
+  // it dedents exactly like a block without.  Until loft#990 one hole anywhere switched
+  // the strip off completely and kept the trailing whitespace-only line as well — so the
+  // dedent served the block with no values in it, a shader or a config, and silently
+  // stopped serving the template, which is the shape the feature is advertised for.  The
+  // two blocks below are the same two lines laid out identically, and the only difference
+  // in their sizes is the one character the hole contributes.
   who947 = "x";
   plain947 = `
   alpha
@@ -1019,14 +1021,14 @@ fn test_a_literal_brace_is_doubled_and_a_backtick_block_dedents() {
   `;
   assert(plain947 == "alpha{nl947()}beta", "no hole: fully dedented, got [{plain947}]");
   assert(size(plain947) == 10, "got {size(plain947)}");
-  // Same layout, same two lines, plus one character of interpolated value.
-  // `  alpha`(7) + nl + `  beta x`(8) + nl + `  `(2) = 19, against 10 for the same
-  // two lines with no hole in them.
-  assert(size(holed947) == 19, "a hole keeps every space, got {size(holed947)}");
+  // Same layout, same two lines, plus one character of interpolated value and one space
+  // before it: `alpha`(5) + nl + `beta x`(6) = 12, against 10 for the same two lines with
+  // no hole in them.  Two, not nine, is the whole of the difference a hole makes.
+  assert(size(holed947) == 12, "a hole dedents like anything else, got {size(holed947)}");
   hlines947 = split(holed947, nl947()[0]);
-  assert(hlines947[0] == "  alpha", "the first line keeps its indent, got [{hlines947[0]}]");
-  assert(len(hlines947) == 3, "and the trailing blank line survives too, got {len(hlines947)}");
-  assert(hlines947[2] == "  ", "which is two spaces, not nothing");
+  assert(hlines947[0] == "alpha", "the first line is dedented too, got [{hlines947[0]}]");
+  assert(len(hlines947) == 2, "and no trailing blank line survives, got {len(hlines947)}");
+  assert(hlines947[1] == "beta x", "the hole's line carries its value, got [{hlines947[1]}]");
 
   // A tab is not a space, so the tabbed line is skipped by the strip entirely.
   mixed947 = `
