@@ -43,9 +43,25 @@ the one place the two models genuinely differ.
 
 ## Declined for now
 
-SDF shape fast paths, arbitrary paths with tessellation caching, gradients and the post-fx
-chain. All of it is good and none of it is needed to make a game authorable — it is arc G's
-territory, and pulling it in now would trade the plan's shippability for its ambition.
+SDF shape fast paths, arbitrary paths with tessellation caching, gradients, and the general
+post-fx chain (bloom, colour grading). All of it is good and none of it is needed to make a
+game authorable — arc G's territory, and pulling it in now would trade the plan's
+shippability for its ambition.
+
+**Two post-fx passes are NOT declined: lighting, and per-layer atmosphere.** Crawler's **R6** shipped and verified it —
+world layers into an offscreen FBO, one fullscreen composite through a directed light cone
+plus vignette, **HUD drawn after and unlit**, with the kernel still authoritative over what
+is visible and the light only softening. A12 inherits that shape, and inherits its gate
+design too: the constants live in the shader **and** in a blueprint script that generates the
+probe expectations, so a falloff is retuned in one place and verified by monotonicity along a
+ray rather than by hand-computing a curve per pixel.
+
+A13 then reuses that same framebuffer for **blur and fog, per layer** — the Hollow Knight /
+Silksong pipeline, where a distant plane is blurred and hazed while the foreground stays
+sharp. It is per-LAYER and not fullscreen, which is the whole distinction: a fullscreen blur
+softens the character too. Because A8 already gives a layer a parallax factor, adding a blur
+radius and a fog colour makes atmosphere *data on the layer* rather than a pipeline anyone
+has to configure.
 
 ## Where the two models differ — and the seam that resolves it
 

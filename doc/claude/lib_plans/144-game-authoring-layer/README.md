@@ -31,13 +31,16 @@ A game is a **tree you mutate**, not a frame loop you draw: ship `stage`, `text2
 
 **Scope: 2-D games, at any scale — not a 3-D engine.** The 2.5-D half is a *sprite
 presentation* of a 3-D world (a hex or grid footprint, sprites standing up from it) and it
-stops there: no meshes, no camera projection, no lighting. dryopea's 3-D renderer and moros's
-3-D editor are where lessons came from, **not consumers this plan serves** — the test of any
-proposal here is whether a 2-D game needs it, never how big the game is.
+stops there: no meshes, no camera projection. **Lighting, fog and background blur are in
+scope** — a torch, a day/night cycle, a hazy blurred distance — as tint, a composite pass and
+per-layer atmosphere (A11–A13), the Hollow Knight / Silksong pipeline rather than a 3-D
+lighting model. dryopea's 3-D renderer and moros's 3-D editor are where lessons came
+from, **not consumers this plan serves**: the test of any proposal here is whether a 2-D game
+needs it, never how big the game is.
 
 ## Effort + design
 
-- **Effort:** H overall — 33 phases, **none above M** (9 XS, 20 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 36 phases, **none above M** (9 XS, 21 S, 6 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -81,6 +84,9 @@ phase is cut, not when it is implemented.
 | **A9w** — world sprites: ambient motion, no per-instance state | `stage` | 500 wind-swayed sprites cost **zero per-frame instance updates** — the phase is derived from time and position, not stored and stepped — and two instances at different positions are visibly out of phase rather than marching in lockstep | Open |
 | **A9** — mob animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
 | **A10** — facings, **two models chosen by projection** | `stage` | *Top-down* (crawler's): one sprite authored in a locked orientation, **rotated continuously** to the facing — 15° steps must cost **no extra atlas entries**, since pre-rotated frames are what this avoids. *Side-on / 2.5D*: an `(action, facing)` table, because a standing sprite cannot be rotated into another facing — at most mirrored — and there a facing change mid-walk must **keep the frame phase** rather than snapping the legs back to frame 0 | Open |
+| **A11** — light sampled per sprite, applied as tint | `stage` | a sprite at distance `d` from a light takes the hand-computed falloff; two at equal distance take equal tint; and light **composes with** A5's material tint rather than overwriting it. Rides A5's existing attribute, so it costs no pass and cannot disturb draw order | Open |
+| **A12** — light-map composite pass | `stage` | falloff along a ray from the light is **monotonic** and never undercuts its floor — the invariant, since hand-computing a curve per pixel is not a gate anyone maintains. Expectations **generated from the same constants the shader uses** (crawler's `light_cone.py` technique), so retuning happens in one place. And the HUD's pixels are **bit-identical with the light on and off**, which is how *the HUD draws after, unlit* stops being a comment | Open |
+| **A13** — per-layer atmosphere: blur + fog | `stage` | fog at density 0 is **bit-identical to no fog** and at density 1 is exactly the fog colour — the degenerate cases proved, as with A8's factor `1.0`. A blurred layer **preserves total luminance** (edge clamping darkening the border is the classic bug). And blur is applied **per layer before it composites**, so a sharp foreground over a blurred background stays sharp — which a fullscreen blur cannot do and is the entire point | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B0** — a built-in fallback font | `text2d` | under `loft test`, with **no font file and no native library loaded**, a known string draws a known non-zero coverage — the state in which `graphics::draw_text` answers *native function not loaded* today. Consumer outcome, not a unit test: `dryopea/src/hud.loft` draws its digits as **rectangles** because of this, and `picker.loft` shipped with no labels for the same reason | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
@@ -94,7 +100,7 @@ phase is cut, not when it is implemented.
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — today it returns `i32::MIN` / `-1`, so the harness must go red before the fix | Open |
 | **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
-| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — and a definition carries its **animation table**, `(action, facing) → sequence`, since a walk cycle is asset data and not code — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
+| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — and a definition carries its **animation table**, `(action, facing) → sequence`, since a walk cycle is asset data and not code. A **light is a placed instance** like any other — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from `python3 -m http.server` with only the URL changed; a byte-range log shows **only** the requested keys fetched | Open |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | Open |
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
@@ -160,7 +166,7 @@ time, silence at run time.
 
 ## Effort per phase
 
-Totals: **9 XS, 20 S, 4 M** — no phase above M, which is the § Cutting rule holding
+Totals: **9 XS, 21 S, 6 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -177,6 +183,9 @@ those calls are made here rather than discovered mid-build.
 | **A9w** | XS | Phase from `(time, position)` in the shader — no stored state, so a field of grass is one recorded batch and a time uniform. This is the case A9's frame-index attribute exists to keep cheap, taken to its limit: **nothing per frame at all**. |
 | **A9** | S | A sequence is (first cell, count, fps, loop mode); a node carries (sequence, elapsed). Advanced from `fixstep`'s step, never from wall time — that is what makes it identical at any frame rate and replayable under a recorded input stream. **Design call: the instance attribute is a FRAME INDEX, not a uv rect**, and the shader derives uv from the atlas layout — so an animating sprite dirties one integer per frame instead of four floats, and A3's *upload only what changed* keeps meaning something with 500 animated tufts on screen. |
 | **A10** | S | Two models, and the projection picks — not the author. Top-down gets continuous rotation off the 2×3 affine, which is why crawler authors every mob facing *up* and pre-rotated frames never exist. Side-on gets the `(action, facing)` table with one rule: switching sequences **carries the elapsed phase over**. Crawler's by-name resolution comes with it — a mob loads `<key>.png`, an optional action variant, and a missing file falls back rather than failing. Walking between hexes stays composition: C tweens the position, A9 plays the cycle. |
+| **A11** | S | Sample each light at the sprite's **origin** — its footprint, the same point A7 sorts on — and fold the result into the tint attribute. Order-independent, one pass, no framebuffer. This is the whole feature for a flat-lit 2-D game and it is deliberately first: A12 is only worth its pass when lights must fall across the scene rather than across the sprites. |
+| **A12** | M | World layers into an offscreen FBO, lights accumulated, one fullscreen composite, **HUD drawn after and unlit** — the shape crawler shipped as R6 and verified. Every entry point exists (`gl_create_framebuffer`, `gl_framebuffer_texture`, `gl_create_color_texture`, `gl_draw_fullscreen_quad`). A multiply composite after the scene is order-independent, so it does not fight *never reorder*. Visibility stays the app's: the light **presents**, it does not decide what is seen. |
+| **A13** | M | A layer already carries a parallax factor (A8); give it a blur radius, a fog colour and a density, and *distant, hazy, out-of-focus* becomes **layer data rather than an effects pipeline**. Fog is a `lerp` toward the fog colour — a uniform, essentially free. Blur rides A12's FBO: render the layer at quarter resolution and upsample with linear filtering, the cheap approximation backgrounds are made of. **Default to a BAKED blur** — the packer pre-blurs a static layer, so it costs nothing at run time; runtime blur is opt-in for a radius that actually changes (a focus pull). Atmosphere in this style is also largely particles, which `lib_plans/76-particles` gets cheaply once A lands. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
 | **B0** | S | A compact bitmap face baked in as data plus a pure-loft blitter — no file, no `#native`, no GL. Small, and it is the phase that unblocks a shipped consumer rather than one that makes an unshipped one faster: today the text path needs a GL context **and** a native rasteriser **and** a font file, so a repo that tests its UI headlessly answers by having no text. |
