@@ -454,6 +454,11 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
         gl.bindVertexArray(null);
       },
+      // Block until every GL command has completed — the call that makes a
+      // read-back trustworthy.  WebGL has no glFinish that is meaningfully
+      // synchronous, so `finish()` is the honest best effort here and a page that
+      // needs a hard guarantee reads through a fence instead.
+      loft_gl_finish() { gl.finish(); },
       loft_gl_draw_instanced(vaoIdx, vertexCount, instanceCount) {
         const o = slot(vaos, vaoIdx);
         if (!o || !o.vao) return;
