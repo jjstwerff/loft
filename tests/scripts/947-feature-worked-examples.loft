@@ -1317,3 +1317,98 @@ fn test_store_release_answers_bytes_and_keeps_every_reference_valid() {
   _ = delete(sp947); _ = delete("{sp947}.dschema");
 }
 
+
+struct Part947z { const id: integer, name: text }
+struct Widget947z { const code: text, weight: integer }
+
+// @FTR-020 — the lazy fault channel: what an absence clears, and which reason survives
+//
+// @F108's three calls exist to split one `null` into two facts — "no such key" and "I could
+// not reach the source" — so what CLEARS the channel is the whole contract, and the entry
+// stated it two ways that cannot both hold.  Measured on both backends, the rule is one
+// rule: nothing but `store_lazy_clear` clears, and neither a reached-and-absent lookup nor
+// an outright success is an acknowledgement.  A traversal whose first fetch failed and whose
+// second succeeded is still missing data, and that is the point of the stickiness.
+//
+// The count is per FETCH, not per key: three distinct keys over a dead source read 3, and
+// asking twice more for a key already known to be missing reads 5, because a miss is not
+// remembered.  That is what makes "how incomplete am I" answerable.
+//
+// The reason is the FIRST one, kept — not the last.  Below, cause A is a source that does
+// not exist and cause B is a store whose recorded layout is another program's; the count
+// reaches 2 and the reason still names A.  So the reason identifies the ORIGINAL cause, and
+// a later, more actionable one is reported on stderr rather than through this call.
+//
+// Binding before the source exists is deliberate and is what makes the sequence testable:
+// a missing file takes no pin, so the file appearing later is not "drift" and one binding
+// carries the whole run from unreachable to serving.
+fn test_lazy_faults_are_sticky_until_acknowledged_and_keep_the_first_reason() {
+  tmp947z = temp_dir();
+  assert(tmp947z != null, "temp_dir is where this test's store goes");
+  sp947z = "{tmp947z ?? ""}/loft947_lazy_{now()}_{ticks()}.store";
+  _ = delete(sp947z); _ = delete("{sp947z}.dschema");
+
+  parts947z: hash<Part947z[id]> = [];
+  assert(store_bind_lazy(parts947z, sp947z), "a hash binds to a .store image");
+  assert(len(parts947z) == 0, "binding loads nothing, got {len(parts947z)}");
+  assert(store_lazy_faults(parts947z) == 0, "and a fresh binding is healthy");
+
+  // Cause A — the source is not there.  One fault per FETCH.
+  assert(parts947z[1] == null, "an unreachable source answers null");
+  assert(store_lazy_faults(parts947z) == 1, "one failed fetch is one fault, got {store_lazy_faults(parts947z)}");
+  assert(parts947z[2] == null && parts947z[3] == null, "and every key answers null");
+  assert(store_lazy_faults(parts947z) == 3, "three keys, three faults, got {store_lazy_faults(parts947z)}");
+  assert(parts947z[1] == null && parts947z[1] == null, "a key already missed is fetched again");
+  assert(store_lazy_faults(parts947z) == 5, "because a miss is not remembered, got {store_lazy_faults(parts947z)}");
+  reasonA947z = store_lazy_error(parts947z);
+  assert(reasonA947z != "", "an unreachable source leaves a reason");
+
+  // Make the source exist, holding 7 and 91.
+  src947z: hash<Part947z[id]> = [];
+  assert(store_persist_bind(src947z, sp947z), "the image is written at that path");
+  src947z += Part947z { id: 7, name: "bolt" };
+  src947z += Part947z { id: 91, name: "washer" };
+
+  // Reached, and the key is genuinely absent.  This is the cell the entry got wrong: it
+  // does NOT clear, because reachability now says nothing about what was already lost.
+  assert(parts947z[404] == null, "a key the image lacks reads null");
+  assert(store_lazy_faults(parts947z) == 5, "an absence acknowledges nothing, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == reasonA947z, "and leaves the reason, got [{store_lazy_error(parts947z)}]");
+
+  // Nor does a success.  One miss fetches exactly one entry.
+  hit947z = parts947z[7] ?? Part947z { id: -1, name: "" };
+  assert(hit947z.name == "bolt", "the fetch lands, got {hit947z.name}");
+  assert(len(parts947z) == 1, "a miss fetches exactly one entry, got {len(parts947z)}");
+  assert(store_lazy_faults(parts947z) == 5, "a success acknowledges nothing either, got {store_lazy_faults(parts947z)}");
+
+  // A hit never leaves the process: same value, resident count unmoved.
+  again947z = parts947z[7] ?? Part947z { id: -1, name: "" };
+  assert(again947z.name == "bolt", "the second read answers the same record");
+  assert(len(parts947z) == 1, "and fetches nothing, got {len(parts947z)}");
+
+  // The only acknowledgement there is, and it reports whether there was one to make.
+  assert(store_lazy_clear(parts947z), "the clear had faults to acknowledge");
+  assert(store_lazy_faults(parts947z) == 0, "after which the count is 0, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == "", "and the reason is gone, got [{store_lazy_error(parts947z)}]");
+  assert(!store_lazy_clear(parts947z), "a second clear has nothing to acknowledge");
+
+  // Which reason survives, on one collection that fails two different ways.
+  sq947z = "{tmp947z ?? ""}/loft947_lazy2_{now()}_{ticks()}.store";
+  _ = delete(sq947z); _ = delete("{sq947z}.dschema");
+  assert(store_bind_lazy(parts947z, sq947z), "the same collection rebinds to a second path");
+  assert(parts947z[7] != null, "a rebind does not drop what is already resident");
+  assert(parts947z[404] == null, "cause A again: the new source is not there");
+  causeA947z = store_lazy_error(parts947z);
+  assert(store_lazy_faults(parts947z) == 1, "one fault so far, got {store_lazy_faults(parts947z)}");
+
+  // Cause B — a store at that path whose recorded layout is not this collection's.
+  other947z: hash<Widget947z[code]> = [];
+  assert(store_persist_bind(other947z, sq947z), "a foreign-layout image lands at that path");
+  other947z += Widget947z { code: "aa", weight: 5 };
+  assert(parts947z[404] == null, "a foreign layout is refused rather than range-read");
+  assert(store_lazy_faults(parts947z) == 2, "which counts as a second fault, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == causeA947z, "and the FIRST reason is the one kept, got [{store_lazy_error(parts947z)}]");
+
+  _ = delete(sp947z); _ = delete("{sp947z}.dschema");
+  _ = delete(sq947z); _ = delete("{sq947z}.dschema");
+}

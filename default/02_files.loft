@@ -695,7 +695,7 @@ pub fn store_lazy_query(local: reference, condition: text) -> integer;
 pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer;
 #rust"stores.lazy_range(&(@local), @lo, @hi)"
 
-// @PLN129 arc C — why the last lazy fetch could not REACH this collection's
+// @PLN129 arc C — why a lazy fetch for this collection could not REACH its
 // source, or "" when it is healthy.
 //
 // A lookup cannot tell you this. C80 says a value read never raises, so a miss
@@ -709,8 +709,12 @@ pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer;
 //     if why == "" { /* really no such person */ } else { /* could not reach: {why} */ }
 //   }
 //
-// A genuine absence CLEARS it: reaching the source and not finding the key
-// proves the source was reachable, so a stale error never outlives it.
+// The FIRST failure's reason, kept — not the last: it names the original cause,
+// and later ones are usually the same failure repeating. Nothing clears it but
+// `store_lazy_clear`. An absence does NOT, and neither does a later success:
+// reaching the source now says nothing about what an earlier failure already
+// lost, and answering "healthy" over a traversal that missed data is the silent
+// wrong answer this channel exists to prevent.
 pub fn store_lazy_error(local: reference) -> text;
 #rust"stores.lazy_error(&(@local))"
 
