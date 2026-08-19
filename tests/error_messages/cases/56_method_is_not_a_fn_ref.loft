@@ -1,0 +1,10 @@
+struct P56 { n: integer }
+
+fn scaled(self: P56) -> integer { self.n * 2 }
+
+fn apply56(f: fn(P56) -> integer, p: P56) -> integer { f(p) }
+
+fn main() {
+  p = P56 { n: 5 };
+  println("{apply56(scaled, p)}");
+}

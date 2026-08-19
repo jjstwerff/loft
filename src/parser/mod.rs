@@ -9145,7 +9145,45 @@ impl Parser {
                         .get(nr)
                         .cloned()
                         .unwrap_or_else(|| self.lexer.pos().clone());
-                    self.validate_convert(&context, actual_type, &tp, &pos);
+                    // loft#1008 — a `both`/`self` METHOD is registered only as
+                    // `t_<len><Type>_<name>`, so its bare name has no value to bind. In a
+                    // fn-ref ARGUMENT position it survives as an untyped placeholder and this
+                    // site reported *"expected fn(P) -> integer, got null"* — a value the
+                    // author wrote nowhere. Name what the argument is instead; the unknown-name
+                    // sites do the same for the spellings that reach them.
+                    //
+                    // Reaches the `self` spelling, which arrives as a placeholder VARIABLE. A
+                    // `both` one arrives as a bare `Value::Null` with no name attached, so the
+                    // name cannot be recovered here and that spelling still gets the generic
+                    // message; loft#1008 records it as the remaining half.
+                    let method_arg = if matches!(tp, Type::Function(_, _, _))
+                        && matches!(actual_type, Type::Null | Type::Unknown(_))
+                        && let Value::Var(v) = actual_code.unspan()
+                    {
+                        let nm = self.vars.name(*v).to_string();
+                        let recv = self.method_receivers_named(&nm);
+                        if recv.is_empty() {
+                            None
+                        } else {
+                            Some((nm, recv))
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some((nm, recv)) = method_arg {
+                        let on = recv.join("`, `");
+                        diagnostic_at!(
+                            self.lexer,
+                            &pos,
+                            Level::Error,
+                            "`{nm}` is a method on `{on}`, and a method is not a function VALUE \
+                             — there is nothing to pass here. Wrap it: `|x| {{ x.{nm}(…) }}`, or \
+                             declare the function with a plain first-parameter name (not \
+                             `self` / `both`), which makes it a free function and a usable fn-ref"
+                        );
+                    } else {
+                        self.validate_convert(&context, actual_type, &tp, &pos);
+                    }
                 } else if !self.can_convert(actual_type, &tp) {
                     return Vec::new();
                 }
