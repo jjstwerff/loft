@@ -281,7 +281,7 @@ Everything above is tree-agnostic.  This section is the **only** loft-specific p
 | Generic term | loft binding |
 |---|---|
 | Plan tracker / issue id | [`loft-lang/plans`](https://github.com/loft-lang/plans/issues) issues; id = `@PLN<N>`; next free: `gh issue list -R loft-lang/plans --state all --limit 1` |
-| Plan directory (new model) | `doc/claude/plans/<N>-<slug>/` (core language) · `doc/claude/lib_plans/<N>-<slug>/` (libraries) — flat |
+| Plan directory (new model) | `doc/claude/plans/<N>-<slug>/` — **library plans too**.  A single-file plan is `doc/claude/plans/<N>-<slug>.md`; one with companions gets the directory.  ⚠ **`doc/claude/lib_plans/` is CLOSED to new work** (its README, 2026-06-19): it is a legacy archive being migrated here, so read it and never add to it.  The drift is real — @PLN141 landed there 2026-08-18 and @PLN144–147 did too before being moved, both because this row used to say libraries went there. |
 | Legacy layout (mid-migration — most existing plans) | `doc/claude/plans/{future,finished,deferred}/<N>-<slug>/` with rows in `doc/claude/ROADMAP.md` (still maintained — being retired in favor of the tracker).  Plans 51 (finished/) and 54 (future/) live here; new plans use the flat/tracker model above. |
 | Standard plan template | [`doc/claude/plans/_TEMPLATE.md`](../../../doc/claude/plans/_TEMPLATE.md) |
 | Investigation template | [`doc/claude/plans/_INVESTIGATION_TEMPLATE.md`](../../../doc/claude/plans/_INVESTIGATION_TEMPLATE.md) — canonical example `plans/finished/51-hidden-buffer-aliasing/` (5 clusters, 39 probes) |
