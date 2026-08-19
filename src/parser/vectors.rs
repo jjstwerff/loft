@@ -1920,6 +1920,10 @@ impl Parser {
         } else {
             Value::Null
         };
+        // Captured BEFORE `iterator` rewrites `create_iter`: the collection as written, so
+        // the length-based break re-reads the SOURCE rather than the iterator state
+        // (loft#1000). Mirrors the `for` statement's `orig_coll_expr`.
+        let src_coll = expr.clone();
         let mut create_iter = expr;
         let it = Type::Iterator(Box::new(var_tp.clone()), Box::new(Type::Null));
         let iter_next = self.iterator(&mut create_iter, &in_type, &it, iter_var, pre_var);
@@ -2069,6 +2073,11 @@ impl Parser {
             for_var,
             for_next,
             pre_var,
+            if matches!(in_type, Type::Vector(_, _)) {
+                Some((src_coll.clone(), iter_var))
+            } else {
+                None
+            },
             fill,
             create_iter,
             if_step,
@@ -2095,6 +2104,14 @@ impl Parser {
         for_var: u16,
         for_next: Value,
         pre_var: Option<u16>,
+        // The SOURCE collection and its index variable, for length-based termination;
+        // `None` when the source is not a vector.  The source EXPLICITLY, because
+        // `vec_expr` is the DESTINATION being appended to: `map` builds a result vector
+        // and hands that in, and taking ITS length would measure the thing that grows
+        // each iteration.  Distinct from `pre_var` too, which is text's character index —
+        // a text loop's `iter_var` is a byte POSITION and cannot answer "how many
+        // elements so far" (loft#1000).
+        vector_end: Option<(Value, u16)>,
         fill: Value,
         create_iter: Value,
         if_step: Value,
@@ -2155,6 +2172,18 @@ impl Parser {
             let coll = super::collections::find_text_coll(lp.first().unwrap_or(&Value::Null), tcn)
                 .unwrap_or_else(|| create_iter.clone());
             for step in self.text_loop_break(&coll, idx) {
+                lp.push(step);
+            }
+        } else if let Some((src, index_var)) = vector_end
+            && matches!(in_type, Type::Vector(_, _))
+        {
+            // loft#1000 — a VECTOR ends on its LENGTH, never on the element's value.
+            // The same rule the `for` STATEMENT already uses, and for the same reason:
+            // a null the vector really holds shares the out-of-bounds sentinel, and a
+            // `value struct` element is deep-copied into a fresh record on bind (@PLN101),
+            // so the bound local is never null and a null test can never fire at all.
+            // `map`, `filter` and the comprehension all route their break through here.
+            for step in self.vector_loop_break(&src, index_var) {
                 lp.push(step);
             }
         } else if !matches!(in_type, Type::Iterator(_, _)) {

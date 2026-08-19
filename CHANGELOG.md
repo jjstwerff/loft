@@ -26,6 +26,23 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `map`, `filter` and friends work on a `value struct` vector
+
+Every vector builtin that walks to the end — `map`, `filter`, `reduce`, `all`, `count_if`,
+and the `[for x in v { … }]` comprehension — **hung forever** when the element was a
+`value struct`. `any` did stop, but by reading one element past the end and answering from
+it, so it could report `true` where the answer is `false`.
+
+```loft
+value struct V { x: integer }
+vs = [V{x:1}, V{x:2}];
+m = map(vs, |v| { v.x * 10 });    // never returned
+```
+
+The same code with a plain `struct` was always fine, and so was a `for` statement over the
+same vector — which was the workaround. All of them now agree: these loops end after
+exactly `len(v)` elements, whatever the elements are.
+
 ### `break` naming the wrong variable now tells you, instead of crashing the compiler
 
 `x#break` and `x#continue` leave a loop by naming the variable that loop binds. Naming

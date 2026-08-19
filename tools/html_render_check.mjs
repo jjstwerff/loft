@@ -263,8 +263,29 @@ function decodePngRgb(pngBuf) {
 // ── Main ───────────────────────────────────────────────────────────
 (async () => {
   let exitCode = 0;
+  // REACHING the browser is a precondition, not a measurement — so failing to reach it
+  // is the same answer as not having one: SKIP (exit 2), never a failure.
+  //
+  // A missing chrome binary already skipped.  A chrome that is INSTALLED and never
+  // answers its debugging port fell into the generic catch below and exited 3, which the
+  // caller reads as "the page was wrong" — so a CI runner whose chrome could not start
+  // reported a red probe that had rendered nothing and asserted nothing.  Observed on
+  // `main` since at least 2026-08-06: `harness error: timeout waiting for () =>
+  // getJson('/json/version')`, three retries, no pixels ever produced.
+  //
+  // Everything AFTER this point keeps its failure codes: once the browser answers, a bad
+  // page is a real result and must stay red.
   try {
     await waitFor(() => getJson('/json/version'));
+  } catch (e) {
+    console.error('SKIP: chrome is installed but never answered its debugging port ('
+      + e.message + ')');
+    if (chromeErr) console.error('chrome stderr (last 500):\n' + chromeErr.slice(-500));
+    chrome._intentionalExit = true;
+    chrome.kill();
+    process.exit(2);
+  }
+  try {
     const tab = await putJson('/json/new?' + encodeURIComponent(URL_ARG));
     const wsState = await openWebSocket(tab.webSocketDebuggerUrl);
     let { sock } = wsState;

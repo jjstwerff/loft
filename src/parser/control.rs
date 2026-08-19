@@ -13288,14 +13288,22 @@ impl Parser {
         self.vars.finish_loop(loop_nr);
         let for_next = v_set(for_var, iter_next);
 
-        let mut test_for = Value::Var(for_var);
-        self.convert(&mut test_for, &var_tp, &Type::Boolean);
-        let not_test = self.cl("OpNot", &[test_for]);
-        let break_if_null = v_if(
-            not_test,
-            v_block(vec![Value::Break(0)], Type::Void, "break"),
-            Value::Null,
-        );
+        // loft#1000 — a VECTOR ends on its LENGTH, not on the element's value: a null the
+        // vector really holds shares the out-of-bounds sentinel, and a `value struct`
+        // element is deep-copied into a fresh record on bind (@PLN101), so the bound local
+        // is never null and the test could never fire — `reduce` hung forever.
+        let break_if_null = if matches!(in_type, Type::Vector(_, _)) {
+            Value::Insert(self.vector_loop_break(&Value::Var(vec_copy_var), iter_var))
+        } else {
+            let mut test_for = Value::Var(for_var);
+            self.convert(&mut test_for, &var_tp, &Type::Boolean);
+            let not_test = self.cl("OpNot", &[test_for]);
+            v_if(
+                not_test,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            )
+        };
 
         // Use Value::Call(d_nr, ...) directly — no fn_ref_var local needed.  loft#945:
         // through `callback_call`, so a fold whose accumulator is TEXT gets the hidden

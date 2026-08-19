@@ -9,6 +9,48 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A vector builtin ends on LENGTH, not on the element's null (loft#1000, 2026-08-19)
+
+`map`, `filter`, `reduce`, `all`, `count_if` and the vector comprehension NEVER TERMINATED
+over a `value struct` element; `any` terminated only by stopping on a phantom element read
+one past the end, and answered from it. Both backends, and a plain `struct` was correct in
+every cell — `value` was the only axis.
+
+Two correct-in-isolation mechanisms met. The builtins emit `Set(elm, iter_next)` followed
+by `if !bool(elm) { break }`, relying on `OpGetVectorNullable` answering null past the end.
+@PLN101's `value_struct_copy` rewrites exactly that bind: a `value struct` reaching a user
+callback is deep-copied so the local OWNS its record — and a freshly minted record is never
+null, so the break could not fire at all. The phantom `x=5695106865` was the same on both
+backends and every run: whatever the out-of-bounds `DbRef` addressed.
+
+The cure already existed one construct over. The `for` STATEMENT had the mirror defect (a
+null ELEMENT ending the loop EARLY) and was cured by terminating on LENGTH, which is why it
+was the one correct row in the report. `Parser::vector_loop_break` is now the shared home —
+sibling of `text_loop_break`, which exists for the same reason — and all six lowerings
+route through it, so "how the loop ends" is one decision rather than seven.
+
+**The index semantics were read off the emitted IR rather than reasoned about**, because an
+off-by-one here is a silently dropped or doubled element: `#index` starts at `-1`, the
+`{#iter next}` block PRE-increments and then reads, so at the test the index is the 0-based
+one just read and `len <= idx` is exactly "past the end". Re-read each iteration rather than
+hoisted, so an in-loop `#remove` still terminates. Forward-only — these builtins have no
+reverse form, so the `for` statement's companion `idx < 0` test has nothing to answer.
+
+⚠ **The first version took the length of the wrong vector.** `build_comprehension_code`'s
+`vec_expr` is the DESTINATION being appended to — `map` builds a result vector and hands
+that in — so measuring it would have measured the thing that grows every iteration. The
+parameter is therefore `Option<(Value, u16)>` carrying the SOURCE explicitly, and each of
+the four call sites passes its own (`vec_copy_var` for map/filter, `source_expr` for the par
+materialiser, the pre-`iterator` collection for the comprehension — captured before
+`iterator` rewrites it, mirroring the `for` statement's `orig_coll_expr`).
+
+Guard: `tests/scripts/1000-value-struct-vector-builtins.loft`, 12 cells on both backends —
+all six constructs, the `for`-statement control, an EMPTY vector (which hung too, so the
+element count is not the axis), five elements (so "2" is not mistaken for the rule), a
+plain-`struct` control, and a scalar vector holding real values, since a null the vector
+genuinely holds is the OTHER shape that shares the out-of-bounds sentinel. A pre-fix binary
+hangs on the first cell.
+
 ### `loop_nr` answers "not found", so `x#break` on a non-loop local is a diagnostic (loft#998, 2026-08-19)
 
 Naming a declared local that is not a loop variable in `x#break` / `x#continue` was an

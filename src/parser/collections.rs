@@ -264,6 +264,37 @@ impl Parser {
             .collect()
     }
 
+    /// The loop-end test for iterating a VECTOR: its LENGTH, never the element's value.
+    ///
+    /// The sibling of [`text_loop_break`](Self::text_loop_break), and it exists for the
+    /// same reason one construct over. Ending on a null ELEMENT works only while no
+    /// element can legitimately be null-shaped, and two things break that: a null the
+    /// vector really holds (it shares the out-of-bounds sentinel), and a `value struct`
+    /// element, which @PLN101 deep-copies into a freshly minted record on bind — so the
+    /// bound local is never null and the test can never fire (loft#1000). `map`, `filter`,
+    /// `reduce`, `all`, `count_if` and the comprehension all hung forever on one, and
+    /// `any` answered from a phantom element read one past the end.
+    ///
+    /// The `for` STATEMENT was cured this way first; these are the six lowerings that did
+    /// not get the same treatment, and routing them through one function is what stops
+    /// "how the loop ends" being seven independent decisions.
+    ///
+    /// The index is pre-incremented from `-1` by the `{#iter next}` block, so at the test
+    /// it is the 0-based index just READ, and `len <= idx` is exactly "past the end".
+    /// Re-read each iteration rather than hoisted, so an in-loop `#remove` — which shrinks
+    /// the vector and steps the index back — still terminates. Forward-only: these
+    /// builtins have no reverse form, so the `for` statement's `idx < 0` companion test
+    /// has nothing to answer here.
+    pub(crate) fn vector_loop_break(&mut self, coll: &Value, index_var: u16) -> Vec<Value> {
+        let len = self.cl("OpLengthVector", std::slice::from_ref(coll));
+        let past_end = self.cl("OpLeInt", &[len, Value::Var(index_var)]);
+        vec![v_if(
+            past_end,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        )]
+    }
+
     #[allow(clippy::too_many_lines)] // sorted/index/spatial iterator setup — splitting would lose context
     /// The ONE home for a vector's per-element ITERATION stride — the byte
     /// step `vector::get_vector(size, idx)` walks per element.  Both the
@@ -3008,6 +3039,13 @@ use #count instead"
             for_var,
             for_next,
             pre_var,
+            if matches!(in_type, Type::Vector(_, _)) {
+                // `source_expr`, not `mat_var` — `mat_var` is the destination this
+                // loop FILLS, and its length grows every iteration.
+                Some((source_expr.clone(), iter_var))
+            } else {
+                None
+            },
             Value::Null,
             create_iter,
             Value::Null,
@@ -4499,6 +4537,12 @@ use #count instead"
             for_var,
             for_next,
             None,
+            // The SOURCE, not `result_vec` — that is what this loop appends to.
+            if matches!(in_type, Type::Vector(_, _)) {
+                Some((Value::Var(vec_copy_var), iter_var))
+            } else {
+                None
+            },
             fill,
             create_iter_code,
             Value::Null,
@@ -4648,6 +4692,12 @@ use #count instead"
             for_var,
             for_next,
             None,
+            // The SOURCE, not `result_vec` — that is what this loop appends to.
+            if matches!(in_type, Type::Vector(_, _)) {
+                Some((Value::Var(vec_copy_var), iter_var))
+            } else {
+                None
+            },
             fill,
             create_iter_code,
             if_step,
@@ -5323,14 +5373,20 @@ use #count instead"
         self.vars.finish_loop(loop_nr);
         let for_next = v_set(for_var, iter_next);
 
-        let mut test_for = Value::Var(for_var);
-        self.convert(&mut test_for, &var_tp, &Type::Boolean);
-        let not_test = self.cl("OpNot", &[test_for]);
-        let break_if_done = v_if(
-            not_test,
-            v_block(vec![Value::Break(0)], Type::Void, "break"),
-            Value::Null,
-        );
+        // loft#1000 — a VECTOR ends on its length, not on the element's value.
+        let break_if_done = if matches!(in_type, Type::Vector(_, _)) {
+            let brk = self.vector_loop_break(&Value::Var(vec_var), iter_var);
+            Value::Insert(brk)
+        } else {
+            let mut test_for = Value::Var(for_var);
+            self.convert(&mut test_for, &var_tp, &Type::Boolean);
+            let not_test = self.cl("OpNot", &[test_for]);
+            v_if(
+                not_test,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            )
+        };
 
         let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
         // N8a.4: return for_next and break_if_done as separate values so callers
