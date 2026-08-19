@@ -9,6 +9,92 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `filter` freed the source's records, so a later loop over it answered nothing (2026-08-19)
+
+Found while verifying loft#1000's table cell by cell. On BOTH backends, a `filter` over a
+`vector<vector<T>>` left the source unreadable: `len(nv)` still answered 2 and `nv[0]` still
+read its contents, while a fresh loop over the same collection yielded 0. Not a crash, not an
+obviously wrong length — a loop that silently does not run.
+
+The comprehension's per-iteration yield slot is created with the bare element type, which
+carries no deps, so scope handling reads it as an OWNER and frees it each iteration. For `map`
+that is right: the body is a call and the slot owns its result. `filter`'s body IS the loop
+element (the identity yield that makes it a filter rather than a map), so the slot was an
+ALIAS of a borrow of the source, and freeing it destroyed a record the source still pointed at.
+
+`LOFT_VAR_TABLE` is what named it — `_comp_1 … OWNS` beside `_filter_elm_1 … deps=[_filter_vec_1]`,
+a borrow classified as an owner, which is @PLN130's shape. INVISIBLE ON A SCALAR ELEMENT,
+whose copy is the value itself, which is why it stood so long.
+
+A variable bound to a borrow is a borrow: the slot now carries the body variable's deps when
+the body is a bare variable that has any. Narrowed to a bare `Var` deliberately — that is the
+only shape where the slot aliases rather than owns.
+
+### The open spatial slices walk OUTWARD from the point (loft#1002, 2026-08-19)
+
+`xs[(x,y)..]` and `xs[(x,y)..:n]` were the Z-order TAIL: only records whose Morton code is
+`>=` the query's. Half the neighbourhood was structurally unreachable, so the answer depended
+on where the query sat in the curve — an entity at the far end of the map asking for the three
+things nearest it got NOTHING, and `..:n` answered 3, 3, 3, 2, 1, 0 over five records as the
+query moved along, with nothing to separate "only two things are near me" from "I am near the
+end of the curve". Four docs and the catalogue entry all described an outward walk.
+
+`radix_db::near_range` is the n-axis form of `spatial::near`, which was correct, unit-tested,
+and reachable from no loft program. Two cursors seeded either side of the query, each step
+yielding whichever is closer. The distance is computed word by word with a borrow: one axis is
+64 bits, so two axes are 128 and three are 192, and truncating to a `u64` would make every pair
+of points sharing a high word look equidistant — most of a map.
+
+APPROXIMATE, and now said so in every doc: ordered by Morton distance, which jumps at quadrant
+boundaries, so a truly-near point can arrive a little late. `xs[lo..hi]` stays the exact form.
+`tests/scripts/48b-spatial-slice.loft` pinned the tail and is rewritten to pin the walk, each
+expectation beside the euclidean distances it follows from.
+
+### A tuple variable carrying text reaches a tuple parameter on `--native` (loft#1005, 2026-08-19)
+
+The generated parameter was `(i64, &str)` while the caller's local was `(i64, String)`, so
+`--native` refused the whole program. A tuple LITERAL argument is emitted in place and already
+spelled `&str`, which is what made this narrow and what pointed at the seam.
+
+Closed by BORROWING at the call site. The issue expected this to need a lifetime on the
+generated signature; it does not — Rust elides it. Only the argument had to be re-spelled,
+element-wise, with `&*place` on each text leaf, which derefs `String`, `Str` and `&str` alike.
+A by-value tuple parameter is a COPY in loft, so the callee cannot write back through it and
+the call stays allocation-free. The matrix found a second cell: a NESTED tuple parameter
+reaches its inner tuple as a tuple-get, which loft#840's whole-parameter rule did not see.
+
+### `loft --tests` runs the functions a file NAMES as tests (loft#1010, 2026-08-19)
+
+Every zero-parameter function ran: a `setup` helper (whose `assert` could fail the suite), and
+a `main` alongside the tests with whatever it prints or writes. Arity was the whole rule, so a
+parameter was the only way to say "not a test". A file declaring any `test_*` now runs exactly
+those; one declaring none keeps arity, which is the demonstration shape and the only reason
+`--tests` can be pointed at a plain program. Measured first: 1785 files in this corpus name no
+`test_*` against 216 that do.
+
+⚠ **The `--native` half was worse than what was filed.** `has_main` was true whenever `n_main`
+merely EXISTED, so the generated binary ran `main` and nothing else, exited 0, and the harness
+reported every `test_*` as PASSED without running one — a test asserting `1 == 2` beside a
+`main` was green on `--native` and red on the interpreter. The entry point is now decided by
+whether `main` is among the functions the run means to call.
+
+### Four mechanical fixes carry an edit, and `loft fix` can act on a warning (loft#1003, 2026-08-19)
+
+`loft fix` could act on no WARNING-level fix at all. `needless-reference-parameter`,
+`needless-const-parameter`, `empty-braces-not-collection` and `not-null-deprecated` now carry
+an edit. The missing fact was the modifier's OWN position, taken at the declaration with
+`peek_pos`; the CARET was wrong for the same reason and one capture fixed both — the
+`needless-*` checks run after the body and fell back to the variable's source, a position
+INSIDE the body.
+
+⚠ **The attached edits surfaced a latent hazard.** `apply_fixes` claimed its candidates' spans
+were disjoint instead of enforcing it, and each is verified against the ORIGINAL source.
+`empty-braces-not-collection` fired on BOTH parser passes, so `{  }` -> `[]` applied twice
+deleted the four characters after the replacement and ate the enclosing `}` — in a file the
+user asked to have fixed. The notice is pass-2 only now, and overlap is settled in
+`apply_fixes`, the only place that knows the candidates share a buffer.
+
+
 ### A vector builtin ends on LENGTH, not on the element's null (loft#1000, 2026-08-19)
 
 `map`, `filter`, `reduce`, `all`, `count_if` and the vector comprehension NEVER TERMINATED

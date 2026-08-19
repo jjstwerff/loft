@@ -26,6 +26,66 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Proximity queries on a `spatial` collection cover every direction
+
+`xs[(x,y)..]` and `xs[(x,y)..:n]` are documented as walking **outward** from a point. They
+walked *onward* instead — along the collection's internal order — so half the neighbourhood
+was unreachable, and what you got depended on where your query happened to sit:
+
+```loft
+for m in s[(20, 20)..:3] { … }    // asked for 3, got 1
+for m in s[(99, 99)..:3] { … }    // asked for 3, got nothing at all
+```
+
+Worse, the nearest thing could be invisible: from `(12, 11)` a mob two steps away was never
+returned while one twelve steps away was. Both forms now walk outward, so `..:n` answers `n`
+records from any query point and the nearest ones come first. The walk is approximate — it
+orders by the collection's space-filling curve, so a very close point can occasionally arrive
+a place late; `xs[(x1,y1)..(x2,y2)]` is still the exact form when you need a guarantee.
+
+### `filter` no longer breaks the collection it read
+
+Filtering a vector whose elements are themselves vectors quietly damaged the source. It kept
+its length and its contents still read back, but any later loop over it ran zero times:
+
+```loft
+nv = [[1], [2]];
+f = filter(nv, |x| { true });
+c = [for x in nv { 1 }];          // was: 0 elements, not 2
+```
+
+### `loft test` runs your tests, not every function in the file
+
+A file that names any `test_*` function now runs exactly those. A `setup` helper no longer
+runs (and can no longer fail your suite from an `assert` inside it), and a `main` no longer
+executes during a test run with whatever it prints or writes. A file with no `test_*` at all
+is unchanged — every zero-argument function still runs, which is what makes `--tests` usable
+on a plain script.
+
+If you had given a function an unused parameter just to keep it out of the run, you can drop
+that now.
+
+**And on `--native`, tests in a file with a `main` were being reported as passing without
+being run** — a failing test could show green there and red on the interpreter. They run.
+
+### `loft fix` can act on warnings, not just errors
+
+`loft fix` only ever applied fixes attached to errors. Four more now carry a real edit it can
+apply and verify: dropping a needless `&` or `const` on a parameter, replacing an empty `{}`
+with `[]`, and deleting a deprecated `not null`. The `&` and `const` notices also point at the
+token itself now, instead of at a spot inside the function body.
+
+### Passing a tuple containing text now compiles with `--native`
+
+```loft
+fn take(p: (integer, text)) -> integer { p.0 }
+a: (integer, text) = (3, "three");
+take(a);                          // was: --native refused the whole program
+```
+
+The same tuple written directly at the call site always worked, which made this an easy one to
+trip over. Nested tuples (`((integer, text), text)`) are fixed too.
+
 ### `map`, `filter` and friends work on a `value struct` vector
 
 Every vector builtin that walks to the end — `map`, `filter`, `reduce`, `all`, `count_if`,
