@@ -1,0 +1,114 @@
+// @PLN144 A0 — falsify the batching premise before A3 is built on it.
+//
+// RUN:  xvfb-run -a loft --native --lib <loft-libs-graphics> probe-a0.loft
+// Result and what it decided: README.md § Sub-arcs, row A0.
+//
+// Two ways to put N sprites on screen, timed over the same frame count on the
+// same window:
+//   per-sprite : N x (use_shader + 8 uniform uploads + gl_draw)   <- what today's
+//                `draw_sprite` does, one draw call each
+//   batched    : one instance-buffer update + ONE gl_draw_instanced
+//
+// A3 is an M-effort phase whose whole justification is that the second is
+// materially cheaper.  If it is not, this probe costs a compile and A3 is wrong.
+use graphics;
+
+FRAMES = 60;
+WARM = 20;
+REPEATS = 3;
+
+VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 iOff;
+uniform int uInstanced;
+uniform vec3 uOff;
+void main() {{
+  vec3 o = uInstanced == 1 ? iOff : uOff;
+  gl_Position = vec4(aPos * 0.01 + o, 1.0);
+}}
+`;
+FRAG = `
+#version 330 core
+out vec4 FragColor;
+void main() {{ FragColor = vec4(0.9, 0.4, 0.2, 1.0); }}
+`;
+
+fn offsets(n: integer) -> vector<single> {
+  ofs: vector<single> = [];
+  for i in 0..n {
+    fx = (((i % 64) as float) / 32.0 - 1.0) as single;
+    fy = (((i / 64) as float) / 32.0 - 1.0) as single;
+    ofs += [fx]; ofs += [fy]; ofs += [0.0f];
+  }
+  ofs
+}
+
+fn main() {
+  if !graphics::gl_create_window(320, 240, "a0") { println("SKIP: no GL window"); return; }
+  prog = graphics::gl_create_shader(VERT, FRAG);
+  quad: vector<single> = [
+    -1.0f, -1.0f, 0.0f,   1.0f, -1.0f, 0.0f,   1.0f, 1.0f, 0.0f,
+    -1.0f, -1.0f, 0.0f,   1.0f,  1.0f, 0.0f,  -1.0f, 1.0f, 0.0f];
+  vao = graphics::gl_upload_vertices(quad, 3);
+
+  for n in [100, 1000, 5000] {
+    ofs = offsets(n);
+    ivbo = graphics::gl_upload_instance_buffer(ofs);
+    graphics::gl_instance_attrib(vao, ivbo, 1, 3, 3, 0);
+
+    // ⚠ WARM UP BEFORE TIMING, AND TAKE THE MIN OF REPEATS.  The first read of
+    // this probe was unusable: batched looked 10x SLOWER at N=100 and per-sprite
+    // at N=5000 came out FASTER than at N=1000, which cannot be true if the work
+    // scales with N.  Shader/pipeline/buffer warm-up was landing inside whichever
+    // block ran first, and one-off driver cost dominated the small N.  Min-of-3
+    // after a warm-up is the cheapest instrument that reads the same twice.
+    for _w in 0..WARM {
+      graphics::gl_clear(0);
+      graphics::gl_use_shader(prog);
+      graphics::gl_set_uniform_int(prog, "uInstanced", 1);
+      graphics::gl_update_buffer(ivbo, ofs);
+      graphics::gl_draw_instanced(vao, 6, n);
+      graphics::gl_set_uniform_int(prog, "uInstanced", 0);
+      graphics::gl_set_uniform_vec3(prog, "uOff", 0.0, 0.0, 0.0);
+      graphics::gl_draw(vao, 6);
+      graphics::gl_swap_buffers();
+    }
+    _ = graphics::gl_poll_events();
+
+    per = 0;
+    bat = 0;
+    for rep in 0..REPEATS {
+      t0 = ticks();
+      for _f in 0..FRAMES {
+        graphics::gl_clear(0);
+        graphics::gl_use_shader(prog);
+        graphics::gl_set_uniform_int(prog, "uInstanced", 0);
+        for i in 0..n {
+          graphics::gl_set_uniform_vec3(prog, "uOff", ofs[i * 3] as float,
+                                        ofs[i * 3 + 1] as float, 0.0);
+          graphics::gl_draw(vao, 6);
+        }
+        graphics::gl_swap_buffers();
+      }
+      p1 = ticks() - t0;
+      if rep == 0 or p1 < per { per = p1; }
+
+      t1 = ticks();
+      for _f in 0..FRAMES {
+        graphics::gl_clear(0);
+        graphics::gl_use_shader(prog);
+        graphics::gl_set_uniform_int(prog, "uInstanced", 1);
+        graphics::gl_update_buffer(ivbo, ofs);
+        graphics::gl_draw_instanced(vao, 6, n);
+        graphics::gl_swap_buffers();
+      }
+      b1 = ticks() - t1;
+      if rep == 0 or b1 < bat { bat = b1; }
+    }
+
+    ratio = (per as float) / ((bat + 1) as float);
+    println("N={n}  per-sprite={per}us  batched={bat}us  speedup={ratio}x  draw calls/frame {n} -> 1");
+  }
+  graphics::gl_destroy_window();
+}
