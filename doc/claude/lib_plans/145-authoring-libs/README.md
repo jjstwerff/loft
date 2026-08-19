@@ -22,7 +22,7 @@ without writing a rasteriser, an integrator or a hit test.
 
 ## Effort + design
 
-- **Effort:** MH — 10 phases, none above M. **Design:** ✓, except D0, which is another tree's call.
+- **Effort:** MH — 11 phases, none above M. **Design:** ✓, except D0, which is another tree's call.
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -39,6 +39,7 @@ cut, not when it is implemented.
 | **C1** — tween core + easing set | `tween` | sampled values match a hand-computed easing table exactly; a completed tween lands **on** the end value, not end−ε; identical result at 30 Hz and 60 Hz | Open |
 | **C2** — bind to node properties | `tween` | driving `node.x` through a tween yields the same pixel sequence as setting it by hand | Open |
 | **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
+| **D0b** — does `input` fit a consumer that already exists? | probe only | express **dryopea's `bindings.loft` action/axis set** through `input`'s `Bindings` and drive it headless from a recorded event list. Red if the package cannot express it — and that is the point: three consumers wrote their own input layer and none chose this package, so adopting it unasked would make these widgets the **fourth**. XS, and it runs *before* `D1` commits | Open |
 | **D1** — Button + Panel over stage routing | `ui` | a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire. **And `panel_hit_test` answers the same `UiHit` it answers today**, which is what makes this an extraction rather than a rewrite wearing its name. **On touch there is no `over` state** — the kit has four, so a widget whose affordance lives in hover is invisible on a phone; the gate replays a touch stream, not only a mouse one | Open |
 | **D2** — focus, tab order, text field | `ui` | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today | Open |
 ## Effort per phase
@@ -52,6 +53,7 @@ cut, not when it is implemented.
 | **C1** | S | A tween is (setter, from, to, duration, easing, elapsed) driven off `fixstep`'s step, plus the standard easing table and sequencing — chain, parallel, delay, on-complete. Pure loft, no GPU. The exactness gate is a clamp everyone forgets: a finished tween must land **on** the end value. |
 | **C2** | XS | loft has no property references, so tweenable properties are a small enum plus a write switch. Unelegant and correct; closures are the alternative if one arrives cheaply. |
 | **D0** | — | A request, not an effort: `lavition_ui` is unpublished and lives in a tree this stream reads and never writes. Costs a conversation and their release cycle. |
+| **D0b** | XS | One probe program. The cheapest phase in this plan and the only one that can retire a dependency before it is load-bearing — `A0`'s shape, applied to a package rather than a technique. |
 | **D1** | S | Four visual states over A4's routing-with-capture, on top of an **extracted** `Button`/`Panel`/`ListBox`/`VerbBar`/`Theme` rather than a written one. The effort is the replay harness, and it constrains A4: the input path must be injectable. `input_tick_from_state` in the `input` package already exists for exactly this — reuse it rather than inventing a second seam. |
 | **D2** | M | The half the kit does not have. Focus ring and tab order are small; the **text field** is the phase. Caret placement needs B2's measurement, selection needs hit-test to a character index, insertion/backspace/IME arrive via `gl_event_text`, and multi-byte indexing returns for a third time. |
 

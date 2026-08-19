@@ -182,3 +182,41 @@ where a Latin one needs about a hundred, which is why @PLN145's B1 atlas carries
 eviction for dynamic glyph entries rather than assuming a small fixed set. Ruby/furigana — a
 reading set above the line — is a text-layout feature B2 does not have and no loft consumer asks for; out
 of scope, recorded so the next person does not have to re-derive that it is missing.
+
+---
+
+## Library integration — what exists, and what must not be built twice
+
+Audited 2026-08-19 across `moros`, `dryopea`, `crawler`, `routing`, `hexbody` and loft's own
+`tools/`, against a freshly built `LIBRARIES.md`.
+
+**The finding is not that a plan duplicates a library. It is that these plans lean on three
+published packages and only one of them has ever been adopted.**
+
+| Package | Real consumers | What the plans do with it |
+|---|---|---|
+| `fixstep` v0.2.0 | **dryopea** (6 files) + **moros** `editor_server` | @PLN145 `C1` drives tweens off it — safe, no probe needed |
+| `input` v0.2.0 | **none** | @PLN145 `D1` reuses `input_tick_from_state` |
+| `shapes` v0.4.1 | **none** — only loft's own `brick-buster` demo and a test fixture | @PLN146 `F7` produces proxies for it |
+
+`input` is the sharp one. Three consumers wrote their own instead — `moros/lib/hex_editor/src/keymap.loft`
+(685 lines), `dryopea/src/bindings.loft` (461), `crawler/src/framekey.loft` — and none reached
+for the package. **That is evidence, not an accident**, and adopting it without asking why would
+make @PLN145's widgets the *fourth* input layer rather than the first shared one. Hence `D0b`
+and `F7a`: an XS probe that expresses one **existing consumer's** need through the package,
+run *before* the phase commits to the dependency. If the package cannot express it, that is
+worth knowing for the cost of a compile — the same shape as `A0`.
+
+**Atlases: three builders already exist.** `brick-buster`'s `build_atlas()` (~190 hand-poked
+lines, in this repo), `crawler/src/gpuatlas.loft` (67 lines), and @PLN146's `F1`. `F4` already
+retires the first; the rule for `F1` is that it **replaces** rather than joins, and the check is
+that no consumer still keeps its own.
+
+**`imaging`: use the published package.** `routing/lib/imaging/` is a 2024 *predecessor* (56
+lines, read-only PNG, a `Pixel` with `limit()` bounds) that pre-dates the 73-line package rather
+than forking it. dryopea already uses the published one. Retiring routing's copy is that tree's
+call, not this plan's — recorded so nobody reads two `imaging`s as a design.
+
+**Cameras are not a duplication.** `moros/lib/hex_cam` (102 lines) and `dryopea/src/camera.loft`
+(86) are 3-D orbit/follow cameras; @PLN144's `P2` is a 2-D per-layer parallax camera. Different
+thing, same word — checked so the next reader does not merge them.

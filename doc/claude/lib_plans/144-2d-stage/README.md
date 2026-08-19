@@ -38,6 +38,13 @@ lighting model. dryopea's 3-D renderer and moros's 3-D editor are where lessons 
 from, **not consumers this plan serves**: the test of any proposal here is whether a 2-D game
 needs it, never how big the game is.
 
+**No dependency probe is due here.** The 2026-08-19 library audit
+([`PRIOR_ART.md`](PRIOR_ART.md) § Library integration) found this arc's dependencies —
+`graphics`, `mesh3d`, its `math` submodule — carry real consumers in all five sibling trees, so
+they are validated by use. @PLN145 and @PLN146 each gained an XS probe because they lean on a
+**published but unadopted** package; this plan does not, and adding the ceremony anyway would
+be cost without a question behind it.
+
 **Targets: the interpreter, `--native`, `--html`, and `--native-android`.** Android is a real
 target today — loft's @PLN106 shipped `--native-android` (signed APK, `src/android.rs`, on-
 emulator goldens for rendering, touch, keyboard and audio), and **GLES 3.0 is WebGL2**, so a
