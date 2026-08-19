@@ -1187,6 +1187,17 @@ continue.  Full closure record at
 5. Discovers all zero-parameter user functions as entry points.  If `main` exists,
    only `main` is called.  Otherwise all `fn test_*()` functions run individually
    with `catch_unwind`.  Functions annotated `@EXPECT_FAIL` tolerate panics.
+
+   **The CLI runner's rule is not this one** (loft#1010).  `loft --tests` / `loft test`
+   run EVERY zero-parameter function — `main` included, alongside the tests, and a
+   helper whose name has no `test_` prefix as well — and count each in the total.  A
+   function that takes a parameter is the only thing skipped, so a parameter (even an
+   unused one) is today's way to say "not a test".  Measured on both backends: a file
+   with `fn setup()` and `fn test_one()` reports `(2 fns: setup, test_one)` and runs
+   `setup`'s body.  57 files in this corpus have both a `test_*` and another
+   zero-parameter function, 19 of them a `main`, so the two rules are not
+   interchangeable and narrowing the CLI to `test_*` would silently drop what those
+   `main`s assert — which is why loft#1010 is a decision rather than a patch.
 6. In debug builds, writes a bytecode dump to `tests/dumps/<filename>.txt` first.
    If `debug = true`, also writes an execution trace using `execute_log`.
 
