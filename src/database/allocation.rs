@@ -5039,8 +5039,8 @@ impl Stores {
         Some((md.len(), mtime, ino))
     }
 
-    /// @PLN129 arc C — why the last fetch could not reach this collection's
-    /// source, or `""` when it is healthy.
+    /// @PLN129 arc C — why a fetch could not reach this collection's
+    /// source, or `""` when it is healthy. The FIRST such reason, kept.
     ///
     /// Empty is the honest answer for a collection that was never bound: nothing
     /// has failed. A caller distinguishing "absent" from "unreachable" asks this

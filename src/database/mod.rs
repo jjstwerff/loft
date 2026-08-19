@@ -363,7 +363,7 @@ pub struct Stores {
     /// so an unbound collection pays one hash probe on a path that was about to
     /// return "absent" anyway.
     pub lazy_sources: HashMap<(u16, u32, u32), LazyBinding>,
-    /// @PLN129 arc C — why the last fetch for this collection could not reach its
+    /// @PLN129 arc C — why a fetch for this collection could not reach its
     /// source. Absent means healthy.
     ///
     /// A lookup cannot report this: C80 says a value read never raises, and

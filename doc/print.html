@@ -1172,12 +1172,15 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   buf += <span class="nm">2.1f</span>;
   buf += <span class="nm">2.2f</span>;
  }</code></pre>
-<p>Read the count, then use it to read exactly that many floats directly into a struct field. This pattern lets you serialise and deserialise structs with variable-length data cleanly.</p>
+<p>Read the count, then use it to read exactly that many floats directly into a struct field. This pattern lets you serialise and deserialise structs with variable-length data cleanly.  A sized <code>f#read</code> answers a raw byte buffer, so name the type you are reading it back as: the <code>as</code> is what turns those bytes into elements.</p>
 <pre><code> {b = <span class="en">Buffer</span> { };
   f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"buffer.bin"</span>);
   f#format = <span class="en">LittleEndian</span>;
   n = f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span>;
-  b.data = f#<span class="fn-call">read</span>(n * <span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">single</a></span>));
+  floats = f#<span class="fn-call">read</span>(n * <span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">single</a></span>)) <span class="kw">as</span> <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;;
+  b.data = floats;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b.data) == <span class="nm">4</span>, <span class="st">"Read four floats back into the field."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((b.data[<span class="nm">0</span>] ?? <span class="nm">0.0f</span>) == <span class="nm">1.1f</span>, <span class="st">"First float survives the round-trip."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);</code></pre>
 <h2 id="error-handling">Error handling</h2>
@@ -2104,7 +2107,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </section>
 <section class="print-section" id="26-closures">
 <h1>Closures</h1>
-<p>#warn Dead assignment — <code>base</code> is overwritten before being read @TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.</p>
+<p>A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.</p>
 <h2 id="integer-capture">Integer capture</h2>
 <p>A lambda may read any integer variable in scope. Store the lambda, then call it by name.</p>
 <h2 id="multiple-integer-captures">Multiple integer captures</h2>
@@ -2885,7 +2888,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub type i32 = integer size(4)</code></pre>
-<p>Full 32-bit integer range, 4 bytes.</p>
+<p>4-byte signed: -2_147_483_647 – 2_147_483_647.  The bottom of the 32-bit range (`-2147483648`) is the null sentinel, so it is not a value an `i32` can hold — the same reservation `u32` makes at the top of its range.</p>
 </div>
 <div class="item">
 <pre><code>pub type u32 = integer limit(0, 4294967294) size(4)</code></pre>
@@ -3126,7 +3129,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
 </div>
 <div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>
@@ -3222,7 +3225,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
-<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
+<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: @STD-003</p>
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
@@ -3234,7 +3237,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn chr(cp: integer) -&gt; text</code></pre>
-<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one.</p>
+<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one. Example: @STD-002</p>
 </div>
 <h2 id="stdlib-collections">Collections</h2>
 <p class="section-desc">Operations on vector&lt;T&gt; — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value</p>
@@ -3308,15 +3311,15 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <div class="item">
 <pre><code>pub fn min_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
+<p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;). Example: @STD-004</p>
 </div>
 <div class="item">
 <pre><code>pub fn max_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
+<p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;). Example: @STD-004</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
-<p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42</p>
+<p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42 Example: @STD-005</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
@@ -3327,6 +3330,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn tree_walk &lt; T: Walkable &gt; (wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
+<p>Example: @STD-006</p>
 </div>
 <h2 id="stdlib-field-iteration-support-types">Field iteration support types</h2>
 <div class="item">
@@ -3412,7 +3416,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
-<p>True when the result is `FileResult.Ok`. Use to test a file op for success.</p>
+<p>True when the result is `FileResult.Ok`. Use to test a file op for success. Example: @STD-012</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -3435,9 +3439,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text?fs#read</code></pre>
+<p>Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt; fs#read</code></pre>
+<p>Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: @STD-011</p>
 </div>
 <p class="section-desc">Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p>
 <div class="item">
@@ -3475,11 +3481,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn list_dir(path: text) -&gt; vector&lt;text&gt; ?fs#read</code></pre>
-<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
+<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn read_bytes(path: text) -&gt; vector&lt;u8&gt; ?fs#read</code></pre>
-<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
+<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn write_bytes(path: text, bytes: vector&lt;u8&gt;) -&gt; boolean fs#update</code></pre>
@@ -3537,7 +3543,9 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn store_reclaim(r: reference) -&gt; integer fs#update</code></pre>
 <p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
-<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.</p>
+<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.</p>
+<p>WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.</p>
+<p>Example: @FTR-001 Example: @FTR-002</p>
 <p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
@@ -3577,10 +3585,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
-<p>@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or &quot;&quot; when it is healthy.</p>
+<p>@PLN129 arc C — why a lazy fetch for this collection could not REACH its source, or &quot;&quot; when it is healthy.</p>
 <p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>
 <p>p = persons[42]; if p == null { why = store_lazy_error(persons); if why == &quot;&quot; { /* really no such person */ } else { /* could not reach: {why} */ } }</p>
-<p>A genuine absence CLEARS it: reaching the source and not finding the key proves the source was reachable, so a stale error never outlives it.</p>
+<p>The FIRST failure's reason, kept — not the last: it names the original cause, and later ones are usually the same failure repeating. Nothing clears it but `store_lazy_clear`. An absence does NOT, and neither does a later success: reaching the source now says nothing about what an earlier failure already lost, and answering &quot;healthy&quot; over a traversal that missed data is the silent wrong answer this channel exists to prevent.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_faults(local: reference) -&gt; integer</code></pre>
@@ -3700,8 +3708,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Returns loft's per-user cache directory ($XDG_CACHE_HOME/loft, else $HOME/.cache/loft) — the same root the engine caches into — or null on a target with no filesystem (the browser).</p>
 </div>
 <div class="item">
-<pre><code>pub fn host_input() -&gt; text</code></pre>
-<p>Pops the next pending host message as one text; empty when there is none. The source is per-target: stdin (read once, to EOF) on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host_output.  The engine only moves opaque bytes; the program parses them.</p>
+<pre><code>pub fn host_input(wait_ms: integer = -1) -&gt; text</code></pre>
+<p>Reads pending host input as one text; empty when there is none.  The source is per-target: stdin on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host_output.  The engine only moves opaque bytes; the program parses them.</p>
+<p>wait_ms says how long to wait for input that has not arrived yet.  The default -1 reads the WHOLE stream, waiting for stdin to end; 0 takes what is already there and returns at once; a positive value waits that many milliseconds for the first byte.  Ask with a bound whenever the answer might be that nobody is listening: an absent host never closes stdin, so the default form waits forever for a reply that is not coming.</p>
+<p>host_output(&quot;MODE?&quot;); mode = host_input(200);        // &quot;&quot; =&gt; no host, run locally</p>
+<p>On --html every read already polls (a page cannot wait for a message its own thread has to deliver), and on --native-wasm, which has no threads, a bounded read falls back to waiting for the whole stream.</p>
 </div>
 <div class="item">
 <pre><code>pub fn host_output(msg: text)</code></pre>

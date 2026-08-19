@@ -51,7 +51,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
-<p>True when the result is `FileResult.Ok`. Use to test a file op for success.</p>
+<p>True when the result is `FileResult.Ok`. Use to test a file op for success. Example: @STD-012</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -74,9 +74,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text?fs#read</code></pre>
+<p>Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt; fs#read</code></pre>
+<p>Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: @STD-011</p>
 </div>
 <div class="section-desc"><p>Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p></div>
 <div class="item">
@@ -114,11 +116,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn list_dir(path: text) -&gt; vector&lt;text&gt; ?fs#read</code></pre>
-<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
+<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn read_bytes(path: text) -&gt; vector&lt;u8&gt; ?fs#read</code></pre>
-<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
+<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`. Example: @STD-010</p>
 </div>
 <div class="item">
 <pre><code>pub fn write_bytes(path: text, bytes: vector&lt;u8&gt;) -&gt; boolean fs#update</code></pre>
@@ -176,7 +178,9 @@
 <div class="item">
 <pre><code>pub fn store_reclaim(r: reference) -&gt; integer fs#update</code></pre>
 <p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
-<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.</p>
+<p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.</p>
+<p>WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.</p>
+<p>Example: @FTR-001 Example: @FTR-002</p>
 <p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
@@ -216,10 +220,10 @@
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
-<p>@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or &quot;&quot; when it is healthy.</p>
+<p>@PLN129 arc C — why a lazy fetch for this collection could not REACH its source, or &quot;&quot; when it is healthy.</p>
 <p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>
 <p>p = persons[42]; if p == null { why = store_lazy_error(persons); if why == &quot;&quot; { /* really no such person */ } else { /* could not reach: {why} */ } }</p>
-<p>A genuine absence CLEARS it: reaching the source and not finding the key proves the source was reachable, so a stale error never outlives it.</p>
+<p>The FIRST failure's reason, kept — not the last: it names the original cause, and later ones are usually the same failure repeating. Nothing clears it but `store_lazy_clear`. An absence does NOT, and neither does a later success: reaching the source now says nothing about what an earlier failure already lost, and answering &quot;healthy&quot; over a traversal that missed data is the silent wrong answer this channel exists to prevent.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_faults(local: reference) -&gt; integer</code></pre>

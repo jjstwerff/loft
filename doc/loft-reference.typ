@@ -3120,14 +3120,17 @@ Write a count followed by individual float values. `sizeof(T)` returns the byte 
  }
 ```
 
-Read the count, then use it to read exactly that many floats directly into a struct field. This pattern lets you serialise and deserialise structs with variable-length data cleanly.
+Read the count, then use it to read exactly that many floats directly into a struct field. This pattern lets you serialise and deserialise structs with variable-length data cleanly.  A sized `f\#read` answers a raw byte buffer, so name the type you are reading it back as: the `as` is what turns those bytes into elements.
 
 ```rust
  {b = Buffer { };
   f = file("buffer.bin");
   f#format = LittleEndian;
   n = f#read(4) as i32;
-  b.data = f#read(n * sizeof(single));
+  floats = f#read(n * sizeof(single)) as vector<single>;
+  b.data = floats;
+  assert(len(b.data) == 4, "Read four floats back into the field.");
+  assert((b.data[0] ?? 0.0f) == 1.1f, "First float survives the round-trip.");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 ```
@@ -4833,7 +4836,7 @@ fn main() {
 
 = Closures
 
-\#warn Dead assignment — 'base' is overwritten before being read \@TITLE: Capturing variables from the surrounding scope A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
+A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
 
 === Integer capture
 
@@ -5918,7 +5921,7 @@ pub type i16 = integer limit(-32768, 32767) size(2)
 pub type i32 = integer size(4)
 ```
 
-Full 32-bit integer range, 4 bytes.
+4-byte signed: -2\_147\_483\_647 – 2\_147\_483\_647.  The bottom of the 32-bit range (`-2147483648`) is the null sentinel, so it is not a value an `i32` can hold — the same reservation `u32` makes at the top of its range.
 
 ```rust
 pub type u32 = integer limit(0, 4294967294) size(4)
@@ -6271,7 +6274,7 @@ pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
 ```
 
 Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts\_with` / `ends\_with` moved to `02\_files.loft` so the path helpers there can call them; both still available as `text.starts\_with` / `text.ends\_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self\[pos..pos + prefix.size()\] == prefix` for the common "is this token at this offset?" pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts\_with` for the "prefix too long for input" case.
-Faster than comparing characters one at a time for a known prefix at `pos`.
+Faster than comparing characters one at a time for a known prefix at `pos`. Example: \@STD-001
 
 ```rust
 pub fn trim(both: text) -> text[both]
@@ -6415,7 +6418,7 @@ True if the character is a control character.
 pub fn join(self: vector<text>, sep: text) -> text
 ```
 
-Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
+Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: \@STD-003
 
 ```rust
 pub fn byte_at(self: text, i: integer) -> integer
@@ -6433,7 +6436,7 @@ Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\
 pub fn chr(cp: integer) -> text
 ```
 
-Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one.
+Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one. Example: \@STD-002
 
 == Collections
 
@@ -6545,19 +6548,19 @@ pub fn len(both: trie) -> integer
 pub fn min_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Smallest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
+Smallest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<). Example: \@STD-004
 
 ```rust
 pub fn max_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
+Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<). Example: \@STD-004
 
 ```rust
 pub fn sum < T: Addable > (v: vector<T>, init: T) -> T
 ```
 
-Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42
+Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42 Example: \@STD-005
 
 ```rust
 pub fn sum_of(v: vector<integer>) -> integer
@@ -6572,6 +6575,8 @@ pub interface Walkable
 ```rust
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T>
 ```
+
+Example: \@STD-006
 
 == Field iteration support types
 
@@ -6682,7 +6687,7 @@ Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get
 pub fn ok(self: FileResult) -> boolean
 ```
 
-True when the result is `FileResult.Ok`. Use to test a file op for success.
+True when the result is `FileResult.Ok`. Use to test a file op for success. Example: \@STD-012
 
 ```rust
 pub struct File {
@@ -6708,9 +6713,13 @@ pub struct File {
 pub fn content(self: File) -> text?fs#read
 ```
 
+Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts. Example: \@STD-010
+
 ```rust
 pub fn lines(self: File) -> vector<text> fs#read
 ```
+
+Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: \@STD-011
 
 Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
 
@@ -6764,13 +6773,13 @@ Returns true if `path` exists and is a regular file. Use to confirm a directory 
 pub fn list_dir(path: text) -> vector<text> ?fs#read
 ```
 
-Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.
+Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths. Example: \@STD-010
 
 ```rust
 pub fn read_bytes(path: text) -> vector<u8> ?fs#read
 ```
 
-Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
+Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`. Example: \@STD-010
 
 ```rust
 pub fn write_bytes(path: text, bytes: vector<u8>) -> boolean fs#update
@@ -6852,7 +6861,9 @@ pub fn store_reclaim(r: reference) -> integer fs#update
 ```
 
 Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store\_persist\_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.
-You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first — its `tail%` is exactly what this call returns, and its `inner%` is the space BETWEEN records, which this does not touch.
+You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.
+WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.
+Example: \@FTR-001 Example: \@FTR-002
 You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
@@ -6902,10 +6913,10 @@ The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order t
 pub fn store_lazy_error(local: reference) -> text
 ```
 
-\@PLN129 arc C — why the last lazy fetch could not REACH this collection's source, or "" when it is healthy.
+\@PLN129 arc C — why a lazy fetch for this collection could not REACH its source, or "" when it is healthy.
 A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:
 p = persons\[42\]; if p == null { why = store\_lazy\_error(persons); if why == "" { /\* really no such person \*/ } else { /\* could not reach: {why} \*/ } }
-A genuine absence CLEARS it: reaching the source and not finding the key proves the source was reachable, so a stale error never outlives it.
+The FIRST failure's reason, kept — not the last: it names the original cause, and later ones are usually the same failure repeating. Nothing clears it but `store\_lazy\_clear`. An absence does NOT, and neither does a later success: reaching the source now says nothing about what an earlier failure already lost, and answering "healthy" over a traversal that missed data is the silent wrong answer this channel exists to prevent.
 
 ```rust
 pub fn store_lazy_faults(local: reference) -> integer
@@ -7078,10 +7089,13 @@ pub fn cache_dir() -> text?env#read
 Returns loft's per-user cache directory (\$XDG\_CACHE\_HOME/loft, else \$HOME/.cache/loft) — the same root the engine caches into — or null on a target with no filesystem (the browser).
 
 ```rust
-pub fn host_input() -> text
+pub fn host_input(wait_ms: integer = -1) -> text
 ```
 
-Pops the next pending host message as one text; empty when there is none. The source is per-target: stdin (read once, to EOF) on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft\_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host\_output.  The engine only moves opaque bytes; the program parses them.
+Reads pending host input as one text; empty when there is none.  The source is per-target: stdin on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft\_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host\_output.  The engine only moves opaque bytes; the program parses them.
+wait\_ms says how long to wait for input that has not arrived yet.  The default -1 reads the WHOLE stream, waiting for stdin to end; 0 takes what is already there and returns at once; a positive value waits that many milliseconds for the first byte.  Ask with a bound whenever the answer might be that nobody is listening: an absent host never closes stdin, so the default form waits forever for a reply that is not coming.
+host\_output("MODE?"); mode = host\_input(200);        // "" =\> no host, run locally
+On --html every read already polls (a page cannot wait for a message its own thread has to deliver), and on --native-wasm, which has no threads, a bounded read falls back to waiting for the whole stream.
 
 ```rust
 pub fn host_output(msg: text)
