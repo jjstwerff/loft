@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN144 — The 2D game-authoring layer
+# @PLN144 — The 2-D stage
 
 > Tracker: [loft-lang/plans#144](https://github.com/loft-lang/plans/issues/144)
 > (`subject:libs`, `status:future`). Everything here sits **on top of the shipped
@@ -25,10 +25,9 @@ texture per string. The AS3 equivalent is ~500 lines with the art drawn in a too
 
 ## Goal
 
-A game is a **tree you mutate**, not a frame loop you draw: ship `stage`, `text2d`,
-`tween`, `ui`, light, an asset route, browser audio and co-op, and rebuild Brick Buster on
-them at
-**≤ 600 lines** while it gains rotation, per-node alpha, tint, music and live text.
+A game is a **tree you mutate**, not a frame loop you draw: ship `stage` — a retained scene,
+the presentation model that lets it show a 3-D world, and light — and rebuild Brick Buster on
+it while it gains rotation, per-node alpha, tint and a camera.
 
 **Scope: 2-D games, at any scale — not a 3-D engine.** The 2.5-D half is a *sprite
 presentation* of a 3-D world (a hex or grid footprint, sprites standing up from it) and it
@@ -41,7 +40,7 @@ needs it, never how big the game is.
 
 ## Effort + design
 
-- **Effort:** H overall — 40 phases in ten arcs, **none above M** (9 XS, 25 S, 6 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** MH — 17 phases in three arcs, **none above M**; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -91,33 +90,7 @@ phase is cut, not when it is implemented.
 | **L1** — light sampled per sprite, applied as tint | `stage` | a sprite at distance `d` from a light takes the hand-computed falloff; two at equal distance take equal tint; and light **composes with** A5's material tint rather than overwriting it. Rides A5's existing attribute, so it costs no pass and cannot disturb draw order | Open |
 | **L2** — light-map composite pass | `stage` | falloff along a ray from the light is **monotonic** and never undercuts its floor — the invariant, since hand-computing a curve per pixel is not a gate anyone maintains. Expectations **generated from the same constants the shader uses** (crawler's `light_cone.py` technique), so retuning happens in one place. And the HUD's pixels are **bit-identical with the light on and off**, which is how *the HUD draws after, unlit* stops being a comment | Open |
 | **L3** — per-layer atmosphere: blur + fog | `stage` | fog at density 0 is **bit-identical to no fog** and at density 1 is exactly the fog colour — the degenerate cases proved, as with P2's factor `1.0`. A blurred layer **preserves total luminance** (edge clamping darkening the border is the classic bug). And blur is applied **per layer before it composites**, so a sharp foreground over a blurred background stays sharp — which a fullscreen blur cannot do and is the entire point | Open |
-| *— arcs **B/C/D**: text, tweens, widgets —* | | | |
-| **B0** — a built-in fallback font | `text2d` | under `loft test`, with **no font file and no native library loaded**, a known string draws a known non-zero coverage — the state in which `graphics::draw_text` answers *native function not loaded* today. Consumer outcome, not a unit test: `dryopea/src/hud.loft` draws its digits as **rectangles** because of this, and `picker.loft` shipped with no labels for the same reason | Open |
-| **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
-| **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
-| **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **per target**, **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap. Not one shared table: native measures the real TTF through fontdue and the browser measures whatever family resolved, so the same string breaks in different places. The cross-target invariant is **self-consistency** — the drawn text fits the box that same target measured. Every estimate rounds **outward**, since an under-estimate overflows a box just proved to fit | Open |
-| **C1** — tween core + easing set | `tween` | sampled values match a hand-computed easing table exactly; a completed tween lands **on** the end value, not end−ε; identical result at 30 Hz and 60 Hz | Open |
-| **C2** — bind to node properties | `tween` | driving `node.x` through a tween yields the same pixel sequence as setting it by hand | Open |
-| **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
-| **D1** — Button + Panel over stage routing | `ui` | a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire. **And `panel_hit_test` answers the same `UiHit` it answers today**, which is what makes this an extraction rather than a rewrite wearing its name. **On touch there is no `over` state** — the kit has four, so a widget whose affordance lives in hover is invisible on a phone; the gate replays a touch stream, not only a mouse one | Open |
-| **D2** — focus, tab order, text field | `ui` | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today | Open |
-| **F7** — a collision proxy derived from the sprite's alpha | `assets` | hexbody's contract, in 2-D: the proxy **contains** every opaque texel and its overshoot is **bounded** — `proxy ⊇ opaque ∧ overshoot ≤ X`, measured per sprite over the corpus rather than asserted. Re-art a sprite and its proxy follows with no hand edit; that is the whole point | Open |
-| *— arc **M**: co-op multiplayer —* | | | |
-| **M1** — replicate the **world**, never the stage | `coop` | two clients with **different window sizes, different cameras and different ROLES** converge on the same world hash while their frames differ pixel-for-pixel — one showing a labelled panel, the other the same panel with the labels gone. The frames differing is half the gate: it proves presentation was not replicated | Open |
-| **M2** — determinism, gated by replay | `coop` | one recorded input stream replayed on two builds yields identical world hashes tick for tick, and a divergence **names the first differing tick** rather than reporting that they differ | Open |
-| **M3** — several views over one stage | `stage` | split-screen: two cameras, two composites, one scene — each view's frame is identical to the same camera rendered alone, so a second view cannot perturb the first | Open |
-| *— arcs **E/F/H**: audio, assets, the sandbox boundary —* | | | |
-| **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — today it returns `i32::MIN` / `-1`, so the harness must go red before the fix | Open |
-| **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
-| **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
-| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — and a definition carries its **animation table**, `(action, facing) → sequence`, since a walk cycle is asset data and not code. A **light is a placed instance** like any other — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
-| **F2** — range-read loader | `assets` | the same game source runs from a local pack and from `python3 -m http.server` with only the URL changed; a byte-range log shows **only** the requested keys fetched | Open |
-| **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | Open |
-| **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
-| **F5** — font sources: browser-resident, our server, or a CDN | `assets` | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes. Field evidence rather than deduction: `moros/probe/b1` measured a desktop fixed-pitch font arriving as a **proportional** browser fallback | Open |
-| **F6** — font readiness ordering | `assets` | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | Open |
-| **H1** — the game's own logic runs **admitted**, not just its mods | project-wide | the negative gate, because a policy that admits everything proves nothing: **remove a capability from `[sandbox]` and the corresponding call must fail to LOAD**, with an actionable error. @PLN86 admission ships here (`src/sandbox.rs`) | Open |
-| **H2** — every library in this plan declares its side of the boundary | all | game code compiled under the policy reaches `stage` / `tween` / `ui` / `assets` **only** through allow-listed capabilities, and a deliberately unbounded loop in game code is rejected at load rather than at frame 900 | Open |
+| **P6** — several views over one stage | `stage` | split-screen: two cameras, two composites, one scene — each view's frame is identical to the same camera rendered alone, so a second view cannot perturb the first | Open |
 | **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
 
 ## Companion files
@@ -132,11 +105,6 @@ phase is cut, not when it is implemented.
   `font.loft` **is** B1m, and the editor is already 2D with 3D extracted through `hex_proj`.
 - **[PRESENTATION.md](PRESENTATION.md)** — arc P: the three knobs, the two scroll modes,
   and why occlusion is a placement rule.
-- **[ASSETS.md](ASSETS.md)** — arc F: why the pack is a loft store on a dumb file server
-  rather than an `[Embed]`-style bundler, and the two constraints that carry over from
-  `routing`.
-- **[FONTS.md](FONTS.md)** — F5/F6: reusing a font the browser has, and bringing one it does
-  not.
 
 ## The presentation model
 
@@ -151,9 +119,9 @@ that decline costs A4/A5: [PRESENTATION.md](PRESENTATION.md).
 
 ## Effort per phase
 
-Totals: **9 XS, 25 S, 6 M** — no phase above M, which is the § Cutting rule holding
-rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
-those calls are made here rather than discovered mid-build.
+Totals: no phase above M, which is the § Cutting rule holding rather than optimism — the two
+bounds (an exact comparison half-way, and able to go red alone) both push size *down*. Three
+phases carry a design call that decides the effort, made here rather than discovered.
 
 | Phase | E | What the effort actually is |
 |---|---|---|
@@ -172,36 +140,13 @@ those calls are made here rather than discovered mid-build.
 | **L1** | S | Sample each light at the sprite's **origin** — its footprint, the same point P1 sorts on — and fold the result into the tint attribute. Order-independent, one pass, no framebuffer. This is the whole feature for a flat-lit 2-D game and it is deliberately first: L2 is only worth its pass when lights must fall across the scene rather than across the sprites. |
 | **L2** | M | World layers into an offscreen FBO, lights accumulated, one fullscreen composite, **HUD drawn after and unlit** — the shape crawler shipped as R6 and verified. Every entry point exists (`gl_create_framebuffer`, `gl_framebuffer_texture`, `gl_create_color_texture`, `gl_draw_fullscreen_quad`). A multiply composite after the scene is order-independent, so it does not fight *never reorder*. Visibility stays the app's: the light **presents**, it does not decide what is seen. |
 | **L3** | M | A layer already carries a parallax factor (P2); give it a blur radius, a fog colour and a density, and *distant, hazy, out-of-focus* becomes **layer data rather than an effects pipeline**. Fog is a `lerp` toward the fog colour — a uniform, essentially free. Blur rides L2's FBO: render the layer at quarter resolution and upsample with linear filtering, the cheap approximation backgrounds are made of. **Default to a BAKED blur** — the packer pre-blurs a static layer, so it costs nothing at run time; runtime blur is opt-in for a radius that actually changes (a focus pull). Atmosphere in this style is also largely particles, which `lib_plans/76-particles` gets cheaply once A lands. |
-| **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
-| **B0** | S | A compact bitmap face baked in as data plus a pure-loft blitter — no file, no `#native`, no GL. Small, and it is the phase that unblocks a shipped consumer rather than one that makes an unshipped one faster: today the text path needs a GL context **and** a native rasteriser **and** a font file, so a repo that tests its UI headlessly answers by having no text. |
-| **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
-| **B2** | S | Greedy breaking on measured advances, three alignments, and the character-vs-byte trap — `len(text)` counts characters, the indexed read is bytes. Per-target break tables (see the Verify column). |
-| **C1** | S | A tween is (setter, from, to, duration, easing, elapsed) driven off `fixstep`'s step, plus the standard easing table and sequencing — chain, parallel, delay, on-complete. Pure loft, no GPU. The exactness gate is a clamp everyone forgets: a finished tween must land **on** the end value. |
-| **C2** | XS | loft has no property references, so tweenable properties are a small enum plus a write switch. Unelegant and correct; closures are the alternative if one arrives cheaply. |
-| **D0** | — | A request, not an effort: `lavition_ui` is unpublished and lives in a tree this stream reads and never writes. Costs a conversation and their release cycle. |
-| **D1** | S | Four visual states over A4's routing-with-capture, on top of an **extracted** `Button`/`Panel`/`ListBox`/`VerbBar`/`Theme` rather than a written one. The effort is the replay harness, and it constrains A4: the input path must be injectable. `input_tick_from_state` in the `input` package already exists for exactly this — reuse it rather than inventing a second seam. |
-| **D2** | M | The half the kit does not have. Focus ring and tab order are small; the **text field** is the phase. Caret placement needs B2's measurement, selection needs hit-test to a character index, insertion/backspace/IME arrive via `gl_event_text`, and multi-byte indexing returns for a third time. |
-| **E1** | XS | ~40 lines of JS. **Design call: `audio_load` is synchronous and `decodeAudioData` is not**, so it returns a handle immediately and the buffer lands later; a `play` on a still-decoding clip drops rather than queues — the same plan-then-use shape as the asset store. `play` builds BufferSource → GainNode, sinks go in a table that `stop`/`set_volume` index. |
-| **E2** | S | Native: widen the `#native` signatures and the cdylib (rodio already does all four). Browser: `loop` on the source, `StereoPannerNode`, `start(when, offset)`. Both together, or they drift. |
-| **E3** | S | Buses as a gain graph with per-bus volume and ducking. Pure composition over E2. |
-| **F1** | M | Asset **and scene** record types, the packer (PNG in via `imaging`, audio bytes, scene records), `store_persist_bind` / `durable_seal`. Effort: the native-vs-wasm layout fingerprint check, and choosing the key granularity so `store_load_key` fetches a sensible page rather than one sprite or the whole file. **The packer also decides A3's batch count** — depth order cannot be rearranged under blending, so sprites that draw near each other must share an atlas, and premultiplication happens here, once. Scene records do not raise the M — they raise the schema's stakes, which is why they belong in the first cut. |
-| **F2** | S | One call site — `store_load_key(s)` from a URL with a local-path fallback. The effort is *proving* only the requested ranges crossed the wire, which means a logging static file server in the test. |
-| **F3** | S | An explicit request-these-keys call at load and level boundaries, a ring-around-player helper, and a counter that can assert zero fetches inside a frame. The instrumentation is the work; the policy is three lines. |
-| **F4** | XS | Pack `build_atlas()`'s output as a PNG, load it from the pack, delete 190 lines, pixel-compare. |
-| **F5** | S | Manifest fields (family, browser source, native path), page emission of the `@font-face` or `<link>`, and enforcing family-name-equals-lookup-key **at build time** instead of leaving it to be discovered as a silent fallback at runtime. |
-| **F6** | XS | Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The fix is two lines; the throttled test is the phase. |
-| **F7** | S | Derive at pack time from the same alpha A4 already reads to pick — the art contains the answer, so nobody hand-authors a hitbox per sprite. Produces *data*; `shapes` and `lib_plans/75-physics-2body` consume it, so this is not a physics engine arriving by the back door. Containment is what makes substitution safe (a system validated against the proxy stays valid when the art changes); the bound is what stops containment being satisfied by a screen-sized rectangle. |
-| **M1** | S | Mostly a **rule with a gate**, and the rule is the plan's own presentation model applied across the wire: the stage is a pure function of the world and the camera, so each client derives its own. Replicating the scene instead would ship presentation over the network and desync on cosmetic difference. `game_protocol` already frames and acks; `lib_plans/64-game-client` already designs the envelope. |
-| **M2** | S | The determinism this needs is **already maintained** by `fixstep` + P4 advancing off the step rather than wall time + P3 deriving ambient phase from `(time, position)`. So M2 buys no mechanism — it buys the *harness* that would catch losing it, which is the input record/replay tool with a world hash per tick. **Arm it before the subject exists**, hexbody's `L7` discipline: they wrote `joint.loft` and held it **red** before a line of body code, both controls verified, and it caught the thing they had feared. A determinism gate written after co-op works only proves that day's build. |
-| **M3** | S | Two cameras over one stage, two composite passes (L2 already builds one). The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
-| **H1** | S | Turn the `[sandbox]` policy on over the game's own function surface and find where it is too tight — which is the point of doing it early. Doing it late is a re-architecture: the boundary decides which library internals may be unbounded, and that is a design-time property of every package this plan ships. |
-| **H2** | S | Each package declares **trusted engine** (unbounded internals, an admitted-safe API) or **admissible loft**. Cheap while the APIs are being written, and the reason mods cost nothing later: a mod is then just more admitted code, with no second code path to keep in step. |
+| **P6** | S | Two cameras over one stage, two composite passes (L2 already builds one). The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
 | **G** | H | Deferred. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. |
 
 ## The vehicle
 
-**Brick Buster II**, rebuilt arc by arc, with the shipped 1983-line version kept as
-the baseline. At each arc boundary record two numbers here: frames pixel-comparable against the
+**Brick Buster II**, rebuilt arc by arc across all three plans, with the shipped 1983-line
+version kept as the baseline. At each arc boundary record two numbers here: frames pixel-comparable against the
 baseline, and line count — which must go **down**. A rewrite that only moves lines between
 files is a failed arc, and the count is what says so.
 
@@ -216,30 +161,25 @@ one world must agree about what is where**, so a pick at one screen point answer
 
 ## Phase ordering
 
-**Start with the three that depend on nothing** — `E1` (silent browser games get sound),
-`B0` (unblocks dryopea today), `F1` (the pack schema, which everything else stores into).
-None waits on the keystone; all three are cheap.
+**`A0` first — it can kill the design for the cost of a compile**, which no other phase here
+can. Then the critical path `A1 → A2 → A3`.
 
-**The critical path is `A0 → A1 → A2 → A3`**, and `A0` can kill the design for the cost of a
-compile, so it is genuinely first among them. `A3` is the phase every later one can quietly
-ruin — the camera (`P2`) and the animation attribute (`P4`) each turned out to decide whether
-its upload path survives, so ask any new per-node property *what does this dirty per frame?*
-before adding it.
+**`A3` is the phase every later one can quietly ruin.** The camera (`P2`) and the animation
+attribute (`P4`) each turned out to decide whether its upload path survives, and both were
+only visible from the phase *after* it. So ask any new per-node property **what does this
+dirty per frame?** before adding it.
 
-**Then the arcs fan out**, each needing only what its first phase names:
-
-| Arc | Waits on | Then runs independently |
+| Arc | Waits on | Then |
 |---|---|---|
-| **A** scene | — | A0 → A6 in order |
-| **P** presentation | A3 | P1 → P5 |
-| **L** light | A5's tint (L1), A3 (L2/L3) | L1 alone is the whole feature for a flat-lit game |
-| **B** text | B0 alone; B1 needs A3 | B1m and B2 follow B1 |
-| **C** tweens | A1 | pure loft otherwise |
-| **D** widgets | D0 (**someone else's clock**), A4 | D2 also needs B2 |
-| **E** audio | — | E2/E3 when a consumer asks; comfort, not capability |
-| **F** assets | — | F4 needs A2; F5/F6 land with B |
-| **M** co-op | P2 (M3) | M1 is a rule and a gate; **M2's harness is armed first**, not last |
-| **H** sandbox | every package's API existing | cheap now, a re-architecture later |
+| **A** scene | — | `A0` → `A6` in order |
+| **P** presentation | `A3` | `P1` → `P6` |
+| **L** light | `A5`'s tint (`L1`), `A3` (`L2`/`L3`) | `L1` alone is the whole feature for a flat-lit game |
+| **G** vector paths | deferred behind its trigger | — |
+
+Sibling plans fan out from here: [@PLN145](../145-authoring-libs/README.md)'s `B1` needs
+`A3`, `C` needs `A1`, `D` needs `A4`; [@PLN146](../146-content-delivery/README.md)'s `F4`
+needs `A2`. Both have phases that wait on nothing and should start immediately — `B0` and
+`E1`.
 
 ## Open design questions
 
@@ -277,10 +217,16 @@ before adding it.
   `moros_sim` (11). D0 rides that plan rather than competing with it.
 - **moros plan 22** (the pages client) — the working precedent for F1/F3, and the tree
   where a regression in `stage` or `assets` would show up first.
-- **Package authoring** — loft#976 makes a bare `use <mod>` bind the package's own file, so
-  the six packages here are safe from a sibling's basename; the lip is that `use <pkg>`
-  inside `<pkg>` means the *package* and a suite named `tests/<pkg>.loft` amputated nine
-  libraries. Copy moros's `tools/basenames.sh` guard rather than reinventing it.
+- **Package authoring + the sandbox boundary** — both apply to every package across the
+  three plans and are stated once in each: `use <pkg>` inside `<pkg>` means the *package*
+  (loft#976's lip), and each package declares **trusted engine** or **admissible loft** while
+  its API is being written, because afterwards it is a re-architecture.
+- **[`lib_plans/64-game-client`](../64-game-client/README.md)** — **co-op lives there**, not
+  here. Its rule falls out of this plan's presentation model: the stage is a pure function of
+  world and camera, so replicate the **world** and let each client derive its own scene —
+  which is what makes crew_punk's six-phones-six-panels shape work at all. The determinism it
+  needs is already maintained by `fixstep` + `P4` + `P3`; what is missing is only the harness
+  that would catch losing it, armed *before* its subject (hexbody's `L7`).
 - **`lib_plans/72-renderer-backend-boundary`** (GFX.PORTABLE) — `stage` must reach the
   GPU through the `Renderer` contract, not raw `gl_*`, or it becomes the next thing
   blocking a wgpu backend.
@@ -294,4 +240,6 @@ before adding it.
 - [REMOTE_STORES.md](../../REMOTE_STORES.md) — the asset route (arc F).
 - [`../../../tools/brick-buster/25-brick-buster.loft`](../../../tools/brick-buster/25-brick-buster.loft) — the baseline and the vehicle.
 - [HTML_EXPORT.md](../../HTML_EXPORT.md) / [BROWSER_INTEROP.md](../../BROWSER_INTEROP.md) — the browser target arc E fixes.
+- [@PLN145](../145-authoring-libs/README.md) — text, tweens, widgets above this stage.
+- [@PLN146](../146-content-delivery/README.md) — the asset pack, fonts, browser audio.
 - [loft-lang/plans#144](https://github.com/loft-lang/plans/issues/144).

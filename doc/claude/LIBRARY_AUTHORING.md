@@ -271,6 +271,26 @@ The automated gate only sees a citation that *dangles* or *duplicates* — stale
 clearest) are caught by the monthly by-hand pass in
 [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md).
 
+## 2a. Declare which side of the sandbox boundary the library is on
+
+Decide this **while the API is being written**. @PLN86 shipped admission control
+(`src/sandbox.rs`, `[sandbox]` in `loft.toml`): a designated function is admitted only if
+proven safe at load — capability, termination, data integrity, backend. A library is therefore
+either
+
+- **trusted engine** — internals may be unbounded, and it exposes an API an admitted caller
+  can reach; or
+- **admissible loft** — the library's own code passes admission.
+
+The choice decides which internals may loop without a bound, so it is a **property of the
+API**, not a deployment flag. Made up front it costs a sentence; made afterwards it is a
+re-architecture. Getting it right is also what makes user scripting cheap later — a mod is
+then just more admitted code, with no second code path to keep in step, and the negative gate
+is writable: **remove a capability from the policy and the corresponding call must fail to
+load.**
+
+See [SANDBOX.md](SANDBOX.md).
+
 ## 3. Pre-release checklist
 
 **Declare your three compatibility levels first.** They are required before a package may be

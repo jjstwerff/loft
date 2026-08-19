@@ -29,7 +29,7 @@ the one place the two models genuinely differ.
   packing into ~2048² pages at `load_image` time — the natural off-frame point, since packing
   on first *draw* hitches the hot frame. Heuristics replace direction: an oversized image
   bypasses to its own texture, a full page opens the next, dynamic entries (glyphs) get LRU
-  eviction. This supersedes F1's earlier "the packer decides A3's batch count", which made a
+  eviction. This supersedes [@PLN146](../146-content-delivery/README.md)'s F1 earlier "the packer decides A3's batch count", which made a
   human responsible for something a heuristic does better.
 - **Per-instance 2×3 affine** rather than pos/rot/scale — their 2.5D spec delta. A skew
   shadow is then a sheared dark re-emission of the same atlas entry, for free.

@@ -3,7 +3,12 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN144 — Prior art: the lavition tree next door
+# Prior art: what the sibling trees already built
+
+> Shared by [@PLN144](README.md) (the stage), [@PLN145](../145-authoring-libs/README.md)
+> (text, tweens, widgets) and [@PLN146](../146-content-delivery/README.md) (content and
+> delivery). It lives here because the stage plan is the oldest of the three, not because it
+> belongs to it more than the others.
 
 What `moros` already built that this plan extracts, adopts, or is validated by.
 The plan and its phase gates are in [README.md](README.md).
@@ -65,7 +70,7 @@ so what follows is read off the code rather than asked for.
   arrive when E1's live GL window lands (`gl_draw_text` is GL-only)"*.
 
 So the text path today requires a GL context **and** a native rasteriser **and** a font file,
-and a consumer that tests its UI headlessly answers by not having text. That is **B0**: a
+and a consumer that tests its UI headlessly answers by not having text. That is [@PLN145](../145-authoring-libs/README.md)'s **B0**: a
 built-in fallback font, in pure loft, needing no file and no native call. It is the phase
 that unblocks a shipped consumer, which is why it goes first in arc B.
 
@@ -88,7 +93,7 @@ it, and promote it once battle-tested."*
 
 Two consequences for this plan, and they are not small:
 
-- **D0 is their promotion decision, on their clock.** Publishing `lavition_ui` is not a
+- **[@PLN145](../145-authoring-libs/README.md)'s D0 is their promotion decision, on their clock.** Publishing `lavition_ui` is not a
   dependency this plan can schedule, and arc D must be honest that its first phase is
   someone else's call rather than a queued task.
 - **A library built here and handed over is the shape their rule rejects.** So `stage`,
@@ -124,7 +129,7 @@ things anyway.
 **The proxy contract, which transfers to 2-D unchanged.** Its load-bearing invariant is
 `proxy ⊇ footprint ∧ overshoot ≤ X`: a collision proxy is **derived** from the structured
 representation rather than hand-authored, must **contain** the true shape, and its overshoot
-is **bounded**. That is exactly F7 in two dimensions — derive a sprite's proxy from the alpha
+is **bounded**. That is exactly [@PLN146](../146-content-delivery/README.md)'s F7 in two dimensions — derive a sprite's proxy from the alpha
 A4 already reads for picking, require containment, bound the slop. Containment is what makes
 the substitution safe (a system validated against the proxy stays valid when the art
 changes); the bound is what stops containment being satisfied by a screen-sized rectangle.
@@ -136,41 +141,44 @@ be.
 **Arm the gate before its subject.** Their frontier item 0 was *"arm a forward gate before
 writing body code — there is currently none"*: `tests/joint.loft` was written and **held red**
 before a line of body code, with both controls verified, and it caught what they had feared.
-Their `L7` says determinism/replay is *built from line one*. M2 adopts that ordering — a
+Their `L7` says determinism/replay is *built from line one*. The co-op determinism gate in `lib_plans/64-game-client` adopts that ordering — a
 determinism gate written after co-op works only proves that day's build.
 
 *(`../stories` is an empty directory — nothing to read.)*
 
 ---
 
-## crew_punk — no code yet, and the case that proves M1
+## crew_punk — no code yet, and the case that proves the co-op rule
 
 A co-operative bridge simulator, **design documents only**, derived from moros and sibling to
 crawler. It is not a consumer yet, but `SCOPE.md` states a constraint that lands squarely on
-arc M and is worth capturing before anything is built:
+co-op (which lives in [`lib_plans/64-game-client`](../64-game-client/README.md)) and is worth
+capturing before anything is built:
 
 > **A pure phone interface must be possible.** … Six players, six phones, six consoles. This
 > is the *Spaceteam* / *Artemis* / *Keep Talking and Nobody Explodes* pattern.
 
-**It makes M1's rule obviously right rather than merely principled.** Each player's phone
+**It makes the replicate-the-world rule obviously right rather than merely principled.** Each player's phone
 shows a *different* view of one world, and the difference is presentation driven by per-client
 state: your own station shows labelled controls, and taking someone else's shows *the same
 panel with the labels gone*. Replicate the **stage** and six clients need six replicated
 scenes that must not drift; replicate the **world** and each client derives its own panel from
-what it is rated for. M1's gate therefore varies **role** as well as window size and camera —
+what it is rated for. That gate therefore varies **role** as well as window size and camera —
 same world hash, deliberately different frames.
 
 It also names two things arc D would otherwise learn late. **Touch has no hover**, and the
 extracted kit has an `over` state — so any affordance that lives in hover is invisible on a
-phone, and D1's replay gate must drive a touch stream and not only a mouse one. And **six
-people opening a link** is exactly what `--html` is good at, which puts arcs E and F on the
-critical path for this consumer rather than at the end.
+phone, and [@PLN145](../145-authoring-libs/README.md)'s D1 replay gate must drive a touch
+stream and not only a mouse one. And **six
+people opening a link** is exactly what `--html` is good at, which puts
+[@PLN146](../146-content-delivery/README.md) on the critical path for this consumer rather
+than at the end.
 
 ## japanese — not a consumer
 
 A JavaScript/HTML graded reader (`dict.js`, `server.py`); no loft anywhere, so it needs
 nothing from this plan. One transferable input: a Japanese text needs **thousands** of glyphs
-where a Latin one needs about a hundred, which is why B1's atlas carries LRU eviction for
-dynamic glyph entries rather than assuming a small fixed set. Ruby/furigana — a reading set
-above the line — is a text-layout feature B2 does not have and no loft consumer asks for; out
+where a Latin one needs about a hundred, which is why @PLN145's B1 atlas carries LRU
+eviction for dynamic glyph entries rather than assuming a small fixed set. Ruby/furigana — a
+reading set above the line — is a text-layout feature B2 does not have and no loft consumer asks for; out
 of scope, recorded so the next person does not have to re-derive that it is missing.
