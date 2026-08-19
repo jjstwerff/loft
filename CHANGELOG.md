@@ -26,6 +26,116 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A `match` at the end of a function no longer frees its locals too early
+
+A `match` written as the **last statement** of a function, with a `return` in **any** arm,
+released that function's locals *before* the arms ran:
+
+```loft
+fn use_it() {
+    x = Box { id: 1, items: [7] };
+    match 0 {
+        0 => { println("items[0] = {x.items[0]}") },   // read a released value
+        _ => { return }
+    }
+}
+```
+
+What you saw depended on what the local held. A number came back as `null(oob)` with
+`--native` and correctly under the interpreter — the same program, two answers, no
+diagnostic. A text came back **empty** on both. A value with a drop was released once
+before the arm and again at the `return`, which is a use-after-free: the interpreter ran
+the drop twice, and `--native` stopped with an out-of-bounds index.
+
+`break` and `continue` in the same position were always fine, and so was a single
+statement after the `match` — which was the workaround. All of it now behaves the same:
+one release, after the arm that runs.
+
+### A multi-line block with a value in it is now indented like one without
+
+A backtick block loses the indentation you wrote it at, so the text can sit where it
+belongs in your source without that showing up in the output. Unless it contained a
+`{…}` — then it was not dedented at all, and kept its trailing blank line too. One value
+anywhere in the block, before or after the affected lines, was enough:
+
+```loft
+page = `
+    <h1>hello {name}</h1>
+    <p>bye</p>
+    `;
+```
+
+That printed four spaces in front of every line and a line of spaces at the end. The
+same block without `{name}` printed flush. So the feature served the block with nothing
+in it and quietly stopped serving the template, which is what it is for.
+
+The base indentation is now taken from the block's **first content line** instead of
+from the closing backtick, which is what lets a block with values in it be measured at
+all. In the ordinary layout — content indented to one level, closing backtick a level
+out — that is the same number as before and nothing moves. Two things do move, both
+only in blocks laid out unusually:
+
+- a block whose closing backtick sits at a *different* column than its own lines now
+  follows the lines. This kept four spaces in front of `select 1` and is now flush:
+
+  ```loft
+  sql = `
+          select 1
+      `;
+  ```
+
+- a line indented *less* than the base comes out flush rather than keeping its own
+  indentation, so it can no longer end up further right than lines that were indented
+  past it.
+
+A blank line does not set the base (a template may open with one), and a tab-indented
+block is still left alone — a tab is not a space, so there is nothing to count.
+
+### A stray `{` in a message now tells you what to write
+
+The two ways of getting a literal brace wrong got very different answers. A lone `}`
+named itself, gave the fix, and stopped there. A lone `{` said `Formatter error` and
+then five more errors, the last of which blamed the closing brace of the function:
+
+```loft
+println("a lone open { here");
+```
+
+`{` opens a value slot, and a slot has to close on the line it opened. When nothing on
+that line can close it, that is now a single error pointing at the `{`, naming the cure
+(`{{`), and the rest of the file parses as usual.
+
+### A parallel loop with an empty body works with `--native`
+
+```loft
+for a in rows par(b = work(a), 4) { }
+```
+
+Running the workers purely for their effect and ignoring what they return compiled fine
+in the interpreter and failed `--native` with a raw compiler error out of `rustc`. Giving
+the body something to do was the workaround.
+
+It compiles now. Two quieter problems came out with it, both in the interpreter and both
+invisible for the same reason — a loop that discards every result has nothing to compare:
+the row reached the worker in the wrong shape, so a worker taking an `integer` read
+nonsense, and a worker returning a `text` could crash the process outright. Every return
+type now behaves the same as it does in a loop whose body uses the result.
+
+### A parallel worker declared below its loop no longer mistypes the result
+
+A `par` worker returning a `float` typed the result variable as `integer` when the
+worker was declared *after* the loop that used it — so a running total refused to add:
+
+```loft
+fn main() { t = 0.0; for a in 1..=4 par(b = half(a), 4) { t += b; } }
+fn half(v: integer) -> float { v * 0.5 }
+```
+
+*"Variable 't' cannot change type from float to integer"*, on a line where nothing is an
+integer. Moving the worker above the loop fixed it, and so did writing `t = t + b`
+instead of `t += b`, neither of which is a hint about the cause. Declaration order no
+longer decides the type.
+
 ### A package keeps its own files, whoever else is in the build
 
 If two libraries both had a file called `skin.loft`, only one of them got to be `skin`.
@@ -249,6 +359,12 @@ Now nothing is written by running. A script with no declaration means *the newes
 release, re-decided every run*; where you stand is not part of the answer; and if the
 registry cannot be reached, the newest copy already in your cache answers instead of a
 "library not found" in a directory holding five copies of it.
+
+That covers a project too, which is the shape that hurt most: a project with a
+`loft.toml` but no `loft.lock` yet used to resolve through whatever `loft.lock` happened
+to sit in the directory you ran from. Same project, same manifest, three directories,
+three library versions — and the error you got when the wrong one loaded said the
+function was missing, never that a directory had chosen the version.
 
 Where you DO have a declaration — a `loft.toml` in the project, or a
 `<script>.loft.lock` from `loft pin` — nothing changes: it governs, exactly as before.

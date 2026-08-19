@@ -1,0 +1,168 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#992 — a `match` that is the LAST statement of a function, with a `return` in ANY
+// arm, freed the function's locals BEFORE the arms ran.
+//
+// A `return` in an arm types the match block `never`, and `Scopes::insert_free` sent
+// anything that is not `Void` down the value-returning leg.  That leg hoists the tail
+// into a `__ret_N` temp so the tail evaluates BEFORE the frees — but only for a result
+// type it can hoist, and `never` yields no value, so there was nothing to hoist and the
+// frees were emitted in front of the tail.  The arm that does not return then read a
+// variable already released: `null(oob)` on `--native`, an empty text on the interpreter,
+// and on a droppable a drop before the arm plus a second one at the `return` — a
+// use-after-free that panics native on the 65535 freed-record marker.
+//
+// `never` is now placed like `Void`, which is the same SHAPE: no value, nothing to
+// hoist, so the two legs decide by whether the tail can still COMPLETE.
+//
+// Nine of the twenty probe cells behind this file failed against the defect.  The axes
+// that do NOT matter, each measured: how many arms; which arm returns; whether the
+// returning arm is the taken one; a scalar match vs an enum match; nesting; whether the
+// function returns a value.  The ones that do: the match must be the function's TAIL (a
+// statement after it, or the match wrapped in an `if`, is correct), and the terminator
+// must be `return` (`break`, `continue` and `panic` are all correct).
+
+struct I992Box {
+  id:    integer,
+  items: vector<integer>,
+}
+
+fn i992_make(id: integer) -> I992Box {
+  b = I992Box { id: id, items: [] };
+  for i in 0..4 { b.items += [id * 10 + i]; }
+  return b;
+}
+
+/// The reported shape: the arm that RUNS reads a local, the arm that returns is not
+/// taken.  Against the defect this read `null(oob)` on native and panicked on a heavier
+/// value.
+fn test_992_untaken_return_arm() {
+  x = i992_make(1);
+  match 0 {
+    0 => { assert(x.items[0] == 10, "untaken-return arm read {x.items[0]}, want 10"); },
+    _ => { return },
+  }
+}
+
+/// The read is in the arm that DOES return, before the `return` itself.
+fn test_992_taken_return_arm() {
+  x = i992_make(2);
+  match 0 {
+    0 => {
+      assert(x.items[0] == 20, "taken-return arm read {x.items[0]}, want 20");
+      return
+    },
+    _ => { },
+  }
+}
+
+/// A TEXT local, which fails differently and silently: the free ran first and the arm
+/// read an EMPTY string rather than a wrong number.  Not in the filed report.
+fn test_992_text_local_survives_the_arm() {
+  n = 1;
+  s = "ab{n}cd";
+  match 0 {
+    0 => { assert(s == "ab1cd", "text local read [{s}], want [ab1cd]"); },
+    _ => { return },
+  }
+}
+
+/// Three arms — the arm count is not the axis.
+fn test_992_three_arms() {
+  x = i992_make(3);
+  match 0 {
+    0 => { assert(x.items[1] == 31, "three-arm read {x.items[1]}, want 31"); },
+    1 => { },
+    _ => { return },
+  }
+}
+
+/// Two locals: both were released early, in reverse declaration order.
+fn test_992_two_locals() {
+  x = i992_make(4);
+  y = i992_make(5);
+  match 0 {
+    0 => {
+      assert(x.items[0] == 40, "first local read {x.items[0]}, want 40");
+      assert(y.items[0] == 50, "second local read {y.items[0]}, want 50");
+    },
+    _ => { return },
+  }
+}
+
+/// `return` in EVERY arm — the block genuinely never completes.  The frees each arm
+/// emits for itself are the only ones that may run.
+fn test_992_return_in_every_arm() {
+  x = i992_make(6);
+  match 0 {
+    0 => {
+      assert(x.items[0] == 60, "all-return arm read {x.items[0]}, want 60");
+      return
+    },
+    _ => { return },
+  }
+}
+
+/// An ENUM match, not the scalar one the report used.
+enum I992Kind { Keep, Leave }
+
+fn test_992_enum_match() {
+  x = i992_make(7);
+  k: I992Kind = I992Kind.Keep;
+  match k {
+    Keep  => { assert(x.items[0] == 70, "enum-match read {x.items[0]}, want 70"); },
+    Leave => { return },
+  }
+}
+
+/// A match nested inside another match's arm, the inner one holding the `return`.
+fn test_992_nested_match() {
+  x = i992_make(8);
+  match 0 {
+    0 => {
+      match 0 {
+        0 => { assert(x.items[0] == 80, "nested read {x.items[0]}, want 80"); },
+        _ => { return },
+      }
+    },
+    _ => { },
+  }
+}
+
+/// A value-returning function was always correct — its block result is hoistable, so the
+/// tail already evaluated before the frees.  Kept as the control: it must stay correct.
+fn test_992_value_returning_function_control() {
+  assert(i992_value(9) == 90, "value-returning control");
+}
+
+fn i992_value(id: integer) -> integer {
+  x = i992_make(id);
+  match 0 {
+    0 => { x.items[0] },
+    _ => { return 0 },
+  }
+}
+
+/// The two shapes that were always correct, and are the workaround the report names:
+/// a statement after the match, and the match wrapped in an `if`.
+fn test_992_statement_after_the_match_control() {
+  x = i992_make(11);
+  match 0 {
+    0 => { assert(x.items[0] == 110, "stmt-after read {x.items[0]}, want 110"); },
+    _ => { return },
+  }
+  assert(x.items[3] == 113, "stmt-after later read {x.items[3]}, want 113");
+}
+
+/// `break` and `continue` in an arm were correct and must stay so — the terminator kind
+/// is what separates this bug from every other early exit.
+fn test_992_break_and_continue_controls() {
+  x = i992_make(12);
+  for i in 0..2 {
+    match i {
+      0 => { assert(x.items[0] == 120, "break-control read {x.items[0]}, want 120"); },
+      _ => { break },
+    }
+  }
+}

@@ -9,6 +9,256 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `never` block places its frees like a `Void` one (loft#992, 2026-08-19)
+
+A `match` in a function's TAIL position with a `return` in ANY arm freed that function's
+locals BEFORE the arms ran. The arm that does not return then read a released variable:
+`null(oob)` on `--native` against a correct interpreter answer, an EMPTY text on both, and
+on a droppable a drop before the arm plus a second one at the `return` — a use-after-free
+that panics native on the 65535 freed-record marker.
+
+A `return` in an arm types the match block `never`, and `Scopes::insert_free` routed
+everything that is not `Void` down the value-returning leg. That leg exists to hoist the
+tail into a `__ret_N` temp so the tail EVALUATES before the frees (the @PLN85 / B5-L3
+invariant) — but it hoists only a result type it can hold, and `never` yields no value.
+So `is_value_return_type` / text / heap-ref all answered no, `hoist_tmp` stayed `None`,
+and the final `else` emitted `ls.extend(ret_frees)` and then the tail. Frees first, tail
+second, with the tail still able to read them.
+
+`Never` now joins `Void` at that branch, because it is the same SHAPE for free placement:
+no value, nothing to hoist, nothing to return. The two legs there already decide correctly
+by whether the tail can COMPLETE — a tail that unconditionally returns keeps the frees in
+front of it, a tail that may still complete runs first and the frees follow. The
+returning arm emits its own frees on its own path, as it always did, so nothing is freed
+twice.
+
+The boundary, 20 probe cells, 9 of them red against the defect. Not axes: the arm count;
+which arm returns; whether the returning arm is the taken one; a scalar match vs an enum
+match; nesting; two locals vs one; `return` in EVERY arm. Axes: the match must be the
+function's TAIL (a statement after it, or the match wrapped in an `if`, was always
+correct), the terminator must be `return` (`break`, `continue` and `panic` were correct),
+and the function must return VOID — a value-returning one was correct all along, because
+its result type is hoistable and the tail therefore already evaluated first.
+
+Guards: `tests/scripts/992-match-tail-with-return-arm.loft` (11 cells on both backends,
+using a VALUE read in the arm) and `tests/match_tail_return.rs` (the drop COUNT and its
+position relative to the arm body, both backends). The two oracles have different
+sharpness and that is why both are here: on the interpreter a freed store keeps its bytes
+until something claims them, so only the TEXT cell of the script goes red against the
+defect — against seven cells on native, and against every cell of the drop-count test on
+both.
+
+### A lock-less project is not governed by the invoking directory (loft#991, 2026-08-19)
+
+Already fixed on this branch by @PLN143 arc C2, which deleted the cwd `loft.lock` leg from
+the resolution chain; what lands here is the GUARD for the row the arc's own cells left
+open. `probe_project_lockfile` finds the project root, finds no lock in it, and returns —
+and the chain then fell through to the cwd probe, so a stranger's pin governed a project
+that declares its own dependency. The two existing arc C2 cells both use a BARE script,
+which belongs to no project, so neither covered it. Measured against `tuxedo-post-973`
+(no arc C2): one project, one manifest, three invoking directories, three library
+versions.
+
+`arc_c2_a_cwd_lockfile_does_not_pin_a_lockless_project` asserts the ABSENCE of the
+stranger's version, and `arc_c2_a_projects_own_lock_outranks_the_invoking_directorys` is
+what keeps that from being vacuous — same fixture, project lock present, resolves. The
+absence is what the cell can assert because offline a lock-less project resolves NOTHING:
+`probe_cache_newest` is `Bare`-scope only by design (a fallback takes the newest cached
+copy, and only where nothing is declared can that violate no constraint). That refusal is
+PRE-EXISTING — measured identical on both branches with no lockfile anywhere — so the
+difference the cell measures is exactly the filed one: `probepkg-0.1.0` against the
+defect, no version at all with the leg gone.
+
+### A backtick block dedents from its first content line, holes included (loft#990, 2026-08-19)
+
+A backtick block was dedented unless it contained a `{…}`, in which case it was not
+dedented at all and kept its trailing whitespace-only line. One hole anywhere in the
+block, before or after the affected lines, was enough — so the feature served the block
+with no values in it (a GLSL shader, LOFT.md's own example) and stopped serving the
+TEMPLATE, which is the shape it exists for. LOFT.md's second example sat under the
+sentence describing the strip and was not stripped.
+
+**The rule and the streaming were incompatible by construction, not by oversight.** The
+strip was `closing-backtick column - 1`, computed and applied when `backtick_string`
+reached that backtick. An interpolation makes the scanner emit the text accumulated so
+far and return (`Mode::Formatting`) long before the closing column is known, so the
+`Some(&'{')` arm built its segment with no strip and `backtick_string_resume` continued
+without one. Every compat-preserving cure needs the closing column BEFORE the first hole:
+a shadow scanner for the string grammar (a second home for it), or a rewindable lexer
+that drives the real scanner once to measure and again to emit (M+, and it touches the
+diagnostic path and the token-memory replay).
+
+The base is now **the first content line's indentation**, which is knowable before any
+hole can occur, so a holed literal and an unholed one answer alike. `backtick_line_start`
+consumes a line's leading spaces as the line is ENTERED, settles the base on the first
+line that has content, and returns `spaces - base`; both scanners call it, so there is one
+home for the rule and the resumed segments get it too. `backtick_strip` is a STACK, one
+entry per open literal, because a backtick literal can be written inside another's hole —
+pushed where `next()` opens one, popped in `close_backtick`.
+
+What settles the base is decided by one peek after the spaces: end-of-line means a BLANK
+line (settles nothing — a template may open with one, and taking its zero would switch the
+dedent off for the block), a closing backtick means the LAST line (dropped when it holds
+only whitespace, so not content either), anything else is content. The opening backtick's
+own line can never be the base: it starts wherever that backtick ended, so its indentation
+is the statement's.
+
+Two visible consequences, both only in blocks laid out unusually. A block whose closing
+backtick sits at a different column than its own lines now follows the LINES. And a line
+indented LESS than the base comes out flush (`spaces.saturating_sub(base)`) instead of
+keeping all its indentation — which used to leave it further right than the siblings that
+were indented PAST it, the inversion loft#990 lists as a related silent edge. A
+TAB-indented block is still untouched: a tab is not a space, so the count is zero.
+
+`backtick_string`'s closing arm no longer strips — every line arrives dedented — and keeps
+only the two layout rules. `backtick_string_resume` gained the trailing-blank-line drop it
+never had (`drop_trailing_blank_line`), which is the other half of the reported symptom.
+
+**One in-repo program moved, and it is the instructive one.**
+`scripts/build-playground-examples.loft` builds `doc/examples.js` out of six holed
+backtick blocks, and took the newline BETWEEN two appends from the closing line the old
+behaviour kept verbatim. With the block dedenting properly that line is layout and is
+dropped, so the whole file came out as nine lines. The generator now ends each block's
+last content line with an explicit `\n` — the newline is written rather than inherited —
+and the regenerated `doc/examples.js` is byte-identical to the committed one once
+whitespace is ignored (40 examples, 40 list entries, 2 groups, checked through `node`).
+`doc_hygiene::doc_examples_js_is_up_to_date` is what caught it.
+
+Guard: `tests/scripts/990-backtick-dedent-with-holes.loft`, 11 cells on both backends —
+hole in the middle / on the opening line / on the first content line, blank first line,
+outdented line, tabs, a nested block inside a hole, doubled braces, content on the opening
+line, empty block, and the template shape LOFT.md advertises. 9 of the 11 fail against a
+pre-fix binary. LOFT.md's shader example is corrected too: `void main() {` opens a hole, so
+it never compiled; doubled, it compiles AND dedents.
+
+### A `{` that opens a hole nothing closes says so (loft#989, 2026-08-19)
+
+The two ways of getting a literal brace wrong got very different answers. `}` reached
+`Lexer::unescaped_brace` — one home for four scanners, a code, and a `Mechanical` fix
+naming `}}`. `{` had no equivalent: the scanner opened a hole and returned, and the failure
+surfaced later at `objects.rs`'s generic `diagnostic!(… "Formatter error")`, the "the string
+did not resume after a hole" path, which cannot know a `{` started it. Measured on
+`println("a lone open { here");` — SIX diagnostics, the last of them blaming the function's
+own closing brace, and not one of them mentioning `{{`.
+
+Reporting it needs the hole's fate to be KNOWN at the `{`, and it is: a hole holds code, the
+code scanner stops at the end of a line, so a hole that does not close on the line it opened
+never closes at all (measured both ways — `"a {` + newline and the same in a backtick
+literal are both errors today). `hole_closes_on_this_line` scans the rest of the line from a
+CLONE of the char iterator with a four-state stack (code / string / backtick / char literal)
+and brace depth; `Lexer::unclosed_hole` is the `}` twin — coded `format-unclosed-hole`,
+`Mechanical` fix `{{`, caret ON the brace rather than one past it.
+
+The scan's direction is the safety property: a wrong `true` leaves the pre-fix behaviour,
+a wrong `false` would refuse a legal program. It answers `true` for the one thing it does
+not model, a `//` comment. A `` ` `` in code can only OPEN a literal (code has no bare
+closing backtick), and one that runs past the end of the line cannot let the hole close on
+that line either — which is also what the enclosing literal's own terminator looks like
+from inside an unclosed hole, so both readings are the same error.
+
+Recovery is to treat the `{` as the literal brace the fix advertises and keep scanning, so
+the string terminates where it was going to and nothing cascades: six diagnostics down to
+one. Verified silent on `{x}`, `{S{x:7}.x}`, `{"q{y}q"}`, `{\"inner\"}`, `{if c == '}' {…}}`,
+`{{`/`}}`, and a nested backtick literal in a hole.
+
+Guards: `tests/error_messages/cases/54_format_unclosed_open_brace.loft` (the whole rendered
+output, so the single-error shape is pinned too) and the `e1_code_set` registry row. No
+existing error golden moved.
+
+### The par discard route has a native lowering (loft#987, 2026-08-19)
+
+`for x in v par(r = f(x), N) { }` — a body that never names the result — lowers to
+`n_parallel_discard`. Every other live par route has a bespoke native emitter; this one had
+none, so it fell through to the declaration-driven default and `--native` emitted
+`n_parallel_discard`'s loft DECLARATION, whose body is EMPTY. The only thing separating that
+from a silent no-op was an unrelated arity mismatch (the IR pushes six args, the declaration
+has five), which rustc refused: add the missing parameter and the program compiles and runs
+no workers, on one backend only.
+
+`n_parallel_discard_native` (`codegen_runtime.rs`) + `ParallelDiscardEmitter` +
+the registry row, and `n_parallel_discard` joins the `collect_calls` list so the worker fn
+is in the reachable set. The closure returns `()` rather than the worker's value: with the
+result dropped the return SHAPE stops mattering, so one runner covers scalar, float, text
+and heap-reference workers alike, and the emitter needs neither a per-shape return bridge
+nor `return_size` nor the heap-ref storage type — only the `&mut String` work buffer a
+non-owned text worker must still be handed.
+
+**Making the backends comparable is what exposed the INTERPRETER's half**, wrong in two
+ways nothing could witness — a route that drops every result produces nothing to compare
+against. `run_parallel_discard` had only the `DbRef` input arm, so a worker taking
+`integer` read the row pointer's bits; it now runs the same input ladder
+`run_parallel_queue` does (text / wide-tuple / primitive / DbRef, with `u32::MAX` leaving
+before any size test — it is the TEXT marker, not a width). And it never pushed the hidden
+parameters a compiled worker has: the `__work_N` buffer of a text return, the destination
+of a heap return. Missing them shifted every slot the worker reads — the text case
+SEGFAULTED the interpreter. Both counts now come from the same two readers
+`parallel_queue_dispatch` uses, and the route picks `execute_at_text` / `execute_at_ref`
+accordingly. No adoption or rebasing: the worker's whole `Stores` clone dies with the
+batch, which is what discard means.
+
+Guards: `tests/scripts/987-par-empty-body-discard.loft` — each worker ASSERTS the row it
+was handed, across scalar / float / text / text-input / struct / vector / boolean returns
+plus an empty input, with a queue-route control for count and value (a pre-fix binary
+SIGSEGVs on it) — and `tests/par_discard.rs`, which uses a side effect as the oracle
+(each worker prints its row) because a discarded result cannot be one, plus an emit check
+that the CALL reaches the runtime helper.
+
+Left standing, and worth knowing: `output_function` gates its `todo!()` / `compile_error!`
+stub on `*def.returned() != Type::Void`, so a VOID native with no implementation is emitted
+as an empty body — silently — where a value-returning one is loud. Ten such stubs are in a
+typical emit; each is fine today only because its own call site is rewritten elsewhere
+(`n_parallel_buf_drop*` by the rename emitter, `n_eprint` inlined from `#rust`) or is a
+deliberate no-op on this target (`n_yield_frame`). Nothing checks that, and it is what hid
+this bug for its whole life.
+
+### A par worker declared below its loop keeps its return type (loft#988, 2026-08-19)
+
+`b_type` in `build_parallel_for_ir` asked two questions in the wrong order:
+
+```rust
+if matches!(ret_type, Type::Unknown(_)) { I32 } else if fn_d_nr == u32::MAX { Unknown } …
+```
+
+On pass 1 a worker declared BELOW its loop answers `(u32::MAX, Unknown(0))` — BOTH
+conditions at once — and the first arm won, pinning `_b_par<n>` to `integer`. Pass 2
+refines only a slot that is still unknown, so it stayed. The comment above it already
+described the intended behaviour ("On the first pass fn_d_nr is u32::MAX; use Type::Unknown
+… Using I32 here caused the type to stick as integer even when the worker returns float or
+boolean") — the code had the arms the other way round.
+
+Only a COMPOUND assignment showed it: `t += b` retyped a float accumulator to integer and
+the PASS-1 error aborted the parse before pass 2 could correct it, while `t = t + b`
+coerces and passed, and `println("{b}")` printed correctly because `b` is inline-substituted
+by the element accessor and only its DECLARED type reaches the body's type check. The
+instrument that named it was `LOFT_VAR_TABLE=main`: `_b_par0 int` with the worker below,
+`float` with it above.
+
+**The arm order alone was not the fix** — the suite said so. `parse_parallel_worker`
+answers `(u32::MAX, Unknown)` for two OPPOSITE reasons, and both callers were reading one
+sentinel: a worker declared below the loop (not resolved YET) and a worker it REFUSES,
+which is a generator return or a name that does not exist. The refusals lean on `integer`
+deliberately — their own comment says so — because `b` has to carry a usable type or every
+use of it in the body earns a second diagnostic under the reported one, and reordering the
+arms alone added `Unknown variable '_b_par1'` to
+`parse_errors::par_worker_returns_generator`.
+
+The PASS is what tells the two apart: `fn_d_nr == u32::MAX && self.first_pass` is "not yet"
+and answers `Unknown`; on pass 2 the same sentinel means "never, and the error is already
+reported" and keeps `integer`. A RESOLVED worker whose return type is still unknown keeps
+`integer` too — the width the downstream route decisions assume.
+
+Guards: `parse_errors::par_worker_returns_generator` (which caught the first attempt) and
+its new sibling `par_worker_that_does_not_exist_reports_once`, holding the pass-2 half for
+the OTHER caller of the sentinel — one error, the body's `b > 0` silent, so the two intents
+cannot quietly re-collapse. Behaviour:
+`tests/scripts/988-par-worker-declared-below.loft`, 7 cells on both backends —
+`+=` / `=` / `/=` over a float return, integer, text and boolean returns, and a vector
+accumulate — every worker declared below its loop. A pre-fix binary fails 3 of them at the
+parse. Each loop is the LAST statement of its function on purpose: a par loop with a
+below-declared worker also reads as a value rather than a statement, so anything after it
+demands a `;`. That is a separate defect with a separate fix, already landed on the
+consumer stream's branch; keeping the loop last means this file measures the TYPE alone.
+
 ### A struct-enum field access checks the tag (loft#980, 2026-08-18)
 
 `c.field` resolved at COMPILE time to the first variant declaring the name and read that

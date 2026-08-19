@@ -6873,7 +6873,20 @@ impl Scopes {
                     for v in self.insert_free(bl, free, is_return, data, function) {
                         ls.push(v);
                     }
-                } else if block.result == Type::Void {
+                } else if block.result == Type::Void || matches!(block.result, Type::Never) {
+                    // `Never` joins `Void` here because it is the same SHAPE for free
+                    // placement: a block that never completes yields no value, so there
+                    // is nothing to hoist into a `__ret_N` and nothing to return — and
+                    // the value leg below, having nothing to hoist, emitted the frees
+                    // BEFORE the tail.  When that tail is a branch (a `match` whose arm
+                    // `return`s is what types the block `never`), the arm that does NOT
+                    // return then reads a variable already released: `null(oob)` on
+                    // native, and on a droppable a drop before the arm plus a second one
+                    // at the `return` — a use-after-free (loft#992).  The two legs below
+                    // put the tail where it belongs either way: a tail that
+                    // unconditionally returns keeps the frees in front of it, a tail that
+                    // may still complete runs first and the frees follow.
+                    //
                     // @P322 — when the function body ends with a nested
                     // Void-result block whose last op is `Return(...)` (the
                     // iterator-generator shape: `for n in […] { yield n; }

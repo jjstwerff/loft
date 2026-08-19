@@ -192,6 +192,17 @@ fn cache_pkg(home: &Path, name: &str, version: &str, loft_req: &str) {
     );
 }
 
+/// A `loft.lock` pinning one version of `probepkg`. The url/sha are unreachable by
+/// construction — a cell that fetched would be measuring the network, not resolution.
+fn pin_lock(version: &str) -> String {
+    format!(
+        "schema_version = 1\n\n[[package]]\nname = \"probepkg\"\nversion = \"{version}\"\n\
+         url = \"http://127.0.0.1:1/probepkg-{version}.tar.gz\"\n\
+         sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+         source = \"registry\"\n"
+    )
+}
+
 /// A bare script that prints which version of `probepkg` it resolved.
 fn probe_script(dir: &Path) {
     write(
@@ -446,6 +457,98 @@ fn arc_c2_a_cwd_lockfile_does_not_pin_a_bare_script() {
         all.contains("probepkg-0.2.0"),
         "nothing declares anything here — a lockfile in the cwd is not a declaration, \
          and 0.1.0 means the deleted leg is still deciding (@PLN143 arc C2):\n{all}"
+    );
+}
+
+/// loft#991 — the same for a file that is INSIDE A PROJECT whose project has no lock.
+///
+/// The two cells above cover a BARE script, which belongs to no project. This is the row
+/// they leave open, and it is the one that was filed: `probe_project_lockfile` finds the
+/// project root, finds no `loft.lock` there, and returns — and before this arc the chain
+/// then fell through to the cwd probe, so a stranger's pin governed a project that
+/// declares its own dependency in `loft.toml`. Measured on `tuxedo-post-973` (the branch
+/// without this arc): the same project resolved `random-0.2.1` or `random-0.3.1` purely
+/// by which directory `loft` was invoked from, against `0.1.0` in its own manifest.
+///
+/// A stray `loft.lock` is easy to acquire without asking for one, which is what made this
+/// reachable: before this arc, running any bare script that `use`d a registry package
+/// wrote one into the cwd. Do that once in `$HOME` and every lock-less project built from
+/// `$HOME` resolved through it.
+///
+/// ⚠ **What this cell asserts is the ABSENCE of the stranger's version, and the control
+/// below is what stops that from being vacuous.** Offline, a lock-less project resolves
+/// NOTHING — `probe_cache_newest` is `Bare`-scope only by design (a fallback takes the
+/// newest cached copy, and only where nothing is declared can that violate no
+/// constraint), so a scope that HAS a declaration refuses instead. That refusal is
+/// pre-existing and unchanged by this arc — measured identical on both branches with no
+/// lockfile anywhere. So the difference this cell measures is exactly the filed one:
+/// `probepkg-0.1.0` against the defect, no version at all with the leg gone.
+#[test]
+fn arc_c2_a_cwd_lockfile_does_not_pin_a_lockless_project() {
+    let home = empty_home("c2_project");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let proj = home.join("proj");
+    write(
+        &proj.join("loft.toml"),
+        "[package]\nname = \"lockless\"\nversion = \"0.1.0\"\n\n\
+         [dependencies]\nprobepkg = \"0.2.0\"\n",
+    );
+    // The script sits under the project root — `probe_project_lockfile` finds that root
+    // and no lock in it, which is exactly the state that used to fall through.
+    probe_script(&proj.join("src"));
+    let elsewhere = home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir");
+    write(&elsewhere.join("loft.lock"), &pin_lock("0.1.0"));
+    let all = run_env(
+        &home,
+        &elsewhere,
+        proj.join("src/s.loft").to_str().expect("path"),
+        &[("LOFT_OFFLINE", "1")],
+    );
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        !all.contains("probepkg-0.1.0"),
+        "a project's resolution belongs to the PROJECT, not to the directory loft was \
+         invoked from — 0.1.0 is the invoking directory's lockfile deciding \
+         (loft#991):\n{all}"
+    );
+}
+
+/// The control for the cell above: the SAME fixture, with the project holding its own
+/// lock, must resolve — otherwise "no version appeared" would pass whatever the reason.
+///
+/// It also pins the precedence the filed report found already working: the project's lock
+/// outranks the invoking directory's, and the two name different versions here so neither
+/// can be reached by accident.
+#[test]
+fn arc_c2_a_projects_own_lock_outranks_the_invoking_directorys() {
+    let home = empty_home("c2_project_ctl");
+    cache_pkg(&home, "probepkg", "0.1.0", ">=0.8");
+    cache_pkg(&home, "probepkg", "0.2.0", ">=0.8");
+    let proj = home.join("proj");
+    write(
+        &proj.join("loft.toml"),
+        "[package]\nname = \"locked\"\nversion = \"0.1.0\"\n\n\
+         [dependencies]\nprobepkg = \"0.2.0\"\n",
+    );
+    probe_script(&proj.join("src"));
+    write(&proj.join("loft.lock"), &pin_lock("0.2.0"));
+    let elsewhere = home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir");
+    write(&elsewhere.join("loft.lock"), &pin_lock("0.1.0"));
+    let all = run_env(
+        &home,
+        &elsewhere,
+        proj.join("src/s.loft").to_str().expect("path"),
+        &[("LOFT_OFFLINE", "1")],
+    );
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(
+        all.contains("probepkg-0.2.0"),
+        "the project's own lock governs it from any directory (loft#991):\n{all}"
     );
 }
 
