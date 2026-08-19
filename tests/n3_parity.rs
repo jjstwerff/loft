@@ -738,12 +738,43 @@ fn boolean_compare_of_lifted_ref_field_builds_in_cdylib_672() {
 // @speed 3.9
 #[test]
 fn a_dependency_edit_invalidates_its_dependents_cdylib() {
+    dependency_edit_reaches_a_dependent("777", &[]);
+}
+
+/// loft#999 — the same guard with the layout probe's RELOCATION forced to fail.
+///
+/// Before a rebuild, `cached_or_build_shared_cdylib` asks the artifact which type
+/// layout it was built for, and it asks a copy set aside from the real path: macOS
+/// dyld caches a loaded image by PATH and its `dlclose` is a no-op, so probing the
+/// real path and then rebuilding there serves the pre-edit image to the very run
+/// that wrote the correct file.
+/// The probe used to fall back to asking IN PLACE when that copy could not be made —
+/// which restored that behaviour on one unlucky `copy`, and no run afterwards could
+/// clear it.  That is the whole of loft#999: this assertion failed on `macos-latest`
+/// twice in a fortnight and passed the other eleven times, because how a probe
+/// answers must not depend on whether a temp file could be written.
+///
+/// `LOFT_FORCE_PROBE_RELOCATE_FAIL` makes the relocation fail on every platform, so
+/// the luck is gone from the test: the probe must now answer "cannot adopt" and the
+/// caller must rebuild.  Verified non-vacuous — with the in-place fallback restored,
+/// this fails at round 2 with `left: "2"`, the reported failure verbatim.
+// @speed 5.3
+#[test]
+fn a_dependency_edit_reaches_a_dependent_when_the_layout_probe_cannot_relocate() {
+    dependency_edit_reaches_a_dependent("999", &[("LOFT_FORCE_PROBE_RELOCATE_FAIL", "1")]);
+}
+
+/// The shared body: `dep` inlines `base`, the consumer names only `dep`, `base` is
+/// edited, and every run afterwards must report the edited rule.  `tag` keeps the
+/// two callers' scratch trees apart (same pid, one test binary); `extra_env` is
+/// applied to every `loft` invocation.
+fn dependency_edit_reaches_a_dependent(tag: &str, extra_env: &[(&str, &str)]) {
     if Command::new("rustc").arg("--version").output().is_err() {
         eprintln!("skip: rustc unavailable (needs the native build)");
         return;
     }
     let pid = std::process::id();
-    let root = std::env::temp_dir().join(format!("loft_777_dep_{pid}"));
+    let root = std::env::temp_dir().join(format!("loft_{tag}_dep_{pid}"));
     let _ = std::fs::remove_dir_all(&root);
     let libdir = root.join("lib");
 
@@ -779,14 +810,16 @@ fn a_dependency_edit_invalidates_its_dependents_cdylib() {
     std::fs::write(&prog, "use dep;\nfn main() { println(\"{check(3)}\"); }\n").unwrap();
 
     let run = || -> String {
-        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
-            .arg("--interpret")
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("--interpret")
             .arg("--lib")
             .arg(&libdir)
             .arg(&prog)
-            .env("LOFT_NO_CACHE", "1")
-            .output()
-            .expect("spawn loft binary");
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn loft binary");
         assert!(
             out.status.success(),
             "run failed:\n{}",
@@ -814,6 +847,125 @@ fn a_dependency_edit_invalidates_its_dependents_cdylib() {
             "round {round}: a `base` edit must reach a consumer that only names `dep`"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// loft#999 — an artifact that cannot be moved off its path is REBUILT, not adopted.
+///
+/// This is the policy behind the round-2 failure, asserted directly and on every
+/// platform: the layout probe must never `dlopen` a path its caller may replace, so
+/// when it cannot link or copy the artifact aside it has to answer "cannot adopt".
+/// The alternative the fallback used to take — ask in place — is correct on Linux
+/// and silently serves a stale image on macOS, which is exactly the property a
+/// cross-platform test cannot see and a nightly notices twice a fortnight.
+///
+/// Non-vacuous by construction: the third run, with the fault injection removed,
+/// must ADOPT the same artifact.  Without that cell, "the artifact was rebuilt"
+/// would also pass on a loft that rebuilds unconditionally.
+// @speed 1.6
+#[test]
+fn an_unrelocatable_layout_probe_rebuilds_instead_of_adopting() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (needs the native build)");
+        return;
+    }
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_999_probe_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("lib").join("solo");
+    std::fs::create_dir_all(pkg.join("src")).unwrap();
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"solo\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+         [library]\nentry = \"src/solo.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src").join("solo.loft"),
+        "pub fn seven() -> integer { return 7; }\n",
+    )
+    .unwrap();
+    let prog = root.join("main.loft");
+    std::fs::write(&prog, "use solo;\nfn main() { println(\"{seven()}\"); }\n").unwrap();
+
+    let run = |env: &[(&str, &str)]| -> (String, String) {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("--interpret")
+            .arg("--lib")
+            .arg(root.join("lib"))
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn loft binary");
+        assert!(
+            out.status.success(),
+            "run failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (
+            String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // The artifact `solo`'s cdylib was published as, and when.
+    let auto = pkg.join("native-auto");
+    let artifact_mtime = || -> std::time::SystemTime {
+        let ext = if cfg!(target_os = "windows") {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        let mut newest: Option<std::time::SystemTime> = None;
+        for e in std::fs::read_dir(&auto)
+            .expect("native-auto must exist")
+            .flatten()
+        {
+            if e.path().extension().is_some_and(|x| x == ext)
+                && let Ok(m) = e.metadata().and_then(|m| m.modified())
+                && newest.is_none_or(|n| m > n)
+            {
+                newest = Some(m);
+            }
+        }
+        newest.expect("the cold run must have built an artifact")
+    };
+
+    // Cold: builds the artifact and answers from it.
+    assert_eq!(run(&[]).0, "7", "cold run");
+    let cold = artifact_mtime();
+
+    // Unchanged sources, but the probe cannot be relocated: the artifact must NOT
+    // be adopted — and the reason must be said, because an unexplained rebuild is
+    // recoverable while an unexplained stale answer is not.
+    let (out, err) = run(&[("LOFT_FORCE_PROBE_RELOCATE_FAIL", "1")]);
+    assert_eq!(
+        out, "7",
+        "an unprobeable artifact must still give the right answer"
+    );
+    assert!(
+        err.contains("to read its type layout"),
+        "the refusal to adopt must name itself; stderr was:\n{err}"
+    );
+    let forced = artifact_mtime();
+    assert!(
+        forced > cold,
+        "an artifact the probe cannot move off its path must be REBUILT, not adopted          (mtime unchanged: {cold:?})"
+    );
+
+    // Control: without the injection the same artifact IS adopted, so the assertion
+    // above is about the probe and not about loft rebuilding on every run.
+    assert_eq!(run(&[]).0, "7", "control run");
+    assert_eq!(
+        artifact_mtime(),
+        forced,
+        "a fresh artifact must be adopted, not rebuilt"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
