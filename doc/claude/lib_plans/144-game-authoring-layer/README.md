@@ -135,6 +135,18 @@ entire contract between them**: a projected position, a sprite origin, and `laye
 A plain 2D game sets all three trivially. That is A7; A3's run-grouping is what keeps it true
 once batched.
 
+**Occlusion is the level designer's rule, and the engine gets no mechanism for it —
+settled, not open.** A character walking behind a fence, a tree trunk, a window or a low
+wall stays visible, because those things are narrow or mostly transparent and alpha does the
+work. The rule is simply *do not place large solid objects in the foreground*. So there is
+no cutaway, no fade-when-occluding, no height ceiling, and not even a *what covers my
+subject* query: each buys a runtime mechanism to rescue a placement that should not exist.
+It does make A4 and A5 load-bearing rather than polish — the rule holds only if a fence's
+soft edge composites correctly and a click passes through its gaps. Should it ever need
+help, the help is an **authoring-time check in the editor** (flag a placed sprite whose
+solid region could hide a character behind it), never a runtime feature: advice at author
+time, silence at run time.
+
 The page shell is the other half worth watching: moros plan 22 has a `--html` editor whose
 world is bytes (`W1`), whose page has a filesystem (`P6`), and where *build something, close
 the tab, come back and it is there* has been true since `B4`. That is F1's scene-in-a-store
@@ -252,14 +264,7 @@ behind them: [FONTS.md](FONTS.md).
 4. **What does a store miss do under `--html` today?** [LAZY_STORES.md](../../LAZY_STORES.md)
    fetches on a miss, which is right for a document and wrong for a frame loop.
    Confirm the current behaviour before F3 designs around it.
-5. **Occlusion is not ordering — but alpha does most of the work.** A character walks
-   *behind* a tree and stays visible through its gaps, because the sprite is mostly
-   transparent; that is the design working, not a problem. What is left is the **solid**
-   region of a foreground sprite hiding the thing the player is steering. Cutaway,
-   fade-when-occluding and a height ceiling are app policy, not `stage` policy — the
-   library owes only the query *is my subject covered by opaque texels*. Settle it before
-   the vehicle asks.
-6. **G's trigger.** Open vector paths when a consumer needs resolution-independent
+5. **G's trigger.** Open vector paths when a consumer needs resolution-independent
    art — a UI that scales across DPI, a zoomable map. Until then sprites + atlas
    cover the cases, and a path rasterizer is the one genuinely research-shaped item
    in this plan.
