@@ -51,15 +51,15 @@ shippability for its ambition.
 **Two post-fx passes are NOT declined: lighting, and per-layer atmosphere.** Crawler's **R6** shipped and verified it —
 world layers into an offscreen FBO, one fullscreen composite through a directed light cone
 plus vignette, **HUD drawn after and unlit**, with the kernel still authoritative over what
-is visible and the light only softening. A12 inherits that shape, and inherits its gate
+is visible and the light only softening. L2 inherits that shape, and inherits its gate
 design too: the constants live in the shader **and** in a blueprint script that generates the
 probe expectations, so a falloff is retuned in one place and verified by monotonicity along a
 ray rather than by hand-computing a curve per pixel.
 
-A13 then reuses that same framebuffer for **blur and fog, per layer** — the Hollow Knight /
+L3 then reuses that same framebuffer for **blur and fog, per layer** — the Hollow Knight /
 Silksong pipeline, where a distant plane is blurred and hazed while the foreground stays
 sharp. It is per-LAYER and not fullscreen, which is the whole distinction: a fullscreen blur
-softens the character too. Because A8 already gives a layer a parallax factor, adding a blur
+softens the character too. Because P2 already gives a layer a parallax factor, adding a blur
 radius and a fog colour makes atmosphere *data on the layer* rather than a pipeline anyone
 has to configure.
 
@@ -86,5 +86,5 @@ Two things dissolve most of that tension:
 What genuinely remains is a question of **who owns the scene between frames**, and the answer
 is decided by the consumer, not by the library. A roguelike that redraws everything every frame
 wants the canvas. A GameMaker-shaped game with thousands of instances and a moving camera
-wants the retained form, because A8's camera is then one uniform instead of an O(N) rewrite.
+wants the retained form, because P2's camera is then one uniform instead of an O(N) rewrite.
 Both sit on the same batcher, which is the only part that must not be duplicated.
