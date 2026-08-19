@@ -92,6 +92,15 @@ promoted once battle-tested where the consumer lives. See
 onward — another reason that publication decision is on the critical path rather than at the
 edge of it.
 
+## Targets
+
+The editor is a page, so its first target is the browser — including a **phone browser**, which
+is the same surface crew_punk's six-consoles constraint assumes. With `--native-android` it can
+equally ship as an APK from the same source. That makes `T2`'s pick and `D`'s widgets carry a
+touch obligation rather than a mouse one: no hover, and finger-sized targets. Gated on
+[loft-libs-graphics#32](https://github.com/loft-lang/loft-libs-graphics/issues/32) for the APK
+route; the browser route needs nothing extra.
+
 ## Open design questions
 
 1. **What is content and what is play?** `V1`'s second half needs the line drawn: reloading a

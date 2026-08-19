@@ -55,6 +55,14 @@ cut, not when it is implemented.
 | **D1** | S | Four visual states over A4's routing-with-capture, on top of an **extracted** `Button`/`Panel`/`ListBox`/`VerbBar`/`Theme` rather than a written one. The effort is the replay harness, and it constrains A4: the input path must be injectable. `input_tick_from_state` in the `input` package already exists for exactly this — reuse it rather than inventing a second seam. |
 | **D2** | M | The half the kit does not have. Focus ring and tab order are small; the **text field** is the phase. Caret placement needs B2's measurement, selection needs hit-test to a character index, insertion/backspace/IME arrive via `gl_event_text`, and multi-byte indexing returns for a third time. |
 
+## Targets
+
+Follows @PLN144: interpreter, `--native`, `--html`, `--native-android`. ⚠ **`D2`'s IME gate
+cannot pass on Android today** — NativeActivity delivers `KeyEvent`s and has no `TextEvent`, so
+*composing* text needs a new `gl_text_input()` text-stream API in `graphics`. Discover that
+before `D2` is cut, not inside it; the desktop and browser halves of the same gate are
+unaffected.
+
 ## Phase ordering
 
 **`B0` first — it depends on nothing and unblocks a shipped consumer today.** Two UI surfaces

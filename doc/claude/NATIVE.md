@@ -1592,7 +1592,13 @@ emits the bare `.so`. Env: `ANDROID_NDK_HOME`, `ANDROID_HOME`, `JAVA_HOME`;
 `LOFT_ANDROID_TARGET` (default `aarch64-linux-android`; use `x86_64-linux-android` for the KVM
 emulator), `LOFT_ANDROID_API` (default 24). Needs a `fn main`.
 
-Graphics/input/audio run through the **cfg-gated** Android backend in the `lib/graphics` fixture
+⚠ **That backend is FIXTURE-ONLY.** Graphics/input/audio run through the cfg-gated Android
+backend at `tests/fixtures/libs/graphics/native/src/android_gl.rs`, which exists on **no branch**
+of the canonical `loft-libs-graphics` — so an **installed** `graphics` cannot target Android,
+and @PLN106's goldens prove the fixture rather than the published package. Flow-back filed as
+[loft-libs-graphics#32](https://github.com/loft-lang/loft-libs-graphics/issues/32); the fixture
+is pinned at `graphics-v0.1.1` against a `main` at v0.5.5, so it needs a rebase forward, not a
+copy. What that backend does
 (`native/src/android_gl.rs`): raw EGL/GLES-3.0 on `app.native_window()` (GLES 3.0 = WebGL2, so
 website GL programs run unchanged) + android-activity's event pump. An UNCHANGED loft program
 gets: rendering (clear/shapes/shaders/text), **touch** (feeds `gl_mouse_*` from `MotionEvent`s),

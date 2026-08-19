@@ -58,6 +58,15 @@ cut, not when it is implemented.
 | **F6** | XS | Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The fix is two lines; the throttled test is the phase. |
 | **F7** | S | Derive at pack time from the same alpha A4 already reads to pick — the art contains the answer, so nobody hand-authors a hitbox per sprite. Produces *data*; `shapes` and `lib_plans/75-physics-2body` consume it, so this is not a physics engine arriving by the back door. Containment is what makes substitution safe (a system validated against the proxy stays valid when the art changes); the bound is what stops containment being satisfied by a screen-sized rectangle. |
 
+## Targets
+
+Follows @PLN144: interpreter, `--native`, `--html`, `--native-android`. Android already has
+audio through the fixture backend (oboe/AAudio via `audio_play_raw`) and takes the **native**
+side of every file and HTTP path, so a pack range-read from static hosting works there as it
+does on desktop — `E1`'s browser stub is a `--html` problem only. Both depend on
+[loft-libs-graphics#32](https://github.com/loft-lang/loft-libs-graphics/issues/32) landing, and
+**`E2`/`F2` should be measured on Android as well as the two desktop targets** once it does.
+
 ## Phase ordering
 
 **`E1` first** — ~30 lines of JS, independent of everything, and it turns silent browser games

@@ -38,6 +38,15 @@ lighting model. dryopea's 3-D renderer and moros's 3-D editor are where lessons 
 from, **not consumers this plan serves**: the test of any proposal here is whether a 2-D game
 needs it, never how big the game is.
 
+**Targets: the interpreter, `--native`, `--html`, and `--native-android`.** Android is a real
+target today — loft's @PLN106 shipped `--native-android` (signed APK, `src/android.rs`, on-
+emulator goldens for rendering, touch, keyboard and audio), and **GLES 3.0 is WebGL2**, so a
+program written for the browser GL surface runs there unchanged. That means this stage is
+Android-capable with **no new rendering work** — but only once the graphics library's Android
+backend, which currently lives *only in loft's test fixture*, is published
+([loft-libs-graphics#32](https://github.com/loft-lang/loft-libs-graphics/issues/32)). iOS is a
+different question and does sit behind `GFX.PORTABLE`'s wgpu backend.
+
 **Two growth directions are deliberately out, and neither is an omission.** *Full 3-D* will
 mature on its own track and this set is expected to grow toward it then — the groundwork
 already has a home in [`lib_plans/72-renderer-backend-boundary`](../72-renderer-backend-boundary/README.md)
