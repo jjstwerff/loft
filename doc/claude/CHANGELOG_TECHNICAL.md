@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A package's own NAME is not one of its module names (loft#976 follow-up, 2026-08-19)
+
+loft#976 made a bare `use <id>` inside a package bind that package's OWN `<id>.loft`, so a
+stranger's same-named module can no longer amputate a library's public surface. The rule
+had no stop at the package's own name, and `own_module_path` finds a same-named file
+ANYWHERE in the package — including `tests/`.
+
+Every library in the ecosystem writes its own suite as `tests/<pkg>.loft` containing
+`use <pkg>;`. That import therefore bound the TEST FILE as the package's module, the
+entry's `pub` surface never loaded, and every symbol read *"Unknown function … — the `X`
+this build resolved does not have it, and the registry's `X` does"*. **Nine published
+libraries went red** on the PR's `revalidate-libs` gate: hex_world, glb, regex, cbor,
+crypto, server, shapes, pluginabi, zttext.
+
+`use <pkg>` inside `<pkg>` asks for the PACKAGE. The guard now stops there (`id != pkg`),
+and `use self::<pkg>` remains the explicit spelling for the file. The distinction is what
+lets a package refer to itself at all: a name that means the package in one file and a
+sibling module in another is a name that means nothing.
+
+**Two wrong turns before the right one, both worth recording.** The first hypothesis was
+"a package importing itself by name", and the minimal repro built from it PASSED on both
+binaries — refuted, not confirmed. The trigger needs the same-named file to exist and NOT
+be the entry, which is what `tests/<pkg>.loft` is; reducing DOWN from the red library
+found it, building UP from a guess did not. The second was a mis-measurement of my own
+making: `loft --tests src` walked `overland.loft`, a file the entry never imports and
+which fails to parse on BOTH binaries, and that pre-existing error read as the regression
+for several minutes.
+
+Measured before/after on five libraries, each a clean copy in a scratchpad (running a
+suite inside a consumer's tree writes `native-auto/` and `.loft/` and is not read-only):
+regex 1→11, cbor 0→5, glb 0→21, zttext 0→46, hex_world 0→21 passing.
+
+Guard: `module_name_clash::a_packages_own_name_means_the_package_not_a_same_named_file`,
+built by hand rather than through `parse_two_packages` because the whole point is a file
+named after its package in a directory that is not `src/`. loft#976's own sixteen cells
+use module names distinct from the package name, which is why none of them covered this.
+
 ### `OpIndex` reaches the composite subscript, and the slice says what to write (loft#996, 2026-08-19)
 
 @F114 says a type defining `OpIndex` "is subscripted like a built-in collection" and names

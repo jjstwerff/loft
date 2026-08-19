@@ -9750,8 +9750,23 @@ impl Parser {
                     // `self::` is the explicit form for the rare case that wants a
                     // stranger's module rather than the defensive form every library
                     // author has to remember for every file they will ever add.
+                    // …but a package's OWN NAME is not one of its module names.  `use
+                    // <pkg>` inside `<pkg>` asks for the package — its public surface —
+                    // and that is how every library in the ecosystem writes its own test
+                    // suite (`tests/<pkg>.loft` saying `use <pkg>;`).  Without this the
+                    // rule above binds whatever file happens to be called `<pkg>.loft`,
+                    // which for that suite is the TEST FILE, so the entry's `pub` surface
+                    // is not loaded and every symbol reads unknown.  Nine published
+                    // libraries went red on it.
+                    //
+                    // The distinction is what keeps a package able to refer to ITSELF: a
+                    // name that means the package in one file and a sibling module in
+                    // another is a name that means nothing.  `use self::<pkg>` remains
+                    // the explicit spelling for the file, in the rare case that is what
+                    // was wanted.
                     if !self.package_declares_dep(&id)
                         && let Some(pkg) = self.own_package_name()
+                        && id != pkg
                         && let Some(f) = self.own_module_path(&id)
                     {
                         self.bind_own_module(&id, &pkg, &f, lib_alias.as_ref(), spec, "");

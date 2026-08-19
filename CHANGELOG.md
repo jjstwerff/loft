@@ -26,6 +26,16 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A library can import itself again
+
+A package whose own test file is named after the package — `tests/hex_world.loft` saying
+`use hex_world;`, which is how essentially every loft library is laid out — stopped
+seeing its own functions in this cycle. The import bound the test file rather than the
+package, so the library's entry never loaded and every call read *"Unknown function"*.
+
+`use <name>` inside the package called `<name>` means the package. Nothing you write needs
+to change; if you hit this, it is fixed.
+
 ### A type with `OpIndex` can be subscripted with more than one index
 
 Giving your type `OpIndex` lets it be subscripted like a built-in collection — and the

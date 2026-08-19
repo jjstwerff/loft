@@ -92,6 +92,62 @@ fn parse_two_packages(tag: &str, extra: &[(&str, &str)], top_body: &str) -> (Lev
     out
 }
 
+/// loft#976's own-module rule stops at the package's OWN NAME.
+///
+/// `use <pkg>` inside `<pkg>` asks for the package — its public surface — and that is how
+/// every library in the ecosystem writes its own test suite: `tests/<pkg>.loft` containing
+/// `use <pkg>;`. The rule as first written bound whatever file was called `<pkg>.loft`,
+/// which for that suite is the TEST FILE, so the entry's `pub` surface never loaded and
+/// every symbol read unknown. Nine published libraries went red on it — hex_world, glb,
+/// regex, cbor, crypto, server, shapes, pluginabi, zttext — and the shape reduces to the
+/// three files below.
+///
+/// The distinction is what lets a package refer to ITSELF: a name that means the package
+/// in one file and a sibling module in another is a name that means nothing. `use
+/// self::<pkg>` remains the explicit spelling for the file.
+///
+/// Built by hand rather than through `parse_two_packages`, because the whole point is a
+/// file named after its own package in a directory that is not `src/`.
+#[test]
+fn a_packages_own_name_means_the_package_not_a_same_named_file() {
+    let root = std::env::temp_dir().join(format!("loft_976_self_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("selfpkg");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir src");
+    std::fs::create_dir_all(pkg.join("tests")).expect("mkdir tests");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"selfpkg\"\nversion = \"0.1.0\"\n\n\
+         [library]\nentry = \"src/selfpkg.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/selfpkg.loft"),
+        "pub fn from_the_entry() -> integer { 42 }\n",
+    )
+    .unwrap();
+    // The file that used to win: named after the package, and NOT the entry.
+    std::fs::write(
+        pkg.join("tests/selfpkg.loft"),
+        "use selfpkg;\nfn main() { assert(selfpkg::from_the_entry() == 42, \"entry surface\"); }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("tests/selfpkg.loft").to_string_lossy(), false);
+    let level = p.diagnostics.level();
+    let lines = p.diagnostics.lines().to_vec();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        level < Level::Error,
+        "`use selfpkg` inside package `selfpkg` must bind the PACKAGE, so the entry's \
+         `pub` surface is what the test sees — binding the same-named test file instead \
+         amputates it (loft#976): {lines:?}"
+    );
+}
+
 /// The reported shape, and the one loft#976 fixes: the consumer grows a
 /// `src/catalogue.loft` of its own while its dependency already has one.  Each `use
 /// catalogue;` now binds the module of the package it is written in, so both packages
