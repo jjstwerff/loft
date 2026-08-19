@@ -35,7 +35,7 @@ text.
 
 ## Effort + design
 
-- **Effort:** H overall — 25 phases, **none above M** (7 XS, 14 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 26 phases, **none above M** (7 XS, 15 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -72,9 +72,10 @@ phase is cut, not when it is implemented.
 | **A1** — node tree + transform composition | `stage` | composed world matrices for a 3-deep tree with rotation + non-uniform scale + pivot equal hand-computed `math::mat4_*` products; both backends. Red on multiply order or pivot handling | Open |
 | **A2** — draw the tree through the **existing** per-sprite path, emitting `DrawRect`/`DrawText` | `stage` | a stage-drawn frame is **pixel-identical** to the hand-written immediate-mode draw of the same content (`save_png` + compare). Parallel run: both paths live. **Second gate:** a `lavition_ui` panel's `panel_draw_list` renders unmodified through this path — if it needs a shim, the command shape is wrong | Open |
 | **A3** — batched renderer behind the same API | `stage` | pixels identical to A2 **and** draw calls drop from N to O(atlases). Both halves — same pixels alone would pass a batch that silently fell back | Open |
-| **A4** — depth order, hit-test, input routing | `stage` | a headless pick table over a known overlapping tree: every (x, y) resolves to the hand-computed node, under rotation and inside a clip — **and a point over a sprite's TRANSPARENT texel resolves to what is behind it**, not to the sprite. A rect test cannot: you can see through the tree, so you must be able to click through it | Open |
+| **A4** — depth order, hit-test, input routing | `stage` | a headless pick table over a known overlapping tree: every (x, y) resolves to the hand-computed node, under rotation and inside a clip — **and a point over a sprite's TRANSPARENT texel resolves to what is behind it**, not to the sprite. A rect test cannot: you can see through the tree, so you must be able to click through it. Under A8 the un-projection is **per layer** — one screen point is a different world point in each — and the answer is the topmost layer whose alpha test passes | Open |
 | **A5** — per-node alpha + tint, and **blending instead of discard** | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; a sprite's **anti-aliased edge** composites without a fringe; tint × texel matches. The shipped `SPRITE_FRAG` does `if (c.a < 0.01) discard` and writes everything else opaque, with `GL_BLEND` never enabled — a binary cutout, so soft edges and semi-transparency are wrong today and per-node alpha is unimplementable on it | Open |
 | **A7** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
+| **A8** — camera with a per-layer parallax factor | `stage` | with every factor `1.0`, a camera pan is **pixel-identical** to translating every node by hand — the flat mode proved to be the degenerate case, not a second path. With factors varying, a pan of `d` moves each layer by `d × factor`, hand-computed per layer. **And a pure camera move re-uploads no instance data** (assert zero uploads), which is the entire reason the camera lives here and not in the node positions | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
@@ -95,33 +96,15 @@ phase is cut, not when it is implemented.
 | **F6** — font readiness ordering | `assets` | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | Open |
 | **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
 
-## Prior art — the lavition tree next door
+## Prior art
 
-`moros` carries a ~55 k-line editor (`hex_editor` 26.8 k, `hex_part` 10.6 k, `hex_voxel`
-7.9 k, `hex_mesh` 5.3 k) and three of its results land directly on this plan. Read that
-tree; **never write to it** — the findings come back here.
+`moros` carries a ~55 k-line editor and three of its results land directly on this plan:
+**`lavition_ui` is arc D already built** (zero-dependency widget kit, `panel_build` → a flat
+`vector<DrawRect>`), **`font.loft` is B1m** and was paid for in a 31 px layout error, and
+**the editor is already 2D with 3D extracted** through `hex_proj`. Detail, and the two facts
+that bound sequencing: [PRIOR_ART.md](PRIOR_ART.md).
 
-- **`lavition_ui` (2.1 k lines) is arc D, already built and proven by a 26.8 k-line
-  consumer.** `UiRect` / `rect_contains`, `Button`, `Entry`, `ListBox`, `StatusStrip`,
-  `Panel` with `panel_hit_test → UiHit`, a hotkey `VerbBar`, a `Theme` — with a
-  **deliberately empty dependency list**: no graphics, no GL, no world, so it is
-  headless-testable and registry-ready as it stands. D1 extracts it; D2 adds the focus and
-  text-field half it lacks.
-- **Its architecture is this plan's, already running.** `panel_build(spec, w, h) → Panel`,
-  then `panel_draw_list → vector<DrawRect>` and `panel_text_list → vector<DrawText>` —
-  retained spec, flat command list, hit-test on the same structure. A2 emits that shape
-  rather than a rival one.
-- **`font.loft` is B1m, and it was paid for.** Two measured runs to detect the browser's
-  proportional substitution, a 1/64-px advance because whole pixels accumulated a 31 px
-  error on one line, and outward rounding so `fit_text` never claims a fit that overflows.
-
-**`lavition_ui` is unpublished**, so D0 is a request to that tree, not work here.
-
-**And the editor core transfers further than it looks.** It is already 2D with 3D
-*extracted*: `hex_editor`'s work is axial-lattice editing — `gesture.loft` alone is 7 027 of
-its 12 304 source lines — and the third dimension lives in `hex_proj`, a seam of
-`hex_to_world(q, r, height) → Vec3` plus mesh emitters. Give that seam a screen sibling and
-the same world renders as sprites, with gestures, session, keymap and UI untouched.
+## The presentation model
 
 **The 2D view is a PRESENTATION of the 3D world, not a second world** — which is what a
 GameMaker-shaped game already is: a room whose instances carry a `depth`, sprites whose
@@ -135,6 +118,13 @@ entire contract between them**: a projected position, a sprite origin, and `laye
 A plain 2D game sets all three trivially. That is A7; A3's run-grouping is what keeps it true
 once batched.
 
+**Two scroll modes, one mechanism.** Scrolling the whole world in place and scrolling the
+front faster than the back are not two code paths: they are one camera with a **per-layer
+parallax factor**, and the flat mode is every factor at `1.0`. That is A8, and it is why the
+camera belongs to `stage` rather than to the app — an app-owned camera means rewriting every
+node's position on every scrolled frame, which is exactly the O(N) per-frame work the
+retained tree exists to avoid.
+
 **Occlusion is the level designer's rule, and the engine gets no mechanism for it —
 settled, not open.** A character walking behind a fence, a tree trunk, a window or a low
 wall stays visible, because those things are narrow or mostly transparent and alpha does the
@@ -147,15 +137,9 @@ help, the help is an **authoring-time check in the editor** (flag a placed sprit
 solid region could hide a character behind it), never a runtime feature: advice at author
 time, silence at run time.
 
-The page shell is the other half worth watching: moros plan 22 has a `--html` editor whose
-world is bytes (`W1`), whose page has a filesystem (`P6`), and where *build something, close
-the tab, come back and it is there* has been true since `B4`. That is F1's scene-in-a-store
-with hot reload, running — which is why scenes are in the first schema rather than a later
-one.
+## Effort per phase## Effort per phase
 
-## Effort per phase
-
-Totals: **7 XS, 14 S, 4 M** — no phase above M, which is the § Cutting rule holding
+Totals: **7 XS, 15 S, 4 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -168,6 +152,7 @@ those calls are made here rather than discovered mid-build.
 | **A4** | S | Stable z sort (insertion order breaks ties), reverse-iterate to pick, invert the world affine in closed form (no general 4×4 inverse) to take a screen point node-local. **The part that is always forgotten is capture** — the node that received the press receives the release even when the pointer has left it — and it is exactly what D1 tests. |
 | **A5** | S | Two more instance attributes, plus the shader moving off alpha-discard to real blending. **Design call: premultiplied alpha.** The canvas packs straight 0xAARRGGBB, so the packer premultiplies once at pack time; straight alpha under linear filtering darkens every anti-aliased edge, and this stack draws overlapping soft-edged sprites all day. Hand-compute the expected RGBA against that choice. |
 | **A7** | S | Three knobs, and **`stage` learns nothing about hexes or 3D**. GameMaker's, because a game author already has the vocabulary: a sprite **origin** (put it bottom-centre and the sprite stands up from its footprint), a per-node **`depth`** the app sets — `depth = -y` is the whole 2.5D idiom, and a hex world writes the projection of `(q, r, height)` instead — and a **`layer`** that outranks depth, so background / world / UI are bands rather than a global number every node has to get right. The effort is A3's run-grouping and getting *origin, not extent* right in both places; the sort itself is a comparison. |
+| **A8** | S | One `(dx, dy)` per stage and one float per layer, applied as a **shader uniform** at draw time. **Design call: parallax translates, it does not scale.** Scaling by depth is a perspective projection, and it would resize the footprint a base-anchored sprite is aligned to — so the world layer sits at `1.0`, backgrounds below, foreground overlays above, and every cell stays the same size. The cost this avoids is the point: baking the camera into node positions makes a scroll an O(N) rewrite **and a full instance re-upload every frame**, which is A3's whole budget spent on standing still. Picking pays for it — A4 must un-apply the camera **per layer**, since one screen point is a different world point in each. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
