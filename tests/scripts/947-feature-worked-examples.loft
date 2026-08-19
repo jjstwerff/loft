@@ -1524,3 +1524,113 @@ fn test_a_reflected_position_is_checked_against_the_descriptor_not_trusted() {
   assert(type_named("Nope947t") == null, "an unknown name answers null");
   assert((type_named("Doc947t") ?? lt947t).name == "Doc947t", "a known one answers its type");
 }
+
+struct Part947p { const id: integer, name: text }
+struct Word947p { const w: text, body: text }
+struct Pin947p  { const x: integer, const y: integer }
+
+// @FTR-022 — a paged read pays for the WALK, and for the order the file was written in
+//
+// @F93's load-bearing claim is that `limit` caps the WALK and not just the answer, so
+// "asking for twenty matches never pays for the rest". Asserted below as the counts it
+// decides, and measured with `LOFT_LOADER_STATS=1`, which reports `bytes_fetched` in
+// exact multiples of the 64 KiB page. Over a `trie` run of the same prefix, at limit 8:
+//
+//   2 000 words (566 KB file)    3 pages     uncapped   9 pages
+//   8 000 words (2.38 MB file)   3 pages     uncapped  32 pages
+//  32 000 words (9.72 MB file)   6 pages     uncapped 129 pages
+//
+// The capped read is FLAT while the file grows 17x and the uncapped read grows 14x, so
+// the cap really does stop the walk. The 3 -> 6 is the trie getting deeper, which is the
+// honest cost: a capped prefix read grows with the structure's DEPTH, not with the size
+// of the run it matched. Any NEGATIVE limit means no cap (not just -1), a limit past the
+// run reads the run, and limit 0 reads nothing while still paying the 2-page descent.
+//
+// The spatial half carries a cost nothing in the entry mentions, and it dominates
+// everything else: `store_load_box` is priced by the order the records were INSERTED,
+// not by the box or the index. Same 62 500-point grid, same query, same 500 records
+// returned, pages fetched --
+//
+//   box shape     x-major insert   y-major insert   tiled insert
+//   250 x   2         107                7               15
+//   100 x   5          45                7                9
+//    25 x  20          15               13                6
+//    20 x  25          13               15                7
+//     5 x 100           7               45               15
+//     2 x 250           7              107               29
+//
+// A 15x swing between two files holding identical data. The mirror is exact, which is
+// what proves the cause: the Morton walk is symmetric and the FILE is not, so a box
+// laid out across the insertion order pays for every stride it crosses. At 107 pages
+// the read pulls 81 % of the image in 107 range requests to return 0.8 % of the records
+// — worse than fetching the whole file once.
+//
+// So the cure is a write-time one: lay the dataset out with locality in both axes.
+// Tiling has no catastrophic orientation and is the best of the three for the
+// square-ish boxes a real viewport uses. This is asserted only as far as a count can
+// see it; the page numbers above are the reason the note exists.
+fn test_a_paged_read_pays_for_the_walk_it_takes_not_for_the_rest() {
+  tmp947p = temp_dir();
+  assert(tmp947p != null, "temp_dir is where this test's stores go");
+  stem947p = "{tmp947p ?? ""}/loft947_paged_{now()}_{ticks()}";
+  hp947p = "{stem947p}_h.store";
+  tp947p = "{stem947p}_t.store";
+  sp947p = "{stem947p}_s.store";
+
+  // ONE entry, and a batch that skips what the image does not hold.
+  all947p: hash<Part947p[id]> = [];
+  assert(store_persist_bind(all947p, hp947p), "the hash image is written");
+  for i in 0..50 { all947p += Part947p { id: i, name: "p{i}" } }
+
+  one947p: hash<Part947p[id]> = [];
+  assert(store_load_key(one947p, hp947p, 42), "a present key loads");
+  assert(len(one947p) == 1, "and brings exactly one entry, got {len(one947p)}");
+  assert((one947p[42] ?? Part947p { id: -1, name: "" }).name == "p42", "the right one");
+
+  miss947p: hash<Part947p[id]> = [];
+  assert(!store_load_key(miss947p, hp947p, 999), "an absent key answers false");
+  assert(len(miss947p) == 0, "and loads nothing, got {len(miss947p)}");
+
+  batch947p: hash<Part947p[id]> = [];
+  assert(store_load_keys(batch947p, hp947p, [7, 13, 999]) == 2,
+         "a batch answers how many were FOUND, skipping the absent");
+  assert(len(batch947p) == 2, "and brings just those, got {len(batch947p)}");
+
+  // A prefix run, and what `limit` bounds.
+  words947p: trie<Word947p[w]> = [];
+  assert(store_persist_bind(words947p, tp947p), "the trie image is written");
+  for i in 0..300 { words947p += Word947p { w: "kerk{i}", body: "x" } }
+
+  eight947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(eight947p, tp947p, "kerk", 8) == 8, "the cap decides the count");
+  assert(len(eight947p) == 8, "and the resident set, got {len(eight947p)}");
+
+  zero947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(zero947p, tp947p, "kerk", 0) == 0, "limit 0 reads nothing");
+
+  every947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(every947p, tp947p, "kerk", -1) == 300, "-1 is no cap");
+  neg947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(neg947p, tp947p, "kerk", -5) == 300, "and so is any negative");
+  over947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(over947p, tp947p, "kerk", 9999) == 300, "a cap past the run reads the run");
+
+  // A bounding box, and the corners written either way round.
+  pins947p: spatial<Pin947p[x, y]> = [];
+  assert(store_persist_bind(pins947p, sp947p), "the spatial image is written");
+  for gx in 0..40 { for gy in 0..40 { pins947p += Pin947p { x: gx, y: gy } } }
+
+  b1947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b1947p, sp947p, [10, 10], [19, 19], -1) == 100,
+         "a 10x10 box holds 100 of the 1600 points");
+  b2947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b2947p, sp947p, [19, 19], [10, 10], -1) == 100,
+         "and the corners the other way round name the same box");
+  b3947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b3947p, sp947p, [10, 10], [19, 19], 5) == 5,
+         "the box cap bounds the walk the same way the prefix cap does");
+
+  _ = delete(hp947p); _ = delete("{hp947p}.dschema");
+  _ = delete(tp947p); _ = delete("{tp947p}.dschema");
+  _ = delete(sp947p); _ = delete("{sp947p}.dschema");
+}
