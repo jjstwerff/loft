@@ -38,6 +38,16 @@ lighting model. dryopea's 3-D renderer and moros's 3-D editor are where lessons 
 from, **not consumers this plan serves**: the test of any proposal here is whether a 2-D game
 needs it, never how big the game is.
 
+**Two growth directions are deliberately out, and neither is an omission.** *Full 3-D* will
+mature on its own track and this set is expected to grow toward it then — the groundwork
+already has a home in [`lib_plans/72-renderer-backend-boundary`](../72-renderer-backend-boundary/README.md)
+(`GFX.PORTABLE`), which is also what unblocks native Android/iOS. And *broad standards
+integration* — interchange formats, asset and tooling conventions, browser and graphics
+standards beyond the ones already used — is wanted, but it is a direction rather than a phase:
+folded into these four plans it would multiply their surface without moving their vehicles.
+Both belong to later plans; recorded here so that a reader finding them absent knows the
+absence was chosen.
+
 ## Effort + design
 
 - **Effort:** MH — 17 phases in three arcs, **none above M**; see § Effort per phase
