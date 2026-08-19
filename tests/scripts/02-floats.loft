@@ -1,6 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Float and single arithmetic, math functions, null, and conversions.
+// @FTR-024 — the math library's domain edges: which calls answer null, and which answer
+// an infinity
+//
+// Six of the functions are declared `-> float?` because their domain has holes —
+// `sqrt`, `pow`, `log`, `ln`, `asin`, `acos` — and out-of-domain is loft's null, since
+// NaN IS the null float. The rest (`abs`, `sin`, `cos`, `tan`, `atan`, `floor`, `ceil`,
+// `round`, `min`, `max`) are total and answer a plain `float`.
+//
+// The distinction that is easy to get backwards is that an INFINITY is not null:
+// `log(0.0, base)` is negative infinity and `1.0/0.0` is positive infinity, so `??`
+// never fires on either, while `sqrt(-1.0)` and `asin(2.0)` are null and it does.
+// Asserted both ways below.
 fn main() {
   // --- Arithmetic (f64) ---
   assert(1.5 + 0.5 == 2.0, "float add");
