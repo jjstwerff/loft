@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Format specifiers: integers, floats, booleans, text, long, single, vectors.
+// @FTR-044 — `{expr}` interpolation and the format specifiers: width, fill, precision,
+// sign, and the radix forms
 fn main() {
   // --- Brace escaping ---
   // "ab{cd}e" would treat {cd} as a format expression in loft.

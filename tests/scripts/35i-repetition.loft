@@ -42,6 +42,7 @@ fn firstof(v: vector<Tok>) -> integer {
   }
 }
 
+// @FTR-053 — repetition in a slice pattern: `(V)*` and `(V)+` over a run of elements
 fn main() {
   a: vector<Tok> = [
     Num { n: 5 },

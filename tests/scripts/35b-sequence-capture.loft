@@ -91,6 +91,8 @@ fn point_reuse(ps: vector<Point>) -> integer {
   p.x + p.y + after
 }
 
+// @FTR-050 — naming pieces of a matched run: `name:pat` element captures inside a slice
+// pattern
 fn main() {
   // name:pat scalar
   assert(lit_then([5, 8]) == 13, "lit match: {lit_then([5, 8])}");

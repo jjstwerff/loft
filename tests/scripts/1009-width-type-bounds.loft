@@ -1,0 +1,83 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// What a width type (`u8`, `i8`, `u16`, `i16`, `i32`, `u32`) actually bounds — and where it
+// does not (loft#1009).
+//
+// The entry for these types says each "holds whole numbers within fixed bounds".  Measured,
+// that is true of the declaration, true of a struct FIELD, and false of a LOCAL reached by a
+// compound operator: `a: u8 = 250; a += 10;` answers 260, and `b: u8 = 5; b -= 10;` answers
+// -5, which the type cannot represent at all.  `a = a + 10` — the same arithmetic written
+// out — is a compile error, so the guarded spelling is the long one and the shorthand is the
+// hole.
+//
+// The cells below pin BOTH halves, because the pair is the finding: the same program holds
+// 260 in a `u8` local and 0 in the `u8` field it was assigned from.  When loft#1009 closes,
+// the local cells are the ones that change and they say so by name.
+//
+// The field half is loft#984's, already fixed: an out-of-range write leaves the type's
+// DEFAULT rather than a wrapped or aliased value, for the `u8` spelling and the
+// `integer limit(0, 255)` spelling alike.
+//
+// Sizes are pinned too, because "takes up less space" is the other half of the entry's
+// promise and it is the half that holds exactly.
+
+struct U1009 { a: u8, b: u16, c: i8 }
+struct L1009 { b: integer limit(0, 255) }
+
+// @FTR-043 — a width type's bounds: enforced at the declaration and in storage, absent on a
+// local reached by `+=`
+fn main() {
+  // Sizes: one, two and four bytes, and a struct is their packed sum.
+  assert(sizeof(u8) == 1, "sizeof(u8) = {sizeof(u8)}, want 1");
+  assert(sizeof(u16) == 2, "sizeof(u16) = {sizeof(u16)}, want 2");
+  assert(sizeof(i32) == 4 && sizeof(u32) == 4, "sizeof(i32/u32) = {sizeof(i32)}/{sizeof(u32)}, want 4/4");
+  assert(sizeof(integer) == 8, "sizeof(integer) = {sizeof(integer)}, want 8");
+  assert(sizeof(U1009) == 4, "sizeof(U1009) = {sizeof(U1009)}, want 1+2+1 = 4");
+
+  // A value inside the range is an ordinary number in every position.
+  level: u8 = 200;
+  year: u16 = 2026;
+  temp: i8 = -40;
+  assert("{level} {year} {temp}" == "200 2026 -40", "in-range values print plainly");
+
+  // Arithmetic WIDENS: the result of `u8 + integer` is an `integer`, which is why the
+  // written-out assignment back into the u8 needs a cast and gets a diagnostic.
+  widened = level + 10;
+  assert(widened == 210, "u8 + integer widens to integer, got {widened}");
+
+  // A vector of u8 is one byte per element — the storage promise, measured.
+  bytes: vector<u8> = [1, 2, 250];
+  assert(len(bytes) == 3, "len = {len(bytes)}");
+  assert(size(bytes) == 3, "one byte each, got {size(bytes)} bytes for 3 elements");
+  assert(bytes[2] == 250, "element value survives, got {bytes[2]}");
+
+  // A FIELD refuses a write it cannot hold and keeps the type's default (loft#984).  Both
+  // spellings of the same type agree, which is what that issue bought.
+  u = U1009 { a: 7, b: 0, c: 0 };
+  u.a += 253;
+  assert(u.a == 0, "a u8 FIELD written out of range reads its default, got {u.a}");
+  l = L1009 { b: 7 };
+  l.b = 260;
+  assert(l.b == 0, "the limit() spelling agrees, got {l.b}");
+
+  // A LOCAL does not.  These four are loft#1009 and are expected to CHANGE when it closes —
+  // they pin today's answer so the change is visible rather than silent.
+  a1009: u8 = 250;
+  a1009 += 10;
+  assert(a1009 == 260, "loft#1009: a u8 local passes its ceiling, got {a1009}");
+
+  b1009: u8 = 5;
+  b1009 -= 10;
+  assert(b1009 == -5, "loft#1009: an UNSIGNED local goes negative, got {b1009}");
+
+  c1009: i8 = 100;
+  c1009 += 100;
+  assert(c1009 == 200, "loft#1009: an i8 local passes 127, got {c1009}");
+
+  d1009: u16 = 65000;
+  d1009 += 1000;
+  assert(d1009 == 66000, "loft#1009: a u16 local passes 65535, got {d1009}");
+
+  println("width types: bounded where they are stored");
+}
