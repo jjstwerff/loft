@@ -33,6 +33,7 @@
 @FTR-022	tests/scripts/947-feature-worked-examples.loft:1532	test_a_paged_read_pays_for_the_walk_it_takes_not_for_the_rest	https://github.com/loft-lang/loft/blob/main/tests/scripts/947-feature-worked-examples.loft#L1532
 @FTR-023	tests/scripts/pln125-c-index.loft:88	main	https://github.com/loft-lang/loft/blob/main/tests/scripts/pln125-c-index.loft#L88
 @FTR-024	tests/scripts/02-floats.loft:4	main	https://github.com/loft-lang/loft/blob/main/tests/scripts/02-floats.loft#L4
+@FTR-025	tests/scripts/30-expressions.loft:53	test_inner_loop	https://github.com/loft-lang/loft/blob/main/tests/scripts/30-expressions.loft#L53
 @GIT-001	tools/indexer/src/scan.loft:61	indexable_files	https://github.com/loft-lang/loft/blob/main/tools/indexer/src/scan.loft#L61
 @GIT-002	tools/viewer/refresh.loft:48	branch_state	https://github.com/loft-lang/loft/blob/main/tools/viewer/refresh.loft#L48
 @GIT-003	tools/viewer/refresh.loft:88	commits_state	https://github.com/loft-lang/loft/blob/main/tools/viewer/refresh.loft#L88

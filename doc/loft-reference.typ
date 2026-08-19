@@ -1061,7 +1061,7 @@ Every block in Loft produces a value — the last expression inside it. That mea
 
 === Nested loops and break
 
-Loft has no unbounded loop construct — 'while' is a reserved keyword but there is no 'while' or 'loop' statement to write. All repetition uses 'for' with a range, so there is always a clear upper bound on how many iterations can occur. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
+Loft has two loop statements: 'for', which walks a range or a collection, and 'while', which repeats as long as its condition holds. A 'for' over a range carries its own upper bound, so it is the one to reach for; a 'while' does not, and 'while true { }' runs until something stops it. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
 
 ```rust
   b = "";

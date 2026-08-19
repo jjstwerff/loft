@@ -50,6 +50,15 @@ fn void_routine(a: integer) {
   return;
 }
 
+// @FTR-025 — the labelled loop forms: which loop `i#break` and `i#continue` name
+//
+// A bare `break` / `continue` acts on the nearest enclosing loop; the `#` forms name an
+// OUTER one by its loop variable, which is why the expected string below is triangular.
+// `i#continue` abandons the rest of the inner loop AND the rest of the outer body, so
+// each row stops at j == i; `i#break` leaves both loops at once.
+//
+// Labelling names a loop VARIABLE, so a `while` — which has none — cannot be named.
+// It can still be escaped: see the companion below.
 fn test_inner_loop() {
   s = "";
   for i in 0..10 {
@@ -63,6 +72,26 @@ fn test_inner_loop() {
     s == "00,10,11,20,21,22,30,31,32,33,40,41,42,43,44,50,51,52,53,54,55,60,61,62,63,64,65,66,70,71,72,73,74,75,",
     "inner loop"
   );
+}
+
+fn test_labelled_break_leaves_a_while() {
+  // A `while` cannot be NAMED by a labelled form (it has no loop variable), but a
+  // labelled break crosses one on its way out of the `for` that encloses it.
+  found = "";
+  for i in 1..=3 {
+    k = 0;
+    while k < 3 {
+      k += 1;
+      if i * k == 4 { found = "{i}x{k}"; i#break }
+    }
+  }
+  assert(found == "2x2", "labelled break leaves the for from inside a while: {found}");
+
+  // And a plain break / continue inside a `while` acts on that while.
+  j = 0; t = 0;
+  while j < 10 { j += 1; if j == 3 { continue }; if j == 6 { break }; t += j }
+  assert(t == 12, "continue skipped 3 and break stopped at 6: {t}");
+  assert(j == 6, "the while's own variable stops where break left it: {j}");
 }
 
 enum ExState {

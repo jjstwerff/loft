@@ -1425,6 +1425,21 @@ Exceptions:
 - `e#remove` in a filtered loop is safe and allowed — it adjusts the iterator position after removal.
 - Field accesses are not blocked: `db.items += x` is allowed even if `db.items` is iterated via a local variable.
 
+### While loops
+
+```
+while <condition> { }
+```
+
+Repeats as long as the condition holds, and is the only unbounded loop loft has —
+`while true { }` runs until something stops it, where a `for` over a range carries
+its own upper bound. `break` and `continue` work inside it exactly as in a `for`.
+
+A `while` has no loop VARIABLE, so it cannot be named by the labelled forms below:
+there is no way to leave an outer `while` from inside an inner loop except a flag.
+A labelled `x#break` does cross a `while` on its way out, so an inner `while`
+nested in a `for x` can still leave that `for`.
+
 ### Break and continue
 
 ```
@@ -1451,7 +1466,9 @@ for x in 1..5 {
 ```
 
 **Gotcha (INC#18).** `x#break` looks like an attribute access but is a jump
-instruction — it produces no value and cannot appear on the right of `=`.
+instruction — it produces no value and cannot appear on the right of `=`.  The name
+must be a real loop variable: an ordinary local currently crashes the compiler
+rather than being diagnosed (loft#998).
 
 **Labelled continue — `loop_var#continue`.** Symmetric to `x#break`: use
 `x#continue` from inside an inner loop to skip the remainder of the current
