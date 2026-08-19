@@ -797,9 +797,29 @@ examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:li
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-progress
+.PHONY: examples-index examples-progress features-review libraries-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
+
+# Monthly release aid, NOT a gate and NOT in CI (CI_BUDGET.md's 20-minute rule).
+# Answers the only two questions a program can answer about the catalogue — what is
+# structurally missing, and which entries the cycle actually touched — so the agent's
+# read is bounded to those instead of all 82.  Whether an entry is self-explanatory and
+# whether its example still demonstrates it are judgements, and stay an agent task.
+#   make features-review                     # what is missing
+#   make features-review SINCE=<watermark>   # + what to re-read this cycle
+features-review:  ## Feature-catalogue review aid: what is missing + what to re-read (SINCE=<ref>)
+	@FEATURES_SINCE=$(SINCE) bash scripts/check_doc_drift.sh features-progress
+
+# The LIBRARY half of the same monthly pass (LIBRARY_DOC_REVIEW.md).  Same two questions,
+# same non-gate status; the difference is where the baseline comes from.  Libraries are
+# deliberately OFF the release axis (RELEASE.md § What forces a release), so they move on
+# their own cadence and one global SINCE would be meaningless across thirty-four packages
+# in eight repos -- each library carries its OWN watermark in LIBRARY_DOC_REVIEW.md's
+# table, and the aid diffs each against that.  Reads the local catalogue snapshots, so:
+#   make libcatalogue && make libraries-review
+libraries-review:  ## Library review aid: which libraries owe a review + which ones moved
+	@bash scripts/check_doc_drift.sh libraries-progress
 
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft

@@ -1,0 +1,34 @@
+# Worked-example verdicts for FEATURE entries (@F) that carry no runnable example.
+# The feature-catalogue twin of a library repo's `examples-exempt.tsv` (@PLN141).
+#
+# Hand-written, one row per feature:  F<N> <TAB> exempt|deferred <TAB> reason
+#
+# `check_doc_drift.sh features-progress` requires every @F to have either
+# `tests/docs/features/F<N>.loft` or a row here. A feature with neither is TODO, and
+# the release gate in RELEASE.md refuses to ship while any TODO stands. @I (infra)
+# entries are not in scope: they describe how the project is built, not a language
+# surface a program can demonstrate.
+#
+# exempt   — a runnable `.loft` cannot demonstrate this feature, and saying so is the
+#            honest answer rather than a contrived file. Almost all of these are
+#            TOOLING or TARGET features: what they do is observable by running the
+#            tool or building for the target, not by executing loft source. The
+#            reason must say WHAT would demonstrate it instead, so the exemption is a
+#            pointer rather than a shrug.
+# deferred — a runnable example is possible and wanted; nobody has written it yet.
+#            A deferred row is a debt with a name, and the release gate reports it.
+#
+F47	deferred	The module system is demonstrable — it needs a multi-file fixture (two packages, a shadowed module name), which the single-file `tests/docs/features/` shape cannot hold. `tests/module_name_clash.rs` proves the semantics today; the example wants a fixture tree the generator can run.
+F48	exempt	The CLI is observed by INVOKING it. `--help`, `--interpret`/`--native` and `--timeout` are proven by `tests/cli_*.rs` and the `--help` golden; a `.loft` file cannot run the binary that runs it.
+F49	exempt	The REPL is an interactive session. Demonstrated by `tests/repl*.rs` driving stdin/stdout; a `.loft` program has no REPL to enter.
+F50	exempt	`loft introspect` PRINTS the bytecode and generated Rust for a program. The artefact is the tool's output, checked by `tests/introspect*.rs`, not a value a program can assert.
+F51	exempt	The debugger STOPS a program and reads its frame. Proven by the scripted-RPC tests (`tests/debugger.rs`); a program cannot single-step itself.
+F52	exempt	The formatter rewrites source. Its demonstration is a before/after pair of files (`tests/formatter*.rs`), not a program that runs.
+F53	exempt	`--native` is a BACKEND, not a construct. Every `.loft` example in this directory already demonstrates it: the suite runs each one on both backends and requires identical answers.
+F54	exempt	The browser/WASM target is proven by building and loading a page (`tests/html_render.rs`, `tests/paged_browser.rs`, the wasm suites). A `.loft` file cannot host itself.
+F55	exempt	Package management is `loft.toml` + a lockfile + `loft install` — a filesystem and registry story, covered by `tests/manifest_less_resolution.rs` and `tests/registry_e2e.rs`. A single file has no dependencies to resolve.
+F56	exempt	Live reload patches a RUNNING program from outside it. Proven by the live-reload tests driving an edit mid-run; a program cannot reload itself mid-statement.
+F89	exempt	The test runner runs `fn test_*`. Every file in this directory is already one of its subjects, so the feature is demonstrated by the directory existing and passing.
+F101	exempt	`loft build` produces artefacts for declared targets. The demonstration is the artefact set on disk, covered by the build/deliver tests.
+F102	exempt	The Android target produces a signed APK. Proven by `tests/android_target.rs`; a `.loft` file cannot package itself.
+F103	exempt	`deliver` / `expose` hand a value to JAVASCRIPT. The other half of the demonstration is JS, so it lives in the browser-interop suites rather than in a loft file that has no host to hand anything to.
