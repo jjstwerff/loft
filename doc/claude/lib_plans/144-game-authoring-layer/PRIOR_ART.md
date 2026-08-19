@@ -75,3 +75,39 @@ context exists with no display (`xvfb-run` + `gl_screenshot`), then decodes the 
 0**. A byte-diff says *different*; a classification says *what* changed — so A5's compositing
 gate uses flat colours deliberately, keeping the expected RGBA set small enough that
 `other == 0` means something.
+
+---
+
+## moros — what it needs, and the rule that reframes arc D
+
+**It does not want libraries from upstream, and says so.** `doc/claude/LOFT_HANDOFF.md`
+scopes its outbound queue to *"loft the LANGUAGE and its TOOLING — never a library gap. We
+create and update libraries ourselves, because upstream cannot verify one against our use —
+verification is only possible where the consumer lives. Build it under `lib/<name>/`, gate
+it, and promote it once battle-tested."*
+
+Two consequences for this plan, and they are not small:
+
+- **D0 is their promotion decision, on their clock.** Publishing `lavition_ui` is not a
+  dependency this plan can schedule, and arc D must be honest that its first phase is
+  someone else's call rather than a queued task.
+- **A library built here and handed over is the shape their rule rejects.** So `stage`,
+  `text2d` and `tween` have to be verified *in* a consumer, not beside one — which is what
+  the vehicles are for — with a 2.5-D sample rather than a lavition port, since a port runs
+  on their tree and their clock.
+
+**Their upstream record lags the tracker, in the safe direction.** All four entries
+`LOFT_HANDOFF.md` marks ⛔ OPEN — #948, #949, #950, #976 — are **closed upstream**. That
+matters most for **#950** (`--html` traps `RuntimeError: unreachable`, `sev:high`,
+`wa:none`): read off their doc it is a live blocker for every browser phase in arcs E and F,
+and it is not one. Their own rule is that status is re-run and never read off a label, so
+this is a re-measure prompt rather than a contradiction.
+
+**#976 is fixed, so the collision this plan would otherwise ship is already cured.**
+`graphics/src/render.loft` and `lavition_ui/src/render.loft` are the exact shape #976 was
+filed about — two packages each holding one basename — and a bare `use render;` now binds
+the package's own file first. What survives is an authoring checklist for the six packages
+this plan adds, because the fix has a lip: `use <pkg>` **inside** `<pkg>` means the package,
+`use self::<pkg>` means the file, and a suite written as `tests/<pkg>.loft` was what
+amputated nine published libraries' public surface. moros carries a static guard for the
+family (`tools/basenames.sh`, in its fast tier) that is worth copying rather than reinventing.

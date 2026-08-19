@@ -12,13 +12,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — design ready, nothing built.** The runtime is not the gap. `loft --html`
-already beats Flash on deployment (self-contained page, no plugin, WebGL2,
-E2E-gated in CI), and static types, compiled-WASM speed and stackful coroutines
-all beat ActionScript 3. What is missing is the **layer a game author writes
-against**: `graphics` ships a complete immediate-mode GL surface and nothing above
-it, so every game re-implements the scene graph, the text field, the tweens and
-the widgets by hand.
+**Open — design ready, nothing built.** The runtime is not the gap: `loft --html` already
+beats Flash on deployment (self-contained page, no plugin, WebGL2, E2E-gated in CI), and
+static types, compiled-WASM speed and stackful coroutines all beat ActionScript 3. What is
+missing is the **layer a game author writes against** — `graphics` ships a complete
+immediate-mode GL surface and nothing above it, so every game re-implements the scene graph,
+the text field, the tweens and the widgets by hand.
 
 The measurement is `tools/brick-buster/25-brick-buster.loft` — **1983 lines for a Breakout
 clone**, ~190 of them (`build_atlas()`) hand-poked pixel art and ~40 more pre-baking one GL
@@ -27,9 +26,14 @@ texture per string. The AS3 equivalent is ~500 lines with the art drawn in a too
 ## Goal
 
 A game is a **tree you mutate**, not a frame loop you draw: ship `stage`, `text2d`,
-`tween`, `ui`, an asset route and browser audio, and rebuild Brick Buster on them
-at **≤ 600 lines** while it gains rotation, per-node alpha, tint, music and live
-text.
+`tween`, `ui`, an asset route and browser audio, and rebuild Brick Buster on them at
+**≤ 600 lines** while it gains rotation, per-node alpha, tint, music and live text.
+
+**Scope: 2-D games, at any scale — not a 3-D engine.** The 2.5-D half is a *sprite
+presentation* of a 3-D world (a hex or grid footprint, sprites standing up from it) and it
+stops there: no meshes, no camera projection, no lighting. dryopea's 3-D renderer and moros's
+3-D editor are where lessons came from, **not consumers this plan serves** — the test of any
+proposal here is whether a 2-D game needs it, never how big the game is.
 
 ## Effort + design
 
@@ -84,7 +88,7 @@ phase is cut, not when it is implemented.
 | **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **per target**, **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap. Not one shared table: native measures the real TTF through fontdue and the browser measures whatever family resolved, so the same string breaks in different places. The cross-target invariant is **self-consistency** — the drawn text fits the box that same target measured. Every estimate rounds **outward**, since an under-estimate overflows a box just proved to fit | Open |
 | **C1** — tween core + easing set | `tween` | sampled values match a hand-computed easing table exactly; a completed tween lands **on** the end value, not end−ε; identical result at 30 Hz and 60 Hz | Open |
 | **C2** — bind to node properties | `tween` | driving `node.x` through a tween yields the same pixel sequence as setting it by hand | Open |
-| **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work** — see § Prior art | Blocked on moros |
+| **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
 | **D1** — Button + Panel over stage routing | `ui` | a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire. **And `panel_hit_test` answers the same `UiHit` it answers today**, which is what makes this an extraction rather than a rewrite wearing its name | Open |
 | **D2** — focus, tab order, text field | `ui` | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today | Open |
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — today it returns `i32::MIN` / `-1`, so the harness must go red before the fix | Open |
@@ -110,6 +114,9 @@ phase is cut, not when it is implemented.
   post-fx — arc G's territory.
 - **[PRIOR_ART.md](PRIOR_ART.md)** — what `moros` already built: `lavition_ui` **is** arc D,
   `font.loft` **is** B1m, and the editor is already 2D with 3D extracted through `hex_proj`.
+- **[ASSETS.md](ASSETS.md)** — arc F: why the pack is a loft store on a dumb file server
+  rather than an `[Embed]`-style bundler, and the two constraints that carry over from
+  `routing`.
 - **[FONTS.md](FONTS.md)** — F5/F6: reusing a font the browser has, and bringing one it does
   not.
 
@@ -201,14 +208,14 @@ against the baseline, and line count — which must go **down** and is written i
 this table when it does. A rewrite that only moves lines between files is a failed
 arc, and the count is what says so.
 
-**A second vehicle, once A7 lands: lavition presenting its world in 2D.** Brick Buster
-proves the stack is *enough*; an editor proves it is *general* — thousands of base-anchored
-sprites standing up off a lattice, live mutation, a real UI, and a consumer that exists
-rather than one written to fit the test. Its gate is the one no synthetic scene can produce:
-**the 2D and 3D presentations of a single world must agree about what is where**, so a pick
-at one screen point answers the same `(q, r, height)` in both. That is what makes the 2D
-view a projection rather than a parallel model that drifts. It belongs to that tree; what
-this plan owes it is A7 and D0.
+**A second vehicle, once A7 lands: a 2.5-D sample** — a hex footprint, sprites standing up
+from it, mobs walking behind a fence. Brick Buster proves the stack is *enough* for a flat
+game; this proves the presentation model. It is a sample rather than a port because a port
+runs on someone else's tree and clock, not because of its size.
+
+If lavition ever presents in 2-D it brings a gate no sample can — **the 2-D and 3-D views of
+one world must agree about what is where**, so a pick at one screen point answers the same
+`(q, r, height)` in both. Worth taking if offered; not something this plan waits on.
 
 ## Phase ordering
 
@@ -222,30 +229,6 @@ this plan owes it is A7 and D0.
    A2. F5/F6 (fonts) are independent of F1–F3 and can land with B, which is the first
    arc that cares which font actually resolved.
 5. **E2/E3** whenever a consumer asks; they are comfort, not capability.
-
-## The asset route — why not an embedder
-
-The obvious first pass is a `--html` flag that bundles referenced files into the
-page, the Flash `[Embed]` shape. **Do not build that.** The route already exists and
-is better: an asset pack **is a loft store**, hosted on any dumb file server and read
-by HTTP range so only the bytes a lookup touches cross the wire —
-[REMOTE_STORES.md](../../REMOTE_STORES.md) documents this for exactly this case
-(*"world chunks, meshes, textures, sounds, animations, dialogue, level data"*), and
-the `routing` project already ships it for map tiles (`PLAN-TILES.md`): the store's
-layout is schema-derived, so there is no codec, no parse step and no serialize seam —
-the struct definition **is** the file layout.
-
-Two constraints carry over from routing, and F3 exists to hold the first:
-
-- **Plan → fetch → read, never fetch-on-miss inside a frame.** Synchronous wasm cannot
-  await, and a frame blocking on a range read stutters visibly. Assets are requested at load
-  or level boundaries, or as a ring around the player.
-- **Verify the layout fingerprint across native and wasm before anything reads a pack**
-  (routing's B.2). A silent divergence turns every asset into garbage at a byte offset,
-  which reads as a corrupt file rather than a layout bug.
-
-Embedding stays available for the bytes a page needs before its first fetch — a boot font, a
-loading sprite — but it is the exception, not the pipeline.
 
 ## Open design questions
 
@@ -283,12 +266,16 @@ loading sprite — but it is the exception, not the pipeline.
   `moros_sim` (11). D0 rides that plan rather than competing with it.
 - **moros plan 22** (the pages client) — the working precedent for F1/F3, and the tree
   where a regression in `stage` or `assets` would show up first.
+- **Package authoring** — loft#976 makes a bare `use <mod>` bind the package's own file, so
+  the six packages here are safe from a sibling's basename; the lip is that `use <pkg>`
+  inside `<pkg>` means the *package* and a suite named `tests/<pkg>.loft` amputated nine
+  libraries. Copy moros's `tools/basenames.sh` guard rather than reinventing it.
 - **`lib_plans/72-renderer-backend-boundary`** (GFX.PORTABLE) — `stage` must reach the
   GPU through the `Renderer` contract, not raw `gl_*`, or it becomes the next thing
   blocking a wgpu backend.
-- **`lib_plans/76-particles`, `lib_plans/75-physics-2body`** — both become cheap once
-  A lands (a particle system is a batched node; a body is a node with a velocity), so
-  neither needs its own renderer.
+- **`lib_plans/76-particles`, `lib_plans/75-physics-2body`** — both become cheap once A
+  lands (a particle system is a batched node, a body is a node with a velocity), so neither
+  needs its own renderer.
 
 ## See also
 
