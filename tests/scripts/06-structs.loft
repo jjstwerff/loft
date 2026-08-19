@@ -26,6 +26,8 @@ struct Point {
   b: integer limit(0, 255),
 }
 
+// @FTR-042 — a method reached with a dot: `self` as the receiver, a method returning its
+// own type, and one that mutates the receiver
 fn value(self: Point) -> integer {
   self.r * 0x10000 + self.g * 0x100 + self.b
 }

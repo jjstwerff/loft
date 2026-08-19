@@ -2110,7 +2110,14 @@ round(PI * 1000.0)
 **Gotcha (INC#8) — method vs. free function is the stdlib author's choice.** The
 language has no rule about which operations *should* be methods vs. free
 functions; it depends entirely on whether the definition's first parameter is
-`self` (method-only), `both` (both forms), or neither (free-only).  The
+`self`, `both`, or neither.  Measured, that names two behaviours rather than
+three: a plain first-parameter name is free-ONLY and the method spelling is
+refused by name, while **both `self` and `both` accept the method AND the free
+spelling** — `find_fn` resolves a free call by receiver type, so `f(x)` reaches
+a `self` method.  What separates them is registration, and it shows up in the
+one place neither reaches: **a `self`/`both` method is not a fn-ref value**, so
+it cannot be handed to `map`/`filter` or to a parameter of function type
+(loft#1008 — wrap it in a lambda, `map(v, |q| { q.m(…) })`).  The
 standard library makes this call per-function: `text.starts_with(s)` and
 `text.find(s)` are method-only (`self: text`); `len(v)`, `abs(n)`, `round(x)`
 are both-forms (`both: …`); `sum_of(v)` and `print(s)` are free-only.  A user
