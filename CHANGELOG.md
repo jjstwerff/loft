@@ -26,6 +26,19 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Leaving out an argument that defaults to `null` gives you the type's zero
+
+```loft
+fn f(a: integer? = null) -> integer { a? }
+f();                  // was 65535 on the interpreter — now 0
+```
+
+`float?` was similarly wrong (a denormal), and a `boolean?` parameter of this shape stopped
+`--native` compiling the program at all. Passing the argument explicitly, and the same thing
+written as a local, were always correct — it was only the omitted-default path.
+
+`character?` still has this problem and is tracked separately.
+
 ### `loft fix` can repair a text slice that stops short
 
 `s[i..len(s)]` looks like "to the end" and is not — `len` counts characters while a slice bound

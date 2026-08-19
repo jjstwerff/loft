@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An omitted `τ? = null` argument arrived as the wrong kind of null (loft#1015, 2026-08-19)
+
+`fn f(a: integer? = null) -> integer { a? }` called as `f()` answered **65535** on the
+interpreter, and `float?` answered a denormal — silent wrong NUMBERS. On `--native` the same
+shape with `boolean?` did not compile at all. Against `types.md`'s
+`(N-Default)` / `(D-Scalar) construct_default(Integer[r]) = 0`.
+
+Two independent halves, one per backend, which is why neither alone showed it:
+
+- **Interpreter** — `emit_typed_null` matched the UNPEELED type, so every `τ?` missed the scalar
+  arms and fell to the catch-all "push a zero-filled DbRef as a generic null". An `integer?`
+  parameter received a REFERENCE sentinel and `a?` read it as a number. The parser's own `null()`
+  already peels for this exact reason (@PLN25 slice (b)) — one fact in two places, one of which
+  peeled.
+- **`--native`** — `write_typed_null` peels correctly but wrote `false` for `boolean`, while
+  `rust_type` declares a null-capable boolean slot as the @PLN17 tri-state `u8`. `bool` into `u8`
+  is rustc E0308.
+
+⚠ **A third defect was hiding behind the first, and fixing the peel exposed it.** The
+interpreter's `Boolean` arm said `i64::MIN` — a value the tri-state byte cannot hold — and had
+never been reached, because the missing peel routed `boolean?` to the catch-all whose ref
+sentinel happened to read as null. With the peel in, `a == null` on an omitted `boolean? = null`
+began answering FALSE. The sentinel is 255, which is what `--native` writes into the same slot;
+the two backends now agree by construction rather than by coincidence.
+
+`write_typed_null_in` takes the storage-vs-expression split `rust_type` already makes for
+`boolean`: the call-argument site asks for the storage form, the two `if`-branch callers keep the
+2-state `false` they unify against.
+
+The regression test asserts three things, because the obvious one is not sufficient: the
+discharge, that a supplied argument is still delivered, and that the omitted argument really IS
+null — including that a supplied `false` is not, which is the whole point of a tri-state.
+
+`character? = null` is NOT fixed here and is filed as loft#1014: it needs a width-correct
+sentinel of its own, and `--native` additionally fails to compile one of its two forms.
+
+
 ### A reference tuple read its elements at the wrong layout's offsets (loft#1006, 2026-08-19)
 
 `TupleGet`/`TuplePut` derived the element offset from TWO layouts for one datum: the

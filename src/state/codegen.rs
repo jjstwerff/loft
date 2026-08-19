@@ -1742,7 +1742,17 @@ impl State {
     /// Emit a null sentinel for the given type onto the stack.
     /// Used when Value::Null appears in a typed context (e.g. function argument).
     fn emit_typed_null(&mut self, stack: &mut Stack, tp: &Type) {
-        match tp {
+        // @PLN25 slice (b) — an `Optional(τ)`'s null IS `τ`'s typed null (the same sentinel),
+        // so peel before dispatching. The parser's own `null()` (`definitions.rs`) already
+        // peels for this reason; matching the unpeeled type here sent every `τ?` to the
+        // catch-all below and pushed a zero-filled DbRef where a scalar was expected.
+        //
+        // Reached whenever a caller OMITS a parameter declared `= null`: the parser fills a
+        // bare `Value::Null`, and this is what gives it the parameter's width and sentinel.
+        // An `integer? = null` then arrived as a REF sentinel and `a?` discharged it to
+        // 65535 instead of 0 — a silent wrong number, against types.md's
+        // `(D-Scalar) construct_default(Integer[r]) = 0` (loft#1015).
+        match tp.base() {
             Type::Text(_) => {
                 stack.add_op("OpConvTextFromNull", self);
             }
@@ -1775,9 +1785,16 @@ impl State {
                 stack.add_op("OpConstSingle", self);
                 self.code_add(f32::NAN.to_bits());
             }
+            // @PLN17 — a null-capable `boolean` is the TRI-STATE byte (0/1/255), so its null
+            // is 255, not the integer sentinel. This arm was unreachable for `boolean?` until
+            // the `.base()` peel above (every `τ?` fell to the catch-all), and it was wrong:
+            // `i64::MIN` is not a value the tri-state can hold, so `a == null` on an omitted
+            // `boolean? = null` answered FALSE. 255 matches what `--native` writes for the
+            // same slot (`write_typed_null_in`'s `255_u8`), which is what makes the two
+            // backends agree (loft#1015).
             Type::Boolean => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i64::MIN);
+                self.code_add(255i64);
             }
             _ => {
                 // For other types, push a zero-filled DbRef as a generic null.

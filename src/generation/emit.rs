@@ -1224,13 +1224,35 @@ impl Output<'_> {
 
     /// Emit a typed null sentinel for the given type.
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
+        Self::write_typed_null_in(w, tp, false)
+    }
+
+    /// The typed null, in the representation the destination actually holds.
+    ///
+    /// `storage` picks the same split [`rust_type`](crate::generation::rust_type) makes for
+    /// `boolean`: a null-capable POSITION (a parameter, a local, a return) holds the @PLN17
+    /// tri-state as a raw `u8` (0/1/255), while a transient expression result is a 2-state
+    /// `bool`. Everything else spells the same either way, so this is the only arm that reads
+    /// the flag.
+    ///
+    /// The two `if`-branch callers pass `false`: they emit a null to unify with the OTHER
+    /// branch, which is an expression. The call-argument site passes `true` — its destination
+    /// is a parameter slot, and emitting `false` there put a `bool` where the generated
+    /// signature declares `u8`, so an omitted `boolean? = null` argument failed to compile at
+    /// all (rustc E0308, loft#1015).
+    pub(super) fn write_typed_null_in(
+        w: &mut dyn Write,
+        tp: &Type,
+        storage: bool,
+    ) -> std::io::Result<()> {
         match tp {
             // @PLN25 slice (b): `Optional(τ)`'s null is its base's sentinel (same storage).
-            Type::Optional(inner) => Self::write_typed_null(w, inner),
+            Type::Optional(inner) => Self::write_typed_null_in(w, inner, storage),
             Type::Character => write!(w, "i32::MIN"),
             Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
+            Type::Boolean if storage => write!(w, "255_u8"),
             Type::Boolean => write!(w, "false"),
             Type::Text(_) => write!(w, "loft::state::STRING_NULL"),
             Type::Enum(_, false, _) => write!(w, "255_u8"),

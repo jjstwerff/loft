@@ -279,7 +279,7 @@ impl Output<'_> {
             // instead — the same repair the interpreter call paths apply
             // via `emit_typed_null`.  Fn-ref params keep the generic path
             // (their two-part (d_nr, closure) form is handled below).
-            Self::write_typed_null(w, &def_fn.attributes()[idx].typedef)?;
+            Self::write_typed_null_in(w, &def_fn.attributes()[idx].typedef, true)?;
         } else {
             // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
             let param_is_fnref = idx < def_fn.attributes().len()
