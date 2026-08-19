@@ -1870,7 +1870,12 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
     /// a different (and possibly deliberate) expression, and a bound held in a local is
     /// carried by `len_bound_locals` the same way the loop form carries it — that spelling
     /// is not a stylistic variant, it is the one real code reaches for.
-    fn warn_text_len_slice_bound(&mut self, end: &Value, subject: &Value) {
+    fn warn_text_len_slice_bound(
+        &mut self,
+        end: &Value,
+        subject: &Value,
+        bound_span: Option<(u32, u32, u32)>,
+    ) {
         if self.first_pass || !crate::keys::text_index_units_lint_enabled() {
             return;
         }
@@ -1904,11 +1909,25 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             concept: "len vs size",
             concept_ref: "@F97",
         });
+        // loft#1003 — the applicable one of the two.  `len(t)` -> `size(t)` cannot carry an
+        // edit from here: BOTH spellings warn (`s[i..len(s)]` and `s[i..s.len()]`) and they
+        // put the `len` token in different places, so a 3-character rename at the bound's
+        // start would turn `s.len()` into `sizelen()`.  That needs the `len` TOKEN's own
+        // position, which this site does not have.
+        //
+        // Deleting the bound does not care which spelling it is: `s[i..<anything>]` becomes
+        // `s[i..]`, which takes the rest — the cure this fix already names, and the one the
+        // doc recommends for exactly this shape.  Measured on both spellings.
         self.lexer.fix_last(crate::diagnostics::Fix {
             kind: crate::diagnostics::FixKind::Mechanical,
             title: "take the rest with `text[i..]`".to_string(),
             condition: None,
-            edit: None,
+            edit: bound_span.map(|(line, col, len)| crate::diagnostics::Edit {
+                line,
+                col,
+                len,
+                text: String::new(),
+            }),
             concept: "len vs size",
             concept_ref: "@F97",
         });
@@ -1943,7 +1962,22 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                     &[code.clone(), p.clone(), Value::Int(i32::MAX)],
                 );
             } else {
+                // loft#1003 — the bound's own extent, for the "take the rest" fix's edit:
+                // the start of the end expression, and (after it is parsed) the start of the
+                // `]` that closes the slice.  Taken here because this is the only point that
+                // brackets the whole bound whatever it is spelled as.
+                let bound_start = self.lexer.peek_pos().clone();
                 let ot_type = self.expression(&mut other);
+                let bound_end = self.lexer.peek_pos().clone();
+                let bound_span = (bound_end.line == bound_start.line
+                    && bound_end.pos > bound_start.pos)
+                    .then(|| {
+                        (
+                            bound_start.line,
+                            bound_start.pos,
+                            bound_end.pos - bound_start.pos,
+                        )
+                    });
                 // @PLN110 3a / loft#749 — snapshot the END before `convert` wraps it, for
                 // the units lint below.
                 let raw_end = other.unspan().clone();
@@ -1962,7 +1996,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 // ASCII test never produces — a `key=value` parse over an author-given
                 // name reached it on the first accented character.  `size(s)` is the byte
                 // count and is what this means; `s[i..]` says it without a bound at all.
-                self.warn_text_len_slice_bound(&raw_end, code);
+                self.warn_text_len_slice_bound(&raw_end, code, bound_span);
                 if incl {
                     other = self.cl("OpAddInt", &[other.clone(), Value::Int(1)]);
                 }

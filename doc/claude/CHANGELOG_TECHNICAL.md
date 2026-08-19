@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A reference tuple read its elements at the wrong layout's offsets (loft#1006, 2026-08-19)
+
+`TupleGet`/`TuplePut` derived the element offset from TWO layouts for one datum: the
+`RefVar(Tuple)` branch used `stored_tuple_field_offset` — the synthetic `__tuple<…>` RECORD
+field positions — while the plain branch beside it used `element_stack_offsets`. A reference
+tuple points into the caller's STACK FRAME (`OpCreateStack`, whose own contract says the DbRef
+targets the frame and is "NOT a valid data store"), so the stack layout is the one the data has.
+
+Measured: `(integer, integer)` is `[0, 8]` under both derivations, `(text, text)` is `[0, 4]` as
+a record against `[0, 16]` on the stack. So a reference read of element 1 of a text pair landed
+12 bytes early, inside element 0. Scalars coinciding is what hid it — the shape that reads as
+proof and is not. `ref_tuple_field_offset` now answers the stack layout and the two branches
+agree.
+
+No shipped program changes: scalars coincide, and a heap element is still refused at the
+signature. What it removes is a hazard that would have made any future heap-element work wrong
+in a way every scalar test passes.
+
+⚠ **It is not, on its own, enough to lift the refusal** — measured, not assumed. With the offset
+corrected, adding the `text` arms still SIGSEGVs, because the two element paths speak different
+op families: the plain tuple writes with `OpPut*` at a position in the CURRENT frame (16-byte
+inline stack form), while a reference writes with `OpSet*` through a DbRef (4-byte record
+handle). A callee must reach the CALLER's frame, so only the DbRef family can get there, and
+that family speaks the record form. `i64` is 8 bytes either way, which is why scalars are
+immune. Closing loft#1006 needs a representation decision — recorded as `D-bind-11` /
+`D-tup-1` in `doc/claude/formal/`.
+
+### `loft fix` can take the rest of a text slice (loft#1003, 2026-08-19)
+
+`text-slice-char-bound` is the fifth mechanical fix `loft fix` can apply, and the last row in
+`EDIT_BLOCKED` that claimed it should carry an edit.
+
+`len(t)` -> `size(t)` is NOT the one that could carry it: both spellings warn — `s[i..len(s)]`
+and `s[i..s.len()]` — and they put the `len` token in different places, so a rename at the
+bound's start would turn `s.len()` into `sizelen()`. That needs the `len` TOKEN's position,
+which the emit site does not have.
+
+The fix's SIBLING does not care which spelling it is. Deleting the bound turns `s[i..<anything>]`
+into `s[i..]`, which takes the rest — the cure the fix already named and the one the docs
+recommend for this shape. The span is the start of the end expression to the `]` that closes the
+slice, both taken at the one point that brackets the whole bound. Verified on both spellings by
+applying it and running the result: `s[0..len(s)]` over `"héllo"` printed `héll` before and
+`héllo` after.
+
+
 ### A `both` method named where a value is wanted says so (loft#1008, 2026-08-19)
 
 The `self` half of loft#1008 already reported *"`f` is a method on `P`, and a method is not a

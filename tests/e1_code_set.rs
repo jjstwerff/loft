@@ -408,10 +408,6 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
         "deleting the block removes a statement, so the span includes its terminator",
     ),
     (
-        "text-slice-char-bound",
-        "`len(t)` -> `size(t)` is a span edit and SHOULD carry one; unblocked as soon as the call's span is threaded to the emit site",
-    ),
-    (
         "text-index-char-bound",
         "the cure is a different loop form (`for c in t`), not a substitution",
     ),

@@ -26,6 +26,19 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `loft fix` can repair a text slice that stops short
+
+`s[i..len(s)]` looks like "to the end" and is not — `len` counts characters while a slice bound
+is a byte offset, so it truncates any text with an accented character. loft warned about it;
+now `loft fix` can also repair it, by taking the bound off entirely:
+
+```loft
+t = s[0..len(s)];     // "héllo" -> "héll"
+t = s[0..];           // what loft fix writes -> "héllo"
+```
+
+Works for `s.len()` as well as `len(s)`.
+
 ### Naming a `both` method where a value goes now tells you what is wrong
 
 Handing a method to `map`, `filter` or a `fn(...)` parameter does not work — a method is not a
