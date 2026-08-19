@@ -74,7 +74,7 @@ phase is cut, not when it is implemented.
 | **A3** — batched renderer behind the same API | `stage` | pixels identical to A2 **and** draw calls drop from N to O(atlases). Both halves — same pixels alone would pass a batch that silently fell back | Open |
 | **A4** — z-order, hit-test, input routing | `stage` | a headless pick table over a known overlapping tree: every (x, y) resolves to the hand-computed node, including under rotation and inside a clip | Open |
 | **A5** — per-node alpha + tint as instance attributes | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; tint × texel matches. Today `draw_sprite` has neither uniform | Open |
-| **A7** — depth key supplied by the app, sprites free of their cell | `stage` | a hand-computed overlap table for a hex-anchored scene: a tall sprite on row `r` occludes `r−1` and never `r+1`, equal rows break by `q`, a height change reorders exactly as computed — **and it holds with the sprites split across two atlases**, which is the cell A3 gets wrong if batching groups globally | Open |
+| **A7** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
@@ -87,7 +87,7 @@ phase is cut, not when it is implemented.
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — today it returns `i32::MIN` / `-1`, so the harness must go red before the fix | Open |
 | **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
-| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. Scenes are in scope from the first schema — retrofitting them costs a format break, and once they are in, reloading the store **is** hot reload | Open |
+| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from `python3 -m http.server` with only the URL changed; a byte-range log shows **only** the requested keys fetched | Open |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | Open |
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
@@ -120,11 +120,20 @@ tree; **never write to it** — the findings come back here.
 **And the editor core transfers further than it looks.** It is already 2D with 3D
 *extracted*: `hex_editor`'s work is axial-lattice editing — `gesture.loft` alone is 7 027 of
 its 12 304 source lines — and the third dimension lives in `hex_proj`, a seam of
-`hex_to_world(q, r, height) → Vec3` plus mesh emitters. Swap that emission for sprites and
-the editor is 2D, with the gestures, session, keymap and UI untouched. What the swap asks of
-**this** plan is A7: a depth key the app computes, and sprites that may overflow the cell
-that anchored them — a tree taller than its tile. That is also the cell that catches A3
-batching by atlas globally.
+`hex_to_world(q, r, height) → Vec3` plus mesh emitters. Give that seam a screen sibling and
+the same world renders as sprites, with gestures, session, keymap and UI untouched.
+
+**The 2D view is a PRESENTATION of the 3D world, not a second world** — which is what a
+GameMaker-shaped game already is: a room whose instances carry a `depth`, sprites whose
+**origin** sits at their feet, and `depth = -y` doing the 2.5D work. The hex is only the
+footprint; the sprite stands *up* from it, so where it sorts is decided by its origin and
+never by its artwork. Get that backwards and a tall sprite sorts by its own top edge, which
+is the classic 2.5D wrong picture.
+
+So `stage` stays a 2D presenter and the world stays 3D in the app, with **three knobs as the
+entire contract between them**: a projected position, a sprite origin, and `layer` + `depth`.
+A plain 2D game sets all three trivially. That is A7; A3's run-grouping is what keeps it true
+once batched.
 
 The page shell is the other half worth watching: moros plan 22 has a `--html` editor whose
 world is bytes (`W1`), whose page has a filesystem (`P6`), and where *build something, close
@@ -146,7 +155,7 @@ those calls are made here rather than discovered mid-build.
 | **A3** | M | Group by **contiguous runs of depth order that share an atlas** — *not* by atlas globally, which silently reorders two overlapping sprites drawn from different atlases and is a wrong picture, not a slow one (A7 is the cell that catches it). Pack per-instance attributes (a 2×3 affine + uv rect + tint + alpha) into one float buffer, one `gl_draw_instanced` per run, new shader with instanced attributes. The cost is stride/offset bookkeeping — `gl_instance_attrib` takes `stride_floats`/`offset_floats` and a wrong one fails as garbage geometry, silently — plus re-uploading only what changed. A2's path stays alive to compare against. |
 | **A4** | S | Stable z sort (insertion order breaks ties), reverse-iterate to pick, invert the world affine in closed form (no general 4×4 inverse) to take a screen point node-local. **The part that is always forgotten is capture** — the node that received the press receives the release even when the pointer has left it — and it is exactly what D1 tests. |
 | **A5** | S | Two more instance attributes and `color = texel * tint * vec4(1,1,1,alpha)`. Small once A3's buffer exists; the real content is the compositing decision — the canvas packs straight 0xAARRGGBB and GL blending wants premultiplied, so pick one and hand-compute the expected RGBA against it. |
-| **A7** | S | Depth becomes an app-computed key with a documented tie rule, and a sprite is never clipped to whatever anchored it. That is all a hex-anchored 2D scene needs — the painter's order is `(row, q, height)` — and it is the same mechanism an isometric game wants. The effort is A3's run-grouping, not the sort. |
+| **A7** | S | Three knobs, and **`stage` learns nothing about hexes or 3D**. GameMaker's, because a game author already has the vocabulary: a sprite **origin** (put it bottom-centre and the sprite stands up from its footprint), a per-node **`depth`** the app sets — `depth = -y` is the whole 2.5D idiom, and a hex world writes the projection of `(q, r, height)` instead — and a **`layer`** that outranks depth, so background / world / UI are bands rather than a global number every node has to get right. The effort is A3's run-grouping and getting *origin, not extent* right in both places; the sort itself is a comparison. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
@@ -175,10 +184,14 @@ against the baseline, and line count — which must go **down** and is written i
 this table when it does. A rewrite that only moves lines between files is a failed
 arc, and the count is what says so.
 
-**A second vehicle, once A7 lands: a 2D lavition.** Brick Buster proves the stack is
-*enough*; an editor proves it is *general* — thousands of overlapping anchored sprites, live
-mutation, a real UI, and a consumer that already exists rather than one written to fit. It
-belongs to that tree, not this plan; what this plan owes it is A7 and D0.
+**A second vehicle, once A7 lands: lavition presenting its world in 2D.** Brick Buster
+proves the stack is *enough*; an editor proves it is *general* — thousands of base-anchored
+sprites standing up off a lattice, live mutation, a real UI, and a consumer that exists
+rather than one written to fit the test. Its gate is the one no synthetic scene can produce:
+**the 2D and 3D presentations of a single world must agree about what is where**, so a pick
+at one screen point answers the same `(q, r, height)` in both. That is what makes the 2D
+view a projection rather than a parallel model that drifts. It belongs to that tree; what
+this plan owes it is A7 and D0.
 
 ## Phase ordering
 
@@ -217,40 +230,14 @@ Two constraints carry over from routing, and F3 exists to hold the first:
 Embedding stays available for the bytes a page needs before its first fetch — a boot font, a
 loading sprite — but it is the exception, not the pipeline.
 
-## Fonts — three sources, one declaration
+## Fonts
 
-`--html` ships **no font bytes today**, and for the reuse case it does not need to:
-`gl_load_font("X.ttf")` never opens a file. `familyFor()` (`doc/loft-gl-wasm.js:113`)
-resolves the path's base name to a CSS family — one the page registered wins
-(`document.fonts.check`), else a name heuristic picks `monospace` / `serif`, else
-`sans-serif` — and the browser's own `fillText` produces the coverage bitmap the desktop
-shader expects. Name a family the browser has and **nothing is downloaded**.
+`--html` already reuses a browser-resident font for free, and **ships no font bytes today**.
+Bringing one — from our file server or a CDN such as Google Fonts — is F5/F6. The three
+sources, the two mechanics that decide whether it works at all, and the field evidence
+behind them: [FONTS.md](FONTS.md).
 
-What is missing is the ability to *bring* one. Three sources, one declaration:
-
-| Source | Browser | Native / `--native-wasm` |
-|---|---|---|
-| a family the browser already has | nothing shipped, nothing fetched | the TTF beside the game |
-| our own file server | `@font-face { src: url(…) }`, or the WOFF2 packed in the asset store and range-read like every other asset | the same store |
-| Google Fonts, or any CDN | the provider's stylesheet `<link>`; zero bytes of ours | the TTF beside the game |
-
-Two mechanics decide whether it works at all, and F5/F6 gate them. The declared
-`font-family` must **equal** the base name the program passes to `gl_load_font` — that
-string is the key `familyFor` builds, and drift is a silent fallback, never an error. And
-the page must await `document.fonts.load('16px "<family>"')` **before** `loft_start`:
-`check` is synchronous and answers *false* while a webfont loads, and `familyFor`'s answer
-is cached per handle, so one early call locks that handle to `sans-serif` for good, with
-nothing on stderr.
-
-A remote font is a third-party dependency: offline, or with the CDN blocked, the chain
-degrades to `sans-serif` rather than failing — which is right, and is why the native source
-stays declared beside the browser one.
-
-A library can do all of this **today** by carrying its `@font-face` and the `fonts.load`
-await in `[wasm.bridge] host_js`. F5/F6 make it declarative, so a game writes no JS and the
-ordering gate is automatic rather than remembered.
-
-## Open design questions
+## Open design questions## Open design questions
 
 1. **Chunk ownership.** Proposed: `stage`, `text2d`, `ui` → `loft-libs-graphics`;
    `tween`, `audio_bus` → `loft-libs-game`; `assets` (pack tool + loader) →
@@ -265,7 +252,12 @@ ordering gate is automatic rather than remembered.
 4. **What does a store miss do under `--html` today?** [LAZY_STORES.md](../../LAZY_STORES.md)
    fetches on a miss, which is right for a document and wrong for a frame loop.
    Confirm the current behaviour before F3 designs around it.
-5. **G's trigger.** Open vector paths when a consumer needs resolution-independent
+5. **Occlusion is not ordering.** Correct depth order still lets a tall foreground sprite
+   hide the thing the player is steering — the standing 2.5D problem. Cutaway, fade-when-
+   occluding and a height ceiling are all app policy, not `stage` policy, so the library
+   owes them only the query *what does this sprite cover*. Settle that before the vehicle
+   asks for it.
+6. **G's trigger.** Open vector paths when a consumer needs resolution-independent
    art — a UI that scales across DPI, a zoomable map. Until then sprites + atlas
    cover the cases, and a path rasterizer is the one genuinely research-shaped item
    in this plan.
