@@ -35,7 +35,7 @@ text.
 
 ## Effort + design
 
-- **Effort:** H overall — 26 phases, **none above M** (7 XS, 15 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 28 phases, **none above M** (8 XS, 16 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -76,6 +76,8 @@ phase is cut, not when it is implemented.
 | **A5** — per-node alpha + tint, and **blending instead of discard** | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; a sprite's **anti-aliased edge** composites without a fringe; tint × texel matches. The shipped `SPRITE_FRAG` does `if (c.a < 0.01) discard` and writes everything else opaque, with `GL_BLEND` never enabled — a binary cutout, so soft edges and semi-transparency are wrong today and per-node alpha is unimplementable on it | Open |
 | **A7** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
 | **A8** — camera with a per-layer parallax factor | `stage` | with every factor `1.0`, a camera pan is **pixel-identical** to translating every node by hand — the flat mode proved to be the degenerate case, not a second path. With factors varying, a pan of `d` moves each layer by `d × factor`, hand-computed per layer. **And a pure camera move re-uploads no instance data** (assert zero uploads), which is the entire reason the camera lives here and not in the node positions | Open |
+| **A9** — sprite animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
+| **A10** — directional sets, `(action, facing)` | `stage` | a facing change mid-walk **keeps the frame phase** — a character turning does not snap its legs back to frame 0, which the naive implementation does. Six facings on a hex lattice, four on a square one, from the same table | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
@@ -88,7 +90,7 @@ phase is cut, not when it is implemented.
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — today it returns `i32::MIN` / `-1`, so the harness must go red before the fix | Open |
 | **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
-| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
+| **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — and a definition carries its **animation table**, `(action, facing) → sequence`, since a walk cycle is asset data and not code — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | Open |
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from `python3 -m http.server` with only the URL changed; a byte-range log shows **only** the requested keys fetched | Open |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | Open |
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
@@ -125,6 +127,11 @@ camera belongs to `stage` rather than to the app — an app-owned camera means r
 node's position on every scrolled frame, which is exactly the O(N) per-frame work the
 retained tree exists to avoid.
 
+A **frame event** — a footstep on frame 3, a hitbox live on frames 4–6 — stays app-side for
+the same reason occlusion does: the node's current frame is readable, so the app can act on
+it, and a callback table in the library would be a mechanism for something already
+expressible.
+
 **Occlusion is the level designer's rule, and the engine gets no mechanism for it —
 settled, not open.** A character walking behind a fence, a tree trunk, a window or a low
 wall stays visible, because those things are narrow or mostly transparent and alpha does the
@@ -139,7 +146,7 @@ time, silence at run time.
 
 ## Effort per phase## Effort per phase
 
-Totals: **7 XS, 15 S, 4 M** — no phase above M, which is the § Cutting rule holding
+Totals: **8 XS, 16 S, 4 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -153,6 +160,8 @@ those calls are made here rather than discovered mid-build.
 | **A5** | S | Two more instance attributes, plus the shader moving off alpha-discard to real blending. **Design call: premultiplied alpha.** The canvas packs straight 0xAARRGGBB, so the packer premultiplies once at pack time; straight alpha under linear filtering darkens every anti-aliased edge, and this stack draws overlapping soft-edged sprites all day. Hand-compute the expected RGBA against that choice. |
 | **A7** | S | Three knobs, and **`stage` learns nothing about hexes or 3D**. GameMaker's, because a game author already has the vocabulary: a sprite **origin** (put it bottom-centre and the sprite stands up from its footprint), a per-node **`depth`** the app sets — `depth = -y` is the whole 2.5D idiom, and a hex world writes the projection of `(q, r, height)` instead — and a **`layer`** that outranks depth, so background / world / UI are bands rather than a global number every node has to get right. The effort is A3's run-grouping and getting *origin, not extent* right in both places; the sort itself is a comparison. |
 | **A8** | S | One `(dx, dy)` per stage and one float per layer, applied as a **shader uniform** at draw time. **Design call: parallax translates, it does not scale.** Scaling by depth is a perspective projection, and it would resize the footprint a base-anchored sprite is aligned to — so the world layer sits at `1.0`, backgrounds below, foreground overlays above, and every cell stays the same size. The cost this avoids is the point: baking the camera into node positions makes a scroll an O(N) rewrite **and a full instance re-upload every frame**, which is A3's whole budget spent on standing still. Picking pays for it — A4 must un-apply the camera **per layer**, since one screen point is a different world point in each. |
+| **A9** | S | A sequence is (first cell, count, fps, loop mode); a node carries (sequence, elapsed). Advanced from `fixstep`'s step, never from wall time — that is what makes it identical at any frame rate and replayable under a recorded input stream. **Design call: the instance attribute is a FRAME INDEX, not a uv rect**, and the shader derives uv from the atlas layout — so an animating sprite dirties one integer per frame instead of four floats, and A3's *upload only what changed* keeps meaning something with 500 animated tufts on screen. |
+| **A10** | XS | A table from `(action, facing)` to a sequence, and one rule: switching sequences carries the elapsed phase over rather than resetting it. Walking between hexes is the composition — C tweens the position, A9 plays the cycle — so neither owes the other anything. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
