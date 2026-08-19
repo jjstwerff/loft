@@ -1,0 +1,140 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#974 — a record handed back BY A FUNCTION out of one of its parameters is a VIEW
+// into that parameter's store, and until this landed the signature did not say so.
+//
+// `it = b.items[k]?` inline typed `it` as `ref(Item)["b"]`, so scope exit left it alone.
+// The same lookup behind an accessor declared `optional(reference(Item, deps {}))` — no
+// dep at all — so the caller read the result as OWNED and emitted `OpFreeRef(it)`,
+// freeing a store the CALLER's `b` still owned. The next unrelated allocation took the
+// recycled slot and every later lookup answered out of it: `2, 0, 0` where the same
+// program reads `2, 2, 2` with the lookup written inline.
+//
+// Nothing here needs LOFT_POISON: the store is freed and then RE-OCCUPIED, so the values
+// are wrong on their own (`LOFT_NO_SLOT_REUSE=1` is what made it read correctly — the
+// freed bytes survive when nothing else claims them, which is why a poison sweep alone
+// would have called this clean).
+//
+// The axes that do NOT matter, each measured: whether the accessor's body is a direct
+// expression or binds a local first; whether the parameter IS the collection or holds it
+// one or two fields down; whether the `?` discharges at the call site or inside the
+// accessor. The one that does is the `?` on the RETURN TYPE — a non-nullable accessor
+// materialises a copy into the caller's buffer and was always right.
+
+struct I974Item {
+  name:  text,
+  limbs: vector<float>,
+}
+
+struct I974Inner {
+  items: hash<I974Item[name]>,
+}
+
+struct I974Bag {
+  items: hash<I974Item[name]>,
+  inner: I974Inner,
+}
+
+// The unrelated allocation: it only has to CLAIM a store, not touch anything above.
+struct I974Sink {
+  vals: vector<float>,
+}
+
+fn i974_direct(b: I974Bag, n: text) -> I974Item? { b.items[n] }
+
+fn i974_via_local(b: I974Bag, n: text) -> I974Item? {
+  x = b.items[n];
+  x
+}
+
+fn i974_deep(b: I974Bag, n: text) -> I974Item? { b.inner.items[n] }
+
+fn i974_bare_hash(h: hash<I974Item[name]>, n: text) -> I974Item? { h[n] }
+
+fn i974_seed() -> I974Bag {
+  b = I974Bag { items: [], inner: I974Inner { items: [] } };
+  one = I974Item { name: "one", limbs: [] };
+  one.limbs += [1.0];
+  one.limbs += [2.0];
+  b.items += [one];
+  two = I974Item { name: "one", limbs: [] };
+  two.limbs += [1.0];
+  two.limbs += [2.0];
+  b.inner.items += [two];
+  b
+}
+
+fn i974_read_direct(b: I974Bag) -> integer {
+  it = i974_direct(b, "one")?;
+  len(it.limbs)
+}
+
+fn i974_read_via_local(b: I974Bag) -> integer {
+  it = i974_via_local(b, "one")?;
+  len(it.limbs)
+}
+
+fn i974_read_deep(b: I974Bag) -> integer {
+  it = i974_deep(b, "one")?;
+  len(it.limbs)
+}
+
+fn i974_read_bare_hash(h: hash<I974Item[name]>) -> integer {
+  it = i974_bare_hash(h, "one")?;
+  len(it.limbs)
+}
+
+fn i974_read_coalesce(b: I974Bag) -> integer {
+  it = i974_direct(b, "one") ?? I974Item { name: "", limbs: [] };
+  len(it.limbs)
+}
+
+fn main() {
+  b = i974_seed();
+
+  // ⚠ Three properties of the shape below are load-bearing, each measured against the
+  // defect on BOTH backends:
+  //   * the reader is its own FUNCTION — the wrong free fires at ITS scope exit, so a
+  //     single call still reads correctly and every read in one scope frees only at the
+  //     end (the first version of this guard did that and passed against the defect);
+  //   * the unrelated allocation sits HERE, in the caller, between two calls — and it
+  //     must stay LIVE.  Made a helper (`fn churn() { s = Sink{…}; }`) it allocates and
+  //     releases inside its own call, and native then answered correctly against the
+  //     defect while the interpreter still failed;
+  //   * it is the ALLOCATION, not a write: the freed slot only becomes observable once
+  //     something else claims it.
+  assert(i974_read_direct(b) == 2, "direct, first: {i974_read_direct(b)}");
+  s1 = I974Sink { vals: [] };
+  s1.vals += [0.0];
+  assert(i974_read_direct(b) == 2, "direct, after an unrelated allocation");
+  assert(i974_read_direct(b) == 2, "direct, third");
+
+  assert(i974_read_via_local(b) == 2, "via local, first");
+  s2 = I974Sink { vals: [] };
+  s2.vals += [0.0];
+  assert(i974_read_via_local(b) == 2, "via local, after an unrelated allocation");
+
+  assert(i974_read_deep(b) == 2, "two field hops, first");
+  s3 = I974Sink { vals: [] };
+  s3.vals += [0.0];
+  assert(i974_read_deep(b) == 2, "two field hops, after an unrelated allocation");
+
+  assert(i974_read_bare_hash(b.items) == 2, "collection as the parameter, first");
+  s4 = I974Sink { vals: [] };
+  s4.vals += [0.0];
+  assert(i974_read_bare_hash(b.items) == 2, "collection as the parameter, after an allocation");
+
+  // The `??` discharge at the CALL SITE is the shape dryopea filed; it must not differ
+  // from the `?` one above.
+  assert(i974_read_coalesce(b) == 2, "?? at the call site, first");
+  s5 = I974Sink { vals: [] };
+  s5.vals += [0.0];
+  assert(i974_read_coalesce(b) == 2, "?? at the call site, after an allocation");
+
+  // The container itself must still be intact after all of that — the defect freed ITS
+  // store, so this is the same fact asked from the other end.
+  final = b.items["one"]?;
+  assert(len(final.limbs) == 2, "the container survived: {len(final.limbs)}");
+  print("974 accessor borrow OK\n");
+}

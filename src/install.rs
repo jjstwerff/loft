@@ -199,6 +199,14 @@ pub fn install_one(
                 r.name, r.version.semver
             ));
         } else {
+            // @PLN143 — the one line the registry prints on the resolution path, and it
+            // speaks where bytes are actually fetched.  `[registry] resolving <pkg>` used
+            // to print BEFORE this, so a warm cache announced work it was not doing —
+            // twice per run once a bare `use` re-decides on every parse pass, which is
+            // noise on a program that has nothing to report (GOALS.md: loft is noticed in
+            // its absence).  Downloading a tarball is worth a line; finding it already
+            // extracted is not.
+            eprintln!("[registry] downloading {} {}", r.name, r.version.semver);
             registry_index::download_tarball(&r.version.url, &tarball_path)?
         };
         crate::integrity::verify_sha256(&bytes, &r.version.sha256)?;
@@ -360,6 +368,13 @@ fn load_index_inner(
                 idx_path.display()
             )
         })?;
+        // @PLN143 — verify here too.  This was the one branch of the four that read the
+        // cached index and trusted it unchecked, which put the whole signature gate
+        // behind a single environment variable: `LOFT_OFFLINE=1` and the bytes are
+        // whatever is on disk.  The cache is where a rejected fetch used to linger (see
+        // the fetch branch below), so it is not a place trust can be assumed.
+        let sig = std::fs::read(&sig_path).unwrap_or_default();
+        verify_or_explain(&content, &sig, opts)?;
         (content, false)
     } else if opts.refresh || index_stale(&idx_path) {
         match registry_index::fetch_index(&url) {
@@ -470,23 +485,98 @@ fn index_stale(idx_path: &Path) -> bool {
     age.as_secs() > 60 * 60 // 1-hour TTL per PKG_REGISTRY.md
 }
 
-/// What this project already holds, read from its `loft.lock` — the input step 6
+/// The lockfile whose entries this resolution is bound by — @PLN143.
+///
+/// `lock_path` names the lock that GOVERNS, and `skip_lockfile` says whether this
+/// resolution may write it; the two are separate questions, and reading them as one is
+/// what let a pinned script's sidecar decide which file loaded while deciding nothing
+/// about which version got installed.
+///
+/// - **Named** → that file, whether or not it may be written. A pinned script's sidecar
+///   governs and must not be amended by a run.
+/// - **Unnamed, may write** → the cwd's `loft.lock`, which is where `loft install`
+///   writes by default and therefore what it is already bound by.
+/// - **Unnamed, may not write** → nothing. There is no declaration in force: a bare
+///   script, or a dep resolved inside the registry cache with no consumer project.
+fn governing_lock_path(opts: &InstallOptions) -> Option<PathBuf> {
+    match (&opts.lock_path, opts.skip_lockfile) {
+        (Some(p), _) => Some(p.clone()),
+        (None, false) => std::env::current_dir().ok().map(|c| c.join("loft.lock")),
+        (None, true) => None,
+    }
+}
+
+/// The options a `use`-driven auto-install runs with, for a program in `scope` — @PLN143.
+///
+/// One function so the whole posture of that path is stated in one place and testable
+/// without a registry:
+///
+/// - **The index signature is not waived** (arc A). `loft install` keeps its own CLI
+///   default, and the asymmetry is the point: waiving is defensible for a verb a person
+///   typed, not for the path a bare `use` takes on its own.
+/// - **The governing lock is READ, and written only where a declaration may be
+///   recorded.** They were one field, and reading them as one is what let a pinned
+///   script's sidecar decide which file loaded while deciding nothing about which
+///   version was installed.
+/// - **A resolution inside the registry cache is bound by neither**: the only
+///   declaration above it is the cached dependency's own, and the consumer's constraint
+///   reaches it through the root manifest instead.
+/// - No `refresh` (the index TTL decides that) and no prereleases — a `use` takes
+///   releases.
+#[must_use]
+pub fn options_for_use(
+    scope: &crate::resolution_scope::ResolutionScope,
+    in_registry_cache: bool,
+    offline: bool,
+) -> InstallOptions {
+    let write_target = scope.lock_write_target(in_registry_cache);
+    InstallOptions {
+        allow_unsigned: false,
+        refresh: false,
+        skip_lockfile: write_target.is_none(),
+        lock_path: if in_registry_cache {
+            None
+        } else {
+            scope.governing_lock()
+        },
+        // `LOFT_OFFLINE=1` makes resolution HERMETIC: a missing package fails fast and
+        // deterministically instead of fetching — what a test-spawned fixture (or an
+        // air-gapped box) wants.  Mirrors the CLI paths that already honour it.
+        offline,
+        allow_prerelease: false,
+    }
+}
+
+/// The constraint a resolution runs under, given what the governing lock pins and what
+/// the manifest declares — @PLN143.
+///
+/// A lock entry is an EXACT version, so it outranks a range: that is what a lockfile IS,
+/// the resolved form of the declaration above it. The one case where it does not is a
+/// pin the manifest has since excluded — someone edited `^0.1` to `^0.2` and has not
+/// re-installed — and answering the stale pin there would honour a declaration that has
+/// been overruled by the one it derives from.
+///
+/// `None` means unconstrained: nothing is declared, so the newest release, which is what
+/// a bare script means by `use`.
+#[must_use]
+pub fn constraint_for(pinned: Option<&str>, declared: Option<&str>) -> Option<String> {
+    match (pinned, declared) {
+        (Some(v), Some(c)) if !registry_index::satisfies(v, c) => Some(c.to_string()),
+        (Some(v), _) => Some(v.to_string()),
+        (None, c) => c.map(ToString::to_string),
+    }
+}
+
+/// What this project already holds, read from the lock that governs it — the input step 6
 /// needs to tell a first install from an upgrade.
 ///
-/// Empty on every path that has no consumer project to speak of: a
-/// cache-internal resolution (`skip_lockfile`), a missing or unreadable
-/// lockfile.  Empty means unconstrained, so those paths resolve exactly as they
-/// did before.
+/// Empty where no declaration is in force (see [`governing_lock_path`]), or where the
+/// lockfile cannot be read.  Empty means unconstrained, so those paths resolve exactly as
+/// they did before.
 fn held_versions(opts: &InstallOptions) -> std::collections::BTreeMap<String, String> {
     use std::collections::BTreeMap;
-    if opts.skip_lockfile {
+    let Some(lock_path) = governing_lock_path(opts) else {
         return BTreeMap::new();
-    }
-    let lock_path = match &opts.lock_path {
-        Some(p) => p.clone(),
-        None => std::env::current_dir()
-            .unwrap_or_default()
-            .join("loft.lock"),
     };
     match lockfile::read_lockfile(&lock_path) {
         Ok(Some(l)) => l
@@ -538,11 +628,13 @@ fn check_against_lockfile(graph: &[ResolvedPackage], opts: &InstallOptions) -> R
 /// Every `name -> (version, sha256)` a lockfile pins, for [`check_against_lockfile`].
 fn locked_hashes(opts: &InstallOptions) -> std::collections::BTreeMap<String, (String, String)> {
     use std::collections::BTreeMap;
-    let lock_path = match &opts.lock_path {
-        Some(p) => p.clone(),
-        None => std::env::current_dir()
-            .unwrap_or_default()
-            .join("loft.lock"),
+    // @PLN143 — the same lock `held_versions` reads, from the same rule: a lockfile
+    // records the bytes it pinned, so whatever governs the versions governs the hashes.
+    // A pinned script's sidecar therefore gets the re-publish check too, and a resolution
+    // with no declaration in force is checked against nothing rather than against a stray
+    // `loft.lock` in whatever directory the run happened to start in.
+    let Some(lock_path) = governing_lock_path(opts) else {
+        return BTreeMap::new();
     };
     match lockfile::read_lockfile(&lock_path) {
         Ok(Some(l)) => l
@@ -701,12 +793,47 @@ pub fn auto_install_if_in_catalog(
     if name == crate::self_update::TOOLCHAIN_PKG || !index.packages.contains_key(name) {
         return Ok(None);
     }
-    eprintln!("[registry] resolving {name} from registry");
     let report = install_one(name, constraint, opts)?;
     for (n, v) in &report.installed {
         eprintln!("[registry] installed {n} {v}");
     }
     Ok(Some(report))
+}
+
+/// The newest release of every package the CACHED index knows — @PLN143 arc E.
+///
+/// The input to the "your pin has fallen behind" notice, and every property of it follows
+/// from what that notice is allowed to cost:
+///
+/// - **Cache only, never a fetch.** The index already refreshes on a 1-hour TTL with a
+///   conditional GET; an advisory line may not add a network round trip to a program run.
+///   No cached index means an empty map, which means silence.
+/// - **`allow_unsigned`**, the posture every read-only registry command takes
+///   (`loft search`, `loft info`, `loft api --registry`): a MISSING signature is
+///   tolerated, an INVALID one still hard-fails — and here that failure degrades to an
+///   empty map, so tampered bytes produce silence rather than a message. Nothing is
+///   installed from this, and the cure it prints goes through the verifying path.
+/// - The version is picked by [`registry_index::find_best_version`], so "newest" means
+///   exactly what it means everywhere else — yanked skipped, prerelease skipped — rather
+///   than a second rule that could drift from the resolver's.
+#[must_use]
+pub fn newest_cached_releases() -> std::collections::BTreeMap<String, String> {
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        offline: true,
+        ..Default::default()
+    };
+    let Ok(index) = load_index(&opts) else {
+        return std::collections::BTreeMap::new();
+    };
+    index
+        .packages
+        .iter()
+        .filter_map(|(name, pkg)| {
+            registry_index::find_best_version(pkg, "*", false)
+                .map(|v| (name.clone(), v.semver.clone()))
+        })
+        .collect()
 }
 
 /// Render a human-readable summary of an install.
@@ -1159,5 +1286,128 @@ mod tests {
             "an upgrade must not be mistaken for tampering"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// @PLN143 — which lockfile a resolution is BOUND by, which is not always the one it
+    /// may write. Reading those as one question is what let a pinned script's sidecar
+    /// decide which file loaded while deciding nothing about which version was installed.
+    #[test]
+    fn the_lock_that_governs_is_not_the_lock_that_is_written() {
+        let named = InstallOptions {
+            lock_path: Some(PathBuf::from("/s.loft.lock")),
+            skip_lockfile: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            governing_lock_path(&named),
+            Some(PathBuf::from("/s.loft.lock")),
+            "a sidecar governs even though a run may not amend it"
+        );
+        let project = InstallOptions {
+            lock_path: Some(PathBuf::from("/proj/loft.lock")),
+            ..Default::default()
+        };
+        assert_eq!(
+            governing_lock_path(&project),
+            Some(PathBuf::from("/proj/loft.lock"))
+        );
+        let nothing_declared = InstallOptions {
+            lock_path: None,
+            skip_lockfile: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            governing_lock_path(&nothing_declared),
+            None,
+            "a bare script (or a dep resolved inside the cache) is bound by nothing"
+        );
+        // The `loft install` default: unnamed, and it writes the cwd's lock — so that is
+        // the file it is already bound by.
+        let cli = InstallOptions::default();
+        assert_eq!(
+            governing_lock_path(&cli),
+            std::env::current_dir().ok().map(|c| c.join("loft.lock"))
+        );
+    }
+
+    /// @PLN143 — a lock entry is the resolved form of the declaration above it, so it
+    /// outranks a range; a pin the manifest has SINCE excluded does not, because it has
+    /// been overruled by the thing it derives from.
+    #[test]
+    fn a_pin_outranks_a_range_unless_the_manifest_excluded_it() {
+        assert_eq!(
+            constraint_for(Some("0.1.0"), Some("^0.1")).as_deref(),
+            Some("0.1.0"),
+            "the exact pin, not the range around it"
+        );
+        assert_eq!(
+            constraint_for(Some("0.1.0"), None).as_deref(),
+            Some("0.1.0"),
+            "a pinned script has no manifest, and its sidecar still governs"
+        );
+        assert_eq!(
+            constraint_for(Some("0.1.0"), Some("^0.2")).as_deref(),
+            Some("^0.2"),
+            "a stale lock loses to the declaration it derives from"
+        );
+        assert_eq!(
+            constraint_for(None, Some("^0.2")).as_deref(),
+            Some("^0.2"),
+            "nothing pinned yet — the manifest decides"
+        );
+        assert_eq!(
+            constraint_for(None, None),
+            None,
+            "nothing declared at all is the bare script: the newest release"
+        );
+    }
+
+    /// @PLN143 — the posture of the `use` path, per scope: what it reads, what it may
+    /// write, and the signature it never waives.
+    #[test]
+    fn the_options_a_use_driven_install_runs_with() {
+        use crate::resolution_scope::ResolutionScope;
+        let sidecar = PathBuf::from("/scripts/s.loft.lock");
+        let pinned = options_for_use(
+            &ResolutionScope::PinnedScript(sidecar.clone()),
+            false,
+            false,
+        );
+        assert_eq!(
+            (pinned.lock_path.as_ref(), pinned.skip_lockfile),
+            (Some(&sidecar), true),
+            "a sidecar governs the install and is not amended by it"
+        );
+
+        let root = PathBuf::from("/proj");
+        let package = options_for_use(&ResolutionScope::Package(root.clone()), false, false);
+        assert_eq!(
+            (package.lock_path.as_ref(), package.skip_lockfile),
+            (Some(&root.join("loft.lock")), false),
+            "a package reads and records the lock beside its manifest"
+        );
+
+        let bare = options_for_use(&ResolutionScope::Bare, false, false);
+        assert_eq!(
+            (bare.lock_path.as_ref(), bare.skip_lockfile),
+            (None, true),
+            "nothing declared: bound by nothing, and it declares nothing in return"
+        );
+
+        let cached = options_for_use(&ResolutionScope::Package(root), true, false);
+        assert_eq!(
+            (cached.lock_path.as_ref(), cached.skip_lockfile),
+            (None, true),
+            "a dep resolved inside the cache has no consumer project on either side"
+        );
+
+        for o in [&pinned, &package, &bare, &cached] {
+            assert!(
+                !o.allow_unsigned,
+                "the `use` path never waives the index signature (@PLN143 arc A)"
+            );
+            assert!(!o.allow_prerelease, "a `use` takes releases");
+        }
+        assert!(options_for_use(&ResolutionScope::Bare, false, true).offline);
     }
 }

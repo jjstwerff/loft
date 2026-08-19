@@ -465,6 +465,27 @@ default).  `--all-fns` includes the default/* stdlib.  `--fn
 sections are selected as one JSON object (parseable by loft's own
 `json` reader) instead of the text dump.
 
+### A record layout is a MEASURED fact
+
+Byte offsets are what `OpGetField` / `OpNewRecord` carry, so a wrong one is a wrong answer —
+and they cannot be inferred from the declaration. `--show-bytecode` prints them, which is
+the only place to read them from:
+
+```
+GetField(v1: ref(reference), fld=4) -> ref(reference) type=vector<float> 78
+NewRecord(data: ref(reference), parent_tp=81, fld=1) -> ref(reference)
+```
+
+`GetField`'s `fld` is a byte OFFSET; `NewRecord`'s is a field INDEX. Two things that look
+alike and are not, and both appear as `fld=`.
+
+Neither a hand-built `Stores` table in a unit test nor a reading of the field types will give
+you the same numbers. `enum Shape { Circle { limbs: vector<float> }, Square { s: float } }`
+puts `limbs` at 4 (a 4-byte collection handle after the discriminant) and `s` at 8 (float
+alignment) — a unit test that assembles the same shape through `Stores::structure` /
+`Stores::field` runs none of the layout pass and answers otherwise (loft#977). When a test
+needs two fields to collide, `assert` the collision in the test so the premise cannot drift.
+
 ### `--show-resolution` when a name will not resolve
 
 A name resolves only if the source you are calling it from can **see** it. loft

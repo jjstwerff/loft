@@ -9,6 +9,1173 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A vector builtin ends on LENGTH, not on the element's null (loft#1000, 2026-08-19)
+
+`map`, `filter`, `reduce`, `all`, `count_if` and the vector comprehension NEVER TERMINATED
+over a `value struct` element; `any` terminated only by stopping on a phantom element read
+one past the end, and answered from it. Both backends, and a plain `struct` was correct in
+every cell — `value` was the only axis.
+
+Two correct-in-isolation mechanisms met. The builtins emit `Set(elm, iter_next)` followed
+by `if !bool(elm) { break }`, relying on `OpGetVectorNullable` answering null past the end.
+@PLN101's `value_struct_copy` rewrites exactly that bind: a `value struct` reaching a user
+callback is deep-copied so the local OWNS its record — and a freshly minted record is never
+null, so the break could not fire at all. The phantom `x=5695106865` was the same on both
+backends and every run: whatever the out-of-bounds `DbRef` addressed.
+
+The cure already existed one construct over. The `for` STATEMENT had the mirror defect (a
+null ELEMENT ending the loop EARLY) and was cured by terminating on LENGTH, which is why it
+was the one correct row in the report. `Parser::vector_loop_break` is now the shared home —
+sibling of `text_loop_break`, which exists for the same reason — and all six lowerings
+route through it, so "how the loop ends" is one decision rather than seven.
+
+**The index semantics were read off the emitted IR rather than reasoned about**, because an
+off-by-one here is a silently dropped or doubled element: `#index` starts at `-1`, the
+`{#iter next}` block PRE-increments and then reads, so at the test the index is the 0-based
+one just read and `len <= idx` is exactly "past the end". Re-read each iteration rather than
+hoisted, so an in-loop `#remove` still terminates. Forward-only — these builtins have no
+reverse form, so the `for` statement's companion `idx < 0` test has nothing to answer.
+
+⚠ **The first version took the length of the wrong vector.** `build_comprehension_code`'s
+`vec_expr` is the DESTINATION being appended to — `map` builds a result vector and hands
+that in — so measuring it would have measured the thing that grows every iteration. The
+parameter is therefore `Option<(Value, u16)>` carrying the SOURCE explicitly, and each of
+the four call sites passes its own (`vec_copy_var` for map/filter, `source_expr` for the par
+materialiser, the pre-`iterator` collection for the comprehension — captured before
+`iterator` rewrites it, mirroring the `for` statement's `orig_coll_expr`).
+
+Guard: `tests/scripts/1000-value-struct-vector-builtins.loft`, 12 cells on both backends —
+all six constructs, the `for`-statement control, an EMPTY vector (which hung too, so the
+element count is not the axis), five elements (so "2" is not mistaken for the rule), a
+plain-`struct` control, and a scalar vector holding real values, since a null the vector
+genuinely holds is the OTHER shape that shares the out-of-bounds sentinel. A pre-fix binary
+hangs on the first cell.
+
+### `loop_nr` answers "not found", so `x#break` on a non-loop local is a diagnostic (loft#998, 2026-08-19)
+
+Naming a declared local that is not a loop variable in `x#break` / `x#continue` was an
+INTERNAL COMPILER ERROR on both backends — *"index out of bounds: the len is 1 but the
+index is 18446744073709551615"*, a `usize` underflow.
+
+`Variables::loop_nr` walked the enclosing-loop chain with the match in its loop CONDITION:
+
+```rust
+while c != u16::MAX && self.loops[c as usize].variable != target { c = …; nr += 1; }
+nr
+```
+
+so falling off the end returned the chain length — one past the deepest valid level, and
+indistinguishable from a real answer. Three sites in `Scopes::scan` then indexed
+`self.loops[self.loops.len() - lv - 1]` and underflowed. The `in_loop` guard catches
+"outside a loop", which is why `k#break` with no loop at all was always clean; nothing
+checked that the NAME belonged to a loop.
+
+It now returns `Option<u16>` and RETURNS ON THE MATCH, which is what makes the missing
+case impossible to fall out of — "not found" and "the outermost loop" are different
+answers and one number cannot carry both. An unbound name is `None` too: it names no loop,
+which is the same answer as a bound one that names no loop.
+
+Reported at the PARSE, not in `scopes.rs`: that is where the source position and the
+author's spelling are, and `scan` has only a level. The message names what CAN be written
+— `Variables::enclosing_loop_names` lists the enclosing loops' variables innermost first,
+so a nested pair reads *"or `j#break` or `i#break`"*, and a `while` (which binds no
+variable) offers the plain form instead. Outside a loop the pre-existing message stays the
+only one; adding "…and `k` is not a loop variable" says the same thing twice from further
+away.
+
+Guards: four `parse_errors` cells — `for`, `while`-with-`continue`, the nested pair, and
+the outside-a-loop control. The `while` cell is the one that would not have been written
+from the `for` case alone: a `while` binds no variable, so the cure list is empty and the
+message has to say something else.
+
+### A package's own NAME is not one of its module names (loft#976 follow-up, 2026-08-19)
+
+loft#976 made a bare `use <id>` inside a package bind that package's OWN `<id>.loft`, so a
+stranger's same-named module can no longer amputate a library's public surface. The rule
+had no stop at the package's own name, and `own_module_path` finds a same-named file
+ANYWHERE in the package — including `tests/`.
+
+Every library in the ecosystem writes its own suite as `tests/<pkg>.loft` containing
+`use <pkg>;`. That import therefore bound the TEST FILE as the package's module, the
+entry's `pub` surface never loaded, and every symbol read *"Unknown function … — the `X`
+this build resolved does not have it, and the registry's `X` does"*. **Nine published
+libraries went red** on the PR's `revalidate-libs` gate: hex_world, glb, regex, cbor,
+crypto, server, shapes, pluginabi, zttext.
+
+`use <pkg>` inside `<pkg>` asks for the PACKAGE. The guard now stops there (`id != pkg`),
+and `use self::<pkg>` remains the explicit spelling for the file. The distinction is what
+lets a package refer to itself at all: a name that means the package in one file and a
+sibling module in another is a name that means nothing.
+
+**Two wrong turns before the right one, both worth recording.** The first hypothesis was
+"a package importing itself by name", and the minimal repro built from it PASSED on both
+binaries — refuted, not confirmed. The trigger needs the same-named file to exist and NOT
+be the entry, which is what `tests/<pkg>.loft` is; reducing DOWN from the red library
+found it, building UP from a guess did not. The second was a mis-measurement of my own
+making: `loft --tests src` walked `overland.loft`, a file the entry never imports and
+which fails to parse on BOTH binaries, and that pre-existing error read as the regression
+for several minutes.
+
+Measured before/after on five libraries, each a clean copy in a scratchpad (running a
+suite inside a consumer's tree writes `native-auto/` and `.loft/` and is not read-only):
+regex 1→11, cbor 0→5, glb 0→21, zttext 0→46, hex_world 0→21 passing.
+
+Guard: `module_name_clash::a_packages_own_name_means_the_package_not_a_same_named_file`,
+built by hand rather than through `parse_two_packages` because the whole point is a file
+named after its package in a directory that is not `src/`. loft#976's own sixteen cells
+use module names distinct from the package name, which is why none of them covered this.
+
+### `OpIndex` reaches the composite subscript, and the slice says what to write (loft#996, 2026-08-19)
+
+@F114 says a type defining `OpIndex` "is subscripted like a built-in collection" and names
+A MATRIX as the motivating case — and `m[r, c]` answered `error: Expect token ]` at the
+comma. The dispatch half was never the gap: a two-index declaration is accepted and
+`OpIndex(m, 1, 2)` works, so an author could write the method the feature exists for, call
+it by hand, and never reach it as a subscript.
+
+The indices are now parsed comma-separated and passed as ARGUMENTS, which is what the
+accepted declaration already means (the issue's first design question, answered by the
+declaration itself). That keeps the arity and type checks in the ordinary call path,
+reported against the signature the author wrote.
+
+**The SLICE half is refused, not implemented, and that is a decision.** `x[a..b]` is not a
+subscript with a different argument: every built-in kind lowers its own
+(`parse_vector_index`, `parse_text_index`, `parse_spatial_slice`, `parse_trie_slice`), each
+to a dedicated runtime call, and there is no range VALUE in the language for a user method
+to receive. So it needs a range type or an `OpSlice` of its own — a language addition, not
+a parse — and the issue's own "expected" allows saying so. Making `x[a..b]` mean
+`OpIndex(x, a, b)` was rejected: a matrix type would then have `m[1..2]` silently mean
+`m[1, 2]`.
+
+The refusal has two halves and the first version had only one. It must also CONSUME the
+rest of the bracket, the way the pass-1 `Unknown` receiver arm does: returning with `..2`
+unread cascades into `Expect token ]` on pass 1, and a pass-1 abort silences every pass-2
+diagnostic — so the message existed and nothing printed it.
+
+**One diagnostic beyond the issue**, because the comma form makes it reachable: a
+one-index `OpIndex` given two reported `Too many parameters for t_4Ring_OpIndex`, naming a
+storage symbol that appears in no source file. Two fixtures in the suite already record
+that as a defect of its own (`tests/lib/dupmethod_a/…`, `tests/scripts/850-…`).
+`Data::user_facing_name` renders `n_<name>` as `<name>` and `t_<LEN><Type>_<name>` as
+`Type.name` — the receiver stays visible because that is exactly what is ambiguous where
+these messages fire, between two packages or two arities — and anything it cannot parse
+comes back unchanged, since it decides how a name is SHOWN and must never lose one.
+
+Guards: `tests/scripts/996-opindex-composite-subscript.loft` (two / one / three indices,
+and index EXPRESSIONS including a nested subscript, so "two" is not mistaken for the rule)
+and two `parse_errors` cells pinning the slice refusal and the demangled arity message.
+
+### A void native with no lowering is a hard error, not an empty body (loft#993, 2026-08-19)
+
+`output_function` escalates an unimplemented native to `compile_error!` when reachable and
+`todo!()` when not — P269's "fail at startup, not runtime". Both legs gated that on
+`*def.returned() != Type::Void`, so a VOID one was emitted as `{}`: a function that
+compiles, is callable, and does nothing. The principle had no effect on the half of the
+surface where the failure is silent instead of a panic, and that is what hid the par
+discard route for its whole life — `--native` emitted `n_parallel_discard`'s declaration
+with an empty body, and only an unrelated arity mismatch made "runs no workers" visible
+(loft#987).
+
+**The filed analysis was wrong on its central claim and is corrected on the issue.** It
+said dropping the guard was unsafe because `self.reachable` counts a call even where a
+custom emitter renames it. It does not: the internal leg's predicate already answers *"is
+this def actually called through its declaration"* —
+
+```rust
+let reachable = (self.reachable.is_empty() || self.reachable.contains(&def_nr))
+    && def.rust().is_empty() && !is_iface_stub && !is_t_stub && !has_custom_op_emitter;
+```
+
+— so the escalation was never a predicate short, it was one `if` too narrow. Re-measured
+over the ten stubs a typical emit carries: three are excluded by their `#rust` body
+(`n_eprint`, `n_store_lazy_fail`, `n_host_output` — inlined at the call site), six by a
+registered `OpEmitter` (`n_parallel_buf_drop*` via the rename emitter, `n_parallel_discard`
+since loft#987), and exactly ONE was relying on the silence.
+
+That one is `yield_frame`, and its no-op is genuine: a `--native` binary has no interpreter
+state to resume and no host loop to return to, so a frame-driven program runs straight
+through. It now carries `#rust "()"` — the silence is what the declaration SAYS rather
+than what falls out of "nobody implemented it", which is the whole distinction loft#993 is
+about.
+
+Both legs lose the guard. The `#native` leg's own predicate is untouched: a `#native`
+binding whose symbol no registered crate provides, CALLED by the program, is now the same
+hard error for a void return that it always was for a value return.
+
+Guard: `tests/native_no_silent_stub.rs` — a property of the emitted source rather than a
+list of names, so it keeps holding for built-ins that do not exist yet, which is the point
+of a guard for a silence: **no generated function may be both CALLED and EMPTY.** An
+unreachable empty declaration is harmless and stays legal.
+
+The control cell changed shape while being written, and that is the measurement worth
+keeping: it first asserted the emit still CARRIES empty-bodied declarations, so the
+property could not pass vacuously — and it does not. Lifting the guard took the count to
+ZERO on the probe. All ten became `todo!("native function …")`, and no `compile_error!`
+appeared, which is the other half: nothing that is lowered elsewhere started being refused.
+So the control pins the signature instead — `n_parallel_discard`, the void stub loft#987
+was about, must appear LOUD while its CALL goes to the runtime helper. Plus a behavioural
+cell that `yield_frame` still runs on both backends.
+
+### `FieldInfo.nullable` follows the declaration for every field kind (loft#995, 2026-08-19)
+
+Documented as *"was the field DECLARED nullable"* and named as the fact a generated
+`CREATE TABLE` needs for `NOT NULL` (@F107); correct for the seven scalar kinds, a
+constant `true` for enum / record / vector / keyed. A generic serialiser emitted all four
+as nullable columns. The two spellings genuinely differ — construct every field with
+`null` and `x.f == null` answers `false` for the non-null spelling — so this was a fact
+being LOST, not two things that are one.
+
+Scope, not logic. @PLN25 DN1 derives the flag from the `Optional` wrapper and the rollout
+gated that on `is_non_null_scalar`; everything else kept the pre-DN1 parser default
+(`true`). The gate is gone, so the derivation is `matches!(a_type, Type::Optional(_))` for
+every field. The synthetic tuple attributes have derived it that way from every element
+type since @PLN114 — a declared field now agrees with them.
+
+The flag is not reflection-only, and the suite is what settled the blast radius: it feeds
+the JSON-import default (`set_default_value_nullable`), the `not null` hint counter, and
+the narrow-integer op pair (`NarrowIntKind::of` — Integer fields only, which already
+derived correctly). Each moves in the same direction, toward the declaration. One visible
+consequence: `redundant-null-check` now fires on a non-null heap field compared against
+`null`, where before it saw only scalars.
+
+The forward-reference hazard was checked because the flag is deposited on pass 1 and never
+revisited — a member type declared BELOW its user reports correctly on both backends.
+
+**One kind is exempt, and the suite is what found it.** `reference<T>` in field position is
+#328's documented POINTER, and a pointer holds null however it is spelled: `n.next = null`
+is legal on it and an omitted one DEFAULTS to null, both pinned by
+`issue_328_reference_field_pointer_semantics` — which went red on the first version of this
+fix, reporting `redundant-null-check` on the very comparison it then asserts. Deriving from
+the `?` there answers a question the spelling does not decide. The pointer marker
+(`Deps::pointer_marker()`, the `u16::MAX` dep the parse stamps to select that 12-byte
+layout) is the exact discriminator — a by-VALUE `r: At995` is `Type::Reference` too and
+genuinely cannot hold null. Measured on all four: `byval` false, `byval?` true, `ptr` true,
+`ptr?` true, reflection agreeing with `x.f == null` in every cell.
+
+⚠ Writing that cell surfaced a separate PRE-EXISTING defect, measured identical on a
+pre-fix binary and NOT filed here: a forward-declared nullable record or enum field types
+as `unknown?` at a comparison site, so `x.rq == null` is *"No matching operator '==' on
+'unknown?' and 'null'"*. It is why the declared-below cell compares reflection against a
+written-down table instead of against the language, which is the weaker oracle — the
+declared-above cells carry the real one.
+
+Guard: `tests/reflect_declared_nullable.rs`, both declaration orders on both backends. The
+above-cells read the truth out of the RUN (`x.f == null` per field) rather than a table, so
+a cell that agreed with a table but not with the language would still fail.
+
+### A paged source validates the store signature (loft#994, 2026-08-19)
+
+A lazy binding reported every failure to OBTAIN bytes and none to INTERPRET them. Missing
+file / HTTP 404 / connection refused each set `store_lazy_faults` and `store_lazy_error`;
+an empty file, eleven bytes of text, 8 KB of noise, a directory, and an HTTP `200` serving
+an error page set neither — `faults 0`, `err ""`, `store_verify true`, every key `null`,
+which is precisely what a valid image with an absent key answers. Same family as loft#802,
+which fixed the refusals that route through `refuse_paged`; this is the hole where nothing
+reaches such a site at all.
+
+`PageSource::open` validated nothing — it opened the file and read its SIZE, and a size is
+not a format — so a non-image failed deep inside `load_one`, which has only `false` to
+return. Both legs now read the four-byte signature the format has always carried:
+`LocalFileProvider::open` from the handle it just opened, `HttpRangeProvider::open` with
+one extra four-byte range read per bind. Refusing THERE is what makes every existing
+`refuse_paged(path, "it cannot be opened as a paged source")` site inherit a report it
+already words correctly.
+
+`Store::has_signature` is the one home for the fact, and `is_store_file` (the startup
+cache's pre-check) now calls it too — the question is asked from two very different
+distances, a whole file and four range-read bytes, and one predicate answers both. Fewer
+than four bytes is not an image either, which is how an empty file gets its reason.
+
+The boundary, measured per-cell in its own process. Five sources now fault with a reason
+where four were silent; a real image is unchanged (`null=false`, `faults=0`, quiet).
+
+Separate processes because of a NEIGHBOURING defect this measurement surfaced, and the
+first reading of it was wrong: the channel is not per-run. Two collections alive at once
+report their own sources correctly. What is missing is that `store_bind_lazy` does not
+CLEAR the channel of the collection it binds — rebind a faulted collection to a good
+source and the lookup answers correctly while `store_lazy_faults` still says 1 with the
+old source's message. A function that binds a fresh local six times reuses one slot and
+so accumulates: `1, 2, 3, 4, 4`, the last of them under a healthy answer. Not slot reuse
+(`LOFT_NO_SLOT_REUSE=1` changes nothing) and not this bug.
+
+**One row moved on purpose**, and it is the row loft#994 records as "not a defect": an
+image whose first four bytes are overwritten used to answer the correct record, because
+the lazy reader only touches the pages it needs and those were intact. It now refuses.
+Answering from a file whose magic is wrong was luck, not a promise, and refusing it is
+what a magic number is for. A merely TRUNCATED image is unaffected and is pinned in the
+same cell, so neither direction can move by accident.
+
+**A neighbouring "defect" that turned out to be the contract — recorded because the wrong
+turn is the useful part.** Measuring the boundary showed a rebound collection still
+reporting the previous binding's faults, and `bind_lazy`'s own comments say a rebind
+re-pins the source and re-decides the schema (*"a different world now"*), so clearing the
+channel there looked like the missing half. It is not. `tests/scripts/129-lazy-bind.loft`
+pins exactly that shape — fail, rebind, succeed — and its comment gives the reason: the
+faults describe the CONTENTS, not the source, and the contents do not reset on a rebind.
+Whatever the previous binding materialised is still resident, minus the rows that failed,
+so "healthy" after a rebind is the silent wrong answer the channel exists to prevent. Only
+`store_lazy_clear` clears. The change was reverted with that reasoning written at
+`bind_lazy`, where the next reader will have the same idea.
+
+Two readings of the same measurement were wrong before that one: it is not per-run state
+(two collections alive at once were always isolated) and not slot reuse
+(`LOFT_NO_SLOT_REUSE=1` changes nothing). What remains unexplained, and is NOT the same
+thing, is a FRESH collection landing on a recycled `(store_nr, rec, pos)` and inheriting a
+channel that was never its own — a function binding a new local six times accumulates
+`1, 2, 3, 4, 4`. Clearing on bind is the wrong cure for it (that is the contract above);
+clearing when the SLOT is released would be the right place, and is not attempted here.
+
+Guard: `tests/lazy_source_not_an_image.rs` — the five silent sources, a valid-image
+control, the truncated/broken-signature pair, and the rebind. Each cell gets its own fixture directory:
+they run in parallel and each removes its tree, so one shared path is one cell deleting
+another's image (the first version of the file did exactly that).
+
+### A `never` block places its frees like a `Void` one (loft#992, 2026-08-19)
+
+A `match` in a function's TAIL position with a `return` in ANY arm freed that function's
+locals BEFORE the arms ran. The arm that does not return then read a released variable:
+`null(oob)` on `--native` against a correct interpreter answer, an EMPTY text on both, and
+on a droppable a drop before the arm plus a second one at the `return` — a use-after-free
+that panics native on the 65535 freed-record marker.
+
+A `return` in an arm types the match block `never`, and `Scopes::insert_free` routed
+everything that is not `Void` down the value-returning leg. That leg exists to hoist the
+tail into a `__ret_N` temp so the tail EVALUATES before the frees (the @PLN85 / B5-L3
+invariant) — but it hoists only a result type it can hold, and `never` yields no value.
+So `is_value_return_type` / text / heap-ref all answered no, `hoist_tmp` stayed `None`,
+and the final `else` emitted `ls.extend(ret_frees)` and then the tail. Frees first, tail
+second, with the tail still able to read them.
+
+`Never` now joins `Void` at that branch, because it is the same SHAPE for free placement:
+no value, nothing to hoist, nothing to return. The two legs there already decide correctly
+by whether the tail can COMPLETE — a tail that unconditionally returns keeps the frees in
+front of it, a tail that may still complete runs first and the frees follow. The
+returning arm emits its own frees on its own path, as it always did, so nothing is freed
+twice.
+
+The boundary, 20 probe cells, 9 of them red against the defect. Not axes: the arm count;
+which arm returns; whether the returning arm is the taken one; a scalar match vs an enum
+match; nesting; two locals vs one; `return` in EVERY arm. Axes: the match must be the
+function's TAIL (a statement after it, or the match wrapped in an `if`, was always
+correct), the terminator must be `return` (`break`, `continue` and `panic` were correct),
+and the function must return VOID — a value-returning one was correct all along, because
+its result type is hoistable and the tail therefore already evaluated first.
+
+Guards: `tests/scripts/992-match-tail-with-return-arm.loft` (11 cells on both backends,
+using a VALUE read in the arm) and `tests/match_tail_return.rs` (the drop COUNT and its
+position relative to the arm body, both backends). The two oracles have different
+sharpness and that is why both are here: on the interpreter a freed store keeps its bytes
+until something claims them, so only the TEXT cell of the script goes red against the
+defect — against seven cells on native, and against every cell of the drop-count test on
+both.
+
+### A lock-less project is not governed by the invoking directory (loft#991, 2026-08-19)
+
+Already fixed on this branch by @PLN143 arc C2, which deleted the cwd `loft.lock` leg from
+the resolution chain; what lands here is the GUARD for the row the arc's own cells left
+open. `probe_project_lockfile` finds the project root, finds no lock in it, and returns —
+and the chain then fell through to the cwd probe, so a stranger's pin governed a project
+that declares its own dependency. The two existing arc C2 cells both use a BARE script,
+which belongs to no project, so neither covered it. Measured against `tuxedo-post-973`
+(no arc C2): one project, one manifest, three invoking directories, three library
+versions.
+
+`arc_c2_a_cwd_lockfile_does_not_pin_a_lockless_project` asserts the ABSENCE of the
+stranger's version, and `arc_c2_a_projects_own_lock_outranks_the_invoking_directorys` is
+what keeps that from being vacuous — same fixture, project lock present, resolves. The
+absence is what the cell can assert because offline a lock-less project resolves NOTHING:
+`probe_cache_newest` is `Bare`-scope only by design (a fallback takes the newest cached
+copy, and only where nothing is declared can that violate no constraint). That refusal is
+PRE-EXISTING — measured identical on both branches with no lockfile anywhere — so the
+difference the cell measures is exactly the filed one: `probepkg-0.1.0` against the
+defect, no version at all with the leg gone.
+
+### A backtick block dedents from its first content line, holes included (loft#990, 2026-08-19)
+
+A backtick block was dedented unless it contained a `{…}`, in which case it was not
+dedented at all and kept its trailing whitespace-only line. One hole anywhere in the
+block, before or after the affected lines, was enough — so the feature served the block
+with no values in it (a GLSL shader, LOFT.md's own example) and stopped serving the
+TEMPLATE, which is the shape it exists for. LOFT.md's second example sat under the
+sentence describing the strip and was not stripped.
+
+**The rule and the streaming were incompatible by construction, not by oversight.** The
+strip was `closing-backtick column - 1`, computed and applied when `backtick_string`
+reached that backtick. An interpolation makes the scanner emit the text accumulated so
+far and return (`Mode::Formatting`) long before the closing column is known, so the
+`Some(&'{')` arm built its segment with no strip and `backtick_string_resume` continued
+without one. Every compat-preserving cure needs the closing column BEFORE the first hole:
+a shadow scanner for the string grammar (a second home for it), or a rewindable lexer
+that drives the real scanner once to measure and again to emit (M+, and it touches the
+diagnostic path and the token-memory replay).
+
+The base is now **the first content line's indentation**, which is knowable before any
+hole can occur, so a holed literal and an unholed one answer alike. `backtick_line_start`
+consumes a line's leading spaces as the line is ENTERED, settles the base on the first
+line that has content, and returns `spaces - base`; both scanners call it, so there is one
+home for the rule and the resumed segments get it too. `backtick_strip` is a STACK, one
+entry per open literal, because a backtick literal can be written inside another's hole —
+pushed where `next()` opens one, popped in `close_backtick`.
+
+What settles the base is decided by one peek after the spaces: end-of-line means a BLANK
+line (settles nothing — a template may open with one, and taking its zero would switch the
+dedent off for the block), a closing backtick means the LAST line (dropped when it holds
+only whitespace, so not content either), anything else is content. The opening backtick's
+own line can never be the base: it starts wherever that backtick ended, so its indentation
+is the statement's.
+
+Two visible consequences, both only in blocks laid out unusually. A block whose closing
+backtick sits at a different column than its own lines now follows the LINES. And a line
+indented LESS than the base comes out flush (`spaces.saturating_sub(base)`) instead of
+keeping all its indentation — which used to leave it further right than the siblings that
+were indented PAST it, the inversion loft#990 lists as a related silent edge. A
+TAB-indented block is still untouched: a tab is not a space, so the count is zero.
+
+`backtick_string`'s closing arm no longer strips — every line arrives dedented — and keeps
+only the two layout rules. `backtick_string_resume` gained the trailing-blank-line drop it
+never had (`drop_trailing_blank_line`), which is the other half of the reported symptom.
+
+**One in-repo program moved, and it is the instructive one.**
+`scripts/build-playground-examples.loft` builds `doc/examples.js` out of six holed
+backtick blocks, and took the newline BETWEEN two appends from the closing line the old
+behaviour kept verbatim. With the block dedenting properly that line is layout and is
+dropped, so the whole file came out as nine lines. The generator now ends each block's
+last content line with an explicit `\n` — the newline is written rather than inherited —
+and the regenerated `doc/examples.js` is byte-identical to the committed one once
+whitespace is ignored (40 examples, 40 list entries, 2 groups, checked through `node`).
+`doc_hygiene::doc_examples_js_is_up_to_date` is what caught it.
+
+Guard: `tests/scripts/990-backtick-dedent-with-holes.loft`, 11 cells on both backends —
+hole in the middle / on the opening line / on the first content line, blank first line,
+outdented line, tabs, a nested block inside a hole, doubled braces, content on the opening
+line, empty block, and the template shape LOFT.md advertises. 9 of the 11 fail against a
+pre-fix binary. LOFT.md's shader example is corrected too: `void main() {` opens a hole, so
+it never compiled; doubled, it compiles AND dedents.
+
+### A `{` that opens a hole nothing closes says so (loft#989, 2026-08-19)
+
+The two ways of getting a literal brace wrong got very different answers. `}` reached
+`Lexer::unescaped_brace` — one home for four scanners, a code, and a `Mechanical` fix
+naming `}}`. `{` had no equivalent: the scanner opened a hole and returned, and the failure
+surfaced later at `objects.rs`'s generic `diagnostic!(… "Formatter error")`, the "the string
+did not resume after a hole" path, which cannot know a `{` started it. Measured on
+`println("a lone open { here");` — SIX diagnostics, the last of them blaming the function's
+own closing brace, and not one of them mentioning `{{`.
+
+Reporting it needs the hole's fate to be KNOWN at the `{`, and it is: a hole holds code, the
+code scanner stops at the end of a line, so a hole that does not close on the line it opened
+never closes at all (measured both ways — `"a {` + newline and the same in a backtick
+literal are both errors today). `hole_closes_on_this_line` scans the rest of the line from a
+CLONE of the char iterator with a four-state stack (code / string / backtick / char literal)
+and brace depth; `Lexer::unclosed_hole` is the `}` twin — coded `format-unclosed-hole`,
+`Mechanical` fix `{{`, caret ON the brace rather than one past it.
+
+The scan's direction is the safety property: a wrong `true` leaves the pre-fix behaviour,
+a wrong `false` would refuse a legal program. It answers `true` for the one thing it does
+not model, a `//` comment. A `` ` `` in code can only OPEN a literal (code has no bare
+closing backtick), and one that runs past the end of the line cannot let the hole close on
+that line either — which is also what the enclosing literal's own terminator looks like
+from inside an unclosed hole, so both readings are the same error.
+
+Recovery is to treat the `{` as the literal brace the fix advertises and keep scanning, so
+the string terminates where it was going to and nothing cascades: six diagnostics down to
+one. Verified silent on `{x}`, `{S{x:7}.x}`, `{"q{y}q"}`, `{\"inner\"}`, `{if c == '}' {…}}`,
+`{{`/`}}`, and a nested backtick literal in a hole.
+
+Guards: `tests/error_messages/cases/54_format_unclosed_open_brace.loft` (the whole rendered
+output, so the single-error shape is pinned too) and the `e1_code_set` registry row. No
+existing error golden moved.
+
+### The par discard route has a native lowering (loft#987, 2026-08-19)
+
+`for x in v par(r = f(x), N) { }` — a body that never names the result — lowers to
+`n_parallel_discard`. Every other live par route has a bespoke native emitter; this one had
+none, so it fell through to the declaration-driven default and `--native` emitted
+`n_parallel_discard`'s loft DECLARATION, whose body is EMPTY. The only thing separating that
+from a silent no-op was an unrelated arity mismatch (the IR pushes six args, the declaration
+has five), which rustc refused: add the missing parameter and the program compiles and runs
+no workers, on one backend only.
+
+`n_parallel_discard_native` (`codegen_runtime.rs`) + `ParallelDiscardEmitter` +
+the registry row, and `n_parallel_discard` joins the `collect_calls` list so the worker fn
+is in the reachable set. The closure returns `()` rather than the worker's value: with the
+result dropped the return SHAPE stops mattering, so one runner covers scalar, float, text
+and heap-reference workers alike, and the emitter needs neither a per-shape return bridge
+nor `return_size` nor the heap-ref storage type — only the `&mut String` work buffer a
+non-owned text worker must still be handed.
+
+**Making the backends comparable is what exposed the INTERPRETER's half**, wrong in two
+ways nothing could witness — a route that drops every result produces nothing to compare
+against. `run_parallel_discard` had only the `DbRef` input arm, so a worker taking
+`integer` read the row pointer's bits; it now runs the same input ladder
+`run_parallel_queue` does (text / wide-tuple / primitive / DbRef, with `u32::MAX` leaving
+before any size test — it is the TEXT marker, not a width). And it never pushed the hidden
+parameters a compiled worker has: the `__work_N` buffer of a text return, the destination
+of a heap return. Missing them shifted every slot the worker reads — the text case
+SEGFAULTED the interpreter. Both counts now come from the same two readers
+`parallel_queue_dispatch` uses, and the route picks `execute_at_text` / `execute_at_ref`
+accordingly. No adoption or rebasing: the worker's whole `Stores` clone dies with the
+batch, which is what discard means.
+
+Guards: `tests/scripts/987-par-empty-body-discard.loft` — each worker ASSERTS the row it
+was handed, across scalar / float / text / text-input / struct / vector / boolean returns
+plus an empty input, with a queue-route control for count and value (a pre-fix binary
+SIGSEGVs on it) — and `tests/par_discard.rs`, which uses a side effect as the oracle
+(each worker prints its row) because a discarded result cannot be one, plus an emit check
+that the CALL reaches the runtime helper.
+
+Left standing, and worth knowing: `output_function` gates its `todo!()` / `compile_error!`
+stub on `*def.returned() != Type::Void`, so a VOID native with no implementation is emitted
+as an empty body — silently — where a value-returning one is loud. Ten such stubs are in a
+typical emit; each is fine today only because its own call site is rewritten elsewhere
+(`n_parallel_buf_drop*` by the rename emitter, `n_eprint` inlined from `#rust`) or is a
+deliberate no-op on this target (`n_yield_frame`). Nothing checks that, and it is what hid
+this bug for its whole life.
+
+### A par worker declared below its loop keeps its return type (loft#988, 2026-08-19)
+
+`b_type` in `build_parallel_for_ir` asked two questions in the wrong order:
+
+```rust
+if matches!(ret_type, Type::Unknown(_)) { I32 } else if fn_d_nr == u32::MAX { Unknown } …
+```
+
+On pass 1 a worker declared BELOW its loop answers `(u32::MAX, Unknown(0))` — BOTH
+conditions at once — and the first arm won, pinning `_b_par<n>` to `integer`. Pass 2
+refines only a slot that is still unknown, so it stayed. The comment above it already
+described the intended behaviour ("On the first pass fn_d_nr is u32::MAX; use Type::Unknown
+… Using I32 here caused the type to stick as integer even when the worker returns float or
+boolean") — the code had the arms the other way round.
+
+Only a COMPOUND assignment showed it: `t += b` retyped a float accumulator to integer and
+the PASS-1 error aborted the parse before pass 2 could correct it, while `t = t + b`
+coerces and passed, and `println("{b}")` printed correctly because `b` is inline-substituted
+by the element accessor and only its DECLARED type reaches the body's type check. The
+instrument that named it was `LOFT_VAR_TABLE=main`: `_b_par0 int` with the worker below,
+`float` with it above.
+
+**The arm order alone was not the fix** — the suite said so. `parse_parallel_worker`
+answers `(u32::MAX, Unknown)` for two OPPOSITE reasons, and both callers were reading one
+sentinel: a worker declared below the loop (not resolved YET) and a worker it REFUSES,
+which is a generator return or a name that does not exist. The refusals lean on `integer`
+deliberately — their own comment says so — because `b` has to carry a usable type or every
+use of it in the body earns a second diagnostic under the reported one, and reordering the
+arms alone added `Unknown variable '_b_par1'` to
+`parse_errors::par_worker_returns_generator`.
+
+The PASS is what tells the two apart: `fn_d_nr == u32::MAX && self.first_pass` is "not yet"
+and answers `Unknown`; on pass 2 the same sentinel means "never, and the error is already
+reported" and keeps `integer`. A RESOLVED worker whose return type is still unknown keeps
+`integer` too — the width the downstream route decisions assume.
+
+Guards: `parse_errors::par_worker_returns_generator` (which caught the first attempt) and
+its new sibling `par_worker_that_does_not_exist_reports_once`, holding the pass-2 half for
+the OTHER caller of the sentinel — one error, the body's `b > 0` silent, so the two intents
+cannot quietly re-collapse. Behaviour:
+`tests/scripts/988-par-worker-declared-below.loft`, 7 cells on both backends —
+`+=` / `=` / `/=` over a float return, integer, text and boolean returns, and a vector
+accumulate — every worker declared below its loop. A pre-fix binary fails 3 of them at the
+parse. Each loop is the LAST statement of its function on purpose: a par loop with a
+below-declared worker also reads as a value rather than a statement, so anything after it
+demands a `;`. That is a separate defect with a separate fix, already landed on the
+consumer stream's branch; keeping the loop last means this file measures the TYPE alone.
+
+### A struct-enum field access checks the tag (loft#980, 2026-08-18)
+
+`c.field` resolved at COMPILE time to the first variant declaring the name and read that
+offset whatever the tag said:
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+a: Node = Anon { k: 7 };
+a.n            // 7 — that is Anon's `k`, handed back as Named's `n`
+a.label = "x"  // stored in the Anon record, which goes on calling itself an Anon
+```
+
+Direct payload access STAYS — C89 decided permanently that enum payloads are named fields
+you read straight, with matching for DISPATCH and never for extraction, so refusing
+`c.field` (issue option 1) is the outcome that decision exists to prevent, and option 3
+restricts it the same way. C80/C85/C90 then fix what the check must ANSWER: a read that
+cannot be computed yields the type's null sentinel and the program keeps running, like a
+hash miss or an out-of-range index. So the access TYPE is unchanged, `a.n` on an `Anon`
+answers null, and a write to a field the value does not have is suppressed.
+
+**The guard goes on the RECEIVER, not the access** — `if tag(c) ∈ declaring { c } else
+{ null }` — which is what made the write half tractable. A null receiver ALREADY reads as
+null and ALREADY swallows a write, on both backends and with no new opcode, so both halves
+fall out of machinery that exists. And because only the receiver changed, the access is
+still a PLACE: the assignment path needs no notion of a guarded lvalue, which is what the
+issue recorded as the blocker (`if tag ∈ D { read } = rhs` cannot be an assignment target).
+The one seam it does touch is `lhs_base_var`, which now looks through the guard — recognised
+by its else arm being the zero-argument null sentinel, so an ordinary `if` on the left of an
+assignment is still not a place and is still refused.
+
+The guard is skipped, at no cost, where the question does not arise: every variant declares
+the field (the common-prefix case, correct today because a shared name+type shares a slot),
+a synthetic `__nullable<S>` (@PLN25's null model — guarding it would make `v[i].field`
+answer null), and a receiver that is not a place read. That last is a real bound: the guard
+reads the receiver twice — once for the tag, once as the value, which is what a struct-enum
+`match` does with its subject — so a receiver that is a CALL keeps the unchecked access, and
+the diagnostic says so rather than claiming a check that is not there.
+
+**`OpNullRefSentinel`, not `OpConvRefFromNull`.** The latter's `Stores::null()` is
+`database(u32::MAX)` — it ALLOCATES — so the first draft leaked one store per guarded
+access, caught by `loft_suite`'s per-script leak gate on this issue's own probe.
+
+**A write through an ABSENT destination was fatal, not refused** — and that one is not
+about enums. `set_default_value_nullable` wrote a field's default into the destination
+record without asking whether there IS one, so `allocations[u16::MAX]` panicked the
+interpreter. Two ways in, one contract: `s.v += [1]` on a null `S?` (which reproduces on
+`main`, independent of this issue), and — once the guard above exists — an append to a
+collection field the value's variant does not declare. The scalar write path already
+honoured the contract (`if db.rec != 0 { … }`); the default-init path honoured neither
+spelling of absence. One guard, sibling to the `tp == u16::MAX` return directly above it
+(nothing to write INTO rather than nothing to write), closes both. Found by this issue's
+own composition probe, which is why the guard is only correct WITH it: without it, the
+`c.field` fix turns silent corruption into a panic, which is the wrong trade.
+
+`variant-field-unchecked` stays a WARNING and its message was rewritten: a message
+describing behaviour the compiler no longer has is worse than none, and one derivation now
+decides both the guard and what the message says. Tier unchanged because a suppressed write
+is a lost write, which is the two-tier rule's own gating example. `LOFT_NO_VARIANT_FIELD`
+silences the message only — semantics must not depend on a diagnostic switch, pinned by
+`the_diagnostic_opt_out_does_not_change_the_answer`.
+
+Guards: `tests/scripts/980-variant-field-answers-its-own-variant.loft` +
+`tests/variant_field_semantics.rs` (behaviour); `tests/variant_field.rs` keeps the
+diagnostic.
+
+### The post-scope lints run under `loft test` too (loft#985, 2026-08-19)
+
+Five lints share one precondition — they read the ownership verdicts and the materialised
+copies that exist only after `scopes::check` — so they sat in one block on `main.rs`'s
+PROGRAM path. `loft test` / `--tests`, which is the path a LIBRARY's CI takes, ran none of
+them: a library could ship a `#superseded` steer pointing at nothing (a hard ERROR anywhere
+else) and writes that land in a copy, with a green suite. That is the hole @PLN107's lint
+was written for — its motivating case is a published `graphics` canvas that shipped every
+drawing primitive as a no-op through the copy-mutate shape, checked by
+`LOFT_DENY_WARNINGS=1 loft --interpret --tests tests`.
+
+What hid it is that the split is INSIDE the diagnostic set: `warning[never-read]` reached
+`--tests` and always did, so "tests are quiet" was never the rule.
+
+`use_analysis::post_scope_lints` is now the ONE home for the set, error gate included
+(loft#883: they all read RESOLVED types, and an aborting error means resolution did not
+finish, so an unresolved type's empty deps read as OWNED and an unrelated library's `for`
+variable reads as a lost write). `main.rs` and `test_runner.rs` both call it — two callers,
+one list, so the sets cannot drift apart again.
+
+**The ordering was the actual fix.** `scopes::check` ran in the test runner AFTER test
+discovery, while diagnostics are collected into `FileResult` well before that — so a lint
+reporting there wrote into a struct nobody read again. The scope check now runs directly
+after the parse and before the collection, which is also where its own diagnostics become
+visible. Called once per FILE, not per test: each test compiles its own bytecode from one
+`Data`, so a per-test call would report every finding N times
+(`one_finding_is_reported_once_across_many_tests` pins 3 tests → 1 report).
+
+Guard: `tests/post_scope_lints_under_tests.rs` — the dangling steer FAILS the run, the lost
+write is reported, `LOFT_DENY_WARNINGS=1` goes red on it, the count is one across three
+tests, and `never-read` still reaches the test path (the control for the split that hid it).
+
+### An empty struct literal parses before its declaration (loft#986, 2026-08-19)
+
+`T { }` was a parse error when `T` was declared BELOW the use, while `T { port: 0 }` in the
+same position was fine and `T { }` was fine with `T` declared above — `error: Expect token ;`
+pointing at the line rather than the type, so it read as a syntax mistake in code that has
+none. Legality by declaration ORDER, for the spelling that asks for the whole default record.
+
+A type pass 1 cannot resolve falls to a fallback that consumes the `Name { … }` body, and
+that fallback recognised a literal by SHAPE — an identifier followed by `:` or `,`. An empty
+body has no field to shape-check, so it did not match, the `{` went unconsumed, and the
+statement failed. (Fourth member of the family where a pass-1 fallback accepts fewer
+spellings than the construct has; the other three were named arguments in the method
+spelling, the shared argument-list skipper, and the compound-key index.)
+
+The shape check is what keeps a control-flow body from reading as a literal, and an empty
+body cannot be told from one that way — `if b { }` with an undefined `b` is identical. So
+the head of an `if` / `while` / `for` sets `in_control_head` (saved/restored, like
+`in_loop`) and only the empty-literal case consults it. Measured both directions: without
+it, `if b { }` answered `Expect token {` where the useful message is `Unknown variable 'b'`.
+
+The pre-existing sibling is left alone and noted: `if b { x: 1 }` with an undefined `b`
+already read as a struct literal before this change, and still does.
+
+Guard: `tests/scripts/986-empty-struct-literal-before-its-declaration.loft` — the empty
+literal below its declaration, with a declared field default, nested, as an argument and a
+return, plus the control-flow controls.
+
+### Float `/0` is IEEE in every destination (loft#983, 2026-08-19)
+
+`1.0 / 0.0` was `inf` inline and `null` once bound, returned, or stored — one operator, two
+ops, and the DESTINATION picked between them: `OpDivFloat` forced `f64::NAN` on a zero
+divisor while the `OpDivFloatNullable` peer did raw IEEE, emitted at "defended" sites.
+
+The model is IEEE with **NaN as the one float null** (`doc/23-safety`: "NaN … is null"), so
+`0.0 / 0.0` is null and `1.0 / 0.0` is `inf`. Three things already said so and now agree:
+
+- `tests/scripts/02-floats.loft` pinned `1.0/0.0 is positive infinity`, `log(0)` as `-inf`
+  "(not null)", and IEEE infinity arithmetic — beside a `runtime_warnings` test demanding
+  the SAME expression be null when undefended. Both were green because the op split made
+  defended ≠ undefended; that is the bug, not a coincidence.
+- float OVERFLOW is the sibling: `1.0e308 * 10.0` is `inf` in every position and always
+  was, though it yields the identical IEEE value. That asymmetry named the defect.
+- `formal/types.md` DN3-Float, which introduced the nullable peers, says in bold that it
+  was a TYPE-level change and *"Runtime is UNCHANGED"*. The forced NaN was a runtime change
+  it had promised not to make.
+
+`??` was self-defeating under the old split: at a `a / b ?? 0.0` site the peer that never
+yields null was chosen, so the idiom every numeric library uses to defend a divide guarded
+nothing (`mesh3d::normalize3` was sound only because a zero-length vector zeroes the
+numerator too, making it a genuine `0.0 / 0.0`).
+
+`OpDiv/RemFloat` + `OpDiv/RemSingle` keep the C80/E-Report Warn on an unguarded zero
+divisor and return the IEEE result. The TYPE is untouched — `/` still types `float?`,
+because `0.0 / 0.0` still yields null — so `(N-Store)` still fires and
+`float_div_var_on_is_nullable` still counts its warning. The `*Nullable` peers are now
+behaviourally identical and are dead weight, a separable cleanup exactly as the integer
+split already is. **`src/fill.rs` is GENERATED** from these `#rust` bodies
+(`cargo test --test issues regen_fill_rs -- --ignored`) — hand-editing it is what
+`fill_rs_up_to_date` exists to catch.
+
+Guard: `tests/scripts/983-float-divide-by-zero-is-one-answer.loft` (every destination ×
+`inf`/NaN/overflow/`%`/`single`). Updated to the model, intent preserved: `runtime_warnings`
+f4f float+single (renamed `…_reports_and_continues`, still exit 0, still warning),
+`nullflow_phase3` float_div_var (still `warns == 1`), `184-i333` (its float cell split into
+an `inf` cell and a `0.0/0.0` null cell), and one golden baseline.
+
+### A limited field stores its default when a value does not fit (loft#984, 2026-08-19)
+
+`integer limit(lo, hi)` stored three different wrong things and reported none: `x.b = 256`
+on `limit(0,255)` ALIASED to `0` (`set_byte` admitted `min + 256`, storing `256 as u8` = 0,
+so the field read back as `min`); `x.b = 260` was DROPPED (the setter returned `false` and
+every caller ignored it, leaving the previous value); and `x.s = 70000` on `limit(0,65535)`
+WRAPPED to `4464` (`set_i16_raw` had NO range check — a truncating `(val - min) as u16`).
+
+Three encodings, three different range bugs, now one rule: a value the field cannot
+represent stores the type's **default** — the lowest value in its range, or **null** where
+the field is nullable, since absence is a value that type can hold and is the honest answer
+for "this did not fit". A slot never holds a value its type cannot represent.
+
+The bounds, each read off the encoding rather than assumed: `set_byte` stores `val - min` in
+a u8, so `min ..= min + 255` (not `+256`); `set_short` stores `val - min + 1` reserving raw
+0 for null, so `min ..= min + 65534` (the old bound was off by TWO); `set_i16_raw` stores
+`val - min` with no sentinel, so `min ..= min + 65535`. Each is now a `Store::*_fits`
+predicate read by BOTH the setter and the nullable wrapper — two derivations of "does this
+fit" is how one field came to be stored three ways.
+
+The width follows the SPAN, not the magnitude (`(L-Narrow)`): `limit(300, 400)` and
+`limit(-200, 0)` are one byte each and round-trip their whole declared range — a check
+written against the magnitude would break them, which is why the guard pins both.
+
+**The DECLARED range needs a second layer, because the store cannot see it.** A store op
+carries the field's `min` and its width — so it catches what the width cannot represent,
+and nothing else. `m.v = 500` into a `limit(300, 400)` byte encodes to 200, fits, and used
+to read back as 500. And a declared range on a LOCAL had no store op at all to carry it, so
+`a: integer limit(0,255) = 7; a = 300` simply kept 300 — unenforced entirely, not merely
+mis-stored, because `is_narrowing_int_store` gates on `forced_size`, which `limit(...)`
+never sets.
+
+`OpRangeDefault(val, lo, hi, dflt)` closes both by guarding the **value** rather than the
+store: outside `lo..=hi` it reports `RangeDefaulted` (a Warn on the same recoverable channel
+as ÷0 — the run continues, exit 0) and answers `dflt`, the lowest value in range or the null
+sentinel where the slot admits null. A null passes straight through: whether a null may land
+there is `(N-Store)`'s question, and substituting `lo` would invent a value the program never
+computed.
+
+Two emit sites, because neither reaches the other's shapes: the assignment seam in
+`expressions.rs` (whose own comment records that it covers "both the annotated local and the
+field WRITE"), and `Parser::convert`, which reaches a struct LITERAL's field, a call
+argument and a return. The guard is idempotent, since both fire on a plain field write and a
+guard wrapping a guard would report twice.
+
+Two bounds, both measured rather than assumed:
+
+- **emitted only where the value is not PROVABLY in range**, read off the range the source
+  type already carries — so `x.b = 7` and `p.r = q.r` between two `limit(0,255)` fields emit
+  nothing and cost nothing;
+- **only for the `limit(...)` spelling** (`forced_size.is_none()`). A narrow ALIAS is already
+  refused at compile time (`cannot implicitly narrow integer to u8`), and layering a silent
+  default on it is both redundant and wrong — the first draft fired 24 times inside the
+  stdlib's own `i8` stores and handed them `-128`, which is what `behavior_golden` and the
+  nullflow suites caught.
+
+Guard: `tests/scripts/984-limit-field-out-of-range-defaults.loft`;
+`389-narrow-runtime-collision` pins the nullable half (it was what caught the first draft
+storing `min` where a nullable field owes `null`).
+
+### A split-ownership return is decided per run (loft#981, loft#982, 2026-08-18)
+
+A heap return carries ONE static answer to *may the caller free this?*, read off the return
+deps — a dep naming a visible parameter means BORROW (never free), an empty one means OWNED.
+A return that is a view of a parameter on one path and a freshly minted store on the other
+has no correct static answer, and the one it got orphaned the minted store:
+
+```loft
+fn get(b: Bag, k: text) -> Item { b.items[k] ?? Item { name: "miss", limbs: [] } }
+fn pick(o: Outer, fresh: boolean) -> Outer { if !fresh { return o; } make_outer(99) }
+```
+
+`Item×41` for 41 misses, `Outer×N` for N calls — unbounded in a loop, both backends, exit 0,
+every value correct. Found in `loft-libs-world`'s `hex_field::stencil_rotate`, in a published
+library, invisibly: `loft test` runs the leak check under `--interpret` only and the leak
+surfaces at PROGRAM exit.
+
+loft#982 reads as the same defect for a different reason, and the measurement is the point:
+its arms do NOT split. `return o` over a by-value struct parameter is hoisted to
+`__ret_1 = o`, which DEEP-COPIES — so both paths deliver a fresh store, the caller gets a
+copy either way (`b.o_n = 777` leaves the argument at `2`), and the dep on `o` is simply
+STALE. That is why BOTH arms leaked, not just the fresh one, and why the runtime test is the
+right answer for it too: it asks *is this store mine?* rather than trusting the static class.
+
+**The cure reuses @P290 instead of adding a rung.** The call bracket already marks a caller's
+arguments "do not free mine" for the call's duration, and both backends' `OpCopyRecord`
+already refuse the `0x8000` source-free on a marked store (`state/io.rs::do_copy_record`,
+`codegen_runtime.rs::OpCopyRecord`). So the bit is SET at a bracketed call site and the run
+decides. No new opcode, and it scales to several witnesses where one `OpFreeRefIfDistinct`
+could not. `use_analysis::call_return_frees_source` is the one fact; three emitters read it
+(interp first-bind + reassign, native `generation/dispatch.rs`, which had no bracket and now
+emits the same one), and `protectable_ref_args` is the one derivation shared by the gate and
+the protection emit so the two cannot drift.
+
+**The bound that the suite found.** The witness set must span every argument the return could
+BORROW, not every argument the bracket accepts. The bracket takes `Reference`/`Vector`/`Enum`;
+a keyed collection (`hash`/`sorted`/`index`/`radix`/`trie`) is a borrow source it does not
+cover, and reading the narrower list as complete freed a hash parameter's element out from
+under the caller — `keyed_cells_poison_clean_*` and `consumed_lift_cells_poison_*` went red,
+`rec=0xDEADBEEF`. Coverage is now asked with `heap_dep()`, through `base()` so an `Optional`
+wrapper cannot hide the storage under it. An argument the bracket cannot name keeps the old
+conservative *never free*: the leak stays for that shape (a keyed-collection parameter)
+rather than risking a free of a store the caller still reaches.
+
+**`Store::free_protected` became `free_protect_depth`.** One call bracket inside another may
+protect the same store, and a boolean let the inner release drop the outer bracket's
+protection — after which the outer copy's source-free would free the caller's own argument.
+No probe in the suite distinguishes the two today; the depth closes it by construction.
+
+Guard: `tests/scripts/981-split-ownership-return.loft` + `tests/split_ownership_return.rs` —
+leak as the DETERMINISTIC oracle (the census at exit does not depend on slot reuse), poison
+and strict-stores for the opposite direction, and the keyed-collection control. Against a
+pre-fix binary it orphans 161 + 41 records on both backends while every value cell passes.
+`tests/scripts/978-…loft` now drives its return-position join down the fresh arm too — the
+exclusion its comment recorded was this leak.
+
+### A package's own module wins its own `use` (loft#976, 2026-08-18)
+
+Two packages, neither depending on the other, each shipping `src/skin.loft` with DISJOINT
+names inside, and each saying a bare `use skin;`. A consumer that pulls both:
+
+```
+error: unknown type 'PartBox'
+error: Unknown function skin_covers
+```
+
+Swap the consumer's two `use` lines and the OTHER package loses instead. A module's short
+name was one slot shared by the whole dependency graph, so the first loader took it and
+every other package's own module never loaded — its public surface amputated in a build it
+had nothing to do with, reported against a file its author had not touched. A qualified
+`hex_part::skin_covers` did not help: the module never loaded, so there was no second name
+to choose between. Each package's own test suite was green, because a package's own graph
+holds only itself.
+
+A bare `use <module>` inside a package now resolves that package's own
+`src/<module>.loft` first, binding it under `<package>::<module>` — which is exactly what
+`use self::<module>` already did (loft#949) and what the `module-name-shadowed` advice
+already recommended. `parse_use_self`'s tail is now `bind_own_module`, shared by both
+spellings, so `self::` is the explicit form for the rare case that wants a stranger's
+module rather than the defensive form every library author has to remember for every file
+they will ever add.
+
+**A declared dependency still beats a local file of the same name** — that is `lib_path`'s
+own shadow guard, deliberate — so the preference checks `package_declares_dep` first.
+Without that, a package holding `src/<dep>.loft` stopped being able to reach the `<dep>` it
+depends on; `a_file_named_like_a_declared_dependency_is_not_a_clash` caught it.
+
+**What it deliberately does not do is merge two modules into one name.** Where both
+packages' modules declare the same public name and a consumer calls it BARE with both in
+scope, that call is now an explicit ambiguity error naming both spellings, where before one
+was picked by load order. That is a tightening, and it is the one the pre-freeze mandate
+asks for: COMPATIBILITY.md § *the error surface is one-directional* says every place loft
+"produces a plausible-wrong value where it should reject" is a last-chance-to-add while
+contract 0 allows it. The ambiguity message no longer assumes the reader wrote `self::`,
+since a bare `use` now scopes the same way.
+
+`module-name-shadowed` stays for what the scoping rule cannot reach: a file with no
+`<module>.loft` of its own still takes whichever the search finds, and two of those in one
+graph still resolve by load order.
+
+Two things the short spelling has to keep, both found by the suite rather than by reading:
+
+- **the `<module>::` qualifier.** `use math;` has always supplied it and code inside the
+  package writes it, so the bare spelling registers the short name as an alias onto the
+  same source; without that the shipped `graphics` fixture failed with `Unknown library
+  'math'`. It is a flat map, so two packages both spelling it short still share that ONE
+  qualifier — unchanged from before, and now the only thing they share.
+- **a stable name in diagnostics.** One source reachable under two names met
+  `qualified_type_name`'s walk over a `HashMap`, which returned the first match: the same
+  program named the same definition `con::catalogue::part_list` on one run and
+  `catalogue::part_list` on the next. It now picks the most qualified spelling, ties broken
+  alphabetically. The order-sensitivity predates this change; a second key is what made it
+  observable, and it read as a flaky test.
+
+Guard: `tests/module_name_clash.rs` — the filed shape (two SIBLING packages, both `use`
+orders) plus the dependency-direction cases, rewritten from asserting the mis-resolution to
+asserting the fix. Those tests were written to go red when this landed and say so in their
+own docs.
+
+### A struct-enum field access never checked the discriminant (loft#980, 2026-08-18)
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+a: Node = Anon { k: 7 };
+print("{a.n}");     // 7 — that is Anon's `k`, answered as Named's `n`
+a.label = "written";  // lands in the Anon record; the tag stays Anon
+```
+
+`c.field` resolves at COMPILE time to the first variant declaring the name, and the
+layout gives a shared name+type ONE slot — so the read is right for the variants that
+declare it and reads another variant's bytes for the rest. `match` afterwards still
+reports the original variant, because nothing changed the tag. Both backends, exit 0.
+
+**Direct payload access stays.** [C89](DESIGN_DECISIONS.md#c89) decided permanently that
+enum payloads are named fields you read straight, with matching for *dispatch* and never
+for *extraction* — refusing a bare `c.field` would force a matcher on every read, which
+is the thing C89 exists to prevent. And the common-prefix case is already correct:
+measured on variants whose preceding fields differ in width, a field every variant
+declares reads right from each of them. The **silence** on the partial case was the
+defect, and `variant-field-unchecked` closes it: `warning` tier by the two-tier rule,
+since ignoring it produces a wrong result. `LOFT_NO_VARIANT_FIELD` opts out.
+
+Quiet where the access is answerable, each exemption measured: every variant declares the
+field (one slot, any tag finds it); a `match` / `is` binding, which is per-arm and is the
+cure the message names; and a synthetic `__nullable<S>`, whose payload access is @PLN25's
+null model rather than a user-visible variant question.
+
+Swept before it spoke: the whole `.loft` corpus — `tests/scripts`, `tests/docs`, `lib/*`,
+`default/*` — holds **13** partial-variant accesses, all of them inside loft#977's own
+regression test, and every one on a value that IS the declaring variant. Partial access is
+rare precisely because `match` is the idiom.
+
+**What is still open** is the semantics, and it now has one answer rather than three. The
+issue offered refuse-at-compile-time (contrary to C89), a runtime tag check, or a
+common-prefix-only rule (restricts direct access the same way C89 rejects). The fault
+model picks the middle one's shape: C80/C85/C90 say an uncomputable read answers the
+type's null SENTINEL and the program keeps running — the same answer a hash miss, an
+out-of-range index and an overflow already give — which leaves the access type unchanged,
+so it breaks nothing. The read lowers with existing IR (`OpGetEnum` → `OpConvIntFromEnum`
+→ `OpEqInt`, the tag test a `match` already emits), so it needs no new opcode on either
+backend. The WRITE is what makes it design work: suppressing a write to a field the value
+does not have needs an lvalue notion the parser does not have — a guarded read is not a
+place, and the assignment path takes the parsed access as one.
+
+### A branch whose arms disagree about ownership froze the wrong one (loft#978, 2026-08-18)
+
+```loft
+fn read(b: Bag, fresh: boolean) -> integer {
+  // ONE arm is a fresh record, the other a view into `b`
+  it = if fresh { Item { name: "fresh", limbs: [] } } else { b.items["one"] ?? Item {} };
+  len(it.limbs)
+}
+// prints `2 0 0` where the same program without the fresh arm prints `2 2 2`
+```
+
+Silent, both backends, exit 0. `it` recorded no dependency at all, an empty dep list is
+the OWNED reading at every free site, and scope exit released the container's record; the
+next unrelated allocation claimed the recycled slot and every later read answered out of
+it. `LOFT_NO_SLOT_REUSE=1` read *correctly* with the defect present, which is why no
+poison or use-after-free sweep saw it — the store was freed and then legitimately
+re-occupied.
+
+The defect was **arm-order sensitive**, and that is what named the cause. Writing the view
+first read correctly. `parse_if` parses the `else` block with the THEN arm's type as its
+expected type, and `block_result` adopted that expected type WHOLE — deps included. An
+expected type says what shape belongs in a position; it was written before the value in
+hand existed, so it cannot say what that value aliases. Whichever arm came second got its
+sibling's borrow list, and with the fresh arm first that list was empty.
+
+- `Type::with_deps_of` keeps the block's own tail deps when it adopts an expected type,
+  applied to the `else` arm alone — the only block handed a sibling EXPRESSION as its
+  expected type. Every other caller's is a DECLARED type whose deps are attribute indices,
+  and grafting frame vars onto those is the cross-space read loft#666 was made of.
+- `Type::joined_deps` unions the arms' borrows at the `if`/`else`, at the `else if` chain
+  (whose type is deliberately not adopted as `false_type`, so what it borrows had to reach
+  the join another way), and at all six `match` arm sites.
+- `Parser::arm_join_type` filters what an arm CONTRIBUTES: a dep naming a store the arm
+  itself mints is its ownership marker, not a borrow (`[]` lowers to `OpDatabase(__vdb_N,
+  …)` and types as a dep on it). Importing one told the return machinery the value views a
+  local and turned @PLN85's `deliver` return from `["__retbuf", "e"]` into an unresolvable
+  `["??"]`. The minted set comes from `use_analysis::minted_vars`, the same `collect_defs`
+  walk the ownership classifier reads.
+- `Type::with_deps` is now the one list of which variants carry a dep list; `depending`
+  delegates to it.
+
+Measured boundary — eighteen shapes, all previously wrong, all now correct on both
+backends: the join construct (`if`/`else`, `else if`, `match`, nested), where the view
+comes from (hash lookup, vector element, struct field), how it arrives (projection,
+accessor return, parameter), and what the local is used for (collection field, scalar
+field, returned). Controls that must stay green and do: two fresh arms are genuinely
+owned and still freed; two views of one base were never in doubt.
+
+Guard: `tests/branch_join.rs` + `tests/scripts/978-branch-join-carries-both-arms-borrows.loft`
+— a static oracle on the recorded type (deterministic, unlike the value cells, which depend
+on a freed slot being reused), the value cells on both backends, a strict-store run and a
+leak run. Both oracles were checked against a pre-fix binary and fail there.
+
+Residual filed as **loft#981**: an escaping join — a *return* whose arms disagree — has no
+static answer that is right for both arms, so taking the borrow leaks the record the fresh
+arm mints. Predates this fix; a plain `fn get(b, k) -> Item { b.items[k] ?? Item { … } }`
+leaks identically on the released binary.
+
+### Writing a collection field of a struct-enum panicked in the store layer (loft#977, 2026-08-18)
+
+```loft
+enum Shape { Circle { limbs: vector<float> }, Square { s: float } }
+c: Shape = Circle { limbs: [] };
+c.limbs += [1.0];     // index out of bounds: the len is 83 but the index is 65535
+```
+
+Both backends, no imports, no diagnostic and no source position — `65535` is `u16::MAX`
+reaching `self.types[tp as usize]` in `record_new`.
+
+`c.limbs` is written through the ENUM type, but the field lives in the `Circle` variant's
+own record. The enum type is `Parts::Enum` — a variant list, no fields — so resolving a
+field against it misses, and both resolvers hand back their not-found sentinel:
+`field_nr` says `0`, which is a real field number, and `field_type` says `u16::MAX`, which
+is then used as a type-table index. `field_ref` has the same miss and answers the record
+base, silently, so the sentinel was the loud half of a defect whose other half was not.
+
+The filed scope was a tenth of it. The issue reads "appending to a vector payload"; the
+boundary matrix says **every allocating write to every collection payload field, through
+every route** — `+=` and whole-assign alike, over `vector<float>` / `vector<record>` /
+`hash<T[k]>` / `vector<vector<…>>`, reached as a local, an element of a `vector<Shape>`,
+a function parameter or a struct field. An element write (`c.limbs[0] = …`) and a scalar
+field write (`c.s = …`) never call `record_new` and were correct throughout — the controls
+that place the defect in the allocating path rather than in struct-enum field access.
+
+- `Stores::variant_owning_field(enum_tp, position, content)` resolves a struct-enum field
+  to the variant that declares it, keyed on the byte offset **and** the content type —
+  never the offset alone, because every collection field is one 4-byte handle straight
+  after the discriminant, so two variants each holding one put it at the same offset.
+  Measured, with the resolver built offset-only: `enum Box { Listed { xs: vector<Item> },
+  Keyed { ys: hash<Item[name]> } }` resolves `ys` to `xs`, appends the record to the vector
+  instead of keying it, and the lookup answers nothing — silent at the write. Identity for
+  a non-enum parent and for a field no variant declares.
+- `new_record_field_op` applies it after `key_owner`, so `OpNewRecord` and `OpFinishRecord`
+  name the variant record. This is the same redirect @PLN25 already needed for a synth
+  `__nullable<S>` payload, now for the user-facing shape.
+- `record_new` / `record_finish` derive their sub-record type in one shared
+  `sub_record_type`, which refuses a not-found field type by name instead of indexing the
+  type table with it. The two halves cannot disagree, and the next instance of this class
+  says which type and which field rather than `the index is 65535`.
+
+Residual, filed as loft#980 rather than fixed here: field access on a struct-enum does not
+check the discriminant, so `c.limbs` on a `Square` value reads and writes `Circle`'s slot.
+That is the READ's long-standing behaviour — `len(c.limbs)` on a `Square` answered `0`
+silently before this fix too — and the write now merely agrees with it. Which of the three
+answers loft wants (refuse at compile time, check the tag at runtime, or allow a common
+prefix) is a language decision, not a patch.
+
+Guard: `tests/scripts/977-struct-enum-collection-field-write.loft` — eighteen cells on both
+backends, 45 assertions over value, length, ordering and the neighbouring fields — plus
+three unit tests in `src/database/structures.rs`: the resolver's ambiguity cell, its
+identity cases, and the guard's message, which no loft program can reach any more.
+
+### An accessor's returned record borrows its container (loft#974, 2026-08-18)
+
+`fn get(b: Bag, k: text) -> Item? { b.items[k] }` declared
+`optional(reference(Item, deps {}))` — no dep — so the caller typed the result OWNED and
+emitted `OpFreeRef(it)` at scope exit, freeing a store the CALLER's `b` still owned. The
+next unrelated allocation claimed the recycled slot and every later lookup answered out
+of it: `2, 0, 0` where the same lookup written INLINE reads `2, 2, 2`. Silent, both
+backends, no imports; it survived dryopea's 1361-test suite.
+
+`LOFT_NO_SLOT_REUSE=1` reads correctly WITH the defect present (the freed bytes survive
+while nothing claims them), which is why no poison or UAF sweep ever saw it — the
+detectors all watch a freed store, and this one is freed and then legitimately
+re-occupied.
+
+Root cause: one selector answering two questions. `ret_promo_base()` decides DELIVERY
+(does this return get a `__retbuf`?) and peels `Optional(Vector)` only — deliberately, a
+nullable struct is loft#896's `__nullable<S>` with its own delivery. But the whole
+promotion pass was gated on it, so the SIGNATURE fact went with it: *which parameter
+does the returned view borrow?* — which is true whatever the delivery is.
+
+- `Type::ret_dep_shape() -> (&Type, RetPeel)` answers the signature question, peeling `?`
+  for `Reference` and struct-`Enum` too and marking those `SignatureOnly`.
+- `ref_return` under `SignatureOnly` records the borrow and skips every placement verdict
+  (`Rename` / `Bind` / `Grow`), so no second delivery is created and the ABI is unchanged.
+- `generation/dispatch.rs`: a first-bind from a callee that `returns_borrowed_view()` now
+  ALIASES instead of deep-copying **where the destination is one the emitter will not
+  free** (`variables.skip_free`) — what the interpreter already emitted (`PutRef`).
+  Without the alias the copy is a store the IR never frees (one leaked record per call,
+  caught by the new `accessor_cells_leak_clean_native`); without the `skip_free` half a
+  LIFTED call temporary (`__lift_1`, which the IR owns and frees) aliases the caller's
+  store and loft#677's guard reports `USE AFTER FREE (write) … killed by the free of
+  var___lift_1` on native. The copy decision now reads the same fact the free decision
+  reads, instead of a proxy for it.
+
+Widening the delivery peel instead was measured and rejected: it re-typed the return
+non-nullable (`-> Item["b"]`) and diverged the backends on a missing key.
+
+Guard: `tests/scripts/974-accessor-returned-record-borrows-its-container.loft` +
+`tests/accessor_borrow.rs` (static: the signature names the parameter and keeps its `?`;
+behavioural: both backends, strict-stores, native leak check; plus a harness control).
+⚠ The script is calibrated against the defect on BOTH backends — its first version put
+every read in one scope and passed against the bug, and a `churn()` helper made native
+pass while the interpreter still failed.
+
+
+### Manifest-less resolution: one scope function, no lockfile written by running (@PLN143, 2026-08-18)
+
+`lib_path`'s registry legs were three probes that each re-derived their own lockfile
+path — beside the script, at the project root, and in the **cwd** — and a disagreement
+between them was silent: a different version loads and nothing errors.
+`resolution_scope(script) -> Package | PinnedScript | Bare`
+(`src/resolution_scope.rs`) answers it once, and the same value decides which lock may
+be WRITTEN, so read and write cannot drift. Two other copies of the walk-up went with
+it (`Parser::find_project_root`, main.rs's `find_project_root_from`).
+
+What changed behaviourally:
+
+- **The cwd leg is deleted.** A `loft.lock` in the directory you stand in governs
+  nothing. A bare script's first run no longer writes one either
+  (`skip_lockfile` is read off `lock_write_target`, one fact), so "latest" is
+  re-decided every run instead of being pinned by a file the run produced.
+- **`Bare` scope gains a cache fallback** (`registry_index::newest_cached_loadable`):
+  newest extracted, prereleases skipped, and any copy this build cannot load filtered
+  out through `manifest::check_version` / `check_contract` — the loader's own
+  functions, so the filter cannot drift from what the loader accepts. `Bare` only: a
+  declared scope has a constraint the fallback would answer past.
+- **`loft install <pkg>` outside a package writes a minimal `loft.toml`** so its lock
+  has a root that governs it, and prints `created loft.toml (package \`x\`)`.
+- **A governing pin behind the cached index prints one line** naming the cure the
+  scope takes (`loft install <pkg>` / `loft pin <script>`). Cache-only (never a
+  fetch), once per package per run, never for a dependency's own `use`, silent under
+  `LOFT_OFFLINE`, off-switch `LOFT_NO_UPGRADE_NOTICE=1`.
+- **`[registry] resolving <pkg> from registry` is gone**; `[registry] downloading
+  <pkg> <version>` prints where bytes are actually fetched. With nothing pinning a
+  bare script both parse passes re-decide, so the old line printed twice per run for
+  work a warm cache was not doing. The auto-install ANSWER is memoised per run for the
+  same reason — two passes must resolve the same file.
+- **The governing lock decides the INSTALL, not only the load.** `lock_path` and
+  `skip_lockfile` are now separate questions — the lock that governs vs. whether this
+  resolution may write it — because reading them as one meant arc C2 (a run writes
+  nothing) also stopped a pinned script's sidecar from being read. A sidecar pinning
+  0.1.0 loaded 0.1.0 when the cache had it and INSTALLED the newest when it did not;
+  the same hole applied to a package whose locked version was not yet extracted.
+  `install::constraint_for` states the rule: an exact pin outranks a range, except a
+  pin the manifest has since excluded, which is a stale lock losing to what it derives
+  from. `install::options_for_use` makes the whole posture of the `use` path one tested
+  fact, and the sidecar now gets `check_against_lockfile`'s re-publish check as well.
+- **Two index reads that trusted unchecked bytes are closed**: `load_index_inner`'s
+  `offline` branch now verifies like the other three, and `locked_hashes` takes the
+  `skip_lockfile` guard `held_versions` already had.
+
+Arc A (2026-08-18) preceded all of it: `probe_auto_install` no longer passes
+`allow_unsigned: true`. `loft install` keeps its own CLI default, and that asymmetry is
+the point — waiving is defensible for a verb a person typed, not for the path a bare
+`use` takes on its own.
+
+
 ### Every store access is bounded, on every target (loft#950, 2026-08-17)
 
 `Store::addr` and `addr_mut` bounded their offset with a `debug_assert!`, and loft's

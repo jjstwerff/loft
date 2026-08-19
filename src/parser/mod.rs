@@ -143,6 +143,15 @@ pub struct Parser {
     pub lexer: Lexer,
     /// Are we currently allowing break/continue statements?
     in_loop: bool,
+    /// loft#986 — we are parsing a control-flow HEAD (an `if`/`while` condition, a `for`
+    /// iterable), where the `{` that follows opens a BLOCK, not a struct literal.
+    ///
+    /// Only the EMPTY-literal case consults it. `T { }` has no `field:` to shape-check, so
+    /// the fallback that consumes an unresolved `Name { … }` cannot tell it from the body
+    /// of `if b { }` with an undefined `b` — and without this it swallowed the block and
+    /// answered `Expect token {` where the useful message is `Unknown variable 'b'`.
+    /// Saved and restored around the head, like `in_loop`.
+    in_control_head: bool,
     /// Cognitive complexity per definition — `context` → score, accumulated AS THE SOURCE IS
     /// PARSED.
     ///
@@ -372,6 +381,22 @@ pub struct Parser {
     /// there can read.
     #[cfg(feature = "registry")]
     undeclared_reported: std::collections::HashSet<String>,
+    /// What an auto-install already answered this run: `id -> Some(version)`, or `None`
+    /// for a name the registry does not carry.  @PLN143 — a bare `use` is decided by
+    /// `probe_auto_install` on EVERY parse pass now that no lockfile pins it, and asking
+    /// the registry twice is both the cost and a correctness question: the two passes
+    /// must resolve the same file, and re-deciding gives them two chances not to.
+    #[cfg(feature = "registry")]
+    auto_installed: std::collections::HashMap<String, Option<String>>,
+    /// Packages already told about in the "this pin has fallen behind" notice (@PLN143
+    /// arc E), for the same reason `undeclared_reported` exists: both parse passes walk
+    /// the resolution path, and one pin reported twice reads as two.
+    #[cfg(feature = "registry")]
+    pin_behind_reported: std::collections::HashSet<String>,
+    /// Newest release per package as the CACHED index knows it, read at most once per run
+    /// and only when a pin is actually in force (@PLN143 arc E).  `None` until asked.
+    #[cfg(feature = "registry")]
+    newest_releases: Option<std::collections::BTreeMap<String, String>>,
     /// Module names already reported as captured by another file (loft#912 / loft#949),
     /// for the same reason and with the same non-travel rule as `undeclared_reported`:
     /// the `use` is walked by both the pre-scan and the definition loop, and one
@@ -908,6 +933,7 @@ impl Parser {
             database: Stores::new(),
             lexer: Lexer::default(),
             in_loop: false,
+            in_control_head: false,
             complexity: HashMap::new(),
             cc_deepest: HashMap::new(),
             cc_nest: 0,
@@ -968,6 +994,12 @@ impl Parser {
             use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             undeclared_reported: std::collections::HashSet::new(),
+            #[cfg(feature = "registry")]
+            auto_installed: std::collections::HashMap::new(),
+            #[cfg(feature = "registry")]
+            pin_behind_reported: std::collections::HashSet::new(),
+            #[cfg(feature = "registry")]
+            newest_releases: None,
             module_clash_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             root_dep_pins: None,
@@ -3513,6 +3545,14 @@ impl Parser {
                 Level::Error,
                 "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
             );
+        }
+        // loft#984 — a value meeting a slot that DECLARES a range is guarded here, which
+        // is what reaches the shapes the assignment seam does not: a struct LITERAL's
+        // field, a call ARGUMENT, a return.  An explicit `as` is excluded — a cast has its
+        // own answer for a value that does not fit (`400 as u8` is null), and folding the
+        // default in would silently change it.
+        if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
+            self.guard_declared_range(code, should, is_type);
         }
         if is_type.is_equal(should) {
             return true;
@@ -8986,7 +9026,7 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Too many parameters for {}",
-                    self.data.def(d_nr).name()
+                    self.data.user_facing_name(d_nr)
                 );
             }
             return actual;
@@ -9693,10 +9733,48 @@ impl Parser {
                     // the flat top-level comma list (`use lib::a, b`) is dropped (it
                     // read poorly — `b` didn't visually bind to `lib::`).
                     let spec = self.parse_import_spec(&id);
-                    // loft#912 — the name is taken, but by WHICH file?  If this
-                    // package has its own `<id>.loft`, the two are different modules
-                    // sharing one global name, and the import below binds the other
-                    // package's.  Say so; the resolution itself is unchanged.
+                    // loft#976 — a package's OWN module wins its own `use`.
+                    //
+                    // A module's file name is one global name across the whole
+                    // dependency graph, so two packages that each ship a `<id>.loft`
+                    // and each say a bare `use <id>` used to be resolved by whichever
+                    // loaded FIRST — a decision that belongs to the CONSUMER's `use`
+                    // order and is visible to neither author.  The loser's own module
+                    // never loaded, so its public surface was amputated in a build it
+                    // had nothing to do with, and a qualified `pkg::name` could not
+                    // rescue it: there was no second module to choose between.
+                    //
+                    // `use self::<id>` already bound the local file under a
+                    // package-qualified key, and the advice already recommended it.
+                    // This makes it what a bare `use` MEANS inside a package, so
+                    // `self::` is the explicit form for the rare case that wants a
+                    // stranger's module rather than the defensive form every library
+                    // author has to remember for every file they will ever add.
+                    // …but a package's OWN NAME is not one of its module names.  `use
+                    // <pkg>` inside `<pkg>` asks for the package — its public surface —
+                    // and that is how every library in the ecosystem writes its own test
+                    // suite (`tests/<pkg>.loft` saying `use <pkg>;`).  Without this the
+                    // rule above binds whatever file happens to be called `<pkg>.loft`,
+                    // which for that suite is the TEST FILE, so the entry's `pub` surface
+                    // is not loaded and every symbol reads unknown.  Nine published
+                    // libraries went red on it.
+                    //
+                    // The distinction is what keeps a package able to refer to ITSELF: a
+                    // name that means the package in one file and a sibling module in
+                    // another is a name that means nothing.  `use self::<pkg>` remains
+                    // the explicit spelling for the file, in the rare case that is what
+                    // was wanted.
+                    if !self.package_declares_dep(&id)
+                        && let Some(pkg) = self.own_package_name()
+                        && id != pkg
+                        && let Some(f) = self.own_module_path(&id)
+                    {
+                        self.bind_own_module(&id, &pkg, &f, lib_alias.as_ref(), spec, "");
+                        continue;
+                    }
+                    // loft#912 — the name is taken, but by WHICH file?  A package with
+                    // its own `<id>.loft` took it above; reaching here means this file
+                    // has none, so the import binds whichever package's did load.
                     if self.data.use_exists(&id) {
                         self.module_name_clash(&id);
                     }
@@ -10250,15 +10328,29 @@ impl Parser {
         Self::probe_loft_lib_flat(id, &mut f);
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
-        self.probe_sidecar_lockfile(id, &mut f);
         // loft#968 — everything above resolves from something the project SAYS: a path it
         // declares, a `--lib` directory it was given, a sidecar lock it pinned.  What
         // follows resolves from the registry, which is a property of the BOX.  So this is
         // the one line where the two can be told apart.
-        let named_by_the_project = std::path::Path::new(&f).exists();
-        self.probe_project_lockfile(id, &mut f);
-        self.probe_registry_installed(id, &mut f);
-        self.probe_auto_install(id, &mut f);
+        let mut named_by_the_project = std::path::Path::new(&f).exists();
+        // @PLN143 arc B — the scope is a property of the PROGRAM, so it is answered ONCE,
+        // here, and handed to each probe that needs it.  Re-deriving it inside a probe
+        // would put the old three-sites-must-agree brittleness back with one extra step
+        // between it and the reader.
+        let scope = crate::resolution_scope::resolution_scope(&cur_script);
+        // A sidecar pin belongs on the project's side of that line: `loft pin <script>`
+        // wrote it FOR this script, so it is a declaration the author made — even though
+        // what it resolves to is a package in the registry cache.
+        if self.probe_governing_lock(id, &mut f, &cur_script, &scope)
+            && matches!(
+                scope,
+                crate::resolution_scope::ResolutionScope::PinnedScript(_)
+            )
+        {
+            named_by_the_project = true;
+        }
+        self.probe_auto_install(id, &mut f, &cur_script, &scope);
+        self.probe_cache_newest(id, &mut f, &scope);
         if !named_by_the_project && std::path::Path::new(&f).exists() {
             self.undeclared_registry_dep(id, &cur_script);
         }
@@ -10398,11 +10490,38 @@ impl Parser {
             self.lexer.has_token(";");
             return;
         };
+        self.bind_own_module(&module, &pkg, &f, alias.as_ref(), spec, "self::");
+    }
+
+    /// Bind `<pkg>::<module>` to this package's own `<module>.loft` at `f`.
+    ///
+    /// The body of `use self::<module>`, and — since loft#976 — of a BARE `use
+    /// <module>` inside a package that ships one, which is the same request written
+    /// the short way.  Keyed by `<pkg>::<module>` rather than the bare name, so no
+    /// other package in the graph can take the name from under it.
+    fn bind_own_module(
+        &mut self,
+        module: &str,
+        pkg: &str,
+        f: &str,
+        alias: Option<&String>,
+        spec: Option<ImportSpec>,
+        spelling: &str,
+    ) {
+        // The SHORT spelling (`use math;`) has always also supplied the `math::` qualifier,
+        // and code inside the package writes it. Scoping the module must not take that
+        // away, so the bare name is registered as an alias onto the same source. It is a
+        // flat map, so two packages both spelling it short still share this ONE qualifier
+        // — unchanged from before, and now the only thing they share: each package's own
+        // module, and every bare name it exports, is its own.
+        let bare_qualifier = spelling.is_empty();
         let key = format!("{pkg}::{module}");
         if self.data.use_exists(&key) {
             let lib_source = self.data.get_source(&key);
-            if let Some(a) = &alias {
+            if let Some(a) = alias {
                 self.data.use_alias(a, lib_source);
+            } else if bare_qualifier {
+                self.data.use_alias(module, lib_source);
             }
             // Same rule as a bare `use`: a plain one wildcard-imports, an explicit
             // `::` spec is honoured, and an alias with neither gives ONLY the
@@ -10424,7 +10543,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Missing ';' after 'use self::{module}' — use statements must end with a semicolon"
+                    "Missing ';' after 'use {spelling}{module}' — use statements must end with a semicolon"
                 );
             }
             return;
@@ -10432,11 +10551,13 @@ impl Parser {
         let cur = self.lexer.pos().file.clone();
         self.todo_files.push((cur, self.data.source));
         self.data.use_add(&key);
-        self.record_use_path(&key, &f);
-        if let Some(a) = &alias {
+        self.record_use_path(&key, f);
+        if let Some(a) = alias {
             self.data.use_alias(a, self.data.source);
+        } else if bare_qualifier {
+            self.data.use_alias(module, self.data.source);
         }
-        self.switch_to_dep(&f);
+        self.switch_to_dep(f);
     }
 
     /// Remember which FILE a `use` short-name was loaded from (loft#912).
@@ -10507,6 +10628,19 @@ impl Parser {
     /// type key, which must be identical on every machine that reads the store.  The
     /// registry already enforces that names are unique, so `<name>::<module>` is a
     /// qualifier nothing else in the graph can spell by accident.
+    /// Does the package above this file DECLARE `id` as a dependency?
+    ///
+    /// A declared dependency beats a local file of the same name — the shadow guard in
+    /// `lib_path` settles that on purpose — so the own-module preference (loft#976) must
+    /// defer to it, or a package holding `src/<dep>.loft` would stop being able to reach
+    /// the `<dep>` it depends on.
+    fn package_declares_dep(&mut self, id: &str) -> bool {
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let cur_dir = script_dir(&cur_script).to_string();
+        self.package_declared_deps(&cur_dir)
+            .is_some_and(|(_, deps)| deps.contains(id))
+    }
+
     fn own_package_name(&mut self) -> Option<String> {
         let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
         let cur_dir = script_dir(&cur_script).to_string();
@@ -10606,7 +10740,7 @@ impl Parser {
         // `^advice`, so the only sign of a changed answer was being discarded by design.
         // Keeping (a) at advice is what lets (b) gate without failing the CI of every
         // library that ships an overlapping basename today.
-        let root_project = Self::find_project_root(&self.database.source_dir);
+        let root_project = crate::resolution_scope::project_root(&self.database.source_dir);
         let inside = |file: &str, root: &std::path::Path| {
             std::path::Path::new(file)
                 .canonicalize()
@@ -10687,7 +10821,7 @@ impl Parser {
         {
             return;
         }
-        let Some(root) = Self::find_project_root(cur_script) else {
+        let Some(root) = crate::resolution_scope::project_root(cur_script) else {
             return;
         };
         let manifest_path = root.join("loft.toml");
@@ -10794,7 +10928,7 @@ impl Parser {
     fn root_dep_constraint(&mut self, id: &str) -> Option<String> {
         if self.root_dep_pins.is_none() {
             let mut map = std::collections::HashMap::new();
-            if let Some(root) = Self::find_project_root(&self.database.source_dir) {
+            if let Some(root) = crate::resolution_scope::project_root(&self.database.source_dir) {
                 let manifest_path = root.join("loft.toml");
                 if let Some(manifest) =
                     crate::manifest::read_manifest(&manifest_path.to_string_lossy())
@@ -11209,203 +11343,60 @@ impl Parser {
         .as_ref()
     }
 
-    /// @PLAN12 Phase 6.6 — walk-up project root detection.
+    /// The lockfile that governs this program, read once — @PLN143 arc B.
     ///
-    /// From the script's directory, walks up to `/` looking for a
-    /// `loft.toml`.  Returns the dir containing it (the project
-    /// root) — used by:
-    /// - `probe_project_lockfile` to find the lockfile that pins
-    ///   manifest-declared deps.
-    /// - `probe_auto_install` to redirect the lockfile WRITE path
-    ///   to the project root, so auto-installs in a project
-    ///   context update the project's lockfile rather than cwd's.
+    /// WHICH lockfile that is comes from [`crate::resolution_scope::resolution_scope`],
+    /// not from where this probe sits in the chain: a package's root `loft.lock`, the
+    /// `<script>.loft.lock` beside a pinned script, or — in `Bare` scope — nothing,
+    /// because nothing is declared there.
     ///
-    /// - `module_name_clash` to tell a module name captured BY the root project from one
-    ///   captured FROM it, which decides the tier (loft#949).
+    /// Three probes used to answer this, each re-deriving its own lockfile path
+    /// independently (beside the script, at the project root, and in the **cwd**), and a
+    /// disagreement between them was silent: a different version loads and nothing
+    /// errors.  The cwd leg is the one that made the same script resolve two ways from
+    /// two directories.
     ///
-    /// Returns `None` for script-mode invocations (no `loft.toml`
-    /// anywhere in the parent chain).  Script mode falls back to
-    /// cwd's `loft.lock` (existing behaviour) or to the sidecar
-    /// (when `loft pin <script>` has been run).
-    ///
-    /// Not gated on `registry`, though its first two readers are: it walks up looking for
-    /// a `loft.toml` and asks the network nothing.  Gating it there put a plain path walk
-    /// out of reach of a `--no-default-features` build, which is the shape loft's own wasm
-    /// runtime rlib is compiled in — the same gated-by-association mistake as loft#967.
-    fn find_project_root(script_path: &str) -> Option<std::path::PathBuf> {
-        let p = std::path::Path::new(script_path);
-        if script_path.is_empty() {
-            return None;
-        }
-        let start_dir = if p.is_dir() {
-            p.to_path_buf()
-        } else {
-            let parent = p.parent()?;
-            if parent.as_os_str().is_empty() {
-                std::env::current_dir().ok()?
-            } else {
-                parent.to_path_buf()
-            }
-        };
-        // Canonicalize so the walk-up doesn't terminate prematurely
-        // on relative `./` prefixes that loop on themselves.
-        let abs_start = std::fs::canonicalize(&start_dir).unwrap_or(start_dir);
-        let mut cur = abs_start.as_path();
-        loop {
-            if cur.join("loft.toml").exists() {
-                return Some(cur.to_path_buf());
-            }
-            let parent = cur.parent()?;
-            if parent == cur {
-                return None;
-            }
-            cur = parent;
-        }
-    }
-
-    /// @PLAN12 Phase 6.6 — project-mode lockfile resolution.
-    ///
-    /// Walks up from the script's directory looking for `loft.toml`;
-    /// if found, reads the adjacent `loft.lock` and resolves `id`
-    /// against it.  Means a script at `myproject/src/foo.loft`
-    /// resolves registry libraries via `myproject/loft.lock` no
-    /// matter where `loft` is invoked from (cwd-independent).
-    ///
-    /// Cargo-style: the project root owns the lockfile; cwd is
-    /// irrelevant.  Inserted in the probe chain BEFORE
-    /// `probe_registry_installed` (which uses cwd as a script-mode
-    /// fallback when no project is found).
+    /// Answers whether THIS probe resolved `id` — the caller needs to tell a version the
+    /// AUTHOR declared (a sidecar pin) from one the box merely happens to hold
+    /// (loft#968), and pairs that answer with the scope it already holds.
     #[cfg(feature = "registry")]
-    fn probe_project_lockfile(&mut self, id: &str, f: &mut String) {
+    fn probe_governing_lock(
+        &mut self,
+        id: &str,
+        f: &mut String,
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) -> bool {
         if std::path::Path::new(f).exists() {
-            return;
+            return false;
         }
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        let Some(project_root) = Self::find_project_root(&cur_script) else {
-            return;
-        };
-        let lock_path = project_root.join("loft.lock");
-        if !lock_path.exists() {
-            return;
-        }
-        let lock = match crate::lockfile::read_lockfile(&lock_path) {
-            Ok(Some(l)) => l,
-            _ => return,
-        };
-        let version = match lock.packages.iter().find(|p| p.name == id) {
-            Some(p) => p.version.clone(),
-            None => return,
-        };
-        let install_dir = crate::registry_index::extract_dir(id, &version);
-        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
-            Some(p) => p.to_string(),
-            None => return,
-        };
-        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
-        {
-            Some(n) => n.to_string(),
-            None => return,
-        };
-        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
-            self.check_advisory(id, &version);
-            *f = entry;
-        }
-    }
-
-    /// No-op when registry feature is off.
-    #[cfg(not(feature = "registry"))]
-    #[allow(clippy::unused_self)]
-    fn probe_project_lockfile(&mut self, _id: &str, _f: &mut String) {}
-
-    /// @PLAN12 Phase 6.6 — sidecar lockfile next to the script.
-    ///
-    /// `<script>.loft.lock` (e.g. `hello.loft.lock` next to `hello.loft`)
-    /// pins the registry versions a one-file script uses.  Generated by
-    /// `loft pin <script>`; takes precedence over the cwd `loft.lock`
-    /// because the sidecar belongs TO the script, while cwd's lockfile
-    /// belongs to wherever the user happens to be invoking from.
-    ///
-    /// Without the sidecar, single-file scripts inherit cwd's lockfile
-    /// (or auto-install latest active).  With it, the script is
-    /// reproducible regardless of cwd or registry-state drift.
-    #[cfg(feature = "registry")]
-    fn probe_sidecar_lockfile(&mut self, id: &str, f: &mut String) {
-        if std::path::Path::new(f).exists() {
-            return;
-        }
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        if cur_script.is_empty() {
-            return;
-        }
-        let sidecar = format!("{cur_script}.lock");
-        if !std::path::Path::new(&sidecar).exists() {
-            return;
-        }
-        let lock = match crate::lockfile::read_lockfile(std::path::Path::new(&sidecar)) {
-            Ok(Some(l)) => l,
-            _ => return,
-        };
-        let version = match lock.packages.iter().find(|p| p.name == id) {
-            Some(p) => p.version.clone(),
-            None => return,
-        };
-        let install_dir = crate::registry_index::extract_dir(id, &version);
-        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
-            Some(p) => p.to_string(),
-            None => return,
-        };
-        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
-        {
-            Some(n) => n.to_string(),
-            None => return,
-        };
-        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
-            self.check_advisory(id, &version);
-            *f = entry;
-        }
-    }
-
-    /// No-op when registry feature is off.
-    #[cfg(not(feature = "registry"))]
-    #[allow(clippy::unused_self)]
-    fn probe_sidecar_lockfile(&mut self, _id: &str, _f: &mut String) {}
-
-    /// `~/.loft/registry/<id>-<version>/` — packages installed via `loft install`
-    /// against the package registry.  Resolves the version via the cwd's
-    /// `loft.lock` (written by `loft install`).  When loft.lock is absent or
-    /// doesn't list `id`, this probe is a no-op and resolution falls through
-    /// to the remaining strategies.
-    ///
-    /// @PLAN12 phase 3.5a wiring (2026-05-24): closes the "loft install →
-    /// use installed package" loop.  Before this, `loft install crypto`
-    /// downloaded + extracted correctly but `use crypto;` in a subsequent
-    /// run still required a manual `--lib` flag.
-    #[cfg(feature = "registry")]
-    fn probe_registry_installed(&mut self, id: &str, f: &mut String) {
-        // Use `loft::*` (not `crate::*`) because this module is compiled
-        // into BOTH the loft library AND the loft binary; the binary
-        // doesn't have `lockfile` / `registry_index` declared as `mod`,
-        // but accesses them as deps via the `loft::` library path.
-        if std::path::Path::new(f).exists() {
-            return;
-        }
-        let cwd = match env::current_dir() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let lock_path = cwd.join("loft.lock");
-        if !lock_path.exists() {
-            return;
-        }
-        let lock = match crate::lockfile::read_lockfile(&lock_path) {
-            Ok(Some(l)) => l,
-            _ => return,
-        };
-        let version = match lock.packages.iter().find(|p| p.name == id) {
-            Some(p) => p.version.clone(),
-            None => return,
+        // `None` is `Bare` scope: nothing is declared, so nothing pins this run.  There
+        // used to be a leg here reading the CWD's `loft.lock` — a file an earlier RUN
+        // wrote, in a directory that is not even the program's, deciding which version
+        // this run gets.
+        let Some(version) = scope.pinned_version(id) else {
+            return false;
         };
         self.resolve_registry_installed(id, &version, f);
+        if std::path::Path::new(f).exists() {
+            self.pin_behind_notice(id, &version, cur_script, scope);
+            return true;
+        }
+        false
+    }
+
+    /// No-op when the registry feature is off — a lockfile pins a REGISTRY version, and
+    /// without the registry machinery there is nothing for it to name.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_governing_lock(
+        &mut self,
+        _id: &str,
+        _f: &mut String,
+        _cur_script: &str,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) -> bool {
+        false
     }
 
     /// Point `f` at an installed registry package's extracted source, given the
@@ -11438,14 +11429,6 @@ impl Parser {
         }
     }
 
-    /// No-op when registry feature is off — registry-installed packages
-    /// only resolve when the `loft install` machinery is compiled in.
-    /// `self` is kept to match the `#[cfg(feature = "registry")]` method
-    /// signature (it is a genuine method on the registry-enabled build).
-    #[cfg(not(feature = "registry"))]
-    #[allow(clippy::unused_self)]
-    fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
-
     /// @PLAN12 Phase 6.6 — auto-install on `use`.
     ///
     /// When `id` doesn't resolve via any of the prior strategies
@@ -11463,10 +11446,16 @@ impl Parser {
     /// Off-switches: `LOFT_OFFLINE=1` and `LOFT_NO_AUTO_INSTALL=1`
     /// both suppress this probe.  Surprise reduction: every cold
     /// install prints `[registry] ...` lines (mirrors Cargo's
-    /// "Downloading…" output); steady-state (cache hit, resolves
-    /// via probe_registry_installed) is silent.
+    /// "Downloading…" output); steady-state (cache hit, resolved by
+    /// `probe_governing_lock`) is silent.
     #[cfg(feature = "registry")]
-    fn probe_auto_install(&mut self, id: &str, f: &mut String) {
+    fn probe_auto_install(
+        &mut self,
+        id: &str,
+        f: &mut String,
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
         if std::path::Path::new(f).exists() {
             return;
         }
@@ -11477,53 +11466,45 @@ impl Parser {
         if std::env::var("LOFT_NO_AUTO_INSTALL").is_ok() {
             return;
         }
-        // Bootstrap state: the loft binary may not have an embedded
-        // trust root yet (K_tmp → K_real rotation per
-        // PKG_REGISTRY.md / REGISTRY_BOOTSTRAP.md).  Mirror what
-        // `loft install` / `loft search` / `loft info` do — accept
-        // unsigned indexes during the trust-bootstrap window.  Once
-        // the production key is embedded, signed indexes verify
-        // cleanly and this flag becomes a no-op for the happy path.
-        //
-        // Lockfile WRITE path: walk up from the script's directory
-        // looking for `loft.toml`.  Found → project mode — write to
-        // `<project_root>/loft.lock` so the project's manifest +
-        // lockfile stay co-located regardless of where loft was
-        // invoked from.  Not found → script mode — `lock_path: None`
-        // falls back to cwd's `loft.lock` (the existing default).
-        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        // Already decided this run: resolve to the SAME version rather than asking the
+        // registry a second time.  Both parse passes walk this path, and a second
+        // decision could answer differently — a run whose two passes read two different
+        // files is a worse failure than the one this probe exists to prevent.
+        if let Some(known) = self.auto_installed.get(id).cloned() {
+            if let Some(version) = known {
+                self.resolve_registry_installed(id, &version, f);
+            }
+            return;
+        }
         // A transitive dep discovered while parsing an ALREADY-CACHED package
         // (`~/.loft/registry/<pkg>/src/...`) has no consumer project: the only
-        // `loft.toml` the walk-up finds is the cached dep's own, so writing a
-        // `loft.lock` there would mutate the immutable cache — a harmless stray
-        // file on Unix, but an ENOENT that aborts the whole resolution on Windows
-        // (nightly `moros_glb_cli_end_to_end`).  Install without recording.
-        let in_registry_cache = std::fs::canonicalize(&cur_script)
+        // `loft.toml` the walk-up finds is the cached dep's own, so recording there
+        // would mutate the immutable cache — a harmless stray file on Unix, but an
+        // ENOENT that aborts the whole resolution on Windows (nightly
+        // `moros_glb_cli_end_to_end`).  Install without recording.
+        let in_registry_cache = std::fs::canonicalize(cur_script)
             .ok()
             .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
             .is_some_and(|(script, cache)| script.starts_with(&cache));
-        let project_root = if in_registry_cache {
-            None
-        } else {
-            Self::find_project_root(&cur_script)
-        };
-        let lock_path = project_root.as_ref().map(|p| p.join("loft.lock"));
-        let opts = crate::install::InstallOptions {
-            allow_unsigned: true,
-            refresh: false,
-            skip_lockfile: in_registry_cache,
-            // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
-            // fails fast and deterministically instead of fetching — what a
-            // test-spawned fixture (or an air-gapped box) wants.  Mirrors
-            // the CLI paths (src/main.rs) that already honour it.
-            offline: std::env::var_os("LOFT_OFFLINE").is_some(),
-            allow_prerelease: false,
-            lock_path,
-        };
-        // Honour the root project's declared constraint for `id` (if any), so a
-        // consumer's pin — exact or ranged — wins over "resolve newest", even
-        // when `id` is pulled transitively by a lib that didn't pin it.
-        let pin = self.root_dep_constraint(id);
+        // What this path installs UNDER — which lock governs it, which one it may write,
+        // and the signature it never waives — is one tested fact rather than a literal
+        // buried here (@PLN143).
+        let opts = crate::install::options_for_use(
+            scope,
+            in_registry_cache,
+            std::env::var_os("LOFT_OFFLINE").is_some(),
+        );
+        // Honour the declaration in force.  Two of them can be, and they are not the
+        // same kind: the root project's `[dependencies]` range (which also reaches a
+        // transitively-pulled `id` a library never pinned), and the governing lock's
+        // EXACT version — the resolved form of that range.  @PLN143: the lock used to
+        // decide only which file LOADED, so a pinned version that was not extracted yet
+        // was installed as "newest", and a fresh box ran a different program than the
+        // machine that pinned it.
+        let pin = crate::install::constraint_for(
+            scope.pinned_version(id).as_deref(),
+            self.root_dep_constraint(id).as_deref(),
+        );
         match crate::install::auto_install_if_in_catalog(id, pin.as_deref(), &opts) {
             Ok(Some(report)) => {
                 // Resolve `f` straight from the install report's version — no
@@ -11532,25 +11513,26 @@ impl Parser {
                 // freshly-installed transitive dep unresolved (`use <dep>` → "not
                 // found") even though it is on disk. The report carries the exact
                 // version, whether newly installed or already cached.
-                if let Some((_, version)) = report
+                let resolved = report
                     .installed
                     .iter()
                     .chain(report.skipped_cached.iter())
                     .find(|(n, _)| n == id)
-                {
-                    let version = version.clone();
-                    self.resolve_registry_installed(id, &version, f);
+                    .map(|(_, v)| v.clone());
+                if let Some(ref version) = resolved {
+                    self.resolve_registry_installed(id, version, f);
                 }
-                // Fallbacks for a normal (non-cache) install that DID write a
-                // lockfile: the project lockfile (where the new entry landed),
-                // then cwd's lockfile (script mode).
-                self.probe_project_lockfile(id, f);
-                self.probe_registry_installed(id, f);
+                self.auto_installed.insert(id.to_string(), resolved);
+                // Fallback for a normal (non-cache) install that DID write a lockfile:
+                // read back the lock this run just recorded the new entry in.
+                self.probe_governing_lock(id, f, cur_script, scope);
             }
             Ok(None) => {
                 // `id` is not a registry package; let the remaining
                 // resolution strategies handle it (or fail with
-                // the standard "library not found" diagnostic).
+                // the standard "library not found" diagnostic).  Recorded so the second
+                // parse pass does not re-read the index to be told the same thing.
+                self.auto_installed.insert(id.to_string(), None);
             }
             Err(e) => {
                 // Network failure, sig mismatch, or similar.
@@ -11566,7 +11548,132 @@ impl Parser {
     /// No-op when registry feature is off.
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
-    fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
+    fn probe_auto_install(
+        &mut self,
+        _id: &str,
+        _f: &mut String,
+        _cur_script: &str,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+    }
+
+    /// @PLN143 arc E — say once when the declaration in force has fallen behind.
+    ///
+    /// A `loft.lock` has no expiry, so a pin holds forever and nothing about the
+    /// program's own code will ever say why: `cbor` 0.1.3 turned canonical map encode
+    /// from O(n³) to O(n²) with no API change at all, and a consumer pinned at 0.1.2
+    /// keeps hanging. `loft check` reports it, but that is a verb you have to think to
+    /// run — it only helps someone who already suspects what it would tell them.
+    ///
+    /// What it costs is what shapes it:
+    ///
+    /// - **No fetch.** It speaks only when the cached index ALREADY knows (the index has
+    ///   its own 1-hour TTL); with no cache there is nothing to compare and it is silent.
+    /// - **Once per package per run**, not once per parse pass — and never for a
+    ///   dependency's own `use`, because "latest" is about what the PROGRAM named, and a
+    ///   deep graph would otherwise turn every build into a report.
+    /// - **Silent under `LOFT_OFFLINE`**: someone who has opted out of the registry for
+    ///   this run has not asked what the registry now holds.
+    /// - **Silent where nothing is pinned.** A bare script re-decides every run, so it
+    ///   cannot be behind — the notice exists for the scope that HAS a declaration.
+    ///
+    /// It names the cure the scope actually takes: `loft install <pkg>` updates a
+    /// package's lock beside its manifest, while a pinned script is re-pinned with
+    /// `loft pin <script>`.
+    ///
+    /// Off-switch: `LOFT_NO_UPGRADE_NOTICE=1`.
+    #[cfg(feature = "registry")]
+    fn pin_behind_notice(
+        &mut self,
+        id: &str,
+        version: &str,
+        cur_script: &str,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+        if std::env::var_os("LOFT_NO_UPGRADE_NOTICE").is_some()
+            || std::env::var_os("LOFT_OFFLINE").is_some()
+        {
+            return;
+        }
+        // A `use` inside an already-cached package is the dependency's own; its pins are
+        // its author's business, and the consumer cannot act on them.
+        if std::fs::canonicalize(cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache))
+        {
+            return;
+        }
+        if !self.pin_behind_reported.insert(id.to_string()) {
+            return;
+        }
+        let newest = self
+            .newest_releases
+            .get_or_insert_with(crate::install::newest_cached_releases);
+        let Some(newest) = newest.get(id) else {
+            return;
+        };
+        if crate::registry_index::compare_semver(newest, version) != std::cmp::Ordering::Greater {
+            return;
+        }
+        let cure = match scope {
+            crate::resolution_scope::ResolutionScope::PinnedScript(_) => {
+                format!("loft pin {cur_script}")
+            }
+            _ => format!("loft install {id}"),
+        };
+        eprintln!(
+            "[registry] {id} {version} is pinned; {newest} is the newest release — run: {cure}"
+        );
+    }
+
+    /// @PLN143 arc C1 — a bare script falls back to the newest version already in the
+    /// cache.
+    ///
+    /// The failure path this exists for: offline (or a registry that cannot be reached),
+    /// a bare script, and the package sitting right there under `~/.loft/registry/`.
+    /// That answered *"Library 'x' not found — searched lib/, lib_dirs, and sibling
+    /// packages"* in a directory holding five extracted copies of it, which is the least
+    /// true message available.
+    ///
+    /// **`Bare` scope only, and that is the whole rule**: a fallback picks the newest
+    /// cached version, and only where nothing is declared is there no constraint it could
+    /// be violating. A package's manifest may say `^0.1`, and a pinned script names an
+    /// exact version — honouring the declaration is the point of having one, so a scope
+    /// that HAS one fails instead, and says what it could not satisfy.
+    ///
+    /// Runs after `probe_auto_install`, so an online run still resolves the newest
+    /// RELEASE; the cache only answers when the registry could not.
+    #[cfg(feature = "registry")]
+    fn probe_cache_newest(
+        &mut self,
+        id: &str,
+        f: &mut String,
+        scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        if *scope != crate::resolution_scope::ResolutionScope::Bare {
+            return;
+        }
+        let Some((version, _)) = crate::registry_index::newest_cached_loadable(id) else {
+            return;
+        };
+        self.resolve_registry_installed(id, &version, f);
+    }
+
+    /// No-op when the registry feature is off — there is no registry cache to fall back
+    /// to.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_cache_newest(
+        &mut self,
+        _id: &str,
+        _f: &mut String,
+        _scope: &crate::resolution_scope::ResolutionScope,
+    ) {
+    }
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {
@@ -12312,10 +12419,10 @@ impl Parser {
         diagnostic!(
             self.lexer,
             Level::Error,
-            "`{bare}` is declared by more than one module here — {}. A module taken \
-             with `use self::` has no bare qualifier of its own: alias yours \
-             (`use self::{module} as m;` then `m::{bare}`), or import the other one \
-             by name so only one `{bare}` is in scope",
+            "`{bare}` is declared by more than one module here — {}. A package's own \
+             module is scoped to it and has no bare qualifier, so nothing here picks \
+             between them: alias yours (`use self::{module} as m;` then `m::{bare}`), \
+             or import the other one by name so only one `{bare}` is in scope",
             spellings.join(" and ")
         );
     }
@@ -12387,7 +12494,7 @@ impl Parser {
         self.vars.add_variable(name, var_type, &mut self.lexer)
     }
 
-    fn create_unique(&mut self, name: &str, var_type: &Type) -> u16 {
+    pub(crate) fn create_unique(&mut self, name: &str, var_type: &Type) -> u16 {
         self.vars.unique(name, var_type, &mut self.lexer)
     }
 
@@ -13103,6 +13210,16 @@ fn emit_fn_ref_field_write(
     }
 }
 
+/// The type of an `if`/`else` whose arms have been unified: the THEN arm's shape,
+/// carrying what EITHER arm can alias.
+///
+/// The shape comes from `a` because the arms are already unified by the time this
+/// runs; only the borrow list has two answers to merge.  It is a UNION, not a
+/// pick: an arm yielding a fresh record has an empty dep list, which every free
+/// site reads as owned, so taking that arm's answer for the whole join freed a
+/// container view the other arm had delivered (loft#978 — silent, both backends).
+/// Text was the only type this merged until then, so the rule existed but reached
+/// one variant of the many that carry deps.
 fn merge_dependencies(a: &Type, b: &Type) -> Type {
     // Never (return/break/continue) defers to the other branch's type.
     if matches!(a, Type::Never) {
@@ -13111,18 +13228,7 @@ fn merge_dependencies(a: &Type, b: &Type) -> Type {
     if matches!(b, Type::Never) {
         return a.clone();
     }
-    if let (Type::Text(da), Type::Text(db)) = (a, b) {
-        let mut d = HashSet::new();
-        for v in da {
-            d.insert(*v);
-        }
-        for v in db {
-            d.insert(*v);
-        }
-        Type::Text(Deps::frame(d.into_iter().collect()))
-    } else {
-        a.clone()
-    }
+    a.joined_deps(b)
 }
 
 fn field_id(key: &[(String, bool)], name: &mut String) {

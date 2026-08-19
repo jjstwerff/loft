@@ -768,6 +768,47 @@ impl Stores {
         None
     }
 
+    /// The variant record that actually declares a field of a STRUCT-ENUM value.
+    ///
+    /// `c.limbs` on `enum Shape { Circle { limbs: vector<float> }, … }` is written through
+    /// the ENUM type, but the field lives in the variant's own `EnumValue` record — the
+    /// enum itself is `Parts::Enum`, which carries a variant list and no fields at all.
+    /// Resolving a field against it therefore misses, and the two resolvers answer their
+    /// not-found sentinels: `field_nr` says `0`, which is a real field number, and
+    /// `field_type` says `u16::MAX`, which is then used to index the type table
+    /// (loft#977 — a panic for a collection field, and the wrong field for the rest).
+    ///
+    /// Keyed on the field's byte `position` AND its `content` type, because the offset alone
+    /// names several fields: every collection is one 4-byte handle laid down straight after
+    /// the discriminant, so two variants each holding one put it at the same place.  A
+    /// `vector` variant and a `hash` variant then look identical by offset, and resolving to
+    /// the wrong one appends the record to a vector instead of keying it — silent at the
+    /// write, visible only later as a lookup that finds nothing.
+    ///
+    /// Answers `enum_tp` unchanged for anything that is not a struct-enum and for a field no
+    /// variant declares — identity, exactly like `key_owner`, so a caller can always ask.
+    pub(crate) fn variant_owning_field(&self, enum_tp: u16, position: u16, content: u16) -> u16 {
+        let Some(Parts::Enum(variants)) = self.types.get(enum_tp as usize).map(|t| &t.parts) else {
+            return enum_tp;
+        };
+        for (variant_tp, _) in variants {
+            // A payload-less variant registers as `u16::MAX` until (and unless) it is given
+            // one, so it names no record to resolve against.
+            if *variant_tp == u16::MAX {
+                continue;
+            }
+            if let Some(Parts::EnumValue(_, fields)) =
+                self.types.get(*variant_tp as usize).map(|t| &t.parts)
+                && fields
+                    .iter()
+                    .any(|f| f.position == position && f.content == content)
+            {
+                return *variant_tp;
+            }
+        }
+        enum_tp
+    }
+
     /// Byte offset of S's fields within a stored `__nullable<S>` (`Some`) record — the
     /// position of the inline `payload` field, after the discriminant.  `0` for any
     /// non-nullable element (S's fields then sit at the record root).  Alignment-dependent,

@@ -26,6 +26,502 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `map`, `filter` and friends work on a `value struct` vector
+
+Every vector builtin that walks to the end — `map`, `filter`, `reduce`, `all`, `count_if`,
+and the `[for x in v { … }]` comprehension — **hung forever** when the element was a
+`value struct`. `any` did stop, but by reading one element past the end and answering from
+it, so it could report `true` where the answer is `false`.
+
+```loft
+value struct V { x: integer }
+vs = [V{x:1}, V{x:2}];
+m = map(vs, |v| { v.x * 10 });    // never returned
+```
+
+The same code with a plain `struct` was always fine, and so was a `for` statement over the
+same vector — which was the workaround. All of them now agree: these loops end after
+exactly `len(v)` elements, whatever the elements are.
+
+### `break` naming the wrong variable now tells you, instead of crashing the compiler
+
+`x#break` and `x#continue` leave a loop by naming the variable that loop binds. Naming
+something else that happens to be a declared local — easy to do, since it looks like any
+other name — crashed the compiler with an internal error and a nonsense index:
+
+```loft
+k = 0;
+for j in 1..=3 { if j == 2 { k#break } }   // was: internal compiler error
+```
+
+It now says `k` is not a loop variable, and lists what you can write instead — a plain
+`break`, or the enclosing loops by name, innermost first.
+
+### A library can import itself again
+
+A package whose own test file is named after the package — `tests/hex_world.loft` saying
+`use hex_world;`, which is how essentially every loft library is laid out — stopped
+seeing its own functions in this cycle. The import bound the test file rather than the
+package, so the library's entry never loaded and every call read *"Unknown function"*.
+
+`use <name>` inside the package called `<name>` means the package. Nothing you write needs
+to change; if you hit this, it is fixed.
+
+### A type with `OpIndex` can be subscripted with more than one index
+
+Giving your type `OpIndex` lets it be subscripted like a built-in collection — and the
+documented motivating case is a matrix, which wants `m[row, col]`. That spelling was a
+parse error (`Expect token ]`, pointing at the comma), even though the two-index method
+was accepted and `OpIndex(m, row, col)` worked. So you could write the method the feature
+is for and never reach it with brackets.
+
+```loft
+fn OpIndex(self: Mat, r: integer, c: integer) -> integer { … }
+m[1, 2]        // was: error: Expect token ]
+```
+
+However many indices your `OpIndex` declares, that is what the brackets take. Getting the
+count wrong now says so against your own signature, naming the method as you wrote it.
+
+A slice, `x[a..b]`, still does not work on your own type — there is no range value in loft
+for a method to receive, so it needs more than a parser change. It now says that, and what
+to write instead, rather than `Expect token ]`.
+
+### A built-in with no native implementation now fails the build instead of doing nothing
+
+`loft --native` already refused to compile a program calling a built-in that has no native
+implementation, naming the function — but only when that function returned something. One
+returning nothing was emitted as an empty body: it compiled, it was called, and it did
+nothing at all, on `--native` only. That is how a parallel loop with an empty body came to
+run no workers for as long as it did.
+
+Both now fail the same way. Nothing you can write in loft changes behaviour here — every
+built-in that looked implemented still is; the one deliberate do-nothing on this target,
+`yield_frame`, says so in its own declaration and keeps working.
+
+### Reflection reports what a field was declared, for every field type
+
+`FieldInfo.nullable` answers *"was this field declared `T?` rather than `T`?"* — the fact
+a generated `CREATE TABLE` needs for `NOT NULL`. It was right for the scalar types and a
+constant `true` for the other four: a struct, an enum, a vector, and a keyed collection.
+So a generic serialiser or ORM emitted every one of those columns as nullable, dropping a
+`NOT NULL` the declaration had asked for.
+
+The declaration really does decide — a `Thing` field cannot hold null and a `Thing?` one
+can — so this was a fact being lost, not two things that are really one. It now follows
+the declaration for every field type, whether the type is declared above the struct or
+below it.
+
+One field type is deliberately exempt: `reference<T>`, which is a pointer. A pointer field
+can be cleared with `null` and starts as `null` when you leave it out, so it reports
+nullable whether or not you write the `?` — the `?` is not what decides it there.
+
+One side effect worth knowing: the redundant-null-check warning can now see these fields
+too, so comparing a non-nullable struct, enum, vector or collection field against `null`
+is reported the way the scalar ones already were. The comparison was always pointless;
+nothing said so before.
+
+### A lazy store that is not a store now says so
+
+`store_bind_lazy` reported every failure to *reach* a source and none to *read* it. A
+missing file, an HTTP 404 and a refused connection each raised a fault with a reason. An
+empty file, a truncated download, a directory, or a URL answering `200` with an HTML
+error page raised nothing at all — `store_lazy_faults` stayed `0`, `store_lazy_error`
+stayed empty, `store_verify` said true, and every key came back `null`. That is exactly
+what a valid store with no such key looks like, so a program could not tell "the dataset
+is empty" from "the dataset never loaded".
+
+The URL case is the one that bites: a stale CDN path, a bucket serving its own 404
+document, or a half-finished upload binds successfully and answers `null` forever, with
+the health channel reporting fine.
+
+A store image begins with a four-byte marker, and binding now checks it. Any source that
+is reachable but is not an image raises a fault with a reason, the same way a missing
+file always did.
+
+
+One thing changed for a *damaged* image: a file whose first four bytes are gone is now
+refused rather than read. It used to answer correctly if the pages your keys needed
+happened to be intact, which was luck rather than a promise. A merely truncated image is
+unaffected — those pages are still read.
+
+### A `match` at the end of a function no longer frees its locals too early
+
+A `match` written as the **last statement** of a function, with a `return` in **any** arm,
+released that function's locals *before* the arms ran:
+
+```loft
+fn use_it() {
+    x = Box { id: 1, items: [7] };
+    match 0 {
+        0 => { println("items[0] = {x.items[0]}") },   // read a released value
+        _ => { return }
+    }
+}
+```
+
+What you saw depended on what the local held. A number came back as `null(oob)` with
+`--native` and correctly under the interpreter — the same program, two answers, no
+diagnostic. A text came back **empty** on both. A value with a drop was released once
+before the arm and again at the `return`, which is a use-after-free: the interpreter ran
+the drop twice, and `--native` stopped with an out-of-bounds index.
+
+`break` and `continue` in the same position were always fine, and so was a single
+statement after the `match` — which was the workaround. All of it now behaves the same:
+one release, after the arm that runs.
+
+### A multi-line block with a value in it is now indented like one without
+
+A backtick block loses the indentation you wrote it at, so the text can sit where it
+belongs in your source without that showing up in the output. Unless it contained a
+`{…}` — then it was not dedented at all, and kept its trailing blank line too. One value
+anywhere in the block, before or after the affected lines, was enough:
+
+```loft
+page = `
+    <h1>hello {name}</h1>
+    <p>bye</p>
+    `;
+```
+
+That printed four spaces in front of every line and a line of spaces at the end. The
+same block without `{name}` printed flush. So the feature served the block with nothing
+in it and quietly stopped serving the template, which is what it is for.
+
+The base indentation is now taken from the block's **first content line** instead of
+from the closing backtick, which is what lets a block with values in it be measured at
+all. In the ordinary layout — content indented to one level, closing backtick a level
+out — that is the same number as before and nothing moves. Two things do move, both
+only in blocks laid out unusually:
+
+- a block whose closing backtick sits at a *different* column than its own lines now
+  follows the lines. This kept four spaces in front of `select 1` and is now flush:
+
+  ```loft
+  sql = `
+          select 1
+      `;
+  ```
+
+- a line indented *less* than the base comes out flush rather than keeping its own
+  indentation, so it can no longer end up further right than lines that were indented
+  past it.
+
+A blank line does not set the base (a template may open with one), and a tab-indented
+block is still left alone — a tab is not a space, so there is nothing to count.
+
+### A stray `{` in a message now tells you what to write
+
+The two ways of getting a literal brace wrong got very different answers. A lone `}`
+named itself, gave the fix, and stopped there. A lone `{` said `Formatter error` and
+then five more errors, the last of which blamed the closing brace of the function:
+
+```loft
+println("a lone open { here");
+```
+
+`{` opens a value slot, and a slot has to close on the line it opened. When nothing on
+that line can close it, that is now a single error pointing at the `{`, naming the cure
+(`{{`), and the rest of the file parses as usual.
+
+### A parallel loop with an empty body works with `--native`
+
+```loft
+for a in rows par(b = work(a), 4) { }
+```
+
+Running the workers purely for their effect and ignoring what they return compiled fine
+in the interpreter and failed `--native` with a raw compiler error out of `rustc`. Giving
+the body something to do was the workaround.
+
+It compiles now. Two quieter problems came out with it, both in the interpreter and both
+invisible for the same reason — a loop that discards every result has nothing to compare:
+the row reached the worker in the wrong shape, so a worker taking an `integer` read
+nonsense, and a worker returning a `text` could crash the process outright. Every return
+type now behaves the same as it does in a loop whose body uses the result.
+
+### A parallel worker declared below its loop no longer mistypes the result
+
+A `par` worker returning a `float` typed the result variable as `integer` when the
+worker was declared *after* the loop that used it — so a running total refused to add:
+
+```loft
+fn main() { t = 0.0; for a in 1..=4 par(b = half(a), 4) { t += b; } }
+fn half(v: integer) -> float { v * 0.5 }
+```
+
+*"Variable 't' cannot change type from float to integer"*, on a line where nothing is an
+integer. Moving the worker above the loop fixed it, and so did writing `t = t + b`
+instead of `t += b`, neither of which is a hint about the cause. Declaration order no
+longer decides the type.
+
+### A package keeps its own files, whoever else is in the build
+
+If two libraries both had a file called `skin.loft`, only one of them got to be `skin`.
+The other one's file never loaded, so the functions in it were simply missing — reported
+against a line inside a library whose author had never seen the problem, in a program they
+did not write. Which one lost depended on the order the *consumer* happened to list them
+in, and swapping those two lines moved the breakage to the other library.
+
+A library now always gets its own files. `use skin;` inside a package means *this
+package's* `skin.loft`, so two libraries can both have one and both work, in any order.
+Naming a dependency still wins over a file of the same name, so nothing can shadow what it
+depends on.
+
+One thing to know: if both files happen to export the *same* name and you call it without
+saying which you mean, you now get an error naming both, instead of one of them being
+picked for you. Give one an alias (`use skin as s;`) or import the name you want directly.
+
+### Reading a field the value's variant doesn't have now answers null instead of nonsense
+
+Enum variants carry named fields you read directly:
+
+```loft
+enum Node { Named { label: text, n: integer }, Anon { k: integer } }
+```
+
+Reading `a.n` when `a` happens to be an `Anon` answered a number — `Anon`'s `k`, handed
+back as if it were `Named`'s `n` — and writing `a.label` stored the text in the `Anon`
+value, which went on calling itself an `Anon` ever after. Nothing said a word.
+
+Reading fields straight off an enum is still the way loft works, and a field that *every*
+variant declares is unaffected. What is new is that reading one only *some* of them have
+now **checks which variant you actually have**: the read answers `null` — the same answer
+you get from a missing key or an index past the end — and the write is ignored instead of
+landing in the wrong field. The value's own fields are left alone, and it goes on being
+the variant it was.
+
+You are still told about it, with the variants that have the field and the `match` or `is`
+form that binds it for the one you hold, because a write that quietly does nothing is
+rarely what anyone meant. Set `LOFT_NO_VARIANT_FIELD=1` to turn the message off; the check
+itself stays either way.
+
+One case is left unchecked, and it says so: when the thing you read the field *from* is
+itself a call (`shape_of(x).radius`), checking the tag would mean calling it twice. Bind it
+to a local first.
+
+Related, and fixed with it: adding to a list through something that isn't there —
+`s.v += [1]` where `s` is null — stopped the program with an internal message instead of
+doing nothing. Setting a plain field that way was already ignored; adding to a list now is
+too.
+
+### Writing `Thing { }` works wherever the struct is declared
+
+An empty struct literal — the way you ask for a value with every field at its default —
+was a parse error if the struct happened to be declared *below* the function using it:
+
+```loft
+fn main() { a = Cfg { }; }
+struct Cfg { port: integer }        // declared after — used to break the line above
+```
+
+Naming a single field (`Cfg { port: 0 }`) worked, and moving the struct above worked, so
+the error pointed at a line that had nothing wrong with it. Both spellings now work in
+either order.
+
+### Tests now see the same warnings a program does
+
+A handful of checks — the lost-write warning, the double-move warning, and the
+`#superseded` signpost check — only ran when you ran your code as a *program*. Under
+`loft test` they were silent, which is the wrong way round: a library is checked by its
+tests, so exactly the code most in need of them was the code that never got them. A
+library could publish a signpost pointing at a function that does not exist, or a helper
+whose writes all land in a copy, with a completely green suite.
+
+They now run on both paths, once per file, and `--deny-warnings` fails on them as you
+would expect.
+
+### Dividing a float by zero gives one answer everywhere
+
+`1.0 / 0.0` answered two different things depending on where the result went. Written
+straight into a message it was `inf`; assigned to a variable, or handed back from a
+function, it was `null` — the same expression, both backends, nothing said a word. So a
+check that looked unnecessary on one line was load-bearing on the next.
+
+There is one answer now, and it is the one the rest of the language already used: `NaN`
+is the float null, so `0.0 / 0.0` is null, and `1.0 / 0.0` is `inf` — a real value, which
+is why `?? 0.0` does not replace it. That was already true of float *overflow*
+(`1.0e308 * 10.0` has always been `inf` wherever it went), so division now agrees with its
+own sibling. Dividing by zero without a guard still prints its warning and still keeps
+going.
+
+If you were relying on `?? 0.0` to catch a divide by zero, note that it only catches
+`0.0 / 0.0`. Test the divisor (`if d != 0.0`) when any numerator is possible.
+
+### A value that doesn't fit a limited field no longer becomes a different one
+
+For a field declared with a range —
+
+```loft
+struct Pixel { r: integer limit(0, 255) }
+```
+
+— writing something outside it did one of three things, and never said so: `256` came back
+as `0`, `260` left the old value untouched, and on a two-byte field `70000` came back as
+`4464`. A number you never wrote, sitting in a field that looks fine.
+
+Now anything outside the declared range stores the field's **default** — the lowest value
+in that range, or `null` if it is nullable. Nothing is wrapped, aliased, or quietly
+dropped, and you get a warning saying so. Ranges that don't start at zero work the same:
+`limit(300, 400)` and `limit(-200, 0)` still pack into a single byte, still hold every
+value they declare, and now refuse the ones they don't — `500` into a `limit(300, 400)`
+gives you `300`, not `500`.
+
+The same is true of a **variable**, which used to ignore its range entirely:
+
+```loft
+count: integer limit(10, 20) = 12;
+count = 99;   // 10 — the bottom of its range, and a warning
+```
+
+In-range code is untouched and costs nothing: the check is only emitted where the value
+might actually fall outside.
+
+### A function that sometimes hands back what you gave it, and sometimes something new
+
+A helper with two ways out — one returning what it was passed, the other building a fresh
+value —
+
+```loft
+fn rotate(st: Stencil, seen: boolean) -> Stencil {
+  if !seen { return st; }      // hand back what came in
+  Stencil { cells: turned }    // or build a new one
+}
+```
+
+— never released the value it built. Every call left one behind, so a loop that rotated a
+stencil a few thousand times quietly grew by a few thousand stencils. Nothing was wrong
+with the answers, nothing was printed, and the program exited 0; it just used more and
+more memory the longer it ran. The same happened to the far more common lookup-with-a-
+fallback shape:
+
+```loft
+fn get(b: Bag, k: text) -> Item { b.items[k] ?? Item { name: "missing", limbs: [] } }
+```
+
+where every miss left its fallback record behind.
+
+The trouble was that a function got to give one answer, once, to "who cleans this up?" —
+and these functions need two, because which one is right depends on which way the call
+actually went. That is now decided per call instead: a value the function built is cleaned
+up by the caller, and one that was already yours is left alone. Writing the same thing in
+the caller was the workaround, and it is no longer needed.
+
+One shape is still left out and still leaks: a helper whose *collection parameter itself*
+is the thing looked in (`fn get(items: hash<Item[name]>, k: text)` rather than a struct
+holding it). Passing the struct, or binding the lookup in the caller, avoids it.
+
+### An `if` that answers a new value on one side and an existing one on the other
+
+Choosing between building something and pointing at something already stored —
+
+```loft
+it = if fresh { Item { name: "fresh", limbs: [] } } else { b.items["one"]? };
+```
+
+— quietly threw away the record `it` was pointing at, once the function returned.  The
+first read was correct; the next allocation anywhere in the program took over the freed
+space, and every read after that answered out of whatever landed there.  The entry could
+even stop being found in the collection it was still filed under.
+
+The giveaway was that swapping the two sides around fixed it, which is nobody's idea of a
+difference that should matter.  It doesn't now.  A value that could have come from either
+side of an `if`, an `else if`, or a `match` is treated as possibly pointing at whatever
+either side points at — so nothing it might still be using is released.  Building on both
+sides is unaffected: those really are new values, and they are still cleaned up.
+
+### Filling in a list inside an enum variant works
+
+A struct-enum whose variant carries a collection —
+
+```loft
+enum Shape { Circle { limbs: vector<float> }, Square { s: float } }
+```
+
+— could be built with its contents (`Circle { limbs: [1.0, 2.0] }`), but adding to that
+list afterwards, or replacing it, stopped the program with an internal message and no
+line number. It made no difference how the list was reached: a local, an element of a
+vector of shapes, a function parameter, a field of some other struct. Reading was fine,
+which is what made building the value up in steps look like a mistake in your own code.
+
+Both work now, for every kind of collection a variant can hold.
+
+### A helper that looks something up no longer breaks what it looked in
+
+Reading a record out of a collection through your own small helper —
+
+```loft
+fn part(ps: PartSet, name: text) -> Part? { ps.parts[name] }
+```
+
+— handed back the right record and then, on the way out of the caller, released the
+storage it had borrowed from `ps`. Nothing said so: the first read was correct, and the
+next allocation anywhere in the program took over the freed space, so later reads
+answered out of whatever landed there. In dryopea a tower drew 96 triangles the first
+time and nothing the second. Writing the same lookup inline at the use site was correct,
+which is what made it look like a data problem rather than a language one.
+
+The signature now says what the helper hands back: a view into its argument, which the
+caller borrows and does not free. Both backends, and the same for a helper that binds a
+local first, reaches through two fields, takes the collection itself as the parameter, or
+is discharged with `?` or `??` at the call site.
+
+### A one-file script takes the newest release, and stops writing files at you
+
+`use arguments;` in a script with no `loft.toml` already resolved the newest release —
+and then left a `loft.lock` in whatever directory you happened to be standing in. That
+file pinned the script forever, from then on: the "latest" it took once became the
+version it took always, decided by something the run itself produced. Run the same
+script from a second directory and it re-resolved and dropped a second lock there.
+
+Now nothing is written by running. A script with no declaration means *the newest
+release, re-decided every run*; where you stand is not part of the answer; and if the
+registry cannot be reached, the newest copy already in your cache answers instead of a
+"library not found" in a directory holding five copies of it.
+
+That covers a project too, which is the shape that hurt most: a project with a
+`loft.toml` but no `loft.lock` yet used to resolve through whatever `loft.lock` happened
+to sit in the directory you ran from. Same project, same manifest, three directories,
+three library versions — and the error you got when the wrong one loaded said the
+function was missing, never that a directory had chosen the version.
+
+Where you DO have a declaration — a `loft.toml` in the project, or a
+`<script>.loft.lock` from `loft pin` — nothing changes: it governs, exactly as before.
+`loft install cbor@0.1.2` in a directory that is not a package now writes the small
+`loft.toml` that makes that pin stick, and says so.
+
+### A pinned version is installed, not just loaded
+
+`loft pin my_script.loft` writes the versions that script runs against, and that held as
+long as those versions were already in your package cache. On a machine where they were
+not — a colleague's laptop, a fresh CI runner — the run installed the *newest* release
+instead and said nothing, so the same pinned script ran different code on two boxes. It
+now installs exactly what the pin names. The same applies to a project whose
+`loft.lock` names a version the box has not downloaded yet.
+
+If you have edited `loft.toml` since (say `^0.1` to `^0.2`) and not re-installed, the
+manifest still wins — a lockfile is the resolved form of what the manifest asks for, so
+it cannot outrank it.
+
+### Your build says once when a pin has fallen behind
+
+A lockfile has no expiry, so a pinned version holds forever — including through a
+release that fixes something you would want. `cbor` 0.1.3 turned one encoder from
+O(n³) to O(n²) (a few hundred entries went from "effectively hung" to milliseconds)
+with no API change at all: a project pinned at 0.1.2 keeps hanging, and nothing it can
+read explains why.
+
+When a pin governs and the registry index you already have says there is a newer
+release, the build mentions it once:
+
+```
+[registry] cbor 0.1.2 is pinned; 0.1.3 is the newest release — run: loft install cbor
+```
+
+It never fetches anything to say this, never speaks for a library's own dependencies,
+stays quiet when you are current or offline, and can be turned off with
+`LOFT_NO_UPGRADE_NOTICE=1`.
+
 ### Adding a file no longer changes a library's answer in silence
 
 Two `.loft` files in different packages can share a basename, but only one of them can be

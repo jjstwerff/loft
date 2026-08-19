@@ -4947,6 +4947,15 @@ impl Stores {
                 check: crate::database::SchemaCheck::Unchecked,
             },
         );
+        // The FAULT channel is deliberately NOT cleared here, and it took a suite failure
+        // to see why.  A rebind re-decides the source and the schema, so "the faults
+        // belong to a source this collection no longer reads" sounds right — but the
+        // faults describe the CONTENTS, not the source, and the contents do not reset:
+        // whatever the previous binding materialised is still resident, minus the rows
+        // that failed.  Clearing on rebind therefore answers "healthy" for a working set
+        // that is missing data, which is the silent wrong answer this channel exists to
+        // prevent.  `tests/scripts/129-lazy-bind.loft` pins exactly that shape — fail,
+        // rebind, succeed — and only `store_lazy_clear` may clear it.
         true
     }
 

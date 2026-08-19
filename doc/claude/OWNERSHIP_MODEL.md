@@ -348,6 +348,60 @@ two-leg discriminator). Each site validated on BOTH backends:
   the typed `borrow_tail_copy` block). Fix = route through / replicate the proven path, not a bare
   `OpAppendVector`. (Not the tp, not interp execution — both ruled out by probe.)
 
+### The RETURN join is decided per run, not by a bit (loft#981 / loft#982)
+
+A heap return carries ONE static answer to *may the caller free this?*, read off the
+return deps: a dep naming a visible parameter means BORROW (never free), an empty one
+means OWNED (the caller adopts and frees). A return that is a view of a parameter on one
+path and a freshly minted store on the other has **no correct static answer**, and the one
+it got — borrow — orphaned the minted store: one leaked store per call, unbounded in a
+loop, silent on both backends with every value correct.
+
+Two filed shapes, one defect:
+
+| shape | why the dep says borrow |
+|---|---|
+| loft#981 — the arms genuinely split (`b.items[k] ?? Item { … }`) | the hit arm really is a view; which arm ran is a run-time fact |
+| loft#982 — the arms do NOT split (`if !fresh { return o; }` over a by-value struct param) | the dep is STALE: the return hoist lowers `return o` to `__ret_1 = o`, which DEEP-COPIES, so both paths deliver a fresh store — measured, and why BOTH arms leaked |
+
+**The cure reuses @P290 rather than adding a rung.** The call bracket already marks a
+caller's arguments *"do not free mine"* for the duration of the call, and both backends'
+`OpCopyRecord` already refuse the `0x8000` source-free on a marked store. So the bit is
+SET at a bracketed call site and the run decides: a returned store belonging to an
+argument is refused the free, a callee-minted one is not marked and is freed. That is the
+`Own::Join` witness test, spelled with machinery that already existed — no new opcode, and
+it scales to several witnesses where a single `OpFreeRefIfDistinct` could not.
+
+Three emitters read one fact (`use_analysis::call_return_frees_source`): the interpreter's
+first-bind and reassign paths, and native `generation/dispatch.rs`, which had no bracket
+and now emits the same one.
+
+**Two bounds, both load-bearing:**
+
+- The witness set must span every argument the return COULD borrow, not every argument the
+  bracket happens to accept. The bracket takes `Reference`/`Vector`/`Enum`; a **keyed
+  collection** (`hash`/`sorted`/`index`/`radix`/`trie`) is a borrow source it does not
+  cover. Reading the narrower list as complete freed a hash parameter's element out from
+  under the caller — `tests/scripts/882-…` went red under poison, which is how it was
+  found. Coverage is asked with `heap_dep()`, through `base()` so an `Optional` wrapper
+  cannot hide the storage under it.
+- An argument the bracket cannot name (not a bare `Var`, or a keyed collection) leaves the
+  witness set incomplete, so that call site keeps the old conservative *never free*. The
+  leak stays for that shape rather than risking a free of a store the caller still reaches
+  — a leak is the lesser wrong. In practice the parser lifts a non-`Var` ref argument into
+  a temporary first, so the fallback is rarer than it reads.
+
+`Store::free_protect_depth` is a DEPTH, not a flag, for the same reason: one call bracket
+inside another may protect the SAME store, and a boolean let the inner release drop the
+outer bracket's protection — after which the outer copy's source-free would free the
+caller's own argument. No probe in the suite distinguishes the two today; the depth closes
+the hazard by construction rather than by luck.
+
+Guard: `tests/scripts/981-split-ownership-return.loft` + `tests/split_ownership_return.rs`
+(leak as the deterministic oracle, poison/strict for the opposite direction, and the
+keyed-collection control). Against a pre-fix binary it orphans 161 + 41 records on both
+backends while every value cell still passes — which is the whole shape of the defect.
+
 ### A var holds a value two ways — `Set` and FILL (loft#704)
 
 `ownership_of` resolves a var by joining its DEFINITIONS, and for a long time a

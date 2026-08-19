@@ -152,6 +152,7 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
                 | "n_parallel_queue_ref"
                 | "n_parallel_queue_narrow"
                 | "n_parallel_queue_fn"
+                | "n_parallel_discard"
         ) && args.len() >= 5
             && args.get(4).kind() == ValueType::Int
             && args.get(4).int_value() >= 0
@@ -4696,19 +4697,23 @@ extern crate loft;"
                     // per the "fail at startup, not runtime" principle.
                     // Unreachable defs keep the `todo!()` shim so unused
                     // declarations don't reject otherwise-valid programs.
+                    //
+                    // The RETURN TYPE is not part of that question (loft#993). It used to
+                    // gate the whole escalation, so a VOID unimplemented native was
+                    // emitted as `{}` — a function that compiles, is callable, and does
+                    // nothing. "Fail at startup, not runtime" has no effect on the half
+                    // of the surface where the failure is silent instead of a panic.
                     let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
                     writeln!(w, "{{")?;
-                    if *def.returned() != Type::Void {
-                        if reachable {
-                            writeln!(
-                                w,
-                                "  compile_error!(\"loft --native: native fn `{}` (#native \\\"{}\\\") has no implementation in any registered native crate; either run via --interpret or wire the symbol in a #native package or src/codegen_runtime.rs (P269)\")",
-                                def.name(),
-                                def.native()
-                            )?;
-                        } else {
-                            writeln!(w, "  todo!(\"native function {}\")", def.name())?;
-                        }
+                    if reachable {
+                        writeln!(
+                            w,
+                            "  compile_error!(\"loft --native: native fn `{}` (#native \\\"{}\\\") has no implementation in any registered native crate; either run via --interpret or wire the symbol in a #native package or src/codegen_runtime.rs (P269)\")",
+                            def.name(),
+                            def.native()
+                        )?;
+                    } else {
+                        writeln!(w, "  todo!(\"native function {}\")", def.name())?;
                     }
                     writeln!(w, "}}")?;
                 }
@@ -4746,11 +4751,27 @@ extern crate loft;"
                         "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                     )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
-                } else if *def.returned() != Type::Void {
+                } else {
                     // P269: same compile-time-error escalation as above for
                     // reachable unimplemented natives without a `#native`
                     // annotation.  Unreachable internal stubs (e.g. unused
                     // `i_*` helpers) keep the `todo!()` shim.
+                    //
+                    // The RETURN TYPE used to gate this whole branch, so a VOID
+                    // unimplemented built-in was emitted as `{}` — callable, silent, and
+                    // doing nothing, where a value-returning one is loud.  That
+                    // asymmetry is what hid the par discard route's missing lowering for
+                    // its whole life: `--native` emitted `n_parallel_discard`'s
+                    // declaration with an empty body, and only an unrelated arity
+                    // mismatch made it visible (loft#993, loft#987).
+                    //
+                    // Nothing else here had to change, because `reachable` below ALREADY
+                    // answers "is this def actually called through its declaration" — it
+                    // excludes a `#rust` body (inlined at the call site), an interface or
+                    // T-param stub, and a def with a registered `OpEmitter` (whose call
+                    // sites are rewritten).  A deliberate no-op therefore has to SAY so,
+                    // and `yield_frame` — the one built-in that was relying on the
+                    // silence — now carries `#rust "()"`.
                     //
                     // Three categories of "abstract declarations never
                     // called at runtime" must NOT trigger compile_error

@@ -696,6 +696,46 @@ fn install_manifest_dependencies(opts: &loft::install::InstallOptions) {
     write_api_stubs(&cwd.join("loft.lock"), &cwd);
 }
 
+/// @PLN143 arc D — write the minimal `loft.toml` that makes `dir` a package, so the lock
+/// `loft install` is about to write has a root that governs it.
+///
+/// Minimal on purpose: a `[package]` name and version, and nothing else. This directory
+/// is where someone installed a dependency, not a library being authored — `loft new`
+/// writes the library skeleton, and inventing an `entry` here would claim a source file
+/// that does not exist.
+///
+/// The name is the directory's own, folded to what a package name may hold (lowercase
+/// ascii, digits, `_`); a directory whose name yields nothing usable is called `app`,
+/// because the name is a label for the manifest, not an identity anyone publishes.
+///
+/// Answers the name written, or `None` when the file could not be written — the install
+/// itself still stands, and the missing declaration is visible in the next run.
+#[cfg(feature = "registry")]
+fn manifest_for_new_package(dir: &std::path::Path, manifest: &std::path::Path) -> Option<String> {
+    let raw = dir.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+    let folded: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .skip_while(|c| !c.is_ascii_alphabetic() && *c != '_')
+        .collect();
+    let name = if folded.is_empty() || loft::libscan::is_reserved_package_name(&folded) {
+        "app".to_string()
+    } else {
+        folded
+    };
+    let body = format!(
+        "# Written by `loft install`: this directory's dependency declaration.\n\
+         [package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+    );
+    std::fs::write(manifest, body).ok().map(|()| name)
+}
+
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
 ///
 /// PKG.REG R4 (2026-05-24): the `loft install <name>` entry point in
@@ -748,9 +788,18 @@ fn install_from_registry_with_opts(args: &[String], opts: &loft::install::Instal
                     },
                     ToString::to_string,
                 );
-                let manifest = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("loft.toml");
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let manifest = cwd.join("loft.toml");
+                // @PLN143 arc D — install into a directory that is not a package, and the
+                // verb CREATES the declaration it needs. Without a `loft.toml` the walk-up
+                // finds no root, so the lock this install writes governs nothing: an
+                // explicit `loft install <pkg>@<version>` would be silently ignored on the
+                // next run, which is worse than the stray-lockfile defect it replaces.
+                if !manifest.exists() {
+                    if let Some(pkg) = manifest_for_new_package(&cwd, &manifest) {
+                        println!("  created loft.toml (package `{pkg}`)");
+                    }
+                }
                 if manifest.exists()
                     && loft::manifest::record_dependency(
                         &manifest.to_string_lossy(),
@@ -1787,7 +1836,7 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
             return 1;
         }
     };
-    let project_root = find_project_root_from(&cwd);
+    let project_root = loft::resolution_scope::project_root_from(&cwd);
     let lock_dir = project_root.as_ref().unwrap_or(&cwd);
     let lock_path = lock_dir.join("loft.lock");
 
@@ -2034,27 +2083,6 @@ fn strip_verbatim_disk(path: String) -> String {
         rest.to_string()
     } else {
         path
-    }
-}
-
-/// Walk up from `start` looking for the nearest directory that
-/// contains a `loft.toml`.  Returns `None` when reaching the
-/// filesystem root with no match.  Mirrors
-/// `parser::find_project_root` but reusable from main.rs
-/// (which can't reach into the parser's static helper).
-#[cfg(feature = "registry")]
-fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf> {
-    let abs = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
-    let mut cur = abs.as_path();
-    loop {
-        if cur.join("loft.toml").exists() {
-            return Some(cur.to_path_buf());
-        }
-        let parent = cur.parent()?;
-        if parent == cur {
-            return None;
-        }
-        cur = parent;
     }
 }
 
@@ -8285,37 +8313,9 @@ fn main() {
     if let Some(map) = script_line_map.as_deref() {
         p.diagnostics.remap_lines(&abs_file, map);
     }
-    // loft#883 — every lint below reads the RESOLVED types and the ownership verdicts
-    // derived from them. An aborting error means resolution did not finish, so those
-    // inputs are known-bad: an unresolved type carries empty deps, `ownership_of` reads
-    // empty deps as OWNED, and a borrowing `for` loop variable in an unrelated library
-    // then reads as a lost write. The compile is already failing and the user has one
-    // thing to fix; a warning derived from the wreckage points them at the wrong file.
-    //
-    // The gate is the whole set, not the one lint that was reported: they share the
-    // precondition, and the reason the false positive survived this long is that a green
-    // suite never aborts, so no warning-clean gate can reach this state.
-    if p.diagnostics.level() < Level::Error {
-        // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
-        // through the Warning channel so it surfaces with the other diagnostics.
-        // Gated (no-op unless LOFT_WARN_COPIES); disjoint borrows of `p`'s fields.
-        loft::use_analysis::warn_copies(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
-        // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
-        loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN139 stage G — the double-move lint. Runs here for the same reason the dead-store
-        // one does: the hand-offs it counts are the materialised `OpCopyRecord`s, which only
-        // exist once the program is scope-checked.
-        loft::use_analysis::warn_double_move(&p.data, &mut p.diagnostics, &abs_file);
-        // loft#894 — the lost-temporary-write lint. Runs here for the same reason its two
-        // neighbours do: the `__lift_N` temporaries it keys on are minted by `scopes`, so
-        // they exist only once the program is scope-checked.
-        loft::use_analysis::warn_lost_temp_writes(&p.data, &mut p.diagnostics, &abs_file);
-        // @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol in owned source must resolve
-        // Y (unresolvable = hard error) and shim over it (un-folded = advisory warning). Inert until a
-        // symbol is marked, so a no-op for every program today.
-        loft::use_analysis::superseded_fold_diagnostics(&p.data, &mut p.diagnostics, &abs_file);
-    }
+    // loft#985 — the post-scope-check lint family lives in ONE place, so the program path
+    // here and `loft test` run the same set; the error gate (loft#883) travels with it.
+    loft::use_analysis::post_scope_lints(&p.data, &mut p.diagnostics, &abs_file);
     // @PLN24 arc B — the interpreter calls `#c` bindings for real now; what
     // remains gated is the ONE shape the contract does not cover.
     //

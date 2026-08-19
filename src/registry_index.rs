@@ -826,6 +826,62 @@ pub fn installed_packages() -> Vec<(String, String, PathBuf)> {
     entries
 }
 
+/// The newest version of `pkg` already extracted in the cache that THIS loft can load —
+/// @PLN143 arc C1.
+///
+/// The fallback for a bare script when the registry cannot be reached: a directory
+/// holding five extracted copies of a package answering "not found" is the least true
+/// message available. Nothing here writes, fetches, or decides anything durable — the
+/// cache is written by RUNNING, and it may only make a resolution faster, never
+/// different, so reading it cannot pin a later run.
+///
+/// Filters, so the answer is a version that will actually load:
+///
+/// - **A prerelease is skipped.** `find_best_version` skips it too unless asked for it,
+///   and a fallback is not the place to opt someone in.
+/// - **A package whose `loft` requirement this build does not satisfy is skipped**, and
+///   so is one demanding a newer contract — checked with `manifest::check_version` /
+///   `check_contract`, the same functions the loader uses, so the filter cannot drift
+///   from what the loader accepts. Without this the newest cached copy is picked and the
+///   load then fails FATALLY, hiding the older copy that would have worked.
+/// - A directory with no readable `loft.toml` is skipped: a half-extracted tarball is
+///   not an installed package.
+///
+/// Returns `(version, entry_dir)`.
+#[must_use]
+pub fn newest_cached_loadable(pkg: &str) -> Option<(String, PathBuf)> {
+    let current = env!("CARGO_PKG_VERSION");
+    let mut best: Option<(String, PathBuf)> = None;
+    for (name, version, dir) in installed_packages() {
+        if name != pkg || version.contains('-') {
+            continue;
+        }
+        let Some(m) = crate::manifest::read_manifest(&dir.join("loft.toml").to_string_lossy())
+        else {
+            continue;
+        };
+        if m.loft_version.as_ref().is_some_and(|req| {
+            crate::manifest::check_version(req, current) != crate::manifest::VersionCheck::Satisfied
+        }) {
+            continue;
+        }
+        if let Some(ref creq) = m.contract {
+            match crate::manifest::check_contract(creq, crate::manifest::CONTRACT_VERSION) {
+                crate::manifest::ContractCheck::Ok
+                | crate::manifest::ContractCheck::Drifted { .. } => {}
+                _ => continue,
+            }
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(b, _)| compare_semver(&version, b) == std::cmp::Ordering::Greater)
+        {
+            best = Some((version, dir));
+        }
+    }
+    best
+}
+
 /// Build the Tier-1 lazy-load `method -> package` map from a parsed catalog.
 ///
 /// Each version's `triggers` are `"name:receiver"` strings; the map keys on the

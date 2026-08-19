@@ -1,0 +1,225 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#981 / loft#982 — a RETURN whose paths disagree about ownership.
+//
+// A function's return type carries one static answer to "may the caller free the store
+// this hands back?", read off the return deps: a dep naming a visible parameter means
+// BORROW (never free), an empty one means OWNED (the caller adopts and frees). Neither
+// answer is right for a return that is a view on one path and a freshly minted store on
+// the other, and the type has to pick one. It picked BORROW, so the minted store was
+// owned by nobody — one leaked store per call, unbounded in a loop, silent on both
+// backends with every value correct.
+//
+// The two filed shapes are the same defect reached two ways:
+//
+//   * loft#981 — the arms genuinely split. `b.items[k] ?? Item { … }` hands back a view
+//     of the container on a hit and a fresh record on a miss; which one ran is a
+//     run-time fact.
+//   * loft#982 — the arms do NOT split, and the dep is simply stale. `if !fresh {
+//     return o; }` over a by-value struct parameter is hoisted to `__ret_1 = o`, which
+//     DEEP-COPIES, so both paths deliver a fresh store — measured here by
+//     `i981_param_is_a_copy`, and it is why BOTH arms of `i981_pick` leaked, not just
+//     the fresh one.
+//
+// The cure is to stop answering statically. The @P290 call bracket already marks a
+// caller's arguments "do not free mine" for the duration of the call, and both backends'
+// `OpCopyRecord` already refuse the `0x8000` source-free on a marked store — so setting
+// the bit at a bracketed call site lets the RUN decide: a returned store belonging to an
+// argument is refused, a callee-minted one is freed.
+//
+// The controls are the half that says the fix is a decision and not a widening — a
+// genuine borrow must still NOT be freed, or a leak has been traded for a use-after-free:
+//   * `i981_id` / `i981_two_borrows` return a parameter and nothing else;
+//   * `i981_keyed` takes a KEYED COLLECTION parameter, which the bracket does not cover,
+//     so that call site keeps the conservative "never free" — its element must survive
+//     the call (freeing it is what poisoned tests/scripts/882-…).
+// Every cell reads its container back AFTER the calls, because a store freed early is
+// usually still intact: only a later claim of the recycled slot makes it answer wrong.
+
+struct I981Inner { i_v: vector<integer> }
+struct I981Outer { o_in: I981Inner, o_n: integer }
+
+struct I981Item { name: text, limbs: vector<float> }
+struct I981Bag  { items: hash<I981Item[name]> }
+
+struct I981Leaf   { l_name: text, l_v: vector<integer> }
+struct I981Branch { b_leaves: vector<I981Leaf> }
+struct I981Tree   { t_br: I981Branch }
+
+// The unrelated allocation: it only has to CLAIM a store and stay live.
+struct I981Sink { vals: vector<float> }
+
+fn i981_make(n: integer) -> I981Outer {
+  I981Outer { o_in: I981Inner { i_v: [] }, o_n: n }
+}
+
+// ── loft#982: one path returns the by-value parameter, the other builds ──────────────
+
+fn i981_pick(o: I981Outer, fresh: boolean) -> I981Outer {
+  if !fresh { return o; }
+  i981_make(99)
+}
+
+// The parameter path over a SECOND parameter — the filed matrix's "not the first
+// argument" row, which reaches a different dep index.
+fn i981_pick_second(a: I981Outer, o: I981Outer, fresh: boolean) -> I981Outer {
+  if !fresh { return o; }
+  i981_make(a.o_n)
+}
+
+// ── loft#981: a keyed lookup on a struct field, coalesced with a fresh record ────────
+
+fn i981_get(b: I981Bag, k: text) -> I981Item {
+  b.items[k] ?? I981Item { name: "miss", limbs: [] }
+}
+
+fn i981_read(b: I981Bag, k: text) -> integer { len(i981_get(b, k).limbs) }
+
+// A view of a NESTED collection element rather than a top-level field.
+fn i981_pluck(t: I981Tree, i: integer, fresh: boolean) -> I981Leaf {
+  if fresh { return I981Leaf { l_name: "new", l_v: [] }; }
+  t.t_br.b_leaves[i] ?? I981Leaf { l_name: "gone", l_v: [] }
+}
+
+// A VECTOR-typed split return: the same disagreement over a collection, not a record.
+fn i981_take(o: I981Outer, borrow: boolean) -> vector<integer> {
+  if borrow { return o.o_in.i_v; }
+  w: vector<integer> = [];
+  w += [7];
+  w
+}
+
+// ── The controls: a genuine borrow, which must still never be freed ──────────────────
+
+fn i981_id(o: I981Outer) -> I981Outer { o }
+
+fn i981_two_borrows(o: I981Outer, p: I981Outer, take_first: boolean) -> I981Outer {
+  if take_first { return o; }
+  p
+}
+
+// A KEYED COLLECTION parameter — the borrow source the @P290 bracket does not cover, so
+// this call site keeps the old conservative answer. The element must SURVIVE.
+fn i981_keyed(h: hash<I981Item[name]>, k: text) -> I981Item {
+  h[k] ?? I981Item { name: "miss", limbs: [] }
+}
+
+// ── Value-semantics oracle: the parameter path hands back a COPY ─────────────────────
+//
+// This is the measurement that makes loft#982's "borrow" a stale dep rather than a real
+// one, and it is what the fix relies on. If this ever answers `777` the return has
+// become a genuine alias and the free decision above must be revisited.
+fn i981_param_is_a_copy() -> integer {
+  a = i981_make(2);
+  b = i981_pick(a, false);
+  b.o_n = 777;
+  a.o_n
+}
+
+fn i981_seed_bag() -> I981Bag {
+  b = I981Bag { items: [] };
+  one = I981Item { name: "one", limbs: [] };
+  one.limbs += [1.0];
+  one.limbs += [2.0];
+  b.items += [one];
+  b
+}
+
+fn i981_seed_tree() -> I981Tree {
+  t = I981Tree { t_br: I981Branch { b_leaves: [] } };
+  lf = I981Leaf { l_name: "kept", l_v: [] };
+  lf.l_v += [5];
+  lf.l_v += [6];
+  t.t_br.b_leaves += [lf];
+  t
+}
+
+fn main() {
+  a = i981_make(2);
+  q = i981_make(5);
+  a.o_in.i_v += [11];
+  a.o_in.i_v += [12];
+
+  // ── loft#982, both arms. The FRESH arm is the filed one; the PARAMETER arm leaked
+  // identically, because the hoist copies it into a store of its own.
+  t = 0;
+  for _ in 0..40 { fr = i981_pick(a, true);  t = t + fr.o_n; }
+  s1 = I981Sink { vals: [] };
+  s1.vals += [0.0];
+  for _ in 0..40 { pa = i981_pick(a, false); t = t + pa.o_n; }
+  assert(t == 40 * 99 + 40 * 2, "982 both arms: {t}");
+  assert(a.o_n == 2, "982 the argument is untouched: {a.o_n}");
+  assert(len(a.o_in.i_v) == 2, "982 the argument's collection survived");
+
+  t2 = 0;
+  for _ in 0..40 { sc = i981_pick_second(a, q, true);  t2 = t2 + sc.o_n; }
+  for _ in 0..40 { sp = i981_pick_second(a, q, false); t2 = t2 + sp.o_n; }
+  assert(t2 == 40 * 2 + 40 * 5, "982 second parameter: {t2}");
+  assert(q.o_n == 5, "982 the second argument is untouched: {q.o_n}");
+
+  assert(i981_param_is_a_copy() == 2, "982 the parameter path answers a COPY");
+
+  // ── loft#981: the fallback arm, driven hard, then the container read back.
+  b = i981_seed_bag();
+  for _ in 0..40 { _m = i981_read(b, "absent"); }
+  s2 = I981Sink { vals: [] };
+  s2.vals += [0.0];
+  assert(i981_read(b, "one") == 2, "981 the hit arm still reads the container");
+  assert(i981_read(b, "absent") == 0, "981 the miss arm answers its fresh record");
+  hit = i981_get(b, "one");
+  assert(hit.name == "one", "981 the container's record is the one that was put in");
+
+  // ── The nested view, both arms.
+  tr = i981_seed_tree();
+  n = 0;
+  for _ in 0..40 { pv = i981_pluck(tr, 0, false); n = n + len(pv.l_v); }
+  for _ in 0..40 { pf = i981_pluck(tr, 0, true);  n = n + len(pf.l_v); }
+  s3 = I981Sink { vals: [] };
+  s3.vals += [0.0];
+  assert(n == 40 * 2, "981 nested view: {n}");
+  chk = i981_pluck(tr, 0, false);
+  assert(chk.l_name == "kept", "981 the nested container survived: {chk.l_name}");
+  assert(len(chk.l_v) == 2, "981 the nested element kept its length");
+
+  // ── The vector-typed split.
+  vt = 0;
+  for _ in 0..40 { vb = i981_take(a, true);  vt = vt + len(vb); }
+  for _ in 0..40 { vf = i981_take(a, false); vt = vt + len(vf); }
+  assert(vt == 40 * 2 + 40 * 1, "981 vector split: {vt}");
+  assert(len(a.o_in.i_v) == 2, "981 the borrowed vector survived: {len(a.o_in.i_v)}");
+  assert(a.o_in.i_v[0] == 11, "981 and still holds its own elements");
+
+  // ── Controls: a genuine borrow must NOT be freed. These read the argument back
+  // after an unrelated allocation, which is the only way an early free shows.
+  ct = 0;
+  for _ in 0..40 { idv = i981_id(a); ct = ct + idv.o_n; }
+  s4 = I981Sink { vals: [] };
+  s4.vals += [0.0];
+  assert(ct == 40 * 2, "control: returning a parameter: {ct}");
+  assert(a.o_n == 2, "control: the argument survived being returned");
+  assert(len(a.o_in.i_v) == 2, "control: and kept its collection");
+
+  bt = 0;
+  for _ in 0..40 { b1 = i981_two_borrows(a, q, true);  bt = bt + b1.o_n; }
+  for _ in 0..40 { b2 = i981_two_borrows(a, q, false); bt = bt + b2.o_n; }
+  s5 = I981Sink { vals: [] };
+  s5.vals += [0.0];
+  assert(bt == 40 * 2 + 40 * 5, "control: two borrowed parameters: {bt}");
+  assert(a.o_n == 2 && q.o_n == 5, "control: neither argument was freed");
+
+  // A keyed-collection parameter: the conservative arm. The element must survive — this
+  // is the shape whose over-free poisoned tests/scripts/882-…, so it is a CORRECTNESS
+  // control, not a leak one.
+  kb = i981_seed_bag();
+  kt = 0;
+  for _ in 0..40 { kh = i981_keyed(kb.items, "one"); kt = kt + len(kh.limbs); }
+  s6 = I981Sink { vals: [] };
+  s6.vals += [0.0];
+  assert(kt == 40 * 2, "control: keyed-collection parameter: {kt}");
+  after = kb.items["one"] ?? I981Item { name: "gone", limbs: [] };
+  assert(after.name == "one", "control: the keyed container survived: {after.name}");
+  assert(len(after.limbs) == 2, "control: and its element kept its length");
+
+  print("981 split-ownership return OK\n");
+}

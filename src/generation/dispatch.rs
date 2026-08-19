@@ -547,11 +547,38 @@ impl Output<'_> {
             // interpreter (`state/codegen.rs`).  Both backends read the same
             // fact, so they cannot diverge on the hidden-only / out-of-range edge.
             let is_borrowed_view = self.data.def(*fn_nr).returns_borrowed_view();
-            let tp_with_free: i32 = if is_borrowed_view {
-                i32::from(tp_nr)
-            } else {
+            // loft#981/#982 — a borrowed-view return is not always a borrow: the callee
+            // may hand back the parameter's store OR one it minted (a `??` whose arms
+            // split, a `return o` the return hoist materialises into a fresh `__ret_N`),
+            // and clearing the bit for both leaked the minted one, once per call.
+            // The @P290 bracket below decides which per EXECUTION — it refuses the free
+            // on a protected argument's store and allows it on a callee-minted one — so
+            // the bit is set exactly when this site brackets every ref argument.
+            // The interpreter reads the same fact and runs the same bracket.
+            let tp_with_free: i32 = if crate::use_analysis::call_return_frees_source(self.data, to)
+            {
                 i32::from(tp_nr) | 0x8000
+            } else {
+                i32::from(tp_nr)
             };
+            // Only a borrowed-view return needs the bracket; every other call keeps its
+            // previous emit byte-for-byte.
+            let bracket: Vec<String> = if is_borrowed_view {
+                crate::use_analysis::protectable_ref_args(self.data, to)
+                    .0
+                    .iter()
+                    .map(|&av| format!("var_{}", sanitize(variables.name(av))))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut protect = String::new();
+            let mut unprotect = String::new();
+            for v in &bracket {
+                use std::fmt::Write as _;
+                let _ = write!(protect, "n_protect_store_frees(cell, {v}); ");
+                let _ = write!(unprotect, " n_unprotect_store_frees(cell, {v});");
+            }
             // @P290 — evaluate the call BEFORE touching the destination.  The
             // call's args can reference `var_{name}` itself (e.g. `g = id(g)`),
             // and `OpDatabase` clears the destination's store IN PLACE — so the
@@ -590,7 +617,7 @@ impl Output<'_> {
             // whose test file happened to name a helper the way the library did (loft#878).
             write!(
                 w,
-                "{{ let _dst = var_{name}; let _src = {}(cell",
+                "{{ let _dst = var_{name}; {protect}let _src = {}(cell",
                 self.fn_ident(callee)
             )?;
             // Emit each arg through the shared `emit_call_arg` helper so the
@@ -610,6 +637,24 @@ impl Output<'_> {
                 Some(witness) => {
                     format!("_src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr")
                 }
+                // loft#974 — a callee that returns a VIEW hands back a pointer into a
+                // store the CALLER already owns, so the destination ALIASES it: that is
+                // what the borrow in the signature means, and it is what the interpreter
+                // emits here (a bare `PutRef`).  Copying instead mints a store the IR —
+                // which types such a destination as a borrow and therefore emits no
+                // `OpFreeRef` — never frees: one leaked record per call, measured.  It
+                // also made the two backends disagree about what a view IS, so a write
+                // through the result would land on one and be lost on the other.
+                //
+                // BOTH halves are required, and the destination is the half loft#677's
+                // guard proved: a lifted call temporary (`__lift_1`) takes a borrowed
+                // return too, and its own type carries NO deps — the IR calls it an owner
+                // and frees it at scope exit.  Aliasing there hands that free the
+                // CALLER's store (`USE AFTER FREE (write) … killed by the free of
+                // var___lift_1`, native-only, the interpreter's own copy path unaffected).
+                // So the alias follows the destination's ownership, not the callee's
+                // return alone.
+                None if is_borrowed_view && variables.skip_free(var) => "true".to_string(),
                 None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
             };
             // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
@@ -628,7 +673,7 @@ impl Output<'_> {
                  {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} \
                  var_{name} = _src; }} \
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
-                 OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
+                 OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }}{unprotect} }}"
             )?;
             // @PLN130 — a MAY-copy site: the emitted code branches on store identity at
             // runtime and copies on the non-adopting arm.  Recorded regardless, because the

@@ -39,9 +39,14 @@ actually moved, not all ~350 public functions.
   forces a release), but their docs share the monthly beat for *review*.
 - **Who:** one reviewer per pass — a human, or an agent steered through the steps
   below. Splitting libraries across passes is fine; the watermark carries state.
-- **What:** the loft stdlib (`default/*.loft`) and the in-tree / registered
-  libraries (`lib/*`). The feature catalogue (`@F`/`@I`) rides the same pass via
-  its own `make features-check` pre-flight.
+- **What:** the whole distribution — the loft stdlib (`default/`), the in-tree
+  libraries (`lib/*`), and every package in the registry. `make libraries-review`
+  names the population and says which part of it this pass owes; you never pick
+  the list by hand.
+- **The other half of the pass:** the feature catalogue (`@F`/`@I`) rides the same
+  monthly beat through `make features-review`, with `make features-check` as its
+  pre-flight. Same two questions, same non-gate status — the halves differ only in
+  what they review, so run both and treat the union as one worklist.
 
 ## The pass — per library
 
@@ -53,13 +58,34 @@ make features-check                     # feature-catalogue shadow in sync (if t
 make libcatalogue                       # the catalogue builds without breakage
 ```
 
+`make libcatalogue` is a hard precondition for step 1, not just hygiene: the library
+aid reads the snapshots it writes, and those are a **local build by design** (@PLN112 —
+a committed copy silently lagged `origin/main`). Skip it and the "what moved" answer is
+last month's, which is worse than no answer.
+
 Green here is **necessary, not sufficient** — it means no cheap failure remains,
 so the manual budget goes entirely to staleness and quality.
 
 ### 1. Generate the worklist
 
+Two steps, coarse then fine. First, which libraries does this pass owe anything?
+
 ```bash
-scripts/doc-review.sh --since <last-watermark-commit> <library-tree>
+make libraries-review
+```
+
+It answers the only two questions a program can: what is **structurally missing** (a
+library with no watermark row, so it has never been reviewed; one whose source cites no
+worked example and carries no `examples-exempt.tsv` verdict; a watermark row naming a
+library that no longer exists), and which reviewed libraries have **moved** since the
+commit their watermark records — with the commit count and how many `pub fn` lines
+changed, so "three commits, zero signatures" can be read and dismissed in seconds. It
+is a report: it never fails, and it never judges whether a doc is *good*.
+
+Then, for each library the aid put on the list, the per-function worklist:
+
+```bash
+scripts/doc-review.sh --since <its-watermark-commit> <library-tree>
 ```
 
 It prints three things: a **coverage** count (a health signal, not a target —
@@ -99,24 +125,47 @@ inline. Don't scope-creep the review into unrelated fixes.
 
 ### 6. Bump the watermark
 
-Update the library's row in the table below so next month starts from here.
+Update the library's row in the table below — `reviewed through` to this cycle, `at
+commit` to the ref this pass ended on (`git rev-parse --short HEAD` in that library's
+repo). A library reviewed for the first time gets a **new row**; that is what moves it
+out of the aid's "never reviewed" list.
+
+Leaving `at commit` empty is not free: next month the aid can only say *reviewed, but
+no commit recorded — nothing to diff against*, and that library falls back to a full
+re-read. The watermark is the entire mechanism that keeps a quiet month cheap.
 
 ## Watermark table
 
 "Reviewed through" = the last monthly pass that read this library's docs; "at
-commit" = the ref to pass as `--since` next month.
+commit" = the ref that pass ended on — the baseline `make libraries-review` diffs
+against to say what has moved since.
+
+**A row means a review happened.** The libraries that have *not* been reviewed are
+not listed here — `make libraries-review` derives that backlog from the actual
+population (the in-tree trees plus every package in the registry snapshot), so a
+placeholder row would be a second list of the same fact, drifting the moment a
+library is published or renamed. Six such rows had already gone stale by 2026-08:
+`lib/html` and `lib/markdown` had moved out to the `loft-libs-docs` repo, two more
+were spelled differently from the tree they named, and two were prose standing in
+for a list — a four-library cell, and a catch-all "registered libs (…)" row that
+named six of thirty-four.
+
+The **key column is machine-read** — one library per row, spelled exactly as the aid
+keys it: the path for an in-tree tree (`default`, `lib/git`, `lib/lexer.loft`), the
+package name for a published one (`graphics`). A key that matches nothing is reported
+as a STALE ROW rather than ignored.
 
 | library | reviewed through | at commit | notes |
 |---|---|---|---|
-| stdlib `default/` | 2026-08 | (bootstrap) | @STD-001..012 authored across text / collections / JSON / files-IO; docs read while tagging |
-| `lib/git` | 2026-08 | (bootstrap) | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging |
-| `lib/lexer` | 2026-08 | (bootstrap) | @LEX-001 (matches/test/identifier), @LEX-002 (anchor/revert backtracking) — both tagged to live uses in `parser.loft` (`function`, `object`), exercised by the `16-parser` doc test; format-protocol/comment fns still owe examples (need a non-rendered demo) |
-| `lib/audience_crystal` | 2026-08 | (bootstrap) | @ACR-001..003 tagged to the `01-editor-helpers` test (picking inverse, incr editor loop, erase) |
-| `lib/engine_host` | 2026-08 | (bootstrap) | @EHK-001..004 tagged to CI-spawned audience-demo kernels (run loop, broadcast, sync lanes, run_client drain); 37 pub fns read while tagging |
-| `lib/html` | — | — | not yet reviewed |
-| `lib/markdown` | — | — | not yet reviewed |
-| `lib/input` · `lib/logger` · `lib/lexer` · `lib/parser` | — | — | not yet reviewed |
-| registered libs (`arguments`, `hex_grid`, `gridmesh`, `crypto`, `server`, `web`, …) | — | — | rolled in as @PLN141 Phase D reaches each |
+| `default` | 2026-08 | `7786d28c` | @STD-001..012 authored across text / collections / JSON / files-IO; docs read while tagging |
+| `lib/git` | 2026-08 | `7786d28c` | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging |
+| `lib/lexer.loft` | 2026-08 | `7786d28c` | @LEX-001 (matches/test/identifier), @LEX-002 (anchor/revert backtracking) — both tagged to live uses in `parser.loft` (`function`, `object`), exercised by the `16-parser` doc test; format-protocol/comment fns still owe examples (need a non-rendered demo) |
+| `lib/audience_crystal` | 2026-08 | `7786d28c` | @ACR-001..003 tagged to the `01-editor-helpers` test (picking inverse, incr editor loop, erase) |
+| `lib/engine_host` | 2026-08 | `7786d28c` | @EHK-001..004 tagged to CI-spawned audience-demo kernels (run loop, broadcast, sync lanes, run_client drain); 37 pub fns read while tagging |
+
+`7786d28c` is the commit that authored every in-tree worked-example tag (squash-merged
+PR #971, 2026-08-18) — the 2026-08 pass *was* that tagging, so it is the pass's real
+end ref rather than the `(bootstrap)` placeholder these rows carried first.
 
 ## What this is NOT
 
@@ -134,4 +183,7 @@ commit" = the ref to pass as `--since` next month.
   mechanism (tag family, `check_doc_drift.sh examples`, `idx` ingestion).
 - [DOC_QUALITY.md](DOC_QUALITY.md) — how the docs themselves should read.
 - [RELEASE.md](RELEASE.md) — the monthly cadence this pass rides.
-- `scripts/doc-review.sh` — the worklist generator invoked in step 1.
+- `scripts/doc-review.sh` — the per-function worklist generator invoked in step 1.
+- `make libraries-review` — the per-library worklist that picks what step 1 drills into
+  (`scripts/check_doc_drift.sh libraries-progress`); `make features-review` is its
+  feature-catalogue twin.

@@ -1224,10 +1224,12 @@ register list, no marshal glue.
 When a directory `<id>/` is found, `lib_path_manifest()` reads `loft.toml`,
 validates the version requirement, and resolves the entry path.
 
-Registry packages sit at the end of that chain — lockfile probes, then
-auto-install. Which lockfile governs (and what a script with no manifest at all
-resolves to) is
+Registry packages sit at the end of that chain: the governing lockfile, then
+auto-install, then the newest loadable copy already in the cache. Which lockfile
+governs — and what a script with no manifest at all resolves to — is one
+function, `resolution_scope(script)`, described in
 [PKG_REGISTRY.md § Manifest-less resolution](PKG_REGISTRY.md#manifest-less-resolution--a-bare-script-takes-the-latest-release).
+The cwd is not part of it, and a run writes no lockfile.
 
 ### Load-time sequencing
 

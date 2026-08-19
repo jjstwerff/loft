@@ -630,6 +630,115 @@ impl OpEmitter for ParallelQueueEmitter {
     }
 }
 
+/// `n_parallel_discard` emitter — the route a `par` loop with a body that never
+/// names the worker's result takes (`for x in v par(r = f(x), N) { }`).
+///
+/// Same arg layout as `ParallelForEmitter` (input, elem_size, return_size, threads,
+/// func, extras…, n_extra), and the same closure scaffolding, with one difference
+/// that removes most of it: the result is dropped, so the closure returns `()` and
+/// the emitter needs neither a per-shape return bridge nor `return_size` nor the
+/// heap-ref storage type.  What is left is the ONE shape that still matters — a text
+/// worker taking a `&mut String` work buffer must still be handed one, or the call
+/// does not compile.
+///
+/// Without this emitter the route fell through to the declaration-driven default,
+/// which emitted `n_parallel_discard`'s five-parameter loft declaration with an empty
+/// body: workers that never ran.  A six-argument call site turned that into a rustc
+/// arity error, which is the only reason it was ever seen (loft#987).
+pub struct ParallelDiscardEmitter;
+
+impl OpEmitter for ParallelDiscardEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        // Guard: same as the for/queue family — at least 5 args with args[4] a
+        // non-negative i32 (the worker fn's def_nr).  Otherwise fall through.
+        let fn_d_nr = match args.get(4) {
+            Some(Value::Int(d)) if *d >= 0 => (*d).cast_unsigned(),
+            _ => return super::default::DefaultEmitter.emit(ctx, args),
+        };
+        if args.len() < 5 {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        }
+
+        let worker_def = ctx.output.data.def(fn_d_nr);
+        let worker_name = worker_def.name().to_string();
+        let worker_ret = worker_def.returned().clone();
+        let wants_work_buffer = matches!(closure_shape(&worker_ret), ClosureShape::Text)
+            && !crate::generation::returns_owned_string(worker_def);
+
+        // Extras: args[5..len-1]; the trailing args[len-1] is the n_extra count.
+        let n_extra = if args.len() > 6 { args.len() - 6 } else { 0 };
+        for i in 0..n_extra {
+            write!(ctx.w, "{{ let _ex{i} = ")?;
+            ctx.emit(&args[5 + i])?;
+            write!(ctx.w, "; ")?;
+        }
+
+        write!(ctx.w, "n_parallel_discard_native(cell, ")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[1])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[3])?;
+
+        let extras = {
+            use std::fmt::Write as _;
+            let mut s = String::new();
+            for i in 0..n_extra {
+                write!(s, ", _ex{i}").unwrap();
+            }
+            s
+        };
+
+        // args[1] is the vector element stride (a literal Int), needed to read a
+        // narrow scalar element at its true width.
+        let elem_sz = match args.get(1).map(Value::unspan) {
+            Some(Value::Int(s)) => *s,
+            _ => 8,
+        };
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
+        // @PLAN59: hidden heap DESTINATION attrs — one backing store per dest inside
+        // the closure, passed in attr order.  Same classification as the for/queue
+        // emitters; a worker without dests emits nothing.
+        let (prep, dests) = {
+            let mut prep = prep;
+            let mut dests = String::new();
+            use std::fmt::Write as _;
+            for (i, a) in ctx.output.data.def(fn_d_nr).attributes().iter().enumerate() {
+                if a.hidden
+                    && matches!(
+                        a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    write!(
+                        prep,
+                        "let _pd{i}: DbRef = unsafe {{ &mut *cell.get() }}.database(100); "
+                    )
+                    .unwrap();
+                    write!(dests, ", _pd{i}").unwrap();
+                }
+            }
+            (prep, dests)
+        };
+        if wants_work_buffer {
+            write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}{dests}, &mut _w); }})"
+            )?;
+        } else {
+            write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}let _ = {worker_name}(cell, {arg}{extras}{dests}); }})"
+            )?;
+        }
+
+        for _ in 0..n_extra {
+            write!(ctx.w, " }}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Plan-06 ARC.md A5b — `n_parallel_fold` emitter.  Closure-based
 /// bridge to `n_parallel_fold_native` (defined in
 /// `src/codegen_runtime.rs`).  Closes the native gap left by A5

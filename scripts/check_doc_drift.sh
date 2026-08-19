@@ -28,6 +28,8 @@
 #   scripts/check_doc_drift.sh examples        # only worked-example tag resolution
 #   EXAMPLES_REPO_ROOT=../loft-libs-x \
 #     scripts/check_doc_drift.sh examples-progress   # rollout REPORT: ready to PR?
+#   scripts/check_doc_drift.sh features-progress    # monthly AID: @F catalogue gaps
+#   scripts/check_doc_drift.sh libraries-progress   # monthly AID: library-review gaps
 #
 # Exit code: 0 = clean (or only time-projection warnings), 1 = drift.
 
@@ -772,6 +774,356 @@ check_examples_progress() {
   fi
 }
 
+FEATURES_SNAPSHOT="${FEATURES_SNAPSHOT:-index/features.json}"
+FEATURES_EXEMPT_FILE="${FEATURES_EXEMPT_FILE:-features-exempt.tsv}"
+
+# Feature-catalogue review AID — "what is left to check this time".
+#
+# ⚠ THIS VERIFIES NOTHING ABOUT QUALITY, and it must not be read as if it did. Whether
+# an entry is SELF-EXPLANATORY, whether its example demonstrates what the entry
+# PROMISES, and whether either has gone stale against code that moved are judgements no
+# program makes — they stay an AGENT task (@PLN141 C2 is that task, one entry at a
+# time). What a program can do is bound the reading: say what is structurally missing,
+# and say which entries the month actually touched, so the pass reads ten entries
+# instead of eighty-two.
+#
+# Never a gate, and exit is always the script's usual: a monthly aid that could block a
+# release would be routed around within one cycle.
+#
+# Two sections:
+#
+#   MISSING  — structural only. A feature has a written body, a generated page, and
+#              either a runnable `tests/docs/features/F<N>.loft` or a row in
+#              $FEATURES_EXEMPT_FILE saying why a runnable file cannot show it. Anything
+#              else is named here. "Written" is keyed on the @PLN92 Pass-1 marker, NOT on
+#              the section headings: @I (infra) entries are written in an
+#              infra-appropriate shape (`## What it does`), and a check keyed on the
+#              feature headings mis-reads all 35 of them as unwritten — it did, on the
+#              first version of this function.
+#
+#   TO RE-READ — the worklist, with `--since <ref>`. An entry is worth re-reading when
+#              the SOURCE that cites it moved: entries are referenced bare as `@F<N>` in
+#              src/, default/, tests/ and doc/, so a diff of the citing files since last
+#              cycle's watermark is the highest-signal bound available. The twin of
+#              `doc-review.sh --since`, which does the same for library docs off changed
+#              `pub fn` signatures.
+check_features_progress() {
+  local snap="$FEATURES_SNAPSHOT" exempt="$FEATURES_EXEMPT_FILE"
+  say "=== Feature catalogue — review aid (structure only; quality is an agent task) ==="
+  if [ ! -f "$snap" ]; then
+    yellow "  $snap missing — run: make features-fetch"; return
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    yellow "  jq not installed — cannot read $snap"; return
+  fi
+  local n_ok=0 n_stub=0 n_todo=0 n_exempt=0 n_deferred=0 n_infra=0 num kind body tag
+  say "  -- missing (structural) --"
+  while IFS=$'\t' read -r num kind body; do
+    if [ "$kind" = "infra" ]; then n_infra=$((n_infra + 1)); continue; fi
+    tag="F$num"
+    case "$body" in
+      *"TBD (Pass 2/3)"*)
+        red "    STUB      $tag — never written past @PLN92 Pass 1, so no page is generated"
+        n_stub=$((n_stub + 1)); continue ;;
+    esac
+    if [ ! -f "doc/features/$tag.md" ]; then
+      red "    NO PAGE   $tag — body is written but no doc/features/$tag.md was generated"
+      n_stub=$((n_stub + 1)); continue
+    fi
+    if [ -f "tests/docs/features/$tag.loft" ]; then n_ok=$((n_ok + 1)); continue; fi
+    local row verdict
+    row=$(awk -F'\t' -v t="$tag" '$1!~/^#/ && $1==t {print; exit}' "$exempt" 2>/dev/null)
+    if [ -z "$row" ]; then
+      red "    NO EXAMPLE $tag — and no verdict in $exempt"
+      n_todo=$((n_todo + 1)); continue
+    fi
+    verdict=$(printf '%s' "$row" | cut -f2)
+    case "$verdict" in
+      exempt)   n_exempt=$((n_exempt + 1)) ;;
+      deferred) yellow "    deferred  $tag — a runnable example is wanted and unwritten"
+                n_deferred=$((n_deferred + 1)) ;;
+      *)        red "    NO EXAMPLE $tag — unknown verdict '$verdict' (exempt|deferred)"
+                n_todo=$((n_todo + 1)) ;;
+    esac
+  done < <(jq -r '.[] | [(.number|tostring), .kind, ((.body // "") | gsub("[\n\t]"; " "))] | @tsv' "$snap")
+  [ $((n_stub + n_todo + n_deferred)) -eq 0 ] && green "    (nothing missing)"
+  say ""
+  say "  $n_ok with a runnable example · $n_exempt exempt · $n_deferred deferred · \
+$n_stub unwritten · $n_todo owe a verdict · $n_infra infra entries (no example expected)"
+
+  if [ -n "${FEATURES_SINCE:-}" ]; then
+    say ""
+    say "  -- to re-read since ${FEATURES_SINCE} (its citing source moved) --"
+    local t n_touch=0 tags
+    # The CITING LINES, not the changed files.  A month touches most of src/, so
+    # "some file that mentions @F7 changed" selects nearly the whole catalogue and the
+    # worklist stops bounding anything.  A line that cites `@F7` being ADDED or REWRITTEN
+    # is the sharp signal — the same narrowing `doc-review.sh` gets from diffing `pub fn`
+    # signatures rather than whole files.
+    # Scope: src/ default/ tests/ — the IMPLEMENTATION and its proofs. `doc/` is
+    # deliberately out: a changelog paragraph citing @F109 does not mean @F109's entry
+    # drifted, and including it added 8 entries of pure noise to a month's worklist.
+    # Measured over 2026-08: src+default 26, +tests 39, +doc 47 — and `-a` on both greps
+    # because a binary file in the diff silently TRUNCATES the tag list otherwise (the
+    # first version of this reported 3 and looked wonderfully sharp; it had stopped at
+    # the first binary match).
+    tags=$(git diff --unified=0 "${FEATURES_SINCE}"..HEAD -- src default tests 2>/dev/null \
+           | grep -aE '^\+[^+]' | grep -aohE '@F[0-9]+' | sort -u -t F -k2 -n)
+    if [ -z "$tags" ]; then
+      say "    (no line citing a @F entry changed since ${FEATURES_SINCE})"
+    else
+      for t in $tags; do
+        yellow "    $t — $(jq -r --arg n "${t#@F}" '.[] | select((.number|tostring)==$n) | .title' "$snap" 2>/dev/null | cut -c1-84)"
+        n_touch=$((n_touch + 1))
+      done
+      say ""
+      say "    $n_touch entr(y|ies) to re-read. For each: does the entry still describe what the"
+      say "    code does, and is its example still the clearest demonstration of it?"
+    fi
+  else
+    say ""
+    say "  (pass FEATURES_SINCE=<last cycle's watermark> for the to-re-read worklist)"
+  fi
+}
+
+# ---- Library review aid: what is left to check this cycle? (@PLN141) ----
+LIBRARIES_UNRELEASED="${LIBRARIES_UNRELEASED:-doc/claude/unreleased-snapshot.json}"
+LIBRARIES_REGISTRY="${LIBRARIES_REGISTRY:-doc/claude/registry-index-snapshot.json}"
+LIBRARIES_REVIEW_DOC="${LIBRARIES_REVIEW_DOC:-doc/claude/LIBRARY_DOC_REVIEW.md}"
+LIBRARIES_SIBLINGS="${LIBRARIES_SIBLINGS:-..}"
+
+# The watermark table of LIBRARY_DOC_REVIEW.md, as data: key <TAB> reviewed <TAB> commit.
+#
+# That table is the ONE home for "reviewed through" — the reviewer edits it by hand in
+# step 6 of the protocol, so a second machine-readable copy would be a second list of
+# the same fact and would drift the moment someone updated only the prose.  This parses
+# the prose instead, which is why column 1 must hold EXACTLY ONE library per row, spelled
+# the way the aid keys it (a path for an in-tree tree, the package name for a published
+# one).  A row that does not match anything is not silently dropped — it is reported as a
+# STALE ROW.  That is how all six unmatched rows of the 2026-08 table surfaced: two
+# libraries that had moved out to another repo (`lib/html`, `lib/markdown`), two spelled
+# differently from the tree (`stdlib default`, `lib/lexer`), and two that were prose
+# standing in for a list (a four-library cell, and "registered libs (…)" naming six of
+# thirty-four).
+_libraries_watermarks() {
+  awk -F'|' '
+    /^\| *library *\| *reviewed through *\|/ { t = 1; next }
+    t && /^\|[ :-]*-[ :-]*\|/               { next }
+    t && /^\|/ {
+      k = $2; r = $3; c = $4
+      gsub(/`/, "", k); gsub(/`/, "", r); gsub(/`/, "", c)
+      gsub(/^[ \t]+|[ \t]+$/, "", k); sub(/\/$/, "", k)
+      gsub(/^[ \t]+|[ \t]+$/, "", r); gsub(/^[ \t]+|[ \t]+$/, "", c)
+      if (k != "") print k "\t" r "\t" c
+      next
+    }
+    t { t = 0 }
+  ' "$LIBRARIES_REVIEW_DOC" 2>/dev/null
+}
+
+# The trees this repo reviews itself: the stdlib, each packaged lib, each single-file lib.
+# A file with no `pub fn` has no public surface to review and is not a library — that is
+# what keeps `lib/docs.loft` and `lib/logger.loft` out of the population without a list.
+_libraries_in_tree() {
+  local d f
+  [ -d default ] && echo "default"
+  for d in lib/*/; do [ -f "$d/loft.toml" ] && echo "${d%/}"; done
+  for f in lib/*.loft; do [ -f "$f" ] && echo "$f"; done
+}
+
+# Worked-example citations carried by a library's OWN source.
+#
+# NOT `examples-index.tsv`: that indexes where each tag is DEFINED (the test or consumer
+# call site), and for `default/` every @STD tag is defined under `tests/scripts/`, for
+# `lib/git` under `tools/`.  Keying on the index therefore reported the three best-covered
+# in-tree libraries as carrying no examples at all.  The citation is the half that lives
+# beside the `pub fn`, so it is the half that answers "does this library cite examples?".
+_libraries_citations() {
+  grep -rhoa '// Example: @[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]' "$1" --include='*.loft' 2>/dev/null | wc -l
+}
+
+# Print one grouped line of the missing report, wrapping a long member list under a hanging
+# indent so a 14-package monorepo stays one readable entry.
+_libraries_group_line() {
+  local line
+  while IFS= read -r line; do say "$line"; done < <(
+    printf '      %-20s' "$1"
+    printf '%s\n' "$2" | fold -s -w 66 | sed '1s/^/ /; 2,$s/^/                           /')
+}
+
+# Library-distribution review AID — "what is left to check this cycle".
+#
+# ⚠ THIS VERIFIES NOTHING ABOUT QUALITY.  Whether a `///` doc still describes what the
+# function DOES, and whether a cited example is still the CLEAREST demonstration of it,
+# are the two failures LIBRARY_DOC_REVIEW.md exists for, and no program makes either
+# judgement.  What a program can do is bound the reading: say what is structurally
+# missing, and say which libraries actually moved since they were last read.  Measured on
+# the 2026-08 watermarks: one library to re-read out of a population of forty-two.
+#
+# The twin of `features-progress`, which asks the same two questions of the @F catalogue.
+# Never a gate, always exit 0: a monthly aid that could block a release would be routed
+# around within one cycle, and libraries are deliberately OFF the release axis anyway
+# (RELEASE.md § What forces a release).
+#
+# Two sections:
+#
+#   MISSING     — structural only.  A library owes a watermark row (so the next pass has
+#                 a baseline) and a worked-example verdict — either its source CITES an
+#                 example, or its repo's `examples-exempt.tsv` says why it does not.
+#                 Anything else is named.  A row naming a library that is neither in-tree
+#                 nor published is a STALE ROW: the table is wrong, not the library.
+#
+#   TO RE-READ  — the worklist.  A library is worth re-reading when its source moved since
+#                 the commit its watermark records.  Per-library watermarks, not one global
+#                 `SINCE`: libraries publish on their own cadence, so a single ref is
+#                 meaningless across thirty-four packages in eight repos.  Where the repo
+#                 is checked out the entry also carries the commit count and how many
+#                 `pub fn` lines changed — the same narrowing `doc-review.sh --since` gets
+#                 from diffing signatures rather than whole files.
+#
+# Reads two LOCAL builds (`make libcatalogue`) rather than committed data, deliberately:
+# @PLN112 made the catalogue a local build so it cannot go stale, and the published half
+# of this report is only as true as its inputs.  Missing snapshots degrade to the in-tree
+# trees and say so, rather than reporting a distribution of nothing.
+check_libraries_progress() {
+  local unrel="$LIBRARIES_UNRELEASED" reg="$LIBRARIES_REGISTRY" wm_file="$LIBRARIES_REVIEW_DOC"
+  say "=== Library distribution — review aid (structure only; quality is an agent task) ==="
+  if ! command -v jq >/dev/null 2>&1; then
+    yellow "  jq not installed — cannot read $unrel"; return
+  fi
+  local have_pub=1
+  if [ ! -f "$unrel" ] || [ ! -f "$reg" ]; then
+    yellow "  $unrel / $reg missing — run: make libcatalogue"
+    yellow "  (in-tree trees only; the published distribution needs those snapshots)"
+    have_pub=0
+  fi
+
+  local wm pop; wm=$(mktemp); pop=$(mktemp)
+  _libraries_watermarks > "$wm"
+  # key <TAB> kind <TAB> group <TAB> dir <TAB> sha <TAB> pub-fns <TAB> undocumented
+  local k n sha
+  while read -r k; do
+    [ -n "$k" ] || continue
+    if [ -d "$k" ]; then n=$(grep -rha '^[[:space:]]*pub fn ' "$k" --include='*.loft' 2>/dev/null | wc -l)
+    else                 n=$(grep -cae '^[[:space:]]*pub fn ' "$k" 2>/dev/null); fi
+    [ "${n:-0}" -gt 0 ] || continue
+    sha=$(git log -1 --format=%H -- "$k" 2>/dev/null)
+    printf '%s\tin-tree\tin-tree\t%s\t%s\t%s\t-\n' "$k" "$k" "${sha:--}" "$n"
+  done < <(_libraries_in_tree) >> "$pop"
+  if [ $have_pub -eq 1 ]; then
+    jq -r --slurpfile r "$reg" '
+      to_entries[] | . as $p |
+      (($r[0].packages[$p.key].homepage // "")
+        | capture("github\\.com/[^/]+/(?<repo>[^/]+)/tree/[^/]+/(?<dir>.+)$")
+        // {repo: "?", dir: $p.key}) as $loc |
+      [ $p.key, "published", $loc.repo, $loc.dir, ($p.value.sha // "-"),
+        ($p.value.api | length),
+        ([$p.value.api[] | select((.doc // "") == "")] | length) ] | @tsv' \
+      "$unrel" >> "$pop"
+  fi
+
+  local g_new g_todo g_stale reread
+  g_new=$(mktemp); g_todo=$(mktemp); g_stale=$(mktemp); reread=$(mktemp)
+  local n_rev=0 n_new=0 n_stale=0 n_exempt=0 n_deferred=0 n_todo=0 n_blindpath=0
+  local n_api_pub=0 n_api_tree=0 n_undoc=0
+  local kind group dir cur api undoc row wmrev wmcom tree cites verdict reason
+
+  while IFS=$'\t' read -r k kind group dir cur api undoc; do
+    if [ "$kind" = "published" ]; then n_api_pub=$((n_api_pub + api)); n_undoc=$((n_undoc + undoc))
+    else                               n_api_tree=$((n_api_tree + api)); fi
+    row=$(awk -F'\t' -v k="$k" '$1 == k {print; exit}' "$wm")
+    wmrev=$(printf '%s' "$row" | cut -f2); wmcom=$(printf '%s' "$row" | cut -f3)
+    case "${row:+set}${wmrev}" in
+      ""|"set—"|"set-") printf '%s\t%s\n' "$group" "$k" >> "$g_new"; n_new=$((n_new + 1)) ;;
+      *) n_rev=$((n_rev + 1))
+         printf '%s\t%s\t%s\t%s\t%s\n' "$k" "$kind" "$group" "$dir" "$wmcom|$cur" >> "$reread" ;;
+    esac
+    # Worked-example verdict — needs the library's own source, so it needs a checkout.
+    if [ "$kind" = "in-tree" ]; then tree="$dir"; row="$EXAMPLES_EXEMPT_FILE"
+    else tree="$LIBRARIES_SIBLINGS/$group/$dir"; row="$LIBRARIES_SIBLINGS/$group/$EXAMPLES_EXEMPT_FILE"; fi
+    if [ ! -e "$tree" ]; then n_blindpath=$((n_blindpath + 1)); continue; fi
+    cites=$(_libraries_citations "$tree")
+    [ "${cites:-0}" -gt 0 ] && continue
+    row=$(awk -F'\t' -v p="$dir" '$1 !~ /^#/ && $1 == p {print; exit}' "$row" 2>/dev/null)
+    if [ -z "$row" ]; then
+      printf '%s\t%s\n' "$group" "$k" >> "$g_todo"; n_todo=$((n_todo + 1)); continue
+    fi
+    verdict=$(printf '%s' "$row" | cut -f2); reason=$(printf '%s' "$row" | cut -f3)
+    case "$verdict" in
+      exempt)   n_exempt=$((n_exempt + 1)) ;;
+      deferred) printf '%s\t%s — %s\n' "$group" "$k" "${reason:0:56}" >> "$g_todo"
+                n_deferred=$((n_deferred + 1)) ;;
+      *)        printf "%s\t%s — BAD VERDICT '%s' (exempt|deferred)\n" "$group" "$k" "$verdict" >> "$g_todo"
+                n_todo=$((n_todo + 1)) ;;
+    esac
+  done < "$pop"
+  while IFS=$'\t' read -r k wmrev wmcom; do
+    awk -F'\t' -v k="$k" '$1 == k {f = 1} END {exit !f}' "$pop" && continue
+    printf '%s\n' "$k" >> "$g_stale"; n_stale=$((n_stale + 1))
+  done < "$wm"
+
+  say "  -- missing (structural) --"
+  local grp
+  if [ -s "$g_new" ]; then
+    yellow "    never reviewed — no row in $wm_file"
+    while read -r grp; do
+      _libraries_group_line "$grp" "$(awk -F'\t' -v g="$grp" '$1 == g {printf "%s ", $2}' "$g_new")"
+    done < <(cut -f1 "$g_new" | awk '!seen[$0]++')
+  fi
+  if [ -s "$g_todo" ]; then
+    yellow "    owe a worked-example verdict — no \`// Example:\` citation, no $EXAMPLES_EXEMPT_FILE row"
+    while IFS=$'\t' read -r grp k; do say "      $k"; done < "$g_todo"
+  fi
+  if [ -s "$g_stale" ]; then
+    red "    STALE ROW — names a library that is neither in-tree nor published; fix $wm_file"
+    while IFS= read -r k; do say "      $k"; done < "$g_stale"
+  fi
+  [ $((n_new + n_todo + n_deferred + n_stale)) -eq 0 ] && green "    (nothing missing)"
+
+  say ""
+  say "  $n_rev reviewed · $n_new never reviewed · $n_exempt exempt · $n_deferred deferred · \
+$n_todo owe a verdict · $n_stale stale row(s)"
+  [ $have_pub -eq 1 ] && say "  public surface: $n_api_pub published pub fns ($n_undoc carry no doc \
+comment) · $n_api_tree in-tree"
+  [ $n_blindpath -gt 0 ] && yellow "  $n_blindpath library(ies) not checked out under \
+$LIBRARIES_SIBLINGS/ — their verdict is unknown, not absent"
+
+  say ""
+  say "  -- to re-read (its source moved since its watermark) --"
+  local n_moved=0 n_blind=0 commits sigs repo_dir
+  while IFS=$'\t' read -r k kind group dir row; do
+    wmcom="${row%|*}"; cur="${row#*|}"
+    if [ "$kind" = "in-tree" ]; then repo_dir="."; else repo_dir="$LIBRARIES_SIBLINGS/$group"; fi
+    case "$wmcom" in
+      ""|"—"|"-"|"(bootstrap)")
+        yellow "    $(printf '%-22s' "$k") reviewed, but no commit recorded — nothing to diff against"
+        n_blind=$((n_blind + 1)); continue ;;
+    esac
+    if [ ! -d "$repo_dir" ] || ! git -C "$repo_dir" cat-file -e "$wmcom^{commit}" 2>/dev/null; then
+      yellow "    $(printf '%-22s' "$k") watermark $wmcom unreachable — no checkout to diff"
+      n_blind=$((n_blind + 1)); continue
+    fi
+    [ "$cur" = "-" ] && cur=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null)
+    commits=$(git -C "$repo_dir" rev-list --count "$wmcom..$cur" -- "$dir" 2>/dev/null)
+    [ "${commits:-0}" -eq 0 ] && continue
+    # -a on the grep: a binary file in the diff otherwise TRUNCATES the scan and the
+    # count reads wonderfully low (the same trap features-progress hit).
+    sigs=$(git -C "$repo_dir" diff --unified=0 "$wmcom..$cur" -- "$dir" 2>/dev/null \
+           | grep -acE '^[+-][^+-].*pub fn ')
+    yellow "    $(printf '%-22s' "$k") ${wmcom:0:8} → ${cur:0:8} — $commits commit(s), \
+${sigs:-0} pub fn line(s) changed"
+    n_moved=$((n_moved + 1))
+  done < "$reread"
+  if [ $((n_moved + n_blind)) -eq 0 ]; then
+    green "    (nothing reviewed has moved)"
+  else
+    say ""
+    say "    $n_moved to re-read, $n_blind with no usable baseline.  For each: does the doc still"
+    say "    describe what the code does, and is its example still the clearest demonstration?"
+  fi
+  rm -f "$wm" "$pop" "$g_new" "$g_todo" "$g_stale" "$reread"
+}
+
 # Sep between sections (verbose mode only).
 sep() { [ $QUIET -eq 0 ] && echo; }
 
@@ -787,6 +1139,8 @@ case "$CHECK" in
   examples-index) check_examples_index ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
+  features-progress) check_features_progress; exit 0 ;;   # a REVIEW AID — never in `all`, never a gate
+  libraries-progress) check_libraries_progress; exit 0 ;; # a REVIEW AID — never in `all`, never a gate
   all)
     check_paths
     sep
@@ -807,7 +1161,7 @@ case "$CHECK" in
     check_examples_index
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|write-examples-index|examples-progress]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
     exit 2
     ;;
 esac

@@ -289,7 +289,10 @@ publishing is the **loft-ship skill** (touch-gated signing). REPL: [REPL.md](doc
 
 **Process / issues / release:** [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) workflow ·
 [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) (open→Issues, closed→[PROBLEMS.md](doc/claude/PROBLEMS.md)) ·
-[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (monthly by-hand library-doc staleness/example review — `scripts/doc-review.sh`) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
+[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (the monthly by-hand doc review, both
+halves: `make libraries-review` says which libraries owe a review or have moved since their
+watermark, `make features-review` does the same for the `@F` catalogue, `scripts/doc-review.sh
+--since` drills into one library's functions — all three REPORT, none gates) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) ·
 [DOC.md](doc/claude/DOC.md) · [LAVITION.md](doc/claude/LAVITION.md) · [PROMPTS.md](doc/PROMPTS.md).
 
@@ -396,6 +399,20 @@ argument types, so a bare `find(p, i)` type-checks and answers the wrong thing. 
 where the same name is a method on ANOTHER receiver type — arg-type dispatch keeps that
 one reachable — and quiet for a collision with a stdlib FREE function, which the import
 outranks) ·
+`LOFT_NO_VARIANT_FIELD` (loft#980 `variant-field-unchecked` WARNING: `c.field` on a
+struct-enum names a field only SOME variants declare. The access resolves at COMPILE
+time to the first variant that has it, and the layout gives a shared name+type one
+slot — so the read is right for the variants declaring it and reads ANOTHER variant's
+bytes for the rest, with the tag never consulted: `a.n` on an `Anon` answered
+`Anon.k`'s value, and `a.label = "x"` wrote into a record whose tag still said `Anon`,
+after which `match` still reported `Anon`. Direct payload access STAYS — C89 decided
+permanently that enum payloads are named fields you read straight, with matching for
+DISPATCH and never for extraction; the silence was the defect. `warning`, not advice:
+the value read is another variant's, typed as this one's. Quiet when EVERY variant
+declares the field (one shared slot — measured correct even where the variants'
+preceding fields differ in width), quiet for `match`/`is` bindings, which are per-arm
+and are the cure it names, and quiet for a synthetic `__nullable<S>`, whose payload
+access is @PLN25's null model rather than a variant question) ·
 `LOFT_NO_COMPLEXITY` (function-complexity ADVICE: cognitive complexity ≥ 40 — a
 construct costs `1 + nesting`, so 8 sequential `if`s cost 8, 3 nested cost 6, a flat
 `match` costs 1 whatever its arm count; counted at PARSE time because the IR is

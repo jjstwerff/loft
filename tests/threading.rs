@@ -945,7 +945,20 @@ fn worker_id(r: const Num) -> integer { r.v }
     // Returns ().  All we assert is "no panic" — Discard's contract is
     // that the worker runs N times and the result is dropped.  Worker's
     // return-size is 8 (i64); the runtime discards it.
-    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 4, &[], 8);
+    run_parallel_discard(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        4,
+        &[],
+        8,
+        0,
+        None,
+        0,
+        0,
+    );
 }
 
 /// Discard on an empty input is a no-op — no workers spawned, no panic.
@@ -962,7 +975,20 @@ fn worker_id(r: const Num) -> integer { r.v }
     let fn_pos = data.def(d_nr).code_position;
 
     let program = worker_program(&state);
-    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+    run_parallel_discard(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        8,
+        0,
+        None,
+        0,
+        0,
+    );
 }
 
 /// Spine step 3c — fused for-par with empty body lowers to
@@ -1200,7 +1226,20 @@ fn worker_id(r: const Num) -> integer { r.v }
     let d_nr = data.def_nr("n_worker_id");
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
-    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+    run_parallel_discard(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        8,
+        0,
+        None,
+        0,
+        0,
+    );
 
     let after = state.database.allocations.len();
     assert_eq!(

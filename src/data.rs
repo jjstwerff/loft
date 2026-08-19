@@ -1436,6 +1436,48 @@ impl Deps {
         }
     }
 
+    /// A copy carrying every entry of `other` that is not already here, appended
+    /// in `other`'s order; inherits THIS value's space.
+    ///
+    /// The join rule for a branch whose arms disagree about ownership: a value
+    /// that is a fresh record on one arm and a view into `b` on the other can
+    /// alias `b` at run time, so the merged type must say so.  An empty list is
+    /// the OWNED reading, and owned-∪-borrowed is borrowed — which is why the
+    /// union is taken over the arms rather than the intersection.
+    #[must_use]
+    pub fn union(&self, other: &Deps) -> Deps {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            self.items.is_empty()
+                || other.items.is_empty()
+                || self.space == other.space
+                || self.space == DepSpace::Unknown
+                || other.space == DepSpace::Unknown,
+            "dep-space violation: union of {:?} deps with {:?} deps",
+            self.space,
+            other.space
+        );
+        let mut items = self.items.clone();
+        for e in &other.items {
+            if !items.contains(e) {
+                items.push(*e);
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            let space = if self.items.is_empty() {
+                other.space
+            } else {
+                self.space
+            };
+            Deps { items, space }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Deps { items }
+        }
+    }
+
     /// A copy extended with `on` at the front (the `depending()` shape);
     /// inherits this value's space.
     #[must_use]
@@ -1537,6 +1579,26 @@ pub enum Type {
     /// every exhaustive `match Type` is a COMPILE ERROR until it handles nullability (loud
     /// omission). See plans/25-nullable-sequences/scalar-optional-representation.md.
     Optional(Box<Type>),
+}
+
+/// What peeling a `?` off a return type means for the promotion pass — loft#974.
+///
+/// The two peeled cases are NOT interchangeable, which is the whole point of naming them:
+/// a nullable collection is delivered through the caller's buffer like its non-null twin,
+/// while a nullable struct already has loft#896's `__nullable<S>` delivery and must keep
+/// it. Both still owe the caller the same SIGNATURE fact — which parameter the returned
+/// value borrows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetPeel {
+    /// No `?` was peeled — the return type is the shape itself.
+    None,
+    /// A `?` was peeled off a shape the delivery machinery peels too (`Optional(Vector)`):
+    /// the full promotion pass applies.
+    Delivered,
+    /// A `?` was peeled off a shape delivery does NOT peel (`Optional(Reference)`,
+    /// `Optional(Enum)`): record the borrow the signature owes the caller, and make no
+    /// placement decision — the shape already has a delivery, and a second one leaks.
+    SignatureOnly,
 }
 
 impl Type {
@@ -1644,6 +1706,45 @@ impl Type {
         match self {
             Type::Optional(inner) if matches!(inner.as_ref(), Type::Vector(_, _)) => inner,
             other => other,
+        }
+    }
+
+    /// How `ref_return` reads this return type: the heap shape whose DEPS it carries, and
+    /// what peeling to reach it means — loft#974.
+    ///
+    /// [`ret_promo_base`](Self::ret_promo_base) answers a DELIVERY question (does this
+    /// return get a `__retbuf` and a buffer-filling rewrite?) and deliberately peels
+    /// `Optional(Vector)` only: a nullable STRUCT return is loft#896's synthetic
+    /// `__nullable<S>`, which has its own delivery, and giving it a second one leaks a
+    /// record per call — measured, and the reason that peel is narrow.
+    ///
+    /// This answers a SIGNATURE question, which is not the same one: *does the returned
+    /// value borrow a parameter, and which?* That fact is true whatever the delivery is —
+    /// `fn get(b: Bag, k: text) -> Item? { b.items[k] }` hands back a view into `b`
+    /// whether or not a `?` is wrapped around it — and losing it makes the CALLER type
+    /// the result owned and free the caller's own record at scope exit (silent wrong
+    /// answers on both backends; a panic for the enum form).
+    ///
+    /// One function answers both halves, so "which shapes peel" and "did it peel" cannot
+    /// drift apart the way two `matches!` did.
+    #[must_use]
+    pub fn ret_dep_shape(&self) -> (&Type, RetPeel) {
+        match self {
+            Type::Optional(inner)
+                if crate::keys::nullable_ret_buffer()
+                    && matches!(inner.as_ref(), Type::Vector(_, _)) =>
+            {
+                (inner, RetPeel::Delivered)
+            }
+            Type::Optional(inner)
+                if matches!(
+                    inner.as_ref(),
+                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                ) =>
+            {
+                (inner, RetPeel::SignatureOnly)
+            }
+            other => (other, RetPeel::None),
         }
     }
 
@@ -1839,7 +1940,24 @@ impl Type {
     /// `u16::MAX` markers).
     pub fn depending(&self, on: u16) -> Type {
         assert_ne!(on, u16::MAX, "Unknown depended on variable");
-        let v = Deps::frame1(on);
+        self.with_deps(&Deps::frame1(on))
+    }
+
+    /// The same type carrying `deps` as ITS OWN borrow list — the one place that
+    /// says which variants hold a dep list, so [`Type::depending`] and the branch
+    /// join below cannot drift apart about it.
+    ///
+    /// SHALLOW: a vector's ELEMENT type is left alone, because a container's own
+    /// borrow and its elements' are different axes ([`Type::without_deps`] is the
+    /// deep, hint-shaped rule and stays separate for that reason).  `Optional` and
+    /// `RefVar` are dep-transparent — deps are a lifetime property and a
+    /// nullability marker does not change what a value aliases (without this an
+    /// `Optional` borrow such as `e = v[i]` under DN1 loses its dep and the deps
+    /// pass reads it as OWNING).  A `Tuple` has no list of its own, so the deps
+    /// spread to its elements, where [`Type::depend`] unions them back.
+    #[must_use]
+    pub fn with_deps(&self, deps: &Deps) -> Type {
+        let v = deps.clone();
         match self {
             Type::Text(_) => Type::Text(v),
             Type::Reference(t, _) => Type::Reference(*t, v),
@@ -1849,18 +1967,87 @@ impl Type {
             Type::Trie(t, key, _) => Type::Trie(*t, key.clone(), v),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
-            Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
+            Type::Vector(t, _) => Type::Vector(t.clone(), v),
             Type::Function(params, ret, _) => Type::Function(params.clone(), ret.clone(), v),
-            Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
-            // @PLN25 — `Optional` is a compile-time nullability marker over the base's
-            // runtime representation; deps are a lifetime property, agnostic to it, so a
-            // borrow attaches to the base and the wrapper is transparent (like `RefVar`).
-            // Without this an `Optional`-typed borrow (`e = v[i]` under DN1) silently loses
-            // its dep, and the deps pass treats it as OWNING → wrong store alloc / corruption.
-            Type::Optional(tp) => Type::optional(tp.depending(on)),
-            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
+            Type::RefVar(tp) => Type::RefVar(Box::new(tp.with_deps(deps))),
+            Type::Optional(tp) => Type::optional(tp.with_deps(deps)),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.with_deps(deps)).collect()),
             _ => self.clone(),
         }
+    }
+
+    /// What this type BORROWS, looking through the `Rewritten` marker.
+    ///
+    /// `Rewritten` records that the expression was built in place — a fact about
+    /// its construction, not about what it aliases — so a borrow question must
+    /// see past it (loft#943 makes the same distinction for signatures).
+    #[must_use]
+    pub fn borrow_deps(&self) -> Option<Deps> {
+        match self {
+            Type::Rewritten(inner) => inner.borrow_deps(),
+            other => other.deps_ref().cloned(),
+        }
+    }
+
+    /// [`Type::with_deps`] through a `Rewritten` wrapper, which it preserves.
+    #[must_use]
+    pub(crate) fn rewrap_deps(&self, deps: &Deps) -> Type {
+        match self {
+            Type::Rewritten(inner) => Type::Rewritten(Box::new(inner.rewrap_deps(deps))),
+            other => other.with_deps(deps),
+        }
+    }
+
+    /// This type's SHAPE carrying what `src` borrows (loft#978).
+    ///
+    /// For the places that take an EXPECTED type from their context and hand it
+    /// back as the value's type.  An expected type says what shape belongs here;
+    /// it cannot say what the value in hand aliases, because it was written
+    /// before that value existed.  Adopting it whole silently republishes some
+    /// other expression's borrow list — which is how an `if` arm came to carry
+    /// its SIBLING's deps.  `src` carrying no dep list at all leaves this type
+    /// alone (a diverging or scalar tail has no borrow to state).
+    #[must_use]
+    pub fn with_deps_of(&self, src: &Type) -> Type {
+        match src.borrow_deps() {
+            Some(d) => self.rewrap_deps(&d),
+            None => self.clone(),
+        }
+    }
+
+    /// This type widened to borrow whatever EITHER side borrows — the type-level
+    /// half of a branch join (loft#978).
+    ///
+    /// An `if`/`match` arm that yields a fresh record and one that yields a view
+    /// into a container deliver the SAME local, and which one ran is a run-time
+    /// fact.  Taking one arm's deps therefore under-states what the value can
+    /// alias, and an empty dep list is read as owned — so the local was freed at
+    /// scope exit and took the container's record with it.  The union is the
+    /// conservative reading that no arm can contradict: it can only keep a store
+    /// alive longer than one arm needed, never free one another arm still holds.
+    ///
+    /// `other` must carry only what that arm borrows from OUTSIDE itself — a dep naming
+    /// a variable the arm's own body defines is that arm's OWNERSHIP marker (an `[]`
+    /// literal types as a dep on the `__vdb_N` it just minted), and importing one here
+    /// would tell the return machinery this value views a local. `Parser::arm_join_type`
+    /// is what strips them; `self` is kept whole, because its own marker is how the
+    /// result carries what IT owns.
+    #[must_use]
+    pub fn joined_deps(&self, other: &Type) -> Type {
+        // A tuple carries no list of its own — join element-wise, where the deps live.
+        if let (Type::Tuple(a), Type::Tuple(b)) = (self, other)
+            && a.len() == b.len()
+        {
+            return Type::Tuple(a.iter().zip(b).map(|(x, y)| x.joined_deps(y)).collect());
+        }
+        // Nothing to merge, or nowhere on this shape to put it.
+        let (Some(mine), Some(theirs)) = (self.borrow_deps(), other.borrow_deps()) else {
+            return self.clone();
+        };
+        if theirs.is_empty() {
+            return self.clone();
+        }
+        self.rewrap_deps(&mine.union(&theirs))
     }
 
     #[must_use]
@@ -4408,12 +4595,28 @@ impl Data {
     #[must_use]
     pub fn qualified_type_name(&self, d_nr: u32) -> String {
         let def = self.def(d_nr);
-        for (lib, &id) in &self.use_names {
-            if id == def.source && !lib.is_empty() && lib != "std" {
-                return format!("{lib}::{}", def.name);
-            }
+        // One source can be reachable under SEVERAL names — a package's own module is
+        // keyed `<pkg>::<module>` and also carries the short `<module>` qualifier
+        // (loft#976) — and `use_names` is a HashMap, so taking the first match made this
+        // answer depend on iteration order: the same program named the same definition
+        // `con::catalogue::part_list` on one run and `catalogue::part_list` on the next.
+        // Pick the MOST qualified spelling, ties broken alphabetically: it is the one that
+        // says where the definition actually lives, and it is stable.
+        let best = self
+            .use_names
+            .iter()
+            .filter(|(lib, id)| **id == def.source && !lib.is_empty() && lib.as_str() != "std")
+            .map(|(lib, _)| lib)
+            .max_by(|a, b| {
+                a.matches("::")
+                    .count()
+                    .cmp(&b.matches("::").count())
+                    .then_with(|| b.as_str().cmp(a.as_str()))
+            });
+        match best {
+            Some(lib) => format!("{lib}::{}", def.name),
+            None => format!("src{}::{}", def.source, def.name),
         }
-        format!("src{}::{}", def.source, def.name)
     }
 
     /// @P379 — the native backend emits each loft function as a flat
@@ -5046,6 +5249,47 @@ impl Data {
             "Cannot set attribute value twice"
         );
         self.definitions[d_nr as usize].attributes[a_nr].check = check;
+    }
+
+    /// A definition's name as the AUTHOR wrote it, for a diagnostic to say out loud.
+    ///
+    /// Storage names are mangled — a free function is `n_<name>` and a method is
+    /// `t_<LEN><Type>_<name>` — and a message that prints one names a symbol that appears
+    /// in no source file. `Too many parameters for t_5Thing_go` was the filed shape, and
+    /// two fixtures in the suite record it as a defect in its own right
+    /// (`tests/lib/dupmethod_a/…`, `tests/scripts/850-…`).
+    ///
+    /// Answers `Type.name` for a method so the receiver stays visible — a bare `go` would
+    /// be ambiguous exactly where these messages fire, between two packages or two
+    /// arities. Anything it cannot parse comes back unchanged: this decides how a name is
+    /// SHOWN and must never lose one.
+    #[must_use]
+    pub fn user_facing_name(&self, d_nr: u32) -> String {
+        let name = self.def(d_nr).name();
+        if let Some(rest) = name.strip_prefix("n_") {
+            return rest.to_string();
+        }
+        let Some(rest) = name.strip_prefix("t_") else {
+            return name.to_string();
+        };
+        // `<LEN><Type>_<method>`: the length prefix is what makes a type name containing
+        // `_` unambiguous, so it is what the split has to read.
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return name.to_string();
+        }
+        let Ok(len) = rest[..digits].parse::<usize>() else {
+            return name.to_string();
+        };
+        let after = &rest[digits..];
+        if after.len() <= len || !after.is_char_boundary(len) {
+            return name.to_string();
+        }
+        let (tp, tail) = after.split_at(len);
+        match tail.strip_prefix('_') {
+            Some(method) if !method.is_empty() => format!("{tp}.{method}"),
+            _ => name.to_string(),
+        }
     }
 
     #[must_use]

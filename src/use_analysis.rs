@@ -1713,6 +1713,20 @@ impl FillOps {
     }
 }
 
+/// Every variable `node` MINTS a fresh store into (an `OpDatabase` destination).
+///
+/// The ownership marker in dep form: `[]` lowers to `OpDatabase(__vdb_N, …)` and the
+/// value then types as a dep on `__vdb_N`, which says *I own this store* — the opposite
+/// of the borrow a dep normally records. A branch join has to tell the two apart before
+/// it can union its arms' deps (loft#978, `Parser::arm_join_type`), and this answers it
+/// from the SAME walk the ownership classifier reads, so the two cannot drift.
+#[must_use]
+pub(crate) fn minted_vars(data: &Data, node: &Value) -> HashSet<u16> {
+    let mut out = Defs::default();
+    collect_defs(node, &FillOps::of(data), &mut out);
+    out.db_vars
+}
+
 fn collect_defs(node: &Value, ops: &FillOps, out: &mut Defs) {
     match node.unspan() {
         Value::Set(v, rhs) => {
@@ -2182,6 +2196,83 @@ pub enum HeapDelivery {
     View,
 }
 
+/// loft#981 / loft#982 — the @P290 call-bracket's COVERAGE question, in one place so
+/// the emit that PROTECTS a call's arguments and the gate that decides whether the
+/// returned store may be source-freed cannot drift apart (they are two reads of one
+/// fact, at opposite ends of the same emitted sequence).
+///
+/// Answers, for one call site: which ref-typed arguments can be bracketed with
+/// `protect_store_frees`, and do they cover EVERY ref-typed argument?
+///
+/// Coverage is what makes a BORROWED-VIEW return's source-free safe. A callee whose
+/// return dep names a visible parameter may hand back either that parameter's store
+/// (the borrow arm — the caller must not free it) or a store it minted itself (the
+/// owned arm — the caller must free it, or it leaks one store per call). No static
+/// bit can carry that split, so the decision is made at RUNTIME by the bracket: a
+/// returned store belonging to a protected argument is refused the free by
+/// `do_copy_record` / `OpCopyRecord`, and a callee-minted one is not protected and
+/// so is freed.
+///
+/// The bracket needs a SLOT to name, so only a bare `Var` argument can be protected.
+/// When some ref argument is not one, the witness set is incomplete and the caller
+/// keeps the old, conservative "never free" answer — the leak stays for that shape
+/// rather than risking a free of a store the caller still reaches.
+#[must_use]
+pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
+    let Value::Call(fn_nr, args) = call.unspan() else {
+        return (Vec::new(), false);
+    };
+    let attrs = data.def(*fn_nr).attributes();
+    let mut protectable = Vec::new();
+    let mut covers_all = true;
+    for (i, arg) in args.iter().enumerate() {
+        let Some(tp) = attrs.get(i).map(|a| &a.typedef) else {
+            continue;
+        };
+        // Can the callee's return borrow THIS argument's store?  `heap_dep` is the
+        // canonical "carries a store" question — and asking it through `base` as well,
+        // because an `Optional` wrapper hides the storage under it.  A scalar argument
+        // is no one's borrow source and neither protects nor blocks.
+        if tp.heap_dep().is_none() && tp.base().heap_dep().is_none() {
+            continue;
+        }
+        // The bracket protects only what its emit accepts.  A KEYED COLLECTION argument
+        // (`hash` / `sorted` / `index` / `radix` / `trie`) is a borrow source the emit
+        // does not cover, so it leaves the witness set incomplete — the narrower list
+        // read as complete is what freed a hash parameter's element out from under the
+        // caller (`fn take(h) -> R { h[k] ?? R{…} }`, tests/scripts/882-…). Deliberately
+        // NOT `unspan()` either: the emit matches a bare `Var`, and a spanned one it
+        // cannot name must read as UNCOVERED here, never as covered.
+        match arg {
+            Value::Var(av)
+                if matches!(
+                    tp,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                ) =>
+            {
+                protectable.push(*av);
+            }
+            _ => covers_all = false,
+        }
+    }
+    (protectable, covers_all)
+}
+
+/// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free
+/// bit on the store a call returned?
+///
+/// Yes for a return that borrows nothing (unchanged: the callee minted it and nobody
+/// else owns it), and yes for a BORROWED-VIEW return whose every ref argument this
+/// site protects — see [`protectable_ref_args`] for why the bracket is what decides
+/// the borrow/owned split at runtime. No otherwise.
+#[must_use]
+pub fn call_return_frees_source(data: &Data, call: &Value) -> bool {
+    let Value::Call(fn_nr, _) = call.unspan() else {
+        return false;
+    };
+    !data.def(*fn_nr).returns_borrowed_view() || protectable_ref_args(data, call).1
+}
+
 /// See [`HeapDelivery`].
 #[must_use]
 pub fn heap_return_delivery(data: &Data, d_nr: u32) -> HeapDelivery {
@@ -2540,6 +2631,49 @@ pub fn dump_all(data: &Data) {
 /// (`_`/`#` temporaries, arguments, closure-captured, global shadows). The `reads==0 &&
 /// write_targets>0` signal implies `uses>0`, so this lint and `test_used` (`uses==0`) are
 /// disjoint. Populates `diags`; the caller renders them. Sibling of [`warn_copies`].
+/// loft#985 — the post-scope-check lint family, in ONE place so every path that loads a
+/// program runs the same set.
+///
+/// These five share a precondition — they read the ownership verdicts and the materialised
+/// copies that only exist once `scopes::check` has run — so they cannot live with the
+/// parse-time diagnostics, and they had come to live in `main.rs`'s program path alone.
+/// `loft test` / `--tests`, which is the path a LIBRARY's CI takes, ran none of them: a
+/// library could ship a `#superseded` steer pointing at nothing (a hard ERROR on the
+/// program path) and writes that land in a copy, with a green suite. That is exactly the
+/// hole @PLN107's lint was written for — its motivating case is a published `graphics`
+/// canvas whose every drawing primitive was a no-op through the copy-mutate shape.
+///
+/// Call it ONCE per loaded program, after `scopes::check`. Not once per test: each test
+/// compiles its own bytecode from the same `Data`, so a per-test call would report every
+/// finding N times.
+///
+/// The error gate is part of the fact, not the caller's business (loft#883): every lint
+/// below reads RESOLVED types, and an aborting error means resolution did not finish — an
+/// unresolved type carries empty deps, `ownership_of` reads empty deps as OWNED, and a
+/// borrowing `for` variable in an unrelated library then reads as a lost write. The gate is
+/// the whole set rather than the lint that was reported, because they share the
+/// precondition.
+pub fn post_scope_lints(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if diags.level() >= crate::diagnostics::Level::Error {
+        return;
+    }
+    // @PLN90 W5 — the enforced copy lint (gated `LOFT_WARN_COPIES`).
+    warn_copies(data, diags, fallback_file);
+    // @PLN107 S4a — the dead-store / lost-write lint (gated `LOFT_DEAD_STORES`).
+    warn_dead_stores(data, diags, fallback_file);
+    // @PLN139 stage G — the double-move lint.
+    warn_double_move(data, diags, fallback_file);
+    // loft#894 — the lost-temporary-write lint.
+    warn_lost_temp_writes(data, diags, fallback_file);
+    // @PLN102 arc C step 4 — the `#superseded` fold lint, including its hard ERROR for a
+    // steer whose successor does not resolve.
+    superseded_fold_diagnostics(data, diags, fallback_file);
+}
+
 pub fn warn_dead_stores(
     data: &Data,
     diags: &mut crate::diagnostics::Diagnostics,

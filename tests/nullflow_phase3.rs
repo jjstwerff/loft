@@ -67,14 +67,17 @@ fn float_div_var_on_is_nullable_interpret() {
         warns, 1,
         "ON: float / var is float?, so the store warns; out={out}"
     );
-    assert!(out.contains("f=null"));
+    // The TYPE is unchanged — `/` can still yield null, because `0.0 / 0.0` is NaN — so
+    // the (N-Store) warning above still fires. Only the VALUE moved (loft#983): `1.0 /
+    // 0.0` is IEEE `inf` wherever it lands, instead of `inf` inline and `null` once bound.
+    assert!(out.contains("f=inf"), "out={out}");
 }
 #[test]
 fn float_div_var_on_is_nullable_native() {
     let (ok, warns, out) = run(DIV_VAR, "--native", true, "var_on_n");
     assert!(ok, "{out}");
     assert_eq!(warns, 1, "ON native: float / var is float?; out={out}");
-    assert!(out.contains("f=null"));
+    assert!(out.contains("f=inf"), "out={out}");
 }
 #[test]
 fn float_div_const_stays_non_null() {

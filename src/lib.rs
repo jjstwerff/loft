@@ -300,6 +300,7 @@ pub mod paged_reader;
 pub mod placement;
 pub mod portable_path;
 pub mod resolution;
+pub mod resolution_scope;
 pub mod scopes;
 pub mod siphash;
 pub mod use_analysis;

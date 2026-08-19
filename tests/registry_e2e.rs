@@ -809,3 +809,113 @@ fn load_index_reporting_falls_back_to_cache_when_registry_unreachable() {
     let _ = fs::remove_dir_all(&tmp);
     let _ = fs::remove_dir_all(&home_dir);
 }
+
+/// @PLN143 — a pinned script's sidecar decides which version is INSTALLED, and the run
+/// does not amend it.
+///
+/// The two halves were one field before: `lock_path` meant both "the lock that governs"
+/// and "the lock to write", so arc C2 — which stopped a run from writing — also stopped
+/// it from reading. A sidecar pinning 0.1.0 then loaded 0.1.0 when the cache already had
+/// it and INSTALLED the newest when it did not, so a fresh box quietly ran a different
+/// program than the machine that pinned it.
+///
+/// Both versions are published here, so "it installed the pin" cannot pass by there
+/// being nothing else to resolve to. `file://` serves the index and both tarballs — the
+/// full path runs (resolve → download → sha256 → extract) with no socket.
+#[test]
+fn a_sidecar_pin_decides_the_install_and_is_not_rewritten() {
+    let tmp = tmpdir("a_sidecar_pin_decides_the_install");
+    let home_dir = tmpdir("a_sidecar_pin_home");
+
+    let mut entries = Vec::new();
+    let mut shas = Vec::new();
+    for version in ["0.1.0", "0.2.0"] {
+        let src = tmp.join(format!("src-{version}"));
+        write_file(
+            &src.join("loft.toml"),
+            &format!(
+                "[package]\nname = \"pinpkg\"\nversion = \"{version}\"\nloft = \">=0.8\"\n\n\
+                 [library]\nentry = \"src/pinpkg.loft\"\n"
+            ),
+        );
+        write_file(
+            &src.join("src/pinpkg.loft"),
+            &format!("pub fn id() -> text {{ return \"pinpkg-{version}\"; }}\n"),
+        );
+        let out = loft::package::package_create(&src, Some(&tmp)).expect("package_create");
+        shas.push(out.sha256.clone());
+        entries.push(format!(
+            r#""{version}":{{"url":"file://{}","sha256":"{}","size":{},"loft":">=0.8",
+               "published":"2026-08-18T00:00:00Z"}}"#,
+            out.tarball.display(),
+            out.sha256,
+            out.size
+        ));
+    }
+    let index = tmp.join("index.json");
+    write_file(
+        &index,
+        &format!(
+            r#"{{"schema_version":1,"packages":{{"pinpkg":{{"description":"pin probe",
+               "versions":{{{}}}}}}}}}"#,
+            entries.join(",")
+        ),
+    );
+
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&format!("file://{}", index.display()));
+
+    // The sidecar `loft pin` would have written: the older version, and the file a run
+    // must leave exactly as it found it.
+    let sidecar = tmp.join("s.loft.lock");
+    // The real sha256 of the 0.1.0 tarball: a lockfile pins the BYTES as well as the
+    // version, and reading the sidecar means that check now covers a pinned script too —
+    // a wrong hash here is refused, which the cell below pins.
+    let sidecar_body = format!(
+        "schema_version = 1\n\n[[package]]\nname = \"pinpkg\"\nversion = \"0.1.0\"\n\
+         url = \"file:///pinpkg-0.1.0.tar.gz\"\nsha256 = \"{}\"\nsource = \"registry\"\n",
+        shas[0]
+    );
+    write_file(&sidecar, &sidecar_body);
+
+    // Exactly what the parser hands auto-install in `PinnedScript` scope: the sidecar
+    // governs (`lock_path`), a run may not declare (`skip_lockfile`), and the constraint
+    // is the version that lock pins.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true,
+        lock_path: Some(sidecar.clone()),
+        skip_lockfile: true,
+        ..Default::default()
+    };
+    let pin = loft::install::constraint_for(Some("0.1.0"), None);
+    let report = loft::install::install_one("pinpkg", pin.as_deref(), &opts).expect("install_one");
+
+    let installed: Vec<String> = report
+        .installed
+        .iter()
+        .chain(report.skipped_cached.iter())
+        .map(|(n, v)| format!("{n} {v}"))
+        .collect();
+    let after = fs::read_to_string(&sidecar).expect("read sidecar");
+    let newest_extracted = home_dir.join(".loft/registry/pinpkg-0.2.0").exists();
+
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+
+    assert_eq!(
+        installed,
+        vec!["pinpkg 0.1.0".to_string()],
+        "the sidecar pins 0.1.0 and 0.2.0 is published — the pin decides (@PLN143)"
+    );
+    assert!(
+        !newest_extracted,
+        "and 0.2.0 must not be fetched at all: a pin that installs the newest is not a pin"
+    );
+    assert_eq!(
+        after, sidecar_body,
+        "a run reads the declaration and never rewrites it"
+    );
+}

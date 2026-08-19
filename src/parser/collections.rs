@@ -264,6 +264,37 @@ impl Parser {
             .collect()
     }
 
+    /// The loop-end test for iterating a VECTOR: its LENGTH, never the element's value.
+    ///
+    /// The sibling of [`text_loop_break`](Self::text_loop_break), and it exists for the
+    /// same reason one construct over. Ending on a null ELEMENT works only while no
+    /// element can legitimately be null-shaped, and two things break that: a null the
+    /// vector really holds (it shares the out-of-bounds sentinel), and a `value struct`
+    /// element, which @PLN101 deep-copies into a freshly minted record on bind — so the
+    /// bound local is never null and the test can never fire (loft#1000). `map`, `filter`,
+    /// `reduce`, `all`, `count_if` and the comprehension all hung forever on one, and
+    /// `any` answered from a phantom element read one past the end.
+    ///
+    /// The `for` STATEMENT was cured this way first; these are the six lowerings that did
+    /// not get the same treatment, and routing them through one function is what stops
+    /// "how the loop ends" being seven independent decisions.
+    ///
+    /// The index is pre-incremented from `-1` by the `{#iter next}` block, so at the test
+    /// it is the 0-based index just READ, and `len <= idx` is exactly "past the end".
+    /// Re-read each iteration rather than hoisted, so an in-loop `#remove` — which shrinks
+    /// the vector and steps the index back — still terminates. Forward-only: these
+    /// builtins have no reverse form, so the `for` statement's `idx < 0` companion test
+    /// has nothing to answer here.
+    pub(crate) fn vector_loop_break(&mut self, coll: &Value, index_var: u16) -> Vec<Value> {
+        let len = self.cl("OpLengthVector", std::slice::from_ref(coll));
+        let past_end = self.cl("OpLeInt", &[len, Value::Var(index_var)]);
+        vec![v_if(
+            past_end,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        )]
+    }
+
     #[allow(clippy::too_many_lines)] // sorted/index/spatial iterator setup — splitting would lose context
     /// The ONE home for a vector's per-element ITERATION stride — the byte
     /// step `vector::get_vector(size, idx)` walks per element.  Both the
@@ -1204,6 +1235,44 @@ impl Parser {
     }
 
     /// Compute the RHS value after applying `op` to `to` and `val`.
+    /// `x#break` / `x#continue` named something that is not an enclosing loop's variable
+    /// — report it, and answer a poisoned value (loft#998).
+    ///
+    /// Reported HERE, at the parse, because this is where the source position and the
+    /// author's spelling are. `Scopes::scan` sees only a level, has no position to point
+    /// at, and until this existed simply indexed with it — `k#break` on a declared local
+    /// was *"internal compiler error … index is 18446744073709551615"*, which names
+    /// neither the mistake nor a cure.
+    ///
+    /// Names what CAN be written: the enclosing loops' variables. That list is the whole
+    /// answer to "then what may I say", and the author already has one of them on screen.
+    fn not_a_loop_variable(&mut self, name: &str, verb: &str) -> Value {
+        // Outside a loop entirely, "cannot break outside a loop" is the right and only
+        // message — the caller has already said it, and adding "…and `k` is not a loop
+        // variable" says the same thing twice from further away.
+        if !self.first_pass && self.in_loop {
+            let open = self.vars.enclosing_loop_names();
+            let cure = if open.is_empty() {
+                format!("a plain `{verb}`")
+            } else {
+                let names = open
+                    .iter()
+                    .map(|n| format!("`{n}#{verb}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                format!("a plain `{verb}` for the innermost loop, or {names}")
+            };
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{name}` is not a loop variable — `{name}#{verb}` names the loop to \
+                 {verb} by the variable that loop binds, and no enclosing loop binds \
+                 `{name}`; write {cure}"
+            );
+        }
+        Value::Null
+    }
+
     pub(crate) fn iter_op_count_or_first(
         &mut self,
         code: &mut Value,
@@ -1331,13 +1400,24 @@ use #count instead"
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
             }
-            *code = Value::Break(self.vars.loop_nr(name));
+            // loft#998 — `x#break` names the loop to leave by its VARIABLE, so a name that
+            // is not one has no level to jump. `Value::Null` rather than a level: every
+            // level is a real jump, and the one that used to be handed over (the chain
+            // length, from a walk with no not-found answer) underflowed `Scopes::scan`'s
+            // `loops.len() - lv - 1` into an internal compiler error.
+            *code = match self.vars.loop_nr(name) {
+                Some(lv) => Value::Break(lv),
+                None => self.not_a_loop_variable(name, "break"),
+            };
             *t = Type::Void;
         } else if self.lexer.has_token("continue") {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
             }
-            *code = Value::Continue(self.vars.loop_nr(name));
+            *code = match self.vars.loop_nr(name) {
+                Some(lv) => Value::Continue(lv),
+                None => self.not_a_loop_variable(name, "continue"),
+            };
             *t = Type::Void;
         } else if self.lexer.has_keyword("count") {
             self.iter_op_count_or_first(code, name, t, false, index_var);
@@ -2101,7 +2181,11 @@ use #count instead"
             self.lexer.token("in");
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
+            // loft#986 — see `in_control_head`: the `{` after the iterable opens the body.
+            let outer_head = self.in_control_head;
+            self.in_control_head = true;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
+            self.in_control_head = outer_head;
             // if #fields was detected, take the compile-time unrolling path.
             if self.fields_of != u32::MAX {
                 let struct_def_nr = self.fields_of;
@@ -2955,6 +3039,13 @@ use #count instead"
             for_var,
             for_next,
             pre_var,
+            if matches!(in_type, Type::Vector(_, _)) {
+                // `source_expr`, not `mat_var` — `mat_var` is the destination this
+                // loop FILLS, and its length grows every iteration.
+                Some((source_expr.clone(), iter_var))
+            } else {
+                None
+            },
             Value::Null,
             create_iter,
             Value::Null,
@@ -3640,15 +3731,29 @@ use #count instead"
         self.vars.in_use(len_var, true);
 
         // Create the result element variable (b) with the worker's return type.
-        // On the first pass fn_d_nr is u32::MAX; use Type::Unknown so that the second
-        // pass can update the type to the correct one (Float, Boolean, etc.) via
-        // add_variable's "update if unknown" logic.  Using I32 here caused the type
-        // to stick as integer even when the worker returns float or boolean.
-        let b_type = if matches!(ret_type, Type::Unknown(_)) {
-            I32.clone()
-        } else if fn_d_nr == u32::MAX {
-            // First pass: placeholder — will be replaced on second pass.
+        //
+        // An unresolved worker answers `(u32::MAX, Unknown)` for two OPPOSITE reasons,
+        // and the PASS is what tells them apart:
+        //
+        //   pass 1 — the worker is declared below the loop, so it is not resolved YET.
+        //     `Unknown` is the honest placeholder and pass 2 refines it.  Answering
+        //     `integer` here pinned the slot, and pass 2 refines only a slot that is
+        //     still unknown, so it stayed: `t += b` retyped a float accumulator to
+        //     integer and the pass-1 error aborted before pass 2 could correct it.
+        //     Only the compound assignment showed it — `t = t + b` coerces (loft#988).
+        //
+        //   pass 2 — the worker will NEVER resolve, and the error saying so is already
+        //     reported (an unknown name, or a generator worker, which
+        //     `parse_parallel_worker` refuses with this same sentinel).  Here `integer`
+        //     is what the body needs: `b` has to carry SOME usable type or every use of
+        //     it in the body earns a second diagnostic under the first one.
+        //
+        // A RESOLVED worker whose return type is still unknown keeps `integer` too,
+        // which is the width the downstream route decisions already assume.
+        let b_type = if fn_d_nr == u32::MAX && self.first_pass {
             Type::Unknown(u32::MAX)
+        } else if matches!(ret_type, Type::Unknown(_)) {
+            I32.clone()
         } else if let Type::Text(_) = ret_type {
             // Strip worker-internal deps — they reference variables in the worker scope.
             Type::Text(crate::data::Deps::none())
@@ -4432,6 +4537,12 @@ use #count instead"
             for_var,
             for_next,
             None,
+            // The SOURCE, not `result_vec` — that is what this loop appends to.
+            if matches!(in_type, Type::Vector(_, _)) {
+                Some((Value::Var(vec_copy_var), iter_var))
+            } else {
+                None
+            },
             fill,
             create_iter_code,
             Value::Null,
@@ -4581,6 +4692,12 @@ use #count instead"
             for_var,
             for_next,
             None,
+            // The SOURCE, not `result_vec` — that is what this loop appends to.
+            if matches!(in_type, Type::Vector(_, _)) {
+                Some((Value::Var(vec_copy_var), iter_var))
+            } else {
+                None
+            },
             fill,
             create_iter_code,
             if_step,
@@ -5256,14 +5373,20 @@ use #count instead"
         self.vars.finish_loop(loop_nr);
         let for_next = v_set(for_var, iter_next);
 
-        let mut test_for = Value::Var(for_var);
-        self.convert(&mut test_for, &var_tp, &Type::Boolean);
-        let not_test = self.cl("OpNot", &[test_for]);
-        let break_if_done = v_if(
-            not_test,
-            v_block(vec![Value::Break(0)], Type::Void, "break"),
-            Value::Null,
-        );
+        // loft#1000 — a VECTOR ends on its length, not on the element's value.
+        let break_if_done = if matches!(in_type, Type::Vector(_, _)) {
+            let brk = self.vector_loop_break(&Value::Var(vec_var), iter_var);
+            Value::Insert(brk)
+        } else {
+            let mut test_for = Value::Var(for_var);
+            self.convert(&mut test_for, &var_tp, &Type::Boolean);
+            let not_test = self.cl("OpNot", &[test_for]);
+            v_if(
+                not_test,
+                v_block(vec![Value::Break(0)], Type::Void, "break"),
+                Value::Null,
+            )
+        };
 
         let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
         // N8a.4: return for_next and break_if_done as separate values so callers

@@ -45,10 +45,16 @@ fn main() {
   out = file("doc/examples.js");
   // `+=` is append-only — truncate explicitly so re-runs do not pile
   // up successive copies of the JSON map.
+  //
+  // Every block below ends its last content line with an explicit `\n`.  A backtick
+  // block drops its closing line when that line holds only whitespace, so the newline
+  // between two appends has to be WRITTEN — it is not layout.  Until loft#990 a block
+  // containing a `{…}` kept its closing line verbatim and this file inherited the
+  // newlines from it, which is why they were not here.
   out.set_file_size(0);
   out += `
     // Auto-generated — regenerate with: loft scripts/build-playground-examples.loft
-    export const EXAMPLES = {{
+    export const EXAMPLES = {{\n
   `;
 
   // Pass 1 — examples/.  Builds source-code JSON pairs into out, and
@@ -87,10 +93,10 @@ fn main() {
     }
     key = "ex_{base.to_lowercase().replace(" ", "_")}";
     out += `
-      "{key}": "{json_escape(code)}",
+      "{key}": "{json_escape(code)}",\n
     `;
     examples_list += `
-      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},
+      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},\n
     `;
     examples_count += 1;
   }
@@ -132,17 +138,17 @@ fn main() {
     }
     key = name.to_lowercase().replace(" ", "_");
     out += `
-      "{key}": "{json_escape(code)}",
+      "{key}": "{json_escape(code)}",\n
     `;
     docs_list += `
-      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},
+      {{ key: "{key}", name: "{name}", desc: "{json_escape(desc)}" }},\n
     `;
     docs_count += 1;
   }
 
   out += `
     }};
-    export const EXAMPLE_LIST = [
+    export const EXAMPLE_LIST = [\n
   `;
   out += examples_list;
   out += docs_list;
@@ -152,17 +158,17 @@ fn main() {
     // and playground.html — one entry per category.  "Examples"
     // first so first-time visitors land on the friendly tour.
     export const EXAMPLE_GROUPS = [
-      {{ group: "Examples", items: [
+      {{ group: "Examples", items: [\n
   `;
   out += examples_list;
   out += `
       ] }},
-      {{ group: "Documentation", items: [
+      {{ group: "Documentation", items: [\n
   `;
   out += docs_list;
   out += `
-      ] }},
-    ];
+      ] }},\n
+    ];\n
   `;
   println("Generated doc/examples.js — {examples_count} examples + {docs_count} doc tests");
 }

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I58 — Parser (two-pass recursive descent)
 
-use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_set};
+use super::{
+    DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_set,
+};
 
 // Field access, indexing, and iterator operations.
 
@@ -394,6 +396,7 @@ impl Parser {
                 // → "o cannot change type to vector<…>").  `get_field` (which needs
                 // the layout's `known_type`, assigned in `fill_all`) emits only in
                 // the second pass.
+                let enum_d = *enum_d_nr;
                 let dep = t.depend();
                 t = self.data.attr_type(found_d_nr, found_fnr);
                 for on in dep {
@@ -407,7 +410,8 @@ impl Parser {
                     // `change_var` does not re-type the receiver.
                     *code = Value::Null;
                 } else {
-                    *code = self.get_field(found_d_nr, found_fnr, code.clone());
+                    let recv = self.guard_variant_receiver(enum_d, &field, &t, code.clone());
+                    *code = self.get_field(found_d_nr, found_fnr, recv);
                     self.data.attr_used(found_d_nr, found_fnr);
                 }
                 return t;
@@ -705,6 +709,197 @@ impl Parser {
         self.lexer.token(")");
     }
 
+    /// loft#980 — a struct-enum field access that only SOME variants answer.
+    ///
+    /// `c.field` resolves at COMPILE time to the first variant declaring the name, and
+    /// the layout gives a shared name+type one slot — so the read is right for the
+    /// variants that declare it and reads another variant's bytes for the rest. The tag
+    /// is never consulted, on either backend, and nothing said so: `a.n` on an `Anon`
+    /// answered `Anon.k`'s value as if it were `Named.n`, and `a.label = "x"` wrote into
+    /// a record whose tag still says `Anon` — after which `match` still reports `Anon`.
+    ///
+    /// Direct access STAYS. It is what [C89](../../doc/claude/DESIGN_DECISIONS.md)
+    /// permanently decided enum payloads are for — named fields you read straight,
+    /// with matching for *dispatch*, never for *extraction* — and the common-prefix case
+    /// (every variant declares it) is correct today and stays silent here. The silence
+    /// on the PARTIAL case was the defect.
+    ///
+    /// `warning`, not advice, by the tier rule: ignoring it can produce a wrong result,
+    /// and it already has — the value read is another variant's, typed as this one's.
+    /// Quiet for a synthetic `__nullable<S>`, whose payload access is @PLN25's null
+    /// model rather than a user-visible variant question.
+    fn warn_unchecked_variant_field(
+        &mut self,
+        enum_d: u32,
+        field: &str,
+        owning: &[u32],
+        total: usize,
+        recv: &Value,
+        guarded: bool,
+    ) {
+        if self.first_pass || crate::keys::no_variant_field_warning() {
+            return;
+        }
+        let mut names: Vec<String> = owning
+            .iter()
+            .map(|&v| self.data.def(v).original_name().clone())
+            .collect();
+        names.sort();
+        let have = names.join("`, `");
+        let display = self.data.def(enum_d).original_name().clone();
+        let subject = match recv.unspan() {
+            Value::Var(v) if *v < self.vars.count() => self.vars.name(*v).to_string(),
+            _ => "the value".to_string(),
+        };
+        let first = names[0].clone();
+        // Two different facts, and the message must not claim the other one's. A PLACE
+        // receiver is tag-guarded, so the miss is answerable — null, and the write ignored.
+        // A receiver that is a call is NOT guarded (the guard reads it twice), so it keeps
+        // the unchecked access, and the cure it needs is to bind it first.
+        let effect = if guarded {
+            "on any other one the read answers null and a write to it is IGNORED".to_string()
+        } else {
+            format!(
+                "and it is not a place, so the tag cannot be read without evaluating it \
+                 twice — on any other variant this reads THAT variant's bytes at \
+                 `{field}`'s offset, and a write lands there leaving the tag alone. Bind \
+                 it to a local first"
+            )
+        };
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            code = "variant-field-unchecked",
+            "only `{have}` of `{display}`'s {total} variants declare `{field}`, and this \
+access does not check which variant `{subject}` holds — {effect}. \
+Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `match`"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Conditional,
+            title: format!("bind `{field}` inside `if {subject} is {first} {{ {field} }}`"),
+            condition: Some(format!(
+                "if `{subject}` can only ever be `{first}` here, the read is already right \
+                 — say so with the pattern and the compiler checks it for you"
+            )),
+            edit: None,
+            concept: "pattern matching",
+            concept_ref: "@F29",
+        });
+    }
+
+    /// loft#980 — make a PARTIAL struct-enum field access answer for the variant the
+    /// value actually holds.
+    ///
+    /// `c.field` resolves at COMPILE time to the first variant declaring the name and then
+    /// reads that offset whatever the tag says, so `a.n` on an `Anon` answered `Anon.k`'s
+    /// bytes as `Named.n`, and `a.label = "x"` wrote into a record whose tag still said
+    /// `Anon`. The tag was never consulted.
+    ///
+    /// The guard goes on the RECEIVER, not the access:
+    /// `if tag(c) ∈ declaring { c } else { null }`. A null receiver ALREADY reads as null
+    /// and ALREADY swallows a write, on both backends — so the read answers the type's
+    /// sentinel (the same answer C80 gives a hash miss or an out-of-range index) and the
+    /// write is suppressed, with no new opcode. And because only the receiver changed, the
+    /// access is still a PLACE: the assignment path needs no lvalue notion for a guarded
+    /// read, which is what made the write half unbuildable when the guard wrapped the
+    /// access instead.
+    ///
+    /// Returns the receiver UNCHANGED — no tag read, no cost — when the question does not
+    /// arise:
+    /// * every variant declares the field (the common-prefix case C89 promises, correct
+    ///   today because the layout gives a shared name+type one slot);
+    /// * the enum is a synthetic `__nullable<S>`, whose payload access is @PLN25's null
+    ///   model rather than a user-visible variant question (guarding it would make
+    ///   `v[i].field` answer null);
+    /// * the receiver is not a PLACE READ. The guard reads it twice — once for the tag,
+    ///   once as the value — which is what a struct-enum `match` does with its subject and
+    ///   is safe only for an expression that allocates nothing and calls nothing. A
+    ///   receiver that is a CALL keeps today's unchecked access, and the warning that names
+    ///   it, rather than being evaluated twice.
+    fn guard_variant_receiver(
+        &mut self,
+        enum_d: u32,
+        field: &str,
+        tp: &Type,
+        recv: Value,
+    ) -> Value {
+        if self.data.def(enum_d).name.starts_with("__nullable<") {
+            return recv;
+        }
+        let (owning, total) = self.variants_declaring_field(enum_d, field, tp);
+        if owning.is_empty() || owning.len() >= total {
+            return recv;
+        }
+        // ONE derivation decides both the guard and what the diagnostic says: a message
+        // describing behaviour the compiler no longer has is worse than none.
+        let guarded = recv.is_place_read(&self.data);
+        self.warn_unchecked_variant_field(enum_d, field, &owning, total, &recv, guarded);
+        if !guarded {
+            return recv;
+        }
+        let mut discs: Vec<i32> = owning
+            .iter()
+            .map(|&v| self.variant_disc(enum_d, true, v, ""))
+            .collect();
+        discs.sort_unstable();
+        discs.dedup();
+        // A disc of 0 is `variant_disc`'s "could not resolve" answer, not a real struct-enum
+        // tag (they are +1-biased). Guarding on it would test against a tag no value carries
+        // and turn every access into null, so leave the access unchecked instead.
+        if discs.contains(&0) {
+            return recv;
+        }
+        let tag = self.elem_tag_int(recv.clone());
+        let mut cond = self.cl("OpEqInt", &[tag.clone(), Value::Int(discs[0])]);
+        for &d in &discs[1..] {
+            let next = self.cl("OpEqInt", &[tag.clone(), Value::Int(d)]);
+            cond = v_if(cond, Value::Boolean(true), next);
+        }
+        let absent = self.cl("OpNullRefSentinel", &[]);
+        v_if(cond, recv, absent)
+    }
+
+    /// The variants of `enum_d_nr` that declare `field` at the same TYPE as
+    /// `(found_d_nr, found_fnr)`, and how many variants the enum has in total.
+    ///
+    /// A struct-enum field access resolves at compile time to the first variant
+    /// declaring the name, and the layout puts a shared name+type at a shared offset —
+    /// so the read is right for exactly these variants and reads another variant's
+    /// bytes for the rest (loft#980).  Equal counts mean every variant has it, which is
+    /// the common-prefix case C89 promises works and needs no tag check at all.
+    pub(crate) fn variants_declaring_field(
+        &self,
+        enum_d_nr: u32,
+        field: &str,
+        tp: &Type,
+    ) -> (Vec<u32>, usize) {
+        let mut owning = Vec::new();
+        let mut total = 0usize;
+        for a_nr in 0..self.data.attributes(enum_d_nr) {
+            let a_name = self.data.attr_name(enum_d_nr, a_nr);
+            let variant_d_nr = self.data.variant_of(enum_d_nr, &a_name);
+            if variant_d_nr == u32::MAX {
+                continue;
+            }
+            total += 1;
+            let f = self.data.attr(variant_d_nr, field);
+            // Compared WITHOUT deps: two variants declaring the same field differ in the
+            // borrow their access records, which says nothing about whether the layout
+            // gave them one slot — the question here.
+            if f != usize::MAX
+                && self
+                    .data
+                    .attr_type(variant_d_nr, f)
+                    .unrewritten()
+                    .without_deps()
+                    == tp.unrewritten().without_deps()
+            {
+                owning.push(variant_d_nr);
+            }
+        }
+        (owning, total)
+    }
+
     /// Search for `field` in the variant structs of a polymorphic enum.
     /// Returns `(variant_d_nr, attr_nr)` if found.
     pub(crate) fn find_poly_enum_field(&self, enum_d_nr: u32, field: &str) -> Option<(u32, usize)> {
@@ -871,28 +1066,45 @@ impl Parser {
             self.expr_not_null_name.clear();
         } else if self.user_index_op(&t) != u32::MAX {
             // @PLN125 arc C — `x[i]` on a library type is the call the type declared.
-            // `OpIndex` takes the receiver and the index, so the lowering is the ordinary
-            // two-argument method call `t_<LEN><Type>_OpIndex(x, i)`, and every rule that
+            // `OpIndex` takes the receiver and the indices, so the lowering is the
+            // ordinary method call `t_<LEN><Type>_OpIndex(x, i, …)`, and every rule that
             // governs a method call — argument conversion, the heap-return buffer, the
-            // ownership deps — governs this one because it IS one.
+            // ownership deps, the arity and type checks — governs this one because it IS
+            // one.
             //
-            // The index expression is parsed here rather than by `parse_method`, which
+            // loft#996 — COMMA-separated indices, so `m[r, c]` reaches the two-index
+            // method the feature's own motivating case (a matrix) wants. That
+            // declaration was always accepted and callable as `OpIndex(m, r, c)`; only
+            // its own syntax could not reach it, and the parser said `Expect token ]` at
+            // the comma. Passing the indices through as ARGUMENTS is what the accepted
+            // declaration already means, and it leaves the arity check where it belongs:
+            // `call_nr` reports a mismatch against the signature the author wrote.
+            //
+            // The index expressions are parsed here rather than by `parse_method`, which
             // reads a parenthesised argument list; the brackets are the caller's
             // (`operators.rs` consumes the `]`).
             let md_nr = self.user_index_op(&t);
-            let arg_pos = vec![self.lexer.peek_pos().clone(), self.lexer.peek_pos().clone()];
-            let mut idx = Value::Null;
-            let idx_t = self.expression(&mut idx);
             let recv = code.clone();
-            elm_type = self.call_nr(
-                code,
-                md_nr,
-                &[recv, idx],
-                &[t.clone(), idx_t],
-                true,
-                &arg_pos,
-                None,
-            );
+            let mut args = vec![recv];
+            let mut types = vec![t.clone()];
+            let mut arg_pos = vec![self.lexer.peek_pos().clone()];
+            loop {
+                arg_pos.push(self.lexer.peek_pos().clone());
+                if self.user_index_slice_refused(&t) {
+                    return Type::Never;
+                }
+                let mut idx = Value::Null;
+                let idx_t = self.expression(&mut idx);
+                args.push(idx);
+                types.push(idx_t);
+                if self.user_index_slice_refused(&t) {
+                    return Type::Never;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            elm_type = self.call_nr(code, md_nr, &args, &types, true, &arg_pos, None);
         } else if t.is_unknown() {
             // @P278/P281 — pass-1 Unknown receiver: consume the
             // entire bracket content including range syntax
@@ -1087,6 +1299,48 @@ impl Parser {
             return u32::MAX;
         }
         md
+    }
+
+    /// Refuse `x[a..b]` on a library type, and say what to write — loft#996.
+    ///
+    /// A slice is not a subscript with a different argument: every built-in kind lowers
+    /// its own (`parse_vector_index`, `parse_text_index`, `parse_spatial_slice`,
+    /// `parse_trie_slice`), each to a dedicated runtime call, and there is no range VALUE
+    /// in the language for a user method to take. So this cannot be sugar for `OpIndex`
+    /// the way the comma form is — it needs a range type or an `OpSlice` of its own, which
+    /// is a language addition and not a parse.
+    ///
+    /// What it must not do is stay `Expect token ]` pointing at the `..`, beside the two
+    /// messages this feature already gets right. Answers `true` when the subscript is a
+    /// slice, having consumed the rest of the bracket so the caller's `]` still matches —
+    /// the same recovery the pass-1 `Unknown` receiver takes above, and for the same
+    /// reason: returning with `..2` unread cascades into `Expect token ]` on pass 1, which
+    /// aborts before pass 2 can report anything at all.
+    fn user_index_slice_refused(&mut self, t: &Type) -> bool {
+        if !self.lexer.peek_token("..") && !self.lexer.peek_token("..=") {
+            return false;
+        }
+        if !self.first_pass {
+            let name = match t.base() {
+                Type::Reference(d, _) | Type::Enum(d, _, _) => self.data.def(*d).name().to_string(),
+                _ => String::from("this type"),
+            };
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{name}` defines `OpIndex`, which takes INDEX arguments — there is no \
+                 range value to hand it, so `x[a..b]` has nothing to dispatch to; write \
+                 the bounds as indices (`x[a, b]`, if `OpIndex` declares two) or give the \
+                 type a method that slices (`x.slice(a, b)`)"
+            );
+        }
+        // Consume `..` / `..=` and any till-expression, leaving the `]` for the caller.
+        let _ = self.lexer.has_token("..") || self.lexer.has_token("..=");
+        if !self.lexer.peek_token("]") {
+            let mut till = Value::Null;
+            self.expression(&mut till);
+        }
+        true
     }
 
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {

@@ -855,27 +855,60 @@ impl Function {
     }
 
     /// How many loops out `variable` names, counting from the innermost — the depth
-    /// `#break` / `#continue` jump.
+    /// `#break` / `#continue` jump — or `None` when it names no enclosing loop.
     ///
     /// Matched on the BINDING the name currently denotes, not on the spelling: two `for i`
     /// loops in one function are two variables and only one of them is bound to `i` here
     /// (loft#915).  Comparing names would walk past a loop whose variable is `i#1` and
     /// answer the chain length, which is a jump out of the wrong loop.
-    pub fn loop_nr(&self, variable: &str) -> u16 {
-        // An unbound name matches nothing: `u16::MAX` is also the "no variable yet"
-        // placeholder `start_loop` leaves on a loop still being parsed.
+    ///
+    /// `Option` because "not found" and "the outermost loop" are different answers and
+    /// this used to give them the same one: the walk exited on its CONDITION, so falling
+    /// off the end returned the chain length — one past the deepest valid level, with no
+    /// signal. `Scopes::scan` then indexed `loops.len() - lv - 1` and underflowed a
+    /// `usize`, so naming any declared non-loop local in `k#break` was an internal
+    /// compiler error reporting index 18446744073709551615 (loft#998). Returning on the
+    /// MATCH instead is what makes the missing case impossible to fall out of.
+    ///
+    /// An unbound name is `None` too — it names no loop, which is the same answer as a
+    /// bound one that names no loop.
+    pub fn loop_nr(&self, variable: &str) -> Option<u16> {
         let target = self.var(variable);
-        let mut c = if target == u16::MAX {
-            u16::MAX
-        } else {
-            self.current_loop
-        };
+        if target == u16::MAX {
+            return None;
+        }
+        let mut c = self.current_loop;
         let mut nr = 0;
-        while c != u16::MAX && self.loops[c as usize].variable != target {
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == target {
+                return Some(nr);
+            }
             c = self.loops[c as usize].inside;
             nr += 1;
         }
-        nr
+        None
+    }
+
+    /// The variable names of the enclosing loops, innermost first — what `x#break` may
+    /// legally name here. For the diagnostic when it names something else.
+    #[must_use]
+    pub fn enclosing_loop_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            let v = self.loops[c as usize].variable;
+            if v != u16::MAX {
+                let n = self.name(v);
+                // The parser mangles a shadowed loop variable to `i#1`; the author wrote
+                // the part before the `#`, and that is what they can type back.
+                let n = n.split('#').next().unwrap_or(n);
+                if !n.is_empty() && !out.iter().any(|s: &String| s == n) {
+                    out.push(n.to_string());
+                }
+            }
+            c = self.loops[c as usize].inside;
+        }
+        out
     }
 
     pub fn loop_on(&self, var_nr: u16) -> u8 {

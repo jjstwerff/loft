@@ -60,10 +60,56 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
 /// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
 /// write through a value-const binding can be rejected at its root.
-fn lhs_base_var(v: &Value) -> u16 {
+/// loft#984 — the DECLARED range of a store target, and the default a value outside it
+/// takes: `(lo, hi, default)`.
+///
+/// `None` when the question does not arise — the target declares no range of its own (the
+/// plain `integer` / i32 templates), or it is not an integer at all.
+///
+/// The default is the LOWEST value in range, except where the slot admits null, which
+/// takes `null` instead: absence is a value that type can hold, and it is the honest
+/// answer for "this did not fit". A non-nullable slot has no such value, so it takes `lo`.
+fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
+    let Type::Integer(spec) = tp.base() else {
+        return None;
+    };
+    if spec.is_wide_template() || spec.is_signed32_template() {
+        return None;
+    }
+    // Only the `limit(lo, hi)` spelling. A narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`,
+    // which is what `forced_size` marks) is already guarded at COMPILE time — storing a
+    // plain integer into one is an error demanding `as u8` — so a runtime default there
+    // would be redundant where the check holds and WRONG where it does not: it fired 24
+    // times inside the stdlib's own `i8` stores and handed them `-128`. The gap this
+    // closes is that `limit(...)` sets no `forced_size`, so none of that machinery sees
+    // it (`is_narrowing_int_store`), which is why a declared range went unenforced.
+    if spec.forced_size.is_some() {
+        return None;
+    }
+    let lo = i64::from(spec.min);
+    let hi = i64::from(spec.max);
+    let dflt = if matches!(tp, Type::Optional(_)) {
+        i64::MIN
+    } else {
+        lo
+    };
+    Some((lo, hi, dflt))
+}
+
+fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
-        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0]),
+        // loft#980 — see through the variant-field guard `if tag(c) ∈ declaring { c } else
+        // { null }`: the receiver is the THEN arm.  Recognised by its ELSE arm being the
+        // zero-argument null sentinel, so an ordinary `if` on the left of an assignment is
+        // still not a place and is still refused.
+        Value::If(_, then, els)
+            if matches!(els.unspan(), Value::Call(d, a)
+                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
+        {
+            lhs_base_var(then, data)
+        }
+        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0], data),
         _ => u16::MAX,
     }
 }
@@ -1159,7 +1205,11 @@ impl Parser {
         // unbounded-loop diagnostic points at the `while` itself.
         let while_pos = self.lexer.peek_pos().clone();
         let mut cond = Value::Null;
+        // loft#986 — see `in_control_head`: the `{` after the condition opens the body.
+        let outer_head = self.in_control_head;
+        self.in_control_head = true;
         self.expression(&mut cond);
+        self.in_control_head = outer_head;
         if !self.first_pass && matches!(cond, Value::Null) {
             diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
             return;
@@ -2594,7 +2644,7 @@ use a separate collection or add after the loop"
             // from inside a function is an assignment to a literal — and it is
             // an easy thing to write, because the same declaration for an
             // `integer` is refused with a message.
-            if var_nr == u16::MAX && lhs_base_var(to) == u16::MAX {
+            if var_nr == u16::MAX && lhs_base_var(to, &self.data) == u16::MAX {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -3368,6 +3418,16 @@ use a separate collection or add after the loop"
                     "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
                 );
             }
+        }
+        // loft#984 — a store into a slot that DECLARES a range guards the value: one
+        // outside `lo..=hi` takes the slot's default rather than being wrapped, aliased
+        // or dropped.  This site is deliberately the same one the narrowing check above
+        // uses, because its own comment records what it reaches: "both the annotated
+        // local and the field WRITE".  A `limit(...)` slot never sets `forced_size`, so
+        // `is_narrowing_int_store` above cannot see it — which is why a declared range on
+        // a LOCAL went unenforced entirely, not merely mis-stored.
+        if op == "=" && !self.first_pass {
+            self.guard_declared_range(code, f_type, &s_type);
         }
         if self.validate_lock_assign(code, to) {
             return Type::Void;
@@ -4324,6 +4384,50 @@ use a separate collection or add after the loop"
     /// inner — the closure-body case doesn't need the alloc
     /// preamble because the cell was already allocated by the
     /// parent's first-set).
+    /// loft#984 — wrap `code` in the declared-range guard when the value it computes is
+    /// not PROVABLY inside the target's declared range.
+    ///
+    /// The proof is the range the source type already carries, so ordinary in-range code
+    /// emits nothing and pays nothing: `x.b = 7` into a `limit(0, 255)` is a constant whose
+    /// own range is `[7, 7]`, and `p.r = q.r` between two `limit(0, 255)` fields is
+    /// range-for-range. What gets guarded is the case that actually goes wrong — a value
+    /// whose range is wider than the slot's.
+    ///
+    /// Guarding the VALUE rather than the store is what lets one op reach both a FIELD and
+    /// a VARIABLE. A field write carries its range in the store op (`min` only, which is
+    /// why the top of the range escaped it); a local has no store op at all, which is why
+    /// `a: integer limit(0,255) = 7; a = 300` kept 300.
+    pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {
+        let Some((lo, hi, dflt)) = declared_range(target) else {
+            return;
+        };
+        // Two seams reach the same store — the assignment path and `convert` — so guard
+        // against wrapping a guard.  Harmless arithmetically (the inner already answers a
+        // value in range) but it would report the same out-of-range write twice.
+        if let Value::Call(d, _) = code.unspan()
+            && self.data.def(*d).name() == "OpRangeDefault"
+        {
+            return;
+        }
+        // Already inside the slot's range for every value the source can take → no guard.
+        if let Type::Integer(src) = source.base()
+            && i64::from(src.min) >= lo
+            && i64::from(src.max) <= hi
+        {
+            return;
+        }
+        let guarded = self.cl(
+            "OpRangeDefault",
+            &[
+                code.clone(),
+                Value::Long(lo),
+                Value::Long(hi),
+                Value::Long(dflt),
+            ],
+        );
+        *code = guarded;
+    }
+
     fn extract_boxed_var_from_lhs(&self, lhs: &Value) -> Option<u16> {
         let Value::Call(op_d, args) = lhs.unspan() else {
             return None;
@@ -4843,7 +4947,7 @@ use a separate collection or add after the loop"
         // A rebind of the binding itself (`p = other`) re-points the slot and is allowed;
         // it is a bare-`Var` write handled by `const_write_blocked`, not this path.
         if !self.first_pass {
-            let base = lhs_base_var(to);
+            let base = lhs_base_var(to, &self.data);
             if base != u16::MAX && self.vars.is_value_const(base) {
                 diagnostic!(
                     self.lexer,

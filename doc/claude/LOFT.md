@@ -268,6 +268,30 @@ enum Shape {
 }
 ```
 
+A variant's fields are read **directly** — `s.radius` — with `match` / `is` reserved for
+*dispatch* rather than extraction ([C89](DESIGN_DECISIONS.md#c89)).  A field EVERY variant
+declares shares one slot and reads correctly from any of them.
+
+**A field only SOME variants declare answers for the variant the value holds** (loft#980).
+The access resolves at compile time to the variant that declares it, and the tag is checked
+at run time: on any other variant the read answers **null** — the same answer a hash miss
+and an out-of-range index give — and a write to it is **ignored** rather than landing in
+that variant's bytes.  The value's own fields are untouched and its tag never changes.
+
+The access TYPE is unchanged, so the null is a value the type does not advertise, exactly
+as for an out-of-range index; `warning[variant-field-unchecked]` names each such access and
+the variants that have the field, because a silently ignored write is a lost write.  Reach
+it per-variant instead:
+
+```
+if s is Circle { radius } { area = PI * radius * radius }
+// or
+match s {
+    Circle { radius }            => …,
+    Rectangle { width, height }  => …,
+}
+```
+
 ### Struct types
 
 ```
@@ -576,12 +600,15 @@ qualified access.
 **Multiple names from one library must be parenthesised.** `use lib::a, b;` (a flat
 comma list) is a compile error; write `use lib::(a, b);`.
 
-#### `use self::<module>` — my own module, whatever else the graph ships (loft#949)
+#### A package's own module wins its own `use` (loft#976)
 
-A module's short name is one slot shared by the whole dependency graph, and building a
-package reads every file under its `src/`. So a consumer that merely *adds*
-`src/catalogue.loft` can take the name before its dependency asks for it — and the
-dependency's own `use catalogue;` then binds the consumer's file:
+**Inside a package, `use <module>;` binds that package's own `src/<module>.loft`** when it
+ships one. The module registers under `<package>::<module>`, so two packages' `catalogue`
+modules are two live modules rather than one contested name.
+
+It used not to be. A module's short name was one slot shared by the whole dependency
+graph, and building a package reads every file under its `src/` — so whichever package
+loaded first took the name, and the rest lost their own module:
 
 ```
 dep/src/catalogue.loft   pub fn part_list() -> integer { 41 }
@@ -589,35 +616,29 @@ dep/src/dep.loft         use catalogue;
                          pub fn dep_answer() -> integer { part_list() + 1 }
 con/src/catalogue.loft   pub fn part_list() -> integer { 99 }
 
-dep_answer()  ->  100        // the consumer's number, from inside the dependency
+dep_answer()  ->  100        // was: the consumer's number, from inside the dependency
+dep_answer()  ->  42         // now: its own, in every consumer
 ```
 
-Nothing in `dep` changed; nothing in `con` imported `catalogue`. A published, versioned,
-tested package answers differently because of a file downstream.
+Nothing in `dep` changed and nothing in `con` imported `catalogue`; a published, versioned,
+tested package answered differently because of a file downstream, and which one lost was
+decided by the CONSUMER's `use` order — visible to neither author.
 
-`use self::catalogue;` cannot be captured — it always binds `dep`'s own file, and
-`dep_answer()` is 42 in every consumer:
+Four things to know:
 
-```
-use self::catalogue;              // this package's own src/catalogue.loft
-use self::catalogue as cat;       // …and give it a qualifier: cat::part_list()
-```
-
-Three things to know:
-
-- **It is additive.** Bare `use catalogue;` is unchanged, so nothing that builds today
-  moves. Opt in where a package wants the guarantee; the `module-name-shadowed` advice
-  is the signpost.
-- **It does not search outward.** Bare `use` falls back to `lib/`, sibling packages and
-  the registry; `self::` does not, because a typo that quietly binds another package's
-  file is the outcome it exists to prevent. An absent module is an error naming the
-  package it looked in. It also needs a package: in a bare script with no `loft.toml`
-  declaring `[package] name`, `self::` is refused.
-- **Its qualifier is the alias.** The module registers under `<package>::<module>` so
-  two packages' `catalogue` modules can both be live — which is what a mere "prefer the
-  local file" rule could not give, since the name map has room for one `catalogue`
-  however precedence is decided. That key is not a typeable path, so use
-  `use self::catalogue as cat;` when you want to write `cat::part_list()`.
+- **A declared dependency still wins.** If `loft.toml` names a dependency `catalogue`,
+  `use catalogue;` is that dependency, not a local file of the same name. A package cannot
+  accidentally shadow what it depends on.
+- **`use self::<module>` is the same binding, written explicitly.** It stays, and it is
+  what you write when a file is not inside a package but you want the guarantee spelled
+  out. It also refuses to search outward, which a bare `use` still does when the package
+  ships no module of that name.
+- **Its qualifier is the alias.** `<package>::<module>` is not a typeable path, so write
+  `use self::catalogue as cat;` (or `use catalogue as cat;`) to get `cat::part_list()`.
+- **Two modules are not merged.** If both packages' modules declare the same public name
+  and you call it bare with both in scope, that is an error naming both — pick one with an
+  alias or a selective import. Silently taking one was the old behaviour and the reason
+  for the change.
 
 ### Shadowing and qualified names (`@PLN22`)
 
@@ -1108,16 +1129,26 @@ Single-line. Supports `\n`, `\t`, `\\`, `\"` escapes.
 ### Backtick strings (`` `...` ``)
 
 **Multi-line.** Bare `"` is literal inside backtick strings (no escaping needed).
-Auto-strips common leading indentation based on the closing backtick's column.
-First and last lines are trimmed if they contain only whitespace.
+Auto-strips leading indentation: the **first content line** sets the base, and that many
+leading spaces come off every line that has them.  A blank line does not set the base,
+a line indented less than the base comes out flush, and a TAB-indented line is left
+alone (a tab is not a space, so there is nothing to count).  The first and last lines
+are dropped when they contain only whitespace.
+
+Interpolation is no exception — a block with `{…}` in it dedents exactly like one
+without.  Until loft#990 it did not, which mattered most for the shape the feature
+exists for: templates.
+
+`{` opens an interpolation hole here as it does in `"…"`, so a literal brace is written
+`{{` — which is what the `void main() {{` below is doing.
 
 ```
 shader = `
   #version 330 core
   layout (location = 0) in vec3 aPos;
-  void main() {
+  void main() {{
       gl_Position = vec4(aPos, 1.0);
-  }
+  }}
 `;
 
 msg = `Hello, {name}!

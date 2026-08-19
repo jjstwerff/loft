@@ -61,18 +61,30 @@ began with the `2026-07` cycle) is described in
   and the real HTTP server (@PLN4). Explicitly **not** `2026-07` work. Full
   rationale + critical path: [BROADENING.md § Better PHP](BROADENING.md#better-php--the-2026-08-cycle-theme).
 
-### Monthly library-documentation review (by hand)
+### Monthly documentation review (by hand) — libraries + feature catalogue
 
-Each cycle, before tagging, run the **library-documentation review** —
+Each cycle, before tagging, run the **documentation review** —
 [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md). The automated
 `check_doc_drift.sh examples` gate (blocked on by CI) catches worked-example tags
 that *dangle* or *duplicate*, but not the two failures only a human sees: a doc
 that still resolves yet no longer describes what the code does (**staleness**),
-and an example that is valid but no longer the clearest one (**quality**). The
-pass is a **hygiene ratchet, never a release blocker**: a watermark + a
-changed-since worklist (`scripts/doc-review.sh --since <watermark>`) bound it to
-what actually moved, so a quiet month is a five-minute pass. Fix XS drift on the
-spot; bump the watermark; route M+ findings to an issue.
+and an example that is valid but no longer the clearest one (**quality**).
+
+The pass has two halves, and each starts with an aid that bounds the reading:
+
+```bash
+make libcatalogue && make libraries-review   # which libraries owe a review / moved
+make features-review SINCE=<watermark>       # the @F catalogue's gaps + worklist
+```
+
+Both are **reports, never release blockers** — they say what is structurally
+missing and what actually moved, and stop there; whether a doc is still *true* and
+whether an example is still the *clearest* are judgements they deliberately do not
+make. Per-library watermarks bound the library half (libraries publish on their own
+cadence — § What forces a release — so one global ref would mean nothing across
+thirty-four packages); a single cycle watermark bounds the feature half. A quiet
+month is a five-minute pass. Fix XS drift on the spot; bump the watermark; route M+
+findings to an issue.
 
 ### What forces a release — keep the list bounded
 

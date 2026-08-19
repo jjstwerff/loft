@@ -157,6 +157,44 @@ fn main() {
     );
 }
 
+/// loft#984 — a write outside a DECLARED range takes the slot's default (the lowest
+/// value in range, or null where the slot admits it) and reports a Warn, on the same
+/// recoverable channel as div-by-zero above: the run continues and exits 0.  The value
+/// the program computed is not the value the slot holds, so it is reported; it is not a
+/// halt, because one degraded value never stops the rest (C80).
+#[test]
+fn prod_range_defaulted_logs_and_continues() {
+    let source = "\
+fn main() {
+  print(\"before\\n\");
+  v: integer limit(10, 20) = 12;
+  n = 99;
+  v = n;
+  print(\"v={v}\\n\");
+  print(\"after\\n\");
+}
+";
+    let (stdout, _stderr, code, log) = run_prod("range_defaulted", source);
+    assert_eq!(
+        code,
+        Some(0),
+        "a defaulted store is recoverable — exit 0 (C80)"
+    );
+    assert!(stdout.contains("before"));
+    assert!(
+        stdout.contains("v=10"),
+        "the slot takes the LOWEST value in its range, not zero; got {stdout:?}"
+    );
+    assert!(
+        stdout.contains("after"),
+        "must continue past the defaulted store; got {stdout:?}"
+    );
+    assert!(
+        log.contains("WARN") && log.contains("[range_defaulted]"),
+        "an out-of-range write must report a Warn log; got {log:?}"
+    );
+}
+
 /// Production: vector positive-index OOB logs Warn + returns null DbRef
 /// sentinel + continues.  The post-fault read of `x.something` would
 /// see null too, so just verify the post-fault stdout reaches.

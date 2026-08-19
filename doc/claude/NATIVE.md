@@ -1426,14 +1426,45 @@ interp≡mixed≡native) and arms the Goal-E store guard; the one open soundness
 for the process lifetime, and its `dlclose` is a no-op — so a second `dlopen` of the
 same path returns the FIRST image even after the file was rebuilt underneath it.
 `cached_or_build_shared_cdylib` therefore must never `dlopen` an auto-native artifact
-for INSPECTION when a rebuild-and-load will follow at the same path: the settling run
-would execute the stale pre-edit copy while writing the fresh one for next time (a
-`base` edit reaching the interpret run but not the native run — dependent kept serving
-its inlined pre-edit copy). The layout-adoption probe (`artifact_matches_layout`, which
-opens the artifact to read its `LAYOUT_FP_SYMBOL`) runs ONLY on the fresh fast path,
-where the same file is then loaded — never on the stale path that rebuilds. Linux keys
-`dlopen` on (dev,inode) and loads the new file, so only macOS was affected; the guard
-is `tests/n3_parity.rs::a_dependency_edit_invalidates_its_dependents_cdylib`.
+for INSPECTION at a path a rebuild-and-load can follow at: the settling run would
+execute the stale pre-edit copy while writing the fresh one for next time (a `base`
+edit reaching the interpret run but not the native run — the dependent kept serving
+its inlined pre-edit copy). Linux keys `dlopen` on (dev,inode) and loads the new
+file, so only macOS is affected.
+
+The layout-adoption probe (`artifact_matches_layout`, which opens the artifact to
+read its `LAYOUT_FP_SYMBOL`) therefore asks its question through a RELOCATED
+artifact — hard-linked, or copied when linking fails, into a throwaway
+`.layout-probe-<pid>-<seq>/` — and never at the artifact's own path.  There is one
+entry point, because which variant a call site picked used to be the difference
+between a correct answer and a silently stale one.
+
+**A degraded probe must not degrade to the answer a fix removed (loft#999).** The
+relocation used to fall back to probing IN PLACE when the copy could not be made,
+reasoning that a failed temp file beats answering "declares no layout" — which means
+ADOPT.  Both of those are wrong; the third answer is *cannot adopt*, which rebuilds.
+In place, one unlucky `copy` — a full disk, an exhausted descriptor limit, a
+concurrent prune — silently restored the pre-#777 behaviour, and no later run cleared
+it.  That is why the #777 guard failed on `macos-latest` twice in a fortnight and
+passed the other eleven times: how a probe answers must not depend on whether a temp
+file could be written.  Two rules came out of it:
+
+- **A fallback must never be the behaviour a fix removed.**  Degrade toward the
+  expensive-but-correct answer (rebuild), never toward the cheap one that was the bug.
+  A silent fallback is the same defect twice: the wrong answer, and no way to see it.
+  A relocation that fails now says so once per process and names the cure.
+- **Relocation that costs nothing cannot fail for lack of room.**  The probe
+  hard-links first (O(1), no space, no bytes read), so the conditions that made a
+  copy fail no longer decide whether an artifact is adopted; the byte copy is the
+  fallback for a filesystem without links.  A link shares the artifact's inode, which
+  is safe under both keying schemes — the rebuild publishes a NEW inode by rename, and
+  where the caller adopts instead, the bytes are identical anyway.
+
+Guards: `tests/n3_parity.rs::a_dependency_edit_invalidates_its_dependents_cdylib` is
+the end-to-end #777 shape; `a_dependency_edit_reaches_a_dependent_when_the_layout_probe_cannot_relocate`
+and `an_unrelocatable_layout_probe_rebuilds_instead_of_adopting` set
+`LOFT_FORCE_PROBE_RELOCATE_FAIL=1`, which makes both relocation legs fail and so turns
+a macOS-only coin-flip into a deterministic test on every platform.
 
 **Probe before marking (loft#831).**  Marking a function for cdylib dispatch is a
 commitment: `byte_code` emits `OpStaticCall` to its bridge symbol, and if nothing

@@ -97,7 +97,24 @@ impl LocalFileProvider {
     /// Returns the underlying `io::Error` if `path` can't be opened or its
     /// metadata (length) can't be read.
     pub fn open(path: &str) -> std::io::Result<Self> {
-        let file = std::fs::File::open(path)?;
+        use std::io::Read as _;
+        let mut file = std::fs::File::open(path)?;
+        // Reading the METADATA is not reading the format.  A path that opens and is not
+        // a store image — an empty file, a truncated download, a directory, an HTTP 200
+        // serving an error page — used to get all the way past here and fail deep inside
+        // the load, which has only `false` to answer with; the binding then reported no
+        // fault and no error, so an unusable source was indistinguishable from an image
+        // that simply lacks the key (loft#994).  Four bytes settle it, and refusing HERE
+        // is what gives every `refuse_paged` call site the report it already words
+        // correctly.
+        let mut head = [0u8; 4];
+        let n = file.read(&mut head)?;
+        if !crate::store::Store::has_signature(&head[..n]) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "not a loft store image (the file does not begin with the store signature)",
+            ));
+        }
         let size = file.metadata()?.len();
         Ok(Self {
             file,
@@ -162,6 +179,19 @@ impl HttpRangeProvider {
     /// Returns a message when the request fails or the size can't be determined.
     pub fn open(url: &str) -> Result<Self, String> {
         let size = crate::net::fetch_size(url)?;
+        // A size is not a format.  A host answering `200` with its own error page — a
+        // stale CDN path, a bucket's 404 document, a half-finished upload — has a size
+        // like any other source, and binding to it used to succeed and answer `null` for
+        // every key with the channel reporting healthy.  A genuine 404 and a refused
+        // connection were both reported, so this is exactly the "reachable, wrong bytes"
+        // case (loft#994).  One four-byte range read, once per bind.
+        let head = crate::net::fetch_range(url, 0, 4)?;
+        if !crate::store::Store::has_signature(&head) {
+            return Err(format!(
+                "{url} does not begin with the store signature — it is reachable but is \
+                 not a loft store image"
+            ));
+        }
         Ok(Self {
             url: url.to_string(),
             size,

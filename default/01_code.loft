@@ -124,6 +124,23 @@ fn OpNot(v1: boolean) -> boolean;
 // Both single and float variants exist for every function —
 // choose single for speed, float for precision.
 // Integer operations
+// loft#984 — the declared-RANGE guard, applied to the VALUE at a store into a slot that
+// declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes
+// the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the
+// slot admits null — and reports it, rather than being wrapped, aliased, or dropped.
+//
+// It guards the VALUE rather than the store, which is what lets one op reach both a FIELD
+// and a VARIABLE: a variable has no store op to carry the range, and that is why a declared
+// range on a local went unenforced entirely.
+//
+// A null passes straight through: whether a null may land in this slot is `(N-Store)`'s
+// question, answered at compile time, and substituting `lo` for it here would quietly
+// invent a value the program never computed.
+//
+// Emitted only where the value is NOT provably in range, so ordinary in-range code pays
+// nothing (`parser::expressions::range_guard`).
+fn OpRangeDefault(val: integer, lo: const integer, hi: const integer, dflt: const integer) -> integer;
+#rust"{{ let _rv = @val; if _rv == i64::MIN || (_rv >= @lo && _rv <= @hi) {{ _rv }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {{ value: _rv, lo: @lo, hi: @hi }}); @dflt }} }}"
 fn OpConstInt(val: const integer) -> integer;
 #rust"@val"
 fn OpConstShort(val: const i16) -> integer;
@@ -287,9 +304,9 @@ fn OpMulSingle(v1: single, v2: single) -> single;
 // C80 / E-Uncomp: single-precision div / mod by zero yields the float null
 // sentinel (NaN) and CONTINUES (raise_recoverable, no halt); mirror of float.
 fn OpDivSingle(v1: single, v2: single) -> single;
-#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 / @v2 }}"
+#rust"{{ if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); }} @v1 / @v2 }}"
 fn OpRemSingle(v1: single, v2: single) -> single;
-#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 % @v2 }}"
+#rust"{{ if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); }} @v1 % @v2 }}"
 fn OpDivSingleNullable(v1: single, v2: single) -> single;
 #rust"@v1 / @v2"
 fn OpRemSingleNullable(v1: single, v2: single) -> single;
@@ -577,17 +594,26 @@ fn OpMinFloat(v1: float, v2: float) -> float;
 #rust"@v1 - @v2"
 fn OpMulFloat(v1: float, v2: float) -> float;
 #rust"@v1 * @v2"
-// C80 / E-Uncomp: float div / mod by zero is uncomputable — it yields the
-// float null sentinel (NaN) and CONTINUES (raise_recoverable, no halt), like
-// the integer peers (it does NOT trap/halt; the spreadsheet model degrades one
-// value while the rest of the program keeps computing).  The raw IEEE behaviour
-// (`a / 0.0` → `Inf`) stays available via the `*Nullable` peers, emitted only
-// when `??` / `if x != null` defends the site — so a deliberately-defended site
-// can still observe `Inf` rather than the null.
+// C80 / E-Report: an unguarded zero divisor CONTINUES and logs a Warn — it never
+// traps, so the spreadsheet model still degrades one value and lets the rest of the
+// program compute.  The VALUE is IEEE, and NaN is the one float null (`doc/23-safety`:
+// "NaN (Not a Number) is null"): `0.0 / 0.0` is null, `1.0 / 0.0` is `inf` — a
+// representable value, not a missing one.
+//
+// Forcing NaN here instead (loft#983) made ONE expression answer two things: `inf`
+// inline, where the `*Nullable` peer is emitted, and `null` once bound or returned.
+// It also split division from its own sibling — float OVERFLOW (`1.0e308 * 10.0`)
+// keeps `inf` in every position — though both produce the identical IEEE value.  And
+// it made `??` self-defeating: `a / b ?? 0.0`, the idiom every numeric library uses to
+// defend a divide, selected the peer that never yields null, so the guard guarded
+// nothing (`mesh3d::normalize3` was sound only by accident).
+//
+// The `*Nullable` peers are now behaviourally identical to these and are dead weight —
+// a separable cleanup, exactly as the integer split already is (formal/ROADMAP D-op-4).
 fn OpDivFloat(v1: float, v2: float) -> float;
-#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 / @v2 }}"
+#rust"{{ if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); }} @v1 / @v2 }}"
 fn OpRemFloat(v1: float, v2: float) -> float;
-#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 % @v2 }}"
+#rust"{{ if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); }} @v1 % @v2 }}"
 // IEEE-behaviour peers — emitted only when defended.
 fn OpDivFloatNullable(v1: float, v2: float) -> float;
 #rust"@v1 / @v2"
@@ -1441,7 +1467,15 @@ fn unprotect_store_frees(r: reference);
 // loft programs (animation, game loops) so they can be tested under
 // the interpreter without a graphics backend — the same flag that
 // `gl_swap_buffers` sets when running with real graphics.
+//
+// `#rust "()"` is the NATIVE meaning, and it is deliberate: a `--native` binary has no
+// interpreter state to resume and no host loop to return to, so a frame-driven program
+// simply runs straight through.  Written down because a void built-in with no
+// implementation is now a hard error (loft#993) — before that, this no-op was
+// indistinguishable from a lowering nobody had got round to, which is exactly the
+// silence that hid the par discard route (loft#987).
 fn yield_frame();
+#rust"()"
 // --- Parallel ---
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.

@@ -909,6 +909,31 @@ pub(crate) fn run_tests(
                 continue;
             }
 
+            // Scope analysis — wrap in catch_unwind so a panic here doesn't
+            // kill the entire runner.
+            //
+            // loft#985 — this runs BEFORE the diagnostics are collected below, because the
+            // post-scope lints report through the same channel and the collection is what
+            // puts a diagnostic in front of the reader. It used to sit after the test
+            // discovery further down, which is why nothing it produced could ever be seen.
+            let scopes_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                scopes::check(&mut p.data);
+            }));
+            if let Err(payload) = scopes_ok {
+                let msg = panic_message(&*payload);
+                println!("  FAIL  {display_name}  (scope check panic: {msg})");
+                dir_fail += 1;
+                total_files += 1;
+                continue;
+            }
+            // The same lint set the program path runs, ONCE per loaded file rather than
+            // once per test: every test compiles its own bytecode from this one `Data`, so
+            // a per-test call would report each finding N times. Until this ran, a
+            // library's CI — which IS a test run — could not see a lost write, or a
+            // `#superseded` steer pointing at nothing, which is a hard ERROR everywhere
+            // else.
+            loft::use_analysis::post_scope_lints(&p.data, &mut p.diagnostics, &abs_file);
+
             // Collect diagnostics.
             let mut file_result = FileResult {
                 tests: Vec::new(),
@@ -1244,19 +1269,6 @@ pub(crate) fn run_tests(
 
             if test_fns.is_empty() {
                 // No callable functions found; skip this file silently.
-                continue;
-            }
-
-            // Scope analysis — wrap in catch_unwind so a panic here doesn't
-            // kill the entire runner.
-            let scopes_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                scopes::check(&mut p.data);
-            }));
-            if let Err(payload) = scopes_ok {
-                let msg = panic_message(&*payload);
-                println!("  FAIL  {display_name}  (scope check panic: {msg})");
-                dir_fail += 1;
-                total_files += 1;
                 continue;
             }
 

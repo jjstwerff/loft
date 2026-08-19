@@ -1828,7 +1828,7 @@ impl State {
             && !self.database.is_stack_store(data.store_nr)
             && !self.database.allocations[data.store_nr as usize].free
             && !self.database.allocations[data.store_nr as usize].read_only
-            && !self.database.allocations[data.store_nr as usize].free_protected
+            && !self.database.allocations[data.store_nr as usize].is_free_protected()
         {
             self.database.free(&data);
         }
@@ -1927,7 +1927,7 @@ impl State {
             && !self.database.is_stack_store(src.store_nr)
             && !self.database.allocations[src.store_nr as usize].free
             && !self.database.allocations[src.store_nr as usize].read_only
-            && !self.database.allocations[src.store_nr as usize].free_protected
+            && !self.database.allocations[src.store_nr as usize].is_free_protected()
         {
             self.database.free(&src);
         }

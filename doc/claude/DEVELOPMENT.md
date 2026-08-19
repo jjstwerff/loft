@@ -81,15 +81,34 @@ The branch is merged to main via a single PR when all items pass CI.
 - Fewer PRs = less CI wait time and merge churn.
 - Each commit within the branch is still one coherent item (test + code +
   enable), so `git log` stays bisectable.
-- **Owner directive: do not wait ~half an hour of CI *per subject*.** Every PR to
-  `main` is a full ~20–30 min CI round; splitting N subjects into N PRs = N
-  half-hours of waiting, and the per-subject CI wait — not review — is the
-  bottleneck when exploring many subjects. So **bundle multiple subjects (even
-  unrelated ones — a docs/tooling stream + a compiler soundness fix + a language
-  feature can ride together) into ONE PR**, and do NOT default to proposing a
-  split. Only split when the owner explicitly wants a fast independent clock for
-  one item. Run the local gate (`make gate` / `make ci`) once, so the single PR
-  clears in one round instead of bouncing.
+- **Owner directive: a PR is never one issue, or a few.** *"I will never PR one or a
+  few issues, it takes a lot of time because we cannot stack PR's on gh"*
+  (2026-08-19). GitHub has no stacked pull requests, and the branch policy already
+  requires new work to branch from the TIP of unmerged in-flight work — so a second
+  PR cannot be reviewed or merged independently, it sits behind the first one's merge
+  clock. **Every PR therefore serialises the whole stream**, which is a bigger cost
+  than the CI round it also pays (~20–30 min).
+
+  **Opening a PR is the owner's call, and not a subject to raise.** Do not propose one,
+  hint that the work is "ready" for one, or treat a finished issue as a milestone that
+  wants one — that pressure is why the owner holds off (2026-08-19). Fix, gate, push,
+  and say what is done.
+
+  One consequence to handle LOCALLY rather than by reaching for a PR: `revalidate-libs`
+  — the gate that compiles every published library against this loft — triggers on
+  `pull_request` and on `push` **to `main` only**, never on a work branch. So a language
+  change that retro-breaks shipped libraries is invisible on the branch. On 2026-08-19
+  that was nine libraries losing their entire public surface to one resolution rule,
+  green on every branch gate for a full day. The cure is to run a library's suite from a
+  **scratchpad copy** after any resolution or diagnostic change (a suite run inside a
+  consumer's tree writes `native-auto/` and `.loft/` and is not read-only).
+
+  So **bundle many subjects into ONE PR**, even unrelated ones — a docs/tooling
+  stream, a compiler soundness fix and a language feature ride together. A branch the
+  owner asks for is a branch to ACCUMULATE on, not one to PR when its first issue is
+  done. Do NOT default to proposing a split; only split when the owner explicitly
+  wants an independent clock for one item. Run the local gate (`make gate` / `make ci`)
+  once, so the single PR clears in one round instead of bouncing.
 
 ### Stay close to `main` — rebase rigorously (the 2026-06-24 lesson)
 

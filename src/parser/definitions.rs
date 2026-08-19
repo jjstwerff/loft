@@ -4031,7 +4031,29 @@ impl Parser {
             // it.  Now covers all scalars (Integer/Text/Boolean/Float/Single/Character): the
             // attribute flag was the last place a plain non-Integer scalar field still read as
             // nullable (inconsistently — `(N-Store)` already rejected a `null` store into it).
-            if crate::keys::pln25_f2_enabled() && Self::is_non_null_scalar(a_type.base()) {
+            // loft#995 — asked of EVERY field kind, not only the scalars the DN1 rollout
+            // reached first.  A record, an enum, a vector and a keyed collection kept the
+            // pre-DN1 parser default (`true`), so `FieldInfo.nullable` — documented as
+            // "was the field DECLARED nullable" and named as the fact a generated
+            // `CREATE TABLE` needs for `NOT NULL` — answered a constant `true` for all
+            // four, and a serialiser dropped a `NOT NULL` the declaration had asked for.
+            // The two spellings genuinely differ (`r: At107` cannot hold null, `rq:
+            // At107?` can), so this was a fact being LOST, not two things that are one.
+            // The synthetic tuple attributes have derived it this way from every element
+            // type since @PLN114; a declared field now agrees with them.
+            //
+            // The ONE kind where the `?` is not the question is `reference<T>` in field
+            // position: #328 made that the documented POINTER, and a pointer holds null
+            // whatever it is spelled — `n.next = null` is legal on it and an omitted one
+            // DEFAULTS to null, both pinned by `issue_328_reference_field_pointer_
+            // semantics`.  Deriving from the wrapper there reported a field non-null that
+            // the same test then compares against null, and the redundant-null-check
+            // warning said so.  The pointer marker (`u16::MAX` dep) is what the parse
+            // stamps to select that layout, so it is the exact discriminator: a by-VALUE
+            // `r: At107` is `Reference` too and genuinely cannot hold null.
+            let is_pointer_field = matches!(&a_type, Type::Reference(_, deps)
+                if deps.is_pointer_marker());
+            if crate::keys::pln25_f2_enabled() && !is_pointer_field {
                 nullable = matches!(a_type, Type::Optional(_));
             }
             // H6: stamp the field's nullability onto its integer spec so the

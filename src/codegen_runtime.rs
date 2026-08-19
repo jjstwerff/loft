@@ -84,6 +84,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_discard_native",    abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_ref_native",  abi: Abi::Cell },
@@ -921,7 +922,7 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
         && !stores.is_stack_store(data.store_nr)
         && !stores.allocations[data.store_nr as usize].free
         && !stores.allocations[data.store_nr as usize].read_only
-        && !stores.allocations[data.store_nr as usize].free_protected
+        && !stores.allocations[data.store_nr as usize].is_free_protected()
     {
         stores.free(&data);
     }
@@ -952,7 +953,7 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
         && !stores.is_stack_store(src.store_nr)
         && !stores.allocations[src.store_nr as usize].free
         && !stores.allocations[src.store_nr as usize].read_only
-        && !stores.allocations[src.store_nr as usize].free_protected
+        && !stores.allocations[src.store_nr as usize].is_free_protected()
     {
         stores.free(&src);
     }
@@ -3871,6 +3872,52 @@ where
 // The accompanying `n_parallel_buf_get_*_native` / `_drop_*_native`
 // fns provide the per-row read + cleanup that loft's fused for-par
 // desugars into.
+
+/// Plan-06 spine step 3 (native variant) — `Stitch::Discard` runtime entry.
+///
+/// Runs the worker over every input row and keeps nothing: no result vector, no
+/// buffer, no merge.  That is the whole point of the route — the parser picks it
+/// for `for x in v par(r = f(x), N) { }`, where the body never names the result.
+///
+/// It exists because the declaration-driven fallback cannot express it.  Every other
+/// par route has a bespoke lowering that builds the worker closure; the discard route
+/// had none, so `--native` emitted `n_parallel_discard`'s loft DECLARATION with an
+/// empty body — workers that would never run.  What made that visible rather than
+/// silent was an unrelated arity mismatch in the same emit, which is not a thing to
+/// rely on (loft#987).
+///
+/// The closure returns `()` rather than the worker's own value: with the result
+/// dropped, the return shape stops mattering, so one runner covers every worker —
+/// scalar, float, text and heap-reference alike.
+pub fn n_parallel_discard_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    threads: i32,
+    worker: F,
+) where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    if n == 0 {
+        return;
+    }
+    let input_t = input;
+    let n_threads = (threads.max(1) as usize).min(n);
+    let _: Vec<()> =
+        crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+            for row_idx in start..end {
+                let elm =
+                    vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
+                // P199 — see `run_native_workers_primitive` for the `&UnsafeCell<Stores>`
+                // cast; generated worker closures take the new ABI.
+                let cell: &std::cell::UnsafeCell<Stores> =
+                    unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+                worker(cell, elm);
+            }
+        });
+}
 
 /// Plan-06 spine step 8a (native variant) — scalar-return Queue
 /// runtime entry.  Runs workers, packs their `i64` returns into a

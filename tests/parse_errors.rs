@@ -1160,6 +1160,123 @@ fn par_worker_returns_generator() {
     .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
+/// loft#998 — `x#break` naming a declared NON-loop local was an internal compiler error.
+///
+/// `Variables::loop_nr` walked the enclosing-loop chain and exited on its CONDITION, so
+/// falling off the end returned the chain length — one past the deepest valid level, with
+/// no "not found" signal. `Scopes::scan` then indexed `loops.len() - lv - 1` and
+/// underflowed a `usize`: *"internal compiler error … index is 18446744073709551615"*,
+/// which names neither the mistake nor a cure. Both backends.
+///
+/// It now answers `Option`, because "not found" and "the outermost loop" are different
+/// answers and one number cannot carry both, and the parser reports — which is where the
+/// source position and the author's spelling are.
+///
+/// The message names what CAN be written, and the enclosing loops' variables are the whole
+/// answer to that: innermost first, so a nested pair reads `j#break` before `i#break`.
+#[test]
+fn a_non_loop_variable_in_break_says_so() {
+    code!("fn test() { k = 0; for j in 1..=3 { if j == 2 { k#break } } }").error(
+        "`k` is not a loop variable — `k#break` names the loop to break by the variable that loop binds, and no enclosing loop binds `k`; write a plain `break` for the innermost loop, or `j#break` at a_non_loop_variable_in_break_says_so:1:58",
+    );
+}
+
+/// The `continue` twin, in a `while` — which binds NO variable, so the only cure to offer
+/// is the plain form. A cell that only ever saw `for` would not have found that.
+#[test]
+fn a_non_loop_variable_in_continue_says_so() {
+    code!("fn test() { k = 0; while k < 3 { k#continue } }").error(
+        "`k` is not a loop variable — `k#continue` names the loop to continue by the variable that loop binds, and no enclosing loop binds `k`; write a plain `continue` at a_non_loop_variable_in_continue_says_so:1:46",
+    );
+}
+
+/// Nested loops list both, innermost first — the order the author reads them in.
+#[test]
+fn the_cure_lists_the_enclosing_loops_innermost_first() {
+    code!("fn test() { z = 1; for i in 1..=2 { for j in 1..=2 { z#break } } }").error(
+        "`z` is not a loop variable — `z#break` names the loop to break by the variable that loop binds, and no enclosing loop binds `z`; write a plain `break` for the innermost loop, or `j#break` or `i#break` at the_cure_lists_the_enclosing_loops_innermost_first:1:63",
+    )
+    .warning("Variable i is never read at the_cure_lists_the_enclosing_loops_innermost_first:1:36")
+    .warning("Variable j is never read at the_cure_lists_the_enclosing_loops_innermost_first:1:53");
+}
+
+/// OUTSIDE a loop the pre-existing message is the right one, and stays the ONLY one —
+/// adding "…and `k` is not a loop variable" says the same thing twice from further away.
+#[test]
+fn outside_a_loop_keeps_its_own_message() {
+    code!("fn test() { k = 0; k#break }")
+        .error("Cannot continue outside a loop at outside_a_loop_keeps_its_own_message:1:29");
+}
+
+/// loft#996 — a SLICE on a library type says what to write, instead of `Expect token ]`.
+///
+/// The composite `x[a, b]` now dispatches to `OpIndex` (its indices are arguments, which
+/// is what the accepted declaration already means). The slice cannot: every built-in kind
+/// lowers its own to a dedicated runtime call, and there is no range VALUE in the language
+/// for a user method to receive — so `x[a..b]` needs a range type or an `OpSlice` of its
+/// own, which is a language addition and not a parse. What it must not stay is
+/// `Expect token ]` pointing at the `..`, beside the two messages this feature already
+/// gets right.
+///
+/// ONE error, which is the second half of the fix: the refusal consumes the rest of the
+/// bracket so the caller's `]` still matches. Returning with `..2` unread cascaded on
+/// pass 1, and a pass-1 abort silences every pass-2 diagnostic — the first version of this
+/// reported nothing at all and left `Expect token ]` standing.
+#[test]
+fn opindex_slice_says_what_to_write() {
+    code!(
+        "struct Ring996 { data: vector<integer> }
+fn OpIndex(self: Ring996, i: integer) -> integer { return self.data[i] ?? 0; }
+fn test() { r = Ring996 { data: [7, 8, 9] }; _x = r[0..2]; }"
+    )
+    .error(
+        "`Ring996` defines `OpIndex`, which takes INDEX arguments — there is no range value to hand it, so `x[a..b]` has nothing to dispatch to; write the bounds as indices (`x[a, b]`, if `OpIndex` declares two) or give the type a method that slices (`x.slice(a, b)`) at opindex_slice_says_what_to_write:3:56",
+    );
+}
+
+/// The arity mismatch the comma form makes reachable, and the name it uses.
+///
+/// A one-index `OpIndex` given two now earns the ordinary call diagnostic, reported
+/// against the signature the author wrote. It used to name the STORAGE symbol —
+/// `t_4Ring996_OpIndex`, which appears in no source file — and two fixtures in this suite
+/// record that as a defect of its own (`tests/lib/dupmethod_a/…`,
+/// `tests/scripts/850-…`). `Data::user_facing_name` renders the method as `Type.name`,
+/// keeping the receiver visible because that is exactly what is ambiguous where these
+/// messages fire.
+#[test]
+fn opindex_wrong_arity_names_the_method_not_the_symbol() {
+    code!(
+        "struct Ring996 { data: vector<integer> }
+fn OpIndex(self: Ring996, i: integer) -> integer { return self.data[i] ?? 0; }
+fn test() { r = Ring996 { data: [7, 8, 9] }; _x = r[0, 1]; }"
+    )
+    .error(
+        "Too many parameters for Ring996.OpIndex at opindex_wrong_arity_names_the_method_not_the_symbol:3:58",
+    );
+}
+
+/// The other caller of the same "unresolved worker" sentinel: a worker name that does
+/// not exist. Both refusals answer `(u32::MAX, Unknown)` from `parse_parallel_worker`,
+/// and `build_parallel_for_ir` has to read that ONE sentinel two opposite ways — on
+/// pass 1 it means "not resolved yet" (a worker declared below the loop, loft#988, where
+/// typing `b` as `integer` pins the slot and pass 2 can no longer refine it), on pass 2
+/// it means "will never resolve, and the error is already reported", where `b` needs a
+/// usable type or every use of it in the body earns a second diagnostic under the first.
+///
+/// The pass is what tells them apart. This cell holds the pass-2 half for the second
+/// caller: exactly one error, with `b > 0` in the body silent (the `code!` harness fails
+/// on any diagnostic not asserted here).
+#[test]
+fn par_worker_that_does_not_exist_reports_once() {
+    code!(
+        "fn test() {
+             items = [1, 2, 3];
+             for a in items par(b = no_such_worker(a), 1) { assert(b > 0); }
+         }"
+    )
+    .error("Unknown function 'no_such_worker' at par_worker_that_does_not_exist_reports_once:3:55");
+}
+
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────
 
 // T1.11a (Plan-06 phase 4d): the original rejection of tuple-typed struct
