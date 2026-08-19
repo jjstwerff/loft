@@ -1,19 +1,21 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// What a width type (`u8`, `i8`, `u16`, `i16`, `i32`, `u32`) actually bounds — and where it
-// does not (loft#1009).
+// What a width type (`u8`, `i8`, `u16`, `i16`, `i32`, `u32`) bounds, and where each bound is
+// applied (loft#1009).
 //
-// The entry for these types says each "holds whole numbers within fixed bounds".  Measured,
-// that is true of the declaration, true of a struct FIELD, and false of a LOCAL reached by a
-// compound operator: `a: u8 = 250; a += 10;` answers 260, and `b: u8 = 5; b -= 10;` answers
-// -5, which the type cannot represent at all.  `a = a + 10` — the same arithmetic written
-// out — is a compile error, so the guarded spelling is the long one and the shorthand is the
-// hole.
+// The entry says each "holds whole numbers within fixed bounds".  There are three places that
+// could enforce it and they are not the same place: the DECLARATION refuses a value that does
+// not fit (`l: u8 = 300`), the written-out assignment refuses one it cannot prove fits
+// (`l = l + 10`), and STORAGE clamps — an out-of-range write to a narrow field leaves the
+// type's minimum.  A compound assignment into a LOCAL used to reach none of them: `a: u8 =
+// 250; a += 10;` answered 260 and `b: u8 = 5; b -= 10;` answered -5, a value the type cannot
+// represent at all, so one program held 260 in a `u8` local and 0 in the `u8` field beside it.
 //
-// The cells below pin BOTH halves, because the pair is the finding: the same program holds
-// 260 in a `u8` local and 0 in the `u8` field it was assigned from.  When loft#1009 closes,
-// the local cells are the ones that change and they say so by name.
+// The compile-time check could not have closed it. At the store site the value in hand is the
+// OPERAND — `10`, which fits a `u8` — and only the composed sum can be judged, at run time.
+// So the fix emits at the local what the store layer already did, and the cells below check
+// the two against each other rather than against a constant.
 //
 // The field half is loft#984's, already fixed: an out-of-range write leaves the type's
 // DEFAULT rather than a wrapped or aliased value, for the `u8` spelling and the
@@ -61,23 +63,52 @@ fn main() {
   l.b = 260;
   assert(l.b == 0, "the limit() spelling agrees, got {l.b}");
 
-  // A LOCAL does not.  These four are loft#1009 and are expected to CHANGE when it closes —
-  // they pin today's answer so the change is visible rather than silent.
+  // And since loft#1009, a LOCAL agrees with it.  These cells were written when it did not —
+  // they pinned 260, -5, 200 and 66000 — and the fix is what turned them into these.  A local
+  // is a stack slot and reaches neither the compile-time narrowing check (which judges the
+  // OPERAND, and `10` fits a u8) nor the store's own guard, so the compound seam had no range
+  // check of any kind.
   a1009: u8 = 250;
   a1009 += 10;
-  assert(a1009 == 260, "loft#1009: a u8 local passes its ceiling, got {a1009}");
+  assert(a1009 == 0, "a u8 local past its ceiling takes the type's minimum, got {a1009}");
 
   b1009: u8 = 5;
   b1009 -= 10;
-  assert(b1009 == -5, "loft#1009: an UNSIGNED local goes negative, got {b1009}");
+  assert(b1009 == 0, "and so does one that would go negative, got {b1009}");
 
   c1009: i8 = 100;
   c1009 += 100;
-  assert(c1009 == 200, "loft#1009: an i8 local passes 127, got {c1009}");
+  assert(c1009 == -128, "an i8's minimum is -128, not 0, got {c1009}");
 
   d1009: u16 = 65000;
   d1009 += 1000;
-  assert(d1009 == 66000, "loft#1009: a u16 local passes 65535, got {d1009}");
+  assert(d1009 == 0, "a u16 past 65535, got {d1009}");
+
+  e1009: i16 = 32000;
+  e1009 += 1000;
+  assert(e1009 == -32768, "an i16 past 32767, got {e1009}");
+
+  // IN-RANGE compound assignment is untouched, which is what says the guard fires on the
+  // value rather than on the type.  Both directions, and exactly on the boundary.
+  f1009: u8 = 10;
+  f1009 += 5;
+  assert(f1009 == 15, "an in-range += is unaffected, got {f1009}");
+
+  g1009: i8 = -10;
+  g1009 -= 5;
+  assert(g1009 == -15, "and an in-range -=, got {g1009}");
+
+  h1009: u8 = 255;
+  h1009 -= 255;
+  assert(h1009 == 0, "0 and 255 are both inside a u8, got {h1009}");
+
+  // The local and the FIELD now answer the same thing, which is the pair the issue was
+  // about: one program used to hold 260 in a `u8` local and 0 in the `u8` field beside it.
+  i1009 = U1009 { a: 250, b: 0, c: 0 };
+  i1009.a += 10;
+  j1009: u8 = 250;
+  j1009 += 10;
+  assert(i1009.a == j1009, "field {i1009.a} and local {j1009} agree");
 
   println("width types: bounded where they are stored");
 }

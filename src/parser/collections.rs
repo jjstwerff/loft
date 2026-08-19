@@ -1236,7 +1236,25 @@ impl Parser {
         // inner OpGetVector) — identical to how plain enums are handled.  The old
         // special-case here destructured the two-level OpEqInt(OpGetByte(…)) read
         // shape and is obsolete (it mis-read the single-level OpGetBoolean shape).
-        let code = self.compute_op_code(op, to, val, f_type);
+        let mut code = self.compute_op_code(op, to, val, f_type);
+        // loft#1009 — a COMPOUND assignment into a narrow-alias LOCAL had no range check of
+        // any kind, so `l: u8 = 250; l += 10;` answered 260 and `b: u8 = 5; b -= 10;`
+        // answered -5.  The written-out form (`l = l + 10`) is refused at compile time, and
+        // a narrow FIELD is clamped in the store layer — measured, an out-of-range compound
+        // write on a field leaves the type's MINIMUM (u8 0, i8 -128, u16 0, i16 -32768, on
+        // both backends and in both directions).  A local lives in a stack slot and reaches
+        // neither guard, which is how one program held 260 in a `u8` local and 0 in the `u8`
+        // field it was assigned from.
+        //
+        // The compile-time check cannot close it: at the store site `code` is the OPERAND
+        // (`10`), which fits `u8` — only the composed value here can be judged, and only at
+        // run time.  So this emits what the store layer already does, at the one seam that
+        // was missing it.  `declared_range` deliberately answers `None` for a narrow alias
+        // (its comment: "already guarded at COMPILE time"), which is true of `=` and false
+        // of `+=`; this is that gap, not a second opinion about `=`.
+        if op != "=" && !self.first_pass {
+            self.guard_narrow_alias_local(&mut code, to, f_type);
+        }
         if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name().to_string();
             let args = args.clone();

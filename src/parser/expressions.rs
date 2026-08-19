@@ -4397,6 +4397,47 @@ use a separate collection or add after the loop"
     /// a VARIABLE. A field write carries its range in the store op (`min` only, which is
     /// why the top of the range escaped it); a local has no store op at all, which is why
     /// `a: integer limit(0,255) = 7; a = 300` kept 300.
+    /// loft#1009 — clamp a COMPOUND assignment's result to a narrow-alias local's own range.
+    ///
+    /// Only for a plain whole-variable target: a field or an element goes through the store,
+    /// which already applies this and is the oracle the bounds come from — an out-of-range
+    /// compound write on a narrow FIELD leaves the type's minimum, on both backends and
+    /// whether it overflowed or underflowed. A local is a stack slot and reaches no such
+    /// layer, so `l: u8 = 250; l += 10;` kept 260 and `b: u8 = 5; b -= 10;` kept -5.
+    ///
+    /// Deliberately NOT the `=` path: there the value is judged at compile time
+    /// (`is_narrowing_int_store`), and `declared_range`'s own comment records what happens
+    /// when a runtime default is added on top of a check that already holds — it handed 24
+    /// of the stdlib's own `i8` stores a `-128`.
+    pub(crate) fn guard_narrow_alias_local(&mut self, code: &mut Value, to: &Value, target: &Type) {
+        // A whole-variable target only. `s.f += n` / `v[i] += n` reach `call_to_set_op` and
+        // the store's own guard; wrapping them here would report and clamp twice.
+        if !matches!(to.unspan(), Value::Var(_)) {
+            return;
+        }
+        let Type::Integer(spec) = target.base() else {
+            return;
+        };
+        // `forced_size` is what marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`); the
+        // `limit(lo, hi)` spelling sets none and is `guard_declared_range`'s business.
+        if spec.forced_size.is_none() || spec.is_wide_template() || spec.is_signed32_template() {
+            return;
+        }
+        let (lo, hi) = (i64::from(spec.min), i64::from(spec.max));
+        // The default a narrow slot takes when a write does not fit is its MINIMUM — read
+        // off the field oracle rather than chosen here, so the local and the field agree.
+        let guarded = self.cl(
+            "OpRangeDefault",
+            &[
+                code.clone(),
+                Value::Long(lo),
+                Value::Long(hi),
+                Value::Long(lo),
+            ],
+        );
+        *code = guarded;
+    }
+
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {
         let Some((lo, hi, dflt)) = declared_range(target) else {
             return;

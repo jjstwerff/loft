@@ -1,0 +1,11 @@
+fn swap56(p: &(text, text)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}
+
+fn main() {
+  s = ("x", "y");
+  swap56(s);
+  println("{s.0}{s.1}");
+}

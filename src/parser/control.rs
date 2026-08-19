@@ -8552,6 +8552,31 @@ impl Parser {
                 }
             }
             self.lexer.token("}");
+            // loft#1007 — a capture list is only ever followed by the BODY it binds for, and
+            // this is the one place that knows the braces just consumed were a capture rather
+            // than a block.  Without saying so here the caller reports `Expect token {` at the
+            // `else`, naming neither `is`, the capture, nor the variant — and the spelling that
+            // provokes it is the one a reader writes first, `v = if c is Circle { radius } else
+            // { 0 }`, because `{ radius }` reads as the then-branch.
+            // Reported on BOTH passes on purpose: this is a SYNTAX fault, and pass 1 is where
+            // it is met — a `!self.first_pass` gate made the message unreachable, because the
+            // generic `Expect token {` the caller raises on pass 1 is the error the run stops
+            // on and pass 2 never sees the file (slice 7's fallback-parser lesson, from the
+            // other side).
+            if !self.lexer.peek_token("{") {
+                let names: Vec<&str> = seen_fields.iter().map(String::as_str).collect();
+                let captured = names.join(", ");
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{{ {captured} }}` after `is {}` is the field-capture list, not the body — \
+                     a block has to follow it. Write `is {} {{ {captured} }} {{ … }}`, repeating \
+                     the name if the body is just that value, or use `match`, which takes \
+                     captures and IS an expression",
+                    self.data.def(variant_def_nr).name(),
+                    self.data.def(variant_def_nr).name(),
+                );
+            }
             if condition.is_empty() {
                 *code = disc_check;
             } else {

@@ -2078,6 +2078,37 @@ impl Parser {
                     // the vector-type-resolution chokepoint (`sub_type` `vector` arm),
                     // so no per-site hook here.
                     if reference {
+                        // loft#1006 — a `&(…)` reference tuple reaches its elements through the
+                        // tuple's stored DbRef with the `(ref, offset)` ops a struct field uses,
+                        // and only the SCALAR kinds are laid out for that. A heap element got as
+                        // far as codegen and died there, as an internal compiler error naming a
+                        // Rust type (`RefTupleGet: unsupported element type Text(Deps { … })`).
+                        // Refusing at the signature costs the same program nothing and says what
+                        // to write; implementing it is layout work, not a missing opcode — the
+                        // op table alone answers an out-of-bounds store.
+                        if !self.first_pass
+                            && let Type::Tuple(ref elems) = tp
+                            && let Some(bad) = elems.iter().find(|e| {
+                                !matches!(
+                                    e.base(),
+                                    Type::Integer(_)
+                                        | Type::Float
+                                        | Type::Single
+                                        | Type::Character
+                                        | Type::Function(_, _, _)
+                                )
+                            })
+                        {
+                            let bad_name = bad.name(&self.data);
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `&` reference tuple may only hold scalar elements, and this \
+                                 one holds `{bad_name}` — take the tuple by value and return a \
+                                 new one, or use a struct, whose fields of any type write \
+                                 through a `&` parameter"
+                            );
+                        }
                         Type::RefVar(Box::new(tp))
                     } else {
                         tp

@@ -1,0 +1,7 @@
+enum Shape55 { Circle { radius: integer }, Square { side: integer } }
+
+fn main() {
+  c = Circle { radius: 5 };
+  v = if c is Circle { radius } else { 0 };
+  println("{v}");
+}
