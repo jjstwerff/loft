@@ -26,6 +26,20 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `break` naming the wrong variable now tells you, instead of crashing the compiler
+
+`x#break` and `x#continue` leave a loop by naming the variable that loop binds. Naming
+something else that happens to be a declared local — easy to do, since it looks like any
+other name — crashed the compiler with an internal error and a nonsense index:
+
+```loft
+k = 0;
+for j in 1..=3 { if j == 2 { k#break } }   // was: internal compiler error
+```
+
+It now says `k` is not a loop variable, and lists what you can write instead — a plain
+`break`, or the enclosing loops by name, innermost first.
+
 ### A library can import itself again
 
 A package whose own test file is named after the package — `tests/hex_world.loft` saying

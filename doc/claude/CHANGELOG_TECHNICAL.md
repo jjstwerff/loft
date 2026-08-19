@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `loop_nr` answers "not found", so `x#break` on a non-loop local is a diagnostic (loft#998, 2026-08-19)
+
+Naming a declared local that is not a loop variable in `x#break` / `x#continue` was an
+INTERNAL COMPILER ERROR on both backends — *"index out of bounds: the len is 1 but the
+index is 18446744073709551615"*, a `usize` underflow.
+
+`Variables::loop_nr` walked the enclosing-loop chain with the match in its loop CONDITION:
+
+```rust
+while c != u16::MAX && self.loops[c as usize].variable != target { c = …; nr += 1; }
+nr
+```
+
+so falling off the end returned the chain length — one past the deepest valid level, and
+indistinguishable from a real answer. Three sites in `Scopes::scan` then indexed
+`self.loops[self.loops.len() - lv - 1]` and underflowed. The `in_loop` guard catches
+"outside a loop", which is why `k#break` with no loop at all was always clean; nothing
+checked that the NAME belonged to a loop.
+
+It now returns `Option<u16>` and RETURNS ON THE MATCH, which is what makes the missing
+case impossible to fall out of — "not found" and "the outermost loop" are different
+answers and one number cannot carry both. An unbound name is `None` too: it names no loop,
+which is the same answer as a bound one that names no loop.
+
+Reported at the PARSE, not in `scopes.rs`: that is where the source position and the
+author's spelling are, and `scan` has only a level. The message names what CAN be written
+— `Variables::enclosing_loop_names` lists the enclosing loops' variables innermost first,
+so a nested pair reads *"or `j#break` or `i#break`"*, and a `while` (which binds no
+variable) offers the plain form instead. Outside a loop the pre-existing message stays the
+only one; adding "…and `k` is not a loop variable" says the same thing twice from further
+away.
+
+Guards: four `parse_errors` cells — `for`, `while`-with-`continue`, the nested pair, and
+the outside-a-loop control. The `while` cell is the one that would not have been written
+from the `for` case alone: a `while` binds no variable, so the cure list is empty and the
+message has to say something else.
+
 ### A package's own NAME is not one of its module names (loft#976 follow-up, 2026-08-19)
 
 loft#976 made a bare `use <id>` inside a package bind that package's OWN `<id>.loft`, so a

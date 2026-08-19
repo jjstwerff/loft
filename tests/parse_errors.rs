@@ -1160,6 +1160,54 @@ fn par_worker_returns_generator() {
     .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
+/// loft#998 — `x#break` naming a declared NON-loop local was an internal compiler error.
+///
+/// `Variables::loop_nr` walked the enclosing-loop chain and exited on its CONDITION, so
+/// falling off the end returned the chain length — one past the deepest valid level, with
+/// no "not found" signal. `Scopes::scan` then indexed `loops.len() - lv - 1` and
+/// underflowed a `usize`: *"internal compiler error … index is 18446744073709551615"*,
+/// which names neither the mistake nor a cure. Both backends.
+///
+/// It now answers `Option`, because "not found" and "the outermost loop" are different
+/// answers and one number cannot carry both, and the parser reports — which is where the
+/// source position and the author's spelling are.
+///
+/// The message names what CAN be written, and the enclosing loops' variables are the whole
+/// answer to that: innermost first, so a nested pair reads `j#break` before `i#break`.
+#[test]
+fn a_non_loop_variable_in_break_says_so() {
+    code!("fn test() { k = 0; for j in 1..=3 { if j == 2 { k#break } } }").error(
+        "`k` is not a loop variable — `k#break` names the loop to break by the variable that loop binds, and no enclosing loop binds `k`; write a plain `break` for the innermost loop, or `j#break` at a_non_loop_variable_in_break_says_so:1:58",
+    );
+}
+
+/// The `continue` twin, in a `while` — which binds NO variable, so the only cure to offer
+/// is the plain form. A cell that only ever saw `for` would not have found that.
+#[test]
+fn a_non_loop_variable_in_continue_says_so() {
+    code!("fn test() { k = 0; while k < 3 { k#continue } }").error(
+        "`k` is not a loop variable — `k#continue` names the loop to continue by the variable that loop binds, and no enclosing loop binds `k`; write a plain `continue` at a_non_loop_variable_in_continue_says_so:1:46",
+    );
+}
+
+/// Nested loops list both, innermost first — the order the author reads them in.
+#[test]
+fn the_cure_lists_the_enclosing_loops_innermost_first() {
+    code!("fn test() { z = 1; for i in 1..=2 { for j in 1..=2 { z#break } } }").error(
+        "`z` is not a loop variable — `z#break` names the loop to break by the variable that loop binds, and no enclosing loop binds `z`; write a plain `break` for the innermost loop, or `j#break` or `i#break` at the_cure_lists_the_enclosing_loops_innermost_first:1:63",
+    )
+    .warning("Variable i is never read at the_cure_lists_the_enclosing_loops_innermost_first:1:36")
+    .warning("Variable j is never read at the_cure_lists_the_enclosing_loops_innermost_first:1:53");
+}
+
+/// OUTSIDE a loop the pre-existing message is the right one, and stays the ONLY one —
+/// adding "…and `k` is not a loop variable" says the same thing twice from further away.
+#[test]
+fn outside_a_loop_keeps_its_own_message() {
+    code!("fn test() { k = 0; k#break }")
+        .error("Cannot continue outside a loop at outside_a_loop_keeps_its_own_message:1:29");
+}
+
 /// loft#996 — a SLICE on a library type says what to write, instead of `Expect token ]`.
 ///
 /// The composite `x[a, b]` now dispatches to `OpIndex` (its indices are arguments, which

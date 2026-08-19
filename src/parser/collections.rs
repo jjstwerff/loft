@@ -1204,6 +1204,44 @@ impl Parser {
     }
 
     /// Compute the RHS value after applying `op` to `to` and `val`.
+    /// `x#break` / `x#continue` named something that is not an enclosing loop's variable
+    /// — report it, and answer a poisoned value (loft#998).
+    ///
+    /// Reported HERE, at the parse, because this is where the source position and the
+    /// author's spelling are. `Scopes::scan` sees only a level, has no position to point
+    /// at, and until this existed simply indexed with it — `k#break` on a declared local
+    /// was *"internal compiler error … index is 18446744073709551615"*, which names
+    /// neither the mistake nor a cure.
+    ///
+    /// Names what CAN be written: the enclosing loops' variables. That list is the whole
+    /// answer to "then what may I say", and the author already has one of them on screen.
+    fn not_a_loop_variable(&mut self, name: &str, verb: &str) -> Value {
+        // Outside a loop entirely, "cannot break outside a loop" is the right and only
+        // message — the caller has already said it, and adding "…and `k` is not a loop
+        // variable" says the same thing twice from further away.
+        if !self.first_pass && self.in_loop {
+            let open = self.vars.enclosing_loop_names();
+            let cure = if open.is_empty() {
+                format!("a plain `{verb}`")
+            } else {
+                let names = open
+                    .iter()
+                    .map(|n| format!("`{n}#{verb}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                format!("a plain `{verb}` for the innermost loop, or {names}")
+            };
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{name}` is not a loop variable — `{name}#{verb}` names the loop to \
+                 {verb} by the variable that loop binds, and no enclosing loop binds \
+                 `{name}`; write {cure}"
+            );
+        }
+        Value::Null
+    }
+
     pub(crate) fn iter_op_count_or_first(
         &mut self,
         code: &mut Value,
@@ -1331,13 +1369,24 @@ use #count instead"
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
             }
-            *code = Value::Break(self.vars.loop_nr(name));
+            // loft#998 — `x#break` names the loop to leave by its VARIABLE, so a name that
+            // is not one has no level to jump. `Value::Null` rather than a level: every
+            // level is a real jump, and the one that used to be handed over (the chain
+            // length, from a walk with no not-found answer) underflowed `Scopes::scan`'s
+            // `loops.len() - lv - 1` into an internal compiler error.
+            *code = match self.vars.loop_nr(name) {
+                Some(lv) => Value::Break(lv),
+                None => self.not_a_loop_variable(name, "break"),
+            };
             *t = Type::Void;
         } else if self.lexer.has_token("continue") {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
             }
-            *code = Value::Continue(self.vars.loop_nr(name));
+            *code = match self.vars.loop_nr(name) {
+                Some(lv) => Value::Continue(lv),
+                None => self.not_a_loop_variable(name, "continue"),
+            };
             *t = Type::Void;
         } else if self.lexer.has_keyword("count") {
             self.iter_op_count_or_first(code, name, t, false, index_var);
