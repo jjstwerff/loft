@@ -19,6 +19,8 @@ fn first_over(h: hash<Tile[tkey]>, thresh: integer) -> integer {
   0
 }
 
+// @FTR-064 — `expose` pins a collection read-only and `release` lets it go, with ordered
+// iteration over it building its scratch elsewhere and freeing it
 fn main() {
   h: hash<Tile[tkey]> = [];
   h += [Tile{ tkey: 3, ox: 30 }];

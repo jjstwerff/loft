@@ -129,6 +129,8 @@ fn lex(src: text) -> vector<text> {
   toks
 }
 
+// @FTR-063 — the formatter's safety argument, checked: concatenating every token's text
+// must reproduce the source byte-for-byte, over the whole corpus
 fn main() {
   path = env_variable("LOFT_FMT_FILE") ?? "";
   src = file(path).content() ?? "";

@@ -158,6 +158,8 @@ fn plain_relayed_width<R: PlainRelay>(r: R) -> integer {
   return c.width();
 }
 
+// @FTR-055 — an interface's associated type bound to the implementor's companion, named
+// `Self.Rows` in a signature and used through the bound inside a generic
 fn main() {
   f = FileSource { path: "abcd" };
   d = DbSource { dsn: "pg", cols: 7 };

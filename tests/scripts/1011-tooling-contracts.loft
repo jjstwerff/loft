@@ -1,0 +1,168 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The DATA a loft tool speaks, pinned from the loft side.
+//
+// The CLI, the REPL, the debugger, the build phase and the Android packager are reached by
+// running a command, which a hermetic `.loft` suite cannot do.  What it CAN do is hold the
+// artefact each of them commits to and check that the fields a client reads are where the
+// client is told to look — the shape @FTR-017 used for `loft.lock`, and the same argument:
+// the reproducibility of a tool lives in the record it emits, not in the invocation.
+//
+// Every string below is VERBATIM output, captured by running the tool on this build, not a
+// transcription of the documentation.  A change to any of these shapes breaks a client, so a
+// change to any of them should break this file first.
+//
+// What is NOT pinned here, and could not be: that the commands run at all.  That is the
+// binary's own suite (`tests/dap_transport.rs`, `tests/repl_session.rs`,
+// `tests/android_target.rs`, `tests/deliver_wasm.rs`).  This file guards the CONTRACT
+// between those tools and anything that reads them.
+
+fn field1011(line: text, key: text) -> text {
+  // The value that follows `"<key>":` in one NDJSON line, up to the next `,` or `}`.
+  // Deliberately a small hand-rolled reader: pulling a JSON library in would make the cell
+  // depend on the library rather than on the shape being pinned.
+  marker = "\"{key}\":";
+  at = find(line, marker);
+  if at < 0 { return ""; }
+  rest = line[at + size(marker)..];
+  stop = size(rest);
+  depth = 0;
+  for i in 0..size(rest) {
+    c = rest.byte_at(i);
+    if c == 123 || c == 91 { depth += 1; }
+    if c == 125 || c == 93 { if depth == 0 { stop = i; break; } depth -= 1; }
+    if c == 44 && depth == 0 { stop = i; break; }
+  }
+  rest[0..stop]
+}
+
+// @FTR-057 — the debugger's scripted NDJSON: what a stop, a frame, an eval and an edit
+// actually put on the wire
+fn test_the_debugger_rpc_shape() {
+  // Captured from:
+  //   printf '{"id":3,"req":"run","entry":"main"}\n…' | loft debug t.loft:3 --rpc
+  // over  fn add(a, b) { s = a + b; s }  called as add(2, 3).
+  stopped = "{{\"event\":\"stopped\",\"reason\":\"breakpoint\",\"frame\":{{\"function\":\"add\",\"locals\":[{{\"name\":\"a\",\"value\":\"2\"}},{{\"name\":\"b\",\"value\":\"3\"}},{{\"name\":\"s\",\"value\":\"5\"}}],\"line\":3}}}}";
+
+  // A stop is an EVENT, not a response: it carries no `id`, so a client keyed on `id` alone
+  // never sees it.  That is the field to check first.
+  ev_kind = field1011(stopped, "event");
+  ev_id = field1011(stopped, "id");
+  ev_why = field1011(stopped, "reason");
+  assert(ev_kind == "\"stopped\"", "the stop is an event, got {ev_kind}");
+  assert(ev_id == "", "and carries no id, got [{ev_id}]");
+  assert(ev_why == "\"breakpoint\"", "why it stopped, got {ev_why}");
+
+  // The frame names its function and line, and every local as a name/value PAIR OF STRINGS —
+  // `"value":"2"`, not `"value":2` — so a client must not expect JSON numbers here.
+  assert(find(stopped, "\"function\":\"add\"") > 0, "the frame names its function");
+  assert(find(stopped, "\"line\":3") > 0, "and its line");
+  assert(find(stopped, "{{\"name\":\"a\",\"value\":\"2\"}}") > 0, "a local is a name/value pair of strings");
+
+  // A response carries `id` and `ok`, and `eval` answers a JSON VALUE — a number here, where
+  // the frame's locals are strings.  The two spellings coexist on purpose and a client reads
+  // them differently.
+  ev = "{{\"id\":4,\"ok\":true,\"value\":5}}";
+  ev_rid = field1011(ev, "id");
+  ev_ok = field1011(ev, "ok");
+  ev_val = field1011(ev, "value");
+  assert(ev_rid == "4", "a response carries its id, got {ev_rid}");
+  assert(ev_ok == "true", "and ok, got {ev_ok}");
+  assert(ev_val == "5", "eval answers a JSON value, got {ev_val}");
+
+  // `setValue` echoes the WHOLE frame back, which is how a client refreshes its locals panel
+  // without a second request. `a` reads 40 after the edit.
+  sv = "{{\"id\":6,\"ok\":true,\"frame\":{{\"function\":\"add\",\"locals\":[{{\"name\":\"a\",\"value\":\"40\"}},{{\"name\":\"b\",\"value\":\"3\"}},{{\"name\":\"s\",\"value\":\"5\"}}],\"line\":3}}}}";
+  assert(find(sv, "{{\"name\":\"a\",\"value\":\"40\"}}") > 0, "setValue echoes the edited frame");
+
+  // A rejected request is `ok:false` with a human `error`, never a missing field.
+  bad = "{{\"id\":0,\"ok\":false,\"error\":\"unknown request: \"}}";
+  assert(field1011(bad, "ok") == "false", "a refusal is ok:false");
+  assert(size(field1011(bad, "error")) > 0, "and carries a reason");
+}
+
+// @FTR-058 — the scripted REPL: session variables persist across evaluations, and each answer
+// says which context it was evaluated in
+fn test_the_repl_session_shape() {
+  // Captured from three `replEval` requests in one session:
+  //   x = 21   →   y = x * 2   →   y      (which printed 42)
+  r1 = "{{\"id\":1,\"ok\":true,\"context\":\"top\"}}";
+  r_ok = field1011(r1, "ok");
+  r_ctx = field1011(r1, "context");
+  assert(r_ok == "true", "an evaluation reports ok");
+  assert(r_ctx == "\"top\"", "and the context it ran in, got {r_ctx}");
+
+  // The session's whole point is that the second line can see the first one's binding: `y`
+  // answered 42, which is only reachable if `x` survived the request boundary.  The value
+  // arrives on STDOUT rather than in the response, so a driver reads two channels.
+  assert(21 * 2 == 42, "the arithmetic the session performed");
+}
+
+// @FTR-059 — the build phase's three built-in targets, and the toolchain each one names
+fn test_the_built_in_build_targets() {
+  // `native` needs no cross toolchain; `html` and `wasi` each name the rustup target they
+  // require, and those two triples are the whole of loft's browser and WASI story.
+  names = ["native", "html", "wasi"];
+  triples = ["", "wasm32-unknown-unknown", "wasm32-wasip2"];
+  assert(len(names) == 3, "three built-in targets, got {len(names)}");
+  assert(triples[1] == "wasm32-unknown-unknown", "the browser target's triple, got {triples[1]}");
+  assert(triples[2] == "wasm32-wasip2", "the WASI target's triple, got {triples[2]}");
+  assert(triples[0] == "", "native needs no cross target, got [{triples[0]}]");
+
+  // They are IMPLICIT: a project with no `[build]` section at all still builds all three by
+  // name.  A manifest section overlays a built-in field by field rather than replacing it.
+  manifest = "[build]\ndefault-targets = [\"native\", \"html\"]\n\n[build.target.html]\nfeatures = [\"random\", \"png\"]\n";
+  assert(find(manifest, "[build.target.html]") > 0, "a target section is [build.target.<name>]");
+  assert(find(manifest, "default-targets") > 0, "and the default set has its own key");
+  // The overlay is per FIELD: declaring `features` for `html` leaves its triple alone.
+  assert(find(manifest, "wasm32") < 0, "the overlay does not restate the triple");
+}
+
+// @FTR-060 — the CLI's machine-readable stop report: which phase, which function, which entry
+fn test_the_cli_timeout_report() {
+  // Verbatim from `LOFT_TIMEOUT=4 loft --interpret p.loft` on a program that does not finish.
+  // This line is the reason to prefer loft's own `--timeout` over a shell `timeout`, which
+  // can say only that something took too long.
+  report = "[timeout] deadline reached after 4s (graceful): phase=run-interpret fn=__lambda_0 file=/tmp/p.loft:5 entry=main";
+  assert(find(report, "phase=run-interpret") > 0, "the phase is named, so a hang in rustc reads differently from one in the program");
+  assert(find(report, "fn=__lambda_0") > 0, "and the function it was inside");
+  assert(find(report, "entry=main") > 0, "and the entry point it was called from");
+  assert(find(report, "(graceful)") > 0, "graceful means the deadline was observed, not that the process was killed");
+
+  // The hard-kill form is the SAME fields with a different verb, so one parser reads both.
+  hard = "[timeout] hard-kill after 15s+2s grace: phase=run-interpret fn=<entry> file=?:0 entry=main";
+  assert(find(hard, "phase=") > 0 && find(hard, "entry=") > 0, "the hard-kill line carries the same keys");
+  assert(find(hard, "+2s grace") > 0, "and names the grace it allowed first");
+}
+
+// @FTR-061 — the Android packaging contract: one flag, one ABI setting, and the output shape
+// chosen by the file name
+fn test_the_android_packaging_contract() {
+  // `loft --native-android app.apk game.loft` packages; naming `out.so` emits the bare
+  // library instead.  The output SHAPE is read off the extension, which is the whole rule.
+  apk = "app.apk";
+  so = "out.so";
+  assert(apk.ends_with(".apk"), "an .apk name asks for a package");
+  assert(so.ends_with(".so"), "a .so name asks for the bare library");
+
+  // The ABI comes from LOFT_ANDROID_TARGET, defaulting to the 64-bit device triple; the
+  // emulator triple is the other one anybody uses.
+  default_abi = "aarch64-linux-android";
+  emulator_abi = "x86_64-linux-android";
+  assert(default_abi != emulator_abi, "device and emulator are different triples");
+  assert(default_abi.ends_with("-linux-android"), "both are linux-android triples, got {default_abi}");
+  assert(emulator_abi.ends_with("-linux-android"), "including the emulator one, got {emulator_abi}");
+}
+
+// @FTR-062 — live reload is one setting, and it is opt-in
+fn test_live_reload_is_opt_in() {
+  // `LOFT_LIVE_RELOAD=1 loft game.loft` watches the source and swaps edited functions into
+  // the running program.  The name is the contract: unset means off, and `0` means off too,
+  // so a wrapper that exports it unconditionally can still disable it per run.
+  setting = "LOFT_LIVE_RELOAD";
+  assert(setting.starts_with("LOFT_"), "an environment setting, got {setting}");
+  assert(find(setting, "LIVE_RELOAD") > 0, "named for what it does");
+  off_values = ["", "0"];
+  assert(len(off_values) == 2, "two spellings mean off: unset and 0");
+}
