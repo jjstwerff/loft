@@ -834,7 +834,13 @@ impl State {
                     Type::Single => stack.add_op("OpPutSingle", self),
                     Type::Character => stack.add_op("OpPutCharacter", self),
                     Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
-                    Type::Text(_) => stack.add_op("OpAppendText", self),
+                    // `OpPutText`, like every sibling here and like the three other
+                    // element-write matches in this file — NOT `OpAppendText`, which pops a
+                    // different amount and made a text-element write land one index high
+                    // (loft#1004): `t.0 = "X"` on a `(text, text)` wrote `.1`, a write to the
+                    // LAST element fell off the end and was silently lost, and a write onto a
+                    // non-text neighbour segfaulted the interpreter.
+                    Type::Text(_) => stack.add_op("OpPutText", self),
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         stack.add_op("OpPutRef", self);
                     }

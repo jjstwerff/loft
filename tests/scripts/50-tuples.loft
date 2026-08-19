@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // T1: Tuple types — literals, element access, assignment, parameters, ref-tuple, not null,
 // tuple-returning functions (N8a.3), LHS destructuring.
-// Blocked in native: text elements.
+//
+// TEXT elements are covered in `1004-tuple-text-element-write.loft`, not here, and the note
+// that used to sit on this line ("Blocked in native: text elements") was wrong by the time it
+// was read: a text element reads, interpolates, returns and lives in a vector on BOTH backends
+// today, and writing one is correct since loft#1004.  Two shapes are still open and are the
+// reason this file keeps to scalars — a tuple VARIABLE with a text element passed to a
+// function does not compile on `--native` (loft#1005), and a `&(text, text)` reference-tuple
+// parameter is an internal compiler error (loft#1006).
 
 // T1.5: reference-tuple parameter — swap elements in place.
 fn swap(pair: &(integer, integer)) {
@@ -37,6 +44,8 @@ fn swap_pair(p: (integer, integer)) -> (integer, integer) {
   (p.1, p.0)
 }
 
+// @FTR-031 — every tuple spelling: literal, element read and write, by-value and reference
+// parameters, a tuple return, and LHS destructuring
 fn main() {
   // --- T1: literal and element access ---
   t = (10, 20);

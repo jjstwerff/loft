@@ -330,6 +330,14 @@ impl Output<'_> {
                     if is_work_ref {
                         return write!(w, "var_{name}.{idx}.clone()");
                     }
+                    if self.tuple_text_to_string {
+                        // Feeding a `String`-typed tuple slot, and the caller appends
+                        // `.to_string()`.  Borrowing first makes that `&(x.to_string())`,
+                        // which rustc reads as `&String` where a `String` is wanted —
+                        // `a = ("X", a.1)` refused the whole program (loft#1004).  Same
+                        // guard the plain-variable arm above already carries.
+                        return write!(w, "var_{name}.{idx}");
+                    }
                     return write!(w, "&var_{name}.{idx}");
                 }
                 return write!(w, "var_{name}.{idx}");
@@ -338,9 +346,24 @@ impl Output<'_> {
                 // N8a.2: emit the element assignment (TuplePut is a void stmt).
                 let var = node.tupleput_var();
                 let idx = node.tupleput_idx();
-                let name = sanitize(self.data.def(self.def_nr).variables().name(var));
+                let variables = self.data.def(self.def_nr).variables();
+                let name = sanitize(variables.name(var));
+                // A text element is a `String` slot, so the value has to arrive owned —
+                // the same rule the tuple LITERAL arm below obeys through this flag.
+                // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
+                // whole program with *"expected `String`, found `&str`"* (loft#1004).
+                let elem_is_text = match variables.tp(var).base() {
+                    Type::Tuple(elems) => elems
+                        .get(idx as usize)
+                        .is_some_and(|e| matches!(e.base(), Type::Text(_))),
+                    _ => false,
+                };
                 write!(w, "var_{name}.{idx} = ")?;
-                return self.output_code_node(w, node.tupleput_inner());
+                let prev = self.tuple_text_to_string;
+                self.tuple_text_to_string = elem_is_text;
+                let r = self.output_code_node(w, node.tupleput_inner());
+                self.tuple_text_to_string = prev;
+                return r;
             }
             _ => {}
         }
