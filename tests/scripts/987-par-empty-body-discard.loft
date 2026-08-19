@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#987 — a `par` loop whose body is EMPTY takes the discard route, and that route
+// had no native lowering at all.  `--native` emitted `n_parallel_discard`'s loft
+// DECLARATION, whose body is empty: workers that never run.  A six-argument call site
+// against a five-parameter declaration is the only thing that turned that into a rustc
+// error instead of a silent no-op, and an arity patch would have taken the error away
+// and left the no-op.
+//
+// Fixing the lowering made the two backends comparable for the first time, and the
+// INTERPRETER's half of the route turned out to be wrong in two ways nothing could
+// witness — a route that drops every result produces nothing to compare:
+//
+//   - the row reached the worker as its 12-byte `DbRef` whatever the worker's first
+//     parameter says, so a `fn w(n: integer)` read the pointer's bits;
+//   - a text-returning worker's hidden `__work_N` buffer parameter (and a
+//     heap-returning worker's hidden destination) was never pushed, which shifted
+//     every slot the worker reads — the text case SEGFAULTED the interpreter.
+//
+// So each worker here ASSERTS the row it was handed.  That is the oracle the route
+// itself cannot provide: an assertion inside a worker is observable, its return value
+// is not.  Row-count and value coverage sit in the queue-route control at the bottom,
+// which reads the same workers through a body that names the result.
+
+fn i987_scalar(n: integer) -> integer {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "discard worker got row {n}, expected 10/20/30");
+  n * n
+}
+
+fn i987_float(n: integer) -> float {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "float worker got row {n}");
+  n * 0.5
+}
+
+fn i987_text(n: integer) -> text {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "text worker got row {n}");
+  "row{n}"
+}
+
+fn i987_text_in(s: text) -> text {
+  assert(s == "p" || s == "q" || s == "r", "text-input worker got row {s}");
+  "{s}{s}"
+}
+
+struct I987Point { x: integer, y: integer }
+
+fn i987_struct(n: integer) -> I987Point {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "struct worker got row {n}");
+  I987Point { x: n, y: n * 2 }
+}
+
+fn i987_vector(n: integer) -> vector<integer> {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "vector worker got row {n}");
+  [n, n + 1]
+}
+
+fn i987_bool(n: integer) -> boolean {
+  assert(n >= 10 && n <= 30 && n % 10 == 0, "boolean worker got row {n}");
+  n > 15
+}
+
+fn i987_rows() -> vector<integer> {
+  [10, 20, 30]
+}
+
+// One test per return shape.  The loop is the last statement of its function because a
+// `par` loop is what is under test, not what follows it.
+
+fn test_987_discard_scalar() {
+  for a in i987_rows() par(b = i987_scalar(a), 2) { }
+}
+
+fn test_987_discard_float() {
+  for a in i987_rows() par(b = i987_float(a), 2) { }
+}
+
+fn test_987_discard_text() {
+  for a in i987_rows() par(b = i987_text(a), 2) { }
+}
+
+fn test_987_discard_text_input() {
+  words = ["p", "q", "r"];
+  for a in words par(b = i987_text_in(a), 2) { }
+}
+
+fn test_987_discard_struct() {
+  for a in i987_rows() par(b = i987_struct(a), 2) { }
+}
+
+fn test_987_discard_vector() {
+  for a in i987_rows() par(b = i987_vector(a), 2) { }
+}
+
+fn test_987_discard_boolean() {
+  for a in i987_rows() par(b = i987_bool(a), 2) { }
+}
+
+/// An empty input takes the route with nothing to dispatch — no workers, no panic.
+fn test_987_discard_empty() {
+  none: vector<integer> = [];
+  for a in none par(b = i987_scalar(a), 2) { }
+}
+
+/// A TUPLE row is wide — it has no single-value spelling, so it reaches the worker as
+/// the element reference.  Paired with a text return here, because a worker with a
+/// hidden parameter cannot take the wide entry (that entry has nowhere to put one).
+fn i987_tuple(p: const(integer, integer)) -> text {
+  assert(p.0 * 10 == p.1, "tuple worker got row ({p.0}, {p.1})");
+  "t{p.0}"
+}
+
+fn test_987_discard_tuple_row() {
+  pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+  for a in pairs par(b = i987_tuple(a), 2) { }
+}
+
+/// The control the discard route cannot be: a body that NAMES the result routes through
+/// the Queue family instead, so the same workers can be checked for count and value.
+/// If the discard tests above ever went vacuous (workers not running at all), this is
+/// what still pins that the workers themselves answer what the asserts assume.
+fn test_987_queue_control() {
+  total = 0;
+  seen = 0;
+  for a in i987_rows() par(b = i987_scalar(a), 2) {
+    total += b;
+    seen += 1;
+  }
+  assert(seen == 3, "queue control expected 3 rows, got {seen}");
+  assert(total == 1400, "queue control expected 100+400+900, got {total}");
+}

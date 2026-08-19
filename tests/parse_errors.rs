@@ -1160,6 +1160,28 @@ fn par_worker_returns_generator() {
     .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
+/// The other caller of the same "unresolved worker" sentinel: a worker name that does
+/// not exist. Both refusals answer `(u32::MAX, Unknown)` from `parse_parallel_worker`,
+/// and `build_parallel_for_ir` has to read that ONE sentinel two opposite ways — on
+/// pass 1 it means "not resolved yet" (a worker declared below the loop, loft#988, where
+/// typing `b` as `integer` pins the slot and pass 2 can no longer refine it), on pass 2
+/// it means "will never resolve, and the error is already reported", where `b` needs a
+/// usable type or every use of it in the body earns a second diagnostic under the first.
+///
+/// The pass is what tells them apart. This cell holds the pass-2 half for the second
+/// caller: exactly one error, with `b > 0` in the body silent (the `code!` harness fails
+/// on any diagnostic not asserted here).
+#[test]
+fn par_worker_that_does_not_exist_reports_once() {
+    code!(
+        "fn test() {
+             items = [1, 2, 3];
+             for a in items par(b = no_such_worker(a), 1) { assert(b > 0); }
+         }"
+    )
+    .error("Unknown function 'no_such_worker' at par_worker_that_does_not_exist_reports_once:3:55");
+}
+
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────
 
 // T1.11a (Plan-06 phase 4d): the original rejection of tuple-typed struct

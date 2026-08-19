@@ -1769,7 +1769,11 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
     // return_size is needed by execute_at_raw to drain the worker's
     // return value off the stack.  Discard accepts any return shape;
     // clamp to the same 1..=8 backstop the light path uses.
-    let return_size = {
+    //
+    // The INPUT shape comes from the same two readers the queue family uses
+    // (`input_kind_for_first_arg` / `tuple_first_arg_types`), so a worker taking a
+    // primitive, a text or a tuple row gets it the way its parameter slot expects.
+    let (return_size, primitive_input_size, tuple_input_types, n_hidden_text, n_hidden_dests) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -1780,11 +1784,44 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
             &def.returned,
             &crate::data::Context::Argument,
         ));
-        if (1..=8).contains(&derived) {
+        let return_size = if (1..=8).contains(&derived) {
             derived
         } else {
             (v_return_size.clamp(1, 8)) as u32
-        }
+        };
+        let primitive_input_size = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
+        // Classified by TYPE, the same two readers `parallel_queue_dispatch` uses —
+        // a second spelling of "which attributes are hidden" is how the prefix
+        // heuristic it replaced went wrong.
+        let n_hidden_text = def
+            .attributes
+            .iter()
+            .filter(|a| crate::native_lib::is_text_work_buffer(&a.typedef))
+            .count();
+        let n_hidden_dests = def
+            .attributes
+            .iter()
+            .filter(|a| {
+                a.hidden
+                    && matches!(
+                        a.typedef,
+                        crate::data::Type::Reference(_, _)
+                            | crate::data::Type::Vector(_, _)
+                            | crate::data::Type::Enum(_, true, _)
+                    )
+            })
+            .count();
+        (
+            return_size,
+            primitive_input_size,
+            tuple_first_arg_types(def),
+            n_hidden_text,
+            n_hidden_dests,
+        )
     };
 
     crate::parallel::run_parallel_discard(
@@ -1796,6 +1833,10 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
         n_threads,
         &extra_args,
         return_size,
+        primitive_input_size,
+        tuple_input_types,
+        n_hidden_text,
+        n_hidden_dests,
     );
     // Void return — nothing to push.  Note: post-2c integers are 8B,
     // so callers expecting a return on the stack would be wrong to

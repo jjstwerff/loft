@@ -152,6 +152,7 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
                 | "n_parallel_queue_ref"
                 | "n_parallel_queue_narrow"
                 | "n_parallel_queue_fn"
+                | "n_parallel_discard"
         ) && args.len() >= 5
             && args.get(4).kind() == ValueType::Int
             && args.get(4).int_value() >= 0

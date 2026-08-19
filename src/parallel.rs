@@ -1322,6 +1322,10 @@ pub fn run_parallel_discard(
     n_threads: usize,
     extra_args: &[u64],
     return_size: u32,
+    primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
+    n_hidden_text: usize,
+    n_hidden_dests: usize,
 ) {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
@@ -1332,7 +1336,10 @@ pub fn run_parallel_discard(
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
+    let prim_in = primitive_input_size;
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
     let _: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
         let mut state = prog.new_state(ws);
         for row_idx in start..end {
             let row_ref = vector::get_vector(
@@ -1341,8 +1348,77 @@ pub fn run_parallel_discard(
                 row_idx as i64,
                 &state.database.allocations,
             );
-            // Discard the worker's return — Stitch::Discard contract.
-            let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+            // Discard drops the result, so only the CALL has to be right — and a call
+            // is right when the worker's parameter slots are filled the way its
+            // signature reads them.  Two things decide that, and this route used to
+            // get both wrong for every shape but one, invisibly: the results it drops
+            // are the only thing most workers produce, so nothing could witness the
+            // fault until a worker that also PRINTS put three rows through it and got
+            // one wrong value three times (loft#987).
+            //
+            // The INPUT: a worker taking `integer` reads its first slot as a VALUE, so
+            // handing it the row's `DbRef` gives it the pointer's bits.  Same ladder as
+            // `run_parallel_queue`.
+            //
+            // The HIDDEN parameters: a text-returning worker is compiled with a
+            // `__work_N` buffer parameter and a heap-returning one with a destination
+            // parameter, both after the row.  Leaving them off shifts every slot the
+            // worker reads — a text worker SEGFAULTED the interpreter.
+            // `u32::MAX` is the TEXT marker, not a width, so it has to leave before
+            // any size test.
+            let wide = prim_in != u32::MAX && prim_in > 8;
+            let hidden = n_hidden_text > 0 || n_hidden_dests > 0;
+            if wide && !hidden {
+                // A wide / tuple row has no `WorkerArg` spelling, so it keeps the raw
+                // entry — which is also why it cannot go there when the worker has
+                // hidden parameters: that entry has nowhere to put them.  Such a
+                // worker falls to the `DbRef` arm below, the same answer
+                // `run_parallel_text` and `run_parallel_queue_ref` give it.
+                let buf = if let Some(ref types) = tuple_types_arc {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
+                let _ = state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..prim_in as usize],
+                    &extras,
+                    return_size,
+                );
+                continue;
+            }
+            let arg = if prim_in == u32::MAX {
+                crate::state::WorkerArg::Text(read_text_at(&state.database, &row_ref))
+            } else if prim_in > 0 && !wide {
+                crate::state::WorkerArg::Primitive {
+                    value: read_primitive_at(&state.database, &row_ref, element_size),
+                    size: prim_in,
+                }
+            } else {
+                crate::state::WorkerArg::Ref(row_ref)
+            };
+            if n_hidden_text > 0 {
+                let _ = state.execute_at_text(fn_pos, arg, &extras, n_hidden_text);
+            } else if n_hidden_dests > 0 {
+                // A real backing store per destination, never `null()`: the worker
+                // claims records in it.  Nothing adopts them back — the worker's whole
+                // `Stores` clone dies with the batch, which is what discard means.
+                let dests: Vec<DbRef> = (0..n_hidden_dests)
+                    .map(|_| state.database.database(100))
+                    .collect();
+                let _ = state.execute_at_ref(fn_pos, arg, &dests, &extras);
+            } else {
+                let _ = match arg {
+                    crate::state::WorkerArg::Text(t) => {
+                        state.execute_at_raw_text_input(fn_pos, t, &extras, return_size)
+                    }
+                    crate::state::WorkerArg::Primitive { value, size } => state
+                        .execute_at_raw_primitive_input(fn_pos, value, size, &extras, return_size),
+                    crate::state::WorkerArg::Ref(r) => {
+                        state.execute_at_raw(fn_pos, &r, &extras, return_size)
+                    }
+                };
+            }
         }
     });
 }

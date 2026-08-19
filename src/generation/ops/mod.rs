@@ -293,6 +293,14 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // `n_parallel_fold_native` (runtime helper in
     // `src/codegen_runtime.rs`).  Different arg layout from the
     // for/queue family — see `ParallelFoldEmitter` doc.
+    // The Discard route (`par(...)` with a body that never names the result).  It has
+    // to be here for the same reason the rest of the family is: the declaration-driven
+    // default emits `n_parallel_discard`'s loft declaration, whose body is empty, so
+    // the workers silently never ran (loft#987).
+    r.insert(
+        "n_parallel_discard",
+        Box::new(parallel::ParallelDiscardEmitter),
+    );
     r.insert("n_parallel_fold", Box::new(parallel::ParallelFoldEmitter));
     for name in [
         "n_parallel_buf_get",

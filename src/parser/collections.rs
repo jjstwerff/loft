@@ -3644,15 +3644,29 @@ use #count instead"
         self.vars.in_use(len_var, true);
 
         // Create the result element variable (b) with the worker's return type.
-        // On the first pass fn_d_nr is u32::MAX; use Type::Unknown so that the second
-        // pass can update the type to the correct one (Float, Boolean, etc.) via
-        // add_variable's "update if unknown" logic.  Using I32 here caused the type
-        // to stick as integer even when the worker returns float or boolean.
-        let b_type = if matches!(ret_type, Type::Unknown(_)) {
-            I32.clone()
-        } else if fn_d_nr == u32::MAX {
-            // First pass: placeholder — will be replaced on second pass.
+        //
+        // An unresolved worker answers `(u32::MAX, Unknown)` for two OPPOSITE reasons,
+        // and the PASS is what tells them apart:
+        //
+        //   pass 1 — the worker is declared below the loop, so it is not resolved YET.
+        //     `Unknown` is the honest placeholder and pass 2 refines it.  Answering
+        //     `integer` here pinned the slot, and pass 2 refines only a slot that is
+        //     still unknown, so it stayed: `t += b` retyped a float accumulator to
+        //     integer and the pass-1 error aborted before pass 2 could correct it.
+        //     Only the compound assignment showed it — `t = t + b` coerces (loft#988).
+        //
+        //   pass 2 — the worker will NEVER resolve, and the error saying so is already
+        //     reported (an unknown name, or a generator worker, which
+        //     `parse_parallel_worker` refuses with this same sentinel).  Here `integer`
+        //     is what the body needs: `b` has to carry SOME usable type or every use of
+        //     it in the body earns a second diagnostic under the first one.
+        //
+        // A RESOLVED worker whose return type is still unknown keeps `integer` too,
+        // which is the width the downstream route decisions already assume.
+        let b_type = if fn_d_nr == u32::MAX && self.first_pass {
             Type::Unknown(u32::MAX)
+        } else if matches!(ret_type, Type::Unknown(_)) {
+            I32.clone()
         } else if let Type::Text(_) = ret_type {
             // Strip worker-internal deps — they reference variables in the worker scope.
             Type::Text(crate::data::Deps::none())
