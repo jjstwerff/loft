@@ -44,3 +44,34 @@ the tab, come back and it is there* has been true since `B4`. That is F1's scene
 with hot reload, running — which is why scenes are in the first schema rather than a later
 one.
 
+
+---
+
+## dryopea — what it needs, and the requirement it exposed
+
+`dryopea` is the 3-D consumer (tower defence, hex lattice, `mesh3d` towers, a dynamic
+camera). It wants arcs **B** and **D** — text and widgets — not the 2.5-D sprite
+presentation. Its outbound queue (`QUESTIONS_FOR_LOFT.md`, 48 entries) has **nothing open**,
+so what follows is read off the code rather than asked for.
+
+**Two UI surfaces in that repo ship with no text at all, and each arrived there on its own.**
+
+- `src/hud.loft` draws its digits as **rectangles**, and says why: `graphics::draw_text`
+  rasterises through `#native rasterize_text_into`, which answers *"native function not
+  loaded"* under `loft test`, and it needs **a font file the repo does not have**. Its
+  comment marks this a constraint and not a style — *"a HUD nothing headless can draw is a
+  HUD no test and no `snap` can see"*.
+- `src/picker.loft` reached the same place a plan earlier: *"text labels + hotkey hints will
+  arrive when E1's live GL window lands (`gl_draw_text` is GL-only)"*.
+
+So the text path today requires a GL context **and** a native rasteriser **and** a font file,
+and a consumer that tests its UI headlessly answers by not having text. That is **B0**: a
+built-in fallback font, in pure loft, needing no file and no native call. It is the phase
+that unblocks a shipped consumer, which is why it goes first in arc B.
+
+**And their headless-GL probe is a technique to adopt.** `docs/RENDERER.md` § R0 proves a GL
+context exists with no display (`xvfb-run` + `gl_screenshot`), then decodes the capture with
+`imaging::png` and **buckets every pixel by exact colour, requiring the `other` bucket to be
+0**. A byte-diff says *different*; a classification says *what* changed — so A5's compositing
+gate uses flat colours deliberately, keeping the expected RGBA set small enough that
+`other == 0` means something.

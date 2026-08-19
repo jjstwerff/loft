@@ -20,11 +20,9 @@ against**: `graphics` ships a complete immediate-mode GL surface and nothing abo
 it, so every game re-implements the scene graph, the text field, the tweens and
 the widgets by hand.
 
-The measurement is `tools/brick-buster/25-brick-buster.loft` — **1983 lines for a
-Breakout clone**, of which ~190 (`build_atlas()`, lines 112–301) are hand-poked
-pixel art and ~40 more pre-bake one GL texture per string before gameplay starts,
-because changing a string costs a texture upload. The AS3 equivalent is ~500 lines
-with the art drawn in a tool.
+The measurement is `tools/brick-buster/25-brick-buster.loft` — **1983 lines for a Breakout
+clone**, ~190 of them (`build_atlas()`) hand-poked pixel art and ~40 more pre-baking one GL
+texture per string. The AS3 equivalent is ~500 lines with the art drawn in a tool.
 
 ## Goal
 
@@ -35,7 +33,7 @@ text.
 
 ## Effort + design
 
-- **Effort:** H overall — 32 phases, **none above M** (9 XS, 19 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 33 phases, **none above M** (9 XS, 20 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -73,13 +71,14 @@ phase is cut, not when it is implemented.
 | **A2** — draw the tree through the **existing** per-sprite path, emitting `DrawRect`/`DrawText` | `stage` | a stage-drawn frame is **pixel-identical** to the hand-written immediate-mode draw of the same content (`save_png` + compare). Parallel run: both paths live. **Second gate:** a `lavition_ui` panel's `panel_draw_list` renders unmodified through this path — if it needs a shim, the command shape is wrong | Open |
 | **A3** — batched renderer behind the same API | `stage` | pixels identical to A2 **and** draw calls drop from N to O(atlases). Both halves — same pixels alone would pass a batch that silently fell back | Open |
 | **A4** — depth order, hit-test, input routing | `stage` | a headless pick table over a known overlapping tree: every (x, y) resolves to the hand-computed node, under rotation and inside a clip — **and a point over a sprite's TRANSPARENT texel resolves to what is behind it**, not to the sprite. A rect test cannot: you can see through the tree, so you must be able to click through it. Under A8 the un-projection is **per layer** — one screen point is a different world point in each — and the answer is the topmost layer whose alpha test passes | Open |
-| **A5** — per-node alpha + tint, and **blending instead of discard** | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; a sprite's **anti-aliased edge** composites without a fringe; tint × texel matches. The shipped `SPRITE_FRAG` does `if (c.a < 0.01) discard` and writes everything else opaque, with `GL_BLEND` never enabled — a binary cutout, so soft edges and semi-transparency are wrong today and per-node alpha is unimplementable on it | Open |
+| **A5** — per-node alpha + tint, and **blending instead of discard** | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; a sprite's **anti-aliased edge** composites without a fringe; tint × texel matches. Gate by **exact-colour bucketing with an `other` bucket that must read 0** (dryopea's `RENDERER.md` § R0 technique) over deliberately flat colours — a byte-diff says *different*, a classification says *what*. The shipped `SPRITE_FRAG` does `if (c.a < 0.01) discard` and writes everything else opaque, with `GL_BLEND` never enabled — a binary cutout, so soft edges and semi-transparency are wrong today and per-node alpha is unimplementable on it | Open |
 | **A7** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
 | **A8** — camera with a per-layer parallax factor | `stage` | with every factor `1.0`, a camera pan is **pixel-identical** to translating every node by hand — the flat mode proved to be the degenerate case, not a second path. With factors varying, a pan of `d` moves each layer by `d × factor`, hand-computed per layer. **And a pure camera move re-uploads no instance data** (assert zero uploads), which is the entire reason the camera lives here and not in the node positions | Open |
 | **A9w** — world sprites: ambient motion, no per-instance state | `stage` | 500 wind-swayed sprites cost **zero per-frame instance updates** — the phase is derived from time and position, not stored and stepped — and two instances at different positions are visibly out of phase rather than marching in lockstep | Open |
 | **A9** — mob animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
 | **A10** — facings, **two models chosen by projection** | `stage` | *Top-down* (crawler's): one sprite authored in a locked orientation, **rotated continuously** to the facing — 15° steps must cost **no extra atlas entries**, since pre-rotated frames are what this avoids. *Side-on / 2.5D*: an `(action, facing)` table, because a standing sprite cannot be rotated into another facing — at most mirrored — and there a facing change mid-walk must **keep the frame phase** rather than snapping the legs back to frame 0 | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
+| **B0** — a built-in fallback font | `text2d` | under `loft test`, with **no font file and no native library loaded**, a known string draws a known non-zero coverage — the state in which `graphics::draw_text` answers *native function not loaded* today. Consumer outcome, not a unit test: `dryopea/src/hud.loft` draws its digits as **rectangles** because of this, and `picker.loft` shipped with no labels for the same reason | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
 | **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **per target**, **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap. Not one shared table: native measures the real TTF through fontdue and the browser measures whatever family resolved, so the same string breaks in different places. The cross-target invariant is **self-consistency** — the drawn text fits the box that same target measured. Every estimate rounds **outward**, since an under-estimate overflows a box just proved to fit | Open |
@@ -154,7 +153,7 @@ time, silence at run time.
 
 ## Effort per phase
 
-Totals: **9 XS, 19 S, 4 M** — no phase above M, which is the § Cutting rule holding
+Totals: **9 XS, 20 S, 4 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -173,6 +172,7 @@ those calls are made here rather than discovered mid-build.
 | **A10** | S | Two models, and the projection picks — not the author. Top-down gets continuous rotation off the 2×3 affine, which is why crawler authors every mob facing *up* and pre-rotated frames never exist. Side-on gets the `(action, facing)` table with one rule: switching sequences **carries the elapsed phase over**. Crawler's by-name resolution comes with it — a mob loads `<key>.png`, an optional action variant, and a missing file falls back rather than failing. Walking between hexes stays composition: C tweens the position, A9 plays the cycle. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
+| **B0** | S | A compact bitmap face baked in as data plus a pure-loft blitter — no file, no `#native`, no GL. Small, and it is the phase that unblocks a shipped consumer rather than one that makes an unshipped one faster: today the text path needs a GL context **and** a native rasteriser **and** a font file, so a repo that tests its UI headlessly answers by having no text. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
 | **B2** | S | Greedy breaking on measured advances, three alignments, and the character-vs-byte trap — `len(text)` counts characters, the indexed read is bytes. Per-target break tables (see the Verify column). |
 | **C1** | S | A tween is (setter, from, to, duration, easing, elapsed) driven off `fixstep`'s step, plus the standard easing table and sequencing — chain, parallel, delay, on-complete. Pure loft, no GPU. The exactness gate is a clamp everyone forgets: a finished tween must land **on** the end value. |
@@ -216,8 +216,8 @@ this plan owes it is A7 and D0.
    games into games with music. Do not queue it behind the keystone.
 2. **A0**, then A1 → A6 in order. A0 is the cheapest phase in the plan and the only
    one that can kill the design for the cost of a compile.
-3. **B**, then **C**, then **D** — each needs A4's hit-test or A1's transforms; D2
-   additionally needs B.
+3. **B0 early** — it needs nothing from arc A and it unblocks dryopea today. Then the rest
+   of **B**, **C**, **D** — each needs A4's hit-test or A1's transforms; D2 also needs B.
 4. **F** runs in parallel with A–D (it touches no rendering), except F4, which needs
    A2. F5/F6 (fonts) are independent of F1–F3 and can land with B, which is the first
    arc that cares which font actually resolved.
