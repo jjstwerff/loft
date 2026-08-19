@@ -128,7 +128,7 @@ phase is cut, not when it is implemented.
 | **L2** — light-map composite pass | `stage` | ✅ **Shipped** as `stage` 0.14.0 — the ray invariant holds as a **property** (never rises, never over 1, never under the floor) over 40 samples; expectations are generated from `light_reach` and `LIGHT_FALLOFF` reaches the shader as a **uniform**, not baked text — loft renders `2.0` as `2`, which GLSL refuses, and a baked number would be a second copy of the curve. The HUD is **bit-identical with the light on and off** over its whole rect. Light falls **across one sprite** and lights the **bare background**, which is what L1 cannot do. ⚠ The GL half is **reviewed, not gated** — no GL context in these tests — so it is proved only through the arithmetic and layer split it shares with the fully-gated software path. Nine controls fire; the one that did not was a **mis-aimed control**, matching the sprite blend's `get_pixel` rather than the composite's | ✅ **Shipped** |
 | **L3** — per-layer atmosphere: blur + fog | `stage` | ✅ **Shipped** as `stage` 0.15.0 — density 0 **bit-identical**, density 1 exactly the fog colour, the middle hand-computed; fog is per LAYER so a foggy distance leaves the foreground alone. Blur is **edge-clamped**, gated twice: a uniform field blurs to itself **exactly**, and a non-uniform one preserves total luminance (the black-sampling control moves it by 19344/118680). A layer's blur runs when **that layer** finishes, so a sharp foreground over a blurred distance stays sharp. ⚠ Parallax, fog and blur moved into **one `Layer` record** — three parallel vectors is P5's drift bug again. ⚠ Caught in build: the first interleave was **fake** (boundaries found in one pass, painting in another), so every blur ran before anything was drawn while 9 of 10 tests still passed. Ten controls fire. **Scope stated:** this is the RUNTIME blur; the baked one is the asset packer's, and the **GL runtime blur is not implemented** | ✅ **Shipped** |
 | **P6** — several views over one stage | `stage` | ✅ **Shipped** as `stage` 0.12.0 — view 0's frame is **byte-identical with a second view present**; two views cost **one upload**; each view picks through its own camera and a point outside its rect is not its to answer. A fresh stage already has one view, so the unsplit game is the degenerate case. ⚠ It found **two** defects: a clip did **not follow its content under a camera** (a panned clipped panel vanished — A6 and P2 each green alone, no test had moved a camera across a clip), and a `--native` **store corruption** of its own making, `view_at` answering a borrow on one path and a fresh record on the other (loft#1017). Nine controls fire — and one earned its keep by **not** firing, exposing an inert test | ✅ **Shipped** |
-| **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
+| **G** — vector paths on the GPU | — | deferred behind a trigger — **re-evaluated 2026-08-20 and still deferred**, with the trigger rewritten into three checkable conditions because the old one named DPI, which nothing in the stack can yet observe (§ Open design questions 5) | Deferred |
 
 ## Companion files
 
@@ -178,7 +178,7 @@ phases carry a design call that decides the effort, made here rather than discov
 | **L2** | M ✅ | *Done.* World layers into an offscreen FBO, lights accumulated, one fullscreen composite, **HUD drawn after and unlit** — the shape crawler shipped as R6 and verified. Every entry point exists (`gl_create_framebuffer`, `gl_framebuffer_texture`, `gl_create_color_texture`, `gl_draw_fullscreen_quad`). A multiply composite after the scene is order-independent, so it does not fight *never reorder*. Visibility stays the app's: the light **presents**, it does not decide what is seen. |
 | **L3** | M ✅ | *Done.* A layer already carries a parallax factor (P2); give it a blur radius, a fog colour and a density, and *distant, hazy, out-of-focus* becomes **layer data rather than an effects pipeline**. Fog is a `lerp` toward the fog colour — a uniform, essentially free. Blur rides L2's FBO: render the layer at quarter resolution and upsample with linear filtering, the cheap approximation backgrounds are made of. **Default to a BAKED blur** — the packer pre-blurs a static layer, so it costs nothing at run time; runtime blur is opt-in for a radius that actually changes (a focus pull). Atmosphere in this style is also largely particles, which `lib_plans/76-particles` gets cheaply once A lands. |
 | **P6** | S ✅ | *Done.* ⚠ Its stated lean on L2 did **not** apply — arc L is unbuilt, and it turned out P6 needs no FBO at all: a view is an offset plus a scissor, so the composite pass L2 will bring is an addition rather than a prerequisite. Two cameras over one stage. The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
-| **G** | H | Deferred. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. |
+| **G** | H | Deferred, and **re-checked 2026-08-20: the trigger has not fired**. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. The check found the more useful fact: resolution-independence in this stack is solved **at author time** — moros extrudes SVG icons offline and ships a 32 px atlas — so the owner is @PLN146's packer, and G opens only if that is measured insufficient (T3). |
 
 ## A third vehicle: dryopea's tower defence in 2.5-D
 
@@ -271,10 +271,50 @@ needs `A2`. Both have phases that wait on nothing and should start immediately �
 4. **What does a store miss do under `--html` today?** [LAZY_STORES.md](../../LAZY_STORES.md)
    fetches on a miss, which is right for a document and wrong for a frame loop.
    Confirm the current behaviour before F3 designs around it.
-5. **G's trigger.** Open vector paths when a consumer needs resolution-independent
-   art — a UI that scales across DPI, a zoomable map. Until then sprites + atlas
-   cover the cases, and a path rasterizer is the one genuinely research-shaped item
-   in this plan.
+5. **G's trigger — evaluated 2026-08-20, NOT fired, and the trigger itself was
+   unobservable as written.** It said *open vector paths when a consumer needs
+   resolution-independent art — a UI that scales across DPI, a zoomable map*. The
+   check found no consumer asking, and something more useful: **nothing in the
+   stack is DPI-aware**, so the DPI half could never fire by observation. A
+   consumer on a high-density display gets a uniformly soft picture and nothing
+   tells them why — so *waiting for a consumer to feel it* was waiting for a
+   signal that cannot arrive. What the evidence shows instead:
+
+   | Checked | Found |
+   |---|---|
+   | Consumer asks (`crawler/LOFT-HANDOFF.md`, moros, dryopea docs) | None. crawler's handoff is three ENGINE defects; no art or rendering ask anywhere |
+   | `--html` / wasm DPI handling | **`devicePixelRatio` appears nowhere** in `doc/loft-gl-wasm.js` or `src/*.rs` — the target is not DPI-aware at all |
+   | moros, the consumer with the most icon art | Solves it **at author time**: `tools/svg_to_3d.py` extrudes game-icons.net SVGs to meshes, and item icons ship as a 32 px atlas (`DEVELOPER_ART.md`) |
+   | @PLN145 `D` widgets | An **extraction** of moros's existing kit, which renders through the raster path today and asks for nothing more |
+   | @PLN147 the browser editor | `status:future`, nothing built; its stated invariant is about the STORE, not about crisp rendering |
+
+   **So the real finding is that resolution-independence in this stack is an
+   AUTHOR-TIME concern that @PLN146's packer already owns**, not a runtime
+   rasterizer — moros proves the route works. Arc G opens only when author-time
+   rasterisation is shown to be *insufficient*, which is a far sharper bar than
+   "someone wants crisp art".
+
+   **The trigger, restated so it can actually be checked.** Any ONE of these,
+   each observable rather than felt:
+
+   - **T1 — continuous zoom over authored art.** A consumer needs more scale
+     steps than an atlas can hold: the same asset packed at > 4 sizes, or a zoom
+     that is continuous rather than stepped (a map). Measurable in the pack.
+   - **T2 — DPI, once it is observable.** `--html` honours `devicePixelRatio`
+     (it does not today — **loft#1018**, filed from this check; it is a
+     prerequisite and belongs to the html target, not here), AND a consumer's UI
+     measures soft at ratio ≥ 2. ⚠ That issue's own trap is worth knowing before
+     anyone calls T2 satisfied: scaling the backing store without scaling the
+     input space gives a crisp picture where every click lands at `1/dpr` of
+     where the user pointed.
+   - **T3 — author-time rasterisation proven insufficient.** @PLN146's packer
+     ships, a consumer uses it for scalable art, and the atlas cost or the
+     quality is measured unacceptable. This is the one that actually decides it.
+
+   Until one of those is true, sprites + atlas cover the cases and a path
+   rasterizer with AA fills, gradients and stroke joins stays the one genuinely
+   research-shaped item in this plan — H effort, no consumer, and building it
+   unasked would make it the fourth thing nobody chose (@PLN145 `D0b`'s lesson).
 
 ## Cross-arc dependencies
 
