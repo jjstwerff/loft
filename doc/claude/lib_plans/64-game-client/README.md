@@ -499,7 +499,7 @@ pub fn check_divergence(predicted: text, confirmed: text, threshold: float)
 
 ## Co-op over a 2-D stage — what to replicate  <!-- from @PLN144 -->
 
-**Replicate the WORLD, never the presentation.** A [@PLN144](../144-2d-stage/README.md)
+**Replicate the WORLD, never the presentation.** A [@PLN144](../../plans/144-2d-stage/README.md)
 stage is a pure function of the world and the camera, so every client derives its own scene
 rather than receiving one. Replicating the scene instead ships presentation over the wire and
 desyncs on cosmetic difference — and it cannot express the case that motivates co-op here at
