@@ -122,5 +122,8 @@ suite written as `tests/<pkg>.loft` is what amputated nine published libraries. 
   holds the atlas doctrine `F1` implements.
 - [@PLN145](../145-authoring-libs/README.md) — text, which `F5`/`F6` feed.
 - [@PLN147](../147-content-editor/README.md) — the editor writes **this** pack; `F1` is its
-  only hard prerequisite, so its first phase can start before this plan finishes.
+  only hard prerequisite, so its first phase can start before this plan finishes. Its arc `X`
+  turns arc `W`'s renderer into a **browser sprite editor with animation**, so `W2`'s oracle
+  gate is what `X1` extends across targets, and `W6`'s scene-to-pack route is what `X5` bakes
+  through.
 - [REMOTE_STORES.md](../../REMOTE_STORES.md) · [loft-lang/plans#146](https://github.com/loft-lang/plans/issues/146).

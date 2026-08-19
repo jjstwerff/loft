@@ -19,8 +19,8 @@ meet — edit from a link, stream from static hosting, user content that cannot 
 
 ## Goal
 
-Open a URL, edit a game's scenes and assets, and have the running game show the change — with
-no export step, because the editor writes the file the game already reads.
+Open a URL, edit a game's scenes, sprites and animations, and have the running game show the
+change — with no export step, because the editor writes the file the game already reads.
 
 ## The one invariant
 
@@ -35,7 +35,7 @@ no import path to keep in step — the seam other engines maintain by hand does 
 
 ## Effort + design
 
-- **Effort:** MH — 11 phases, none above M. **Design:** ✓ for S/T/U, ~ for V.
+- **Effort:** H — 16 phases, none above M. **Design:** ✓ for S/T/U/X, ~ for V.
 - **Scope:** 2-D games, following @PLN144's scope exactly.
 
 ## Composition matrix — Stage A
@@ -59,6 +59,12 @@ after a reload, read by the game. Write them as probes before `S1`.
 | **U1** — drop a PNG in | `editor` | the imported sprite round-trips pixel-exact, and @PLN146's atlas invariants hold on it unchanged — premultiplied, 1 px padding, correct page | Open |
 | **U2** — re-import | `editor` | change the PNG and the atlas entry **and the derived collision proxy** follow with **no hand edit**; the proxy still contains every opaque texel within its bound (`F7`) | Open |
 | **U3** — an asset the game cannot load is refused **here** | `editor` | a malformed or oversized import fails at the drop with a reason, never at the game's first frame. The editor is the only place a content error can still be cheap | Open |
+| *— arc **X**: the sprite editor, with animation —* | | | |
+| **X1** — a `.draw` scene renders live in the page | `editor` | the page's render is **pixel-identical to `drawing`'s native render** of the same scene. Same oracle chain @PLN146's `W2` established, now carried across targets — and it generalises `draw.py`'s re-render-on-save daemon into the browser | Open |
+| **X2** — select a named element | `editor` | clicking a mark selects the `name` it belongs to, and the editor's answer equals `drawing`'s own hit answer for that point. The grammar's `name <tag>`, which exists for measurement, turns out to be the selection handle already | Open |
+| **X3** — a drag edits the **source text** | `editor` | dragging to a position produces the scene text you would get by **typing those numbers**, and drag-then-undo returns it **byte-identical** (`S2`'s discipline). This is the phase that keeps it an editor of source rather than a paint program | Open |
+| **X4** — animation: keyframes on named elements | `editor` | sampling the timeline at frame times yields the same images as hand-editing the scene per frame. A walk cycle is **keyframes on tagged marks**, not N drawn bitmaps — so it stays diffable, and re-timing costs nothing | Open |
+| **X5** — bake to atlas cells | `editor` + `assets` | the baked cells are pixel-identical to the timeline's samples, and @PLN144's `P4` plays them unchanged. Baking at pack time, not evaluating at run time — the same call `A13`'s blur and `F1`'s atlas already make | Open |
 | **V1** — hot reload into a running game | `editor` | a change reaches a running game within N frames **and the game's world state survives it** — a reload that resets the player is a restart wearing a nicer name | Open |
 | **V2** — the editor runs the game's own scripts | `editor` | a script that would hang or reach outside its capabilities is **refused at load** by @PLN86 admission, in the editor, before it can reach a player | Open |
 | **V3** — multi-client editing | `editor` | deferred behind a trigger; `routing` already proves the shape — two browsers, echo-free, late joiners see current state | Deferred |
@@ -75,6 +81,11 @@ after a reload, read by the game. Write them as probes before `S1`.
 | **U1** | S | A drop target, then `F1`'s packer unchanged. The pipeline other engines maintain by hand is one call here, because the pack already does premultiplication, padding and page choice. |
 | **U2** | S | Re-run the derivation and diff. Nothing new — `F7` already derives the proxy from alpha; this proves it stays derived under a change, which is the property that makes it worth having. |
 | **U3** | S | Validate at the drop against the same rules the loader enforces. The cost is finding them all; the value is that a content error stops being a runtime bug. |
+| **X1** | M | The `drawing` renderer compiled into the editor page, plus a text pane. Most of the effort is the cross-target pixel gate, not the rendering — and passing it proves `drawing` behaves identically in wasm, which nothing else in these plans checks. |
+| **X2** | S | Reuse `T2`'s pick, then map the hit mark to its enclosing `name`. Cheap because the grammar already tags marks; had it not, this phase would have needed a selection model invented for it. |
+| **X3** | S | The round trip is the whole phase: a drag must write the *source*, and the gate compares against hand-typed numbers rather than against a screenshot. **This is the design decision the arc turns on** — the editor edits `.draw` text, so sprite art stays reviewable in a diff, which a PNG never is. |
+| **X4** | M | A timeline over named elements, with a keyframe holding that element's transform. It is why the sprite is a scene and not a bitmap: a walk cycle becomes a handful of poses on tagged marks, re-timing is free, and a fix to the silhouette fixes every frame at once. |
+| **X5** | S | Sample, hand each frame to `W6`'s scene-to-pack route, done — the packer already premultiplies, pads and places. Bake rather than evaluate live, so the runtime keeps knowing nothing about `.draw`. |
 | **V1** | M | Reload the store and rebind, without resetting the world. The hard part is exactly the second half of the gate — what state is content and what state is play, a line no engine draws for you. |
 | **V2** | S | Point @PLN86 admission at the script surface. Cheap, and it is the differentiator: same-process, full-speed, refused at load — not a second VM. |
 | **V3** | — | Deferred. Trigger: a second person needs to edit the same pack at the same time. |
@@ -100,6 +111,17 @@ equally ship as an APK from the same source. That makes `T2`'s pick and `D`'s wi
 touch obligation rather than a mouse one: no hover, and finger-sized targets. Gated on
 [loft-libs-graphics#32](https://github.com/loft-lang/loft-libs-graphics/issues/32) for the APK
 route; the browser route needs nothing extra.
+
+**Arc X is the toolkit generalised.** `crawler/tools/draw.py` re-renders a scene on save and
+stops there: no selection, no direct manipulation, no animation, and it is Python. @PLN146's
+arc `W` makes the renderer loft; arc `X` makes it an **editor** — live in a page, with the
+marks selectable, dragging that writes the source back, and a timeline over the same tags.
+
+The invariant it adds to this plan's: **the editor edits the SOURCE, not a bitmap.** Every gate
+compares a visual edit against the text edit that should equal it. That is what keeps sprite art
+**reviewable in a diff** — a `.draw` scene is readable in a pull request and a PNG is not — and
+it is why animation costs so little: a walk cycle is keyframes on tagged marks, so re-timing is
+free and a fix to the silhouette fixes every frame at once.
 
 ## Open design questions
 

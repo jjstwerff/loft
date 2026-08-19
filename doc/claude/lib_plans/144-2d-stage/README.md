@@ -269,5 +269,7 @@ needs `A2`. Both have phases that wait on nothing and should start immediately �
 - [@PLN145](../145-authoring-libs/README.md) — text, tweens, widgets above this stage.
 - [@PLN146](../146-content-delivery/README.md) — the asset pack, fonts, browser audio.
 - [@PLN147](../147-content-editor/README.md) — the in-browser editor; `A4` and `P1` are its
-  gates too, checked by two consumers rather than restated.
+  gates too, checked by two consumers rather than restated. Its arc `X` **produces** what `P4`
+  plays: a walk cycle authored as keyframes on named marks, baked to atlas cells at pack time,
+  so the runtime keeps knowing nothing about how the art was made.
 - [loft-lang/plans#144](https://github.com/loft-lang/plans/issues/144).
