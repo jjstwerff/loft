@@ -226,7 +226,14 @@ in the same session with a regression test. Record scope + root cause, never ori
 **File only when NOT fixing now:** it blocks the current task (bookmark + workaround), or it's
 genuinely M+/needs-design (route to its canonical home). When you file: a **GitHub Issue**
 (`gh issue create`, `bug_report` template) — NOT a PROBLEMS.md row (that's the closed archive) —
-with a minimal both-backend repro, `sev:`/`area:` + a VERIFIED `wa:*` label, and `Fixes #NNN`.
+with a minimal both-backend repro, `sev:`/`area:` + a VERIFIED `wa:*` label, **a `hit-by:*`
+label**, and `Fixes #NNN`. `hit-by:` names the project that RAN INTO it, one per issue, **at
+filing time** — loft is one of those projects, so a find of your own is `hit-by:loft`, NEVER a
+blank (a consumer filters `hit-by:<their project>`, and an unlabelled issue reads as "not
+established", not "nobody"). It says who hit it and nothing more: a follow-on you file while
+fixing something else is still `hit-by:loft` even when a consumer's report sent you into that
+subsystem. Lineage is separate and goes in the BODY as `Found-via: #N`
+([.github/LABELS.md § hit-by](.github/LABELS.md)).
 
 **Fixing an existing issue not yet on `main`:** push the fix, write `Fixes #NNN`, keep the issue open
 (the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Inside a

@@ -21,6 +21,8 @@ const VALID = new Set([
   "wa:clean", "wa:partial", "wa:none",
   "area:parser", "area:codegen", "area:store-lifetime", "area:closures",
   "area:runtime", "area:native", "area:wasm", "area:stdlib", "area:packages",
+  "hit-by:loft", "hit-by:moros", "hit-by:routing", "hit-by:dryopea",
+  "hit-by:crawler", "hit-by:zerotrust", "hit-by:planets",
 ]);
 
 /// Required label categories for a loft BUG (`.github/LABELS.md`), with the
@@ -41,6 +43,18 @@ const CATEGORIES = [
     key: "area:",
     name: "area — one or more `area:*` (parser / codegen / store-lifetime / …)",
     values: [...VALID].filter((l) => l.startsWith("area:")),
+  },
+  // `hit-by:` was documented as required in LABELS.md ("a find of our own is
+  // `hit-by:loft` — not a blank") and enforced by nothing: not the template, which
+  // had no field for it, and not this guard.  Issues were filed without it and the
+  // omission was invisible until someone read the labels by hand.  A blank is not
+  // neutral — a consumer filters `hit-by:<their project>`, and an unlabelled issue
+  // reads as "not established", never "nobody", so every count over the gap is a
+  // floor rather than a total.
+  {
+    key: "hit-by:",
+    name: "who hit it — one `hit-by:*` (a find of loft's own is `hit-by:loft`, never blank)",
+    values: [...VALID].filter((l) => l.startsWith("hit-by:")),
   },
 ];
 
@@ -115,9 +129,13 @@ function chooseLabels(body) {
   // label simply does not appear.
   const sevText = section("severity") ?? triage ?? unfenced;
   const waText = section("clean workaround") ?? triage ?? section("workaround") ?? unfenced;
+  // "who hit it", not "hit" — the phrase has to be distinctive enough that no other
+  // heading contains it, which is the trap `wa:` fell into (`### Workaround` came
+  // first and swallowed the dropdown that actually sets the label).
+  const hitText = section("who hit it") ?? triage ?? unfenced;
 
   const found = new Set();
-  for (const [src, key] of [[sevText, "sev"], [waText, "wa"]]) {
+  for (const [src, key] of [[sevText, "sev"], [waText, "wa"], [hitText, "hit-by"]]) {
     const hits = tokens(src, key);
     if (hits.length === 1) found.add(hits[0]);
   }
