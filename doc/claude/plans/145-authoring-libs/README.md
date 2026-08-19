@@ -25,7 +25,7 @@ without writing a rasteriser, an integrator or a hit test.
 
 ## Effort + design
 
-- **Effort:** MH — 11 phases, none above M. **Design:** ✓, except D0, which is another tree's call.
+- **Effort:** MH — 11 phases, none above M. **`B0` shipped 2026-08-19.** **Design:** ✓, except D0, which is another tree's call.
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -35,7 +35,7 @@ cut, not when it is implemented.
 
 | Item | Where | Verify | Status |
 |---|---|---|---|
-| **B0** — a built-in fallback font | `text2d` | under `loft test`, with **no font file and no native library loaded**, a known string draws a known non-zero coverage — the state in which `graphics::draw_text` answers *native function not loaded* today. Consumer outcome, not a unit test: `dryopea/src/hud.loft` draws its digits as **rectangles** because of this, and `picker.loft` shipped with no labels for the same reason | Open |
+| **B0** — a built-in fallback font | `text2d` | ✅ **Shipped** as `text2d` 0.1.0 — a 5×7, 56-glyph face carried as data; pure loft, no file, no `#native`, no GL. Gated on ink under plain `loft test`, and on **every digit drawing AND `'1'` carrying less ink than `'8'`** — a coverage assertion alone would pass a face that drew one blob per character. Three controls fire | ✅ **Shipped** |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
 | **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **per target**, **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap. Not one shared table: native measures the real TTF through fontdue and the browser measures whatever family resolved, so the same string breaks in different places. The cross-target invariant is **self-consistency** — the drawn text fits the box that same target measured. Every estimate rounds **outward**, since an under-estimate overflows a box just proved to fit | Open |
@@ -50,7 +50,7 @@ cut, not when it is implemented.
 | Phase | E | What the effort actually is |
 |---|---|---|
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
-| **B0** | S | A compact bitmap face baked in as data plus a pure-loft blitter — no file, no `#native`, no GL. Small, and it is the phase that unblocks a shipped consumer rather than one that makes an unshipped one faster: today the text path needs a GL context **and** a native rasteriser **and** a font file, so a repo that tests its UI headlessly answers by having no text. |
+| **B0** | S ✅ | *Done.* A compact bitmap face baked in as data plus a pure-loft blitter — no file, no `#native`, no GL. Small, and it is the phase that unblocks a shipped consumer rather than one that makes an unshipped one faster: today the text path needs a GL context **and** a native rasteriser **and** a font file, so a repo that tests its UI headlessly answers by having no text. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
 | **B2** | S | Greedy breaking on measured advances, three alignments, and the character-vs-byte trap — `len(text)` counts characters, the indexed read is bytes. Per-target break tables (see the Verify column). |
 | **C1** | S | A tween is (setter, from, to, duration, easing, elapsed) driven off `fixstep`'s step, plus the standard easing table and sequencing — chain, parallel, delay, on-complete. Pure loft, no GPU. The exactness gate is a clamp everyone forgets: a finished tween must land **on** the end value. |
