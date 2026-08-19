@@ -103,6 +103,14 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   // host_js` or the page's own CSS); `document.fonts.check` then finds it and it is
   // used exactly. Otherwise the base name picks a generic family, so text still draws.
   let fonts = [], textCv = null, textCx = null;
+  // Audio state.  The context is shared with `audio_play_raw` through the same
+  // global it already used, which is also how a test can put an OfflineAudioContext
+  // between the bridge and the speakers.
+  let audioClips = [], audioSinks = [];
+  function audioCtx() {
+    if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
+    return window._loftAudioCtx;
+  }
   function text2d() {
     if (!textCx) {
       textCv = document.createElement('canvas');
@@ -633,17 +641,57 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (hp) out[hp >> 2] = r.h;
         return alphaTexture(i => r.px[i * 4 + 3], r.w, r.h);
       },
-      // G5: Audio via Web Audio API
+      // G5: Audio via Web Audio API (@PLN146 E1).
+      //
+      // ⚠ `audio_load` is SYNCHRONOUS and `decodeAudioData` is not.  The handle is
+      // therefore returned NOW and the samples land LATER, which is the same
+      // plan-then-use shape the asset store runs on: a play before the decode
+      // DROPS rather than queueing, because a queue here would fire a sound at a
+      // moment the game has moved past.  A load that fails leaves the slot with no
+      // buffer for good, so `audio_play` refuses it — the file's absence is
+      // reported by refusing to play it, never by the load call, which cannot know.
       loft_audio_load(pp, pl) {
-        return -2147483648; // i32::MIN — file-based audio not yet supported in WASM
+        const path = readStr(pp, pl);
+        if (!path) return -2147483648;               // i32::MIN — the null sentinel
+        const slot = { buf: null, dead: false };
+        audioClips.push(slot);
+        const id = audioClips.length - 1;
+        fetch(path)
+          .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status))))
+          .then(ab => audioCtx().decodeAudioData(ab))
+          .then(b => { slot.buf = b; })
+          .catch(() => { slot.dead = true; });
+        return id;
       },
-      loft_audio_play(clip, volume) { return -1; },
-      loft_audio_stop(sink) {},
-      loft_audio_set_volume(sink, volume) {},
+      loft_audio_play(clip, volume) {
+        const c = audioClips[clip];
+        if (!c || !c.buf) return -1;                 // absent, failed, or still decoding
+        try {
+          const ctx = audioCtx();
+          const src = ctx.createBufferSource();
+          src.buffer = c.buf;
+          const gain = ctx.createGain();
+          gain.gain.value = volume;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+          src.start();
+          audioSinks.push({ src: src, gain: gain });
+          return audioSinks.length - 1;             // ids are never reused: a stopped
+        } catch (e) { return -1; }                  // sink must not name a live one
+      },
+      loft_audio_stop(sink) {
+        const s = audioSinks[sink];
+        if (!s) return;
+        try { s.src.stop(); } catch (e) { /* already ended — stopping twice is not an error */ }
+        audioSinks[sink] = null;
+      },
+      loft_audio_set_volume(sink, volume) {
+        const s = audioSinks[sink];
+        if (s) s.gain.gain.value = volume;
+      },
       loft_audio_play_raw(ptr, count, sample_rate, volume) {
         try {
-          if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
-          const ctx = window._loftAudioCtx;
+          const ctx = audioCtx();
           const f32 = new Float32Array(getMem().buffer, ptr, count);
           const buf = ctx.createBuffer(1, count, sample_rate);
           buf.getChannelData(0).set(f32);

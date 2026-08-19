@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>loft-gl audio bridge probe</title>
+<body style="margin:0;background:#000">
+<canvas id="gl" width="8" height="8"></canvas>
+<pre id="out" style="color:#0f0"></pre>
+<script src="/doc/loft-gl-wasm.js"></script>
+<script>
+// E1 — what the audio bridge PRODUCES, not what it returns.
+//
+// The stubs this replaces returned NUMBERS (i32::MIN / -1) and made no sound,
+// which is the same shape loft#737's text stubs had: every import-shape check
+// passed while nothing was audible.  So the load-bearing assertions here render
+// through an OfflineAudioContext and measure SAMPLES.  A fix that returns a
+// plausible handle and plays nothing still fails.
+const ctrl = { ac: null, assets: {} };
+const fail = [];
+function ck(name, cond, extra) {
+  if (!cond) fail.push(name + (extra === undefined ? '' : ' (' + extra + ')'));
+}
+const mem = new WebAssembly.Memory({ initial: 4 });
+const enc = new TextEncoder();
+let heap = 1024;
+const put = (s) => { const b = enc.encode(s); new Uint8Array(mem.buffer).set(b, heap);
+                     const r = [heap, b.length]; heap += b.length + 8; return r; };
+const NULL_I32 = -2147483648;
+
+// Render one play through an offline context and hand back the peak sample.
+// The bridge reuses `window._loftAudioCtx`, which is how the probe gets between
+// it and the speakers without the bridge knowing.
+async function peakFor(volume) {
+  const off = new OfflineAudioContext(1, 22050, 22050);
+  window._loftAudioCtx = off;
+  const g = buildLoftImports(document.getElementById('gl'),
+                             document.getElementById('out'), () => mem, ctrl).loft_gl;
+  const [pp, pl] = put('/tests/data/tone440.wav');
+  const clip = g.loft_audio_load(pp, pl);
+  if (clip === NULL_I32 || clip < 0) return { clip, sink: -1, peak: 0 };
+  // audio_load is SYNCHRONOUS and decodeAudioData is not: the handle comes back
+  // now and the samples land later, so a play before the decode is expected to
+  // drop.  Wait for it rather than asserting the race away.
+  await new Promise(r => setTimeout(r, 400));   // let decodeAudioData land
+  const sink = g.loft_audio_play(clip, volume);
+  const buf = await off.startRendering();
+  const d = buf.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+  return { clip, sink, peak };
+}
+
+(async () => {
+  try {
+    // 1 — a real clip yields a real handle, and full-volume playback makes SOUND.
+    const full = await peakFor(1.0);
+    ck('audio_load handle', full.clip >= 0, full.clip);
+    ck('audio_play sink', full.sink >= 0, full.sink);
+    ck('playback has samples', full.peak > 0.1, full.peak.toFixed(4));
+
+    // 2 — volume ATTENUATES.  Without this, a gain node that is wired but ignored
+    //     passes every other check here.
+    const quiet = await peakFor(0.25);
+    const ratio = full.peak > 0 ? quiet.peak / full.peak : -1;
+    ck('volume attenuates', ratio > 0.12 && ratio < 0.45, ratio.toFixed(3));
+
+    // 3 — a MISSING file never becomes playable.  `audio_load` is SYNCHRONOUS and
+    //     the fetch is not, so it cannot answer "absent" at call time — the
+    //     contract is that the clip never arrives, so `audio_play` refuses it and
+    //     the render stays silent.  This is the negative control that stops the
+    //     fix from being "hand out a handle and always play".
+    const offM = new OfflineAudioContext(1, 22050, 22050);
+    window._loftAudioCtx = offM;
+    const gM = buildLoftImports(document.getElementById('gl'),
+                                document.getElementById('out'), () => mem, ctrl).loft_gl;
+    const [mp, ml] = put('/tests/data/definitely_not_here.wav');
+    const missing = gM.loft_audio_load(mp, ml);
+    await new Promise(r => setTimeout(r, 400));
+    const mSink = gM.loft_audio_play(missing, 1.0);
+    const mBuf = await offM.startRendering();
+    const mD = mBuf.getChannelData(0);
+    let mPeak = 0;
+    for (let i = 0; i < mD.length; i++) { const a = Math.abs(mD[i]); if (a > mPeak) mPeak = a; }
+    ck('missing file refuses play', mSink < 0, mSink);
+    ck('missing file is silent', mPeak === 0, mPeak);
+
+    // 4 — stop is real: a stopped sink is not handed out again.
+    const off2 = new OfflineAudioContext(1, 22050, 22050);
+    window._loftAudioCtx = off2;
+    const g = buildLoftImports(document.getElementById('gl'),
+                               document.getElementById('out'), () => mem, ctrl).loft_gl;
+    const [pp2, pl2] = put('/tests/data/tone440.wav');
+    const c2 = g.loft_audio_load(pp2, pl2);
+    await new Promise(r => setTimeout(r, 400));
+    const s1 = g.loft_audio_play(c2, 1.0);
+    g.loft_audio_stop(s1);
+    const s2 = g.loft_audio_play(c2, 1.0);
+    ck('a second play is a second sink', s2 >= 0 && s2 !== s1, s1 + '/' + s2);
+    g.loft_audio_set_volume(s2, 0.5);   // must not throw
+    g.loft_audio_stop(s2);
+
+    const out = document.getElementById('out');
+    if (fail.length) { console.error('AUDIO-BRIDGE FAIL: ' + fail.join(' | ')); out.textContent = 'FAIL ' + fail.join(' | '); }
+    else { out.textContent = 'audio bridge ok'; }
+  } catch (e) {
+    console.error('AUDIO-BRIDGE THREW: ' + (e && e.stack || e));
+  }
+})();
+</script>
