@@ -140,3 +140,37 @@ Their `L7` says determinism/replay is *built from line one*. M2 adopts that orde
 determinism gate written after co-op works only proves that day's build.
 
 *(`../stories` is an empty directory — nothing to read.)*
+
+---
+
+## crew_punk — no code yet, and the case that proves M1
+
+A co-operative bridge simulator, **design documents only**, derived from moros and sibling to
+crawler. It is not a consumer yet, but `SCOPE.md` states a constraint that lands squarely on
+arc M and is worth capturing before anything is built:
+
+> **A pure phone interface must be possible.** … Six players, six phones, six consoles. This
+> is the *Spaceteam* / *Artemis* / *Keep Talking and Nobody Explodes* pattern.
+
+**It makes M1's rule obviously right rather than merely principled.** Each player's phone
+shows a *different* view of one world, and the difference is presentation driven by per-client
+state: your own station shows labelled controls, and taking someone else's shows *the same
+panel with the labels gone*. Replicate the **stage** and six clients need six replicated
+scenes that must not drift; replicate the **world** and each client derives its own panel from
+what it is rated for. M1's gate therefore varies **role** as well as window size and camera —
+same world hash, deliberately different frames.
+
+It also names two things arc D would otherwise learn late. **Touch has no hover**, and the
+extracted kit has an `over` state — so any affordance that lives in hover is invisible on a
+phone, and D1's replay gate must drive a touch stream and not only a mouse one. And **six
+people opening a link** is exactly what `--html` is good at, which puts arcs E and F on the
+critical path for this consumer rather than at the end.
+
+## japanese — not a consumer
+
+A JavaScript/HTML graded reader (`dict.js`, `server.py`); no loft anywhere, so it needs
+nothing from this plan. One transferable input: a Japanese text needs **thousands** of glyphs
+where a Latin one needs about a hundred, which is why B1's atlas carries LRU eviction for
+dynamic glyph entries rather than assuming a small fixed set. Ruby/furigana — a reading set
+above the line — is a text-layout feature B2 does not have and no loft consumer asks for; out
+of scope, recorded so the next person does not have to re-derive that it is missing.
