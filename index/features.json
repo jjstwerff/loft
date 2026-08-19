@@ -339,25 +339,25 @@
     "number": 57,
     "title": "Lexer",
     "kind": "infra",
-    "body": "## What it does\n\nTurns raw loft source text into a stream of tokens — keywords, names, numbers, operators, punctuation — that the parser can consume. It is the first stage of the pipeline and handles character-level details such as comments, string literals, and string interpolation, so later stages never touch raw text.\n\n## Where it lives\n\n`src/lexer.rs`"
+    "body": "## What it does\n\nTurns raw loft source text into a stream of tokens — keywords, names, numbers, operators, punctuation — that the parser can consume. It is the first stage of the pipeline and handles character-level details such as comments, string literals, and string interpolation, so later stages never touch raw text.\n\n## Where it lives\n\n`src/lexer.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-072 — the character-level details the lexer settles before the parser sees anything: every escape sequence, in a string and in a character literal\nExample: @FTR-015 — a literal brace and a backtick block's indentation, both decided in the lexer\n"
   },
   {
     "number": 58,
     "title": "Parser (two-pass recursive descent)",
     "kind": "infra",
-    "body": "## What it does\n\nReads the lexer's tokens and builds the program's intermediate representation (IR) using a two-pass recursive-descent grammar: a first pass registers every definition (types, functions), so a second pass can resolve references regardless of the order they appear in the source. This is where loft syntax becomes a structured tree.\n\n## Where it lives\n\n`src/parser/` (entry point `src/parser/mod.rs`)"
+    "body": "## What it does\n\nReads the lexer's tokens and builds the program's intermediate representation (IR) using a two-pass recursive-descent grammar: a first pass registers every definition (types, functions), so a second pass can resolve references regardless of the order they appear in the source. This is where loft syntax becomes a structured tree.\n\n## Where it lives\n\n`src/parser/` (entry point `src/parser/mod.rs`)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-073 — the two-pass property from the side that proves it: pass 1 DEFERS on a type it has not read yet, so declaration order does not decide\n"
   },
   {
     "number": 59,
     "title": "Type resolver",
     "kind": "infra",
-    "body": "## What it does\n\nResolves every type name to a concrete definition and works out each type's memory layout — its size and the byte offset of each field. This gives the rest of the compiler the fixed shapes it needs to lay out values and to generate field access.\n\n## Where it lives\n\n`src/typedef.rs`"
+    "body": "## What it does\n\nResolves every type name to a concrete definition and works out each type's memory layout — its size and the byte offset of each field. This gives the rest of the compiler the fixed shapes it needs to lay out values and to generate field access.\n\n## Where it lives\n\n`src/typedef.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-074 — the resolver's constant work: a cast and a folded arithmetic result keep the full i64 value, identically on both backends\n"
   },
   {
     "number": 60,
     "title": "Scope & dependency/lifetime tracker (deps)",
     "kind": "infra",
-    "body": "## What it does\n\nTracks which names are visible in each scope and follows how values borrow from and depend on one another, so the compiler knows when each value can safely be freed. This dependency (\"deps\") information is the backbone of loft's ownership and memory-safety model.\n\n## Where it lives\n\n`src/scopes.rs`"
+    "body": "## What it does\n\nTracks which names are visible in each scope and follows how values borrow from and depend on one another, so the compiler knows when each value can safely be freed. This dependency (\"deps\") information is the backbone of loft's ownership and memory-safety model.\n\n## Where it lives\n\n`src/scopes.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-071 — the store-lifetime boundary itself: which shapes may free a store at a block exit and which may not, on both backends\n"
   },
   {
     "number": 61,
@@ -411,25 +411,25 @@
     "number": 69,
     "title": "Word-addressed store",
     "kind": "infra",
-    "body": "## What it does\n\nThe raw heap: a flat, word-addressed block of memory that holds every value's bytes. Higher layers place records and collections into it and reference them by position. It is the lowest level of loft's memory model.\n\n## Where it lives\n\n`src/store.rs`"
+    "body": "## What it does\n\nThe raw heap: a flat, word-addressed block of memory that holds every value's bytes. Higher layers place records and collections into it and reference them by position. It is the lowest level of loft's memory model.\n\n## Where it lives\n\n`src/store.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-068 — the widths the raw store gives each field kind, and the record layout they add up to\n"
   },
   {
     "number": 70,
     "title": "Database — alloc / persistence / journal / snapshot / schema",
     "kind": "infra",
-    "body": "## What it does\n\nManages all of a program's stores together with their schema, and provides allocation, persistence, journaling, and snapshotting on top of the raw heap. It is what makes loft's heap durable and recoverable rather than purely in-memory.\n\n## Where it lives\n\n`src/database/` (entry point `src/database/mod.rs`)"
+    "body": "## What it does\n\nManages all of a program's stores together with their schema, and provides allocation, persistence, journaling, and snapshotting on top of the raw heap. It is what makes loft's heap durable and recoverable rather than purely in-memory.\n\n## Where it lives\n\n`src/database/` (entry point `src/database/mod.rs`)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-069 — a store written to a file and read back: truncate, header, payload, sync, and two save passes that round-trip\n"
   },
   {
     "number": 71,
     "title": "DbRef pointers & collection keys",
     "kind": "infra",
-    "body": "## What it does\n\nDefines `DbRef`, loft's universal pointer — a triple of store number, record, and position that locates any value in the store — together with the key types used to index collections. Everything that refers to heap data does so through these.\n\n## Where it lives\n\n`src/keys.rs`"
+    "body": "## What it does\n\nDefines `DbRef`, loft's universal pointer — a triple of store number, record, and position that locates any value in the store — together with the key types used to index collections. Everything that refers to heap data does so through these.\n\n## Where it lives\n\n`src/keys.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-075 — a record reached by its KEY: insert-or-replace through `coll[key] = value` on hash, sorted and index alike\n"
   },
   {
     "number": 72,
     "title": "Parallel execution runtime",
     "kind": "infra",
-    "body": "## What it does\n\nRuns loft's parallel constructs (parallel loops and tasks) across multiple threads, coordinating the work and access to the shared store safely. It is the machinery behind the language's `par` features.\n\nOne runtime serves both targets: rayon does the scheduling everywhere, and only the source of the threads differs — OS threads natively, Web Worker threads in the browser (which has no `thread::spawn`). A page that cannot get worker threads runs the same `par` sequentially, with the same results.\n\n## Where it lives\n\n`src/parallel.rs` (dispatch over the elements, and the native OS-thread pool), `src/wasm_threads.rs` (the browser half: the host spawns Web Workers against one shared memory and each claims a parked rayon thread)"
+    "body": "## What it does\n\nRuns loft's parallel constructs (parallel loops and tasks) across multiple threads, coordinating the work and access to the shared store safely. It is the machinery behind the language's `par` features.\n\nOne runtime serves both targets: rayon does the scheduling everywhere, and only the source of the threads differs — OS threads natively, Web Worker threads in the browser (which has no `thread::spawn`). A page that cannot get worker threads runs the same `par` sequentially, with the same results.\n\n## Where it lives\n\n`src/parallel.rs` (dispatch over the elements, and the native OS-thread pool), `src/wasm_threads.rs` (the browser half: the host spawns Web Workers against one shared memory and each claims a parked rayon thread)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-070 — a `par` loop across threads: the worker runs on every element and the results come back in order, whatever the thread count\n"
   },
   {
     "number": 73,
@@ -441,31 +441,31 @@
     "number": 74,
     "title": "CDylib extension loader",
     "kind": "infra",
-    "body": "## What it does\n\nLoads compiled native extension libraries (cdylibs) at runtime and connects their exported functions into the running program, letting a loft program call into prebuilt native code.\n\n## Where it lives\n\n`src/extensions.rs`"
+    "body": "## What it does\n\nLoads compiled native extension libraries (cdylibs) at runtime and connects their exported functions into the running program, letting a loft program call into prebuilt native code.\n\n## Where it lives\n\n`src/extensions.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-076 — a package's compiled cdylib linked and called at run time, with a NEGATIVE return as the oracle that the C ABI was read at the right width\n"
   },
   {
     "number": 75,
     "title": "Diagnostics collector",
     "kind": "infra",
-    "body": "## What it does\n\nGathers the errors and warnings produced across the compiler stages and holds them in one place, so they can be reported to the user consistently with source locations attached.\n\n## Where it lives\n\n`src/diagnostics.rs`"
+    "body": "## What it does\n\nGathers the errors and warnings produced across the compiler stages and holds them in one place, so they can be reported to the user consistently with source locations attached.\n\n## Where it lives\n\n`src/diagnostics.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-029 — the code a diagnostic carries is its frozen handle, and none of the six pinned here changes what the program computes\n"
   },
   {
     "number": 76,
     "title": "Logger runtime",
     "kind": "infra",
-    "body": "## What it does\n\nImplements the runtime logging system — the machinery behind loft's log and diagnostic output and the `LOFT_LOG` controls — routing messages to the right destinations at the configured verbosity.\n\n## Where it lives\n\n`src/logger.rs`"
+    "body": "## What it does\n\nImplements the runtime logging system — the machinery behind loft's log and diagnostic output and the `LOFT_LOG` controls — routing messages to the right destinations at the configured verbosity.\n\n## Where it lives\n\n`src/logger.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-047 — `log_info` / `log_warn` / `log_error` and what they do with no log.conf\n"
   },
   {
     "number": 77,
     "title": "Registry / manifest / lockfile resolution",
     "kind": "infra",
-    "body": "## What it does\n\nResolves package dependencies for the package manager: it reads each project's manifest (`loft.toml`), consults the registry, and computes the lockfile that pins exact versions. It is the dependency-resolution brain behind `loft install`.\n\n## Where it lives\n\n`src/registry.rs`"
+    "body": "## What it does\n\nResolves package dependencies for the package manager: it reads each project's manifest (`loft.toml`), consults the registry, and computes the lockfile that pins exact versions. It is the dependency-resolution brain behind `loft install`.\n\n## Where it lives\n\n`src/registry.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-017 — a `loft.lock` parsed verbatim as loft's own writer emitted it, pinning the five-field record the reproducibility promise lives in\n"
   },
   {
     "number": 78,
     "title": "Live-reload dispatch",
     "kind": "infra",
-    "body": "## What it does\n\nThe mechanism behind live code reload: it watches the source and, when a function changes, swaps the new version into the already-running program without a restart.\n\n## Where it lives\n\n`src/live_reload.rs`"
+    "body": "## What it does\n\nThe mechanism behind live code reload: it watches the source and, when a function changes, swaps the new version into the already-running program without a restart.\n\n## Where it lives\n\n`src/live_reload.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-062 — live reload is one setting, and it is opt-in\n"
   },
   {
     "number": 79,
@@ -477,13 +477,13 @@
     "number": 80,
     "title": "Tracker indexer (maintainer tooling)",
     "kind": "infra",
-    "body": "## What it does\n\nMaintainer tooling that scans the repository for `@`-prefixed tracker tags and builds the index that `scripts/idx` queries (`index/tags.json`). It is itself written in loft.\n\n## Where it lives\n\n`tools/indexer/` (scanner `tools/indexer/src/scan.loft`, query CLI `tools/indexer/src/idx.loft`)"
+    "body": "## What it does\n\nMaintainer tooling that scans the repository for `@`-prefixed tracker tags and builds the index that `scripts/idx` queries (`index/tags.json`). It is itself written in loft.\n\n## Where it lives\n\n`tools/indexer/` (scanner `tools/indexer/src/scan.loft`, query CLI `tools/indexer/src/idx.loft`)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-066 — the tracker index itself: built from the tree and queried by tag, written in loft\n"
   },
   {
     "number": 81,
     "title": "Feature-catalogue sync generator (issues → in-project mirror + example tests)",
     "kind": "infra",
-    "body": "## What it does\n\nKeeps the in-project copy of the feature catalogue in step with this issue tracker. It reads a committed snapshot of the issues and regenerates, one-way, a browsable mirror of every entry plus a runnable test file for each feature's example. Agents and CI then work from the issues without anything being written down twice: the issue is the single source, and two guards keep the copy honest — one fails if the mirror drifts from the snapshot, the other fails if any extracted example stops running.\n\n## Where it lives\n\n`tools/features/gen.loft` (the generator), the `Makefile` targets `features-fetch` / `features-gen` / `features-check`, and the example-runs guards in `tests/features.rs` (interpret) and `tests/native.rs::native_features` (native). Realizes strand 3 of @PLN92.\n"
+    "body": "## What it does\n\nKeeps the in-project copy of the feature catalogue in step with this issue tracker. It reads a committed snapshot of the issues and regenerates, one-way, a browsable mirror of every entry plus a runnable test file for each feature's example. Agents and CI then work from the issues without anything being written down twice: the issue is the single source, and two guards keep the copy honest — one fails if the mirror drifts from the snapshot, the other fails if any extracted example stops running.\n\n## Where it lives\n\n`tools/features/gen.loft` (the generator), the `Makefile` targets `features-fetch` / `features-gen` / `features-check`, and the example-runs guards in `tests/features.rs` (interpret) and `tests/native.rs::native_features` (native). Realizes strand 3 of @PLN92.\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-067 — the catalogue mirror generated deterministically and offline from the committed snapshot\n"
   },
   {
     "number": 82,
@@ -495,13 +495,13 @@
     "number": 83,
     "title": "Dev server (--serve / --rpc)",
     "kind": "infra",
-    "body": "## What it does\n\nRuns loft as a long-lived local server. `--serve` exposes an HTTP + WebSocket endpoint for browser-facing development; `--rpc` speaks a line-delimited JSON protocol so an editor or debugger can drive a session programmatically. Both keep one interpreter alive across many requests instead of starting fresh each time.\n\n## Where it lives\n\n`src/serve.rs` (HTTP / WebSocket), `src/rpc.rs` (NDJSON request/response)\n"
+    "body": "## What it does\n\nRuns loft as a long-lived local server. `--serve` exposes an HTTP + WebSocket endpoint for browser-facing development; `--rpc` speaks a line-delimited JSON protocol so an editor or debugger can drive a session programmatically. Both keep one interpreter alive across many requests instead of starting fresh each time.\n\n## Where it lives\n\n`src/serve.rs` (HTTP / WebSocket), `src/rpc.rs` (NDJSON request/response)\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-057 — the request/response and event shapes the served session puts on the wire\nExample: @FTR-058 — `replEval` over the same channel, with session variables persisting across requests\n"
   },
   {
     "number": 84,
     "title": "Coroutine runtime / yield codec",
     "kind": "infra",
-    "body": "## What it does\n\nThe machinery behind suspendable functions: it lays out a coroutine's saved state and encodes each yielded value so the side that suspends and the side that resumes agree on the exact bytes crossing the yield boundary. Both the interpreter and the native backend share this one layout, so a coroutine behaves identically on either.\n\n## Where it lives\n\n`src/coroutine_layout.rs`\n"
+    "body": "## What it does\n\nThe machinery behind suspendable functions: it lays out a coroutine's saved state and encodes each yielded value so the side that suspends and the side that resumes agree on the exact bytes crossing the yield boundary. Both the interpreter and the native backend share this one layout, so a coroutine behaves identically on either.\n\n## Where it lives\n\n`src/coroutine_layout.rs`\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-039 — `yield`, `yield from` delegation, `next()` / `exhausted()`, and locals that survive a suspend\n"
   },
   {
     "number": 85,
@@ -543,7 +543,7 @@
     "number": 91,
     "title": "Editor tooling: language server (LSP), debug adapter (DAP), resolution index",
     "kind": "infra",
-    "body": "## What it does\n\nServes loft to an editor over the two protocols editors speak, so a plain text editor\nbecomes a working loft environment.\n\nThe **language server** (LSP) answers questions about the code being displayed and shows\nlive diagnostics. It re-parses the buffer on every edit with a real stdlib-loaded parser —\nthe same front end the compiler uses — so what the editor reports is what the compiler\nwould report, not a second approximation of loft's rules.\n\nThe **debug adapter** (DAP) lets you set breakpoints, step, inspect locals and evaluate\nexpressions in any DAP-aware editor. It is a pure translator rather than a second\ndebugger: every capability already exists behind the `--rpc` debug engine (@I83), and this\nlayer adds only the DAP framing and handshake, holding the debuggee in-process.\n\nUnderneath the language server, the parser records what each identifier occurrence\nactually resolves to as it parses. That index is what lets \"what is this symbol?\" and\n\"where else is THIS binding used?\" be answered precisely rather than by matching names as\ntext, which would confuse two different variables that happen to share a name. Recording\nis gated behind a flag that is off by default, so ordinary compilation pays nothing.\n\n## Where it lives\n\n`src/bin/loft-lsp.rs` (LSP wire protocol over JSON-RPC / stdio), `src/bin/loft-dap.rs`\n(DAP framing over the `--rpc` debug engine), `src/lsp.rs` (the library-side surface that\ncalls the compiler, so the compiler coupling stays out of the binaries),\n`src/resolution.rs` (the parse-time resolution index: position → resolved binding)."
+    "body": "## What it does\n\nServes loft to an editor over the two protocols editors speak, so a plain text editor\nbecomes a working loft environment.\n\nThe **language server** (LSP) answers questions about the code being displayed and shows\nlive diagnostics. It re-parses the buffer on every edit with a real stdlib-loaded parser —\nthe same front end the compiler uses — so what the editor reports is what the compiler\nwould report, not a second approximation of loft's rules.\n\nThe **debug adapter** (DAP) lets you set breakpoints, step, inspect locals and evaluate\nexpressions in any DAP-aware editor. It is a pure translator rather than a second\ndebugger: every capability already exists behind the `--rpc` debug engine (@I83), and this\nlayer adds only the DAP framing and handshake, holding the debuggee in-process.\n\nUnderneath the language server, the parser records what each identifier occurrence\nactually resolves to as it parses. That index is what lets \"what is this symbol?\" and\n\"where else is THIS binding used?\" be answered precisely rather than by matching names as\ntext, which would confuse two different variables that happen to share a name. Recording\nis gated behind a flag that is off by default, so ordinary compilation pays nothing.\n\n## Where it lives\n\n`src/bin/loft-lsp.rs` (LSP wire protocol over JSON-RPC / stdio), `src/bin/loft-dap.rs`\n(DAP framing over the `--rpc` debug engine), `src/lsp.rs` (the library-side surface that\ncalls the compiler, so the compiler coupling stays out of the binaries),\n`src/resolution.rs` (the parse-time resolution index: position → resolved binding).\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-057 — the debug adapter's wire shapes: a stop event, a frame with its locals, an eval, and an edit that echoes the frame back\n"
   },
   {
     "number": 92,

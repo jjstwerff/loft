@@ -30,6 +30,8 @@
 // directory; #cwd opts out of the program-relative default.
 #cwd
 
+// @FTR-066 — the tracker index itself: built from the tree and queried by tag, written in
+// loft and run by `make index` / `./scripts/idx`
 fn main() {
     // `arguments()` returns only the script-level user args (no
     // binary path, no loft CLI flags) — args[0] is the first user

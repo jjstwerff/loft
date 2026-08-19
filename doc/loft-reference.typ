@@ -3865,6 +3865,8 @@ fn make_scores() -> ScoreList {
 }
 ```
 
+\@FTR-070 — a `par` loop across threads: the worker runs on every element and the results come back in order, whatever the thread count
+
 ```rust
 fn main() {
 ```

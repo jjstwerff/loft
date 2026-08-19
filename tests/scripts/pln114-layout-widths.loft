@@ -16,6 +16,8 @@
 struct Small { a: u8, b: u16, c: character, d: single }
 struct Mixed { a: u8, b: u32, c: u16 }
 
+// @FTR-068 — the widths the raw store actually gives each field kind, and the record
+// layout they add up to
 fn test_sizeof_scalar_widths() {
   // Instrument 1 — a declared width is part of the type's contract.
   assert(sizeof(u8) == 1, "sizeof(u8)");
