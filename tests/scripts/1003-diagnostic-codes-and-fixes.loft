@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The diagnostic CODE is the frozen handle, and a diagnostic never changes what a program
+// computes (@F110).
+//
+// Six constructs, six codes, one run.  Each `@EXPECT_WARNING` below pins the RENDERED code —
+// `Warning[redundant-coalesce]`, not the prose beside it — which is the split @F110 leads
+// with: the wording of a message may improve, the code may not, so the code is what a reader
+// searches for and what a tool keys on.  A rename or removal makes an expectation stop
+// matching, and an `@EXPECT_WARNING` that never fires is fatal here, so the pin has teeth in
+// both directions.
+//
+// This was the first `.loft` file to pin a code at all.  `tests/e1_code_set.rs` pins the code
+// SET from Rust; nothing on this side asserted that a code reaches a running program's own
+// output, and the compact renderer the harness reads is the one that carries it.
+//
+// The second half is the assertion at the end: every construct below is diagnosed, and every
+// one of them still computes exactly what it says.  A warning that changed a result would be
+// an error, and pinning the values is what says so.
+//
+// WHAT THIS FILE CANNOT ASSERT, measured 2026-08-19 and recorded here because the numbers are
+// the reason the guard stops where it does:
+//
+//   * `--explain` prints a fix line under `--errors=pretty` only.  The harness pins COMPACT,
+//     where `--explain` and `LOFT_EXPLAIN=1` add nothing, so no `.loft` file can guard a fix
+//     line.  All six codes below DO render one under `--explain`.
+//   * `loft fix` can act on none of them.  It reports a fix only when the fix carries a
+//     machine edit, and 8 of 76 `Fix` constructions in `src/` do — seven on ERROR codes, and
+//     the eighth (`superseded-call`) is rejected on the only `#superseded` symbol the stdlib
+//     ships.  So of the 25 codes DIAGNOSTICS.md marks mechanical, `loft fix` reaches 5
+//     (loft#1003).  `redundant-coalesce` below is the catalogue entry's own worked `loft fix`
+//     example and prints nothing.
+//
+// @EXPECT_WARNING: Advice[not-null-deprecated]
+// @EXPECT_WARNING: Warning[unreachable-code]
+// @EXPECT_WARNING: Warning[redundant-coalesce]
+// @EXPECT_WARNING: Warning[dead-assignment]
+// @EXPECT_WARNING: Warning[never-read]
+// @EXPECT_WARNING: Advice[upper-case-local]
+
+struct Tile1003 {
+  name: text,
+  // `not null` is inert — the type is non-null already.  advice[not-null-deprecated].
+  tag: text not null,
+}
+
+// A statement after a terminator can never run.  warning[unreachable-code] — and the
+// function still answers the reachable one.
+fn after_return1003() -> integer {
+  return 7;
+  return 9;
+}
+
+// @FTR-029 — a diagnostic's code is its frozen handle, and none of the six change the answer
+fn main() {
+  t = Tile1003 { name: "grass", tag: "x" };
+
+  // `name` is non-null, so the default can never be used.  warning[redundant-coalesce].
+  shown = t.name ?? "none";
+  assert(shown == "grass", "coalesce on a non-null field = '{shown}', want 'grass'");
+
+  // An UPPER_CASE local.  advice[upper-case-local] — the value is unaffected.
+  MAX_TILES = 4;
+  assert(MAX_TILES == 4, "upper-case local = {MAX_TILES}, want 4");
+
+  // Overwritten before it is read.  warning[dead-assignment] — the SECOND value survives,
+  // which is what makes the first one dead rather than the diagnostic wrong.
+  seen = 0;
+  seen = 1;
+  assert(seen == 1, "dead assignment then live one = {seen}, want 1");
+
+  // Never read at all.  warning[never-read].  Asserting on it would make it read, so its
+  // presence is the whole cell and the value is deliberately untouched.
+  spare = 99;
+
+  assert(after_return1003() == 7, "unreachable code after return = {after_return1003()}, want 7");
+
+  println("{shown}/{MAX_TILES}/{seen}/{after_return1003()}");
+}

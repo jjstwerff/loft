@@ -229,6 +229,25 @@ code index landed first — prose is free to change, the code is not.
 | spells an `edit` | a fix that knows the rewrite but not where it goes |
 | verifies | a fix that does not clear its own diagnostic, or that breaks something else |
 
+**How much the second gate rejects, today.** `spells an edit` is not a rare exclusion — it is
+the one that decides the whole of `loft fix`'s reach. Eight of the seventy-six `Fix`
+constructions in `src/` carry an `edit`, and seven of those eight sit on ERROR codes, so
+`loft fix` reports NO warning-level fix at all and of the 25 codes marked `M` above it can
+act on five: `unknown-function`, `unknown-field`, `unknown-variable`,
+`format-unescaped-brace` and `superseded-call`. (`cast-constant-out-of-range` and
+`text-parse-may-fail` carry edits too, on their conditional tier.) The four withheld-`edit`
+decisions written up above are the ones on record; the other twenty are omissions rather
+than decisions, and several are pure deletions at a span the compiler already knows —
+`redundant-coalesce`, `unreachable-code`, `empty-parallel-block`, `needless-const-parameter`.
+loft#1003 tracks closing that, and the shape it proposes is this file's own `FIX_BLOCKED`
+pattern one level down: a listed reason per row, so a missing edit reads as a decision.
+
+`superseded-call` is worth naming separately, because it is the only advice with an edit and
+it is REJECTED every time it fires. The edit is a bare rename, and the stdlib's only
+`#superseded` symbol has a successor of different arity — `sum_of(v)` is a shim over
+`sum(v, 0)`, and `sum` has no default for `init`, so the renamed call does not compile. The
+verification is right; the edit is under-specified.
+
 **The program is never run.** The design asked for a behaviour comparison across both
 backends; that would mean executing the author's code as a side effect of their asking what
 to write — code that may write files, take a network turn, or not terminate. Verification is
