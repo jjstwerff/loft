@@ -220,3 +220,33 @@ call, not this plan's — recorded so nobody reads two `imaging`s as a design.
 **Cameras are not a duplication.** `moros/lib/hex_cam` (102 lines) and `dryopea/src/camera.loft`
 (86) are 3-D orbit/follow cameras; @PLN144's `P2` is a 2-D per-layer parallax camera. Different
 thing, same word — checked so the next reader does not merge them.
+
+### crawler's sprite pipeline — ported, not depended on
+
+`crawler/tools/draw.py` (783 lines, extended from loft's own `sketch/draw.py`) is a working
+sprite-authoring tool, and crawler's `SPRITES.md` already states the intent: *"built to be
+extractable as a reusable 2D sprite library — the 2D stack stands on its own for 2D-preferring
+devs."* @PLN146 arc **W** takes it up, **in loft**, as the `drawing` package.
+
+The grammar is small and line-based — `size WxH` · `Background topc= botc=` (or transparent) ·
+`name <tag>` · `Line (x,y)-(x,y) w=` · `Circle (c) r= [flat=]` · `Poly (x,y)…` · `Petals` ·
+`Fronds` · fills `rgb=` / `grad=a>b [dir=]` / `radial=a>b [at=]` · `landmark` · `check`. All
+coordinates normalised 0–1, so a scene is resolution-independent.
+
+Three things make the port unusually safe, and they are why the arc's phases are comparisons
+rather than judgements:
+
+- **The Python renderer is the oracle.** Every phase gates on *pixel-identical to `draw.py`*
+  over a committed corpus, so "does it look right" never has to be answered by looking.
+- **Only one primitive is actually missing** — a filled polygon. `graphics` has
+  `fill_triangle` but no general scanline fill; lines, circles, ellipses, beziers, blending
+  and `save_png` all ship. That is `W1`, and it belongs in `graphics` rather than in `drawing`.
+- **`--once` and `check` are why an agent can use it.** Render-and-exit, non-zero on an
+  unparsed line or a failed check, plus a metric text report — a channel that costs nothing to
+  read where a PNG costs a look. `W5` keeps that contract exactly.
+
+The *authoring discipline* in `SPRITES.md` — stop when a cold read names the form uniquely,
+monsters read as a threat and show a legitimate attack means, and every sprite is authored in a
+**locked orientation (front = up)** so the engine can rotate it to the facing — is content
+guidance, not code, and stays where it is. @PLN144's `P5` is the half that consumes it: the
+locked orientation is exactly what makes continuous rotation possible without pre-rotated frames.
