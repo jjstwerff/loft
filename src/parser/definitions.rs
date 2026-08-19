@@ -1995,17 +1995,23 @@ impl Parser {
             .filter(|a| !a.hidden && !a.name.starts_with("__"))
             .count();
         let returns = !matches!(def.returned(), Type::Void);
+        // The whole body is parsed before either check runs, so the cursor has already
+        // reached the NEXT declaration — reporting at it sends the reader to an unrelated
+        // function that the message never mentions.  Point at the `OpDrop` itself.
+        let at = def.position().clone();
         if returns {
-            diagnostic!(
+            diagnostic_at!(
                 self.lexer,
+                &at,
                 Level::Error,
                 "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
                  anything whose failure matters stays an explicit call"
             );
         }
         if declared != 1 {
-            diagnostic!(
+            diagnostic_at!(
                 self.lexer,
+                &at,
                 Level::Error,
                 "`OpDrop` takes only `self` — the compiler calls it, so a second argument \
                  has nowhere to come from"

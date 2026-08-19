@@ -1171,3 +1171,149 @@ fn test_lockfile_pins_an_artifact_and_never_the_loft_that_reads_it() {
   assert(join(keys947, ",") == "name,version,url,sha256,source",
          "the pinned record is exactly five fields, got [{join(keys947, ",")}]");
 }
+
+// @FTR-018 — where a drop runs, and where the value it was handed stopped being shared
+//
+// @F115 states one rule — "a drop runs exactly where the value's own free runs — the
+// same binding, the same scope exit, the same early-exit paths — and never anywhere
+// else" — and then ENUMERATES the cases it covers.  An enumeration is a completeness
+// claim, so each case below is checked against a hand-computed log rather than read.
+// All of them hold, and identically on both backends.
+//
+// The log is a file because a drop receives ONLY `self`, so it has no other channel
+// back: it cannot append to a caller's collection even when handed one.  Which is the
+// second half of this test, and the part worth reading twice —
+//
+//   fn param(v: vector<integer>) { v += [7] }                 // the caller SEES this
+//   fn infield(v: vector<integer>) { h = H { log: v };
+//                                    h.log += [8] }           // the caller does NOT
+//
+// One line apart, the same vector, and the answers differ.  A parameter NAMES the
+// caller's record — that is loft's rule everywhere else and what makes `&` unnecessary
+// for field mutation — but a STRUCT LITERAL copies what it is given.  So the copy
+// boundary is the construction, not the call, and a reader who knows the parameter rule
+// will predict the opposite.  That is exactly why a drop cannot reach a caller's data,
+// and it is the mechanism @F115 leans on in one parenthetical.
+//
+// Not covered here, because it is a defect rather than behaviour: a `match` in TAIL
+// position with a `return` in any arm frees the function's locals before the arms run,
+// so a drop fires early and then a second time (loft#992).  Every shape below keeps a
+// statement after any match, which is that bug's verified workaround.
+fn test_a_drop_runs_where_the_value_dies_and_a_struct_literal_stops_the_sharing() {
+  tmp947 = temp_dir();
+  assert(tmp947 != null, "temp_dir is where this test's log goes");
+  // Unique per run: the two backends' suites can run at the same time.
+  p947 = "{tmp947 ?? ""}/loft947_drops_{now()}_{ticks()}.txt";
+
+  // The headline case: reverse declaration order, so nothing outlives what it belongs to.
+  reset947(p947); order947(p947);
+  assert(log947(p947) == "| 2 1 ", "declared 1 then 2, dropped 2 then 1, got [{log947(p947)}]");
+
+  // An early `return` is still a scope exit.
+  reset947(p947); early947(p947, true);
+  assert(log947(p947) == "3 ", "an early return still drops, got [{log947(p947)}]");
+  reset947(p947); early947(p947, false);
+  assert(log947(p947) == "late 3 ", "and the ordinary exit drops after the body, got [{log947(p947)}]");
+
+  // A `for` body IS a scope, so a value made per iteration dies per iteration --
+  // three drops interleaved with the loop, not three at the end.
+  reset947(p947); each947(p947);
+  assert(log947(p947) == "10 11 12 ", "one drop per iteration, got [{log947(p947)}]");
+
+  // A RETURNED value does not drop in the callee; the scope that receives it owns it.
+  reset947(p947); caller947(p947);
+  assert(log947(p947) == "got7 7 ", "the caller sees it alive, then drops it, got [{log947(p947)}]");
+
+  // A value that was never created never drops.
+  reset947(p947); never947(p947, false);
+  assert(log947(p947) == "end ", "nothing was made, so nothing dropped, got [{log947(p947)}]");
+  _ = delete(p947);
+
+  // THE POINT: one line apart, the same vector, opposite answers.
+  a947: vector<integer> = []; a947 += [1]; param947(a947);
+  assert("{a947}" == "[1,7]", "a parameter NAMES the caller's vector, got {a947}");
+  b947: vector<integer> = []; b947 += [1]; infield947(b947);
+  assert("{b947}" == "[1]", "but a struct literal COPIED it, so the write is invisible, got {b947}");
+}
+
+struct Lease947 { id: integer, path: text }
+struct Hold947 { log: vector<integer> }
+fn OpDrop(self: Lease947) { note947(self.path, "{self.id} "); }
+fn note947(p: text, m: text) { old = file(p).content() ?? ""; f = file(p); f.write(old + m); }
+fn lease947(p: text, id: integer) -> Lease947 { return Lease947 { id: id, path: p }; }
+fn log947(p: text) -> text { return file(p).content() ?? ""; }
+fn reset947(p: text) { _ = delete(p); }
+fn order947(p: text) { a = lease947(p, 1); b = lease947(p, 2); note947(p, "| "); }
+fn early947(p: text, go: boolean) { a = lease947(p, 3); if go { return } note947(p, "late "); }
+fn each947(p: text) { for i in 0..3 { x = lease947(p, 10 + i) } }
+fn made947(p: text) -> Lease947 { return lease947(p, 7); }
+fn caller947(p: text) { v = made947(p); note947(p, "got{v.id} "); }
+fn never947(p: text, go: boolean) { if go { n = lease947(p, 8) } note947(p, "end "); }
+fn param947(v: vector<integer>) { v += [7]; }
+fn infield947(v: vector<integer>) { h = Hold947 { log: v }; h.log += [8]; }
+
+struct Tile947r { const key: integer, const points: vector<integer> }
+
+// @FTR-019 — `store_release()`: what it gives back, and the instrument that says it does not
+//
+// The deterministic half of @F112's contract, asserted below: `0` for a collection that is
+// not bound to a file, `0` when nothing new has been written since the last call, and
+// bytes > 0 once there is a region below the write frontier.  Content is untouched — a
+// reference taken BEFORE the release still reads its value, because the mapping is shared
+// and an access after the drop simply re-faults the same bytes from the file.
+//
+// The memory claim is the reason this entry exists, and it holds: 40 000 records of ~2.3 KB,
+// one call per record, sampled every 5 000 records DURING the build --
+//
+//   without   15.8 -> 22.1 -> 35.9 -> 47.1 -> 58.4 MB and still climbing
+//   with      15.9 -> 16.7 -> 17.0 -> 17.5 -> 18.2 MB, flat
+//
+// Above a ~15.8 MB interpreter baseline that is 42.6 MB resident against 2.3 MB, so ~18x --
+// the entry says 20x and 2.2 MB, and that is what this is.
+//
+// WHICH INSTRUMENT, though, because the obvious one says the opposite.  `/usr/bin/time -v`
+// reports Maximum resident set size UNCHANGED (104.0 MB vs 104.3 MB) across the same two
+// runs, in both write shapes, at every scale tried.  The peak is set by arena growth --
+// the store reports `cap 203 MB` holding `data 89 MB` -- and no residency hint can lower a
+// peak it does not cause.  The claim is about the WORKING SET while the build runs, so it
+// has to be sampled while the build runs; a peak-RSS reading will tell you the call does
+// nothing.  That cost several measurement rounds here, which is why it is written down.
+//
+// The wall clock is not hurt and is often helped: same 40 000 records, one call per record,
+// 6.09 s -> 3.13 s where each record is returned to and its vector grows in place, and
+// 2.74 s -> 2.76 s where the record is complete when inserted.
+fn test_store_release_answers_bytes_and_keeps_every_reference_valid() {
+  tmp947 = temp_dir();
+  assert(tmp947 != null, "temp_dir is where this test's store goes");
+  sp947 = "{tmp947 ?? ""}/loft947_release_{now()}_{ticks()}.store";
+  _ = delete(sp947); _ = delete("{sp947}.dschema");
+
+  // Not bound to a file: there is nothing to write out and nothing to drop.
+  loose947: hash<Tile947r[key]> = [];
+  for k in 0..50 { loose947 += Tile947r { key: k, points: [k, k + 1] } }
+  assert(store_release(loose947) == 0, "an unbound collection drops nothing, got {store_release(loose947)}");
+
+  held947: hash<Tile947r[key]> = [];
+  assert(store_persist_bind(held947, sp947), "the collection binds to a file");
+  assert(store_release(held947) == 0, "and an empty bound store drops nothing either");
+
+  for k in 0..2000 { held947 += Tile947r { key: k, points: [k * 10, k * 10 + 1, k * 10 + 2] } }
+
+  // A reference taken BEFORE the release -- the entry's "every reference stays valid".
+  before947 = held947[7];
+  first947 = store_release(held947);
+  assert(first947 > 0, "a written region below the frontier drops bytes, got {first947}");
+
+  // THE POINT of the return value: it is the bytes THIS call dropped, not the resident
+  // total.  Nothing new has been written, so the second call has nothing left to do.
+  assert(store_release(held947) == 0, "a second call with no new writes drops nothing");
+
+  // Content is unaffected: the same bytes, one page fault later.
+  assert(before947.points[2] == 72, "the reference taken before the release still reads, got {before947.points[2]}");
+  after947 = held947[7] ?? Tile947r { key: -1, points: [] };
+  assert(after947.points[2] == 72, "and so does a fresh lookup, got {after947.points[2]}");
+  assert(len(held947) == 2000, "with every record still there, got {len(held947)}");
+
+  _ = delete(sp947); _ = delete("{sp947}.dschema");
+}
+
