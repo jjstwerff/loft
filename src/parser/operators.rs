@@ -407,6 +407,105 @@ impl Parser {
         }
     }
 
+    /// Give an OWNING call a home in THIS frame, so a join can VIEW it.
+    ///
+    /// [`formal/ownership.md`](../../doc/claude/formal/ownership.md) settles the shape:
+    /// a join whose arms disagree about ownership is classified conservatively as a
+    /// view, and that is correct *"because the OWNED arm is materialised into the
+    /// return buffer whose own lifetime frees it"*.  The materialisation was the half
+    /// that did not exist — for `??` (loft#1013) and then for a plain `if`, an
+    /// `else if` chain and every `match` form (loft#1019).  Without it the fresh store
+    /// the owning arm allocated is owned by no frame at all, while the consumer reads
+    /// the join as a borrow and frees nothing: one leaked record per evaluation,
+    /// unbounded in a loop.
+    ///
+    /// The buffer to bind is the one the call ALREADY carries — a heap-returning
+    /// callee is handed a hidden `__ref_N` destination the caller mints and frees
+    /// (`add_defaults`), and all that is missing is capturing what the call answered
+    /// into it.  Reusing that buffer keeps ONE owner and ONE free; a freshly minted
+    /// second work-ref would double-free the callee that DOES deliver through its
+    /// buffer, which `is_struct_returning_call` already excludes.
+    ///
+    /// Answers the rewritten value, or `None` when this value is not an owning call
+    /// that needs a home.
+    pub(crate) fn materialise_owned_call(&mut self, val: &Value, tp: &Type) -> Option<Value> {
+        if self.first_pass {
+            return None;
+        }
+        // A struct LITERAL is already clean for the opposite reason: `parse_object`
+        // allocates it into a work-ref this frame frees unconditionally.
+        let Value::Call(d_nr, args) = val.unspan() else {
+            return None;
+        };
+        let def = self.data.def(*d_nr);
+        // `is_loft_defined`, not `is_struct_returning_call`'s `n_` test: a METHOD is
+        // stored as `t_<LEN><Type>_<method>` and allocates exactly as a free function
+        // does, so a name-shaped gate would leave `bx.make()` leaking while `mk()` was
+        // cured — the same NAME-vs-SHAPE mistake loft#1017 was.
+        if !def.is_loft_defined()
+            // A callee answering a borrowed VIEW of its arguments allocated nothing,
+            // and this frame may free none of what it points at.
+            || def.returns_borrowed_view()
+            // A callee that DELIVERS through the buffer has already claimed it; binding
+            // it again here would free the one store twice.
+            || self.answers_caller_buffer(*d_nr, args)
+        {
+            return None;
+        }
+        let buf = args.iter().find_map(|a| match a.unspan() {
+            Value::Var(w) if self.vars.is_caller_hidden_buf(*w) => Some(*w),
+            _ => None,
+        })?;
+        Some(v_block(
+            vec![v_set(buf, val.clone()), Value::Var(buf)],
+            tp.clone(),
+            "join-arm-owner",
+        ))
+    }
+
+    /// Materialise every owning CALL arm of a join whose merged type is a VIEW
+    /// (loft#1019).
+    ///
+    /// `if`, an `else if` chain and all five `match` forms lower to the same tree of
+    /// [`Value::If`], so one walk covers them — which is why this is a post-pass over
+    /// the assembled value rather than a rewrite repeated at each of the six join
+    /// sites.
+    ///
+    /// Gated on the MERGED type being a view: when every arm is owned the join is
+    /// owned too, the consumer's own free claims the store, and a buffer here would
+    /// free it a second time.
+    pub(crate) fn own_joined_call_arms(&mut self, code: &mut Value, result_tp: &Type) {
+        if self.first_pass
+            || !matches!(result_tp.base(), Type::Reference(_, _))
+            || result_tp.depend().is_empty()
+        {
+            return;
+        }
+        self.own_join_arm(code, result_tp);
+    }
+
+    /// One arm of [`Self::own_joined_call_arms`]: descend to the value the arm
+    /// actually yields — through nested `if`s and to a block's TAIL — and rewrite it
+    /// when it is an owning call.
+    fn own_join_arm(&mut self, arm: &mut Value, tp: &Type) {
+        match arm.unspan_mut() {
+            Value::If(_, t, e) => {
+                self.own_join_arm(t, tp);
+                self.own_join_arm(e, tp);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.own_join_arm(last, tp);
+                }
+            }
+            other => {
+                if let Some(owned) = self.materialise_owned_call(other, tp) {
+                    *other = owned;
+                }
+            }
+        }
+    }
+
     /// loft#953 — does this call hand back a buffer the CALLER already owns?
     ///
     /// A heap-returning callee is given a hidden destination argument: the caller mints
@@ -2087,40 +2186,19 @@ impl Parser {
         // loft#1013 — a CALL default needs an owner when the RESULT is a BORROW.
         //
         // `x = v[i] ?? mk()` types the result from the SUBJECT, which names the vector
-        // (`ref(S)["v"]`), so the consumer reads `x` as a borrow and frees nothing.  On
-        // the MISS path the value is a store `mk()` freshly allocated and handed back,
-        // owned by no one: one leaked record per miss, unbounded in a loop.  A struct
-        // LITERAL default was always clean for the opposite reason — `parse_object`
-        // allocates it into a work-ref this frame already frees — and the compiler's
-        // refusal of a struct-valued constant prescribes the CALL spelling, so the
-        // leaking form is the one it tells you to write.
-        //
-        // The buffer to bind is the one the call ALREADY carries: a heap-returning
-        // callee is given a hidden `__ref_N` destination the caller mints and frees
-        // (`add_defaults`), and the only thing missing is capturing what the call
-        // answered into it.  Reusing it keeps ONE owner and ONE free — a freshly minted
-        // second work-ref would double-free the callee that DOES deliver through its
-        // buffer.
-        //
-        // Only when the result BORROWS: an owned subject makes the result owned and the
-        // consumer's own free claims the store.  And only for a callee that does not
-        // return a borrowed VIEW of its arguments, which nothing here may free.
+        // (`ref(S)["v"]`), so the consumer reads `x` as a borrow and frees nothing while
+        // the MISS path hands back a store `mk()` freshly allocated.  A struct LITERAL
+        // default was always clean for the opposite reason — `parse_object` allocates it
+        // into a work-ref this frame already frees — and the compiler's refusal of a
+        // struct-valued constant PRESCRIBES the call spelling, so the leaking form is the
+        // one it tells you to write.  [`Self::materialise_owned_call`] has the model; the
+        // same join shape written as an `if` or a `match` is loft#1019.
         if !self.first_pass
             && matches!(result_type.base(), Type::Reference(_, _))
             && !result_type.depend().is_empty()
-            && self.is_struct_returning_call(&rhs)
-            && let Value::Call(d_nr, args) = rhs.unspan()
-            && !self.data.def(*d_nr).returns_borrowed_view()
-            && let Some(buf) = args.iter().find_map(|a| match a.unspan() {
-                Value::Var(w) if self.vars.is_caller_hidden_buf(*w) => Some(*w),
-                _ => None,
-            })
+            && let Some(owned) = self.materialise_owned_call(&rhs, &result_type)
         {
-            rhs = v_block(
-                vec![v_set(buf, rhs.clone()), Value::Var(buf)],
-                result_type.clone(),
-                "ncc-default-owner",
-            );
+            rhs = owned;
         }
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
