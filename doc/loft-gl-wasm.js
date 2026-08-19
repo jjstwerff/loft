@@ -174,7 +174,32 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return hold(textures, t);
   }
-  function glCap(c) { return [0, gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE][c] || c; }
+  // ── One space: PHYSICAL pixels ───────────────────────────────────────────
+  //
+  // The canvas backing store is allocated at logical x devicePixelRatio, so the
+  // GPU rasterises at the display's real resolution instead of the browser
+  // upscaling a smaller buffer.  Everything a program sees stays in that ONE
+  // space: `gl_window_width/height` report it, the pointer answers in it, and
+  // `gl_viewport` / `gl_scissor` take it.
+  //
+  // ⚠ THAT IS THE DOCUMENTED CONTRACT, not a choice made here — `gl_window_width`
+  // is *"current window inner size in PHYSICAL pixels ... so projection / 2D ortho
+  // / overlays use the real resolution rather than a windowed hint"*.  A program
+  // that follows that advice is crisp at any ratio for free.  One that stores the
+  // size it ASKED for and reuses it as a viewport renders into part of the
+  // surface — the same defect the doc already warns about for fullscreen, now
+  // reachable on an ordinary high-density display.
+  //
+  // Keeping one space is also why the bridge rescales nothing: `gl_viewport` and
+  // `gl_scissor` are aimed at an offscreen target as often as at the window
+  // (a 1024x1024 shadow map, a thumbnail), and a bridge that scaled them would
+  // render those into a fraction of their own texture.
+  let dpr = 1;
+  const toDevice = v => Math.round(v * dpr);
+
+  function glCap(c) {
+    return [0, gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE, gl.SCISSOR_TEST][c] || c;
+  }
   function glBF(f) { return [gl.ZERO, gl.ONE, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.DST_ALPHA, gl.ONE_MINUS_DST_ALPHA][f] || f; }
   function glMode(m) { return [gl.TRIANGLES, gl.LINES, gl.POINTS][m] || gl.TRIANGLES; }
 
@@ -182,8 +207,16 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   canvas.addEventListener('keydown', e => { keys.add(mapKey(e.code)); e.preventDefault(); });
   canvas.addEventListener('keyup', e => keys.delete(mapKey(e.code)));
   canvas.addEventListener('mousemove', e => {
+    // ⚠ MAPPED FROM CSS PIXELS INTO THE FRAMEBUFFER'S SPACE.  Browser events are
+    // in CSS pixels; everything the program works in is physical.  Scaling the
+    // backing store WITHOUT this gives a crisp picture where every click lands at
+    // 1/ratio of where the user pointed.  Derived from the canvas's actual box
+    // rather than from the ratio, so a page whose stylesheet sizes the canvas
+    // (`width: 100%`) is right too.
     const r = canvas.getBoundingClientRect();
-    mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
+    const sx = r.width > 0 ? canvas.width / r.width : 1;
+    const sy = r.height > 0 ? canvas.height / r.height : 1;
+    mouseX = (e.clientX - r.left) * sx; mouseY = (e.clientY - r.top) * sy;
   });
   canvas.addEventListener('mousedown', e => { mouseBtn |= (1 << e.button); });
   canvas.addEventListener('mouseup', e => { mouseBtn &= ~(1 << e.button); });
@@ -356,10 +389,15 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     }),
     loft_gl: coerceArgs({
       loft_gl_create_window(w, h, tp, tl) {
-        canvas.width = w; canvas.height = h;
+        dpr = window.devicePixelRatio || 1;
+        canvas.width = toDevice(w); canvas.height = toDevice(h);
+        // ⚠ THE CSS SIZE IS MANDATORY, not cosmetic.  Without it the canvas lays
+        // out at its ATTRIBUTE size, so a 2x backing store draws a window twice
+        // as wide on screen and every pointer coordinate is off by the ratio.
+        canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
         canvas.style.display = 'block';
         output.style.display = 'none';
-        gl.viewport(0, 0, w, h);
+        gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
         shouldClose = false;
         return 1;
@@ -521,6 +559,11 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_gl_cull_face(f) { gl.cullFace(f === 1 ? gl.FRONT : gl.BACK); },
       loft_gl_depth_mask(w) { gl.depthMask(!!w); },
       loft_gl_viewport(x, y, w, h) { gl.viewport(x, y, w, h); },
+      // ⚠ Scissor was never bridged AT ALL.  An absent import is a dead page
+      // (loft#668), so every `--html` program that clipped anything — every
+      // `stage` scene using A6's clip, P6's viewports or L2's composite — failed
+      // to instantiate rather than rendering without the clip.
+      loft_gl_scissor(x, y, w, h) { gl.scissor(x, y, w, h); },
       loft_gl_line_width(w) { gl.lineWidth(w); },
       loft_gl_point_size(_s) { /* use gl_PointSize in shader */ },
       loft_gl_create_framebuffer() { return hold(fbos, gl.createFramebuffer()); },

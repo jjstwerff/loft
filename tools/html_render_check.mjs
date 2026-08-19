@@ -43,15 +43,19 @@ import fs from 'node:fs';
 import process from 'node:process';
 
 // ── CLI ────────────────────────────────────────────────────────────
+// `--device-scale-factor N` runs Chrome at that ratio; `--assert EXPR`
+// evaluates EXPR in the page after the wait and fails unless it is true.
+// Together they gate DPI behaviour, which no pixel check can see.
 const args = process.argv.slice(2);
 if (args.length < 1) {
-  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow SUBSTRING] [--canvas SELECTOR] [--canvas-min-colors N]');
+  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow SUBSTRING] [--canvas SELECTOR] [--canvas-min-colors N] [--device-scale-factor N] [--assert EXPR]');
   process.exit(64);
 }
 const URL_ARG = args[0];
 const opts = {
   waitMs: 8000, screenshot: null, port: 9222, allow: [],
   canvasSelector: null, canvasMinColors: 20,
+  deviceScaleFactor: null, assertExpr: null,
 };
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--wait-ms') opts.waitMs = parseInt(args[++i], 10);
@@ -60,6 +64,11 @@ for (let i = 1; i < args.length; i++) {
   else if (args[i] === '--allow') opts.allow.push(args[++i]);
   else if (args[i] === '--canvas') opts.canvasSelector = args[++i];
   else if (args[i] === '--canvas-min-colors') opts.canvasMinColors = parseInt(args[++i], 10);
+  // Layer 3: run the page at a forced device pixel ratio and assert a
+  // property of the result.  A DPI bug is invisible to Layers 1 and 2 —
+  // an upscaled canvas logs no error and has plenty of distinct colours.
+  else if (args[i] === '--device-scale-factor') opts.deviceScaleFactor = parseFloat(args[++i]);
+  else if (args[i] === '--assert') opts.assertExpr = args[++i];
   else { console.error('unknown flag: ' + args[i]); process.exit(64); }
 }
 
@@ -85,6 +94,9 @@ const chrome = spawn(CHROME, [
   '--no-sandbox',
   '--remote-debugging-port=' + opts.port,
   '--window-size=1024,768',
+  ...(opts.deviceScaleFactor
+    ? ['--force-device-scale-factor=' + opts.deviceScaleFactor]
+    : []),
   '--enable-unsafe-swiftshader',
   '--use-gl=angle',
   '--use-angle=swiftshader',
@@ -378,8 +390,32 @@ function decodePngRgb(pngBuf) {
       }
     }
 
+    // Layer 3: the caller's own assertion about the loaded page.  Evaluated
+    // after the wait, so it sees the state the program actually reached.
+    let assertReport = null;
+    if (opts.assertExpr) {
+      try {
+        const ev = await send('Runtime.evaluate', {
+          expression: `(() => { try { return JSON.stringify(${opts.assertExpr}); }
+                                catch (e) { return 'ERR ' + e.message; } })()`,
+          returnByValue: true,
+        });
+        assertReport = { expr: opts.assertExpr, value: ev.result.value };
+      } catch (e) {
+        assertReport = { expr: opts.assertExpr, error: e.message };
+      }
+    }
+
     // Collect failures
     const failures = [];
+    if (assertReport) {
+      if (assertReport.error || assertReport.value !== 'true') {
+        failures.push({
+          kind: 'assert',
+          text: `--assert ${assertReport.expr} => ${assertReport.error || assertReport.value}`,
+        });
+      }
+    }
     if (canvasReport && canvasReport.error) {
       failures.push({ kind: 'canvas.error', text: canvasReport.error });
     } else if (canvasReport && canvasReport.distinctColors < opts.canvasMinColors) {
