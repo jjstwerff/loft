@@ -84,4 +84,6 @@ suite written as `tests/<pkg>.loft` is what amputated nine published libraries. 
 - [@PLN144](../144-2d-stage/README.md) — the stage these sit on; [`PRIOR_ART.md`](../144-2d-stage/PRIOR_ART.md)
   carries what moros and dryopea already built, including `lavition_ui` and the metrics seam.
 - [@PLN146](../146-content-delivery/README.md) — fonts arrive through its asset pack.
+- [@PLN147](../147-content-editor/README.md) — the editor's panels are `D`'s widgets, so `D0`
+  gates that plan as well as this one.
 - [loft-lang/plans#145](https://github.com/loft-lang/plans/issues/145).

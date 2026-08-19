@@ -93,4 +93,6 @@ suite written as `tests/<pkg>.loft` is what amputated nine published libraries. 
 - [@PLN144](../144-2d-stage/README.md) — the stage; [`RENDERER.md`](../144-2d-stage/RENDERER.md)
   holds the atlas doctrine `F1` implements.
 - [@PLN145](../145-authoring-libs/README.md) — text, which `F5`/`F6` feed.
+- [@PLN147](../147-content-editor/README.md) — the editor writes **this** pack; `F1` is its
+  only hard prerequisite, so its first phase can start before this plan finishes.
 - [REMOTE_STORES.md](../../REMOTE_STORES.md) · [loft-lang/plans#146](https://github.com/loft-lang/plans/issues/146).

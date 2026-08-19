@@ -6,8 +6,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Prior art: what the sibling trees already built
 
 > Shared by [@PLN144](README.md) (the stage), [@PLN145](../145-authoring-libs/README.md)
-> (text, tweens, widgets) and [@PLN146](../146-content-delivery/README.md) (content and
-> delivery). It lives here because the stage plan is the oldest of the three, not because it
+> (text, tweens, widgets), [@PLN146](../146-content-delivery/README.md) (content and delivery)
+> and [@PLN147](../147-content-editor/README.md) (the in-browser editor). It lives here because the stage plan is the oldest of the three, not because it
 > belongs to it more than the others.
 
 What `moros` already built that this plan extracts, adopts, or is validated by.

@@ -242,4 +242,6 @@ needs `A2`. Both have phases that wait on nothing and should start immediately �
 - [HTML_EXPORT.md](../../HTML_EXPORT.md) / [BROWSER_INTEROP.md](../../BROWSER_INTEROP.md) — the browser target arc E fixes.
 - [@PLN145](../145-authoring-libs/README.md) — text, tweens, widgets above this stage.
 - [@PLN146](../146-content-delivery/README.md) — the asset pack, fonts, browser audio.
+- [@PLN147](../147-content-editor/README.md) — the in-browser editor; `A4` and `P1` are its
+  gates too, checked by two consumers rather than restated.
 - [loft-lang/plans#144](https://github.com/loft-lang/plans/issues/144).
