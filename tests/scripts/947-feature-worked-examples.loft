@@ -1412,3 +1412,115 @@ fn test_lazy_faults_are_sticky_until_acknowledged_and_keep_the_first_reason() {
   _ = delete(sp947z); _ = delete("{sp947z}.dschema");
   _ = delete(sq947z); _ = delete("{sq947z}.dschema");
 }
+
+struct Leaf947t { p: integer, q: integer }
+struct Doc947t { id: integer, leaf: Leaf947t, label: text, note: text?, tags: vector<integer> }
+
+// Position of a field by name, or -1 — so this test pins the CONTRACT and not the
+// byte layout, which is free to change.
+fn pos947t(t: TypeInfo, name: text) -> integer {
+  for f in t.fields { if f.name == name { return f.position } }
+  return -1;
+}
+
+// @FTR-021 — a reflected position: what begins there, and what adding two of them gives
+//
+// @F107's load-bearing rule is that a position is CHECKED against the type's own
+// descriptor rather than trusted, so only a field that BEGINS at that byte is read.
+// Everything below is that one rule seen from a different side: the interior of a
+// wider field, a position belonging to another type, a path step onto something that
+// is not an inline record, and the empty path all answer `OtherKind` and read nothing.
+//
+// The cell worth naming is the SUM. The entry justified "a path is walked, never
+// summed" with "`origin`'s offset plus `x`'s begins nothing in the owner" — and for the
+// field it illustrates with, `[8, 0]`, that is not what happens. A nested record's first
+// field sits at offset 0, so the sum is the record's OWN offset and answers the record
+// itself. The rule is right and the reason is not: summing does not fail safely into
+// "nothing here", it silently answers a DIFFERENT field, and only for a non-first field
+// does the sum land in the interior and report `OtherKind`. Both cells are asserted.
+// `default/07_reflect.loft` had this right ("which is `origin` itself").
+//
+// The nullability half is only half assertable. `FieldInfo.nullable` tracks the
+// declaration exactly for the scalar kinds, and reports a constant `true` for a record,
+// enum, vector or keyed field, so `T` and `T?` are indistinguishable there (loft#995).
+// What this test pins instead is the GROUND TRUTH the flag is meant to carry — that the
+// two spellings really do differ — so the fact stays guarded while the reporting of it
+// is broken.
+fn test_a_reflected_position_is_checked_against_the_descriptor_not_trusted() {
+  doc947t = Doc947t { id: 7, leaf: Leaf947t { p: 30, q: 40 },
+                      label: "", note: null, tags: [9, 8] };
+  t947t = type_of(doc947t);
+  lt947t = type_of(doc947t.leaf);
+
+  assert(t947t.name == "Doc947t", "type_of names the type, got {t947t.name}");
+  assert(t947t.kind == RecordKind, "a struct is a RecordKind");
+  assert(len(t947t.fields) == 5, "with every declared field, got {len(t947t.fields)}");
+
+  // EVERY position `type_of` hands out is one `field_value` can read — the entry's
+  // reason for both halves reading one descriptor.
+  for f in t947t.fields {
+    assert(field_value(doc947t, f.position).kind != OtherKind,
+           "position {f.position} ({f.name}) came from type_of and must read");
+  }
+
+  id947t = pos947t(t947t, "id");
+  leaf947t = pos947t(t947t, "leaf");
+  label947t = pos947t(t947t, "label");
+  p947t = pos947t(lt947t, "p");
+  q947t = pos947t(lt947t, "q");
+  assert(p947t == 0, "a nested record's first field sits at 0, got {p947t}");
+  assert(q947t > 0, "and its second does not, got {q947t}");
+
+  // A bare position answers the field that BEGINS there.
+  assert(field_value(doc947t, id947t).i == 7, "id reads its value");
+  assert(field_value(doc947t, leaf947t).kind == RecordKind, "leaf reads as a record");
+
+  // A PATH is walked, one descriptor step per element.
+  assert(field_value(doc947t, [leaf947t, p947t]).i == 30, "leaf.p through a path");
+  assert(field_value(doc947t, [leaf947t, q947t]).i == 40, "leaf.q through a path");
+
+  // THE SUM. leaf + p is leaf's own offset, so it answers leaf — not "nothing".
+  assert(leaf947t + p947t == leaf947t, "the first field's offset is 0, so the sum is leaf's own");
+  assert(field_value(doc947t, leaf947t + p947t).kind == RecordKind,
+         "so summing answers the RECORD, got {field_value(doc947t, leaf947t + p947t).kind}");
+  // leaf + q lands inside leaf, which begins nothing in the owner.
+  assert(field_value(doc947t, leaf947t + q947t).kind == OtherKind,
+         "a sum landing in the interior reads nothing, got {field_value(doc947t, leaf947t + q947t).kind}");
+
+  // The interior of a wider field, and a position out of another type's range.
+  assert(field_value(doc947t, id947t + 4).kind == OtherKind, "inside a wider field reads nothing");
+  assert(field_value(doc947t.leaf, label947t).kind == OtherKind,
+         "a position from another type reads nothing");
+
+  // Path edge cases. An empty path needs a typed local — a bare `[]` does not type.
+  empty947t: vector<integer> = [];
+  assert(field_value(doc947t, empty947t).kind == OtherKind, "an empty path names no field");
+  assert(field_value(doc947t, [id947t]).i == field_value(doc947t, id947t).i,
+         "a one-element path is the single-position form");
+  assert(field_value(doc947t, [id947t, 0]).kind == OtherKind,
+         "a step onto a scalar reads nothing");
+  assert(field_value(doc947t, [pos947t(t947t, "tags"), 0]).kind == OtherKind,
+         "and a step onto a vector reads nothing");
+
+  // The three answers `ValueInfo` keeps apart: null is not "".
+  assert(field_value(doc947t, pos947t(t947t, "note")).is_null, "a null text? reads is_null");
+  assert(!field_value(doc947t, label947t).is_null, "an empty text is NOT null");
+  assert(field_value(doc947t, label947t).t == "", "and reads back as the empty string");
+
+  // `nullable` follows the declaration for the scalar kinds.
+  assert(!field_value(doc947t, id947t).is_null, "id holds a value");
+  for f in t947t.fields {
+    if f.name == "id" { assert(!f.nullable, "integer is not declared nullable") }
+    if f.name == "label" { assert(!f.nullable, "text is not declared nullable") }
+    if f.name == "note" { assert(f.nullable, "text? is declared nullable") }
+  }
+
+  // The ground truth loft#995 cannot report: the two spellings really do differ.
+  hole947t = Doc947t { id: 1, leaf: null, label: "", note: null, tags: null };
+  assert(hole947t.leaf != null, "a non-nullable record field cannot hold null");
+  assert(hole947t.tags != null, "nor can a non-nullable vector field");
+
+  // A name that arrives at runtime, and one that names nothing.
+  assert(type_named("Nope947t") == null, "an unknown name answers null");
+  assert((type_named("Doc947t") ?? lt947t).name == "Doc947t", "a known one answers its type");
+}

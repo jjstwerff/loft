@@ -29,6 +29,7 @@
 @FTR-018	tests/scripts/947-feature-worked-examples.loft:1175	test_a_drop_runs_where_the_value_dies_and_a_struct_literal_stops_the_sharing	https://github.com/loft-lang/loft/blob/main/tests/scripts/947-feature-worked-examples.loft#L1175
 @FTR-019	tests/scripts/947-feature-worked-examples.loft:1257	test_store_release_answers_bytes_and_keeps_every_reference_valid	https://github.com/loft-lang/loft/blob/main/tests/scripts/947-feature-worked-examples.loft#L1257
 @FTR-020	tests/scripts/947-feature-worked-examples.loft:1324	test_lazy_faults_are_sticky_until_acknowledged_and_keep_the_first_reason	https://github.com/loft-lang/loft/blob/main/tests/scripts/947-feature-worked-examples.loft#L1324
+@FTR-021	tests/scripts/947-feature-worked-examples.loft:1426	test_a_reflected_position_is_checked_against_the_descriptor_not_trusted	https://github.com/loft-lang/loft/blob/main/tests/scripts/947-feature-worked-examples.loft#L1426
 @GIT-001	tools/indexer/src/scan.loft:61	indexable_files	https://github.com/loft-lang/loft/blob/main/tools/indexer/src/scan.loft#L61
 @GIT-002	tools/viewer/refresh.loft:48	branch_state	https://github.com/loft-lang/loft/blob/main/tools/viewer/refresh.loft#L48
 @GIT-003	tools/viewer/refresh.loft:88	commits_state	https://github.com/loft-lang/loft/blob/main/tools/viewer/refresh.loft#L88
