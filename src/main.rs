@@ -334,7 +334,8 @@ fn print_help() {
          signed registry index"
     );
     println!(
-        "                                — detects corruption and partial upgrades; read-only"
+        "                                — detects corruption and partial upgrades; read-only.\n\
+         Exits 0 verified, 1 mismatch, 2 not a release bundle (nothing checked)"
     );
     println!("  list-installed                list every registry package installed locally");
     println!("                                (from ~/.loft/registry/), annotated with sha256");
@@ -1625,7 +1626,21 @@ fn published_manifest_digest() -> Result<Option<String>, String> {
 }
 
 /// @PLN78 step 2 — `loft verify-self`: is this installation the one that was released?
-/// Read-only.  Exit 0 when nothing failed, 1 otherwise.
+/// Read-only.
+///
+/// Three exits, because *verified intact* and *could not verify anything* are the two
+/// answers a caller most needs to tell apart and they used to be the same answer
+/// (loft#1012).  `loft verify-self && deploy` was green on an install the command could
+/// not examine — a check that silently did not run, which is the same shape as the
+/// install-that-is-not-what-you-think this command exists to catch, one level up.
+///
+/// | `0` | verified against the shipped manifests — intact |
+/// | `1` | verified, and something does not match |
+/// | `2` | could not verify: not a release bundle, so there was nothing to check against |
+///
+/// `loft audit` already grades its exits this way (`0` clean, `1` low, `2` high,
+/// `3` security_critical), so the CLI has the precedent; the message was always honest
+/// and it is the exit code that gets read.
 ///
 /// Three questions, in `verify_self`'s terms: every listed file still matches, no
 /// unlisted `*.loft` sits in `default/`, and the manifest itself matches the signed
@@ -1633,6 +1648,12 @@ fn published_manifest_digest() -> Result<Option<String>, String> {
 /// only establish INTACT; the third is what makes the answer AUTHENTIC.  The output
 /// keeps them apart, because a check that sounds like more than it did is exactly what
 /// @PLN78 step 0 removed from the catalogue.
+/// `verify-self`'s third exit: the checks could not run at all.
+///
+/// Distinct from `1` (ran and something is wrong) and from `0` (ran and everything
+/// matched), so `loft verify-self && …` no longer proceeds on an unverifiable install.
+const NOTHING_TO_VERIFY: i32 = 2;
+
 fn verify_self_cmd() -> i32 {
     use loft::verify_self::{Check, bundle_root, check_anchor, local_checks};
     let Ok(exe) = std::env::current_exe() else {
@@ -1665,7 +1686,9 @@ fn verify_self_cmd() -> i32 {
             "{}: not a release bundle — nothing to check against",
             root.display()
         );
-        return 0;
+        // Not 0: nothing was verified, and a caller that reads the exit code would
+        // otherwise take this for a pass (loft#1012).
+        return NOTHING_TO_VERIFY;
     }
     println!("loft verify-self — {}", root.display());
     let mut failed = false;
@@ -1695,7 +1718,7 @@ fn verify_self_cmd() -> i32 {
     }
     if skipped == checks.len() {
         println!("not a release bundle — nothing to check against");
-        return 0;
+        return NOTHING_TO_VERIFY;
     }
     // Bound what "ok" meant.  Anchored, the chain runs signature -> manifest -> files
     // and the answer is about origin; unanchored, it is a bundle vouching for itself.

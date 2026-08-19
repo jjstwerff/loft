@@ -9,6 +9,26 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `verify-self` no longer exits 0 when it verified nothing (loft#1012, 2026-08-19)
+
+`loft verify-self` on a source-built install reported *"not a release bundle — nothing to
+check against"* and exited **0**. The message was honest; the exit code is what gets read, so
+`loft verify-self && deploy` was green on an install the command could not examine. *Verified
+intact* and *could not verify anything* are the two answers a caller most needs to tell apart,
+and they were the same answer — the same shape the command exists to prevent, one level up: a
+CHECK that silently did not run.
+
+Three exits now, following `loft audit`'s precedent (`0` clean, `1` low, `2` high,
+`3` security_critical): `0` verified and intact, `1` verified and something does not match,
+`2` could not verify. Both `return 0` sites for the nothing-to-check case became `2`; the pass
+and fail paths are untouched.
+
+Nothing in the tree read the exit code — checked before changing it — so no caller had to
+move. Pinned in `tests/exit_codes.rs`, which runs the real binary and can therefore see an OS
+exit code; the test asserts the precondition (the output really is the unverifiable case)
+before the code, so it cannot pass vacuously against a bundle that genuinely verified.
+
+
 ### `filter` freed the source's records, so a later loop over it answered nothing (2026-08-19)
 
 Found while verifying loft#1000's table cell by cell. On BOTH backends, a `filter` over a

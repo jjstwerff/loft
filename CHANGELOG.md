@@ -26,6 +26,16 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### `loft verify-self` tells you when it could not check anything
+
+On an install built from source there is no release manifest to compare against. The command
+said so — and exited **0**, which is the same answer it gives when everything verified. Anyone
+who wired it into a script (`loft verify-self && deploy`) got a green light from a check that
+never ran.
+
+It now exits `2` for "could not verify", keeping `0` for verified-and-intact and `1` for
+verified-and-wrong.
+
 ### Proximity queries on a `spatial` collection cover every direction
 
 `xs[(x,y)..]` and `xs[(x,y)..:n]` are documented as walking **outward** from a point. They
