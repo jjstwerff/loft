@@ -26,6 +26,20 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Naming a `both` method where a value goes now tells you what is wrong
+
+Handing a method to `map`, `filter` or a `fn(...)` parameter does not work — a method is not a
+function value — and loft says so. It said so only for `self` methods. A `both` one was silent:
+
+```loft
+fn tripled(both: P) -> integer { both.n * 3 }
+x = tripled;                      // was: bound null, no message at all
+apply(tripled, p);                // was: "expected fn(P) -> integer, got null"
+```
+
+Both spellings now give the same message, naming the receiver type and the two cures (wrap it
+in a lambda, or declare it with a plain first-parameter name).
+
 ### `loft verify-self` tells you when it could not check anything
 
 On an install built from source there is no release manifest to compare against. The command

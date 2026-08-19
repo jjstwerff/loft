@@ -9157,9 +9157,10 @@ impl Parser {
                     // sites do the same for the spellings that reach them.
                     //
                     // Reaches the `self` spelling, which arrives as a placeholder VARIABLE. A
-                    // `both` one arrives as a bare `Value::Null` with no name attached, so the
-                    // name cannot be recovered here and that spelling still gets the generic
-                    // message; loft#1008 records it as the remaining half.
+                    // `both` one arrives as a bare `Value::Null` with no name attached, so it
+                    // cannot be named HERE — it is reported at the bare-name site in
+                    // `objects.rs` instead, where the name is still in hand, and both
+                    // receivers now give the same message.
                     let method_arg = if matches!(tp, Type::Function(_, _, _))
                         && matches!(actual_type, Type::Null | Type::Unknown(_))
                         && let Value::Var(v) = actual_code.unspan()

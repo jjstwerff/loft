@@ -635,7 +635,47 @@ impl Parser {
                     t = Type::Never;
                 }
             } else {
-                t = Type::Null;
+                // loft#1008 — the OTHER half. A `both` receiver registers a dispatch entry
+                // under the PLAIN name (which is what makes the free-call spelling `f(x)`
+                // work), so unlike a `self` method the bare name is FOUND here — as a
+                // `Dynamic` def — and fell through to a silent null. `x = f` bound null with
+                // no diagnostic at all, and the error surfaced later as whatever used it
+                // ("Cannot format type null"); in a fn-ref argument it reached the call check
+                // as a bare `Value::Null` with no name attached, reported as *"expected
+                // fn(P) -> integer, got null"* — a value the author wrote nowhere.
+                //
+                // The name IS available here, which is what the argument site lacked. Same
+                // message as the `self` spelling gets, so the two receivers finally answer
+                // alike. Pass 2 only, and only when the name really is a method — every other
+                // def kind that lands here keeps the null it always produced.
+                let mut reported_method = false;
+                if !self.first_pass {
+                    let receivers = self.method_receivers_named(name);
+                    if !receivers.is_empty() {
+                        reported_method = true;
+                        let on = receivers.join("`, `");
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "`{name}` is a method on `{on}`, and a method is not a function \
+                             VALUE — there is nothing to bind here. Wrap it: `|x| {{ x.{name}(…) \
+                             }}`, or declare the function with a plain first-parameter name \
+                             (not `self` / `both`), which makes it a free function and a usable \
+                             fn-ref"
+                        );
+                    }
+                }
+                // Poison once the root error is out, exactly as the `self` path does: a
+                // `Null` here is a real value downstream, so the call check reported the
+                // generic *"got null"* on top and the arity check then counted the argument
+                // as missing — three errors for one mistake. `Never` is what both of those
+                // read as "already reported".
+                t = if reported_method {
+                    Type::Never
+                } else {
+                    Type::Null
+                };
             }
         } else if matches!(self.data.def_type(self.context), DefType::Struct)
             && self.data.attr(self.context, name) != usize::MAX

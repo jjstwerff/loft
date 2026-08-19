@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `both` method named where a value is wanted says so (loft#1008, 2026-08-19)
+
+The `self` half of loft#1008 already reported *"`f` is a method on `P`, and a method is not a
+function VALUE"* from every position measured. The `both` spelling did not: `x = f` bound
+**null with no diagnostic at all**, and the error surfaced later as whatever used it ("Cannot
+format type null"); as a fn-ref argument it reached the call check as a bare `Value::Null` and
+came out as *"expected fn(P) -> integer, got null"* — a value the author wrote nowhere.
+
+**The two receivers register identically** (`t_<len><Type>_<name>` — checked, the def tables
+match), so registration was not the axis and the earlier note that the name "cannot be
+recovered" was right about the ARGUMENT site and wrong about the cause. Instrumenting the
+bare-name path found it: a `both` receiver also leaves a `Dynamic` def under the PLAIN name —
+which is what makes the free-call spelling `f(x)` work — so unlike a `self` method the name
+is FOUND, skips every unknown-name branch, and falls through a final `else` to a silent
+`Type::Null`. The name is still in hand there, which is exactly what the argument site lacked.
+
+⚠ **Reporting alone left a cascade.** The first version emitted the right error and then two
+more — the generic "got null" and a "missing argument for parameter 'f'" — because `Null` is a
+real value downstream. The `self` path poisons with `Type::Never` for that reason; this one now
+does too, but only when it actually reported, so every other def kind that lands here keeps the
+null it always produced. One error for one mistake, matching the `self` case byte for byte.
+
+Controls unmoved on both backends: a plain fn-ref (20), `map` with a plain fn, both method
+spellings and both free spellings (10/10/15/15), the lambda wrapper the message recommends,
+and the stdlib's own `both` functions (`len`, `abs`, `round`). Pinned as
+`tests/error_messages/cases/57_both_method_is_not_a_fn_ref.loft`; no other baseline moved.
+
+
 ### `verify-self` no longer exits 0 when it verified nothing (loft#1012, 2026-08-19)
 
 `loft verify-self` on a source-built install reported *"not a release bundle — nothing to

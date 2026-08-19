@@ -1,0 +1,10 @@
+struct P57 { n: integer }
+
+fn tripled(both: P57) -> integer { both.n * 3 }
+
+fn apply57(f: fn(P57) -> integer, p: P57) -> integer { f(p) }
+
+fn main() {
+  p = P57 { n: 5 };
+  println("{apply57(tripled, p)}");
+}
