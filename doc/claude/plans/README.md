@@ -727,7 +727,7 @@ non-goals *for these four* — see @PLN144 § Goal.
 
 | Plan | Arcs | Phases | One line |
 |---|---|---|---|
-| **[@PLN144](144-2d-stage/README.md)** the 2-D stage | A scene · P presentation · L light · G paths | 17 | A retained **flat** node array batched by a *merge-adjacent, never-reorder* rule, presenting a 3-D world through three knobs — sprite **origin**, `layer` + `depth`, projected position |
+| **[@PLN144](144-2d-stage/README.md)** the 2-D stage ✅ **SHIPPED** | A scene ✅ · P presentation ✅ · L light ✅ · G paths *(deferred)* | 17 | A retained **flat** node array batched by a *merge-adjacent, never-reorder* rule, presenting a 3-D world through three knobs — sprite **origin**, `layer` + `depth`, projected position |
 | **[@PLN145](145-authoring-libs/README.md)** text, tweens, widgets | B C D | 11 | What you write a game *with*: a font that works headless, text that costs no upload, property tweens, and a widget kit **extracted** rather than written |
 | **[@PLN146](146-content-delivery/README.md)** content + delivery | E audio · F assets · W drawing | 19 | The pack **is a loft store** on a dumb file server, range-read; plus authoring sprites in loft instead of Python, and browser audio that is currently a stub |
 | **[@PLN147](147-content-editor/README.md)** the editor | S T U V · X sprites | 16 | An in-browser editor whose invariant is that **it edits the same store the game loads**, so editor↔runtime agreement is structural; arc X adds sprite + animation editing |
