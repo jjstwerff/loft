@@ -20,6 +20,13 @@
 //
 // The refusals (a type with no `OpIndex`, an unbounded type variable, and
 // `x[i] = …`) are in tests/errors.
+//
+// The sugar covers ONE index. A built-in takes two more spellings a library type
+// does not get: the composite `x[a, b]` (which a `hash<Cell[r, c]>` answers) and
+// the slice `x[a..b]` (which a vector answers). Both stop in the parser with
+// `Expect token ]`, before any `OpIndex` lookup — even though a two-index
+// `fn OpIndex(self: Mat, r: integer, c: integer)` is accepted and answers
+// correctly when called by its name. loft#996.
 
 interface Indexable {
   op [] (self: Self, i: integer) -> integer
@@ -78,6 +85,14 @@ fn total<I: Indexable>(x: I) -> integer {
   return s;
 }
 
+// @FTR-023 — `x[i]` on a library type: what the method decides, and what it must be
+// reached through
+//
+// Every rule here follows from `x[i]` lowering to an ordinary method call: the ring's
+// subscript is not its vector's, a miss past the end is the TYPE's answer rather than
+// the language's, the index need not be an integer, a struct-returning subscript reads
+// inline, subscripts nest (`b[b[0]]`), and a bound carries the operator to each
+// implementor. What the sugar does NOT reach is in the header note above.
 fn main() {
   b = Bits { words: [1, 2, 3] };
   assert(b[0] == 1, "a library type indexes: {b[0]}");
