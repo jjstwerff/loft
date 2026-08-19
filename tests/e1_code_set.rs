@@ -64,6 +64,7 @@ const CODES: &[(&str, &str)] = &[
         "fn main() { n: integer? = null; print(\"{n ?? \\\"x\\\"}\"); }",
     ),
     ("format-unescaped-brace", "fn main() { print(\"a } b\"); }"),
+    ("format-unclosed-hole", "fn main() { print(\"a { b\"); }"),
     (
         "shift-amount-out-of-range",
         "fn main() { x = 1 << 100; print(\"{x}\"); }",

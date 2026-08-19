@@ -1,0 +1,12 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error[format-unclosed-hole]: a literal `{` in a format string — `{` opens an interpolation hole, and nothing closes it
+  --> <cases>/54_format_unclosed_open_brace.loft:2:24
+  |
+2 |   println("a lone open { here");
+  |                        ^
+
+note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
+
+error: aborting due to 1 previous error

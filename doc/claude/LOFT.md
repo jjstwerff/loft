@@ -1129,16 +1129,26 @@ Single-line. Supports `\n`, `\t`, `\\`, `\"` escapes.
 ### Backtick strings (`` `...` ``)
 
 **Multi-line.** Bare `"` is literal inside backtick strings (no escaping needed).
-Auto-strips common leading indentation based on the closing backtick's column.
-First and last lines are trimmed if they contain only whitespace.
+Auto-strips leading indentation: the **first content line** sets the base, and that many
+leading spaces come off every line that has them.  A blank line does not set the base,
+a line indented less than the base comes out flush, and a TAB-indented line is left
+alone (a tab is not a space, so there is nothing to count).  The first and last lines
+are dropped when they contain only whitespace.
+
+Interpolation is no exception — a block with `{…}` in it dedents exactly like one
+without.  Until loft#990 it did not, which mattered most for the shape the feature
+exists for: templates.
+
+`{` opens an interpolation hole here as it does in `"…"`, so a literal brace is written
+`{{` — which is what the `void main() {{` below is doing.
 
 ```
 shader = `
   #version 330 core
   layout (location = 0) in vec3 aPos;
-  void main() {
+  void main() {{
       gl_Position = vec4(aPos, 1.0);
-  }
+  }}
 `;
 
 msg = `Hello, {name}!

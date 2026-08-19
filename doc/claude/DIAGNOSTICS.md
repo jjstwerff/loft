@@ -36,6 +36,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `text-parse-may-fail` | error | A text parsed `as <numeric>` can fail, and the result was typed non-null. | `?? <default>` for a fallback, `(… as T?)?` for the type's default, or `as T?` for a checked cast. | C C C · `@F2` `@F96` `@F5` |
 | `cast-constant-out-of-range` | error | A constant does not fit the type it is bare-cast to, and a bare cast asserts that it does. | `?? <default>` for a fallback, or `as T?` for a checked cast. | C C · `@F2` `@F5` |
 | `format-unescaped-brace` | error | A literal `}` inside a format string, where `}` closes a hole. | Write it `}}`. | M · `@F35` |
+| `format-unclosed-hole` | error | A literal `{` inside a format string, where `{` opens a hole nothing closes — a hole holds code, and code stops at the end of its line, so a `{` with no `}` after it on that line can never close. | Write it `{{`. | M · `@F35` |
 | `coalesce-default-type-mismatch` | error | A `??` default is not assignable where the value's type is expected. | Cast the default, or give it a matching type. | C · `@F2` |
 | `shift-amount-out-of-range` | error | A constant shift outside `0..=63`, which has no defined result. | Shift by an amount inside the range. | C C · `@F37` `@F2` |
 | `c-binding-not-interpretable` | error | A `#c` binding takes more C arguments than the contract covers (`MAX_C_ARITY`, 32) — refused on BOTH backends, at the declaration in your own code and at any call site. | Wrap it in an ANSI-C shim taking at most 32 parameters. | M · `@F92` |

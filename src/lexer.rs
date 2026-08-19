@@ -159,6 +159,17 @@ pub struct Lexer {
     /// string's own `{y}` verbatim and the program printed a plausible wrong
     /// value.
     open_strings: Vec<StrKind>,
+    /// How many leading spaces each OPEN backtick literal drops from its lines,
+    /// innermost last — `None` until its first content line settles it.
+    ///
+    /// A stack rather than a field because a backtick literal can be written inside
+    /// another one's interpolation hole, and one entry cannot answer for two literals.
+    /// It has to be lexer state at all because a literal with a hole is scanned in
+    /// SEGMENTS: [`backtick_string`](Lexer::backtick_string) hands the text before the
+    /// hole to the parser and returns, and
+    /// [`backtick_string_resume`](Lexer::backtick_string_resume) picks the literal up
+    /// again with nothing of its own to remember.
+    backtick_strip: Vec<Option<usize>>,
     diagnostics: Diagnostics,
 }
 
@@ -405,6 +416,7 @@ impl Default for Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             open_strings: Vec::new(),
+            backtick_strip: Vec::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -469,6 +481,7 @@ impl Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             open_strings: Vec::new(),
+            backtick_strip: Vec::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -542,6 +555,9 @@ impl Lexer {
                 '`' => {
                     self.next_char();
                     let nested = self.in_format_expr;
+                    // A fresh literal: its dedent is not settled until its first content
+                    // line.  `close_backtick` pops it.
+                    self.backtick_strip.push(None);
                     self.backtick_string(nested)
                 }
                 '\'' => {
@@ -1052,6 +1068,14 @@ impl Lexer {
                 self.next_char();
                 if let Some('{') = self.iter.peek() {
                     res.push(c);
+                } else if !self.hole_closes_on_this_line() {
+                    // Say it here, where the `{` is, and carry on as though the author
+                    // had written `{{` — which is the fix offered.  Opening a hole that
+                    // cannot close hands the rest of the line to the wrong scanner, and
+                    // that is what turned one mistake into six diagnostics (loft#989).
+                    self.unclosed_hole();
+                    res.push('{');
+                    continue;
                 } else {
                     self.mode = Mode::Formatting;
                     self.in_format_expr = true;
@@ -1112,6 +1136,7 @@ impl Lexer {
         nested: bool,
         resumed: bool,
     ) -> LexResult {
+        self.backtick_strip.pop();
         if nested {
             return self.close_nested(res, pos, resumed);
         }
@@ -1157,6 +1182,10 @@ impl Lexer {
                 self.next_char();
                 if let Some('{') = self.iter.peek() {
                     res.push(c);
+                } else if !self.hole_closes_on_this_line() {
+                    self.unclosed_hole();
+                    res.push('{');
+                    continue;
                 } else {
                     self.mode = Mode::Formatting;
                     self.in_format_expr = true;
@@ -1202,17 +1231,78 @@ impl Lexer {
         }
     }
 
+    /// Consume the leading spaces of the line just entered inside a backtick literal,
+    /// and answer what survives its dedent.
+    ///
+    /// **The dedent rule is the FIRST CONTENT LINE's indentation.**  That many leading
+    /// spaces come off every line; a line indented LESS than the base loses all of its
+    /// own and comes out flush, which is the only answer that cannot leave it further
+    /// right than a sibling that was indented past it.  A tab-indented line is untouched
+    /// — a tab is not a space, so there is nothing to count.
+    ///
+    /// It reads off the first content line because that is the only anchor a literal
+    /// with an interpolation has.  The rule used to be the CLOSING backtick's column,
+    /// which the scanner only learns when it gets there — and a hole makes it hand the
+    /// text so far to the parser and return long before that, so every segment of a
+    /// holed literal was built with no dedent at all.  The feature worked for a block
+    /// with no values in it and silently stopped for a template, which is the shape it
+    /// exists for (loft#990).  Reading the first content line instead is knowable
+    /// before any hole can occur, so holed and unholed literals answer alike.
+    ///
+    /// A BLANK line settles nothing — a template may open with one, and taking its zero
+    /// indentation as the anchor would switch the dedent off for the whole block.  Nor
+    /// does the CLOSING line: it is dropped when it holds only whitespace, so it is not
+    /// content either.  The line the opening backtick sits on cannot be an anchor at
+    /// all: it starts wherever that backtick ended, so its indentation is the
+    /// statement's, not the block's.
+    fn backtick_line_start(&mut self) -> String {
+        let mut spaces = 0usize;
+        while let Some(&' ') = self.iter.peek() {
+            spaces += 1;
+            self.next_char();
+        }
+        // Peek decides what this line IS, and every case is settled right here: a
+        // special character or ordinary text means content, the closing backtick means
+        // the last line, and end-of-line means blank.
+        let settles = !matches!(self.iter.peek(), None | Some('`'));
+        let strip = match self.backtick_strip.last_mut() {
+            Some(slot) => {
+                if settles && slot.is_none() {
+                    *slot = Some(spaces);
+                }
+                slot.unwrap_or(0)
+            }
+            None => 0,
+        };
+        " ".repeat(spaces.saturating_sub(strip))
+    }
+
+    /// Drop a final line that holds only whitespace, and the newline before it.
+    ///
+    /// The closing backtick's own line is layout, not content — `` `\n  a\n  ` `` is
+    /// one line of text.  [`backtick_string`](Lexer::backtick_string) has always said so
+    /// for a literal it scans in one piece; a RESUMED segment needs it said again, which
+    /// is why a holed block kept a trailing run of spaces nothing asked for (loft#990).
+    fn drop_trailing_blank_line(text: &str) -> &str {
+        match text.rfind('\n') {
+            Some(nl) if text[nl + 1..].chars().all(|c| c == ' ' || c == '\t') => &text[..nl],
+            _ => text,
+        }
+    }
+
     /// Scan a backtick string literal: `` `...` ``.
     ///
     /// Multi-line, supports `{expr}` interpolation and `{{`/`}}` escaping.
     /// Bare `"` is literal (no escaping needed).  `\` escapes work as usual.
     /// Closes on the next `` ` ``.
     ///
-    /// **Indent stripping:** the column of the closing `` ` `` defines the base
-    /// indentation.  That many leading spaces are removed from every line of the
-    /// content.  The first line (on the same line as the opening `` ` ``) and the
-    /// last line (on the same line as the closing `` ` ``) are trimmed if they
-    /// contain only whitespace.
+    /// **Indent stripping:** the FIRST CONTENT LINE's indentation defines the base;
+    /// that many leading spaces are removed from every line of the content.  The
+    /// first line (on the same line as the opening `` ` ``) and the last line (on the
+    /// same line as the closing `` ` ``) are trimmed if they contain only whitespace.
+    /// [`backtick_line_start`](Lexer::backtick_line_start) applies it, one line at a
+    /// time as the line is entered — which is what lets a literal with an
+    /// interpolation in it be dedented at all (loft#990).
     fn backtick_string(&mut self, nested: bool) -> LexResult {
         let pos = self.position.clone();
         let mut lines: Vec<String> = Vec::new();
@@ -1221,14 +1311,12 @@ impl Lexer {
         loop {
             match self.iter.peek() {
                 Some(&'`') => {
-                    // Closing backtick — record its column for indent stripping.
-                    let close_col = self.position.pos;
                     self.next_char();
                     lines.push(cur);
-
-                    // Strip indentation: remove up to (close_col - 1) leading spaces
-                    // from each line.
-                    let strip = (close_col - 1) as usize;
+                    // Each line arrived already dedented — `backtick_line_start` took
+                    // its share off as the line was entered.  What is left here is the
+                    // two layout lines: the opening backtick's and the closing one's,
+                    // each dropped when it holds only whitespace.
                     let mut result = String::new();
                     for (i, line) in lines.iter().enumerate() {
                         if i == 0 {
@@ -1245,16 +1333,7 @@ impl Lexer {
                         if !result.is_empty() {
                             result.push('\n');
                         }
-                        // Strip up to `strip` leading spaces.
-                        let stripped = if strip > 0
-                            && line.len() >= strip
-                            && line[..strip].chars().all(|c| c == ' ')
-                        {
-                            &line[strip..]
-                        } else {
-                            line
-                        };
-                        result += stripped;
+                        result += line;
                     }
                     return self.close_backtick(result, pos, nested, false);
                 }
@@ -1262,6 +1341,10 @@ impl Lexer {
                     self.next_char();
                     if let Some('{') = self.iter.peek() {
                         cur.push('{');
+                    } else if !self.hole_closes_on_this_line() {
+                        self.unclosed_hole();
+                        cur.push('{');
+                        continue;
                     } else {
                         // Enter format interpolation — return what we have so far.
                         lines.push(std::mem::take(&mut cur));
@@ -1292,6 +1375,7 @@ impl Lexer {
                 Some(&'\\') => {
                     self.next_char();
                     if !self.escape_seq(&mut cur) {
+                        self.backtick_strip.pop();
                         self.err(Level::Fatal, "Backtick string not correctly terminated");
                         return Lexer::none();
                     }
@@ -1303,20 +1387,20 @@ impl Lexer {
                     // End of line — advance to next line.
                     lines.push(std::mem::take(&mut cur));
                     if !self.advance_line() {
+                        self.backtick_strip.pop();
                         self.err(Level::Fatal, "Backtick string not correctly terminated");
                         return Lexer::none();
                     }
-                    // Read the full line into cur to get accurate column positions.
-                    // But first, capture the raw line for indent tracking.
-                    let mut line_content = String::new();
+                    // The dedent comes off here, at the line start, where the leading
+                    // spaces are — not at the close, which a hole never reaches.
+                    cur = self.backtick_line_start();
                     while let Some(&c) = self.iter.peek() {
                         if c == '`' || c == '{' || c == '}' || c == '\\' {
                             break;
                         }
-                        line_content.push(c);
+                        cur.push(c);
                         self.next_char();
                     }
-                    cur = line_content;
                     continue; // don't call next_char — we're positioned at the special char
                 }
             }
@@ -1334,12 +1418,19 @@ impl Lexer {
             match self.iter.peek() {
                 Some(&'`') => {
                     self.next_char();
+                    // The closing backtick's own line is layout: drop it when it holds
+                    // only whitespace, exactly as the unresumed scanner does.
+                    let cur = Self::drop_trailing_blank_line(&cur).to_string();
                     return self.close_backtick(cur, pos, nested, true);
                 }
                 Some(&'{') => {
                     self.next_char();
                     if let Some('{') = self.iter.peek() {
                         cur.push('{');
+                    } else if !self.hole_closes_on_this_line() {
+                        self.unclosed_hole();
+                        cur.push('{');
+                        continue;
                     } else {
                         self.mode = Mode::Formatting;
                         self.in_format_expr = true;
@@ -1358,6 +1449,7 @@ impl Lexer {
                 Some(&'\\') => {
                     self.next_char();
                     if !self.escape_seq(&mut cur) {
+                        self.backtick_strip.pop();
                         self.err(Level::Fatal, "Backtick string not correctly terminated");
                         return Lexer::none();
                     }
@@ -1368,9 +1460,13 @@ impl Lexer {
                 None => {
                     cur.push('\n');
                     if !self.advance_line() {
+                        self.backtick_strip.pop();
                         self.err(Level::Fatal, "Backtick string not correctly terminated");
                         return Lexer::none();
                     }
+                    // Same dedent, same place: a segment after a hole is still made of
+                    // the literal's own lines.
+                    cur += &self.backtick_line_start();
                     continue;
                 }
             }
@@ -1743,6 +1839,121 @@ impl Lexer {
             concept: "interpolation",
             concept_ref: "@F35",
         });
+    }
+
+    /// A literal `{` where a format string expects a hole to open.
+    ///
+    /// The mirror of [`unescaped_brace`](Self::unescaped_brace), and it earns the same
+    /// shape: one home for four scanners, one code, one mechanical fix.  Until it
+    /// existed the two halves of the same mistake got very different answers — `}` a
+    /// coded error naming `}}`, `{` a bare "Formatter error" raised four diagnostics
+    /// later by a parser that could not know a `{` started it (loft#989).
+    fn unclosed_hole(&mut self) {
+        // The scanners consume the brace before reporting, so the cursor sits ONE column
+        // past the `{`.  Point the caret AT it instead of one past: the whole message is
+        // about that character, and a reader following the caret to the space beside it
+        // has to guess which of the two the compiler meant.
+        let mut at = self.position.clone();
+        at.pos = at.pos.saturating_sub(1).max(1);
+        diagnostic_at!(
+            self,
+            &at,
+            Level::Error,
+            code = "format-unclosed-hole",
+            "a literal `{{` in a format string — `{{` opens an interpolation hole, and nothing closes it"
+        );
+        self.fix_last(Fix {
+            kind: FixKind::Mechanical,
+            title: "double the brace".to_string(),
+            condition: None,
+            edit: Some(crate::diagnostics::Edit {
+                line: at.line,
+                col: at.pos,
+                len: 1,
+                text: "{{".to_string(),
+            }),
+            concept: "interpolation",
+            concept_ref: "@F35",
+        });
+    }
+
+    /// Can the hole opened by the `{` just consumed still close on this line?
+    ///
+    /// A hole holds CODE, and the code scanner stops at the end of a line — so a hole
+    /// that does not close on the line it opened never closes at all (`"a {` + newline
+    /// is an error today, in a backtick literal as much as a quoted one).  That bound
+    /// is what turns a same-line scan into a DECISION rather than a guess, and it is
+    /// the whole reason the caller may speak: without it the missing `}` surfaces
+    /// several diagnostics later, at a position that says nothing about the `{`.
+    ///
+    /// Answers `true` — stay silent — for the one thing it does not model, a `//`
+    /// comment.  The direction is the point.  A wrong `false` would refuse a legal
+    /// program; a wrong `true` only leaves the pre-loft#989 behaviour in place.
+    fn hole_closes_on_this_line(&self) -> bool {
+        /// What the scan is inside.  A hole nested in a string literal pushes `Code`
+        /// again, which is why this is a stack and not a flag.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Ctx {
+            Code,
+            Str,
+            Backtick,
+            Char,
+        }
+        // The `{` is already consumed, so the hole itself is the first frame.
+        let mut stack = vec![Ctx::Code];
+        let mut it = self.iter.clone();
+        while let Some(c) = it.next() {
+            // An escape hides whatever follows it.  That is also what makes the
+            // Rust-macro spelling `{\"inner\"}` scan clean: both delimiters are
+            // hidden, so the hole sees only the identifier between them.
+            if c == '\\' {
+                it.next();
+                continue;
+            }
+            match stack.last().copied().unwrap_or(Ctx::Code) {
+                Ctx::Code => match c {
+                    // The rest of the line is a comment, so nothing on it can close the
+                    // hole — but that is a shape nobody writes, and reporting it would
+                    // spend the risk budget on a case that does not occur.
+                    '/' if it.peek() == Some(&'/') => return true,
+                    '{' => stack.push(Ctx::Code),
+                    '}' => {
+                        stack.pop();
+                        if stack.is_empty() {
+                            return true;
+                        }
+                    }
+                    '"' => stack.push(Ctx::Str),
+                    // A `` ` `` inside a hole can only OPEN a literal: code has no bare
+                    // closing backtick.  If that literal runs past the end of the line
+                    // the hole cannot close on it either, and running past the line is
+                    // exactly what the enclosing literal's own terminator looks like
+                    // from in here — both readings are an unclosed hole.
+                    '`' => stack.push(Ctx::Backtick),
+                    '\'' => stack.push(Ctx::Char),
+                    _ => {}
+                },
+                Ctx::Str | Ctx::Backtick => match c {
+                    '"' if stack.last() == Some(&Ctx::Str) => {
+                        stack.pop();
+                    }
+                    '`' if stack.last() == Some(&Ctx::Backtick) => {
+                        stack.pop();
+                    }
+                    '{' | '}' if it.peek() == Some(&c) => {
+                        it.next();
+                    }
+                    '{' => stack.push(Ctx::Code),
+                    _ => {}
+                },
+                Ctx::Char => {
+                    if c == '\'' {
+                        stack.pop();
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Debug feature to check the amount of currently in use links
