@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Integer arithmetic, bitwise ops, null, and conversions.
+// @FTR-080 — the per-opcode behaviour itself: integer arithmetic, the bitwise operators,
+// the null sentinel, and every conversion between widths
 fn main() {
   // --- Arithmetic ---
   assert(1 + 2 == 3, "int add");

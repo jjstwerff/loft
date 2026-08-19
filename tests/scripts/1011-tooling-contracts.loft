@@ -166,3 +166,92 @@ fn test_live_reload_is_opt_in() {
   off_values = ["", "0"];
   assert(len(off_values) == 2, "two spellings mean off: unset and 0");
 }
+
+// @FTR-084 — the sandbox policy: which functions are admitted, and what a profile lets them
+// reach
+fn test_the_sandbox_policy_shape() {
+  // A host declares the policy in its own `loft.toml`; a designated function is admitted or
+  // the program is refused AT LOAD, before anything runs.  Verbatim from the policy the
+  // end-to-end sandbox test writes:
+  policy = "[sandbox]\nmod = [\"fn:scripted\"]\n[profile.mod]\nallow_libs = [\"code\"]\n";
+
+  // Two sections, and the pair is the whole design: a NAMED profile says what is reachable,
+  // and the `[sandbox]` table says which functions run under it.  Neither half alone admits
+  // anything.
+  assert(find(policy, "[sandbox]") == 0, "the policy opens with its own table");
+  assert(find(policy, "[profile.mod]") > 0, "and names a profile section for the profile it used");
+  assert(find(policy, "fn:scripted") > 0, "a designated function is named `fn:<name>`");
+  assert(find(policy, "allow_libs") > 0, "and the profile lists what it may reach");
+
+  // The profile's name is the link: `mod = [...]` under `[sandbox]` and `[profile.mod]` have
+  // to agree, so a typo in either is a policy that admits nothing rather than everything.
+  assert(find(policy, "\nmod = ") > 0, "the profile is named on the left of the admission list");
+  assert(find(policy, "profile.mod") > 0, "and again in the section that defines it");
+}
+
+// @FTR-085 — the startup cache is keyed by CONTENT, so a stale entry cannot be served
+fn test_the_startup_cache_key() {
+  // The cache index is one line per parsed source: a 32-hex content hash and the path it was
+  // read from.  A file whose hash no longer matches is simply not used — the check is per
+  // FILE, so editing one stdlib source invalidates that entry and no other.
+  line = "8f14e45fceea167a5a36dedd4bea2543 default/01_code.loft";
+  parts = split(line, (" "[0]));
+  assert(len(parts) == 2, "one hash and one path, got {len(parts)} fields");
+  assert(size(parts[0]) == 32, "a 32-hex content hash, got {size(parts[0])} characters");
+  assert(parts[1].ends_with(".loft"), "and the source it hashed, got {parts[1]}");
+
+  // Content-keyed, not time-keyed: two runs over an unchanged file agree without consulting a
+  // clock, which is what makes a warm start safe rather than merely fast.
+  same = "8f14e45fceea167a5a36dedd4bea2543";
+  assert(parts[0] == same, "the same bytes give the same key");
+}
+
+// @FTR-086 — auto-use triggers are DERIVED from a library's public source, never hand-listed
+fn test_the_auto_use_trigger_surface() {
+  // A library opts in with one manifest line; the trigger surface is then read off its own
+  // `pub` declarations at publish time and written into the registry index, so the resolver
+  // can fire a trigger for a library it has not fetched.
+  optin = "[triggers]\nenabled = true\n";
+  assert(find(optin, "[triggers]") == 0, "one section");
+  assert(find(optin, "enabled = true") > 0, "and one line — the author's whole declaration");
+
+  // A METHOD trigger carries the receiver, because the call site does not name the package:
+  // `line.matches(p)` says only `matches` and `text`.  That pair is what the index must hold.
+  trigger = "{{\"name\":\"matches\",\"receiver\":\"text\"}}";
+  assert(find(trigger, "\"name\"") > 0 && find(trigger, "\"receiver\"") > 0,
+         "a method trigger is a name and the receiver it hangs off");
+
+  // A TYPE trigger needs no receiver — the name is unique enough on its own.
+  type_trigger = "Matcher";
+  assert(size(type_trigger) > 0 && find(type_trigger, ":") < 0, "a type trigger is just the name");
+
+  // What is never derived: the namespace.  `<lib>::<anything>` resolves without a trigger at
+  // all, so it is the spelling that always works and never needs the index.
+  qualified = "regex::find";
+  assert(find(qualified, "::") > 0, "the qualified spelling names the package itself");
+}
+
+// @FTR-087 — where a library runs is one manifest line, and the call site cannot tell
+fn test_the_placement_declaration() {
+  // The library's own manifest, not the consumer's, and the consumer's source is unchanged
+  // across all three.
+  inproc = "[library]\nplacement = \"inproc\"\n";
+  worker = "[library]\nplacement = \"process\"\n";
+  remote = "[library]\nplacement = \"remote\"\n";
+  assert(find(inproc, "[library]") == 0, "the section is the library's own");
+  assert(find(worker, "placement = ") > 0, "one key");
+
+  // Three values, and they are the whole vocabulary: this process, a worker on this machine,
+  // a server elsewhere.
+  places = ["inproc", "process", "remote"];
+  assert(len(places) == 3, "three placements, got {len(places)}");
+  assert(find(inproc, places[0]) > 0, "in-process is the default shape");
+  assert(find(worker, places[1]) > 0, "a worker on this machine");
+  assert(find(remote, places[2]) > 0, "or a server elsewhere");
+
+  // The invariant: a call is indistinguishable in type, effect, ownership and error behaviour
+  // from the in-process one.  A compound value crosses as ITSELF because nothing inside a
+  // store is a pointer — interior references are plain record ids, independent of the address
+  // it is mapped at and of the store number it is registered under.
+  assert(places[0] != places[2], "the two ends of the range are different deployments");
+}

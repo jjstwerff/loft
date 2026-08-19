@@ -30,6 +30,8 @@ struct TrieFirst { look: trie<W[nm]>, data: sorted<W[k]> }
 // Two collections over DIFFERENT element types are not a group and must stay independent.
 struct NotAGroup { ws: vector<W>, ps: vector<P> }
 
+// @FTR-083 — one shared radix structure serving two collection kinds at once: a `trie` on
+// text and a `spatial` on coordinates, linked over the same records
 fn fill_via_primary() -> integer {
   x = VecTrie { data: [], look: [] };
   x.data += [W { k: 1, nm: "a" }, W { k: 2, nm: "b" }];

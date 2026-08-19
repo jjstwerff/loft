@@ -41,6 +41,8 @@ fn pretty_example_name(base: text) -> text {
   base
 }
 
+// @FTR-082 — the doc pages turned into the artefact the site serves, generated from the
+// same `tests/docs/*.loft` files CI runs, so a page and its example cannot disagree
 fn main() {
   out = file("doc/examples.js");
   // `+=` is append-only — truncate explicitly so re-runs do not pile

@@ -34,6 +34,8 @@ fn apply(f: fn(integer) -> integer, v: integer) -> integer {
   f(v)
 }
 
+// @FTR-077 — a stack slot is a fixed width both backends read by position: the fn-ref
+// slot's 20 bytes, padding included, which is what the allocator decides
 fn main() {
   // Non-capturing function reference stored in a local variable.
   // OpPutFnRef writes the 20-byte slot (d_nr=double, closure=null sentinel).

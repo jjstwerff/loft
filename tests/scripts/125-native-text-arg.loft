@@ -16,6 +16,8 @@ fn is_report(s: text) -> boolean {
   s.starts_with("stores:")
 }
 
+// @FTR-081 — a `#rust`-bodied native reached by name on BOTH backends, with a text result
+// handed straight on as a text argument — the registry's own seam
 fn main() {
   // store_memory() (native, returns text) passed DIRECTLY as a text arg
   n = count_chars(store_memory());

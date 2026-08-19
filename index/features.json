@@ -363,49 +363,49 @@
     "number": 61,
     "title": "Stack slot allocator",
     "kind": "infra",
-    "body": "## What it does\n\nAssigns each local variable and temporary a fixed slot on the runtime stack, deciding the layout of every function's stack frame. Stable slot numbers let both the interpreter and the native backend read and write locals by position.\n\n## Where it lives\n\n`src/variables/` (entry point `src/variables/mod.rs`)"
+    "body": "## What it does\n\nAssigns each local variable and temporary a fixed slot on the runtime stack, deciding the layout of every function's stack frame. Stable slot numbers let both the interpreter and the native backend read and write locals by position.\n\n## Where it lives\n\n`src/variables/` (entry point `src/variables/mod.rs`)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-077 — a stack slot is a fixed width both backends read by position: the fn-ref slot's 20 bytes, padding included\n"
   },
   {
     "number": 62,
     "title": "IR data model (Value/Type/Data)",
     "kind": "infra",
-    "body": "## What it does\n\nDefines the core data types the whole compiler passes around: `Value` (an IR node), `Type` (a static type), and `Data` (the table of all named definitions). It is the shared vocabulary that the parser produces and every later stage consumes.\n\n## Where it lives\n\n`src/data.rs`"
+    "body": "## What it does\n\nDefines the core data types the whole compiler passes around: `Value` (an IR node), `Type` (a static type), and `Data` (the table of all named definitions). It is the shared vocabulary that the parser produces and every later stage consumes.\n\n## Where it lives\n\n`src/data.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-078 — the compiler's whole IR vocabulary written as loft types: 24 `Type` variants, 34 `Value` variants, and the definition/function/variable tables\n"
   },
   {
     "number": 63,
     "title": "Store-resident IR (reader + handle + materializer)",
     "kind": "infra",
-    "body": "## What it does\n\nProvides a form of the IR that lives directly in the word-addressed store, along with the reader, handle, and materializer used to access it. This lets a program's definitions be persisted and loaded without rebuilding them from source each time.\n\n## Where it lives\n\n`src/data_store.rs`"
+    "body": "## What it does\n\nProvides a form of the IR that lives directly in the word-addressed store, along with the reader, handle, and materializer used to access it. This lets a program's definitions be persisted and loaded without rebuilding them from source each time.\n\n## Where it lives\n\n`src/data_store.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-078 — the same IR graph laid out so a store schema falls out of it: `db.structure` / `enumerate` / `value` / `vector` / `field` for every type, which is the form a definition is persisted in\n"
   },
   {
     "number": 64,
     "title": "Bytecode compiler (IR -> bytecode)",
     "kind": "infra",
-    "body": "## What it does\n\nLowers the parser's tree-shaped IR into a flat stream of bytecode instructions for the interpreter, and initialises the native-function registry. It is the bridge between the structured IR and the linear form the VM executes.\n\n## Where it lives\n\n`src/compile.rs`"
+    "body": "## What it does\n\nLowers the parser's tree-shaped IR into a flat stream of bytecode instructions for the interpreter, and initialises the native-function registry. It is the bridge between the structured IR and the linear form the VM executes.\n\n## Where it lives\n\n`src/compile.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-033 — what the flattening has to get right: nested loops, a labelled break, `continue`, and a filter guard, all of which become jump targets in one linear stream\n"
   },
   {
     "number": 65,
     "title": "Bytecode code generator",
     "kind": "infra",
-    "body": "## What it does\n\nEmits the individual bytecode instructions during compilation — the routines that decide which opcodes and operands represent each expression and statement. It is the writing end of the bytecode pipeline that the VM later reads.\n\n## Where it lives\n\n`src/state/codegen.rs`"
+    "body": "## What it does\n\nEmits the individual bytecode instructions during compilation — the routines that decide which opcodes and operands represent each expression and statement. It is the writing end of the bytecode pipeline that the VM later reads.\n\n## Where it lives\n\n`src/state/codegen.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-065 — the emitted instructions themselves, pinned byte-for-byte, so a change to which opcode represents an expression is a reviewed diff\n"
   },
   {
     "number": 66,
     "title": "Bytecode VM / executor",
     "kind": "infra",
-    "body": "## What it does\n\nThe virtual machine that runs the compiled bytecode: it holds the instruction stream and the runtime stack and drives the main execute loop that steps through opcodes. This is the engine of the interpreter backend.\n\n## Where it lives\n\n`src/state/mod.rs` (the `State` type and its execute loop)"
+    "body": "## What it does\n\nThe virtual machine that runs the compiled bytecode: it holds the instruction stream and the runtime stack and drives the main execute loop that steps through opcodes. This is the engine of the interpreter backend.\n\n## Where it lives\n\n`src/state/mod.rs` (the `State` type and its execute loop)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-079 — the runtime stack the execute loop drives: it GROWS on deep call nesting instead of running off the frame it started with\n"
   },
   {
     "number": 67,
     "title": "Opcode implementations",
     "kind": "infra",
-    "body": "## What it does\n\nHolds the actual behaviour of each bytecode operation — the per-opcode routines the VM dispatches to for arithmetic, comparisons, text and collection operations, and the rest. The file is generated from the `#rust\"...\"` operator templates in the standard library.\n\n## Where it lives\n\n`src/fill.rs`"
+    "body": "## What it does\n\nHolds the actual behaviour of each bytecode operation — the per-opcode routines the VM dispatches to for arithmetic, comparisons, text and collection operations, and the rest. The file is generated from the `#rust\"...\"` operator templates in the standard library.\n\n## Where it lives\n\n`src/fill.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-080 — the per-opcode behaviour itself: integer arithmetic, the bitwise operators, the null sentinel, and every conversion between widths\n"
   },
   {
     "number": 68,
     "title": "Native Rust generator",
     "kind": "infra",
-    "body": "## What it does\n\nThe `--native` backend: translates the program's IR into Rust source code, which `rustc` then compiles into a fast standalone binary. It produces the same behaviour as the interpreter along a different, compile-to-machine-code path.\n\n## Where it lives\n\n`src/generation/` (entry point `src/generation/mod.rs`)"
+    "body": "## What it does\n\nThe `--native` backend: translates the program's IR into Rust source code, which `rustc` then compiles into a fast standalone binary. It produces the same behaviour as the interpreter along a different, compile-to-machine-code path.\n\n## Where it lives\n\n`src/generation/` (entry point `src/generation/mod.rs`)\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-065 — the generated Rust pinned byte-for-byte beside the bytecode, so the two paths' output stays a reviewed diff\n"
   },
   {
     "number": 69,
@@ -435,7 +435,7 @@
     "number": 73,
     "title": "Native function registry",
     "kind": "infra",
-    "body": "## What it does\n\nRegisters the built-in (\"native\") functions and methods — the parts of the standard library backed by Rust — and maps each loft-level name to its Rust implementation, so both backends can call it.\n\n## Where it lives\n\n`src/native.rs`"
+    "body": "## What it does\n\nRegisters the built-in (\"native\") functions and methods — the parts of the standard library backed by Rust — and maps each loft-level name to its Rust implementation, so both backends can call it.\n\n## Where it lives\n\n`src/native.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-081 — a `#rust`-bodied native reached by name on BOTH backends, with a text result handed straight on as a text argument\n"
   },
   {
     "number": 74,
@@ -471,7 +471,7 @@
     "number": 79,
     "title": "Documentation generator (maintainer tooling)",
     "kind": "infra",
-    "body": "## What it does\n\nMaintainer tooling that generates the project's HTML documentation from the source and standard library (the `gendoc` binary), keeping the published docs in sync with the code.\n\n## Where it lives\n\n`src/gendoc.rs`"
+    "body": "## What it does\n\nMaintainer tooling that generates the project's HTML documentation from the source and standard library (the `gendoc` binary), keeping the published docs in sync with the code.\n\n## Where it lives\n\n`src/gendoc.rs`\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-082 — the doc pages turned into the artefact the site serves, generated from the same `tests/docs/*.loft` files CI runs\n"
   },
   {
     "number": 80,
@@ -489,7 +489,7 @@
     "number": 82,
     "title": "Sandbox policy & enforcement",
     "kind": "infra",
-    "body": "## What it does\n\nDefines what a running loft program is allowed to touch — filesystem, network, environment, subprocesses — as named capability groups, and enforces those limits at the boundary where the program meets the host. It is how a program can be run with least privilege instead of unrestricted access to the machine.\n\n## Where it lives\n\n`src/sandbox.rs`\n"
+    "body": "## What it does\n\nDefines what a running loft program is allowed to touch — filesystem, network, environment, subprocesses — as named capability groups, and enforces those limits at the boundary where the program meets the host. It is how a program can be run with least privilege instead of unrestricted access to the machine.\n\n## Where it lives\n\n`src/sandbox.rs`\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-084 — the sandbox policy: which functions are admitted, and what a profile lets them reach\n"
   },
   {
     "number": 83,
@@ -513,13 +513,13 @@
     "number": 86,
     "title": "Startup cache & embedded stdlib",
     "kind": "infra",
-    "body": "## What it does\n\nMakes start-up fast. The standard library is embedded directly into the binary, and a cache lets a later run skip re-parsing and re-compiling that stdlib by restoring the previous result. Without it, every run would pay the full standard-library compile cost before the program even starts.\n\n## Where it lives\n\n`src/stdlib_sources.rs` (embedded `default/*.loft` sources), `src/cache.rs` + `src/startup_cache.rs` (the cache)\n"
+    "body": "## What it does\n\nMakes start-up fast. The standard library is embedded directly into the binary, and a cache lets a later run skip re-parsing and re-compiling that stdlib by restoring the previous result. Without it, every run would pay the full standard-library compile cost before the program even starts.\n\n## Where it lives\n\n`src/stdlib_sources.rs` (embedded `default/*.loft` sources), `src/cache.rs` + `src/startup_cache.rs` (the cache)\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-085 — the startup cache is keyed by CONTENT, per file, so a stale entry cannot be served\n"
   },
   {
     "number": 87,
     "title": "Auto-use / lazy library triggers",
     "kind": "infra",
-    "body": "## What it does\n\nLets a program use a library's names without writing an explicit import. A lightweight pre-scan of the source works out which library each otherwise-unresolved name belongs to and arranges to load that library the first time the name is used. It keeps small programs terse while still resolving to exactly the right library.\n\n## Where it lives\n\n`src/libscan.rs` (the pre-scan), `src/triggers.rs` (per-library load triggers)\n"
+    "body": "## What it does\n\nLets a program use a library's names without writing an explicit import. A lightweight pre-scan of the source works out which library each otherwise-unresolved name belongs to and arranges to load that library the first time the name is used. It keeps small programs terse while still resolving to exactly the right library.\n\n## Where it lives\n\n`src/libscan.rs` (the pre-scan), `src/triggers.rs` (per-library load triggers)\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-086 — auto-use triggers are DERIVED from a library's public source, never hand-listed, and the qualified spelling needs none\n"
   },
   {
     "number": 88,
@@ -537,7 +537,7 @@
     "number": 90,
     "title": "Shared utilities & data structures",
     "kind": "infra",
-    "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n"
+    "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-083 — one shared radix structure serving two collection kinds at once: a `trie` on text and a `spatial` on coordinates, over the same records\n"
   },
   {
     "number": 91,
@@ -693,7 +693,7 @@
     "number": 116,
     "title": "Library placement — in-process, a worker, or another machine",
     "kind": "infra",
-    "body": "## What it does\n\nDecides **where** a library's functions run — in this process, in a worker process on this machine, or on a server elsewhere — from one line of the library's own manifest, with the consumer's source unchanged:\n\n```toml\n[library]\nplacement = \"inproc\" | \"process\" | \"remote\"\n```\n\nThe invariant it holds is that you cannot tell from the program: a call to a library is indistinguishable, in type, effect, ownership/lifetime and error behaviour, from the same call in-process. Where it runs is deployment policy, not source.\n\nA struct or a vector crosses as **itself** — a shared memory-mapped loft store for a worker on this machine, the same store's bytes on a socket for a remote one — rather than being encoded into a second wire vocabulary. That is possible because nothing inside a store is a pointer: a record graph's interior references are plain `u32` record ids, so it is independent of both the address it is mapped at and the store number it is registered under.\n\nWhat it buys: fault isolation (a crash inside the library ends the call as a loft error instead of taking the program's data with it), and the ability to put a library on the machine that should hold it.\n\nNot everything can be placed, and the rules are the library author's to follow — a public function must not itself be a native, the surface should answer a value rather than a cursor, closures do not cross, and a function returning a borrowed VIEW of something it did not create is refused rather than mis-marshalled. A signature outside what the boundary carries simply runs in-process, byte-identically; nothing becomes a call that fails later.\n\n## Where it lives\n\n`src/lib_placement.rs` (declaration), `src/lib_placement/arena.rs` (the shared store a compound value crosses in), `src/lib_placement/wire.rs` (both transports and both ends), `src/lib_placement/dispatch.rs` (routing a placed library's calls).\n\nReference: `doc/claude/PLACEMENT.md` (mechanism + authoring rules), `doc/claude/PACKAGES.md` (the declaration).\n"
+    "body": "## What it does\n\nDecides **where** a library's functions run — in this process, in a worker process on this machine, or on a server elsewhere — from one line of the library's own manifest, with the consumer's source unchanged:\n\n```toml\n[library]\nplacement = \"inproc\" | \"process\" | \"remote\"\n```\n\nThe invariant it holds is that you cannot tell from the program: a call to a library is indistinguishable, in type, effect, ownership/lifetime and error behaviour, from the same call in-process. Where it runs is deployment policy, not source.\n\nA struct or a vector crosses as **itself** — a shared memory-mapped loft store for a worker on this machine, the same store's bytes on a socket for a remote one — rather than being encoded into a second wire vocabulary. That is possible because nothing inside a store is a pointer: a record graph's interior references are plain `u32` record ids, so it is independent of both the address it is mapped at and the store number it is registered under.\n\nWhat it buys: fault isolation (a crash inside the library ends the call as a loft error instead of taking the program's data with it), and the ability to put a library on the machine that should hold it.\n\nNot everything can be placed, and the rules are the library author's to follow — a public function must not itself be a native, the surface should answer a value rather than a cursor, closures do not cross, and a function returning a borrowed VIEW of something it did not create is refused rather than mis-marshalled. A signature outside what the boundary carries simply runs in-process, byte-identically; nothing becomes a call that fails later.\n\n## Where it lives\n\n`src/lib_placement.rs` (declaration), `src/lib_placement/arena.rs` (the shared store a compound value crosses in), `src/lib_placement/wire.rs` (both transports and both ends), `src/lib_placement/dispatch.rs` (routing a placed library's calls).\n\nReference: `doc/claude/PLACEMENT.md` (mechanism + authoring rules), `doc/claude/PACKAGES.md` (the declaration).\n\n\n\n## In real use\n\nWhere this feature carries real work, validated by `check_doc_drift.sh examples`:\n\nExample: @FTR-087 — where a library runs is one manifest line, and the call site cannot tell\n"
   },
   {
     "number": 117,
