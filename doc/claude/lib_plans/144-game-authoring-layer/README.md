@@ -35,7 +35,7 @@ text.
 
 ## Effort + design
 
-- **Effort:** H overall — 28 phases, **none above M** (8 XS, 16 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 32 phases, **none above M** (9 XS, 19 S, 4 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -76,8 +76,9 @@ phase is cut, not when it is implemented.
 | **A5** — per-node alpha + tint, and **blending instead of discard** | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; a sprite's **anti-aliased edge** composites without a fringe; tint × texel matches. The shipped `SPRITE_FRAG` does `if (c.a < 0.01) discard` and writes everything else opaque, with `GL_BLEND` never enabled — a binary cutout, so soft edges and semi-transparency are wrong today and per-node alpha is unimplementable on it | Open |
 | **A7** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
 | **A8** — camera with a per-layer parallax factor | `stage` | with every factor `1.0`, a camera pan is **pixel-identical** to translating every node by hand — the flat mode proved to be the degenerate case, not a second path. With factors varying, a pan of `d` moves each layer by `d × factor`, hand-computed per layer. **And a pure camera move re-uploads no instance data** (assert zero uploads), which is the entire reason the camera lives here and not in the node positions | Open |
-| **A9** — sprite animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
-| **A10** — directional sets, `(action, facing)` | `stage` | a facing change mid-walk **keeps the frame phase** — a character turning does not snap its legs back to frame 0, which the naive implementation does. Six facings on a hex lattice, four on a square one, from the same table | Open |
+| **A9w** — world sprites: ambient motion, no per-instance state | `stage` | 500 wind-swayed sprites cost **zero per-frame instance updates** — the phase is derived from time and position, not stored and stepped — and two instances at different positions are visibly out of phase rather than marching in lockstep | Open |
+| **A9** — mob animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
+| **A10** — facings, **two models chosen by projection** | `stage` | *Top-down* (crawler's): one sprite authored in a locked orientation, **rotated continuously** to the facing — 15° steps must cost **no extra atlas entries**, since pre-rotated frames are what this avoids. *Side-on / 2.5D*: an `(action, facing)` table, because a standing sprite cannot be rotated into another facing — at most mirrored — and there a facing change mid-walk must **keep the frame phase** rather than snapping the legs back to frame 0 | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
 | **B1m** — the metrics seam | `text2d` | a **wide run and a narrow run** of `n` characters, measured at startup through whichever backend resolved, answer *fixed-pitch or not* — one run cannot, and the browser's proportional substitution is exactly what it must catch. Advance carried in **1/64 px**: a whole-pixel field truncates 9.6→9 and the error accumulates per character | Open |
@@ -96,15 +97,22 @@ phase is cut, not when it is implemented.
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
 | **F5** — font sources: browser-resident, our server, or a CDN | `assets` | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes. Field evidence rather than deduction: `moros/probe/b1` measured a desktop fixed-pitch font arriving as a **proportional** browser fallback | Open |
 | **F6** — font readiness ordering | `assets` | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | Open |
+| **H1** — the game's own logic runs **admitted**, not just its mods | `assets` + host | the negative gate, because a policy that admits everything proves nothing: **remove a capability from `[sandbox]` and the corresponding call must fail to LOAD**, with an actionable error. @PLN86 admission ships here (`src/sandbox.rs`) | Open |
+| **H2** — every library in this plan declares its side of the boundary | all | game code compiled under the policy reaches `stage` / `tween` / `ui` / `assets` **only** through allow-listed capabilities, and a deliberately unbounded loop in game code is rejected at load rather than at frame 900 | Open |
 | **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
 
-## Prior art
+## Companion files
 
-`moros` carries a ~55 k-line editor and three of its results land directly on this plan:
-**`lavition_ui` is arc D already built** (zero-dependency widget kit, `panel_build` → a flat
-`vector<DrawRect>`), **`font.loft` is B1m** and was paid for in a 31 px layout error, and
-**the editor is already 2D with 3D extracted** through `hex_proj`. Detail, and the two facts
-that bound sequencing: [PRIOR_ART.md](PRIOR_ART.md).
+- **[RENDERER.md](RENDERER.md)** — arc A inherits `crawler/RENDER.md` rather than competing
+  with it (crawler stopped building that renderer 2026-07-22). Adopted: *never reorder, merge
+  adjacent only*; a premultiplied atlas with 1 px padding and mipmaps; an atlas that packs
+  itself at load time with no programmer direction; a per-instance 2×3 affine; frame stats
+  naming the reason for every batch break. Declined for now: SDF shapes, paths, gradients,
+  post-fx — arc G's territory.
+- **[PRIOR_ART.md](PRIOR_ART.md)** — what `moros` already built: `lavition_ui` **is** arc D,
+  `font.loft` **is** B1m, and the editor is already 2D with 3D extracted through `hex_proj`.
+- **[FONTS.md](FONTS.md)** — F5/F6: reusing a font the browser has, and bringing one it does
+  not.
 
 ## The presentation model
 
@@ -144,9 +152,9 @@ help, the help is an **authoring-time check in the editor** (flag a placed sprit
 solid region could hide a character behind it), never a runtime feature: advice at author
 time, silence at run time.
 
-## Effort per phase## Effort per phase
+## Effort per phase
 
-Totals: **8 XS, 16 S, 4 M** — no phase above M, which is the § Cutting rule holding
+Totals: **9 XS, 19 S, 4 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -160,8 +168,9 @@ those calls are made here rather than discovered mid-build.
 | **A5** | S | Two more instance attributes, plus the shader moving off alpha-discard to real blending. **Design call: premultiplied alpha.** The canvas packs straight 0xAARRGGBB, so the packer premultiplies once at pack time; straight alpha under linear filtering darkens every anti-aliased edge, and this stack draws overlapping soft-edged sprites all day. Hand-compute the expected RGBA against that choice. |
 | **A7** | S | Three knobs, and **`stage` learns nothing about hexes or 3D**. GameMaker's, because a game author already has the vocabulary: a sprite **origin** (put it bottom-centre and the sprite stands up from its footprint), a per-node **`depth`** the app sets — `depth = -y` is the whole 2.5D idiom, and a hex world writes the projection of `(q, r, height)` instead — and a **`layer`** that outranks depth, so background / world / UI are bands rather than a global number every node has to get right. The effort is A3's run-grouping and getting *origin, not extent* right in both places; the sort itself is a comparison. |
 | **A8** | S | One `(dx, dy)` per stage and one float per layer, applied as a **shader uniform** at draw time. **Design call: parallax translates, it does not scale.** Scaling by depth is a perspective projection, and it would resize the footprint a base-anchored sprite is aligned to — so the world layer sits at `1.0`, backgrounds below, foreground overlays above, and every cell stays the same size. The cost this avoids is the point: baking the camera into node positions makes a scroll an O(N) rewrite **and a full instance re-upload every frame**, which is A3's whole budget spent on standing still. Picking pays for it — A4 must un-apply the camera **per layer**, since one screen point is a different world point in each. |
+| **A9w** | XS | Phase from `(time, position)` in the shader — no stored state, so a field of grass is one recorded batch and a time uniform. This is the case A9's frame-index attribute exists to keep cheap, taken to its limit: **nothing per frame at all**. |
 | **A9** | S | A sequence is (first cell, count, fps, loop mode); a node carries (sequence, elapsed). Advanced from `fixstep`'s step, never from wall time — that is what makes it identical at any frame rate and replayable under a recorded input stream. **Design call: the instance attribute is a FRAME INDEX, not a uv rect**, and the shader derives uv from the atlas layout — so an animating sprite dirties one integer per frame instead of four floats, and A3's *upload only what changed* keeps meaning something with 500 animated tufts on screen. |
-| **A10** | XS | A table from `(action, facing)` to a sequence, and one rule: switching sequences carries the elapsed phase over rather than resetting it. Walking between hexes is the composition — C tweens the position, A9 plays the cycle — so neither owes the other anything. |
+| **A10** | S | Two models, and the projection picks — not the author. Top-down gets continuous rotation off the 2×3 affine, which is why crawler authors every mob facing *up* and pre-rotated frames never exist. Side-on gets the `(action, facing)` table with one rule: switching sequences **carries the elapsed phase over**. Crawler's by-name resolution comes with it — a mob loads `<key>.png`, an optional action variant, and a missing file falls back rather than failing. Walking between hexes stays composition: C tweens the position, A9 plays the cycle. |
 | **A6** | S | `gl_scissor` per clipped subtree, nested clips intersected with the parent rect. S rather than XS **because it interacts with A3**: a scissor change breaks a batch, so grouping becomes (atlas, clip) rather than atlas. |
 | **B1** | M | Rasterize glyphs once into an atlas, keep a (font, size, codepoint) → uv map, build a text node as one quad per glyph fed through A3's buffer, so `.text =` re-lays-out quads and uploads nothing. Effort: shelf packing, atlas growth when it fills, and both backends producing the same atlas *shape* even where glyph pixels differ. |
 | **B1m** | XS | Two measured runs at startup, a 1/64-px advance, and three derived helpers (`text_width`, `fits`, `fit_text`). Nearly free — it is `lavition_ui/src/font.loft` lifted, and its shape is a **finding**, not a preference: one run cannot distinguish a fixed-pitch font from the browser's proportional stand-in, and whole-pixel truncation cost that tree a 31 px error on a single line. |
@@ -180,6 +189,8 @@ those calls are made here rather than discovered mid-build.
 | **F4** | XS | Pack `build_atlas()`'s output as a PNG, load it from the pack, delete 190 lines, pixel-compare. |
 | **F5** | S | Manifest fields (family, browser source, native path), page emission of the `@font-face` or `<link>`, and enforcing family-name-equals-lookup-key **at build time** instead of leaving it to be discovered as a silent fallback at runtime. |
 | **F6** | XS | Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The fix is two lines; the throttled test is the phase. |
+| **H1** | S | Turn the `[sandbox]` policy on over the game's own function surface and find where it is too tight — which is the point of doing it early. Doing it late is a re-architecture: the boundary decides which library internals may be unbounded, and that is a design-time property of every package this plan ships. |
+| **H2** | S | Each package declares **trusted engine** (unbounded internals, an admitted-safe API) or **admissible loft**. Cheap while the APIs are being written, and the reason mods cost nothing later: a mod is then just more admitted code, with no second code path to keep in step. |
 | **G** | H | Deferred. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. |
 
 ## The vehicle
@@ -236,14 +247,7 @@ Two constraints carry over from routing, and F3 exists to hold the first:
 Embedding stays available for the bytes a page needs before its first fetch — a boot font, a
 loading sprite — but it is the exception, not the pipeline.
 
-## Fonts
-
-`--html` already reuses a browser-resident font for free, and **ships no font bytes today**.
-Bringing one — from our file server or a CDN such as Google Fonts — is F5/F6. The three
-sources, the two mechanics that decide whether it works at all, and the field evidence
-behind them: [FONTS.md](FONTS.md).
-
-## Open design questions## Open design questions
+## Open design questions
 
 1. **Chunk ownership.** Proposed: `stage`, `text2d`, `ui` → `loft-libs-graphics`;
    `tween`, `audio_bus` → `loft-libs-game`; `assets` (pack tool + loader) →
