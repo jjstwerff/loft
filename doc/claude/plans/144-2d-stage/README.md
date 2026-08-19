@@ -185,11 +185,20 @@ phases carry a design call that decides the effort, made here rather than discov
 The consumer asked for it, and it is the case this arc was designed against, so it belongs in
 the plan rather than in a conversation.
 
-**Buildings, walls and hills are authored in 3-D** — that is the intended long-term path, not
-a demo shortcut: the 3-D routines already draw them and will keep doing so. What `stage`
-adds is a **presentation**: those meshes project to a footprint and a depth, and mobs,
-workers and the player are sprites that sort against them by the same key. The world stays
-3-D; only the view is flat.
+**The rules are the game's own, unchanged — only the presentation differs.** That is the
+whole claim of this arc, arriving from a consumer rather than from the design: dryopea's flow
+field, combat resolution, wave system and carry model are not forked, re-tuned or
+reimplemented for a 2.5-D view. The simulation stays where it is and `stage` draws it.
+
+**Buildings, walls and hills are authored in 3-D** — the intended long-term path, not a demo
+shortcut: the 3-D routines already draw them and will keep doing so. Those meshes project to
+a footprint and a depth; mobs, workers and the player are sprites that sort against them by
+the same key. The world stays 3-D; only the view is flat.
+
+**So the demo is also the strongest available gate.** With one simulation behind two
+presentations, they must agree about what is where — a pick at one screen point resolves to
+the same entity in both, and an entity standing on a tile is on that tile in either view. A
+plan that only ever renders one way cannot ask that question; this consumer can.
 
 Three things that shape follows from, all now built or named:
 
