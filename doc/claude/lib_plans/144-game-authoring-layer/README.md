@@ -78,7 +78,7 @@ phase is cut, not when it is implemented.
 | **A5** — per-node alpha + tint as instance attributes | `stage` | alpha 0.5 over a known background composites to the hand-computed RGBA; tint × texel matches. Today `draw_sprite` has neither uniform | Open |
 | **A6** — clip / mask rect | `stage` | content outside the mask is absent at the exact pixel boundary, nested two deep | Open |
 | **B1** — glyph atlas + `TextNode.text` | `text2d` | mutate `.text` every frame for 600 frames: GL texture count **constant** (today one upload per change), pixels equal the `create_text_texture` baseline | Open |
-| **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap here | Open |
+| **B2** — wrapping + alignment | `text2d` | a hand-computed break table (width → break positions) **per target**, **including multi-byte text** — `len(text)` counts characters and the byte-indexed read is the live trap. Not one shared table: native measures the real TTF through fontdue and the browser measures whatever family resolved, so the same string breaks in different places. The cross-target invariant is **self-consistency** — the drawn text fits the box that same target measured | Open |
 | **C1** — tween core + easing set | `tween` | sampled values match a hand-computed easing table exactly; a completed tween lands **on** the end value, not end−ε; identical result at 30 Hz and 60 Hz | Open |
 | **C2** — bind to node properties | `tween` | driving `node.x` through a tween yields the same pixel sequence as setting it by hand | Open |
 | **D1** — Button (up/over/down/disabled) | `ui` | a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire | Open |
@@ -90,6 +90,8 @@ phase is cut, not when it is implemented.
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from `python3 -m http.server` with only the URL changed; a byte-range log shows **only** the requested keys fetched | Open |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | Open |
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
+| **F5** — font sources: browser-resident, our server, or a CDN | `assets` | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes | Open |
+| **F6** — font readiness ordering | `assets` | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | Open |
 | **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
 
 ## The vehicle
@@ -109,7 +111,8 @@ arc, and the count is what says so.
 3. **B**, then **C**, then **D** — each needs A4's hit-test or A1's transforms; D2
    additionally needs B.
 4. **F** runs in parallel with A–D (it touches no rendering), except F4, which needs
-   A2.
+   A2. F5/F6 (fonts) are independent of F1–F3 and can land with B, which is the first
+   arc that cares which font actually resolved.
 5. **E2/E3** whenever a consumer asks; they are comfort, not capability.
 
 ## The asset route — why not an embedder
@@ -135,6 +138,45 @@ Two constraints carry over from routing and are what F3 exists to hold:
 
 Embedding stays available for the handful of bytes a page needs before its first
 fetch (a boot font, a loading sprite) — but it is the exception, not the pipeline.
+
+## Fonts — three sources, one declaration
+
+`--html` ships **no font bytes today**, and for the reuse case it does not need to:
+`gl_load_font("X.ttf")` never opens a file in the browser. `familyFor()`
+(`doc/loft-gl-wasm.js:113`) resolves the path's base name to a CSS family — a family
+the page has registered wins (`document.fonts.check`), else a name heuristic picks
+`monospace` / `serif`, else `sans-serif` — and the browser's own `fillText` produces
+the coverage bitmap the desktop shader already expects. Name a family the browser
+already has and **nothing is downloaded**.
+
+What is missing is the ability to *bring* a font. Three sources, one declaration:
+
+| Source | Browser | Native / `--native-wasm` |
+|---|---|---|
+| a family the browser already has | nothing shipped, nothing fetched | the TTF beside the game |
+| our own file server | `@font-face { src: url(…) }`, or the WOFF2 packed in the asset store and range-read like every other asset | the same store |
+| Google Fonts, or any CDN | the provider's stylesheet `<link>`; zero bytes of ours | the TTF beside the game |
+
+Two mechanics decide whether this works at all, and both are gates rather than notes:
+
+- **The declared `font-family` must equal the base name the program passes to
+  `gl_load_font`** — that string is the lookup key `familyFor` builds. A manifest that
+  lets the two drift produces a silent fallback, never an error.
+- **The page must await `document.fonts.load('16px "<family>"')` before `loft_start`.**
+  `document.fonts.check` is synchronous and answers *false* for a webfont still
+  loading, and `familyFor`'s answer is **cached per handle**
+  (`fonts.push({ family: … })`), so one early `gl_load_font` locks that handle to
+  `sans-serif` permanently — the page then renders in the wrong font with nothing on
+  stderr. That is why F5 asserts the resolved family and F6 exists at all.
+
+A remote font is a third-party dependency: offline, or with the CDN blocked, the chain
+degrades to `sans-serif` rather than failing. That is the right behaviour, and the
+reason the native source stays declared beside the browser one.
+
+The mechanism already exists for a library that wants it **today** — a package can
+carry its `@font-face` and the `fonts.load` await in `[wasm.bridge] host_js`, no engine
+change. F5/F6 are about making it declarative so a game does not hand-write JS, and
+about making the ordering gate automatic rather than remembered.
 
 ## Open design questions
 
