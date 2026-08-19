@@ -291,6 +291,23 @@ load.**
 
 See [SANDBOX.md](SANDBOX.md).
 
+## 2b. Never leave a capability in the fixture only
+
+`tests/fixtures/libs/` snapshots each chunk repo at a pinned tag. A fixture that is **behind**
+its tag is ordinary and recoverable — re-sync. A fixture carrying a **file the canonical repo
+has never had** is a fork: nothing recovers it, an installed package silently lacks whatever it
+provides, and the fixture's own tests stay green while saying nothing about that.
+
+That is not hypothetical. @PLN106's Android GL backend (`android_gl.rs`) lived in the graphics
+fixture and on no branch of `loft-libs-graphics`, so `--native-android` shipped while
+`loft install graphics` had no Android rendering, input or audio at all — and the goldens that
+proved it proved the fixture.
+
+`scripts/sync-fixtures.sh --check-unreleased` gates this (CI job `fixtures-unreleased`, unlike
+the advisory full-drift check). Either take the file upstream, or declare it in that script's
+`UNRELEASED_FILES` **with a tracking reference** — a row without one is refused, since knowing
+about it is what the previous arrangement already had.
+
 ## 3. Pre-release checklist
 
 **Declare your three compatibility levels first.** They are required before a package may be

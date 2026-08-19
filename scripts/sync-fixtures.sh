@@ -21,16 +21,21 @@
 # silent drift.
 #
 # Usage:
-#   scripts/sync-fixtures.sh           # refresh all fixtures
-#   scripts/sync-fixtures.sh --check   # verify fixtures match
+#   scripts/sync-fixtures.sh                # refresh all fixtures
+#   scripts/sync-fixtures.sh --check        # verify fixtures match (ADVISORY)
+#   scripts/sync-fixtures.sh --check-unreleased
+#                                           # only the GATED class: a fixture file
+#                                           # the canonical repo has never had
 #                                      # PINNED_REFS without writing
 
 set -euo pipefail
 
 CHECK_ONLY=0
-if [[ "${1-}" == "--check" ]]; then
-    CHECK_ONLY=1
-fi
+UNRELEASED_ONLY=0
+case "${1-}" in
+    --check)            CHECK_ONLY=1 ;;
+    --check-unreleased) CHECK_ONLY=1; UNRELEASED_ONLY=1 ;;
+esac
 
 # Pinned chunk-repo refs.  Each line: `<chunk> <ref> <pkg1,pkg2,...>`.
 # Add web/server/imaging/etc. when their fixtures become load-bearing
@@ -124,6 +129,23 @@ EOF
 #   rejects).  Drop this line when loft-libs-net ships the `text?` migration
 #   (the web/server republish) and bump PINNED_REFS instead.
 #
+# Fixture files the canonical repo does NOT HAVE AT ALL — a fork, not a patch.
+#
+# ⚠ THIS LIST IS GATED, AND `LOCAL_PATCHES` IS NOT.  The distinction is the point: a
+# fixture merely BEHIND its tag is recoverable by re-syncing, but a file upstream has
+# never carried cannot be recovered from anywhere — an installed package silently
+# lacks the capability, and the fixture's own green tests say nothing about it.
+# @PLN106's Android backend sat here proving the FIXTURE while `loft install graphics`
+# had no Android at all.
+#
+# Every row needs a TRACKING REFERENCE and `--check-unreleased` fails without one,
+# because "we know about it" is exactly what the previous arrangement already had.
+# Format: `<pkg>/<relpath>  <issue-or-plan ref>`.
+UNRELEASED_FILES=$(cat <<'EOF'
+graphics/native/src/android_gl.rs  loft-libs-graphics#32
+EOF
+)
+
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
 imaging/src/imaging.loft
@@ -144,8 +166,9 @@ web/src/web.loft
 #   * @PLN110 renamed `len(text)` to a CHARACTER count and `size(text)` to bytes, so
 #     every `.len()` on a byte buffer became `.size()`.  The pinned tags predate it.
 #   * the formatter has been run in-repo since the tags were cut (whitespace only).
-#   * graphics gained an Android backend (`android_gl.rs` + `cfg` gates) that has
-#     never been released upstream.
+#   * graphics gained Android `cfg` gates in files that DO exist upstream.  (The
+#     Android-only FILE, `android_gl.rs`, is not here — see UNRELEASED_FILES, which
+#     is the gated list.)
 # Take these upstream and re-pin when those packages next cut a release; until then
 # the fixture is the newer artifact and the tag is the stale one.
 web/tests/pack.loft
@@ -157,7 +180,6 @@ game_protocol/examples/v5_t1_binary_server.loft
 game_protocol/examples/v5_t2_session_blobs_client.loft
 game_protocol/examples/v5_t4_catch_up_client.loft
 graphics/native/Cargo.toml
-graphics/native/src/android_gl.rs
 graphics/native/src/audio.rs
 graphics/native/src/lib.rs
 graphics/native/src/shader.rs
@@ -176,6 +198,7 @@ trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 mkdir -p "$FIXTURE_ROOT"
 
 drift=0
+unreleased=0
 
 while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -197,6 +220,13 @@ while IFS= read -r line; do
         git clone --quiet --depth=1 --branch "$ref" \
             "https://github.com/loft-lang/$chunk.git" "$target_dir" \
             >/dev/null 2>&1 || {
+                # A GATED check must go red for a FINDING, never for someone else's
+                # outage — chunk-repo availability is outside this tree's control,
+                # and that is the whole reason the full drift check stays advisory.
+                if [[ $UNRELEASED_ONLY -eq 1 ]]; then
+                    echo "[check] SKIP: cannot reach $chunk @ $ref — not a finding" >&2
+                    exit 0
+                fi
                 echo "[sync] FAILED clone $chunk @ $ref" >&2
                 exit 1
             }
@@ -235,6 +265,33 @@ while IFS= read -r line; do
             # A file that exists in only ONE side (a fixture-only addition like
             # `android_gl.rs`) therefore could not be declared a local patch at all — the
             # path `x/y` never appears literally in an "Only in <dir>: <name>" line.
+            # A file in ONLY ONE side is not one finding but two, and they are not
+            # equally serious.  "Only in <dest>" means the FIXTURE carries a file the
+            # canonical repo has never had — unrecoverable by re-syncing, and the
+            # class this script gates.  Capture it before the two shapes collapse
+            # into one bare path below, because after that they are indistinguishable.
+            fixture_only="$(printf '%s\n' "$diff_out" | sed -nE \
+                -e "s|^Only in $dest: (.*)\$|\1|p" \
+                -e "s|^Only in $dest/(.*): (.*)\$|\1/\2|p")"
+            while IFS= read -r decl; do
+                [[ -z "$decl" || "$decl" == \#* ]] && continue
+                read -r declpath declref <<< "$decl"
+                [[ "$declpath" != "$pkg/"* ]] && continue
+                if [[ -z "${declref//[[:space:]]/}" ]]; then
+                    echo "[check] UNDECLARED: $declpath is in UNRELEASED_FILES with no tracking ref"
+                    unreleased=1
+                    continue
+                fi
+                fixture_only="$(grep -vxF -- "${declpath#"$pkg"/}" <<< "$fixture_only" || true)"
+            done <<< "$UNRELEASED_FILES"
+            if [[ -n "${fixture_only//[[:space:]]/}" ]]; then
+                echo "[check] FIXTURE-ONLY (canonical repo lacks these, and no re-sync recovers them):"
+                while IFS= read -r f; do
+                    [[ -z "$f" ]] && continue
+                    echo "          tests/fixtures/libs/$pkg/$f"
+                done <<< "$fixture_only"
+                unreleased=1
+            fi
             diff_out="$(printf '%s\n' "$diff_out" | sed -E \
                 -e "s|^Files .*/$pkg/(.*) and .* differ\$|\1|" \
                 -e "s|^Only in .*/$pkg: (.*)\$|\1|" \
@@ -245,8 +302,8 @@ while IFS= read -r line; do
                 [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
                 rel="${patch#"$pkg"/}"
                 diff_out="$(grep -vxF -- "$rel" <<< "$diff_out" || true)"
-            done <<< "$LOCAL_PATCHES"
-            if [[ -n "${diff_out//[[:space:]]/}" ]]; then
+            done <<< "$LOCAL_PATCHES$'\n'$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
+            if [[ $UNRELEASED_ONLY -eq 0 && -n "${diff_out//[[:space:]]/}" ]]; then
                 echo "[check] DRIFT: tests/fixtures/libs/$pkg vs $chunk@$ref"
                 drift=1
             fi
@@ -261,15 +318,35 @@ while IFS= read -r line; do
             # committed version so a routine re-sync doesn't silently revert
             # an intentional, cross-platform-required divergence.  To take the
             # upstream version instead, drop the file from LOCAL_PATCHES first.
+            # Restore LOCAL_PATCHES *and* UNRELEASED_FILES: the copy above wiped the
+            # directory, and a declared fixture-only file exists NOWHERE ELSE — losing
+            # it to a routine re-sync would delete the only copy of the capability.
             while IFS= read -r patch; do
                 [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
                 git -C "$REPO_ROOT" checkout -- "tests/fixtures/libs/$patch" 2>/dev/null || true
-            done <<< "$LOCAL_PATCHES"
+            done <<< "$LOCAL_PATCHES$'\n'$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
         fi
     done
 done <<< "$PINNED_REFS"
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
+    if [[ $unreleased -ne 0 ]]; then
+        echo
+        echo "[check] a fixture carries a file the canonical repo has NEVER had."
+        echo "  This is not drift: no re-sync recovers it, and an INSTALLED package"
+        echo "  silently lacks whatever the file provides while the fixture's own"
+        echo "  tests stay green — which is how @PLN106's Android backend proved the"
+        echo "  fixture for a month while \`loft install graphics\` had no Android."
+        echo
+        echo "  Take it upstream (the fix), or declare it in UNRELEASED_FILES in this"
+        echo "  script WITH a tracking reference (the bookmark).  A row without a ref"
+        echo "  is refused, because knowing about it is what we already had."
+        exit 1
+    fi
+    if [[ $UNRELEASED_ONLY -eq 1 ]]; then
+        echo "[check] no undeclared fixture-only files"
+        exit 0
+    fi
     if [[ $drift -ne 0 ]]; then
         echo
         echo "[check] fixtures are out of sync with PINNED_REFS."

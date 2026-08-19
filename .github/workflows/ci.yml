@@ -1117,6 +1117,30 @@ jobs:
         # LIBRARY_AUTHORING.md § 5d.
         run: scripts/sync-fixtures.sh --check
 
+  fixtures-unreleased:
+    name: fixture files the canonical repo lacks (ubuntu, GATED)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Refuse an undeclared fixture-only file
+        # GATED, unlike `fixtures-check` above, and the split is deliberate.  A
+        # fixture merely BEHIND its pinned tag is recoverable by re-syncing, so
+        # that stays advisory.  A file the canonical repo has NEVER had is not
+        # recoverable from anywhere: an installed package silently lacks whatever
+        # it provides, while the fixture's own tests stay green and say nothing.
+        # @PLN106's Android GL backend sat in the fixture proving the fixture,
+        # while `loft install graphics` had no Android at all.
+        #
+        # Declaring the file in UNRELEASED_FILES (with a tracking ref) passes; a
+        # row without a ref is refused, because knowing about it is what the
+        # previous arrangement already had.  A chunk repo being unreachable
+        # SKIPS with exit 0 — this must go red for a finding, never for someone
+        # else's outage, which is the reason `fixtures-check` is advisory.
+        #
+        # ⚠ Add this job to branch protection's required checks — the YAML
+        # cannot make itself required.
+        run: scripts/sync-fixtures.sh --check-unreleased
+
   registry-coverage:
     name: library registry coverage (ubuntu, advisory)
     runs-on: ubuntu-latest
