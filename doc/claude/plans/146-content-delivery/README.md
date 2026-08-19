@@ -7,6 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > Tracker: [loft-lang/plans#146](https://github.com/loft-lang/plans/issues/146)
 > (`subject:libs`, `status:future`). Split out of [@PLN144](../144-2d-stage/README.md).
+> **Part of the 2-D game stack** — four plans cut from one design: @PLN144 the stage ·
+> @PLN145 text/tweens/widgets · @PLN146 content + delivery · @PLN147 the editor. Set overview,
+> through-lines and where to start: [`plans/README.md` § Plan sets](../README.md#plan-sets--where-four-plans-are-one-piece-of-work).
 
 ## Status
 

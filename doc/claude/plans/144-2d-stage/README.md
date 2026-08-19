@@ -9,6 +9,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > (`subject:libs`, `status:future`). Everything here sits **on top of the shipped
 > packages** — `graphics` 0.5.5, `input`, `fixstep`, `shapes`, `imaging`. Arcs A–D
 > and F need no engine change; arc E is one stub in this repo.
+> **Part of the 2-D game stack** — four plans cut from one design: @PLN144 the stage ·
+> @PLN145 text/tweens/widgets · @PLN146 content + delivery · @PLN147 the editor. Set overview,
+> through-lines and where to start: [`plans/README.md` § Plan sets](../README.md#plan-sets--where-four-plans-are-one-piece-of-work).
 
 ## Status
 
@@ -56,7 +59,7 @@ different question and does sit behind `GFX.PORTABLE`'s wgpu backend.
 
 **Two growth directions are deliberately out, and neither is an omission.** *Full 3-D* will
 mature on its own track and this set is expected to grow toward it then — the groundwork
-already has a home in [`lib_plans/72-renderer-backend-boundary`](../72-renderer-backend-boundary/README.md)
+already has a home in [`lib_plans/72-renderer-backend-boundary`](../../lib_plans/72-renderer-backend-boundary/README.md)
 (`GFX.PORTABLE`), which is also what unblocks native Android/iOS. And *broad standards
 integration* — interchange formats, asset and tooling conventions, browser and graphics
 standards beyond the ones already used — is wanted, but it is a direction rather than a phase:
@@ -247,7 +250,7 @@ needs `A2`. Both have phases that wait on nothing and should start immediately �
   three plans and are stated once in each: `use <pkg>` inside `<pkg>` means the *package*
   (loft#976's lip), and each package declares **trusted engine** or **admissible loft** while
   its API is being written, because afterwards it is a re-architecture.
-- **[`lib_plans/64-game-client`](../64-game-client/README.md)** — **co-op lives there**, not
+- **[`lib_plans/64-game-client`](../../lib_plans/64-game-client/README.md)** — **co-op lives there**, not
   here. Its rule falls out of this plan's presentation model: the stage is a pure function of
   world and camera, so replicate the **world** and let each client derive its own scene —
   which is what makes crew_punk's six-phones-six-panels shape work at all. The determinism it
@@ -262,7 +265,7 @@ needs `A2`. Both have phases that wait on nothing and should start immediately �
 
 ## See also
 
-- [`lib_plans/58-graphics/`](../58-graphics/README.md) — the layer this builds on.
+- [`lib_plans/58-graphics/`](../../lib_plans/58-graphics/README.md) — the layer this builds on.
 - [REMOTE_STORES.md](../../REMOTE_STORES.md) — the asset route (arc F).
 - [`../../../tools/brick-buster/25-brick-buster.loft`](../../../tools/brick-buster/25-brick-buster.loft) — the baseline and the vehicle.
 - [HTML_EXPORT.md](../../HTML_EXPORT.md) / [BROWSER_INTEROP.md](../../BROWSER_INTEROP.md) — the browser target arc E fixes.

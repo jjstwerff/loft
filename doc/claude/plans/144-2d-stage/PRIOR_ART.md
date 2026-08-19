@@ -152,7 +152,7 @@ determinism gate written after co-op works only proves that day's build.
 
 A co-operative bridge simulator, **design documents only**, derived from moros and sibling to
 crawler. It is not a consumer yet, but `SCOPE.md` states a constraint that lands squarely on
-co-op (which lives in [`lib_plans/64-game-client`](../64-game-client/README.md)) and is worth
+co-op (which lives in [`lib_plans/64-game-client`](../../lib_plans/64-game-client/README.md)) and is worth
 capturing before anything is built:
 
 > **A pure phone interface must be possible.** … Six players, six phones, six consoles. This

@@ -9,6 +9,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > (`subject:libs`, `status:future`). Fourth of the 2-D set:
 > [@PLN144](../144-2d-stage/README.md) the stage · [@PLN145](../145-authoring-libs/README.md)
 > text/tweens/widgets · [@PLN146](../146-content-delivery/README.md) the pack · this.
+> **Part of the 2-D game stack** — four plans cut from one design: @PLN144 the stage ·
+> @PLN145 text/tweens/widgets · @PLN146 content + delivery · @PLN147 the editor. Set overview,
+> through-lines and where to start: [`plans/README.md` § Plan sets](../README.md#plan-sets--where-four-plans-are-one-piece-of-work).
 
 ## Status
 
