@@ -3102,6 +3102,8 @@ impl Parser {
             // use-after-free).  Accept it as the already-primed empty collection
             // (the `OpSetInt4(.., 0)` above zeroed the header) but steer toward
             // the canonical `[]`.
+            // Filled by the brace scan below when `{}` is what stands here.
+            let mut braces_span: Option<(u32, u32, u32)> = None;
             let empty_braces = matches!(
                 td_base,
                 Type::Vector(_, _)
@@ -3112,27 +3114,50 @@ impl Parser {
                     | Type::Index(_, _, _)
             ) && {
                 let link = self.lexer.link();
-                let empty = self.lexer.has_token("{") && self.lexer.has_token("}");
+                // loft#1003 — each brace's own position, taken before it is consumed, so the
+                // fix can spell `{}` -> `[]` as an edit.  Both are needed: `{ }` is the same
+                // construct with a gap, and a length assumed from the opener would leave the
+                // `}` behind.
+                let open = self.lexer.peek_pos().clone();
+                let empty = self.lexer.has_token("{") && {
+                    let close = self.lexer.peek_pos().clone();
+                    self.lexer.has_token("}") && {
+                        braces_span = (open.line == close.line && close.pos >= open.pos)
+                            .then(|| (open.line, open.pos, close.pos + 1 - open.pos));
+                        true
+                    }
+                };
                 if !empty {
                     self.lexer.revert(link);
                 }
                 empty
             };
             let exp_tp = if empty_braces {
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    code = "empty-braces-not-collection",
-                    "empty `{{}}` is not a collection literal"
-                );
-                self.lexer.fix_last(crate::diagnostics::Fix {
-                    kind: crate::diagnostics::FixKind::Mechanical,
-                    title: "write `[]` for an empty collection".to_string(),
-                    condition: None,
-                    edit: None,
-                    concept: "vector",
-                    concept_ref: "@F6",
-                });
+                // Pass 2 only: the field is parsed in both passes, so an ungated notice is
+                // reported twice at one position — which reads as two findings and, now that
+                // the fix spells an edit, offered the same rewrite twice.  Every other
+                // deprecation-style notice gates the same way.
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        code = "empty-braces-not-collection",
+                        "empty `{{}}` is not a collection literal"
+                    );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "write `[]` for an empty collection".to_string(),
+                        condition: None,
+                        edit: braces_span.map(|(line, col, len)| crate::diagnostics::Edit {
+                            line,
+                            col,
+                            len,
+                            text: "[]".to_string(),
+                        }),
+                        concept: "vector",
+                        concept_ref: "@F6",
+                    });
+                }
 
                 td.clone()
             } else {

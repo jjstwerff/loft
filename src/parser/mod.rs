@@ -5423,6 +5423,10 @@ impl Parser {
                 typedef: Self::substitute_all(a.typedef.clone(), &bindings),
                 default: a.value.clone(),
                 constant: false,
+                // A generic instantiation copies the template's parameters; the modifier
+                // position belongs to the template's own source, not this synthetic copy.
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
             })
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
@@ -12884,7 +12888,15 @@ impl Parser {
                 && !a.constant
                 && !written.contains(&(a_nr as u16))
             {
-                let src = self.vars.var_source(a_nr as u16);
+                // loft#1003 — point at the `&` itself when the declaration captured it.
+                // The fallback is the variable's source, which for a parameter is a position
+                // inside the BODY: the caret landed on an unrelated construct and there was
+                // no span to delete, so the fix could only be prose.
+                let src = if a.ref_pos == (0, 0) {
+                    self.vars.var_source(a_nr as u16)
+                } else {
+                    a.ref_pos
+                };
                 self.lexer.to(src);
                 // T1.6: RefVar(Tuple) — downgrade to warning since elements are stack values;
                 // other RefVar types are an error (the & serves no purpose and misleads).
@@ -12897,11 +12909,19 @@ impl Parser {
                         "Parameter '{}' does not need to be a reference",
                         a.name
                     );
+                    // The cure is deleting one token, so the edit is that token's span with
+                    // empty replacement text — applicable exactly when the position is real.
+                    let edit = (a.ref_pos != (0, 0)).then(|| crate::diagnostics::Edit {
+                        line: a.ref_pos.0,
+                        col: a.ref_pos.1,
+                        len: 1,
+                        text: String::new(),
+                    });
                     self.lexer.fix_last(crate::diagnostics::Fix {
                         kind: crate::diagnostics::FixKind::Mechanical,
                         title: "drop the `&`".to_string(),
                         condition: None,
-                        edit: None,
+                        edit,
                         concept: "reference",
                         concept_ref: "@F21",
                     });
@@ -12930,7 +12950,12 @@ impl Parser {
                     Type::Integer(_) | Type::Float | Type::Single | Type::Boolean | Type::Character
                 )
             {
-                let src = self.vars.var_source(a_nr as u16);
+                // loft#1003 — the `const` token's own position, as for the `&` above.
+                let src = if a.const_pos == (0, 0) {
+                    self.vars.var_source(a_nr as u16)
+                } else {
+                    a.const_pos
+                };
                 self.lexer.to(src);
                 diagnostic!(
                     self.lexer,
@@ -12940,11 +12965,20 @@ impl Parser {
                      'const' has no effect on an unmodified primitive parameter",
                     a.name
                 );
+                // `const` plus the one space that separates it from the type: deleting the
+                // keyword alone would leave `a:  integer`, which is legal but is not what a
+                // hand-applied fix looks like.
+                let edit = (a.const_pos != (0, 0)).then(|| crate::diagnostics::Edit {
+                    line: a.const_pos.0,
+                    col: a.const_pos.1,
+                    len: 6,
+                    text: String::new(),
+                });
                 self.lexer.fix_last(crate::diagnostics::Fix {
                     kind: crate::diagnostics::FixKind::Mechanical,
                     title: "drop the `const`".to_string(),
                     condition: None,
-                    edit: None,
+                    edit,
                     concept: "const parameters",
                     concept_ref: "@F18",
                 });

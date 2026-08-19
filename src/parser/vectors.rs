@@ -1008,6 +1008,8 @@ impl Parser {
                 typedef: t.clone(),
                 default: Value::Null,
                 constant: false,
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
             })
             .collect();
 

@@ -420,28 +420,12 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
         "adding a default touches the declaration's parameter list, and which default is the author's choice",
     ),
     (
-        "needless-reference-parameter",
-        "dropping the `&` is a one-token deletion and SHOULD carry an edit; unblocked as soon as the `&`'s own position is captured",
-    ),
-    (
-        "needless-const-parameter",
-        "same one-token deletion as `needless-reference-parameter`",
-    ),
-    (
-        "not-null-deprecated",
-        "deleting `not null` is a span edit and SHOULD carry one; the annotation's span is not captured at the emit site",
-    ),
-    (
         "module-name-shadowed",
         "the cure renames a FILE, which is not an edit to any source span",
     ),
     (
         "undeclared-dependency",
         "the cure is running `loft install <pkg>`, which edits the manifest rather than the source",
-    ),
-    (
-        "empty-braces-not-collection",
-        "`{}` -> `[]` is a span edit and SHOULD carry one",
     ),
     (
         "read-size-not-element-multiple",

@@ -3034,6 +3034,20 @@ pub struct Argument {
     pub typedef: Type,
     pub default: Value, // @F17 — default parameter value
     pub constant: bool, // @F18 — const parameters (compile-time mutation check)
+    /// Where the `&` of a `&T` parameter sits, as `(line, column)`, or `(0, 0)` when the
+    /// parameter has none.  Captured at the declaration because that is the only place the
+    /// token's own position is known: by the time `needless-reference-parameter` decides the
+    /// `&` is pointless, the parser is past the whole signature, and the fallback it used —
+    /// the variable's source — points into the function BODY.  So the notice's caret was on
+    /// the wrong line and `loft fix` had no span to delete (loft#1003).
+    ///
+    /// Parse-time only, like [`Attribute::lexeme`]: the check runs in the same pass that
+    /// fills this, and a position is not a fact the IR store needs to carry.
+    pub ref_pos: (u32, u32),
+    /// Where the `const` of a `const T` parameter sits, as `(line, column)`, or `(0, 0)`
+    /// when there is none.  The `&` field's twin, for `needless-const-parameter`, and
+    /// captured separately because one parameter can carry both.
+    pub const_pos: (u32, u32),
 }
 
 #[derive(Clone)]

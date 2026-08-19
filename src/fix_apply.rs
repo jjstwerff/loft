@@ -219,8 +219,24 @@ pub fn apply_fixes(
             (false, Verdict::Clears) => Verdict::NeedsYou,
             (_, v) => v,
         };
+        // Every candidate was verified against the ORIGINAL source, so two edits may only be
+        // applied together while their spans are disjoint — otherwise the second lands on
+        // text the first already rewrote and neither was checked against what it hits.  The
+        // condition above claimed disjointness rather than enforcing it, and a diagnostic
+        // reported twice at one position is enough to break it: `{  }` -> `[]` applied twice
+        // deleted the four characters AFTER the replacement, eating the enclosing `}`.
+        // Overlap is a runner-level fact, so it is settled here rather than asked of each
+        // emit site (loft#1003).
+        let overlaps = |e: &Edit| {
+            edits.iter().any(|p: &Edit| {
+                p.line == e.line && p.col < e.col + e.len.max(1) && e.col < p.col + p.len.max(1)
+            })
+        };
         let written = mechanical && verdict == Verdict::Clears;
-        if written && let Some(e) = &fix.edit {
+        if written
+            && let Some(e) = &fix.edit
+            && !overlaps(e)
+        {
             edits.push(e.clone());
         }
         report.push(Applied {
@@ -280,6 +296,28 @@ mod tests {
     fn a_multibyte_line_keeps_its_characters() {
         // `ä` is two bytes; an edit at a non-boundary must not split it.
         assert_eq!(apply_edits("äb", &[edit(1, 2, 1, "x")]), "äb");
+    }
+
+    /// Two edits over the same characters must not both be written: each was verified
+    /// against the ORIGINAL source, so the second lands on text the first already replaced.
+    /// The shape that found this was one diagnostic reported twice at one position —
+    /// `{  }` -> `[]` applied twice deleted the four characters after the replacement and
+    /// ate the enclosing `}` (loft#1003).
+    #[test]
+    fn overlapping_edits_do_not_both_apply() {
+        // Both spans cover column 1; applying both would rewrite the rewrite.
+        let out = apply_edits("{  } x", &[edit(1, 1, 4, "[]")]);
+        assert_eq!(out, "[] x", "one edit lands as computed");
+        // Measured, not assumed: applying the SAME span twice is not idempotent.  The second
+        // edit rewrites columns 1-4 of the already-rewritten line — `[] x` — and takes the
+        // ` x` with it.  `apply_edits` is deliberately left this way (it applies what it is
+        // given); the guard belongs in `apply_fixes`, the only place that knows each
+        // candidate was verified against the original.
+        let twice = apply_edits("{  } x", &[edit(1, 1, 4, "[]"), edit(1, 1, 4, "[]")]);
+        assert_eq!(
+            twice, "[]",
+            "an overlapping pair corrupts — which is why apply_fixes drops the second"
+        );
     }
 
     /// A `Conditional` fix is never written unattended, however applicable it looks.

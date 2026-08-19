@@ -82,7 +82,17 @@ impl Parser {
     /// blocked on the registry republish (RESUME.md § F2 task #4). Warns once
     /// (pass 2 only) so a definition parsed in both passes reports a single note.
     fn has_deprecated_not_null(&mut self) -> bool {
+        // loft#1003 — the annotation's own span, which the emit site did not have.  `not` and
+        // `null` are two tokens with arbitrary whitespace between them, so the extent is read
+        // from the cursor AFTER `null` rather than assumed to be eight characters.  A span
+        // that crosses a line is left alone: the edit model is one line, and a `not\nnull` is
+        // rare enough that prose is the honest answer there.
+        let start = self.lexer.peek_pos().clone();
         if self.lexer.has_keyword("not") {
+            // The start of `null` — taken before it is consumed, because `pos()` afterwards is
+            // the scan cursor at the end of the token AFTER it (already past the closing `}`),
+            // and a span measured to there deletes the rest of the declaration.
+            let at_null = self.lexer.peek_pos().clone();
             self.lexer.token("null");
             if !self.first_pass {
                 diagnostic!(
@@ -91,11 +101,21 @@ impl Parser {
                     code = "not-null-deprecated",
                     "`not null` is deprecated and has no effect — a type is non-null by default now"
                 );
+                // `null` is four characters, so the annotation ends exactly there — no
+                // dependence on what follows it, and no trailing whitespace swallowed.
+                let edit = (at_null.line == start.line && at_null.pos >= start.pos).then(|| {
+                    crate::diagnostics::Edit {
+                        line: start.line,
+                        col: start.pos,
+                        len: at_null.pos + 4 - start.pos,
+                        text: String::new(),
+                    }
+                });
                 self.lexer.fix_last(crate::diagnostics::Fix {
                     kind: crate::diagnostics::FixKind::Mechanical,
                     title: "delete `not null`".to_string(),
                     condition: None,
-                    edit: None,
+                    edit,
                     concept: "struct records",
                     concept_ref: "@F12",
                 });
@@ -178,6 +198,9 @@ impl Parser {
             typedef: Type::Enum(e_nr, true, crate::data::Deps::none()),
             default: Value::Null,
             constant: false,
+            // Synthesized receiver — no `&` / `const` token in any source file to point at.
+            ref_pos: (0, 0),
+            const_pos: (0, 0),
         });
         for a in &attrs[..common] {
             args.push(Argument {
@@ -185,6 +208,8 @@ impl Parser {
                 typedef: a.typedef.clone(),
                 default: a.value.clone(),
                 constant: false,
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
             });
         }
         let fn_nr = self.data.add_fn(&mut self.lexer, &name, &args);
@@ -2065,13 +2090,26 @@ impl Parser {
             }
             let mut constant = false;
             let mut reference = false;
+            // loft#1003 — the modifier's OWN position, taken before the token is consumed
+            // (`peek_pos` is the start of what is about to be read, where `pos` is the scan
+            // cursor already past it).  `needless-reference-parameter` and
+            // `needless-const-parameter` both cure by deleting exactly this token, and this
+            // is the only point in the parse where it has a position: the checks run after
+            // the body, from the variable's source, which is inside the body.  Without it the
+            // caret pointed at the wrong construct and neither fix could carry an edit.
+            let mut ref_pos = (0, 0);
+            let mut const_pos = (0, 0);
             let typedef = if self.lexer.has_token(":") {
+                let at_ref = self.lexer.peek_pos().clone();
                 if self.lexer.has_token("&") {
                     reference = true;
+                    ref_pos = (at_ref.line, at_ref.pos);
                 }
                 // Will be the correct def_nr on the second pass
+                let at_const = self.lexer.peek_pos().clone();
                 if self.lexer.has_keyword("const") {
                     constant = true;
+                    const_pos = (at_const.line, at_const.pos);
                 }
                 if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
                     // @PLN25 E2/E3 — a `vector<Struct>` PARAM is already rewritten by
@@ -2254,6 +2292,8 @@ impl Parser {
                 typedef,
                 default: val,
                 constant,
+                ref_pos,
+                const_pos,
             });
             if !self.lexer.has_token(",") {
                 break;
@@ -4258,6 +4298,8 @@ impl Parser {
                 typedef: arguments[*i as usize].typedef.clone(),
                 default: Value::Null,
                 constant: false,
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
             })
             .collect();
         let call_args = used.iter().map(|i| Value::Var(*i)).collect();
