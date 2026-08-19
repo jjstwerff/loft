@@ -3278,6 +3278,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         };
 
@@ -3292,6 +3295,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         };
         if !self.lexer.has_token("=") {
@@ -3305,6 +3311,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         }
 
@@ -3813,8 +3822,18 @@ use #count instead"
 
         // Build IR only when we have a valid function reference.
         if fn_d_nr == u32::MAX || par_for_d_nr == u32::MAX {
-            // Errors already reported; emit nothing useful.
-            *code = Value::Null;
+            // No IR to emit — but the loop is still a STATEMENT, and the placeholder has
+            // to say so.  `Value::Null` does not: the statement parser read the loop as a
+            // value and demanded a `;` after its closing brace, so
+            // `for a in v par(b = w(a), 4) { … }` compiled with `w` declared ABOVE it and
+            // failed with `Expect token ;` on the next line with `w` declared below —
+            // the same loop, legal or not by where its worker sits.
+            //
+            // "Errors already reported" holds on the second pass.  On the FIRST it does
+            // not: an unresolved worker is the ordinary state of a forward reference, and
+            // this recovery path is on the normal route to compiling one.  Both terminal
+            // branches below answer `Type::Void`; so does this one.
+            *code = v_block(Vec::new(), Type::Void, "par (worker not resolved)");
             return;
         }
 

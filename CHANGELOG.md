@@ -521,6 +521,26 @@ release, the build mentions it once:
 It never fetches anything to say this, never speaks for a library's own dependencies,
 stays quiet when you are current or offline, and can be turned off with
 `LOFT_NO_UPGRADE_NOTICE=1`.
+### A `par` loop no longer depends on where its worker is declared
+
+`for a in v par(b = work(a), 4) { … }` compiled with `work` declared above it and
+failed with `Expect token ;` on the next line with `work` declared below it. The loop
+was being read as a value rather than a statement: when the worker cannot be resolved
+yet — the ordinary state of a forward reference on the first parse pass — the recovery
+path left no statement behind, so the parser demanded a semicolon after the closing
+brace. Four such exits now all leave one, on both backends.
+
+The same change stops a malformed `par` clause from swallowing its own error. `par(b =
+x, 4)`, where a worker call belongs, used to report `Expect token ;` pointing at the
+following line; it now says what is wrong, where it is wrong:
+
+```
+error: Expect '.' after 'x' in parallel clause (use a.method() or func(a))
+  --> p.loft:4:24
+4 |   for x in v par(b = x, 4) {
+  |                        ^
+```
+
 ### `x.method(name: value)` — named arguments reach the method spelling
 
 loft has had named arguments for a while, and they only worked on the free spelling of a

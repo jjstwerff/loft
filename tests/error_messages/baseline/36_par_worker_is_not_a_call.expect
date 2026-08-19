@@ -1,0 +1,10 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: Expect '.' after 'x' in parallel clause (use a.method() or func(a))
+  --> <cases>/36_par_worker_is_not_a_call.loft:4:24
+  |
+4 |   for x in v par(b = x, 4) {
+  |                        ^
+
+error: aborting due to 1 previous error

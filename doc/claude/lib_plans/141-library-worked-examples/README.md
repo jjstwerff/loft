@@ -820,7 +820,7 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (28 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (31 of 117)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -1218,6 +1218,82 @@ COLLISION — `Cell947` was already declared 400 lines up for `@FTR-003`. A shar
 demonstrator file has one namespace; the suffix convention does not make a name unique.
 The compound-index gap beside it WAS real, which is what made the misreading comfortable:
 grep the file for the name before adding a type to it.
+
+**Slice 8 — F29, F33, F35, and the forward-reference class claims a fifth member.**
+
+**F29's "every possibility has to be covered" is a statement about ENUMS.** Measured,
+exhaustiveness is enforced two different ways and only one stops a build: a missing enum
+variant is a hard error naming it, while an OPEN domain (integer, text) with no `_`
+compiles and answers `null` for anything no arm covers. What reports it is the
+nullable-into-non-null check, so it needs a non-null CONTEXT — returning the match into a
+declared `text` warns, and binding the same match to a local and printing it says nothing
+at all. Writing `_` is what makes the result non-nullable. The `null` arm is real and
+catches a genuine absence (a vector overrun lands there); its price is @F1's in-band
+sentinel, so the most negative integer cannot be told from "absent".
+
+**F33 was missing the two facts a caller needs before writing a `par` at all**, and both
+are strong. Results reach the body **in SOURCE order, not completion order** — proved by
+giving item 1 the most work and item 8 the least so the workers finish backwards, on both
+backends; that is what decides whether `results += [b]` is writable, and the entry's own
+example only ever does `total += b`, which is order-blind and cannot show it. And a
+worker's captured arguments **must be scalars**, enforced at compile time: `text` counts
+as a reference so even a literal `"x"` is refused, a captured struct the worker WRITES
+earns a second error naming the data race, and the loop ELEMENT is the documented
+exception. So "no manual thread handling" is not a promise to trust — the racing shape
+does not compile. Speed measured twice each way: ~2.0x at 2 workers, ~3.2x at 4, ~4.7x at 8.
+
+**F35's entry never mentioned `{{` / `}}`**, while `format-unescaped-brace` is an ERROR
+whose fix line is tagged `@F35` and spells the cure — the oracle again. And the two
+mistakes are answered unequally: a stray `}` gets that coded mechanical fix, a stray `{`
+gets `Formatter error` plus a cascade (loft#989).
+
+**F35's real finding is the dedent, and it took three rounds to state correctly.** The
+rule is not the "common leading indentation" LOFT.md described: it is
+*(closing-backtick column − 1)* spaces, removed from a line only if that many of its
+leading bytes are all spaces. So a line indented LESS keeps everything while its siblings
+lose theirs (two lines four spaces apart in the source come out level), and a TAB-indented
+line is never dedented. **Then the amended entry example failed to dedent at all, and the
+difference was the `{name}` in it: one interpolation anywhere switches the strip off
+completely, trailing blank line included (loft#990).** The strip amount comes from the
+CLOSING backtick and a hole makes the lexer emit text before that column is known — so the
+dedent serves the block with no values in it and silently stops serving the template, which
+is the shape the feature is advertised for.
+
+*Generalises:* **the doc example you write to illustrate a fix is itself a probe — run it.**
+The interpolation finding exists only because the amended entry example was executed
+before publishing rather than after. Two more doc defects fell out of the same habit:
+LOFT.md's `msg` example sits directly under the sentence describing the strip and is not
+stripped, and **its flagship `shader` example does not compile at all** — `void main() {`
+opens a hole, so a GLSL block needs every brace doubled. Doubled, it compiles AND dedents
+(because `{{` is not a hole), which is now what the doc shows.
+
+**The fifth member of slice 7's forward-reference class, and this one had four sites.**
+A `par` loop whose worker is declared BELOW it was `Expect token ;` on the following line:
+the loop was read as a VALUE, because the recovery path taken when the worker cannot be
+resolved left `*code = Value::Null` instead of a Void statement. Its comment said "errors
+already reported", true on pass 2 and false on pass 1, where an unresolved forward
+reference is the ordinary state — the same misconception as `skip_remaining_args`'s
+"consume a trailing `(…)` to avoid cascading parse errors". Fixing the one exit was not
+enough: three more recovery exits in `parse_parallel_for_loop` had it too, which surfaced
+only when the demonstrator declared the element STRUCT below as well.
+
+*Generalises:* **when a recovery path is wrong for pass 1, look for its siblings before
+declaring the fix done** — one exit fixed and three left is a fix that works on the probe
+and fails on the file. And the counted-axes rule earned its keep again: the matrix needed
+declaration order moved for the WORKER and for the ELEMENT TYPE, not just one of them.
+
+**A baseline test was pinning the broken recovery as a promise** (third time in this plan).
+`36_par_worker_writes_parent` locked the spurious `Expect token ;` cascade — and its name
+was a lie: the source has no worker CALL, so it died on the parse long before any parent
+write. Split into `36_par_worker_is_not_a_call` (which now locks the real message) and a
+new `53_par_worker_writes_parent` that reaches the C93 data-race error the name promised.
+
+**Filed, not fixed:** loft#987 (`par` with an EMPTY body fails to compile on `--native`;
+`n_parallel_discard` is declared one parameter short AND its generated body is empty, so
+"fixing" the arity would turn a loud error into a silent no-op — the
+[[panic-noop-on-native]] shape), loft#988 (a float-returning `par` worker declared below
+its loop mistypes a `+=` accumulator; `t = t + b` is the verified workaround and a plain
+call to the same function is fine, which is what makes it par-specific), loft#989, loft#990.
 
 ### Phase C2 — the original design
 

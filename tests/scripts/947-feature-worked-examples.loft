@@ -765,3 +765,281 @@ fn test_the_sign_is_the_one_operator_that_reads_the_other_way() {
   assert((6 ^ 3) == 5, "`^` is xor, got {6 ^ 3}");
   assert(!(x947 > 2) == false, "`!` negates, got {!(x947 > 2)}");
 }
+
+// @FTR-013 — what "every possibility has to be covered" covers
+//
+// @F29 promises that "every possibility has to be covered" and that "nothing can
+// slip through uncovered".  Measured, that is enforced two different ways, and only
+// one of them stops a build:
+//
+//   * a CLOSED domain — an enum — is a hard error.  `match d { North => … }` on a
+//     two-variant enum is `match on Dir is not exhaustive — missing: South`.
+//   * an OPEN domain — integer, text — is enforced by the TYPE instead.  A match
+//     with no `_` compiles, and a value no arm covers answers `null`.  What reports
+//     it is the nullable-into-non-null check, which needs a non-null CONTEXT to
+//     fire: returning the match into a declared `text` warns, and binding it to a
+//     local and printing it says nothing at all.
+//
+// So "nothing slips through" is a statement about enums.  For an integer the arms
+// are a total function only if you write `_`, and the reward for writing it is that
+// the result stops being nullable.
+//
+// The `null` arm is a real pattern and covers a genuine absence — a vector overrun
+// reads null and lands there.  Its price is @F1's in-band sentinel: the most
+// negative integer IS null, so the one value a program cannot distinguish from
+// "absent" is a value of the domain.
+// @EXPECT_WARNING: a nullable `text?` is stored into the return value
+fn test_exhaustiveness_is_an_error_for_enums_and_a_type_for_everything_else() {
+  // The open domain: every arm is a value, and 7 is covered by none of them.
+  assert(open947(1) == "one", "a covered value answers its arm");
+  assert(open947(7) == null, "an uncovered value answers null, got [{open947(7)}]");
+  assert(len(open947(7)) == 1, "and it is the text null sentinel — one NUL character");
+
+  // The same match with `_` is total, and the result is no longer nullable.
+  assert(total947(7) == "rest", "`_` covers the rest, got {total947(7)}");
+
+  // Bound to a LOCAL, the same fall-through is silent — no context makes it non-null.
+  quiet947 = match 7 { 1 => "one", 2 => "two" };
+  assert(quiet947 == null, "the fall-through is null here too, and nothing said so");
+
+  // The closed domain is checked instead of typed: every variant covered, so the
+  // result is a plain `text`.  (Dropping an arm is `match on Dir947e is not
+  // exhaustive — missing: South`, a hard error, which a test cannot hold inline.)
+  assert(closed947(Dir947e.North) == "n", "got {closed947(Dir947e.North)}");
+  assert(closed947(Dir947e.South) == "s", "got {closed947(Dir947e.South)}");
+
+  // `null` is a pattern, and a real absence reaches it.
+  short947: vector<integer> = [1, 2];
+  assert(grade947(short947[9]) == "absent", "an overrun read lands on the null arm");
+  // …and so does the one integer that IS the sentinel (@F1).
+  lowest947: integer = -9223372036854775807;
+  assert(grade947(lowest947 - 1) == "absent",
+         "the most negative integer cannot be told from absent");
+  assert(grade947(lowest947) == "other", "one above it is an ordinary value");
+
+  // Range arms: `..=` includes its end, `..` does not, and the first match wins.
+  assert(grade947(90) == "A", "90 is in 90..=100, which is listed first");
+  assert(grade947(89) == "B", "89 is in 80..90");
+  assert(grade947(80) == "B", "80 is the inclusive start");
+  assert(grade947(101) == "other", "101 is past the last range");
+
+  // The two forms the title advertises and the entry's example never shows.
+  assert(odd947(3) == "odd", "an or-pattern matches any of its options");
+  assert(odd947(4) == "other", "and nothing else");
+  assert(sized947(20) == "big", "a guard narrows an arm, got {sized947(20)}");
+  assert(sized947(2) == "small", "and falls through when it does not hold");
+}
+
+enum Dir947e { North, South }
+
+fn open947(n: integer) -> text { match n { 1 => "one", 2 => "two" } }
+fn total947(n: integer) -> text { match n { 1 => "one", _ => "rest" } }
+fn closed947(d: Dir947e) -> text { match d { North => "n", South => "s" } }
+fn odd947(n: integer) -> text { match n { 1 | 3 | 5 => "odd", _ => "other" } }
+fn sized947(n: integer) -> text { match n { x if x > 10 => "big", _ => "small" } }
+fn grade947(score: integer) -> text {
+  match score { null => "absent", 90..=100 => "A", 80..90 => "B", _ => "other" }
+}
+
+// @FTR-014 — what `par` guarantees, and what it refuses to compile
+//
+// @F29's neighbour in the catalogue says only that `par(...)` "runs its work across
+// several threads" and that "the loop body then sees that worker's result".  The two
+// facts a caller actually needs before writing one are not there, and both are real:
+//
+//   1. THE BODY SEES RESULTS IN SOURCE ORDER, not completion order.  Measured with
+//      the work deliberately reversed — item 1 given the most work, item 8 the least,
+//      so the workers finish backwards — and the body still saw 1, 4, 9, … on both
+//      backends.  This is what decides whether `results += [b]` is writable at all;
+//      the entry's own example only ever does `total += b`, which is order-blind and
+//      so cannot show the difference.
+//   2. A WORKER'S CAPTURED ARGUMENTS MUST BE SCALARS, and the compiler enforces it:
+//        par worker 'f': captured argument 'tag' is a reference (text); a par worker
+//        runs on an isolated store clone and cannot read a captured reference.
+//      `text` counts as a reference, so even a literal `"x"` is refused — and a
+//      captured struct that the worker WRITES earns a second, separate error naming
+//      the data race (@PLN102 C93).  The LOOP ELEMENT is the documented exception and
+//      may be a reference, which is what makes `for r in rows par(b = f(r), 4)` the
+//      shape to reach for.  Neither refusal can be asserted inline, so this pins the
+//      shapes that DO compile and the values they produce.
+//
+// The speed claim holds and is worth a number: eight equal items on this machine ran
+// ~2.0x faster at 2 workers, ~3.2x at 4 and ~4.7x at 8 (measured twice each way,
+// because a first run after an edit times the compile, not the loop).
+fn test_par_delivers_in_source_order_and_captures_only_scalars() {
+  // Reversed completion: item 1 burns the most, item 8 the least.
+  ordered947: vector<integer> = [];
+  for a947 in 1..=8 par(bo947 = uneven947(a947), 4) { ordered947 += [bo947]; }
+  assert(len(ordered947) == 8, "every item arrives, got {len(ordered947)}");
+  expect947 = [1, 4, 9, 16, 25, 36, 49, 64];
+  for i947 in 0..8 {
+    assert(ordered947[i947] == expect947[i947],
+           "slot {i947} is source order: expected {expect947[i947]}, got {ordered947[i947]}");
+  }
+
+  // A captured SCALAR is allowed — integer, float and boolean all cross.
+  k947 = 3;
+  on947 = true;
+  half947 = 0.5;
+  ti947 = 0;
+  for a947 in 1..=4 par(bi947 = mul947(a947, k947), 4) { ti947 += bi947; }
+  assert(ti947 == 30, "captured integer, got {ti947}");
+  tb947 = 0;
+  for a947 in 1..=4 par(bb947 = gate947(a947, on947), 4) { tb947 += bb947; }
+  assert(tb947 == 10, "captured boolean, got {tb947}");
+  tf947 = 0.0;
+  // `tf947 = tf947 + bf947`, not `+=`: a FLOAT-returning worker declared below its
+  // loop mistypes a compound-assignment accumulator (loft#988).  The long form is
+  // the verified workaround, and every other shape — printing the result, appending
+  // it to a `vector<float>`, a boolean-returning worker — is unaffected.
+  for a947 in 1..=4 par(bf947 = scale947(a947, half947), 4) { tf947 = tf947 + bf947; }
+  assert(tf947 == 5.0, "captured float, got {tf947}");
+
+  // The worker may RETURN a reference type even though it cannot capture one.
+  words947 = "";
+  for a947 in 1..=4 par(bt947 = name947(a947), 4) { words947 += "{bt947} "; }
+  assert(words947 == "n1 n2 n3 n4 ", "a text return crosses back, got [{words947}]");
+
+  // The loop ELEMENT is the documented exception: it may be a reference.
+  rows947: vector<Row947> = [Row947 { n: 1 }, Row947 { n: 2 }, Row947 { n: 3 }];
+  tr947 = 0;
+  for r947 in rows947 par(br947 = twice947(r947), 4) { tr947 += br947; }
+  assert(tr947 == 12, "a struct element reaches the worker, got {tr947}");
+
+  // Worker counts that do not divide the work are ordinary, not special.
+  for w947 in [0, 1, 16] {
+    tw947 = 0;
+    for a947 in 1..=3 par(bw947 = mul947(a947, 1), w947) { tw947 += bw947; }
+    assert(tw947 == 6, "worker count {w947} answers the same, got {tw947}");
+  }
+}
+
+struct Row947 { n: integer }
+
+// Item 1 does the most work and item 8 the least, so completion order is the reverse
+// of source order — the control that makes the ordering assertion mean something.
+fn uneven947(n: integer) -> integer {
+  burn947 = 0;
+  for i947 in 0..((9 - n) * 20000) { burn947 += i947 % 7; }
+  n * n + burn947 * 0
+}
+fn mul947(v: integer, k: integer) -> integer { v * k }
+fn gate947(v: integer, on: boolean) -> integer { if on { v } else { 0 } }
+fn scale947(v: integer, k: float) -> float { v * k }
+fn twice947(r: Row947) -> integer { r.n * 2 }
+fn name947(v: integer) -> text { "n{v}" }
+
+// @FTR-015 — a literal brace, and where a backtick block's indentation goes
+//
+// @F35 teaches `{expr}` and never says how to write a brace that is NOT a hole.
+// loft does: `format-unescaped-brace` is an ERROR whose fix line is tagged `@F35`
+// and spells the cure ("double the brace", write `}}`).  So the entry is where the
+// compiler sends a reader, and it is the one place that does not answer.  The two
+// mistakes are not answered equally either — a stray `}` gets that coded, mechanical
+// fix; a stray `{` gets `Formatter error` plus a cascading `Expect token )`, with no
+// code and no mention of doubling (loft#989).
+//
+// The second promise is "the text you write looks like the text you get", and a
+// backtick block does the OPPOSITE of that on purpose — it dedents.  The rule is not
+// the "common leading indentation" LOFT.md described: it is exactly
+// `closing-backtick column - 1` spaces, removed from a line ONLY IF that many of its
+// leading bytes are all spaces, and otherwise the line is left completely alone.
+// Two consequences, both silent:
+//
+//   * a line indented LESS than the closing backtick keeps ALL its indentation while
+//     its siblings lose theirs — so a line that was outdented in the source can come
+//     out level with one that was indented past it;
+//   * a TAB-indented line is never dedented, so a block that looks aligned in an
+//     editor comes out with the tabbed line as the only indented one.
+//
+// Put the closing backtick on its own line and the common case is exactly right,
+// which is what the entry should say.  Leave it at the end of the last content line
+// — the shape LOFT.md's own second example uses — and nothing is stripped at all.
+fn test_a_literal_brace_is_doubled_and_a_backtick_block_dedents() {
+  // `{{` and `}}` are the escapes the entry does not mention.  The expected value
+  // is built from code points rather than written out: a bare `"{ }"` on the other
+  // side of the `==` would open a hole of its own, which is the whole point.
+  esc947 = "{{ }}";
+  assert(size(esc947) == 3, "two doubled braces are two characters, got {size(esc947)}");
+  assert(esc947[0] == (123 as character), "the first is a literal open brace");
+  assert(esc947[2] == (125 as character), "and the last a literal close brace");
+  hole947 = "{{{1 + 1}}}";
+  assert(size(hole947) == 3, "a hole between literal braces, got {size(hole947)}");
+  assert(hole947[1] == ("2"[0]), "and the hole still filled, got [{hole947}]");
+
+  // Closing backtick on its OWN line, at column 3 -> strip 2, and the
+  // whitespace-only first and last lines are dropped.
+  own947 = `
+  alpha
+  beta
+  `;
+  assert(own947 == "alpha{nl947()}beta", "fully dedented, got [{own947}]");
+  assert(size(own947) == 10, "5 + 1 + 4 bytes, got {size(own947)}");
+
+  // Closing backtick at the END of a content line: its column is past the content's
+  // indentation, so no line matches and NOTHING is stripped.
+  tail947 = `alpha
+  beta`;
+  assert(size(tail947) == 12, "the two leading spaces survive, got {size(tail947)}");
+  assert(tail947 != own947, "the same two lines, laid out two ways, are different text");
+
+  // strip = 4 here.  `four` and `six` lose four spaces; `two` has only two, so it is
+  // left alone — and comes out at the same column as `six`, which it was four spaces
+  // short of in the source.
+  uneven947 = `
+    four
+  two
+      six
+    `;
+  assert(size(uneven947) == 16, "got {size(uneven947)}");
+  lines947 = split(uneven947, nl947()[0]);
+  assert(len(lines947) == 3, "three lines, got {len(lines947)}");
+  assert(lines947[0] == "four", "the matching line is fully dedented, got [{lines947[0]}]");
+  assert(lines947[1] == "  two", "the short line keeps everything, got [{lines947[1]}]");
+  assert(lines947[2] == "  six", "the deep line keeps the remainder, got [{lines947[2]}]");
+  // The inversion: in the SOURCE `two` sat four spaces shallower than `six`.  Here
+  // they are at the SAME column, because only one of them was dedented.
+  assert(size(lines947[1]) == size(lines947[2]),
+         "`two` and `six` end up level: {size(lines947[1])} vs {size(lines947[2])}");
+
+  // THE CELL THAT MATTERS MOST: one `{expr}` anywhere in the block switches the
+  // dedent off completely — and keeps the trailing whitespace-only line as well.
+  // The strip amount comes from the CLOSING backtick, and a hole forces the lexer to
+  // emit the text before it long before that column is known (loft#990).  So the
+  // dedent serves the block with no values in it — a shader, a config — and silently
+  // stops serving the template, which is the shape the feature is advertised for.
+  who947 = "x";
+  plain947 = `
+  alpha
+  beta
+  `;
+  holed947 = `
+  alpha
+  beta {who947}
+  `;
+  assert(plain947 == "alpha{nl947()}beta", "no hole: fully dedented, got [{plain947}]");
+  assert(size(plain947) == 10, "got {size(plain947)}");
+  // Same layout, same two lines, plus one character of interpolated value.
+  // `  alpha`(7) + nl + `  beta x`(8) + nl + `  `(2) = 19, against 10 for the same
+  // two lines with no hole in them.
+  assert(size(holed947) == 19, "a hole keeps every space, got {size(holed947)}");
+  hlines947 = split(holed947, nl947()[0]);
+  assert(hlines947[0] == "  alpha", "the first line keeps its indent, got [{hlines947[0]}]");
+  assert(len(hlines947) == 3, "and the trailing blank line survives too, got {len(hlines947)}");
+  assert(hlines947[2] == "  ", "which is two spaces, not nothing");
+
+  // A tab is not a space, so the tabbed line is skipped by the strip entirely.
+  mixed947 = `
+    spaces
+	tabbed
+    spaces2
+    `;
+  mlines947 = split(mixed947, nl947()[0]);
+  assert(mlines947[0] == "spaces", "a space-indented line dedents, got [{mlines947[0]}]");
+  assert(mlines947[2] == "spaces2", "and so does its twin");
+  assert(size(mlines947[1]) == 7, "the tabbed line keeps its tab, got {size(mlines947[1])}");
+  assert(mlines947[1] != "tabbed", "which is what makes the block come out misaligned");
+}
+
+// A one-character newline, built where the escape is available.
+fn nl947() -> text { "\n" }

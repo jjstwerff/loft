@@ -1152,10 +1152,13 @@ shader = `
 `;
 
 msg = `Hello, {name}!
-  You have {count} messages.`;
+  You have {count} messages.`;   // holes -> NOT stripped: the two spaces survive
 ```
 
 Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
+Embedded code brings its own braces, and every one of them has to be doubled — a bare `{`
+opens an interpolation hole wherever it appears. Doubling keeps the strip working, because
+`{{` is not a hole; a real `{expr}` is what switches it off.
 
 **Gotcha — indexing a text yields `character`, slicing yields `text`.**  The two
 operations on the same subject return different types:
