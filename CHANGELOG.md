@@ -119,6 +119,7 @@ m = v[i] ?? mk();     // one leaked record per index MISS, unbounded in a loop
 A struct **literal** default was always fine, and the compiler's refusal of a struct-valued
 constant points you at the function spelling — so the leaking form was the recommended one.
 Fixed for both backends; the hit path and the literal default are unchanged.
+`character?` still has this problem and is tracked separately.
 
 ### `loft fix` can repair a text slice that stops short
 
