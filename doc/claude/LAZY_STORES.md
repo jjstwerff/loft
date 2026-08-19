@@ -371,6 +371,17 @@ static ones, answered at the bind).
   A `spatial` faults a POINT as the degenerate bounding box, and the fetch routes on
   the collection's KIND rather than the key's shape: a spatial key arrives as one
   value per axis, and a one-axis one is indistinguishable from a hash's integer key.
+- **A source that is reachable and is not a store image.** Every image begins with a
+  four-byte signature, and `PageSource::open` reads it — so an empty file, a truncated
+  download, a directory, or an HTTP `200` serving an error page is refused with a reason
+  instead of binding and answering `null` for every key. Before loft#994 that check did
+  not exist: `open` read the file's SIZE, and a size is not a format, so a non-image
+  never reached a refusal site at all and failed deep inside the load, which has only
+  `false` to return. The URL case is the one that matters — a missing file and a 404 were
+  always reported, so what was silent was specifically "reachable, wrong bytes". Note the
+  consequence for a DAMAGED image: one whose first four bytes are gone is refused, where
+  it used to answer correctly if the pages the keys needed happened to be intact. A
+  merely truncated image still reads.
 - **Writes.** Read-only. A write to a lazily-backed record is refused loudly;
   silently diverging from the source of truth is the failure this design exists to
   avoid.

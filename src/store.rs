@@ -529,6 +529,27 @@ impl Store {
         store
     }
 
+    /// Do these leading bytes carry the store [`SIGNATURE`]?
+    ///
+    /// The one place that answers it, because it is asked from two very different
+    /// distances: the startup cache holds the whole file, and a PAGED source holds
+    /// only the four bytes it range-read.  A source that opens and is not an image
+    /// used to reach neither check — `PageSource::open` validated nothing, so an empty
+    /// file, a truncated download, a directory or an HTTP 200 serving an error page
+    /// bound successfully and answered `null` for every key with the fault channel
+    /// reporting healthy (loft#994).
+    ///
+    /// Fewer than four bytes is not an image either — an empty file is the shortest
+    /// way to get here.
+    ///
+    /// `SIGNATURE` is native-endian: an image is never read on an architecture other
+    /// than the one that wrote it (the startup cache is keyed by target triple, and a
+    /// paged read is refused by the `.dschema` layout gate).
+    #[must_use]
+    pub fn has_signature(head: &[u8]) -> bool {
+        head.len() >= 4 && u32::from_ne_bytes([head[0], head[1], head[2], head[3]]) == SIGNATURE
+    }
+
     /// @PLN11 arc E — cheap validity pre-check for a store image file: it
     /// exists, is large enough, and starts with the store [`SIGNATURE`].  Lets
     /// the startup cache reject a corrupt / non-store / truncated bundle and
@@ -546,7 +567,7 @@ impl Store {
             return false;
         }
         let mut buf = [0u8; 4];
-        f.read_exact(&mut buf).is_ok() && u32::from_ne_bytes(buf) == SIGNATURE
+        f.read_exact(&mut buf).is_ok() && Self::has_signature(&buf)
     }
 
     #[cfg(not(feature = "mmap"))]

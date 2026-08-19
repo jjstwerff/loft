@@ -9,6 +9,211 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `OpIndex` reaches the composite subscript, and the slice says what to write (loft#996, 2026-08-19)
+
+@F114 says a type defining `OpIndex` "is subscripted like a built-in collection" and names
+A MATRIX as the motivating case — and `m[r, c]` answered `error: Expect token ]` at the
+comma. The dispatch half was never the gap: a two-index declaration is accepted and
+`OpIndex(m, 1, 2)` works, so an author could write the method the feature exists for, call
+it by hand, and never reach it as a subscript.
+
+The indices are now parsed comma-separated and passed as ARGUMENTS, which is what the
+accepted declaration already means (the issue's first design question, answered by the
+declaration itself). That keeps the arity and type checks in the ordinary call path,
+reported against the signature the author wrote.
+
+**The SLICE half is refused, not implemented, and that is a decision.** `x[a..b]` is not a
+subscript with a different argument: every built-in kind lowers its own
+(`parse_vector_index`, `parse_text_index`, `parse_spatial_slice`, `parse_trie_slice`), each
+to a dedicated runtime call, and there is no range VALUE in the language for a user method
+to receive. So it needs a range type or an `OpSlice` of its own — a language addition, not
+a parse — and the issue's own "expected" allows saying so. Making `x[a..b]` mean
+`OpIndex(x, a, b)` was rejected: a matrix type would then have `m[1..2]` silently mean
+`m[1, 2]`.
+
+The refusal has two halves and the first version had only one. It must also CONSUME the
+rest of the bracket, the way the pass-1 `Unknown` receiver arm does: returning with `..2`
+unread cascades into `Expect token ]` on pass 1, and a pass-1 abort silences every pass-2
+diagnostic — so the message existed and nothing printed it.
+
+**One diagnostic beyond the issue**, because the comma form makes it reachable: a
+one-index `OpIndex` given two reported `Too many parameters for t_4Ring_OpIndex`, naming a
+storage symbol that appears in no source file. Two fixtures in the suite already record
+that as a defect of its own (`tests/lib/dupmethod_a/…`, `tests/scripts/850-…`).
+`Data::user_facing_name` renders `n_<name>` as `<name>` and `t_<LEN><Type>_<name>` as
+`Type.name` — the receiver stays visible because that is exactly what is ambiguous where
+these messages fire, between two packages or two arities — and anything it cannot parse
+comes back unchanged, since it decides how a name is SHOWN and must never lose one.
+
+Guards: `tests/scripts/996-opindex-composite-subscript.loft` (two / one / three indices,
+and index EXPRESSIONS including a nested subscript, so "two" is not mistaken for the rule)
+and two `parse_errors` cells pinning the slice refusal and the demangled arity message.
+
+### A void native with no lowering is a hard error, not an empty body (loft#993, 2026-08-19)
+
+`output_function` escalates an unimplemented native to `compile_error!` when reachable and
+`todo!()` when not — P269's "fail at startup, not runtime". Both legs gated that on
+`*def.returned() != Type::Void`, so a VOID one was emitted as `{}`: a function that
+compiles, is callable, and does nothing. The principle had no effect on the half of the
+surface where the failure is silent instead of a panic, and that is what hid the par
+discard route for its whole life — `--native` emitted `n_parallel_discard`'s declaration
+with an empty body, and only an unrelated arity mismatch made "runs no workers" visible
+(loft#987).
+
+**The filed analysis was wrong on its central claim and is corrected on the issue.** It
+said dropping the guard was unsafe because `self.reachable` counts a call even where a
+custom emitter renames it. It does not: the internal leg's predicate already answers *"is
+this def actually called through its declaration"* —
+
+```rust
+let reachable = (self.reachable.is_empty() || self.reachable.contains(&def_nr))
+    && def.rust().is_empty() && !is_iface_stub && !is_t_stub && !has_custom_op_emitter;
+```
+
+— so the escalation was never a predicate short, it was one `if` too narrow. Re-measured
+over the ten stubs a typical emit carries: three are excluded by their `#rust` body
+(`n_eprint`, `n_store_lazy_fail`, `n_host_output` — inlined at the call site), six by a
+registered `OpEmitter` (`n_parallel_buf_drop*` via the rename emitter, `n_parallel_discard`
+since loft#987), and exactly ONE was relying on the silence.
+
+That one is `yield_frame`, and its no-op is genuine: a `--native` binary has no interpreter
+state to resume and no host loop to return to, so a frame-driven program runs straight
+through. It now carries `#rust "()"` — the silence is what the declaration SAYS rather
+than what falls out of "nobody implemented it", which is the whole distinction loft#993 is
+about.
+
+Both legs lose the guard. The `#native` leg's own predicate is untouched: a `#native`
+binding whose symbol no registered crate provides, CALLED by the program, is now the same
+hard error for a void return that it always was for a value return.
+
+Guard: `tests/native_no_silent_stub.rs` — a property of the emitted source rather than a
+list of names, so it keeps holding for built-ins that do not exist yet, which is the point
+of a guard for a silence: **no generated function may be both CALLED and EMPTY.** An
+unreachable empty declaration is harmless and stays legal.
+
+The control cell changed shape while being written, and that is the measurement worth
+keeping: it first asserted the emit still CARRIES empty-bodied declarations, so the
+property could not pass vacuously — and it does not. Lifting the guard took the count to
+ZERO on the probe. All ten became `todo!("native function …")`, and no `compile_error!`
+appeared, which is the other half: nothing that is lowered elsewhere started being refused.
+So the control pins the signature instead — `n_parallel_discard`, the void stub loft#987
+was about, must appear LOUD while its CALL goes to the runtime helper. Plus a behavioural
+cell that `yield_frame` still runs on both backends.
+
+### `FieldInfo.nullable` follows the declaration for every field kind (loft#995, 2026-08-19)
+
+Documented as *"was the field DECLARED nullable"* and named as the fact a generated
+`CREATE TABLE` needs for `NOT NULL` (@F107); correct for the seven scalar kinds, a
+constant `true` for enum / record / vector / keyed. A generic serialiser emitted all four
+as nullable columns. The two spellings genuinely differ — construct every field with
+`null` and `x.f == null` answers `false` for the non-null spelling — so this was a fact
+being LOST, not two things that are one.
+
+Scope, not logic. @PLN25 DN1 derives the flag from the `Optional` wrapper and the rollout
+gated that on `is_non_null_scalar`; everything else kept the pre-DN1 parser default
+(`true`). The gate is gone, so the derivation is `matches!(a_type, Type::Optional(_))` for
+every field. The synthetic tuple attributes have derived it that way from every element
+type since @PLN114 — a declared field now agrees with them.
+
+The flag is not reflection-only, and the suite is what settled the blast radius: it feeds
+the JSON-import default (`set_default_value_nullable`), the `not null` hint counter, and
+the narrow-integer op pair (`NarrowIntKind::of` — Integer fields only, which already
+derived correctly). Each moves in the same direction, toward the declaration. One visible
+consequence: `redundant-null-check` now fires on a non-null heap field compared against
+`null`, where before it saw only scalars.
+
+The forward-reference hazard was checked because the flag is deposited on pass 1 and never
+revisited — a member type declared BELOW its user reports correctly on both backends.
+
+**One kind is exempt, and the suite is what found it.** `reference<T>` in field position is
+#328's documented POINTER, and a pointer holds null however it is spelled: `n.next = null`
+is legal on it and an omitted one DEFAULTS to null, both pinned by
+`issue_328_reference_field_pointer_semantics` — which went red on the first version of this
+fix, reporting `redundant-null-check` on the very comparison it then asserts. Deriving from
+the `?` there answers a question the spelling does not decide. The pointer marker
+(`Deps::pointer_marker()`, the `u16::MAX` dep the parse stamps to select that 12-byte
+layout) is the exact discriminator — a by-VALUE `r: At995` is `Type::Reference` too and
+genuinely cannot hold null. Measured on all four: `byval` false, `byval?` true, `ptr` true,
+`ptr?` true, reflection agreeing with `x.f == null` in every cell.
+
+⚠ Writing that cell surfaced a separate PRE-EXISTING defect, measured identical on a
+pre-fix binary and NOT filed here: a forward-declared nullable record or enum field types
+as `unknown?` at a comparison site, so `x.rq == null` is *"No matching operator '==' on
+'unknown?' and 'null'"*. It is why the declared-below cell compares reflection against a
+written-down table instead of against the language, which is the weaker oracle — the
+declared-above cells carry the real one.
+
+Guard: `tests/reflect_declared_nullable.rs`, both declaration orders on both backends. The
+above-cells read the truth out of the RUN (`x.f == null` per field) rather than a table, so
+a cell that agreed with a table but not with the language would still fail.
+
+### A paged source validates the store signature (loft#994, 2026-08-19)
+
+A lazy binding reported every failure to OBTAIN bytes and none to INTERPRET them. Missing
+file / HTTP 404 / connection refused each set `store_lazy_faults` and `store_lazy_error`;
+an empty file, eleven bytes of text, 8 KB of noise, a directory, and an HTTP `200` serving
+an error page set neither — `faults 0`, `err ""`, `store_verify true`, every key `null`,
+which is precisely what a valid image with an absent key answers. Same family as loft#802,
+which fixed the refusals that route through `refuse_paged`; this is the hole where nothing
+reaches such a site at all.
+
+`PageSource::open` validated nothing — it opened the file and read its SIZE, and a size is
+not a format — so a non-image failed deep inside `load_one`, which has only `false` to
+return. Both legs now read the four-byte signature the format has always carried:
+`LocalFileProvider::open` from the handle it just opened, `HttpRangeProvider::open` with
+one extra four-byte range read per bind. Refusing THERE is what makes every existing
+`refuse_paged(path, "it cannot be opened as a paged source")` site inherit a report it
+already words correctly.
+
+`Store::has_signature` is the one home for the fact, and `is_store_file` (the startup
+cache's pre-check) now calls it too — the question is asked from two very different
+distances, a whole file and four range-read bytes, and one predicate answers both. Fewer
+than four bytes is not an image either, which is how an empty file gets its reason.
+
+The boundary, measured per-cell in its own process. Five sources now fault with a reason
+where four were silent; a real image is unchanged (`null=false`, `faults=0`, quiet).
+
+Separate processes because of a NEIGHBOURING defect this measurement surfaced, and the
+first reading of it was wrong: the channel is not per-run. Two collections alive at once
+report their own sources correctly. What is missing is that `store_bind_lazy` does not
+CLEAR the channel of the collection it binds — rebind a faulted collection to a good
+source and the lookup answers correctly while `store_lazy_faults` still says 1 with the
+old source's message. A function that binds a fresh local six times reuses one slot and
+so accumulates: `1, 2, 3, 4, 4`, the last of them under a healthy answer. Not slot reuse
+(`LOFT_NO_SLOT_REUSE=1` changes nothing) and not this bug.
+
+**One row moved on purpose**, and it is the row loft#994 records as "not a defect": an
+image whose first four bytes are overwritten used to answer the correct record, because
+the lazy reader only touches the pages it needs and those were intact. It now refuses.
+Answering from a file whose magic is wrong was luck, not a promise, and refusing it is
+what a magic number is for. A merely TRUNCATED image is unaffected and is pinned in the
+same cell, so neither direction can move by accident.
+
+**A neighbouring "defect" that turned out to be the contract — recorded because the wrong
+turn is the useful part.** Measuring the boundary showed a rebound collection still
+reporting the previous binding's faults, and `bind_lazy`'s own comments say a rebind
+re-pins the source and re-decides the schema (*"a different world now"*), so clearing the
+channel there looked like the missing half. It is not. `tests/scripts/129-lazy-bind.loft`
+pins exactly that shape — fail, rebind, succeed — and its comment gives the reason: the
+faults describe the CONTENTS, not the source, and the contents do not reset on a rebind.
+Whatever the previous binding materialised is still resident, minus the rows that failed,
+so "healthy" after a rebind is the silent wrong answer the channel exists to prevent. Only
+`store_lazy_clear` clears. The change was reverted with that reasoning written at
+`bind_lazy`, where the next reader will have the same idea.
+
+Two readings of the same measurement were wrong before that one: it is not per-run state
+(two collections alive at once were always isolated) and not slot reuse
+(`LOFT_NO_SLOT_REUSE=1` changes nothing). What remains unexplained, and is NOT the same
+thing, is a FRESH collection landing on a recycled `(store_nr, rec, pos)` and inheriting a
+channel that was never its own — a function binding a new local six times accumulates
+`1, 2, 3, 4, 4`. Clearing on bind is the wrong cure for it (that is the contract above);
+clearing when the SLOT is released would be the right place, and is not attempted here.
+
+Guard: `tests/lazy_source_not_an_image.rs` — the five silent sources, a valid-image
+control, the truncated/broken-signature pair, and the rebind. Each cell gets its own fixture directory:
+they run in parallel and each removes its tree, so one shared path is one cell deleting
+another's image (the first version of the file did exactly that).
+
 ### A `never` block places its frees like a `Void` one (loft#992, 2026-08-19)
 
 A `match` in a function's TAIL position with a `return` in ANY arm freed that function's

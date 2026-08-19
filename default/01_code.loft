@@ -1467,7 +1467,15 @@ fn unprotect_store_frees(r: reference);
 // loft programs (animation, game loops) so they can be tested under
 // the interpreter without a graphics backend — the same flag that
 // `gl_swap_buffers` sets when running with real graphics.
+//
+// `#rust "()"` is the NATIVE meaning, and it is deliberate: a `--native` binary has no
+// interpreter state to resume and no host loop to return to, so a frame-driven program
+// simply runs straight through.  Written down because a void built-in with no
+// implementation is now a hard error (loft#993) — before that, this no-op was
+// indistinguishable from a lowering nobody had got round to, which is exactly the
+// silence that hid the par discard route (loft#987).
 fn yield_frame();
+#rust"()"
 // --- Parallel ---
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.

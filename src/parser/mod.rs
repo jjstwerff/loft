@@ -9026,7 +9026,7 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Too many parameters for {}",
-                    self.data.def(d_nr).name()
+                    self.data.user_facing_name(d_nr)
                 );
             }
             return actual;

@@ -1160,6 +1160,53 @@ fn par_worker_returns_generator() {
     .error("parallel worker 'gen_worker' returns iterator<integer> — generator functions cannot be used as parallel workers at par_worker_returns_generator:4:51");
 }
 
+/// loft#996 — a SLICE on a library type says what to write, instead of `Expect token ]`.
+///
+/// The composite `x[a, b]` now dispatches to `OpIndex` (its indices are arguments, which
+/// is what the accepted declaration already means). The slice cannot: every built-in kind
+/// lowers its own to a dedicated runtime call, and there is no range VALUE in the language
+/// for a user method to receive — so `x[a..b]` needs a range type or an `OpSlice` of its
+/// own, which is a language addition and not a parse. What it must not stay is
+/// `Expect token ]` pointing at the `..`, beside the two messages this feature already
+/// gets right.
+///
+/// ONE error, which is the second half of the fix: the refusal consumes the rest of the
+/// bracket so the caller's `]` still matches. Returning with `..2` unread cascaded on
+/// pass 1, and a pass-1 abort silences every pass-2 diagnostic — the first version of this
+/// reported nothing at all and left `Expect token ]` standing.
+#[test]
+fn opindex_slice_says_what_to_write() {
+    code!(
+        "struct Ring996 { data: vector<integer> }
+fn OpIndex(self: Ring996, i: integer) -> integer { return self.data[i] ?? 0; }
+fn test() { r = Ring996 { data: [7, 8, 9] }; _x = r[0..2]; }"
+    )
+    .error(
+        "`Ring996` defines `OpIndex`, which takes INDEX arguments — there is no range value to hand it, so `x[a..b]` has nothing to dispatch to; write the bounds as indices (`x[a, b]`, if `OpIndex` declares two) or give the type a method that slices (`x.slice(a, b)`) at opindex_slice_says_what_to_write:3:56",
+    );
+}
+
+/// The arity mismatch the comma form makes reachable, and the name it uses.
+///
+/// A one-index `OpIndex` given two now earns the ordinary call diagnostic, reported
+/// against the signature the author wrote. It used to name the STORAGE symbol —
+/// `t_4Ring996_OpIndex`, which appears in no source file — and two fixtures in this suite
+/// record that as a defect of its own (`tests/lib/dupmethod_a/…`,
+/// `tests/scripts/850-…`). `Data::user_facing_name` renders the method as `Type.name`,
+/// keeping the receiver visible because that is exactly what is ambiguous where these
+/// messages fire.
+#[test]
+fn opindex_wrong_arity_names_the_method_not_the_symbol() {
+    code!(
+        "struct Ring996 { data: vector<integer> }
+fn OpIndex(self: Ring996, i: integer) -> integer { return self.data[i] ?? 0; }
+fn test() { r = Ring996 { data: [7, 8, 9] }; _x = r[0, 1]; }"
+    )
+    .error(
+        "Too many parameters for Ring996.OpIndex at opindex_wrong_arity_names_the_method_not_the_symbol:3:58",
+    );
+}
+
 /// The other caller of the same "unresolved worker" sentinel: a worker name that does
 /// not exist. Both refusals answer `(u32::MAX, Unknown)` from `parse_parallel_worker`,
 /// and `build_parallel_for_ir` has to read that ONE sentinel two opposite ways — on

@@ -5251,6 +5251,47 @@ impl Data {
         self.definitions[d_nr as usize].attributes[a_nr].check = check;
     }
 
+    /// A definition's name as the AUTHOR wrote it, for a diagnostic to say out loud.
+    ///
+    /// Storage names are mangled — a free function is `n_<name>` and a method is
+    /// `t_<LEN><Type>_<name>` — and a message that prints one names a symbol that appears
+    /// in no source file. `Too many parameters for t_5Thing_go` was the filed shape, and
+    /// two fixtures in the suite record it as a defect in its own right
+    /// (`tests/lib/dupmethod_a/…`, `tests/scripts/850-…`).
+    ///
+    /// Answers `Type.name` for a method so the receiver stays visible — a bare `go` would
+    /// be ambiguous exactly where these messages fire, between two packages or two
+    /// arities. Anything it cannot parse comes back unchanged: this decides how a name is
+    /// SHOWN and must never lose one.
+    #[must_use]
+    pub fn user_facing_name(&self, d_nr: u32) -> String {
+        let name = self.def(d_nr).name();
+        if let Some(rest) = name.strip_prefix("n_") {
+            return rest.to_string();
+        }
+        let Some(rest) = name.strip_prefix("t_") else {
+            return name.to_string();
+        };
+        // `<LEN><Type>_<method>`: the length prefix is what makes a type name containing
+        // `_` unambiguous, so it is what the split has to read.
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return name.to_string();
+        }
+        let Ok(len) = rest[..digits].parse::<usize>() else {
+            return name.to_string();
+        };
+        let after = &rest[digits..];
+        if after.len() <= len || !after.is_char_boundary(len) {
+            return name.to_string();
+        }
+        let (tp, tail) = after.split_at(len);
+        match tail.strip_prefix('_') {
+            Some(method) if !method.is_empty() => format!("{tp}.{method}"),
+            _ => name.to_string(),
+        }
+    }
+
     #[must_use]
     pub fn attr_nullable(&self, d_nr: u32, a_nr: usize) -> bool {
         if a_nr == usize::MAX {

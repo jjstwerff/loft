@@ -26,6 +26,84 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### A type with `OpIndex` can be subscripted with more than one index
+
+Giving your type `OpIndex` lets it be subscripted like a built-in collection — and the
+documented motivating case is a matrix, which wants `m[row, col]`. That spelling was a
+parse error (`Expect token ]`, pointing at the comma), even though the two-index method
+was accepted and `OpIndex(m, row, col)` worked. So you could write the method the feature
+is for and never reach it with brackets.
+
+```loft
+fn OpIndex(self: Mat, r: integer, c: integer) -> integer { … }
+m[1, 2]        // was: error: Expect token ]
+```
+
+However many indices your `OpIndex` declares, that is what the brackets take. Getting the
+count wrong now says so against your own signature, naming the method as you wrote it.
+
+A slice, `x[a..b]`, still does not work on your own type — there is no range value in loft
+for a method to receive, so it needs more than a parser change. It now says that, and what
+to write instead, rather than `Expect token ]`.
+
+### A built-in with no native implementation now fails the build instead of doing nothing
+
+`loft --native` already refused to compile a program calling a built-in that has no native
+implementation, naming the function — but only when that function returned something. One
+returning nothing was emitted as an empty body: it compiled, it was called, and it did
+nothing at all, on `--native` only. That is how a parallel loop with an empty body came to
+run no workers for as long as it did.
+
+Both now fail the same way. Nothing you can write in loft changes behaviour here — every
+built-in that looked implemented still is; the one deliberate do-nothing on this target,
+`yield_frame`, says so in its own declaration and keeps working.
+
+### Reflection reports what a field was declared, for every field type
+
+`FieldInfo.nullable` answers *"was this field declared `T?` rather than `T`?"* — the fact
+a generated `CREATE TABLE` needs for `NOT NULL`. It was right for the scalar types and a
+constant `true` for the other four: a struct, an enum, a vector, and a keyed collection.
+So a generic serialiser or ORM emitted every one of those columns as nullable, dropping a
+`NOT NULL` the declaration had asked for.
+
+The declaration really does decide — a `Thing` field cannot hold null and a `Thing?` one
+can — so this was a fact being lost, not two things that are really one. It now follows
+the declaration for every field type, whether the type is declared above the struct or
+below it.
+
+One field type is deliberately exempt: `reference<T>`, which is a pointer. A pointer field
+can be cleared with `null` and starts as `null` when you leave it out, so it reports
+nullable whether or not you write the `?` — the `?` is not what decides it there.
+
+One side effect worth knowing: the redundant-null-check warning can now see these fields
+too, so comparing a non-nullable struct, enum, vector or collection field against `null`
+is reported the way the scalar ones already were. The comparison was always pointless;
+nothing said so before.
+
+### A lazy store that is not a store now says so
+
+`store_bind_lazy` reported every failure to *reach* a source and none to *read* it. A
+missing file, an HTTP 404 and a refused connection each raised a fault with a reason. An
+empty file, a truncated download, a directory, or a URL answering `200` with an HTML
+error page raised nothing at all — `store_lazy_faults` stayed `0`, `store_lazy_error`
+stayed empty, `store_verify` said true, and every key came back `null`. That is exactly
+what a valid store with no such key looks like, so a program could not tell "the dataset
+is empty" from "the dataset never loaded".
+
+The URL case is the one that bites: a stale CDN path, a bucket serving its own 404
+document, or a half-finished upload binds successfully and answers `null` forever, with
+the health channel reporting fine.
+
+A store image begins with a four-byte marker, and binding now checks it. Any source that
+is reachable but is not an image raises a fault with a reason, the same way a missing
+file always did.
+
+
+One thing changed for a *damaged* image: a file whose first four bytes are gone is now
+refused rather than read. It used to answer correctly if the pages your keys needed
+happened to be intact, which was luck rather than a promise. A merely truncated image is
+unaffected — those pages are still read.
+
 ### A `match` at the end of a function no longer frees its locals too early
 
 A `match` written as the **last statement** of a function, with a `return` in **any** arm,

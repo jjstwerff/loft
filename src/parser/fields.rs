@@ -1066,28 +1066,45 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             self.expr_not_null_name.clear();
         } else if self.user_index_op(&t) != u32::MAX {
             // @PLN125 arc C — `x[i]` on a library type is the call the type declared.
-            // `OpIndex` takes the receiver and the index, so the lowering is the ordinary
-            // two-argument method call `t_<LEN><Type>_OpIndex(x, i)`, and every rule that
+            // `OpIndex` takes the receiver and the indices, so the lowering is the
+            // ordinary method call `t_<LEN><Type>_OpIndex(x, i, …)`, and every rule that
             // governs a method call — argument conversion, the heap-return buffer, the
-            // ownership deps — governs this one because it IS one.
+            // ownership deps, the arity and type checks — governs this one because it IS
+            // one.
             //
-            // The index expression is parsed here rather than by `parse_method`, which
+            // loft#996 — COMMA-separated indices, so `m[r, c]` reaches the two-index
+            // method the feature's own motivating case (a matrix) wants. That
+            // declaration was always accepted and callable as `OpIndex(m, r, c)`; only
+            // its own syntax could not reach it, and the parser said `Expect token ]` at
+            // the comma. Passing the indices through as ARGUMENTS is what the accepted
+            // declaration already means, and it leaves the arity check where it belongs:
+            // `call_nr` reports a mismatch against the signature the author wrote.
+            //
+            // The index expressions are parsed here rather than by `parse_method`, which
             // reads a parenthesised argument list; the brackets are the caller's
             // (`operators.rs` consumes the `]`).
             let md_nr = self.user_index_op(&t);
-            let arg_pos = vec![self.lexer.peek_pos().clone(), self.lexer.peek_pos().clone()];
-            let mut idx = Value::Null;
-            let idx_t = self.expression(&mut idx);
             let recv = code.clone();
-            elm_type = self.call_nr(
-                code,
-                md_nr,
-                &[recv, idx],
-                &[t.clone(), idx_t],
-                true,
-                &arg_pos,
-                None,
-            );
+            let mut args = vec![recv];
+            let mut types = vec![t.clone()];
+            let mut arg_pos = vec![self.lexer.peek_pos().clone()];
+            loop {
+                arg_pos.push(self.lexer.peek_pos().clone());
+                if self.user_index_slice_refused(&t) {
+                    return Type::Never;
+                }
+                let mut idx = Value::Null;
+                let idx_t = self.expression(&mut idx);
+                args.push(idx);
+                types.push(idx_t);
+                if self.user_index_slice_refused(&t) {
+                    return Type::Never;
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            elm_type = self.call_nr(code, md_nr, &args, &types, true, &arg_pos, None);
         } else if t.is_unknown() {
             // @P278/P281 — pass-1 Unknown receiver: consume the
             // entire bracket content including range syntax
@@ -1282,6 +1299,48 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             return u32::MAX;
         }
         md
+    }
+
+    /// Refuse `x[a..b]` on a library type, and say what to write — loft#996.
+    ///
+    /// A slice is not a subscript with a different argument: every built-in kind lowers
+    /// its own (`parse_vector_index`, `parse_text_index`, `parse_spatial_slice`,
+    /// `parse_trie_slice`), each to a dedicated runtime call, and there is no range VALUE
+    /// in the language for a user method to take. So this cannot be sugar for `OpIndex`
+    /// the way the comma form is — it needs a range type or an `OpSlice` of its own, which
+    /// is a language addition and not a parse.
+    ///
+    /// What it must not do is stay `Expect token ]` pointing at the `..`, beside the two
+    /// messages this feature already gets right. Answers `true` when the subscript is a
+    /// slice, having consumed the rest of the bracket so the caller's `]` still matches —
+    /// the same recovery the pass-1 `Unknown` receiver takes above, and for the same
+    /// reason: returning with `..2` unread cascades into `Expect token ]` on pass 1, which
+    /// aborts before pass 2 can report anything at all.
+    fn user_index_slice_refused(&mut self, t: &Type) -> bool {
+        if !self.lexer.peek_token("..") && !self.lexer.peek_token("..=") {
+            return false;
+        }
+        if !self.first_pass {
+            let name = match t.base() {
+                Type::Reference(d, _) | Type::Enum(d, _, _) => self.data.def(*d).name().to_string(),
+                _ => String::from("this type"),
+            };
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{name}` defines `OpIndex`, which takes INDEX arguments — there is no \
+                 range value to hand it, so `x[a..b]` has nothing to dispatch to; write \
+                 the bounds as indices (`x[a, b]`, if `OpIndex` declares two) or give the \
+                 type a method that slices (`x.slice(a, b)`)"
+            );
+        }
+        // Consume `..` / `..=` and any till-expression, leaving the `]` for the caller.
+        let _ = self.lexer.has_token("..") || self.lexer.has_token("..=");
+        if !self.lexer.peek_token("]") {
+            let mut till = Value::Null;
+            self.expression(&mut till);
+        }
+        true
     }
 
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {
