@@ -74,13 +74,31 @@ integer)`), pass one, and unpack it at the caller. Returning a tuple is the idio
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **1** (D-tup-1). The rules above are enforced; what is missing is a rule for `&(…)`.
+
+> **D-tup-1 — OPEN (2026-08-19) — no rule for a REFERENCE tuple.** This doc specifies
+> construction, projection, destructuring and returns; it says nothing about `&(τ₁, …, τₙ)` —
+> the composition of `&` ([binding.md](binding.md)) with a tuple. Both halves are specified and
+> their composition is not, which is how the two backends came to represent it differently with
+> nothing to catch them (`--native`: a Rust stack tuple by `&mut`; interpreter: a record through
+> a DbRef). Per the [README](README.md) doctrine, an edge the rules cannot express means the RULE
+> wants extending — a `T-Ref` stating what a `&(…)` denotes, and which element types it admits,
+> would have decided loft#1006 before the implementations diverged. Tracked against
+> binding.md's D-bind-11, which carries the measurement.
 
 - **Conformance is differential** — tuples are enforced across the two backends by the @PLN89
   oracle (D-op-1): `17-tuples-recursion` carries construction, projection, destructuring, and
   tuple returns, precisely because the native layout (a synthetic `__tuple<…>` struct, inline
   bytes) differs from the interpreter's. A divergence in element order, value, or type is caught
   there.
+- ⚠ **…but the oracle's elements are all `(integer, integer)`.** It carries no `text`, and that
+  gap is measured, not theoretical: this doc read `OPEN: 0` through **two** live tuple deviations
+  that the differential it leans on could not see — loft#1004 (a tuple's `text` element written
+  one index too high: silent wrong element, silent lost write, SIGSEGV) and loft#1005 (a tuple
+  `text` parameter that would not compile on `--native` at all). A `text` element is the first
+  place the native layout stops being inline bytes, so it is exactly where a layout differential
+  earns its keep. Widening `17-tuples-recursion` to a heap element type is the fix; until then
+  the zero above is bounded by what the oracle covers.
 
 ---
 

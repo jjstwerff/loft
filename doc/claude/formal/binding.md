@@ -284,9 +284,38 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **0**. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+OPEN: **1** (D-bind-11). B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
+> B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
+> binding — *scalar OR heap* — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
+> exactly like a `τ` one, with **no operation special-cased**. A reference TUPLE obeys neither
+> once an element is not a scalar:
+>
+> ```loft
+> fn sw(p: &(text, text)) { t = p.0; p.0 = p.1; p.1 = t; }   // refused at the signature
+> fn sw(p: &(integer, integer)) { … }                        // fine, both backends
+> ```
+>
+> Until 2026-08-19 this was an **internal compiler error** at codegen (`RefTupleGet:
+> unsupported element type Text`, loft#1006); it is now a refusal naming the element type,
+> which is better for the user and still a deviation — the rule says it must work.
+>
+> **The cause is a representation split, and the rule names which side is wrong.** The two
+> backends do not agree on what a `&(…)` IS: `--native` emits `&mut (i64, i64)`, a Rust STACK
+> tuple written in place (`var_p.0 = var_p.1`), while the interpreter emits `OpVarRef` +
+> `OpGet<τ>(offset)`, addressing it as a RECORD through a DbRef. Scalars work under both, which
+> is why the split went unnoticed. `B-Ref-Uniform`'s "every operation goes through the link via
+> the EXISTING mutation code" is the tie-breaker: the record path is the existing mutation code,
+> so the stack-tuple representation is the deviating side. (Adding only the `OpGetText` /
+> `OpSetText` arms — the fix loft#1006 predicts — is NOT sufficient: measured, it SIGSEGVs the
+> interpreter and leaves `--native` failing to compile, because the addressing, not the opcode,
+> is what is missing.)
+>
+> `tuples.md` states no rule for `&(…)` at all, which is how a composition of two specified
+> features went unspecified; see its Deviations note.
 
 > **D-bind-10 — CLOSED (2026-08-09) — the ⚑ VITAL rule was enforced for HALF of each
 > expression.** The rule named `x + &y` as a parse error and grammar.md's D-gram-4

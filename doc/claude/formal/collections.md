@@ -152,9 +152,28 @@ STDLIB.md:281. sorted-slice design: [../plans/38-sorted-slice/](../plans/38-sort
                                         threads codes outside the box IN, so the caller filters/`break`s for
                                         an exact shape.  (INV-Superset — a deliberate contract, not a bug.)
   (Slice-Open)   xs[(x,y)..]            open outward walk from a point; the caller `break`s to stop.
-  (Slice-Cap)    xs[(x,y)..:n]          same, capped at n records (k nearest-in-Morton).
+  (Slice-Cap)    xs[(x,y)..:n]          same, capped at n records (k nearest-in-Morton).  EXACTLY
+                                        n when the collection holds n — the cap does not vary with
+                                        where the query sits (answers open question 4 below).
                  1–3 axes; lowers to n_spatial_range(...); the same scratch path as iteration.
 ```
+
+> **`Slice-Open`/`Slice-Cap` HELD only from 2026-08-19** (loft#1002). Until then both lowered to
+> `radix_db::range` — the one-directional walk — so they answered the Z-order **tail**: records
+> at or after the query only. A record one code behind was unreachable however close it was
+> (from `(12,11)`, `C` at distance 2.2 was never returned while `E` at ~12 was), and the cap
+> under-delivered by however close the query sat to the end of the curve — measured 3, 3, 3, 2,
+> 1, 0 over five records as the query moved along, with a query past every record answering
+> nothing at all. The rule above is what settled it: the issue proposed *"keep the tail and
+> rename it"* as an equal option, and it was not one — the code changes to match the rules.
+> Now lowers to `radix_db::near_range`, the n-axis form of `spatial::near` (two cursors seeded
+> either side of the query, each step yielding whichever is closer), which existed, was correct,
+> was unit-tested, and no loft program could reach.
+>
+> **The walk is APPROXIMATE and the rule says so** — `k nearest-in-Morton`, not nearest-in-space.
+> Morton distance tracks euclidean distance closely but jumps at quadrant boundaries, so a
+> truly-near point can arrive a place late; `Slice-Box` is the exact form. Every record is
+> yielded eventually, each once, which is what makes `break` the intended way to stop.
 *Anchors:* fields.rs:688-696,:1558 (parse_spatial_slice); default/01_code.loft:1176
 (`spatial_range`); STDLIB.md:272-281; DATABASE.md:668-674; radix_db.rs:238 (superset comment);
 tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS.md:593 (spatial op set).
@@ -214,8 +233,14 @@ VERIFICATION.md (one ☐ row per rule, both-backends + leak + driver-agreement):
    (plans/25 says partial → in-range part, fully-OOB → `[]`); pin the boundary.
 3. **sorted vs index slice** — do they differ observably (index has both tree+hash)? Confirm both expose
    the same `Slice-KeyedIter` iterator; is a `hash` range slice a clean reject (no order)?
-4. **`:n` cap semantics** — exact count guarantee for `[(x,y)..:n]` (≤ n? exactly n if available?) and
-   whether the cap interacts with the superset (n *candidates* vs n *in-box*). Read n_spatial_range.
+4. ~~**`:n` cap semantics** — exact count guarantee for `[(x,y)..:n]` (≤ n? exactly n if available?)~~
+   **ANSWERED 2026-08-19 (loft#1002): exactly n when the collection holds n, from any origin.**
+   The cap bounds the WALK, and the walk is outward from the query rather than onward from it, so
+   the count no longer depends on where the query lands. Pinned in
+   `tests/scripts/48b-spatial-slice.loft`, which sweeps the origin along the curve (the axis the
+   count-only cells above cannot see) and asserts WHICH records each origin answers, with the
+   euclidean distances each expectation follows from. The superset interaction is `Slice-Box`'s
+   only — the open forms do not filter, they order.
 5. **Both-backends spatial order** — is Morton order proven identical interp-vs-native? (48b runs both +
    leak; confirm it also pins ORDER, not just set membership.)
 6. **Scope boundary** — does this doc also state `for x in c` (iteration.md already owns `I-For`; here just
