@@ -15,7 +15,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — arc A complete, arc P five phases in (`stage` 0.11.0).** The runtime is not the gap: `loft --html` already
+**Open — arcs A and P both COMPLETE (`stage` 0.12.0); arc L is what remains.** The runtime is not the gap: `loft --html` already
 beats Flash on deployment (self-contained page, no plugin, WebGL2, E2E-gated in CI), and
 static types, compiled-WASM speed and stackful coroutines all beat ActionScript 3. What is
 missing is the **layer a game author writes against** — `graphics` ships a complete
@@ -76,7 +76,7 @@ absence was chosen.
 
 ## Effort + design
 
-- **Effort:** MH — 18 phases in three arcs (`A3` split in two), **none above M**. **Arc A complete 2026-08-19**, `P1`–`P5` shipped; see § Effort per phase
+- **Effort:** MH — 18 phases in three arcs (`A3` split in two), **none above M**. **Arcs A and P complete 2026-08-19**; arc L (`L1`–`L3`) and `G` remain; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -127,7 +127,7 @@ phase is cut, not when it is implemented.
 | **L1** — light sampled per sprite, applied as tint | `stage` | a sprite at distance `d` from a light takes the hand-computed falloff; two at equal distance take equal tint; and light **composes with** A5's material tint rather than overwriting it. Rides A5's existing attribute, so it costs no pass and cannot disturb draw order | Open |
 | **L2** — light-map composite pass | `stage` | falloff along a ray from the light is **monotonic** and never undercuts its floor — the invariant, since hand-computing a curve per pixel is not a gate anyone maintains. Expectations **generated from the same constants the shader uses** (crawler's `light_cone.py` technique), so retuning happens in one place. And the HUD's pixels are **bit-identical with the light on and off**, which is how *the HUD draws after, unlit* stops being a comment | Open |
 | **L3** — per-layer atmosphere: blur + fog | `stage` | fog at density 0 is **bit-identical to no fog** and at density 1 is exactly the fog colour — the degenerate cases proved, as with P2's factor `1.0`. A blurred layer **preserves total luminance** (edge clamping darkening the border is the classic bug). And blur is applied **per layer before it composites**, so a sharp foreground over a blurred background stays sharp — which a fullscreen blur cannot do and is the entire point | Open |
-| **P6** — several views over one stage | `stage` | split-screen: two cameras, two composites, one scene — each view's frame is identical to the same camera rendered alone, so a second view cannot perturb the first | Open |
+| **P6** — several views over one stage | `stage` | ✅ **Shipped** as `stage` 0.12.0 — view 0's frame is **byte-identical with a second view present**; two views cost **one upload**; each view picks through its own camera and a point outside its rect is not its to answer. A fresh stage already has one view, so the unsplit game is the degenerate case. ⚠ It found **two** defects: a clip did **not follow its content under a camera** (a panned clipped panel vanished — A6 and P2 each green alone, no test had moved a camera across a clip), and a `--native` **store corruption** of its own making, `view_at` answering a borrow on one path and a fresh record on the other (loft#1017). Nine controls fire — and one earned its keep by **not** firing, exposing an inert test | ✅ **Shipped** |
 | **G** — vector paths on the GPU | — | deferred behind a trigger (below) | Deferred |
 
 ## Companion files
@@ -177,7 +177,7 @@ phases carry a design call that decides the effort, made here rather than discov
 | **L1** | S | Sample each light at the sprite's **origin** — its footprint, the same point P1 sorts on — and fold the result into the tint attribute. Order-independent, one pass, no framebuffer. This is the whole feature for a flat-lit 2-D game and it is deliberately first: L2 is only worth its pass when lights must fall across the scene rather than across the sprites. |
 | **L2** | M | World layers into an offscreen FBO, lights accumulated, one fullscreen composite, **HUD drawn after and unlit** — the shape crawler shipped as R6 and verified. Every entry point exists (`gl_create_framebuffer`, `gl_framebuffer_texture`, `gl_create_color_texture`, `gl_draw_fullscreen_quad`). A multiply composite after the scene is order-independent, so it does not fight *never reorder*. Visibility stays the app's: the light **presents**, it does not decide what is seen. |
 | **L3** | M | A layer already carries a parallax factor (P2); give it a blur radius, a fog colour and a density, and *distant, hazy, out-of-focus* becomes **layer data rather than an effects pipeline**. Fog is a `lerp` toward the fog colour — a uniform, essentially free. Blur rides L2's FBO: render the layer at quarter resolution and upsample with linear filtering, the cheap approximation backgrounds are made of. **Default to a BAKED blur** — the packer pre-blurs a static layer, so it costs nothing at run time; runtime blur is opt-in for a radius that actually changes (a focus pull). Atmosphere in this style is also largely particles, which `lib_plans/76-particles` gets cheaply once A lands. |
-| **P6** | S | Two cameras over one stage, two composite passes (L2 already builds one). The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
+| **P6** | S ✅ | *Done.* ⚠ Its stated lean on L2 did **not** apply — arc L is unbuilt, and it turned out P6 needs no FBO at all: a view is an offset plus a scissor, so the composite pass L2 will bring is an addition rather than a prerequisite. Two cameras over one stage. The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
 | **G** | H | Deferred. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. |
 
 ## A third vehicle: dryopea's tower defence in 2.5-D
@@ -246,7 +246,7 @@ dirty per frame?** before adding it.
 | Arc | Waits on | Then |
 |---|---|---|
 | **A** scene | ✅ **complete** | `A0`–`A6` all shipped as `stage` 0.6.0 |
-| **P** presentation | `A3` | `P1` ✅ · `P2` ✅ · `P3` ✅ · `P4` ✅ · `P5` ✅ → `P6` |
+| **P** presentation | ✅ **complete** | `P1`–`P6` all shipped as `stage` 0.12.0 |
 | **L** light | `A5`'s tint (`L1`), `A3` (`L2`/`L3`) | `L1` alone is the whole feature for a flat-lit game |
 | **G** vector paths | deferred behind its trigger | — |
 
