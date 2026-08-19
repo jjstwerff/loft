@@ -41,7 +41,7 @@ needs it, never how big the game is.
 
 ## Effort + design
 
-- **Effort:** H overall — 39 phases in ten arcs, **none above M** (9 XS, 24 S, 6 M), plus **D0**, an upstream request rather than work; see § Effort per phase
+- **Effort:** H overall — 40 phases in ten arcs, **none above M** (9 XS, 25 S, 6 M), plus **D0**, an upstream request rather than work; see § Effort per phase
 - **Design:** ✓ for A–F, — for G
 - **Last touched:** 2026-08-19
 
@@ -101,6 +101,7 @@ phase is cut, not when it is implemented.
 | **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
 | **D1** — Button + Panel over stage routing | `ui` | a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire. **And `panel_hit_test` answers the same `UiHit` it answers today**, which is what makes this an extraction rather than a rewrite wearing its name | Open |
 | **D2** — focus, tab order, text field | `ui` | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today | Open |
+| **F7** — a collision proxy derived from the sprite's alpha | `assets` | hexbody's contract, in 2-D: the proxy **contains** every opaque texel and its overshoot is **bounded** — `proxy ⊇ opaque ∧ overshoot ≤ X`, measured per sprite over the corpus rather than asserted. Re-art a sprite and its proxy follows with no hand edit; that is the whole point | Open |
 | *— arc **M**: co-op multiplayer —* | | | |
 | **M1** — replicate the **world**, never the stage | `coop` | two clients with **different window sizes and different camera positions** converge on the same world hash while their frames differ pixel-for-pixel. The frames differing is half the gate: it proves presentation was not replicated | Open |
 | **M2** — determinism, gated by replay | `coop` | one recorded input stream replayed on two builds yields identical world hashes tick for tick, and a divergence **names the first differing tick** rather than reporting that they differ | Open |
@@ -150,7 +151,7 @@ that decline costs A4/A5: [PRESENTATION.md](PRESENTATION.md).
 
 ## Effort per phase
 
-Totals: **9 XS, 24 S, 6 M** — no phase above M, which is the § Cutting rule holding
+Totals: **9 XS, 25 S, 6 M** — no phase above M, which is the § Cutting rule holding
 rather than optimism. **D0** carries no letter: it is a request to another tree. Three phases carry a design call that decides the effort, and
 those calls are made here rather than discovered mid-build.
 
@@ -189,8 +190,9 @@ those calls are made here rather than discovered mid-build.
 | **F4** | XS | Pack `build_atlas()`'s output as a PNG, load it from the pack, delete 190 lines, pixel-compare. |
 | **F5** | S | Manifest fields (family, browser source, native path), page emission of the `@font-face` or `<link>`, and enforcing family-name-equals-lookup-key **at build time** instead of leaving it to be discovered as a silent fallback at runtime. |
 | **F6** | XS | Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The fix is two lines; the throttled test is the phase. |
+| **F7** | S | Derive at pack time from the same alpha A4 already reads to pick — the art contains the answer, so nobody hand-authors a hitbox per sprite. Produces *data*; `shapes` and `lib_plans/75-physics-2body` consume it, so this is not a physics engine arriving by the back door. Containment is what makes substitution safe (a system validated against the proxy stays valid when the art changes); the bound is what stops containment being satisfied by a screen-sized rectangle. |
 | **M1** | S | Mostly a **rule with a gate**, and the rule is the plan's own presentation model applied across the wire: the stage is a pure function of the world and the camera, so each client derives its own. Replicating the scene instead would ship presentation over the network and desync on cosmetic difference. `game_protocol` already frames and acks; `lib_plans/64-game-client` already designs the envelope. |
-| **M2** | S | The determinism this needs is **already maintained** by `fixstep` + P4 advancing off the step rather than wall time + P3 deriving ambient phase from `(time, position)`. So M2 buys no mechanism — it buys the *harness* that would catch losing it, which is the input record/replay tool with a world hash per tick. |
+| **M2** | S | The determinism this needs is **already maintained** by `fixstep` + P4 advancing off the step rather than wall time + P3 deriving ambient phase from `(time, position)`. So M2 buys no mechanism — it buys the *harness* that would catch losing it, which is the input record/replay tool with a world hash per tick. **Arm it before the subject exists**, hexbody's `L7` discipline: they wrote `joint.loft` and held it **red** before a line of body code, both controls verified, and it caught the thing they had feared. A determinism gate written after co-op works only proves that day's build. |
 | **M3** | S | Two cameras over one stage, two composite passes (L2 already builds one). The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
 | **H1** | S | Turn the `[sandbox]` policy on over the game's own function surface and find where it is too tight — which is the point of doing it early. Doing it late is a re-architecture: the boundary decides which library internals may be unbounded, and that is a design-time property of every package this plan ships. |
 | **H2** | S | Each package declares **trusted engine** (unbounded internals, an admitted-safe API) or **admissible loft**. Cheap while the APIs are being written, and the reason mods cost nothing later: a mod is then just more admitted code, with no second code path to keep in step. |
@@ -236,7 +238,7 @@ before adding it.
 | **D** widgets | D0 (**someone else's clock**), A4 | D2 also needs B2 |
 | **E** audio | — | E2/E3 when a consumer asks; comfort, not capability |
 | **F** assets | — | F4 needs A2; F5/F6 land with B |
-| **M** co-op | P2 (M3), the replay harness (M2) | M1 is a rule and a gate |
+| **M** co-op | P2 (M3) | M1 is a rule and a gate; **M2's harness is armed first**, not last |
 | **H** sandbox | every package's API existing | cheap now, a re-architecture later |
 
 ## Open design questions

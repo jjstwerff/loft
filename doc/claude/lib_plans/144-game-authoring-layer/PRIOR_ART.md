@@ -111,3 +111,32 @@ this plan adds, because the fix has a lip: `use <pkg>` **inside** `<pkg>` means 
 `use self::<pkg>` means the file, and a suite written as `tests/<pkg>.loft` was what
 amputated nine published libraries' public surface. moros carries a static guard for the
 family (`tools/basenames.sh`, in its fast tier) that is worth copying rather than reinventing.
+
+---
+
+## hexbody — a contract to steal, and a discipline
+
+`hexbody` is 3-D (movable, breakable geometry bodies) and consumer-only by its own rule —
+*"loft is upstream and consumer-only; hexbody never fixes loft"* — so, like dryopea's
+renderer and moros's editor, it is **not a consumer this plan serves**. It contributes two
+things anyway.
+
+**The proxy contract, which transfers to 2-D unchanged.** Its load-bearing invariant is
+`proxy ⊇ footprint ∧ overshoot ≤ X`: a collision proxy is **derived** from the structured
+representation rather than hand-authored, must **contain** the true shape, and its overshoot
+is **bounded**. That is exactly F7 in two dimensions — derive a sprite's proxy from the alpha
+A4 already reads for picking, require containment, bound the slop. Containment is what makes
+the substitution safe (a system validated against the proxy stays valid when the art
+changes); the bound is what stops containment being satisfied by a screen-sized rectangle.
+Their framing of *why* is worth keeping too: where all you have is a bag of triangles,
+collision volumes get authored by hand because a mesh cannot be reasoned about — the same
+reason a hand-authored hitbox per sprite is the norm in 2-D, and the same reason it need not
+be.
+
+**Arm the gate before its subject.** Their frontier item 0 was *"arm a forward gate before
+writing body code — there is currently none"*: `tests/joint.loft` was written and **held red**
+before a line of body code, with both controls verified, and it caught what they had feared.
+Their `L7` says determinism/replay is *built from line one*. M2 adopts that ordering — a
+determinism gate written after co-op works only proves that day's build.
+
+*(`../stories` is an empty directory — nothing to read.)*
