@@ -2143,7 +2143,28 @@ impl Parser {
             elem_known
         }));
         let fld = Value::Int(i32::from(u16::MAX));
-        let comp_var = self.create_unique("comp", in_t);
+        // The per-iteration yield slot.  When the body is a bare variable that is itself a
+        // BORROW, this slot holds that borrow and must say so: a variable bound to a borrow
+        // is a borrow, and one created with a bare element type carries no deps, so scope
+        // handling reads it as an OWNER and emits `OpFreeRef` at the end of every iteration.
+        //
+        // `filter` is where that bites, because its body IS the loop element
+        // (`body = Value::Var(for_var)` — the identity yield that makes it a filter rather
+        // than a map): each kept element freed the SOURCE's record.  Silent on a scalar
+        // element, whose copy is the value itself, and visible on a `vector<vector<T>>`,
+        // where a later loop over the same source then yielded nothing at all — on both
+        // backends.  `map` was never affected: its body is a call, whose result this slot
+        // really does own.
+        //
+        // Narrowed to a bare `Var` on purpose: that is the only shape where the slot is an
+        // ALIAS rather than a fresh value, so it is exactly the case where the free is wrong.
+        let comp_tp = match &body {
+            Value::Var(v) if *v != u16::MAX && !self.vars.tp(*v).depend().is_empty() => {
+                in_t.depending(*v)
+            }
+            _ => in_t.clone(),
+        };
+        let comp_var = self.create_unique("comp", &comp_tp);
         // @P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
         // termination check in the loop body (the `!matches!(Iterator)`
         // guard below skipped it entirely), so they ran forever appending
