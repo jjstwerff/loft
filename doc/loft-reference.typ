@@ -5975,7 +5975,13 @@ Types that can be converted to text via a `to\_text` method. User types satisfy 
 
 == Math
 
-Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations
+Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations loft\#984 — the declared-RANGE guard, applied to the VALUE at a store into a slot that declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the slot admits null — and reports it, rather than being wrapped, aliased, or dropped.
+
+It guards the VALUE rather than the store, which is what lets one op reach both a FIELD and a VARIABLE: a variable has no store op to carry the range, and that is why a declared range on a local went unenforced entirely.
+
+A null passes straight through: whether a null may land in this slot is `(N-Store)`'s question, answered at compile time, and substituting `lo` for it here would quietly invent a value the program never computed.
+
+Emitted only where the value is NOT provably in range, so ordinary in-range code pays nothing (`parser::expressions::range\_guard`).
 
 ```rust
 pub fn abs(both: integer) -> integer
