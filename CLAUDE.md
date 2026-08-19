@@ -227,7 +227,12 @@ in the same session with a regression test. Record scope + root cause, never ori
 genuinely M+/needs-design (route to its canonical home). When you file: a **GitHub Issue**
 (`gh issue create`, `bug_report` template) — NOT a PROBLEMS.md row (that's the closed archive) —
 with a minimal both-backend repro, `sev:`/`area:` + a VERIFIED `wa:*` label, **a `hit-by:*`
-label**, and `Fixes #NNN`. `hit-by:` names the project that RAN INTO it, one per issue, **at
+label**, and `Fixes #NNN`. **Add `silent-wrong` whenever the program answers WRONG and nothing
+says so** (no diagnostic, no refusal, no crash), or a type-system promise does not hold. It is
+the FREEZE axis and outranks both `sev:` and `wa:`: a clean workaround only helps someone who
+learns they need one, and a `sev:low` edge that answers quietly wrong still can't be frozen into
+the contract, while a `sev:high` crash can — a crash tells you. Not for a crash, a refusal, an
+ICE, a wrong error message, or a leak ([.github/LABELS.md § silent-wrong](.github/LABELS.md)). `hit-by:` names the project that RAN INTO it, one per issue, **at
 filing time** — loft is one of those projects, so a find of your own is `hit-by:loft`, NEVER a
 blank (a consumer filters `hit-by:<their project>`, and an unlabelled issue reads as "not
 established", not "nobody"). It says who hit it and nothing more: a follow-on you file while

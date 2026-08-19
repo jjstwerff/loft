@@ -75,6 +75,29 @@ g(["q"]);             // was a crash     — now ""
 A record `T` now gets its own field defaults, where before it got an empty record of the type
 VARIABLE — a value of no type at all, which also leaked.
 
+### An accessor that sometimes borrows and sometimes builds is safe on `--native`
+
+```loft
+fn view_at(self: const Stage, i: integer) -> View {
+    if i < 0 or i >= len(self.views) { return View { … }; }   // builds one
+    self.views[i] ?? View { … }                                // hands one back
+}
+```
+
+Written as a METHOD and called in a loop, every read after the first out-of-range one answered
+zeros on `--native` — the receiver's records had been freed and the slot reused. Writing the
+same body as a plain function was always correct, which is what hid it. Both spellings agree now.
+
+### Leaving out a nullable record argument no longer grows the heap
+
+```loft
+fn f(a: P? = null) -> P { a? }
+for i in 0..1000 { b = f(); … }     // leaked one record per call
+```
+
+Passing the argument, and passing a variable that happens to be null, were both always fine — it
+was only the omitted spelling.
+
 ### `sum(v)` — the identity is optional now
 
 ```loft

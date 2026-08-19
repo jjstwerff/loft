@@ -9,6 +9,81 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The `--native` copy-or-adopt guard was gated on a NAME, so a METHOD never got it (loft#1017, 2026-08-20)
+
+A callee whose return may be a BORROW of an argument cannot have its result aliased into a
+caller local: the local's own `OpFreeRef` then whole-store-frees the caller's RECEIVER. The heap
+first-bind in `dispatch.rs` handles that — the @P290 protect bracket around the call, and a
+copy-or-adopt guard after it (`_src` aliases the receiver → deep copy; callee-minted → adopt).
+The gate read `name().starts_with("n_")`, so a `t_` METHOD, or a generic monomorph, with a
+byte-identical body and the same `return_adopts_fresh_store()` verdict fell straight through to
+a plain alias — no bracket, no copy — followed by the same unconditional free.
+
+`scopes.rs`'s own lift gate already says the two *"have to name the SAME set of callees, which
+is why the predicate lives in one place (loft#810)"* and uses `is_loft_defined()`. This end had
+drifted off it, and the comment directly above it records an earlier correction from a "coarse
+proxy" to the canonical `return_adopts_fresh_store()` fact — which the name prefix survived
+untouched. The interpreter was never affected: `gen_set_first_ref_call_copy` reads the fact.
+
+**The 10-line reduction the issue says it could not find**, and why two attempts missed it:
+
+```loft
+fn view_at(self: const St, i: integer) -> V {
+  if i < 0 or i >= len(self.vs) { return V { x: 0.0, … }; }   // FRESH
+  self.vs[i] ?? V { x: 0.0, … }                                // BORROW
+}
+for i in 0..6 { println("x={view_at(s, i % 3).x}"); }
+```
+
+```
+interp:  1.5  3.5  0  1.5  3.5  0
+native:  1.5  3.5  0  0    0    0     <-- everything after the FRESH arm ran
+```
+
+The borrow arm reads CORRECTLY and then frees its store; the fresh arm's next allocation
+recycles that slot over the receiver's records. In `stage` the recycled slot was a canvas, which
+is why the corrupt `rec` read back as `0xFF000000`.
+
+Both axes have to move together. The identical body as a FREE function is correct, and so is a
+single call instead of a loop — so a reduction "with a plain `vector<V>`", written as a free
+function and called once, is two controls at the same time and passes. The METHOD spelling was
+the missing axis, and the report's "the shape alone is not sufficient" was measuring cell B.
+
+The regression test carries all six cells including the two that a too-eager fix would break —
+the free-function spelling, and the borrow arm alone. It fails 6/6 on the pre-fix binary.
+
+
+### A `null` argument read as an incomplete witness set, so the caller never freed (loft#1021, 2026-08-20)
+
+`fn f(a: P? = null) -> P { a? }` called as `f()` leaked the record the null path built, once per
+call, on both backends. The value was right; only the ownership was wrong.
+
+loft#981/#982 already built what this needs, and `protectable_ref_args`' own comment states it:
+a callee whose return dep names a visible parameter may hand back that parameter's store (the
+caller must not free it) or one it minted itself (the caller must), *"no static bit can carry
+that split, so the decision is made at RUNTIME by the bracket."* The bracket needs a SLOT to
+name, so a non-`Var` argument leaves the witness set incomplete and the caller keeps the
+conservative never-free answer.
+
+An OMITTED `τ? = null` parameter is filled with a bare `Value::Null`, which is not a `Var` — so
+every such call read as uncovered. But a `null` argument holds NO STORE: nothing the callee
+returns can be a borrow of it, so it neither needs protecting nor can it break coverage. One
+arm, at the predicate both ends of the emitted sequence already read.
+
+**The measurement that localised it.** `q: P? = null; b = f(q)` — a bare VAR holding null — was
+always CLEAN, while `b = f()` leaked, over a byte-identical callee and a caller IR differing only
+by that variable. Two readings of `protectable_ref_args` predicted both should leak. One
+env-gated `eprintln` on `call_return_frees_source` settled it in a single run: for `f()` it
+answers `covers_all=false -> false`; for `f(q)` it is **not consulted at all**, because that
+caller takes a different lowering. The predicate was right and the model of who asks it was not
+— which no amount of re-reading the predicate would have shown.
+
+**Still open, found while measuring this:** the BORROW arm of the same mixed-ownership return
+leaks and SCALES — `fn pick(bx: Box, take: boolean) -> P { if take { bx.p } else { P{…} } }`
+called five times leaks four records plus one unknown-typed store. A displaced owner rather than
+a coverage gap, and the closest interpreter-side shape to loft#1017's `--native` corruption.
+
+
 ### `sum`'s identity got a default, so the one `#superseded` fix loft ships can be applied (loft#1003, 2026-08-20)
 
 `superseded-call` is the only ADVICE-level fix carrying a machine `edit`, and it was **always

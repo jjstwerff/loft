@@ -510,10 +510,21 @@ impl Output<'_> {
         // view (`fn pick(t: vector<M>) -> M { t[i] }`: no Reference param, yet
         // the return aliases `t`, so freeing the bound local freed the caller's
         // vector).
+        //
+        // loft#1017 — the callee test is `is_loft_defined()`, the FACT, not a name.
+        // It read `name().starts_with("n_")`, so a `t_` METHOD (or a generic monomorph)
+        // with a byte-identical body and the same `return_adopts_fresh_store()` verdict
+        // fell straight through to a plain ALIAS: no deep copy, and no @P290 bracket
+        // either.  The unconditional `OpFreeRef` on the bound temp then whole-store-freed
+        // the RECEIVER, and the next allocation recycled that slot — `stage`'s `view_at`
+        // read canvas pixels as a record number several calls later.  `scopes.rs`'s own
+        // lift gate already says the two "have to name the SAME set of callees, which is
+        // why the predicate lives in one place (loft#810)"; this end had drifted off it.
+        // Measured: the identical body written as a FREE function was correct on
+        // `--native` and as a METHOD answered zeros from the second call on.
         if let (Some(d_nr), Value::Call(fn_nr, args)) =
             (variables.tp(var).heap_def_nr(), to_unspanned)
-            && self.data.def(*fn_nr).name().starts_with("n_")
-            && *self.data.def(*fn_nr).code() != Value::Null
+            && self.data.def(*fn_nr).is_loft_defined()
             && !self.data.def(*fn_nr).return_adopts_fresh_store()
         {
             let tp_nr = self.data.def(d_nr).known_type();
