@@ -707,6 +707,71 @@ created a recurring drift surface (manual audit 2026-05-09 caught
 ROADMAP's job is "which plans exist + how big + what blocks them";
 the plan README's job is "where it stands today."
 
+## Plan sets — where four plans are one piece of work
+
+Most plans stand alone. When several are cut from one design, the set needs an entry point, or
+a reader meets phase `F7a` with no idea why it exists. One set today:
+
+### The 2-D game stack — @PLN144 · @PLN145 · @PLN146 · @PLN147
+
+**What it is for.** `graphics` ships a complete immediate-mode GL surface and nothing above it,
+so every game re-implements the scene graph, the text field and the widgets by hand —
+`tools/brick-buster/25-brick-buster.loft` is **1983 lines for a Breakout clone**. These four
+plans build the layer a game author writes against.
+
+**Scope: 2-D games at any scale — not a 3-D engine.** The 2.5-D half is a *sprite presentation*
+of a 3-D world (a hex or grid footprint, sprites standing up from it). Lighting, fog and
+background blur are in; meshes and camera projection are not. Targets: interpreter, `--native`,
+`--html`, `--native-android`. Full 3-D and broad standards integration are deliberate
+non-goals *for these four* — see @PLN144 § Goal.
+
+| Plan | Arcs | Phases | One line |
+|---|---|---|---|
+| **[@PLN144](144-2d-stage/README.md)** the 2-D stage | A scene · P presentation · L light · G paths | 17 | A retained **flat** node array batched by a *merge-adjacent, never-reorder* rule, presenting a 3-D world through three knobs — sprite **origin**, `layer` + `depth`, projected position |
+| **[@PLN145](145-authoring-libs/README.md)** text, tweens, widgets | B C D | 11 | What you write a game *with*: a font that works headless, text that costs no upload, property tweens, and a widget kit **extracted** rather than written |
+| **[@PLN146](146-content-delivery/README.md)** content + delivery | E audio · F assets · W drawing | 19 | The pack **is a loft store** on a dumb file server, range-read; plus authoring sprites in loft instead of Python, and browser audio that is currently a stub |
+| **[@PLN147](147-content-editor/README.md)** the editor | S T U V · X sprites | 16 | An in-browser editor whose invariant is that **it edits the same store the game loads**, so editor↔runtime agreement is structural; arc X adds sprite + animation editing |
+
+**Why four and not one.** It was one plan of 40 phases until 2026-08-19, and the test that split
+it is whether phases can **fail together**. @PLN144's arcs share a gate family — pixels, batch
+counts, upload counts — so a regression in `A3`'s upload path reddens `P2` and `P4`, which is
+how both of those findings surfaced. @PLN146's gates are a byte-range log and a headless-Chrome
+audio handle; neither can redden the other or the stage. Phases that cannot fail together are a
+programme, not a plan.
+
+**Where to start — three phases depend on nothing:**
+
+- **`E1`** (@PLN146) — ~30 lines of JS. `loft_audio_load` answers `i32::MIN` in the browser, so
+  a `--html` game can only make procedural noise today.
+- **`B0`** (@PLN145) — a built-in font. Two of dryopea's UI surfaces ship **with no text at
+  all** because the text path needs a GL context *and* a native rasteriser *and* a font file.
+- **`A0`** (@PLN144) — the probe that can kill the batching design for the cost of a compile.
+
+**The through-lines**, which is what makes the set readable as one piece:
+
+1. **The world is 3-D; the view is a presentation of it.** The stage learns nothing about hexes
+   or 3-D, and co-op replicates the *world* rather than the scene for the same reason.
+2. **Never reorder.** 2-D correctness is painter's algebra, so the batcher merges only adjacent
+   runs — which is why the *packer* decides the batch count, and why atlas assignment is a
+   content decision rather than a renderer one.
+3. **Bake at pack time, not at run time.** Blur, premultiplication, collision proxies, animation
+   frames: the runtime keeps knowing nothing about how the art was made.
+4. **Prefer a gate that already exists.** `A4`'s pick is `T2`'s gate; `P1`'s occlusion table is
+   `T3`'s; `W2`'s Python oracle is `X1`'s. One fact checked by two consumers cannot drift.
+5. **Probe an unadopted dependency before depending on it.** `input` and `shapes` are published
+   with no consumers, so `D0b` and `F7a` ask why for the cost of a compile.
+
+**Shared companions** live with @PLN144 because it is the oldest, not because it owns them:
+[`PRIOR_ART.md`](144-2d-stage/PRIOR_ART.md) (what moros, dryopea, crawler, hexbody and crew_punk
+already built, and the library-integration audit), [`RENDERER.md`](144-2d-stage/RENDERER.md)
+(doctrine inherited from crawler's orphaned renderer design), and
+[`PRESENTATION.md`](144-2d-stage/PRESENTATION.md).
+
+**Not in these plans, on purpose:** co-op lives in
+[`lib_plans/64-game-client`](../lib_plans/64-game-client/README.md); the sandbox boundary is a
+rule in [LIBRARY_AUTHORING.md](../LIBRARY_AUTHORING.md) § 2a, because it is a property of an API
+rather than a phase.
+
 ## Where to look for plans by state
 
 The **`loft-lang/plans` issue's `status:*` label is the source of truth** —

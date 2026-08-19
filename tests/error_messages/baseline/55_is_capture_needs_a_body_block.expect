@@ -1,0 +1,34 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+error: `{ radius }` after `is Circle` is the field-capture list, not the body — a block has to follow it. Write `is Circle { radius } { … }`, repeating the name if the body is just that value, or use `match`, which takes captures and IS an expression
+  --> <cases>/55_is_capture_needs_a_body_block.loft:5:37
+  |
+5 |   v = if c is Circle { radius } else { 0 };
+  |                                     ^
+
+error: Expect token {
+  --> <cases>/55_is_capture_needs_a_body_block.loft:5:37
+  |
+5 |   v = if c is Circle { radius } else { 0 };
+  |                                     ^
+
+error: Expect token ;
+  --> <cases>/55_is_capture_needs_a_body_block.loft:5:37
+  |
+5 |   v = if c is Circle { radius } else { 0 };
+  |                                     ^
+
+error: Expect token ;
+  --> <cases>/55_is_capture_needs_a_body_block.loft:7:2
+  |
+7 | }
+  |  ^
+
+error: Expect token }
+  --> <cases>/55_is_capture_needs_a_body_block.loft:7:2
+  |
+7 | }
+  |  ^
+
+error: aborting due to 5 previous errors

@@ -14,6 +14,8 @@ fn cleanup() {
   delete("test_loft_snap.bin");
 }
 
+// @FTR-069 — a store written to a file and read back: truncate, header, payload, sync, and
+// two save passes that round-trip
 fn main() {
   cleanup();
 

@@ -22,6 +22,8 @@ fn pset(h: &hash<Ent[ck]>, k: integer, val: integer) {
   h[k] = Ent { ck: k, v: val };
 }
 
+// @FTR-075 — a record reached by its KEY: insert-or-replace through `coll[key] = value` on
+// hash, sorted and index alike
 fn main() {
   // --- local hash: insert new keys, then replace ---
   h: hash<Ent[ck]> = [];

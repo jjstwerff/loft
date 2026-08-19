@@ -14,6 +14,7 @@
 //   - manual run with extra args: validates per-arg content
 //     when invoked as `loft 103-arguments.loft -- a b c`.
 
+// @FTR-048 — `arguments()` answers the program's own argument vector
 fn main() {
   args = arguments();
   n = args.len();

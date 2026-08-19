@@ -332,6 +332,9 @@ struct Bundle {
   types: vector<DbType>,
 }
 
+// @FTR-078 — the compiler's whole IR vocabulary written as loft types: 24 `Type` variants,
+// 34 `Value` variants, and the definition/function/variable tables — laid out so the store
+// schema for the same graph falls out of it
 fn main() {
   // An empty Data is enough to force the parser to lay out + register the
   // full type graph above; the value of this script is the GENERATED SCHEMA

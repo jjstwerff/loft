@@ -22,9 +22,11 @@ fn main() {
     println("same: {p == q}, resident: {parts.len()}"); // same: true, resident: 1
 
     // A key the source does not have reads as null — and asking why tells a
-    // genuine absence apart from a source you could not reach.
+    // genuine absence apart from a source you could not reach. Nothing failed
+    // here, so the channel is clean.
     missing = parts[404];
     println("missing: {missing == null}, faults: {store_lazy_faults(parts)}");
+                                                        // missing: true, faults: 0
 
     delete("inventory.store");
     delete("inventory.store.dschema");

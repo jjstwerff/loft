@@ -45,6 +45,8 @@ fn write_file(path: text, content: text) {
   f += content;
 }
 
+// @FTR-067 — the catalogue mirror generated deterministically and OFFLINE from the
+// committed snapshot, so the shadow can be rebuilt and compared without the network
 fn main() {
   root = json_parse(file("index/features.json").content());
   mkdir_all("doc/features");

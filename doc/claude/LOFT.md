@@ -1152,10 +1152,13 @@ shader = `
 `;
 
 msg = `Hello, {name}!
-  You have {count} messages.`;
+  You have {count} messages.`;   // holes -> NOT stripped: the two spaces survive
 ```
 
 Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
+Embedded code brings its own braces, and every one of them has to be doubled — a bare `{`
+opens an interpolation hole wherever it appears. Doubling keeps the strip working, because
+`{{` is not a hole; a real `{expr}` is what switches it off.
 
 **Gotcha — indexing a text yields `character`, slicing yields `text`.**  The two
 operations on the same subject return different types:
@@ -1422,6 +1425,21 @@ Exceptions:
 - `e#remove` in a filtered loop is safe and allowed — it adjusts the iterator position after removal.
 - Field accesses are not blocked: `db.items += x` is allowed even if `db.items` is iterated via a local variable.
 
+### While loops
+
+```
+while <condition> { }
+```
+
+Repeats as long as the condition holds, and is the only unbounded loop loft has —
+`while true { }` runs until something stops it, where a `for` over a range carries
+its own upper bound. `break` and `continue` work inside it exactly as in a `for`.
+
+A `while` has no loop VARIABLE, so it cannot be named by the labelled forms below:
+there is no way to leave an outer `while` from inside an inner loop except a flag.
+A labelled `x#break` does cross a `while` on its way out, so an inner `while`
+nested in a `for x` can still leave that `for`.
+
 ### Break and continue
 
 ```
@@ -1448,7 +1466,9 @@ for x in 1..5 {
 ```
 
 **Gotcha (INC#18).** `x#break` looks like an attribute access but is a jump
-instruction — it produces no value and cannot appear on the right of `=`.
+instruction — it produces no value and cannot appear on the right of `=`.  The name
+must be a real loop variable: an ordinary local currently crashes the compiler
+rather than being diagnosed (loft#998).
 
 **Labelled continue — `loop_var#continue`.** Symmetric to `x#break`: use
 `x#continue` from inside an inner loop to skip the remainder of the current
@@ -1889,10 +1909,14 @@ inserts-or-replaces, and `xs[x, y] = null` removes — the same three roles
 `h[k]` has on a `hash`.  Note the point subscript takes the coordinates as
 separate subscripts (`xs[3, 6]`), where the range forms below parenthesise
 them.  Proximity queries use range-slice
-syntax instead of new keywords or methods: `xs[(x,y)..]` (open outward walk,
-caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]`
-(bounding box — the raw Morton-code interval, a superset of the geometric
-box).  See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
+syntax instead of new keywords or methods: `xs[(x1,y1)..(x2,y2)]` is the
+bounding box and gives exactly what is inside it (loft#800), while
+`xs[(x,y)..]` and `xs[(x,y)..:n]` walk ONWARD along the collection's Morton
+order from that point — a tail, not a circle, so a record just behind the
+query is not returned however close it is, and `..:n` answers fewer than `n`
+near the end of the curve (loft#1002).  Reach for a symmetric box,
+`xs[(x-r, y-r)..(x+r, y+r)]`, when the answer must cover every direction.
+See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
 for the full syntax table.
 
 **`trie<T[field]>` keys on ONE text field** and shares the same radix tree as
@@ -2086,7 +2110,14 @@ round(PI * 1000.0)
 **Gotcha (INC#8) — method vs. free function is the stdlib author's choice.** The
 language has no rule about which operations *should* be methods vs. free
 functions; it depends entirely on whether the definition's first parameter is
-`self` (method-only), `both` (both forms), or neither (free-only).  The
+`self`, `both`, or neither.  Measured, that names two behaviours rather than
+three: a plain first-parameter name is free-ONLY and the method spelling is
+refused by name, while **both `self` and `both` accept the method AND the free
+spelling** — `find_fn` resolves a free call by receiver type, so `f(x)` reaches
+a `self` method.  What separates them is registration, and it shows up in the
+one place neither reaches: **a `self`/`both` method is not a fn-ref value**, so
+it cannot be handed to `map`/`filter` or to a parameter of function type
+(loft#1008 — wrap it in a lambda, `map(v, |q| { q.m(…) })`).  The
 standard library makes this call per-function: `text.starts_with(s)` and
 `text.find(s)` are method-only (`self: text`); `len(v)`, `abs(n)`, `round(x)`
 are both-forms (`both: …`); `sum_of(v)` and `print(s)` are free-only.  A user
@@ -2142,6 +2173,25 @@ connect("example.com")                         // all defaults
 connect("example.com", tls: false)             // skip port
 connect(host: "example.com", port: 443)        // all named
 ```
+
+Both spellings of a call take names, including the method one — `cfg.render(dry: true)`
+and `render(cfg, dry: true)` are the same call.  The receiver is argument 0, so naming
+it (`render(self: cfg)`) is the one thing that does not work: it is already provided.
+
+A default is an **expression**, evaluated at the call rather than stored as a constant.
+It runs once per call, not at all when the caller supplies the argument, and it may read
+a parameter declared before it:
+
+```
+fn window(rows: integer, height: integer = rows * 10) -> integer { height }
+window(4)      // 40 — the default reads `rows`
+window(4, 7)   // 7  — the default is not evaluated
+```
+
+A default is **not part of the function's type**.  Adding one to an existing function
+keeps every direct call working, but a fn-ref of type `fn(integer) -> integer` stops
+matching the moment a second parameter arrives however optional it is — so growing the
+signature of something handed out as a VALUE is a breaking change ([INTERFACES.md](INTERFACES.md)).
 
 ---
 

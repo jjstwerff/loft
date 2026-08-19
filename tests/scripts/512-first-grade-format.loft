@@ -23,6 +23,8 @@ fn to_text(self: Plain1) -> text {
   "P{self.v}"
 }
 
+// @FTR-049 — a type owning how it prints: a 1-arg `to_text(self)` for `{x}`, a 2-arg
+// `to_text(self, spec)` that receives the raw `{x:spec}` text, and the field-dump fallback
 fn main() {
   m = Money { cents: 150 };
   assert("{m}" == "c150", "bare interpolation passes empty spec to to_text");

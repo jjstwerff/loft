@@ -8,8 +8,10 @@ fn main() {
     note: text = `first line
 second line mentions {name}`;
     println(note);
+    println("a literal brace: {{ {n} }}");
 }
 // Output:
 // Hello, world. You have 3 messages.
 // first line
 // second line mentions world
+// a literal brace: { 3 }

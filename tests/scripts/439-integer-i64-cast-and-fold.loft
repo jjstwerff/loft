@@ -4,6 +4,8 @@
 // its full i64 value, identically on interp and --native.  Companion to 438 (storage
 // round-trips); this one guards the CONSTRUCTION sites `Value::int_const` covers.
 
+// @FTR-074 — the resolver's constant work: a cast and a folded arithmetic result keep the
+// full i64 value, identically on both backends
 fn test_439_float_to_integer_cast() {
   assert(3000000000.0 as integer == 3000000000, "folded float-literal cast over i32");
   f: float = 9000000000.0;

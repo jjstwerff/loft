@@ -25,6 +25,8 @@ fn lead_pair(v: vector<Tok>) -> integer {
   }
 }
 
+// @FTR-052 — an optional group `(a)?` in a slice pattern: the run matches with it and
+// without it
 fn main() {
   // single-element optional
   wk: vector<Tok> = [

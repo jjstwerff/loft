@@ -86,6 +86,17 @@ the code interval between two corners is a superset the curve threads in and out
 of, and on a wide, shallow viewport that superset is 1.46 M records for 4 k of
 answer. The walk seeks over each excursion rather than reading it.
 
+A THIRD thing decides the cost and this call cannot supply it: the order the file
+was written in. The Morton walk is symmetric; a file laid out along one axis is
+not, so a box crossing that axis pays for every stride it crosses. On a
+62 500-point grid returning the same 500 records, a 250x2 box read **107 pages**
+against **7** for its 2x250 mirror — and the two swapped when the identical data
+was written in the other axis order, which is what proves the file rather than
+the query is the cause. At 107 pages the read pulls 81 % of the image to return
+0.8 % of the records, worse than fetching the whole file once. Write a dataset
+meant for viewport reads **tiled**: it has no bad orientation, and for the
+square-ish boxes a viewport actually uses it beats either linear order.
+
 The six paged forms take **a local path or an `http(s)://` URL, interchangeably**,
 on every target including the browser (`--html`). Nothing in the program changes
 when the data moves from disk to a CDN — which is what makes "develop against a

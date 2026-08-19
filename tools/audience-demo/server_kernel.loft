@@ -139,8 +139,10 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
 
 // @EHK-001 — run(port, tick_us, on_event, on_tick) IS the server loop: it pumps
 // the kernel, calling on_event per network event and on_tick every interval. The
-// two handlers are CLOSURES passed as ARGUMENTS (not struct fields — loft#313),
-// which is how user code supplies meaning while the kernel owns the mechanics.
+// two handlers are CLOSURES passed as ARGUMENTS, which is how user code supplies
+// meaning while the kernel owns the mechanics.  The event closure captures
+// `world` — a struct capture is shared, not snapshotted, so what it appends on a
+// connect is still there on the next event.
 fn main() {
   port = 18083;
   println("audience server (kernel): holds world state + broadcasts every change");

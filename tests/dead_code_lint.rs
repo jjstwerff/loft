@@ -659,3 +659,148 @@ fn a_compile_error_does_not_emit_a_false_lost_write() {
         "the unambiguous control must compile clean; output:\n{clean}"
     );
 }
+
+// ── A default expression is a READ of the parameter it names ─────────────────────────────
+//
+// `fn window(rows: integer, height: integer = rows * 10)` counted no use of `rows`, so
+// `test_used` warned "Parameter rows is never read" and offered to "drop the parameter
+// `rows` — and its callers' argument". Taking that advice deletes what the default reads.
+// The default is parsed against TEMPORARY variables that are removed again before the real
+// parameter slots exist (`definitions.rs`, the `injected` mapping), so the read landed on a
+// throwaway slot; it is answered off the stored signature instead.
+//
+// Same class as the closure-capture false positive (`tests/expressions.rs`,
+// `closure_capture_after_change`): a lint that must never make a program wrong.
+#[test]
+fn a_parameter_read_by_a_later_default_is_not_dead() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_pdflt_{}_{n}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("probe dir");
+
+    // Each case pairs a shape with the values that prove the default actually ran, so a
+    // silenced warning can never be silence over a broken default.
+    // The fourth column is the parameter the lint SHOULD name, if any — not a bare flag,
+    // because "a warning fired" and "the right one fired" are the two things that come
+    // apart here: the fix is name-based, so a blanket silence and a correct silence look
+    // identical from a count.
+    let cases: [(&str, &str, &str, Option<&str>); 5] = [
+        (
+            "arith",
+            "fn window(rows: integer, height: integer = rows * 10) -> integer { height }\n\
+             fn main() { println(\"{window(4)} {window(4, 7)}\"); }\n",
+            "40 7",
+            None,
+        ),
+        (
+            "call",
+            "fn twice(n: integer) -> integer { n * 2 }\n\
+             fn window(rows: integer, height: integer = twice(rows)) -> integer { height }\n\
+             fn main() { println(\"{window(4)}\"); }\n",
+            "8",
+            None,
+        ),
+        // A default needing a temporary is lifted into a function of its own (loft#699); the
+        // parameters it reads become that function's arguments, so the same lookup has to
+        // reach through the generated call.
+        (
+            "lifted",
+            "fn window(rows: integer, tags: vector<integer> = [rows, rows]) -> integer \
+               { len(tags) + rows }\n\
+             fn main() { println(\"{window(4)}\"); }\n",
+            "6",
+            None,
+        ),
+        // The lint is not blunted: a parameter no default and no body reads still warns.
+        (
+            "unused",
+            "fn window(rows: integer, height: integer = 40) -> integer { height }\n\
+             fn main() { println(\"{window(4)}\"); }\n",
+            "40",
+            Some("Parameter rows is never read"),
+        ),
+        // And it is per-parameter, not per-function: `spare` is dead beside a live `rows`.
+        (
+            "beside",
+            "fn window(rows: integer, spare: integer, height: integer = rows * 10) -> integer \
+               { height }\n\
+             fn main() { println(\"{window(4, 9)}\"); }\n",
+            "40",
+            Some("Parameter spare is never read"),
+        ),
+    ];
+
+    for backend in ["--interpret", "--native"] {
+        for (name, src, expect_out, expect_named) in &cases {
+            let file = root.join(format!("{name}.loft"));
+            std::fs::write(&file, src).expect("write probe");
+            let (out, err, code) = run_env(backend, &file, &[]);
+            assert_eq!(
+                code,
+                Some(0),
+                "[{backend}/{name}] must compile and run\n{err}"
+            );
+            assert_eq!(
+                out.trim(),
+                *expect_out,
+                "[{backend}/{name}] the default must still produce its value\n{err}"
+            );
+            match expect_named {
+                Some(msg) => assert!(
+                    err.contains(msg),
+                    "[{backend}/{name}] the lint must still name a genuinely dead parameter \
+                     ({msg})\n{err}"
+                ),
+                None => assert!(
+                    !err.contains("is never read"),
+                    "[{backend}/{name}] the parameter is read by a default — warning it dead \
+                     advertises a deletion that stops the program compiling\n{err}"
+                ),
+            }
+            assert_eq!(
+                err.matches("is never read").count(),
+                usize::from(expect_named.is_some()),
+                "[{backend}/{name}] exactly the expected never-read set must fire\n{err}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ── An unresolved method with a named argument reports ONE error ─────────────────────────
+//
+// `skip_remaining_args` is the shared "consume a call I cannot resolve" loop, and it parsed
+// each argument as an expression — so a NAMED argument stopped it at the `:`. On the error
+// path that turned one typo into five cascading messages with no `Unknown field` among
+// them; on the FIRST-PASS path (the same loop, reached before a forward-declared method is
+// known) it made a legal call fail depending on where its method was declared, which the
+// worked-example file holds directly.
+#[test]
+fn an_unknown_method_with_a_named_argument_reports_one_error() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_nmrec_{}_{n}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("probe dir");
+
+    let file = root.join("recover.loft");
+    std::fs::write(
+        &file,
+        "struct S986 { a: integer }\n\
+         fn main() { s = S986 { a: 1 }; println(\"{s.nosuch(width: 3)}\"); }\n",
+    )
+    .expect("write probe");
+
+    let (_out, err, code) = run_env("--interpret", &file, &[]);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_ne!(code, Some(0), "an unknown member must still fail\n{err}");
+    assert!(
+        err.contains("Unknown field S986.nosuch"),
+        "the one message worth reading must survive the recovery\n{err}"
+    );
+    let errors = err.matches("error:").count();
+    assert_eq!(
+        errors, 2,
+        "one diagnostic plus the `aborting due to` line — a named argument must not cascade\n{err}"
+    );
+}

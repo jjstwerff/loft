@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// What `loft --tests` actually runs (loft#1010).
+//
+// The catalogue says "any function named `test_*` is a test"; TESTING.md says the harness
+// discovers every zero-parameter function and calls only `main` when one exists.  Measured,
+// the shipped runner matches neither: it runs EVERY function of arity zero, `main` included,
+// counts each in the total, and a failing `assert` in any of them fails the file.  A function
+// that takes an argument is the only thing it skips.
+//
+// This file is itself the instrument.  It has no `fn main`, so every function below is an
+// entry point — and `not_a_test_by_arity` proves the rule by being the one that is NOT run:
+// it takes a parameter, and its body asserts something false.  If the runner's rule ever
+// becomes name-based, this file keeps passing; if arity stops being the filter, the parameter
+// cell fires.  The counterpart — a zero-argument non-`test_` function that IS run — is
+// `records_that_it_ran`, whose own assertion only holds when it has been called.
+//
+// The counted total is the other half and cannot be asserted from inside: the runner prints
+// `(3 fns: …)` for the three zero-parameter functions here, and a name-based rule would print
+// one.  That number is the cheapest check of the rule and it lives in the run's output.
+
+// @FTR-056 — every zero-parameter function is an entry point, and a parameter is what opts out
+fn test_the_ordinary_shape() {
+  assert(1 + 1 == 2, "a test named test_* runs, which is the undisputed half");
+}
+
+// No `test_` prefix, no parameters — run all the same.  A helper that asserts a precondition
+// is an ordinary thing to write and it becomes a test here.
+fn records_that_it_ran() {
+  // Nothing to compare against a previous run — each entry point gets a fresh program — so
+  // this asserts only that it can execute, which is what being CALLED means.
+  n = 0;
+  for i in 1..4 { n += i; }
+  assert(n == 6, "a zero-parameter function with no test_ prefix runs too, got {n}");
+}
+
+// Takes a parameter, so it is NOT an entry point.  The assertion is deliberately false: if
+// arity ever stops being the filter, this file goes red and says so by name.
+fn not_a_test_by_arity(unused: integer) {
+  assert(unused == unused + 1, "loft#1010: a function WITH a parameter must not be run");
+}
+
+// Returns a value and takes none — still an entry point, so the value is discarded and only
+// its assertions matter.
+fn returns_something() -> integer {
+  v = 21 * 2;
+  assert(v == 42, "a value-returning zero-parameter function runs, got {v}");
+  v
+}

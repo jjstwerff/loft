@@ -165,7 +165,7 @@ src/database/allocation.rs	@PLN129 arc B step 7 — a rebind re-decides the sche
 src/database/allocation.rs	@PLN129 arc C — acknowledge this collection's fetch failures. True when
 src/database/allocation.rs	@PLN129 arc C — a failed fetch is TWO different facts, and answering
 src/database/allocation.rs	@PLN129 arc C — how many fetches for this collection could not reach its
-src/database/allocation.rs	@PLN129 arc C — why the last fetch could not reach this collection's
+src/database/allocation.rs	@PLN129 arc C — why a fetch could not reach this collection's
 src/database/allocation.rs	@PLN129 arc D — has the source moved under this binding since it was
 src/database/allocation.rs	@PLN129 arc D — pin the source's identity at bind. Rebinding RE-pins,
 src/database/allocation.rs	@PLN129 arc D — the source must be the one this collection was pinned
@@ -242,7 +242,7 @@ src/database/mod.rs	@PLN127 arc D — was this field DECLARED nullable?
 src/database/mod.rs	@PLN129 arc A — a collection bound to a LAZY source, keyed by the
 src/database/mod.rs	@PLN129 arc B step 7 — the verdict on a database schema loft does not own.
 src/database/mod.rs	@PLN129 arc B step 7 — whether this source's schema can serve this
-src/database/mod.rs	@PLN129 arc C — why the last fetch for this collection could not reach its
+src/database/mod.rs	@PLN129 arc C — why a fetch for this collection could not reach its
 src/database/mod.rs	@PLN129 arc D — a collection's lazy source, plus the identity it was PINNED
 src/database/mod.rs	@PLN14 arc A — move a `Store` OUT of this table, leaving a freed sentinel
 src/database/mod.rs	@PLN14 arc B — **the materialize chokepoint**: give the value rooted at

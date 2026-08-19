@@ -42,6 +42,8 @@ fn eval(es: vector<Expr>) -> integer {
   match es { [(Add { x, y } |Neg { x })] => x + (y ?? 0), _ => -1, }
 }
 
+// @FTR-051 — alternation inside a slice pattern: `( V1 { f } | V2 { f } )` matching either
+// shape at one position
 fn main() {
   assert(first_name([
     Ident { n: "foo" },

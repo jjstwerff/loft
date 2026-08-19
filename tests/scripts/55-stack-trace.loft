@@ -10,6 +10,7 @@ fn st_middle() -> vector<StackFrame> {
   st_inner()
 }
 
+// @FTR-046 — `stack_trace()` answers the live frames, innermost first, from a nested call
 fn main() {
   // --- Direct call: at least one frame ---
   frames = stack_trace();

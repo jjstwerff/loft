@@ -186,11 +186,14 @@ loft has no runtime errors (C80). If an unreachable database answered `null`, th
 unstable across runs** — the worst class, because it looks like data. So the
 failure lives on a store-level channel a program can ask:
 
-- `store_lazy_error(c)` — why the last fetch could not reach the source, or `""`
-  when healthy.
+- `store_lazy_error(c)` — why a fetch could not reach the source, or `""`
+  when healthy. The FIRST failure's reason, kept, because it names the original
+  cause; a later one reaches stderr but not this call.
 - `store_lazy_faults(c)` — how many fetches could not reach it. After a traversal
-  this answers "how incomplete am I".
-- `store_lazy_clear(c)` — acknowledge those faults.
+  this answers "how incomplete am I". One per FETCH, so a key missed twice counts
+  twice — a miss is not remembered.
+- `store_lazy_clear(c)` — acknowledge those faults, and the only thing that clears
+  them. Neither a genuine absence nor a later success is an acknowledgement.
 
 - `store_lazy_fail(c, why)` — the WRITING end, for a driver written in loft.
 

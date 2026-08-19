@@ -3,6 +3,7 @@
 // Logging functions: log_info, log_warn, log_error, log_fatal.
 // Without a log.conf these are no-ops — this test verifies they compile and
 // run without crashing, and that format-string interpolation is accepted.
+// @FTR-047 — `log_info` / `log_warn` / `log_error` and what they do with no log.conf
 fn main() {
   // --- Basic calls (no log.conf → no output, no crash) ---
   log_info("starting test");

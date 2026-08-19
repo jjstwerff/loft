@@ -15,9 +15,36 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
 `-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
-`-world` open as PRs alongside the loft-side registry PR they wait on
-(loft#973). 76 tags across the ecosystem. What remains is merging, in the order
-that PR states, and the twelve `deferred` rows in `loft-libs-world`.
+`-world` open as PRs alongside the loft-side registry PR they all wait on
+(loft#973). 152 tags across the ecosystem, and **Phase E is DONE**: `hex_form`
+(`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
+(`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
+(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`),
+`hex_field` (`@HXL-001..012`), `hex_recover` (`@HXV-001..009`) and `hex_edge`
+(`@HXE-001..011`) are **all twelve** of `loft-libs-world`'s deferred packages, so
+**Phase E is complete** — the repo reads *14 tagged, 0 exempt, 0 deferred, 0 todo*. Writing
+them found a shipped parser that repaired seven malformed texts its own comment documents as
+refused, a seam-error number that reads exactly zero wherever a caller would naturally
+measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
+that put every **arc** on the far side of the way from its straights while remaining exactly
+`d` from the centreline, two of a package's own instruments reading *pass* on the exact
+failures they were built to catch, a wall with two legal names of which only one survives
+the round trip the whole text format exists for, and a recovery check whose two sides are a
+lattice rational and an irrational, so it could never have passed, and an invariant whose
+NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
+for a three-dimensional rig anyway, and a validator that refuses the multi-form chunk its
+own package exists to trace, a verification step that discarded the exact answer it had
+just computed because it re-drew into a window sized for the code it replaced, and a
+resting position that lands on the wrong side of a wall every time rather than sometimes.
+
+**This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
+packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
+of the repo — and a verdict file beside the code is a good home for a *reason* and a
+poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
+can actually be done, and the plan stays open until
+`make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
+**Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
+feature catalogue, `FTR`, **25 of 117 entries cited**).
 
 ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
@@ -793,7 +820,489 @@ edit).
   crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
   bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
 
-### Phase C2 — Worked examples for the feature catalogue (S)
+### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (31 of 117)**
+
+**The mechanism half is built, self-tested and proved end to end (2026-08-18); what
+remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
+the tree as the generated shadow `doc/features/F###.md`, and is Markdown — so the
+citation scanner, which grepped `// Example:` in `*.loft` only, could never have seen
+one. Built:
+
+- **A second citation source**, `examples_cited_in_tree()`, scoped to
+  `EXAMPLES_FEATURE_DOCS` (default `doc/features`). Inert where the directory is absent,
+  which is every library — the same opt-in ratchet as the rest of the mechanism. A
+  `dangling` feature citation now names the feature doc and line
+  (`doc/features/F104.md:42`).
+- **Its own self-test**, `examples-cite-selftest`, five rules, **two of them ABSENCES**:
+  `## Example` is a heading and not a citation (81 feature docs carry one, so a scanner
+  that stopped requiring the colon would have every one of them citing whatever tag
+  appeared underneath), and the `//` code form shown INSIDE a fenced block is
+  documentation OF the convention, not a use of it. It earned its place on the first
+  run: `- **Example:** @TST-103` did not match, because the pattern allowed one run of
+  markdown markers and that line has two.
+- **`FTR` registered**, with the rule beside it: a feature whose real use is already
+  demonstrated cites THAT acronym, and only a demonstrator authored *for* a feature is
+  an `FTR`.
+- Proved end to end against a real feature doc: a citation resolves to
+  `tests/scripts/946-…:15`, a bad one goes red naming the doc, and removing it is clean
+  again.
+
+**THE FIRST SLICE NEEDS NO NEW TESTS, and that is the phase's first finding.** Eleven of
+the first twelve citations point at demonstrators that already existed — `@STD-010/011/012`
+for **F40** (file I/O), `@STD-007/008/009` for **F42** (JSON), `@STD-005/006` for **F26**
+(interfaces + bounded generics), `@STD-003/004` for **F6** (vector aggregates) and
+`@STD-001` for **F97** (`len` vs `size`, whose reader's mistake is exactly the byte offset
+that example scans). **The catalogue's gap was the POINTER, not the example** — which makes
+the rollout far cheaper than "author one in retrospect" implied, and says the two halves of
+@PLN141 were building the same thing from opposite ends without a link between them.
+
+**`@FTR-001`/`@FTR-002` are authored, for F104 `store_reclaim()` — and writing them found
+the doc's calibration sentence to be false.** The doc tells a reader how to decide whether
+the call is worth making: *"Read `store_memory()` first — its `tail%` is exactly what this
+call returns."* Measured across eight shapes whose tails ran from 13 % to 60 %, the store
+lands at **`tail 11%` every single time**: 11 % is a growth reserve the allocator keeps, so
+the bytes handed back are `tail_before − 11 %` of the resulting capacity and never the whole
+tail. At a 13 % tail the report suggests ~36 KB and the call returns **5 832 bytes** — a 6×
+over-promise, and it is worst exactly where the decision is marginal. `tail%` ranks
+candidates; it does not size the return.
+
+**And a second fact the docs do not carry: what you get back depends on WHERE you dropped,
+not how much.** Same 4000 records, same 2000 dropped:
+
+| drop | free-blk | mergeable | after reclaim: free-blk | bytes back |
+|---|---|---|---|---|
+| contiguous 2000 | 2004 | **1997** | **7** | 25 400 |
+| scattered 2000 | 2002 | **5** | **1997** | 16 312 |
+
+`mergeable` counts adjacent free neighbours that never coalesced, so it measures how
+CONTIGUOUS the drop was — and it is exactly the part `store_reclaim` can fix. A scattered
+drop leaves the store in ~2000 pieces permanently, because the live records between the
+holes are what keeps them apart. So the report says, before the call, which kind of drop
+was made. **My first hypothesis had this backwards** (I predicted scattered drops would be
+the mergeable ones) and the probe corrected it — recorded because the wrong version is the
+intuitive one.
+
+**THE FIRST SLICE IS APPLIED (2026-08-18).** Twelve pointers across six features, edited
+into the loft-lang/features ISSUE BODIES — the canonical home, never the shadow — and
+pulled through with `make features-fetch && make features-gen`:
+
+| feature | cites |
+|---|---|
+| F6 vector aggregates | `@STD-003` `@STD-004` |
+| F26 interfaces / bounded generics | `@STD-005` `@STD-006` |
+| F40 file & directory I/O | `@STD-010` `@STD-011` `@STD-012` |
+| F42 JSON | `@STD-007` `@STD-008` `@STD-009` |
+| F97 `len` vs `size` | `@STD-001` |
+| F104 `store_reclaim()` | `@FTR-001` `@FTR-002` |
+
+`check_doc_drift.sh` reads 28 citations, all resolving; `make features-check` is green.
+**F97 is the sharpest of the twelve** — the feature is about characters against bytes, and
+`@STD-001` is a scanner calling `starts_with_at` at a BYTE offset, which is the exact
+mistake the feature exists to prevent. That pairing existed in the repo for weeks with
+nothing joining the two.
+
+**The negative gate is proved on real content, not a fixture:** removing the `@FTR-001`
+tag from its demonstrator turns the gate red naming the feature doc AND the citation text
+(`doc/features/F104.md:43:Example: @FTR-001 — …`), and restoring it is clean. So a feature
+that cites a demonstrator someone later deletes cannot stay quietly wrong.
+
+**`store_reclaim`'s own doc comment is corrected too** (`default/02_files.loft`), since it
+was the source of the false calibration and it now cites `@FTR-001`/`@FTR-002` — the
+numbers in the prose cannot drift from the test without the gate saying so.
+
+**Still to do:** the other ~111 features. The first slice says the rollout is mostly a
+READING task rather than an authoring one — find the demonstrator that already exists,
+and only author an `@FTR` where none does.
+
+**THE SECOND SLICE IS APPLIED (2026-08-18) — eight entries, and four of them described
+loft as copy-by-default.** The pairing pass was again mostly READING: `@GIT-001..005` for
+**I117** (git natives — the entry's own "first consumers" section already named the two
+programs the tags sit in), `@EHK-001..004` for **I85**, `@RGX-001` for **F47**,
+`@SSH-002` for **F97**, `@RND-002` for **F106**, `@TIM-001` for **F95**. Two new
+demonstrators were authored, `@FTR-003` / `@FTR-004`, because the rest of the slice was a
+correction and a correction needs a test that can go red.
+
+| feature | cites | what the entry said |
+|---|---|---|
+| F21 references `&T` | `@FTR-003` | *"without `&`, the function only sees a copy and your original is left alone"* |
+| F22 closures | `@EHK-001` `@FTR-004` | *"it keeps behaving the same even if those values change afterwards"* |
+| F47 imports | `@RGX-001` | (nothing about resolution order — added) |
+| F95 value structs | `@TIM-001` `@FTR-003` | *"hand one to somebody and they cannot change yours"* |
+| F97 `len` vs `size` | `@SSH-002` | (second citation, a real byte stream) |
+| F106 copy/move | `@RND-002` `@FTR-003` `@FTR-004` | *"**Two** rules decide whether two names share data"* — a call is not one of them |
+| I85 engine-host natives | `@EHK-001..004` | (locator named only the Rust file; the typed surface added) |
+| I117 git natives | `@GIT-001..005` | — |
+
+**The measured rule, both backends** (the matrix is `@FTR-003`):
+
+| | callee writes a FIELD / ELEMENT | callee REPLACES the binding |
+|---|---|---|
+| `integer` / `text` | — | lost; `&` → lands |
+| `vector` | **lands, `&` or not** | lost; `&` → lands |
+| `struct` | **lands, `&` or not** | lost; `&` → lands |
+| `value struct` | **lands, `&` or not** | lost; `&` → lands |
+
+So `&` buys a scalar write-back and whole-binding replacement, nothing else — and a
+closure capture splits the same way (`@FTR-004`): a scalar is a snapshot, a struct or
+collection is shared in both directions, which is what makes the audience-demo kernel's
+handler (`@EHK-001`) able to append to the world it captured.
+
+**The finding that ties the four together: loft's own compiler already says it.**
+`advice[slow-reference-parameter]` reads *"field mutation already propagates to the caller
+without it"* and its fix line is tagged `[reference · @F21]` — the diagnostic sends the
+reader to the entry that denied it. A catalogue is checked against the code it describes
+only where something crosses the two; nothing did here, and the entries were internally
+consistent all the way to the wrong model. **Where a diagnostic names a doc, that pairing
+is a cheap oracle: read the doc it points at and check it agrees.**
+
+**A test can pin a defect as a promise.** Three tests asserted the dead-assignment warning
+that fires on `s = 10; f = fn() { s }; s = 20;` — and each of them ALSO asserted the value
+that proves the capture read the 10 (`add_base(5) == 15`). A self-contradicting test reads
+as coverage. Fixed in the same session (see below), which is what made `@FTR-004` writable
+at all: the demonstrator tripped the false positive it was written to describe.
+
+**Fixed here: the dead-assignment lint counted a closure capture as no read** (`warning` tier,
+so it gates a library's CI). `Variables::track_write` compares `uses` against `uses_at_write`,
+and the capture site deliberately does not touch `uses` — with the comment *"Do NOT call
+var_usages — that would interfere with the dead-assignment check"*. The narrow cure is the
+one that cannot regress a true positive: skip the report for a variable a closure captured
+(`!var.captured`), which stays silent only where a read exists that the counter cannot see.
+A genuinely dead pair BEFORE the capture still warns — that boundary is the test.
+
+**THE THIRD SLICE (2026-08-18) — F2, F5, F38, and a promise that is an INTEGER promise.**
+`@MSH-005` (mesh3d's degenerate camera) and `@TIM-002` (a date the user typed) were the
+demonstrators already in the tree; `@FTR-005` was authored because the correction needed a
+gate. **F38 said a calculation that cannot give a real answer produces `null` — "the way a
+spreadsheet shows an error in one cell while the rest of the sheet still works".** Measured,
+both backends:
+
+| | value | `?? fallback` fires? |
+|---|---|---|
+| `integer x / 0`, `x % 0`, overflow | null | yes |
+| `float 1.0 / 0.0` | `+inf` | **no** |
+| `float 0.0 / 0.0` | null (NaN is the null float) | yes |
+| `float 1.0e308 * 10.0` | `inf` | **no** |
+
+So whether `x / d ?? 0.0` defends anything depends on whether the NUMERATOR happened to be
+zero — which is not what the line says, and is exactly why `normalize3`'s guard is sound
+(a zero-length vector zeroes the numerator too) one component away from where it is not.
+F2 gained the same warning from the `??` side, and F5 gained the rule the pairing exposed:
+**whether a cast can refuse is the TARGET type's choice** — a `value struct` has no null, so
+`"next tuesday" as DateTime` is total and answers the epoch.
+
+**And a defect the row could not have found from the docs: loft#983.** The raw quotient
+reads as `null` once bound to a local or returned, while the same division keeps its
+infinity inline, through `??`, as an argument, and into a vector — one rule applied in some
+destinations and not others, identically on both backends. Narrowed by the next probe: a
+bound float OVERFLOW keeps the infinity, so it is the DIVIDE op's null-producing path that
+normalises, not the bind. `@FTR-005` asserts only the guarded shapes, so it stays honest
+whichever way #983 is settled.
+
+**THE FOURTH SLICE (2026-08-18) — F1, F3, F12, and a modifier that is a storage width.**
+`@IMG-004` and `@GFX-003` (graphics/imaging) and `@MSH-002` (mesh3d) were the demonstrators
+already in the tree; `@FTR-006` was authored for the settled half of F12.
+
+**F12 listed five field modifiers as if they were one kind of thing.** Measured:
+
+| modifier | when it is checked |
+|---|---|
+| `const` | compile time — assigning the field is an error |
+| `assert(...)` | RUN time — `field constraint failed on <Type>.<field>` stops the program |
+| `= default` / `computed(...)` | not checks at all: one fills an omitted field, one recomputes on access and stores nothing |
+| `limit(lo, hi)` | **never** — it selects the STORAGE WIDTH (`u8` *is* `integer limit(0, 255)`) |
+| `not null` | **never** — deprecated, no effect |
+
+An out-of-range write to a `limit` field is silently dropped (1-byte), silently wrapped
+(2-byte), or aliased onto `lo` at exactly `lo + 256` — `Store::set_byte` guards
+`val <= min + 256` against a range that holds `min..=min+255`, and discards the `false` it
+returns when the write is refused. Filed **loft#984** (the fix is a design choice: refuse at
+compile time like `u8` does, raise like `assert` does, or store null). `@IMG-004` had
+measured the construction half in a published library first — doubling a bright channel
+stores 0, so brightening turns the brightest pixels black, in a well-formed image with
+nothing on stderr.
+
+**And the oracle fired a second time.** `advice[not-null-deprecated]` reads *"`not null` is
+deprecated and has no effect"* and its fix line is tagged `[struct records · @F12]` — the
+entry it points at listed `not null` as a constraint. Two for two: **where a diagnostic names
+a catalogue entry, read that entry.** It is now the cheapest known way to find a wrong one.
+
+**F1's title promised "in-band sentinels" and its body never said what they are.** Added the
+table (integer's most-negative, NaN, `false` for a boolean, NUL for a character, a one-NUL
+text, record 0, enum 255) with the consequence that a value which IS the sentinel reads as
+absent — `false` being the one that bites. `@GFX-003` is the same shape one level up in a
+shipped library: `get_pixel` answers 0 off the canvas and 0 is a colour the canvas holds.
+**F3 listed `single` in its title and never mentioned it in the body**; cited from `@MSH-002`,
+whose GPU upload buffer is a `vector<single>`.
+
+**THE FIFTH SLICE (2026-08-18) — F18, F23, F96, chosen by the ORACLE rather than by
+reading.** Every diagnostic fix line carries a `[concept · @Fnn]` ref, so
+`grep -rn 'concept_ref: "@' src/` ranks the catalogue by how much the compiler already says
+about each entry: F16 (8 diagnostics), F1 (7), F97 (6), F109 (6), F21 (5), F2 (5), F12 (5),
+F106 (5), F18 (4)… Working that list top-down is cheaper than reading entries at random,
+and it is what found F12 and F21.
+
+**F18's guarantee stops at the first call.** `const` on a parameter refuses every write
+THROUGH it — `Cannot modify const parameter 'a'` — and does not stop the parameter being
+handed to a callee that writes:
+
+```loft
+fn bump(a: Account) { a.balance = 999; }
+fn describe(acct: const Account) -> text { bump(acct); "…" }   // accepted, both backends
+// the caller's 500 becomes 999
+```
+
+Not filed: @PLN40 owns it, and its `const-model.md` **rule 4 names the wrong spelling** —
+"a `const` value may be passed to a `const` param but not a `&` param". `&` is not what
+lets a callee write; a plain struct parameter names the caller's record just as well (the
+slice-2 finding). Recorded there as a scope correction to steps 4–5: gate every writable
+argument position, not just `&`. The entry now says what `const` buys and what it does not.
+
+**F96 drew the line in the wrong place.** It said "types with no default (a struct without
+defaults for its fields) are a compile error"; measured, a record without field defaults
+discharges to every field's own zero (nested records, vectors and text included). What has
+no default is a FIELD whose type has none — a plain `enum` with no chosen variant — and the
+compiler already names exactly that. `@FTR-007` pins the table.
+
+**F23 gained the pairing that explains why it matters:** `@ZTX-004` (zttext takes `resolve`
+and `measure` as function parameters, so cross-target layout parity is a consequence of the
+signature) and `@EHK-001`. Its "keep it for later" claim was re-measured across all four
+storage shapes — local, vector element, struct field, argument — including a CAPTURING
+closure in a struct field, which works on both backends; the `@EHK-001` demonstrator's
+comment still blamed loft#313 for that, closed in June, and now says what the capture is
+actually for.
+
+**THE SIXTH SLICE (2026-08-18) — F16, F100, F109, and a whole lint family that a test
+run cannot see.** The oracle picked them (F16 has 8 diagnostics pointing at it, F109 6,
+F100 2). Two demonstrators authored: `@FTR-008` (the stdlib supersedes its own `sum_of`
+with the general `sum`) and `@FTR-009` (the copy-mutate write).
+
+**loft#985 — the post-scope-check lints do not run under `loft test`.** One block in
+`src/main.rs` runs `warn_copies`, `warn_dead_stores` (lost-write), `warn_double_move`,
+`warn_lost_temp_writes` and `superseded_fold_diagnostics` on the PROGRAM path. Under
+`--tests` none of it runs — **including a hard error**:
+
+```loft
+fn doubled(v: integer) -> integer { scaled(v, 2) }
+#superseded "no_such_thing"
+fn test_it() { assert(doubled(21) == 42, "still answers"); }
+```
+
+`loft --tests` → `ok. 1 passed`, with the steer still saying *use `no_such_thing`*; the same
+file with a `main` → `error[superseded-unknown-successor] … the steer would ship dangling`,
+exit 1. `warning[never-read]` DOES fire under `--tests`, which is what makes the split hard
+to notice. It is the exact hole the lint was written for: @PLN107's motivating case is a
+published canvas that shipped every primitive as a no-op, and a library is checked by
+`LOFT_DENY_WARNINGS=1 loft --interpret --tests tests`.
+
+**F100 said the wrong tier.** "Advice-tier, so it never fails a build" — both halves are
+`warning` (`lost-write`, `never-read`), which is the right tier by loft's own rule and the
+opposite of what the entry promised. Corrected, with the real message text and the loft#985
+limit; `@FTR-009` asserts the wrong RESULT rather than the diagnostic, because the diagnostic
+is exactly what a test run does not get.
+
+**F16 gained the two facts a reader needs and it had neither:** a declared result must arrive
+on every path (a fall-through is a compile error, not a zero), and a result you IGNORE is
+discarded in silence — which `@ZTX-001` is the real use of, an editing engine of pure
+functions where a discarded return is an editor that does not type.
+
+**F109 was accurate** — its two checks are real, and both were measured rather than assumed
+(a missing successor is an error, an un-folded shim a warning). The gap was only the pointer,
+plus the loft#985 caveat. **A near-miss worth recording: the first read of the
+missing-successor probe was `head -6` and showed only the advice, which read as "the rule is
+not enforced". It is — the error was four lines further down.** Truncating a probe's output
+is the same failure as a vacuous channel: read the whole thing, and the exit code.
+
+**Still to do:** the other ~92 features, plus two pairings this slice deliberately did NOT
+make. **F109 `#superseded`** was one of them and is now cited from `@FTR-008` (the stdlib's
+own `sum_of` → `sum`); a second, cross-repo citation would still be worth having — an
+`@RGX-005` in loft-libs-core that calls `regex::find`, asserts the steer, and asserts the
+shim answers what `search` does. **F43 is the catalogue's one unauthored stub** and is
+deliberately so (@PLN92: "random, deferred as a library") — it is the single entry the
+shadow generator skips, so `doc/features/` holds 116 pages for 117 issues.
+
+**One diagnostic gap noticed while measuring, not filed:** replacing a whole binding
+inside a callee (`fn f(s: S) { s = S { … } }`) loses the write silently — no `lost-write`,
+no dead-store. It is the one cell of the parameter matrix where the wrong model produces a
+wrong answer, and the natural home is @PLN107's dead-store lint.
+
+**Slice 7 — F17, F7, F37, and one class of bug behind all three.** Picked by the oracle
+(the diagnostics that name each entry), and every one of them fired again: three separate
+diagnostics point a reader at an entry that does not contain what the diagnostic says.
+
+**F17 was a fix, not a correction.** `render(cfg, dry: true)` compiled and
+`cfg.render(dry: true)` was a parse error — the same function, the same argument, the
+same default. `parse_call` collected `name: value`; `parse_method` never did, though
+`call_with_named` already took `is_method` and resolved names against the callee's own
+attributes. The gap mattered most exactly where loft sends an author to close it:
+`advice[trailing-boolean-parameters]` says *"give them defaults so callers pass only what
+they change"* and tags the fix `@F17`, and on a method only a named argument can change a
+flag that is not a PREFIX. Take the advice and the only spelling left was `f(false, true)`
+— the shape the advice complained about, now with a default in front of it.
+
+**The fix passed the codegen gate exactly**: `c.show(loud: true)` now emits IR + native
+Rust byte-identical to `show(c, loud: true)`, which was already correct, so the working
+bytecode was a SOURCE SHAPE rather than something to hand-write.
+
+**And it was WRONG on the first attempt, in a way only the matrix caught.** With
+`parse_method` fixed, `c.show(loud: true)` worked when `show` was declared ABOVE the caller
+and still failed below it — a fix that makes a program's legality depend on declaration
+order is worse than no fix. Pass 1 cannot resolve a forward-declared method, so the call
+never reaches `parse_method`; it reaches a FALLBACK that consumes the argument list
+without resolving anything, and that fallback had not been taught about named arguments.
+There were three such fallbacks, all copies of one loop. Two are now one
+(`skip_remaining_args`, which the `Type::Unknown` receiver path calls instead of its own
+copy), and the third — the index list — had the identical hole: **`grid.cells[1, 2]`, a
+compound-key lookup, parsed above its declarations and reported `Expect token ]` below
+them.**
+
+*Generalises:* **a fallback that consumes what it cannot resolve is invisible until a
+spelling it never learned walks into it, and it fails as an ORDERING dependency rather
+than as a missing feature.** The tell is a matrix cell that moves when you move the
+declaration and nothing else. Fixing the parse loop and not the fallback would have
+shipped a feature that works in the file you tested and not in the file you wrote.
+
+Error recovery improved with it: `s.nosuch(width: 3)` was five cascading errors with no
+`Unknown field` among them, and is now that one message.
+
+**F17's compatibility sentence was false at the boundary that matters.** *"Adding a new
+optional setting later never breaks the calls people already wrote"* — measured, a direct
+call is additive (`scale(5)` keeps answering 10), and a function used as a VALUE breaks:
+`expected fn(integer) -> integer, got fn(integer, integer) -> integer`, and a bound fn-ref
+`expects 2 argument(s), got 1`. A default is not part of the type, so a fn-ref caller must
+be rewritten to the new arity and pass the "optional" argument by hand. Growing the
+signature of something handed out as a value IS a breaking change, and @F23 (functions as
+values) is a first-class feature of the same catalogue.
+
+**F17 also surfaced a lint that told the author to delete a live parameter** — the same
+shape as the closure-capture false positive fixed the slice before. `fn window(rows:
+integer, height: integer = rows * 10)` warned *"Parameter rows is never read"* with the
+fix line *"drop the parameter `rows` — and its callers' argument"*; taking it deletes what
+the default reads. A default is parsed against TEMPORARY variables that are removed before
+the real parameter slots exist, so the read landed on a throwaway. It is answered off the
+stored signature instead (name → argument index → every attribute's default), which also
+covers a default lifted into a function of its own. A parameter nobody reads still warns,
+and one sitting beside a default-reader is still named individually.
+
+**F7 called an index a collection, and that is the sentence loft ships a diagnostic to
+correct.** Two `hash<Person[…]>` fields on one struct are not two collections: one append
+through either is visible through both and `len` moves on both — measured in both
+directions, so there is no primary. `advice[linked-group-double-fill]` says exactly this
+(*"a second route to `by_name`'s records, not a collection of its own"*) and both its fix
+lines are tagged `[keyed collections · @F7]`. Worth having as a CAPABILITY, not only a
+hazard: a multi-index table costs one field declaration and no extra records. The entry
+also never showed the plural its own TITLE promises — `hash<T[keys]>` takes a compound key,
+read `grid.cells[1, 2]` — and never said that `+=` on a key already present REPLACES,
+though its example only ever appends a fresh one.
+
+**F37 is accurate in nine shapes and deviates in exactly one.** Hand-computed against the
+convention a reader brings: `**` is right-associative (512), `+` binds tighter than `<<`
+(32), `and` tighter than `or`, `/` and `%` truncate toward zero (-3, -1, 1), `>>` is
+arithmetic (-4). The single deviation is the one loft warns about — a leading `-` is a
+SIGN, so `-x ** 2` is `(-x) ** 2` = 9 where reading it aloud gives -9 — and the same symbol
+with a left operand goes the other way (`0 - x ** 2` IS -9). `DIAGNOSTICS.md` tags that
+warning `@F37`; the entry did not mention it. **The warning is deliberately silent when the
+base is a LITERAL** (the code says so: *"-2 IS a number"*), which leaves the shortest
+spelling of the trap unmarked — `-3 ** 2` is 9 and `-1.5 ** 2.0` is +2.25, both silently.
+Left as designed and written into the entry, because the value is the same either way and
+the reasoning is stated; what was missing was the reader knowing it.
+
+**Not fixed, filed instead: an EMPTY struct literal cannot be written above its
+declaration.** `d = Dir { };` with `struct Dir` below it is `Expect token ;`, while
+`Dir { by_name: [] }` in the same position is fine — a fourth member of the same
+forward-reference class, with a different mechanism (the literal, not an argument list).
+Both backends, both binaries, pre-existing.
+
+**A trap this slice re-learned the expensive way:** the first run of the new demonstrator
+reported `Unknown field Cell947.x` and it read as a forward-reference gap. It was a NAME
+COLLISION — `Cell947` was already declared 400 lines up for `@FTR-003`. A shared
+demonstrator file has one namespace; the suffix convention does not make a name unique.
+The compound-index gap beside it WAS real, which is what made the misreading comfortable:
+grep the file for the name before adding a type to it.
+
+**Slice 8 — F29, F33, F35, and the forward-reference class claims a fifth member.**
+
+**F29's "every possibility has to be covered" is a statement about ENUMS.** Measured,
+exhaustiveness is enforced two different ways and only one stops a build: a missing enum
+variant is a hard error naming it, while an OPEN domain (integer, text) with no `_`
+compiles and answers `null` for anything no arm covers. What reports it is the
+nullable-into-non-null check, so it needs a non-null CONTEXT — returning the match into a
+declared `text` warns, and binding the same match to a local and printing it says nothing
+at all. Writing `_` is what makes the result non-nullable. The `null` arm is real and
+catches a genuine absence (a vector overrun lands there); its price is @F1's in-band
+sentinel, so the most negative integer cannot be told from "absent".
+
+**F33 was missing the two facts a caller needs before writing a `par` at all**, and both
+are strong. Results reach the body **in SOURCE order, not completion order** — proved by
+giving item 1 the most work and item 8 the least so the workers finish backwards, on both
+backends; that is what decides whether `results += [b]` is writable, and the entry's own
+example only ever does `total += b`, which is order-blind and cannot show it. And a
+worker's captured arguments **must be scalars**, enforced at compile time: `text` counts
+as a reference so even a literal `"x"` is refused, a captured struct the worker WRITES
+earns a second error naming the data race, and the loop ELEMENT is the documented
+exception. So "no manual thread handling" is not a promise to trust — the racing shape
+does not compile. Speed measured twice each way: ~2.0x at 2 workers, ~3.2x at 4, ~4.7x at 8.
+
+**F35's entry never mentioned `{{` / `}}`**, while `format-unescaped-brace` is an ERROR
+whose fix line is tagged `@F35` and spells the cure — the oracle again. And the two
+mistakes are answered unequally: a stray `}` gets that coded mechanical fix, a stray `{`
+gets `Formatter error` plus a cascade (loft#989).
+
+**F35's real finding is the dedent, and it took three rounds to state correctly.** The
+rule was not the "common leading indentation" LOFT.md described: it was
+*(closing-backtick column − 1)* spaces, removed from a line only if that many of its
+leading bytes were all spaces. So a line indented LESS kept everything while its siblings
+lost theirs (two lines four spaces apart in the source came out level), and a TAB-indented
+line was never dedented. **Then the amended entry example failed to dedent at all, and the
+difference was the `{name}` in it: one interpolation anywhere switched the strip off
+completely, trailing blank line included (loft#990).** The strip amount came from the
+CLOSING backtick and a hole made the lexer emit text before that column was known — so the
+dedent served the block with no values in it and silently stopped serving the template,
+which is the shape the feature is advertised for.
+
+**loft#990 is fixed on `main`, and the slice's own test went RED on the rebase** — which is
+the lesson worth keeping. The cells pinned the broken rule as a promise (`size == 19` for a
+held block, `size == 16` for the uneven one), so the fix that made them right made them
+fail. The base is now the FIRST CONTENT LINE, interpolation is no exception, and only the
+TAB edge survives. *A test written against measured-but-wrong behaviour is a tripwire on
+the fix, not a guard — say in the cell which side of a known issue it is pinning.*
+
+*Generalises:* **the doc example you write to illustrate a fix is itself a probe — run it.**
+The interpolation finding exists only because the amended entry example was executed
+before publishing rather than after. Two more doc defects fell out of the same habit:
+LOFT.md's `msg` example sits directly under the sentence describing the strip and is not
+stripped, and **its flagship `shader` example does not compile at all** — `void main() {`
+opens a hole, so a GLSL block needs every brace doubled. Doubled, it compiles AND dedents
+(because `{{` is not a hole), which is now what the doc shows.
+
+**The fifth member of slice 7's forward-reference class, and this one had four sites.**
+A `par` loop whose worker is declared BELOW it was `Expect token ;` on the following line:
+the loop was read as a VALUE, because the recovery path taken when the worker cannot be
+resolved left `*code = Value::Null` instead of a Void statement. Its comment said "errors
+already reported", true on pass 2 and false on pass 1, where an unresolved forward
+reference is the ordinary state — the same misconception as `skip_remaining_args`'s
+"consume a trailing `(…)` to avoid cascading parse errors". Fixing the one exit was not
+enough: three more recovery exits in `parse_parallel_for_loop` had it too, which surfaced
+only when the demonstrator declared the element STRUCT below as well.
+
+*Generalises:* **when a recovery path is wrong for pass 1, look for its siblings before
+declaring the fix done** — one exit fixed and three left is a fix that works on the probe
+and fails on the file. And the counted-axes rule earned its keep again: the matrix needed
+declaration order moved for the WORKER and for the ELEMENT TYPE, not just one of them.
+
+**A baseline test was pinning the broken recovery as a promise** (third time in this plan).
+`36_par_worker_writes_parent` locked the spurious `Expect token ;` cascade — and its name
+was a lie: the source has no worker CALL, so it died on the parse long before any parent
+write. Split into `36_par_worker_is_not_a_call` (which now locks the real message) and a
+new `53_par_worker_writes_parent` that reaches the C93 data-race error the name promised.
+
+**Filed, not fixed:** loft#987 (`par` with an EMPTY body fails to compile on `--native`;
+`n_parallel_discard` is declared one parameter short AND its generated body is empty, so
+"fixing" the arity would turn a loud error into a silent no-op — the
+[[panic-noop-on-native]] shape), loft#988 (a float-returning `par` worker declared below
+its loop mistypes a `+=` accumulator; `t = t + b` is the verified workaround and a plain
+call to the same function is fine, which is what makes it par-specific), loft#989, loft#990.
+
+### Phase C2 — the original design
 
 The same mechanism applies to the **feature catalogue** (`loft-lang/features`,
 `@F<N>` feature / `@I<N>` infra), not just library functions — a reader learning a
@@ -986,10 +1495,15 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-graphics` | *(merged)* | **DONE + PUBLISHED** — 4 tagged, 0 todo; graphics 0.5.3 / gridmesh 0.2.1 / imaging 0.2.2 / shapes 0.4.1 in the registry |
 | `loft-libs-net` | *(merged)* | **DONE + PUBLISHED** — 3 tagged, 1 exempt (`game_protocol`), 0 todo |
 | `loft-libs-core` | *(merged)* | **DONE + PUBLISHED** — 6 tagged, 0 todo |
-| `loft-libs-game` | `worked-examples` | **READY TO PR** — 3 tagged (`fixstep`, `input`, `time`), 0 todo; pushed, PR not opened |
-| `loft-libs-plugins` | `worked-examples` | **READY TO PR** — 1 tagged (`pluginabi`), 0 todo; pushed, PR not opened |
-| `loft-libs-assets` | `worked-examples` | **READY TO PR** — 2 tagged (`glb`, `mesh3d`), 0 todo; pushed, PR not opened |
-| `loft-libs-world` | — | TODO — 14 `hex_*` packages; **HELD**: its tree carries a consumer's uncommitted `sweep_path` finding and an open design question for its owner |
+| `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
+| `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
+| `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
+| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — **14 tagged, 0 exempt, 0 deferred, 0 todo** — Phase E complete |
+
+All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
+carries the six registry rows **and** the fix for the gate bug that reddens every
+library's `examples-index` step. The gate fires on `pull_request`, so none of them
+can go green before it merges.
 
 `loft-libs-net` was the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
@@ -999,6 +1513,705 @@ reached zero TODO without needing the exempt column at all: each of its four
 packages had something a signature could not say. **Opening a PR needs an explicit
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
+
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — **DONE, 12 of 12**
+
+The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
+the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in
+`examples-exempt.tsv`. That is a legitimate verdict, not a gap — but twelve is most
+of the repo, and a verdict file beside the code is a good home for a reason and a
+poor one for a work queue. So the queue lives here, and this plan stays open until
+it is empty.
+
+**Row 1 `hex_form` is DONE** (`@HXF-001..007`, acronym registered, `make
+examples-progress` reads *3 tagged, 0 exempt, 11 deferred, 0 todo*) — and it paid the
+convention's usual dividend in its sharpest form yet. The tag that had to say *"the
+reader accepts exactly what the writer emits"* found that the reader did not. Its own
+comment claimed strictness — *"anything it cannot round-trip must be refused rather
+than repaired"* — and a nineteen-cell acceptance matrix showed the claim wrong seven
+ways: a trailing space, an extra field, junk after the header, a non-integer length, an
+empty length, an unnormalised `h0` and a non-integer `h0` were all admitted and then
+re-written differently, so the byte-diff gate the whole format exists for could be
+defeated by whitespace. Six were spelling; **`len x` was repaired to `len 0`** — a side
+that is not there, admitted into the model without a word. Fixed at the one chokepoint
+by a re-spelling identity (a field is an integer only if printing the parse reproduces
+the original characters), a pure narrowing; `hex_form` 0.1.1. The same pass also
+retired a test that could not fail — the corner-invariance assertion compared
+`form_canon_text` of two *identical* forms.
+
+**The generalisable half:** a doctrine sentence in a source comment is a CLAIM until a
+worked example makes it a test, and the claim is likeliest to be false exactly where it
+is most confidently written. `hex_fit`'s `draft_read` (row 8) states the same doctrine
+over the same `word_int(…) ?? 0` helper and carries the same gap in its `wall` line —
+so the finding was filed as a queue item rather than a one-off, and **row 8 collected it**:
+ten repairs there against seven here, one of them a wall pointing somewhere else.
+
+**Row 2 `hex_place` is DONE** (`@HXP-001..006`, acronym registered; *4 tagged, 10
+deferred*), and it produced the same shape of finding from the opposite direction —
+not a claim that was false, but a claim whose UNITS were unstated. `pose_residual` is
+documented as *"~machine ε in float"*, which reads like a constant. Swept against the
+evaluation point it is not: one 30-degree pose gives exactly `0.0` at (10,7),
+`2.3e-13` at (1000,700), `0.0` again at (10000,7000) and `2.3e-10` at (1e6,7e5) — a
+jagged, deterministic function of the point. So the natural way to calibrate a
+tolerance — measure it once, near the origin, where the thing under test lives —
+**reads exactly zero and concludes the transform is exact.** The comment now says
+which half is load-bearing (*AT ONE WORLD POINT*), and the example pins the contrast
+rather than any single value.
+
+The row also delivered the cross-citation the table asked for: `@HXP-001` and
+`@HXG-003` are one question at two scales — one wall between two hexes must resolve to
+one stored slot; one seam between two *stencils* should not be stored at all — and each
+names the other. The def scanner's first-tag rule keeps a sibling mention a mention;
+verified by running the gate for both packages rather than assuming it.
+
+**Row 3 `hex_roof` is DONE** (`@HXR-001..006`; *5 tagged, 9 deferred*), and its finding
+is the same shape a third time, in its mildest and most useful form: a claim that was
+TRUE but priced nothing. `roof_cone`'s comment says clamping at `dmax` *"is what makes an
+eave LEVEL on a quantised footprint"* — correct, and silent about the cost. Swept across
+`dmax` on a 29-cell quantised disc:
+
+| `dmax` | `eave_spread` | `roof_ponds` | |
+|---|---|---|---|
+| ≤ 3.00 | 0 | 3–9 | level, and it leaks |
+| 3.25 | 0.25 | 1 | both wrong at once |
+| ≥ 3.50 | 0.5+ | 0 | drains, and the eave wobbles |
+
+**No setting gets both**, and the sweep says why: the innermost *boundary* cell sits at
+radius 3.00 while the outermost *interior* cell reaches 3.46, so no single radius
+separates the two sets. `roof_hip` gets both because it never measures a radius — the
+boundary is ring 0 by definition. The comment now carries the cost beside the cure.
+
+**Row 4 `hex_way` is DONE** (`@HXY-001..006`; *6 tagged, 8 deferred*), and it is the first
+row whose finding is a **wrong answer in shipped code** rather than a wrong sentence about
+it. `track_offset` is the function the whole package exists for — a way stores one exact
+centreline and every rail, kerb and platform face is this call at a different `d`. Its arc
+branch read the sweep direction the wrong way up, so **every turn's offset landed on the
+far side of the way from its straights**: a left rail that runs down the left of the
+straight and the right of the bend, with a `2d` jump where they meet.
+
+**What makes it a @PLN141 finding rather than an ordinary bug is what could not see it.**
+The property everyone checks is equidistance, and equidistance holds *exactly* on the
+wrong side — measured at 1.0000000000000009 for a requested 1.0. So:
+
+| checker | verdict on the broken code |
+|---|---|
+| `hex_way`'s own conformance suite (`01-hex-way.loft`) | green |
+| crawler's dedicated `I-EQUI` gate, over a straight+arc+straight track, 4 offsets × 21 samples | green |
+| `track_distance` from any point of the offset | exactly `d` |
+| the gap at the joint | **2d** |
+
+The number that sees it is not a distance to the line at all — it is the distance between
+the end of one offset segment and the start of the next. `@HXY-001` sweeps eight widths ×
+two turn directions × two sides and asserts that gap is zero, and it also pins the
+agreement between `seg_curvature`'s sign and which rail is the shorter one — the invariant
+the bug violated. Fixed in `hex_way` 0.1.1 (one sign), NOT republished. Restoring the bug
+turns two of the six examples red and leaves the conformance suite green, which is the
+whole thesis in one run.
+
+**Consumers, for the record** (reported here, not in their trees): moros' `hex_editor`
+offsets only straights, so it was never affected; crawler's `platformtest` offsets a single
+arc and calls the result "concentric — the right answer" without ever checking the side, so
+its platform was on the wrong side of the curve and nothing said so.
+
+**The row's second finding is a number the module header rounds off.** The header claims
+rasterising a band "bottoms out around 0.5 hex widths". Swept, the floor is not one number —
+it is the spacing of the cell centres *across* the way, so it is a function of the heading:
+**1.5 down a row, 0.866 down a column**, a factor of `sqrt(3)` apart. 0.5 hex widths is the
+best case quoted as the case. Measured, a 0.1-wide footpath and a 1.4999-wide lane along a
+row rasterise to the *identical* 17 cells. The same anisotropy returns end-on in `@HXY-006`:
+the shortest tread `way_steps` can carry is the spacing of the flight's own cells —
+`sqrt(3)` down a row, 1.5 down a column — so there is no tread that is fine enough for every
+heading, and 1.5 is exactly right along one and a double riser along the other. That
+function's own comment already knew this for treads; the module header had forgotten it for
+widths, one screen away.
+
+**And a vacuous instrument, caught in the act.** The first tread sweep read *worst riser =
+0* for every column-heading flight, which looks like a clean staircase and is not: at that
+halfwidth the column footprint is **disconnected** — only every other row has a cell at
+`x = 0` — so the riser instrument had no neighbouring pairs to compare and reported a
+perfect result over an empty set. `@HXY-006` therefore asserts `adjacent_pairs(...) > 0`
+before it measures anything. See [[absent-warning-is-not-a-pass]]: scoring on a channel
+that can be silently empty ranks the most broken cell best.
+
+**Row 5 `hex_shape` is DONE** (`@HXS-001..009`; *7 tagged, 7 deferred* — the repo is half
+tagged), and it moved the finding one level up: from *the code is wrong* to **the package's own
+INSTRUMENTS report pass on the exact failures they were built to catch.** Two of them, in
+different modules, found the same way — by running the measurement on inputs nobody had run it
+on.
+
+| instrument | built to catch | reads on correct/broken input |
+|---|---|---|
+| `wall_along_max` | the "picket comb" — edges marked ACROSS the wall instead of along it, `\|dot\| ~ 1` | **0.97 on a correct in-between wall.** Only 3 of its 25 edges are above 0.9, but the statistic is the MAX |
+| `set_connected` | a wall with a gap in it | **true on a ring with a cell removed** — a broken ring is still one connected chain, just not a loop |
+
+Neither is a bug in the function: `wall_along_max` measures the wobble correctly and
+`set_connected` answers connectivity correctly. What was wrong is that each was written up as
+*the* verdict. On the twelve EXACT headings the along test tops out at 0.5 or 0.866 and nothing
+reaches 0.9, so whoever calibrated it was right — and never ran it on the other twelve, where a
+shallow line genuinely has to cross the vertical edge between two cells of the same row and
+that edge's dot is `cos(13.9°)`. The verdict that holds for all 24 is the CHAIN property
+(`wall_chain_ends == 2`, `wall_chain_branches == 0`), exact and tolerance-free; for the ring it
+is `flood_outside` + `leak_count`, which on one cell removed from twenty-two reports the
+outside reaching **all twenty-seven** courtyard cells. Both comments now say which half is
+load-bearing, and `@HXS-004`/`@HXS-007` pin the contrast rather than the number.
+
+**The package's own thesis, made numeric.** Every primitive takes a CONTINUOUS parameter the
+lattice cannot represent continuously, so every answer is split — which is the row's brief and
+it held everywhere it was checked:
+
+- an arc's **centre** is exact; its **radius** is a grid. Over 0.5–4.5 world units there are
+  exactly FOUR admissible radii (shells 0, 12, 36, 48), and `arc_fill(…, 16, …)` draws shell 12
+  and reports 12 — the 16 is stored nowhere and nothing says it was discarded (`@HXS-001`).
+- a run's **line** is exact; **which end you called the start** is not — the field cannot store
+  an orientation, so `wall_read_run` returns `d` or `d + 12` with the other endpoint as anchor.
+  Writing `d = 0` reads back `12`, so the obvious round-trip assertion `read.d == d` fails on
+  the very first direction (`@HXS-005`).
+- twelve directions are **exact** and twelve are **1.1021° off**, and only three values of `N`
+  occur across all 24 with no pair commensurable — which is the integer reason `WALL_W` is a
+  world-unit constant and not a count of lattice rows (`@HXS-002`).
+- a legal run length depends on the **starting corner**: `wall_min_p` is 1 from one vertex of a
+  hex and 2 from the next, for the same direction (`@HXS-003`).
+- the twelve box angles are **two families of six** — 33 cells against 31, related by no exact
+  map (`@HXS-006`).
+
+**A stale number is a claim too, and one change left three.** Moving the in-between direction
+vector from `N = 21` to `N = 39` updated the design block that argued for it and left three
+downstream comments quoting the old consequences: the angle error as "~4.11 degrees" (measured
+1.1021), and the δ = 0 class as "the N=21 in-between" (measured 39). All three are one screen
+apart from the block that superseded them. The lesson is narrow and repeatable: **when a value
+changes, grep for its CONSEQUENCES, not for the value** — 4.11 does not contain the string 21.
+
+Coverage went from 4 of 83 public functions entered to **all 83**, which is what pushed the
+last two examples (`@HXS-008` the mouse's three stacked snaps, `@HXS-009` the door as an
+annotation) into existence: they were not on the plan's brief and the coverage hole is what
+named them.
+
+**Row 8 `hex_fit` is DONE** (`@HXI-001..008`; *8 tagged, 6 deferred*) — the first row taken
+out of the table's ORDER, because row 1 unblocked it and it inherited a filed finding. It
+repaid that twice over: the finding arrived exactly where row 1 said it would, and a second
+one was waiting underneath it that nothing had predicted.
+
+**The predicted one first.** `draft_read` states row 1's doctrine — *"the reader refuses
+anything else rather than repairing it"* — over the same `word_int(…) ?? 0` helper. A
+nineteen-cell acceptance matrix admitted **ten** texts `draft_write` cannot emit and re-wrote
+each of them differently. Six were spelling (a trailing space, an extra field, `+3`, `003`, an
+empty field from a double space, a `wall` line placed between two `side` lines). The other
+was not: `wall d x a -6 b 9 p 1` parsed as `d 0` — where row 1's `len x` was *a side that is
+not there*, this is **a wall pointing somewhere else**, and `a x` moves it instead. Same
+chokepoint, same re-spelling identity, plus the two structural rules the writer obeys (nine
+fields; the wall line LAST). A pure narrowing: `d 99` and `p -1` still read, because a
+spelling gate is not a doorstep — which became `@HXI-004`.
+
+**And the one nothing predicted, which is the row's real finding.** The format's premise is
+that a `diff` means *the model changed*, and that needs every model to have exactly ONE text.
+The form half has had that since `form_canon`. The RUN half never did, and a run has exactly
+two spellings — `(d, A, p)` and `(d + 12, B, p)` — because A-to-B and B-to-A mark the same
+edges and the field stores no orientation. Measured over all 24 directions, both spellings of
+each wall:
+
+| measurement | result |
+|---|---|
+| edges the two spellings differ in | **0** of 48 |
+| spellings of a wall that survive the text round trip | exactly **one**, 24 of 24 walls — never both, never neither |
+| `draft_write` == `draft_rebuild_text` | 24 of 48 |
+| the doorstep admits it | 48 of 48 |
+
+So an author who wrote the wall from its other end got *the model changed* out of a byte diff
+on a model that had not changed at all — and by law C1's own wording (*fits? must agree with
+whether the model round-trips; a FALSE ACCEPT is the dangerous direction*) **half of every
+legal run is a false accept**. The cure is the canon the form half already had:
+`draft_canon` / `draft_canon_text`, with the canonical spelling **read off the field** — it is
+what the reader answers, so it cannot drift from the reader the way a rule computed beside it
+could. All 48 spellings now canonicalise to one text, stable across two chunk geometries.
+
+**What hid it is worth more than the bug.** The workshop's own round-trip gate covers this
+exact call and is green, because it builds its expected text from `wall_read_run`'s answer
+rather than from what an author would write — a workaround for the defect, written into the
+gate, in the one place that would otherwise have caught it. Row 5 found instruments calibrated
+on a sample that excluded their failure cases; this is the next form of the same thing: **a
+gate that has already routed around the defect it was built to find.** The question to ask of
+a passing gate is therefore not only *what does it measure* but **"what does it CONSTRUCT
+rather than take from the caller?"** — every such step is a place the caller's mistake cannot
+reach.
+
+A third, smaller finding: `arc_fit_n`'s comment says the author "sees both candidates' cost",
+and the API carried only one of them. `arc_snap_n` / `arc_snap_residual` supply the other —
+what an unrefused radius actually draws — validated against `arc_fill` over every radius 0..64
+rather than against the shell formula it would otherwise share with `arc_fits`. The prices are
+not close: `N = 35` is offered 36 at a residual of 1 and would silently have drawn **12**, an
+error of 23, because 12 and 36 are neighbouring shells. hex_fit 0.1.1, not republished.
+Coverage 8 of 30 functions entered → all 37.
+
+**Row 9 `hex_draw` is DONE** (`@HXD-001..007`; *9 tagged, 5 deferred*), and its finding is the
+first one in Phase E that could never have been true. `surface_miter`'s comment states a
+RECOVERY CHECK — *"the intersection of the two averaged lines must land on the **exact model
+corner**, or the surfaces have drifted off the shape they were fitted to"* — and nothing had
+ever evaluated it. Measured on the 5×4 cottage it misses by 0.479 world units at every corner;
+swept over plan sizes 2..8 the miss is 0.465..0.827, and it is **sometimes outside the plan
+rectangle and sometimes inside it**, so it is not even an offset a caller could correct for.
+
+**The reason is structural rather than numerical, and that is what makes it a @PLN141 finding.**
+These surfaces recover the face of the wall AS DRAWN, and the drawn footprint is the plan
+quantised to cells. So the recovered corner is an exact rational of the lattice — every swept
+value is a multiple of 3/4 across the rows — while the plan's half-depth is an irrational
+multiple of `sqrt(3)/2`. The two agree only at the origin. **The claim compares numbers from two
+different systems**, which is the same disease as `hex_grid`'s two lattices sharing a spelling
+(`@HXG`/`@HXW`) and `hex_way`'s treads, one level up: not a wrong value but a wrong KIND.
+
+A second claim was orientation-luck, and it had a green test on it. `surface_fitted_spread`'s
+comment said the fitted quad's spread *"is exactly 0"*, and the conformance suite asserted
+`== 0.0` — at one orientation. Over 12 orientations × 4 sides, **32 read exactly 0 and 16 read
+2.22e-16**: the derivation is exact (integer sums, rational means) but the span is projected
+through world coordinates, and where that arithmetic does not cancel the round trip costs an
+ulp. Both the comment and the conformance assertion now compare against the number that means
+something — flat against the STRIP's own band, fifteen orders of magnitude larger — and the
+tolerance-free exactness stays where it belongs, on the integer cross product in
+`surface_heading`.
+
+**Three claims held, and measuring them was still worth it**: the two wrong ways to write the
+exactness test reject 16 of 24 and 12 of 24 surfaces, exactly as recorded; a band-of-cells wall
+would eat 16 of the cottage's 27 floor cells; the shortened gable ridge rolls its end over by
+`sqrt(3)/4` = 0.375 m. The edge-count undercount held too and came out **sharper** than
+recorded: the same three-directions shortcut reads 19 in `hex_grid`'s neighbour order and 17 in
+`hex_field`'s, both plausible beside the true 38 — a second instance of the convention hazard
+this repo warns about in four separate comments.
+
+**And the row caught its own instrument being vacuous, mid-probe.** Measured over the massing
+alone, the two ridge rules agree to the last bit — because no cell of the massing is past the
+ridge's end. The entire difference lives in the halo ring `grow_ring` adds. That is row 4's
+tread sweep again ([[absent-warning-is-not-a-pass]]), and the example now asserts the halo is
+there before it measures anything. Coverage 3 of 26 public functions entered → all 26, and the
+last two came from reading the coverage list rather than the brief.
+
+**Row 6 `hex_terrain` is DONE** (`@HXT-001..008`; *10 tagged, 4 deferred*), and the fixture
+that unblocked it turned out to be the cheapest possible one: a hand-authored ramp,
+`h(c,r) = 100c + 10r`, 500 m tiles, a sea column and one pit — every number in the eight
+tags is arithmetic that can be redone on paper, which is what made the finding legible.
+
+**The finding is a NAME, and the name is the load-bearing part of the doc.** The README and
+the module header both call the package's headline invariant **window independence**:
+*"every sample is a pure function of `(terrain, types, params, rivers, x, y)`"*. Read as
+written it is true, and the conformance suite holds it — by building the same world from the
+same seed twice and comparing samples, which measures DETERMINISM. Read as named it says the
+answer does not depend on the window you generated in, and the consumer who reads it that way
+is exactly the one tiling a large world.
+
+Measured on one authored ramp in a 5×5 and an 8×8 window:
+
+| measurement | 5×5 | 8×8 |
+|---|---|---|
+| accumulation at cell (2,1) | 5 tiles | 11 tiles |
+| that cell is water (`tp_acc_min` = 6) | no | **yes** |
+| its relief | 154.0 | **0.0** (water takes none) |
+| interior sample points that differ | — | **24 of 27**, by up to **15.1 m** |
+| river courses | **0** | **5** |
+
+Hydrology is a global pass and accumulation is a catchment property, so widening the map
+moves the rivers and the fine surface follows through the blend kernel. There is nothing to
+fix in the code — accumulation cannot be local — so the cure is the doc: which half is pure,
+which half is global, and the rule that follows (*generate the overland map once at its full
+extent; a window is a unit of sampling, never a unit of generation*).
+
+**Two more contracts that a signature cannot carry, and both are exact.** A cell's own centre
+reads **99.1034 m** where 100 m was authored, because the blend kernel has radius `1.02·tile`
+and therefore always overlaps the six neighbours — that overlap IS the seamless merge, and
+`100/(1 + 6w)` with `w = (1 − 1/1.02²)²` is its exact price, with the six neighbours picking
+up exactly what the cell lost. And a pit authored at 5 m returns from hydrology at **110.05**
+— its lowest rim plus the flood's epsilon — reclassified as a LAKE, with nothing in the record
+saying a pass has run.
+
+**A method note this row adds.** The finding was reached by ATTRIBUTION, not by inspection:
+the two windows were compared after each pass in turn (authored → hydrology → relief), which
+put the divergence on `terrain_relief_pass` reading a wetness flag that hydrology had set from
+a global count. Comparing only the endpoints would have said *"the surface differs"* and named
+nothing. Same instrument the profiler lesson asks for — measure where the effect ENTERS, not
+that it exists.
+
+**Row 7 `hex_body` is DONE** (`@HXB-001..008`; *11 tagged, 3 deferred*), and it is the row with
+a **shipped wrong answer** in it — the second in Phase E after `hex_way`'s offset, and this one is
+silent in a way that reaches a consumer's collision layer.
+
+`rig_world_seg` composes joints by ADDING ANGLES, so it reads neither `oz` nor the stored revolute
+axis. Hand it a rig hinged about `+y` — perfectly admissible, built through the library's own
+`rig_bone3` — and it answers as though that hinge were about `+z`:
+
+| joint value | the 2-D walk says | the bone actually is | apart |
+|---|---|---|---|
+| 0.25 | (3, 2) | (3, 0, −1.5) | **2.5** |
+| 0.75 | (3, −2) | (3, 0, 2.5) | **3.2** |
+
+on a bone **2 long**. And `bone_obb` / `bone_shape_has` are built on that same walk, so the
+collision proxy boxes empty space and `I4`'s containment — *a proxy never misses an overlap* —
+quietly stops holding. The predicate that answers the question, `rig_planar`, already existed and
+its own comment names it (*"the question `rig_world_seg` implicitly asks of every rig it is
+handed"*) — but the three functions that ask it implicitly never mentioned it. **A precondition
+known to the author and absent from the call site is not a precondition**, and that is this row's
+generalisable half.
+
+**The second finding is the family's pattern for the third time.** Above `rig_read` stood *"STRICT
+PARSER — accepts exactly what `rig_write` emits … A lenient reader would void the byte diff."* It
+was wrong nine ways — `len 1.0`, `+1.5`, `01.5`, `1.50`, `1.5e0`, an empty field, a trailing space,
+an extra field, and `len x` → `len 0`, which in `hex_form` was *a side that is not there* and here
+is a BONE that is not. Same chokepoint, same cure (a re-spelling identity plus a field count),
+hex_body 0.3.1. **Three packages, three independent authors of the same sentence, three times
+wrong** — which retires any doubt that the doctrine sentence is where to look first.
+
+The narrowing exposed two hand-written fixtures in the package's own suites, one of them the
+CONTROL of the unknown-record test: it had been passing on a text the reader was about to stop
+taking. That is the third time in this plan that a fix's blast radius landed on a test written to
+prove something else.
+
+**And one claim corrected rather than enforced.** The design block said the parser refuses *"a bone
+out of order, or referring to a forward/absent parent"*. It refuses the first and not the second —
+and it is right not to: a forward parent round-trips FAITHFULLY, so it is not a spelling question,
+and `rig_admissible` is the doorstep that catches it. That is exactly the split `hex_fit`'s
+`@HXI-004` draws, so the same reasoning now appears in both packages, and `@HXB-008` measures both
+halves — including what posing an inadmissible rig does, which is read a parent frame that does not
+exist yet and get zeros.
+
+**Row 10 `hex_field` is DONE** (`@HXL-001..012`; *12 tagged, 2 deferred*) — the repo's largest
+surface, 82 public functions, and the one the table had flagged as *"a phase, not a row"*. It was
+a row. The tags do not track functions; they track the package's load-bearing promises, and there
+were twelve.
+
+**The blocker dissolved the same way rows 6 and 7's did.** The table said row 10 waited on
+*"choosing which golden fixture is small enough to read inside a test"* — the package has a real
+oracle, a Python implementation whose golden JSON it must reproduce byte for byte. The answer was
+not to shrink that fixture. It was to write one: a hex traces to six named lattice points,
+`(-1,-1) (0,-2) (1,-1) (1,1) (0,2) (-1,1)`, and shoelaces to exactly 12. The entire
+representation fits in one assertion, and the two hexes and the ring of six that follow are the
+smallest forms carrying an adjacency and a hole. **Three for three now: "small enough to assert
+against" has meant WRITTEN BY HAND every time, and a shrunken real thing has never been the
+answer.**
+
+**THE FINDING IS A PREMISE, and it is the first one in Phase E that was true of the author's
+shape and false of the package's own doctrine.** `validate` — *"what must hold before a renderer
+or mesh may consume it"* — read `outer != 1`, exactly one outer loop. That is a property of a
+CONNECTED form. This package's README says the opposite about itself in its own section heading:
+*"Bounded chunks on purpose … the same code serves a 32×32 world chunk and a one-off tower
+window"*, and *"forms spanning chunks are traced per chunk with a halo and stitched"*. A chunk
+holding two buildings, or one building the chunk edge cut in half, is therefore the ORDINARY case
+— and every such map was refused with code 5 while `trace` had produced it correctly and the
+exact integer area agreed: two disjoint hexes are two loops of 12, and 24 is 24. Measured on
+three shapes (two hexes, two donuts, two columns), all refused, all correct.
+
+The cure is where it gets interesting, because *weakening a gate until it passes* is the exact
+anti-pattern row 5 was about. `outer >= 1` does lose something real — a hole wound the same way as
+its outer loop, compensated by an extra outer loop, so the signed areas still sum. Deciding that
+needs each loop's NESTING, which the sign count never actually computed; the old rule only appeared
+to check it because it forbade the multi-component case outright. So the honest split is: code 5
+means *no* outer loop, `outline_count(v)` is exposed, and a caller who KNOWS its form is one piece
+keeps the stronger property by asserting on it. **The general shape: when a check both refuses
+correct data and catches something real, the answer is to separate the two claims and give the
+stronger one to the caller who has the knowledge it needs — not to pick one.**
+
+**Five more, all one family — a rule enforced on part of its surface:**
+
+| what | the number that shows it |
+|---|---|
+| a material past the slot DELETED the wall it was setting | the slot is a `u8` and the narrowing cast is CHECKED, so `?? 0` behind it wrote the one value that means NO WALL: `edge_set_mat(e, …, 300)` read back as open ground, and 257 did too, so it was not a low-byte truncation anyone could reason about |
+| `validate` never checked for a repeated vertex, which its README listed | two hexes emitted as two circuits joined at their shared corners: twelve legal hex-edge segments, shoelace exactly `12 × 2`, one positive loop — every other check passes it |
+| `stencil_rotate` / `stencil_mirror` carried each edge's MATERIAL and dropped its SURFACE | six turns returned the cells and materials exactly and the geometry as 0, under a comment reading *"A stencil must never lose data"*. The whole surface half of `EdgeSet` — five public functions — was uncovered by the suite |
+| `doc_read` took `w`/`h` on trust | a 32-byte file claiming 4000×4000 allocated sixteen million cells, plus heights, labels, edges and layers over the same extent, and only then reported a missing section. Reverting the fix now trips the **2 GiB store ceiling at 1.9 GiB** — the ceiling is the measurement |
+| the `EDGE` section copied the source layer's vector into a length derived from the FIELD | an `EdgeSet` at another extent has a different stride, so every material landed on a DIFFERENT edge: the file loaded with code 0, the wall count was right, and the walls were somewhere else |
+
+**And a units finding, the `hex_place` shape again.** `form_hexdisk(w, n)` counts hex STEPS;
+`form_circle(w, radius)` and `form_octagon(w, apothem)` measure LATTICE WORLD UNITS, the ones
+`x = k·√3/2, y = m/2` defines, in which a hex has circumradius 1. So one hex step is √3 ≈ 1.732
+world units, and the same `3` asks for 13 cells or 37. The README's own scale section said every
+threshold was *"dimensionless — hex steps or pure ratios"*, which sends a reader to the wrong one
+of the two. Both units are now named at both call sites, with the conversion.
+
+**Two side effects worth recording, because both generalise.**
+
+`hex_fit`'s `@HXI-007` (row 8) had **pinned the erasure as behaviour** — *"256 ERASES the wall — it
+does not wrap to 0 by luck"* — and row 10's fix turned that test red. That is the convention
+noticing its own subject move, which is the whole point of pinning; the tag's thesis (a material id
+is nominal, so its refusal offers nothing) survived unchanged and only the measurement behind it
+moved. **A worked example that documents a defect as behaviour is a bookmark, and the day the defect
+is fixed the bookmark is what tells you.**
+
+And a scratch file: `file(path)` opens an existing file to **APPEND**. A test that died before its
+own `delete` therefore handed the next run a header with a header in front of it — so the failure
+landed in a *different* test from the one that caused it, which is how a five-minute check becomes
+an hour. Both `tmp()` helpers in this package now clear the path before naming it. **A test's
+cleanup running only on the success path is not cleanup.**
+
+**And the row's seventh finding was upstream.** Both `stencil_rotate` and `stencil_mirror`
+opened with `if !seen { return st; }` — a stencil with no occupied cells has no bounding box to
+fit, so it came back unturned. That path is essentially never taken, and it leaked a `Stencil`
+**on every call**: 2000 rotations plus 2000 reflections left 4000 stores unfreed, in a published
+library, in the operation an editor performs constantly. The cause is a loft ownership seam — a
+function whose return paths disagree about ownership (the by-value parameter on one, a freshly
+built value on the other) never frees the fresh one, both backends — filed as **loft#982** with a
+twelve-row boundary matrix and a verified clean workaround, and the same seam as loft#978 in the
+opposite direction (that one over-frees a view; this one under-frees a fresh value). The library
+took the workaround: a zero-turn copy for the rotation, a `flip` flag for the reflection, measured
+at 4000 stores before and zero after.
+
+**Why it took a worked-example pass to see a leak that had been there all along:** `loft test`
+runs the store-leak check only under `--interpret`, and it reports at PROGRAM exit — which a test
+suite never reaches with a stencil still live. The leak was visible only from a standalone probe,
+and the reason to write one was that @HXL-007 needed `edgeset_equal` over a rotated stencil, which
+is what put a rotation in a loop in the first place. **The tag did not find the leak; wanting to
+assert the tag did.**
+
+**A harness note, from this row's own non-vacuity pass.** The first run of the
+restore-the-pre-fix-code channel reported *no failures for all six reverts* — because the loop was
+missing the line that applied the revert. An empty result set read as "nothing broke". The pass was
+re-run with two guards: fail loudly if the patch script errors, and `cmp` the file against the
+fixed copy and skip the case if the revert was a no-op. **Prove the harness can fail — and for a
+harness that reports by ABSENCE, that means asserting the mutation actually happened, not just that
+the run finished.**
+
+**Row 11 `hex_recover` is DONE** (`@HXV-001..009`, acronym registered; *13 tagged, 1 deferred*),
+and its blocker dissolved by being MEASURED rather than scoped. The table said row 11 waited on
+*"deciding what a fast, readable subset of that census looks like — the full one is a long-running
+test"*. There is no subset to choose, because two different censuses had been conflated. The open-
+ended one — push the level ladder up and see where injectivity stops — is hexbody's exploration and
+belongs there. The one a CALLER needs is finite and already fixed by the build: **is `draw`
+injective over the set this build matches against?** That set is 119 forms, and `index_build`
+decides it for the whole space at once (two candidates sharing a digest overwrite each other in the
+map, so the build counts the clashes) in **18 ms** — which the row's own fix then took to **2 ms**.
+*"A census is slow"* was a property of a question nobody was asking.
+
+**THE FINDING IS A LIMIT INHERITED FROM THE CODE IT REPLACED, and it is the first in Phase E where
+the step that makes an answer trustworthy is the step that throws it away.** `rebuild_construct` is
+the package's headline: it reads `(h0, lens, turns)` off the field's own convex hull, *"enumerating
+nothing … in O(cells), independent of how large the admissible space is"*, and then re-draws once —
+*"the construction PROPOSES a form; one re-draw CONFIRMS it. That keeps `ρ = 0` a measured fact
+rather than a claim."* The redraw went into `FW/FH/FQ0/FR0`, a constant 25×25 window whose own
+comment reads *"a compact window: **every level-1 shape** is a handful of cells around the anchor"*
+— true of the enumeration, and false of the thing built to replace it. `form_fill` clips to its
+chunk silently, so:
+
+| form | cells | verdict | ρ |
+|---|---|---|---|
+| heading 0, side 12 | 91 | R1 | 0 |
+| heading 0, side 13 | 105 | **R2** | 2 |
+| heading 2, side 13 | 105 | **R2** | **196** |
+| heading 3, side 7 | **85** | **R2** | 3 |
+
+Every one of those had the correct form sitting in `rb_form` already; `rebuild_construct_text`
+returned `""`.
+
+**Three numbers say what could not see it.** First, `ρ = 2` on a 105-cell field reads like an
+almost-perfect fit — the natural reading of a small residual is *"nearly a stencil"*, and it was
+measuring the distance from the anchor to the edge of a constant. Second, `ρ = 196` on that same
+105-cell field is **more unexplained cells than there are cells**, which is a number that cannot
+mean what its name says: the clip moved the translation-normalisation origin by one, and one is
+the wrong parity, so not a single cell of 105 lined up (105 + 91 = 196, hand-computed and
+confirmed). Third and sharpest, the **85**-cell shape refused while the 105-cell one passed. The
+limit was never a size. An odd (vertex-direction) heading covers two rows per unit of side and an
+even one covers one, so the same stencil turned reached the window at half the length — and a
+stencil and its orientation-image are ONE stencil by this package's own law **I**. A recovery that
+depends on which way a stencil faces is not a recovery.
+
+Fixed at the one chokepoint: the window is now DERIVED from the form (`fit_chunk`, from
+`form_poly_k`/`form_poly_m` — every `head_step` moves `m` by a multiple of 3, so `r` is bounded
+exactly and `q` within one, with a one-cell pad). All three redraw sites take it, so `rebuild_with`
+and `index_build` lose the same latent trap the day `LEVEL` is raised. It is a pure narrowing and
+it is *faster*: the derived window is far smaller than the constant for the shapes that ship —
+70 728 fewer cells scanned across the candidate set, index build 18 ms → 2 ms. `hex_recover` 0.1.1,
+API additive.
+
+**The invariant the tags pin is not the fix.** On the verified path the redraw must CONTAIN the
+field — so ρ counts only what the hull ADDS and never what the chunk dropped. `@HXV-003` asserts
+that at all twelve headings, and carries the old 25×25 window inline as its own CONTROL: the same
+containment check against it must report a drop at every one of the twelve, or the assertion
+proves nothing. Which makes the residual readable at last: a ring of six scores **ρ = 1**, exactly
+the centre cell its hull adds — the smallest positive value there is, and a flat refusal, because
+no grammar form has a hole. `ρ` is a count, not a distance; it does not shrink towards a match.
+
+**A second, upstream finding, and it is loft#982 again — one row later, in a different package.**
+`hex_form`'s `form_canon` opened with `if n == 0 { return f; }` — the by-value parameter on one
+path, a freshly built `Form` on the other — and leaked one store per call on the path that IS
+taken. Every enumerator calls it once per admitted form, so the census leaked 1182 `Form`s on a
+single `candidate_forms()`. Row 10 filed the seam from `hex_field`'s stencil transforms; row 11
+found the second victim in the family without looking for it. Same verified workaround (build a
+fresh value on every path), measured 100 leaked → 0, `hex_form` 0.1.2. **The generalisable half is
+the search key, not the bug: `return <by-value struct param>;` beside a `return <fresh>;` is a
+grep, and it is worth running across a repo the first time the seam bites it.**
+
+**A note on where the row's questions came from.** The productive question was the one rows 1–10
+converged on — *"what is the nearest call that looks identical and is not?"* — and this package
+answers it in its own comments: three digests, all `HexSet -> vector<integer>`, and the file says
+using the wrong one *"reported 17 false law F failures on a 10-entry corpus before the distinction
+was drawn."* `@HXV-001` is that paragraph made executable; it also pins one digest as literal text
+(`640400.642003.643600`, the unit triangle's three cells at `(0,0)`, `(2,0)`, `(1,3)` under
+`(k+400)*1600 + (m+400)`), because *"EXACT, NOT HASHED"* is only a claim until a number you can
+derive by hand appears in a test.
+
+**Non-vacuity, nine for nine.** One targeted library mutation per tag — `field_exact` aliased to
+`field_norm`, the index keyed on the cell count, the constant window restored, the hull refusing
+4 sides, the verify accepting any residual, the cyclic test frozen at shift 0, the mirror test not
+reversing, `ri_fills` not counting, `forms_at_level` reading `<=` — each ran the suite and each
+turned it red naming its OWN test. The harness errors out if a mutation pattern is not found and
+`cmp`s the file to prove the edit landed (row 10's lesson, applied rather than re-learned).
+Coverage 17/46 → **46/46**.
+
+**Row 12 `hex_edge` is DONE** (`@HXE-001..011`, acronym registered), and **Phase E is
+complete**: `make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 exempt,
+0 deferred, 0 todo*. `examples-exempt.tsv` is now empty of verdict rows.
+
+**The blocker was an owner decision, and the measurement refuted BOTH options it offered.**
+The queue held row 12 on *"whether `hex_edge` should offer a `sweep_path_skin(…)` … or every
+caller keeps its own skin"* — the resting-position trap moros#10 reported: a caller must not
+come to rest exactly at the fraction `sweep_path` returns, because that point is on the
+bisector and the next `hex_at` may round to the far side. Two things came out of measuring it
+rather than reasoning about it.
+
+**First, "may round" is wrong — it rounds to the far side EVERY time.** Over all six
+directions, a head-on stop leaves the position at exactly `t = 0.5`, `hex_at` there names the
+FAR cell six times out of six, and the very next sweep then reports `dir = -1, t = 1.0`: the
+whole segment clear, straight through the wall. It is not a rounding coin-flip that bites
+sometimes; it is deterministic, and the consumer's *"collision does not work"* is the exact
+truth — it worked for one step.
+
+**Second, the skin both options depend on has no correct value.** The smallest backoff that
+works is not a geometric clearance, it is a float-resolution floor, so it scales with where in
+the world you are standing:
+
+| where | smallest skin that works |
+|---|---|
+| at the origin | 1e-15 |
+| ~1.7e3 world units out | 1e-11 |
+| ~1.7e6 world units out | 1e-9 |
+
+A constant calibrated at the origin fails 18 of 30 cases at 1.7e3 units out. So *"the library
+offers a skin"* and *"every caller keeps its own"* are the same wrong answer wearing two hats
+— neither party can pick the number, and moros's 1 cm is safe only because it is enormously
+larger than the floor at moros's extent, which is luck rather than reasoning.
+
+**The exact option neither branch considered: `sweep_path` already RETURNS the cell.** It
+hands back `(t, cq, cr, dir)`, and the ambiguity exists only because the next call throws
+`(cq, cr)` away and re-derives it from a float. So the cure is to thread it —
+`sweep_path_from(e, cq, cr, …)`, added as a purely additive `pub fn` with `sweep_path` kept
+byte-identical in behaviour as the `hex_at` wrapper over it. Pressing on into the wall then
+answers `t = 0` in the cell you are in, which is the honest answer, and it needs no tolerance
+anywhere. Verified across all six directions and at four extents: exact from the origin out
+to 3e6 cells. `hex_edge` 0.2.0.
+
+**And the far-field limit, which is the honest part.** Past roughly 5e6 cells the threaded
+version degrades too — so it is not a property of the API choice. TWO in-algorithm
+explanations were tested and BOTH refuted: scaling the epsilons relative to the coordinate
+magnitude made it *worse* (8 of 30 failing at 1e3 cells, where the shipped code is clean), and
+recentring the bisector solve on the current cell's centre — which does make the crossing
+parameter exactly 0.5 at every extent, against a shipped drift of 8.6e-9 at 1e8 cells — moved
+the boundary not at all. What survives is measured directly: the offset a double position can
+recover at that magnitude loses 2.9e-10 at 3e6 cells and 6.4e-10 at 1e7, crossing the code's
+1e-9 tolerance exactly where the walk-throughs start. **The position itself is the limit, and
+the answer is to recentre the world, not the arithmetic.** No fix was shipped for it, because
+the fix would have been for something that is not the cause.
+
+**A second finding, and it is left as BEHAVIOUR rather than fixed, because fixing it is
+another owner decision.** `material_set_solid` is documented as the dynamic-material
+mechanism — *"a level-crossing barrier, a door, a portcullis … flipping the table entry
+retargets every edge already carrying this id"* — and **movement does not read it**.
+`passable` and `sweep_path` take an `EdgeSet` and no `Materials` at all, so lowering `solid`
+to false leaves `passable` false and the sweep stopping at exactly the same `t = 0.25`.
+Raising the portcullis does not open it. Meanwhile `sight_clear` *is* material-aware, so the
+package has one query that honours the material vector and one that cannot see it; of the six
+transmission terms, two (`opacity`, `height`) change an answer here and four are data for a
+consumer. `@HXE-010` pins the asymmetry as behaviour — a bookmark, in row 10's sense — and
+the API question (should movement take a `Materials`?) is recorded, not answered.
+
+**Three hypotheses were tested and refuted in this row and none became a finding.** Besides
+the two above, `sight_clear`'s 0.2-unit sampled walk was checked against the claim in its own
+comment — *"a hex inradius is 0.866, so consecutive samples cannot skip a cell"* — over 600
+sight lines and 7644 cell transitions: **zero** non-adjacent hops, and zero disagreements with
+the exact sweep over 400 crossing lines. The claim is true and now measured. Worth recording
+because the row's write-up would read better with a fourth defect in it, and there wasn't one.
+
+**Non-vacuity, eleven for eleven**, each mutation naming its own test. Coverage 25/40 →
+**40/40**.
+
+**A harness note.** The first full both-backend sweep reported `hex_roof` red on native while
+the mutation harness was running concurrently in the same repo — the harness rewrites a source
+file eleven times, and a native build that reads a tree mid-write fails for reasons that have
+nothing to do with the change under test. Re-run serially it is green, as are all fourteen
+packages on both backends. **Never read a full-suite verdict that was taken while something
+else was editing the tree.**
+
+**A method note worth keeping.** All twelve rows found their defect in the tag that had to
+demonstrate the package's most confidently stated promise — a claim that was
+false (`hex_form`), one whose units were unstated (`hex_place`), one that was true and
+priced nothing (`hex_roof`), one the code simply did not implement (`hex_way`), two
+CHECKS that answered *pass* on what they were written to fail (`hex_shape`), a
+premise the package enforced on one half of its own text and not the other (`hex_fit`),
+one that was true of the shape its author had in mind and false of the shapes the
+package exists to hold (`hex_field`), one true of the CONSTRUCTION and false of the
+ROUTINE, because the step that verifies it kept a limit from the code it replaced
+(`hex_recover`), and one hedged as *"may"* that turns out to happen every time
+(`hex_edge`).
+That is not luck: a worked example is the first thing that ever evaluates such a sentence
+against the code, and the sentences most worth working are the ones written with the most
+certainty.
+
+**And a second note, about what these packages have in common.** Every finding so far is a
+call that produces a plausible wrong answer while passing every cheap check — a parse that
+repairs, a residual that reads zero, a roof that still sheds water, a rail that is exactly
+the right distance from the wrong side. So the productive question for every row after it
+is not *"what does this function do"* but **"what is the nearest call that looks
+identical and is not, and what number distinguishes them?"** In `hex_roof` that number
+already existed and was simply not the one anyone read (`eave_spread`); in `hex_way` it had
+to be constructed, because a joint gap is not a quantity anyone had thought to name.
+
+**The sharpest form of the rule, from row 4:** the property a package is *most* careful to
+guarantee is the one least able to catch its own violation, because everyone — the library's
+tests and the consumer's gate alike — checks the guarantee and nobody checks what the
+guarantee is silent about. Equidistance does not pick a side.
+
+**And row 5 turns it on the checks themselves.** A gate is calibrated on the inputs its author
+had, and its threshold silently inherits that sample: `wall_along_max` separates a chain from a
+comb beautifully on the twelve headings anyone tried it on, and not at all on the twelve they
+did not. So the question to ask of any instrument is **"what is the widest input it was
+calibrated against, and what does it read just outside that?"** — which is a sweep, and it is
+the same sweep rows 3 and 4 needed for a parameter. An instrument is a claim with a number
+attached, and it decays exactly like the prose does.
+
+Nothing here is `exempt`. This is geometry, the tier where a call site teaches most
+and a signature carries least; every row below is a package that owes an example.
+
+| # | package | pub fns | what its example must teach | blocked on |
+|---|---|---|---|---|
+| ~~1~~ | ~~`hex_form`~~ | 53 | **DONE** — `@HXF-001..007`. Rules **C1–C5** worked one by one; writing them found and fixed a reader that repaired seven texts it documents as refused | — |
+| ~~2~~ | ~~`hex_place`~~ | 17 | **DONE** — `@HXP-001..006`. The shared edge, order-freeness, levels, seating, the seam error and arbitration; `@HXP-001` and `@HXG-003` now name each other | — |
+| ~~3~~ | ~~`hex_roof`~~ | 15 | **DONE** — `@HXR-001..006`. The distance-source taxonomy, and the eave/drainage trade-off a quantised footprint forces on a point source | — |
+| ~~4~~ | ~~`hex_way`~~ | 20 | **DONE** — `@HXY-001..006`. Found and fixed an offset that put every arc on the far side of the way (0.1.1), and measured the quantisation floor the header rounds off: 1.5 down a row, 0.866 down a column | — |
+| ~~5~~ | ~~`hex_shape`~~ | 68 | **DONE** — `@HXS-001..009`. The split answer confirmed on all three primitives, and two of the package's own instruments found reading *pass* on what they were built to fail. Coverage 4/83 → 83/83 | — |
+| ~~6~~ | ~~`hex_terrain`~~ | 20 | **DONE** — `@HXT-001..008`. The scale boundary worked on a hand-authored ramp, and the package's headline invariant found to be determinism wearing the name of extent-independence: same content, two window sizes, 0 rivers against 5. Coverage 24/26 → 26/26 | — |
+| ~~7~~ | ~~`hex_body`~~ | 28 | **DONE** — `@HXB-001..008`. Two-bone arms at quarter turns were the fixture, and they found a 2-D walk that answers for a spatial rig 3.2 units away — collision proxy included — plus the family's third strict-reader claim. Coverage 21/32 → 36/36 | — |
+| ~~8~~ | ~~`hex_fit`~~ | 27 | **DONE** — `@HXI-001..008`. Row 1's finding was waiting exactly where it was filed (ten repairs, one of them a wall pointing elsewhere), and under it a wall with two legal names of which only one survives the trip — with the workshop's own gate constructing its way around it. Coverage 8/30 → 37/37 | — |
+| ~~9~~ | ~~`hex_draw`~~ | 23 | **DONE** — `@HXD-001..007`. The analytic surface confirmed on both families, and a stated recovery check found unsatisfiable: the miter it compares is a lattice rational, the plan corner it compares against is not. Coverage 3/26 → 26/26 | — |
+| ~~10~~ | ~~`hex_field`~~ | 82 | **DONE** — `@HXL-001..012`. The fixture question answered itself again (one hex, two hexes, a ring of six), and under it a validator refusing the multi-form chunk the package exists to trace, plus a material write that DELETED the wall it was setting and an extent taken on trust that allocated 16 M cells from a 32-byte file. 0.1.1, format unchanged byte for byte | — |
+| ~~11~~ | ~~`hex_recover`~~ | 33 | **DONE** — `@HXV-001..009`. The blocker dissolved on measurement: the census a caller needs is the 119 forms this build matches against, decided in 2 ms. Under it, a verify step that clipped its own redraw into a window sized for the enumeration it replaced — refusing an 85-cell shape while passing a 105-cell one, and reporting 196 unexplained cells in a 105-cell field. 0.1.1; plus loft#982's second victim upstream (`hex_form` 0.1.2). Coverage 17/46 → 46/46 | — |
+| ~~12~~ | ~~`hex_edge`~~ | 39 | **DONE** — `@HXE-001..011`. The owner decision was refuted on both branches: the skin either option needs has no correct value (1e-15 at the origin, 1e-9 at 1.7e6 units out), and `sweep_path` already returns the cell the ambiguity comes from throwing away. `sweep_path_from` threads it — exact, no tolerance, 0.2.0. Plus a portcullis whose raising opens nothing, pinned as behaviour. Coverage 25/40 → 40/40 | — |
+
+**The order is the table's order, and it is not arbitrary.** Rows 1–5 are unblocked
+and small; 6–7 need one fixture chosen; 8–9 are genuinely downstream of 1 and cannot
+be written first; 10–11 need a scoping decision about what a readable test is; 12 is
+the only one waiting on a person. **Rows 1–10 are done**, and every fixture question
+answered itself the moment it was asked: a hand-authored ramp for row 6, two-bone arms at
+quarter turns for row 7, and for row 10 one hex, two hexes, and a ring of six. None needed
+a generated world, and row 10 is the case that settles it — the package with a *real*
+oracle, a Python golden JSON, and the readable test turned out to be the one that names its
+six vertices in the source. **"Small enough to assert against" means WRITTEN BY HAND every
+time it has come up; a shrunken real thing has never once been the answer.** That is now
+three for three and can be used as a prior rather than re-derived on row 11.
+
+**Row 10 also retired the "it is a phase, not a row" worry.** 82 public functions did not
+need splitting, because the tags do not track functions — they track the package's
+load-bearing PROMISES, and there were twelve. Coverage 69/89 → 84/89 came out of writing
+them rather than being aimed at.
+
+**`hex_edge`'s block is the healthy case, not a stall:** the convention asks *what does a
+caller get wrong*, and when the answer depends on an unmade API decision, writing the
+example anyway would pin the wrong behaviour into a test. Row 11 needs no one — only a
+decision about what a fast, readable subset of a census looks like.
+
+**Definition of done:** `make examples-progress REPO=../loft-libs-world` reads
+*14 tagged, 0 exempt, 0 deferred, 0 todo*. **Reached 2026-08-18.**
 
 ### Phase (last) — Convention doc + CI ratchet (S) — CI RATCHET DONE
 

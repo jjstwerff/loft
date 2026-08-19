@@ -25,6 +25,15 @@ fn mul(acc: integer, x: integer) -> integer {
   acc * x
 }
 
+struct Row13 { name: text, n: integer }
+
+fn bump13(r: Row13) -> Row13 { r.n = 99; r }
+
+// The vector `map` answers is new and so are its records — but the value the callback is
+// HANDED is the caller's own, for every element type stored as a record.  Both halves are
+// asserted below, because the entry's "makes a new vector" reads as a promise about both.
+//
+// @FTR-026 — map / filter / reduce over a vector, and which half of "a new vector" is new
 fn main() {
   nums = [1, 2, 3, 4, 5];
   // --- map: double each element ---
@@ -86,4 +95,40 @@ fn main() {
   // --- filter then reduce ---
   even_sum = reduce(filter(nums, is_even), 0, add);
   assert(even_sum == 6, "filter+reduce={even_sum}");
+
+  // --- what a callback is handed: the CALLER's record, not a copy ---
+  // A struct element is a record, and a parameter names it.  So a callback that writes to
+  // its parameter edits the SOURCE vector, whatever it goes on to return.
+  rows = [Row13 { name: "a", n: 1 }, Row13 { name: "b", n: 2 }];
+  bumped = map(rows, bump13);
+  assert(rows[0].n == 99 && rows[1].n == 99, "source after map = {rows[0].n},{rows[1].n}, want 99,99");
+  assert(bumped[0].n == 99 && bumped[1].n == 99, "result after map = {bumped[0].n},{bumped[1].n}");
+
+  // A scalar is copied, so the identical shape leaves the source alone.  This is the pair
+  // that makes "the callback gets a copy" the wrong summary: which it is depends on the
+  // element type, not on how the callback is written.
+  scal = [1, 2, 3];
+  tens = map(scal, |x| { x = x * 10; x });
+  assert(scal[0] == 1 && scal[2] == 3, "scalar source = {scal[0]},{scal[2]}, want 1,3");
+  assert(tens[0] == 10 && tens[2] == 30, "scalar result = {tens[0]},{tens[2]}, want 10,30");
+
+  // Text likewise.
+  words = ["a", "b"];
+  loud = map(words, |s| { s = "{s}!"; s });
+  assert(words[0] == "a" && words[1] == "b", "text source = {words[0]},{words[1]}, want a,b");
+  assert(loud[0] == "a!" && loud[1] == "b!", "text result = {loud[0]},{loud[1]}");
+
+  // The RESULT's records are fresh, though: writing into what `map` or `filter` answered
+  // does not reach back.  Without this half, "the callback aliases the source" would read
+  // as "the whole thing is one vector", which it is not.
+  src = [Row13 { name: "a", n: 5 }, Row13 { name: "b", n: 6 }];
+  copies = map(src, |r| { r });
+  copies[1].n = 555;
+  assert(src[1].n == 6, "source after writing the result = {src[1].n}, want 6");
+  assert(copies[1].n == 555, "result after writing it = {copies[1].n}, want 555");
+
+  kept = filter(src, |r| { r.n > 5 });
+  kept[0].n = 777;
+  assert(src[1].n == 6, "source after writing filter's result = {src[1].n}, want 6");
+  assert(kept[0].n == 777, "filter result = {kept[0].n}, want 777");
 }

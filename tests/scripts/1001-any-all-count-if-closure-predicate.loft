@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `any` / `all` / `count_if` accept a CAPTURING predicate (loft#1001).
+//
+// All three took a static fn-ref only.  Handed a lambda that captures — or a fn-ref held in a
+// variable — `validate_predicate_args` answered `None` from its last branch, the only one of
+// its five with no diagnostic above it, and `parse_any` / `parse_all` / `parse_count_if`
+// answered that by returning the right TYPE without ever writing `*val`.  So the caller's
+// placeholder survived into the IR and the whole call compiled to `c = c`: no loop, no
+// predicate call, no error, exit 0, and the destination keeping whatever it already held.
+//
+// That is what makes the cells below SEED their destinations.  A run that reports `2` proves
+// the loop ran; a run that reports `42` proves it did not, and both used to be silent.  With
+// no seed the reading was an uninitialised local — `false`, `false`, `0` — which is a plausible
+// answer for every one of the three, so a test without seeds could pass on the broken build.
+//
+// The silence had a second, louder face that explains how it survived: only a plain assignment
+// leaves a usable placeholder.  In EXPRESSION position the dropped call left a hole, and the
+// pre-fix binary refused this very file with *"missing argument for parameter 'v1' of `OpNot`"*
+// pointing at `assert(!all(vs, p), …)` — an internal opcode named in a message about the user's
+// own line.  So the same defect reads as a wrong answer in one position and as an
+// incomprehensible compile error in another.
+//
+// `filter` fifty lines up in the same file already had the answer: return `Option<u32>`, park a
+// fn-ref VALUE in a local, and reach it with `CallRef` instead of `Call`.  c8 is the static
+// path — a non-capturing lambda IS a static fn-ref — and it must not move.
+//
+// The invocation counts are asserted as well as the answers: a fold that ran the predicate zero
+// times and a fold that short-circuits correctly agree on the ANSWER in c3 and c5, and only the
+// count tells them apart.
+
+fn gt2_1001(x: integer) -> boolean { x > 2 }
+
+// @FTR-027 — the other three of the family: a predicate over a whole vector, in every
+// spelling a predicate has
+fn main() {
+  vs = [1, 2, 3];
+  k = 1;
+
+  // c1 — count_if with a read-only capture.  Seeded: `c = c` would print 42.
+  c = 42;
+  assert(c == 42, "c1 seed");
+  c = count_if(vs, |x| { x > k });
+  assert(c == 2, "c1 count_if = {c}, want 2");
+
+  // c2 — all with a read-only capture.  Seeded true, and the answer is false, so the seed
+  //      cannot be mistaken for the result.
+  b = true;
+  assert(b, "c2 seed");
+  b = all(vs, |x| { x > k });
+  assert(!b, "c2 all(x > 1) = {b}, want false");
+
+  // c3 — all where every element passes.  The broken build also answered `false` here, from
+  //      the uninitialised local, which is why c2 and c3 are separate cells.
+  b2 = all(vs, |x| { x > k - 1 });
+  assert(b2, "c3 all(x > 0) = {b2}, want true");
+
+  // c4 — any with a read-only capture, satisfied only by the LAST element.
+  a = any(vs, |x| { x > k + 1 });
+  assert(a, "c4 any(x > 2) = {a}, want true");
+
+  // c5 — any that nothing satisfies.  Same answer as a loop that never ran; the count in c6
+  //      is what separates them.
+  a2 = any(vs, |x| { x > k + 99 });
+  assert(!a2, "c5 any(x > 100) = {a2}, want false");
+
+  // c6 — a MUTATING capture, which is also the invocation counter.  `x > 1` first passes at
+  //      x = 2, so `any` stops after two calls and `all` after one; `count_if` visits all three.
+  na = 0;
+  ra = any(vs, |x| { na += 1; x > k });
+  assert(ra && na == 2, "c6a any calls = {na} (want 2), answer = {ra}");
+
+  nl = 0;
+  rl = all(vs, |x| { nl += 1; x > k });
+  assert(!rl && nl == 1, "c6b all calls = {nl} (want 1), answer = {rl}");
+
+  nc = 0;
+  rc = count_if(vs, |x| { nc += 1; x > k });
+  assert(rc == 2 && nc == 3, "c6c count_if calls = {nc} (want 3), answer = {rc}");
+
+  // c7 — a fn-ref held in a VARIABLE is the other non-static spelling, and it was equally
+  //      dropped: measured on the pre-fix binary it read `any=false all=false count=null`.
+  p: fn(integer) -> boolean = gt2_1001;
+  assert(any(vs, p), "c7 any(p) want true");
+  assert(!all(vs, p), "c7 all(p) want false");
+  assert(count_if(vs, p) == 1, "c7 count_if(p) = {count_if(vs, p)}, want 1");
+
+  // c8 — CONTROL: a NAMED fn and a non-capturing lambda are both static fn-refs, so they took
+  //      the path that always worked.  They are here to pin that it still does.
+  assert(any(vs, gt2_1001), "c8 any(named) want true");
+  assert(!all(vs, gt2_1001), "c8 all(named) want false");
+  assert(count_if(vs, gt2_1001) == 1, "c8 count_if(named) want 1");
+  assert(any(vs, |x| { x > 2 }), "c8 any(bare lambda) want true");
+  assert(count_if(vs, |x| { x > 1 }) == 2, "c8 count_if(bare lambda) want 2");
+
+  // c9 — `filter` is the sibling that already accepted a capturing predicate, and every answer
+  //      the three builtins give is recoverable from it.  It is the workaround the issue names,
+  //      so it is pinned beside them.
+  hits = filter(vs, |x| { x > k });
+  assert(len(hits) == 2, "c9 filter len = {len(hits)}, want 2");
+  assert((len(hits) > 0) == any(vs, |x| { x > k }), "c9 any agrees with filter");
+  assert((len(hits) == len(vs)) == all(vs, |x| { x > k }), "c9 all agrees with filter");
+  assert(len(hits) == count_if(vs, |x| { x > k }), "c9 count_if agrees with filter");
+}

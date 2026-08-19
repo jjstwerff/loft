@@ -48,7 +48,7 @@ conditional one (each is one fix line), and the concept door they open onto.
 | `redundant-default-fallback` | warning | A `?` on a non-null field — the type default can never be used. | Delete the `?`. | M · `@F96` |
 | `redundant-null-check` | warning | A comparison against `null` on a non-null field: the answer is fixed. | Delete the check, or compare the value you meant. | M C · `@F1` |
 | `redundant-null-negation` | warning | `!x` on a non-null value — `!` tests presence, so it is always false. | Compare the value (`x == 0`) if that is what you meant. | C · `@F1` |
-| `dead-assignment` | warning | A local is overwritten before it is read. | Delete the assignment, or read it before the next. | C · `@F100` |
+| `dead-assignment` | warning | A local is overwritten before it is read. Silent on a variable a closure CAPTURES — the capture is a read the check cannot see, so `s = 10; f = fn() { s }; s = 20;` would otherwise advertise deleting the line that supplies `f`'s answer. | Delete the assignment, or read it before the next. | C · `@F100` |
 | `never-read` | warning | A local or parameter is never read. | Delete it — for a parameter, that changes the signature. | C · `@F100` |
 | `shadowed-by-method` | warning | A library's free function is unreachable by its bare name: a same-named METHOD on its first argument's type takes the call (`find_fn` resolves `t_<τ>_f` before `n_f`), from the declaring file, the library's other modules, and any consumer that imported it. The definition stays legal — @PLN102 C97 module-scopes it — so `lib::f` still reaches it (loft#940). | Rename it, or call it qualified as `<package>::f(…)`. | C C · `@F16` |
 | `upper-case-local` | advice | An UPPER_CASE local — that style is reserved for constants. | Declare it `const`, or rename to lower_case. | C M · `@F18` |
@@ -228,6 +228,36 @@ code index landed first — prose is free to change, the code is not.
 | `Mechanical` | a fix whose correctness rests on a condition — an unattended run has nobody to affirm it |
 | spells an `edit` | a fix that knows the rewrite but not where it goes |
 | verifies | a fix that does not clear its own diagnostic, or that breaks something else |
+
+**How much the second gate rejects, today.** `spells an edit` is not a rare exclusion — it is
+the one that decides the whole of `loft fix`'s reach. Eight of the seventy-six `Fix`
+constructions in `src/` carry an `edit`, and seven of those eight sit on ERROR codes, so
+`loft fix` reports NO warning-level fix at all and of the 25 codes marked `M` above it can
+act on five: `unknown-function`, `unknown-field`, `unknown-variable`,
+`format-unescaped-brace` and `superseded-call`. (`cast-constant-out-of-range` and
+`text-parse-may-fail` carry edits too, on their conditional tier.) The four withheld-`edit`
+decisions written up above are the ones on record; the other twenty are omissions rather
+than decisions, and several are pure deletions at a span the compiler already knows —
+`redundant-coalesce`, `unreachable-code`, `empty-parallel-block`, `needless-const-parameter`.
+That is now a GATE rather than a note. `every_mechanical_fix_is_applicable_or_listed`
+(`tests/e1_code_set.rs`) drives `loft fix` itself over each code's trigger program and requires
+that a code whose `--explain` output offers a fix with no `needs:` clause is one `loft fix` can
+name — or carries a row in `EDIT_BLOCKED` saying what stops it. Both directions are red: a
+missing row, and a row for a code that has since graduated. The twenty above are that list, each
+with its reason, so a missing edit is a decision on record instead of a silence; four of them
+say outright that they SHOULD carry an edit and name what is missing (a span the emit site has
+not captured). loft#1003 tracks attaching those.
+
+The scan is scoped to each code's own diagnostic block, from its header to the next. A trigger
+program often reports more than the code it was written for — the `double-move` probe also
+raises `avoidable-copy` — and reading the whole output attributes one code's mechanical fix to
+another, which is exactly how the first version of this gate failed on a code already listed.
+
+`superseded-call` is worth naming separately, because it is the only advice with an edit and
+it is REJECTED every time it fires. The edit is a bare rename, and the stdlib's only
+`#superseded` symbol has a successor of different arity — `sum_of(v)` is a shim over
+`sum(v, 0)`, and `sum` has no default for `init`, so the renamed call does not compile. The
+verification is right; the edit is under-specified.
 
 **The program is never run.** The design asked for a behaviour comparison across both
 backends; that would mean executing the author's code as a side effect of their asking what

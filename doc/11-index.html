@@ -32,6 +32,7 @@
 <pre><code><span class="kw">struct</span> <span class="en">Db</span> {
   map: <span class="ty">index</span> &lt; <span class="en">Elm</span>[nr, -key] &gt;
 }</code></pre>
+<p>@FTR-038 — an <code>index</code> on a multi-part key: lookup by key, ordered iteration, and a second key breaking ties in the other direction</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="adding-and-looking-up-records">Adding and Looking Up Records</h2>
 <p>Fill the index just like a vector. Elements are automatically kept in key order. This index is sorted first by <code>nr</code> (ascending), then by <code>key</code> (descending) for ties.</p>

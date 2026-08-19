@@ -1690,7 +1690,8 @@ impl Parser {
             }
             let body = self.data.definitions[self.context as usize].code().clone();
             if !is_stub {
-                self.vars.test_used(&mut self.lexer, &self.data, &body);
+                self.vars
+                    .test_used(&mut self.lexer, &self.data, &body, self.context);
             }
             // P246 follow-up — UPPER_CASE locals without `const`
             // violate the "UPPER_CASE means immutable constant"
@@ -1994,17 +1995,23 @@ impl Parser {
             .filter(|a| !a.hidden && !a.name.starts_with("__"))
             .count();
         let returns = !matches!(def.returned(), Type::Void);
+        // The whole body is parsed before either check runs, so the cursor has already
+        // reached the NEXT declaration — reporting at it sends the reader to an unrelated
+        // function that the message never mentions.  Point at the `OpDrop` itself.
+        let at = def.position().clone();
         if returns {
-            diagnostic!(
+            diagnostic_at!(
                 self.lexer,
+                &at,
                 Level::Error,
                 "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
                  anything whose failure matters stays an explicit call"
             );
         }
         if declared != 1 {
-            diagnostic!(
+            diagnostic_at!(
                 self.lexer,
+                &at,
                 Level::Error,
                 "`OpDrop` takes only `self` — the compiler calls it, so a second argument \
                  has nowhere to come from"
@@ -2071,6 +2078,37 @@ impl Parser {
                     // the vector-type-resolution chokepoint (`sub_type` `vector` arm),
                     // so no per-site hook here.
                     if reference {
+                        // loft#1006 — a `&(…)` reference tuple reaches its elements through the
+                        // tuple's stored DbRef with the `(ref, offset)` ops a struct field uses,
+                        // and only the SCALAR kinds are laid out for that. A heap element got as
+                        // far as codegen and died there, as an internal compiler error naming a
+                        // Rust type (`RefTupleGet: unsupported element type Text(Deps { … })`).
+                        // Refusing at the signature costs the same program nothing and says what
+                        // to write; implementing it is layout work, not a missing opcode — the
+                        // op table alone answers an out-of-bounds store.
+                        if !self.first_pass
+                            && let Type::Tuple(ref elems) = tp
+                            && let Some(bad) = elems.iter().find(|e| {
+                                !matches!(
+                                    e.base(),
+                                    Type::Integer(_)
+                                        | Type::Float
+                                        | Type::Single
+                                        | Type::Character
+                                        | Type::Function(_, _, _)
+                                )
+                            })
+                        {
+                            let bad_name = bad.name(&self.data);
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a `&` reference tuple may only hold scalar elements, and this \
+                                 one holds `{bad_name}` — take the tuple by value and return a \
+                                 new one, or use a struct, whose fields of any type write \
+                                 through a `&` parameter"
+                            );
+                        }
                         Type::RefVar(Box::new(tp))
                     } else {
                         tp

@@ -60,6 +60,8 @@ fn tag_name(t: Tagged) -> text {
   t.name
 }
 
+// @FTR-032 — a plain enum's ordering, text conversion and vector storage, and a struct
+// enum's construction, field access and polymorphic dispatch
 fn main() {
   // --- Plain enum: equality and ordering ---
   d = Direction.East;

@@ -55,18 +55,14 @@ impl Parser {
             // already-emitted "Field of unknown variable" doesn't
             // cascade into "Expect token ;".  Each arg routes
             // through `expression` so nested calls / format strings
-            // tokenise correctly.
+            // tokenise correctly.  It goes through the SHARED skipper rather than
+            // a copy of its loop: an argument spelling this one had not been
+            // taught about is invisible here (the receiver is already unknown, so
+            // there is nothing to compare against), and a named argument was
+            // exactly that — `r.render(dry: true)` reached this path whenever
+            // `render` was declared BELOW its caller, and only then.
             if self.lexer.has_token("(") {
-                if !self.lexer.peek_token(")") {
-                    loop {
-                        let mut discard = Value::Null;
-                        self.expression(&mut discard);
-                        if !self.lexer.has_token(",") {
-                            break;
-                        }
-                    }
-                }
-                self.lexer.has_token(")");
+                self.skip_remaining_args();
             }
             // wrap `code` in Value::Drop so an unresolved field access
             // (e.g. `x.v` where x's type is not yet known on pass 1) is no
@@ -695,10 +691,28 @@ impl Parser {
         }
     }
 
+    /// Consume the argument list of a call this pass cannot resolve, leaving the
+    /// cursor after the `)`.
+    ///
+    /// Both callers reach it with the callee unknown — the first pass, before the
+    /// method it names has been read, and the error path for a member that does not
+    /// exist — so nothing here can look a parameter up. It still has to accept every
+    /// argument spelling the language has, and a NAMED argument (`name: value`) is
+    /// one of them: `name` is not an expression, so parsing it as one stopped at the
+    /// `:` and reported `Expect token )`.
+    ///
+    /// That made a legal call depend on where its method was DECLARED — `r.render(dry:
+    /// true)` compiled with `render` above the caller and failed with it below —
+    /// and it swallowed the one message worth reading, turning `s.nosuch(width: 3)`
+    /// into five cascading errors with no `Unknown field` among them.
     pub(crate) fn skip_remaining_args(&mut self) {
         loop {
             if self.lexer.peek_token(")") {
                 break;
+            }
+            if self.lexer.peek_named_arg().is_some() {
+                self.lexer.has_identifier();
+                self.lexer.has_token(":");
             }
             let mut p = Value::Null;
             self.expression(&mut p);
@@ -1114,6 +1128,13 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             // Pass-2 (with all defs registered) re-parses the body
             // cleanly and dispatches correctly — or emits the real
             // diagnostic if the receiver is genuinely unknown.
+            // A COMPOUND key is one of those spellings: `hash<Tile[x, y]>` is read
+            // `g.cells[1, 2]`, and consuming only the first expression left the `,`
+            // for the caller's `]`.  That made the lookup depend on where its types
+            // were DECLARED — fine above the use, `Expect token ]` below it — which
+            // is the same ordering dependency a named argument had at
+            // `skip_remaining_args`.  Whatever this pass cannot resolve, it still
+            // has to be able to read.
             if !self.lexer.peek_token("]") {
                 if !self.lexer.peek_token("..") && !self.lexer.peek_token("..=") {
                     let mut p = Value::Null;
@@ -1124,6 +1145,10 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 {
                     let mut p2 = Value::Null;
                     self.expression(&mut p2);
+                }
+                while self.lexer.has_token(",") && !self.lexer.peek_token("]") {
+                    let mut pn = Value::Null;
+                    self.expression(&mut pn);
                 }
             }
         } else {

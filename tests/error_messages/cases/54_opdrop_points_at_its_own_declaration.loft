@@ -1,0 +1,19 @@
+// Both `OpDrop` checks run after the whole body is parsed, so the lexer cursor has
+// already reached the NEXT declaration.  Reporting there sent the reader to `fn main`
+// — a function neither message mentions.  Same family as 48 and 52.
+struct Lease { id: integer }
+struct Ticket { id: integer }
+
+fn OpDrop(self: Lease) -> integer {
+  return self.id;
+}
+
+fn OpDrop(self: Ticket, extra: integer) {
+  println("{self.id} {extra}");
+}
+
+fn main() {
+  a = Lease { id: 1 };
+  b = Ticket { id: 2 };
+  println("{a.id} {b.id}");
+}

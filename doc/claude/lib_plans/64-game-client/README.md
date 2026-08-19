@@ -497,6 +497,34 @@ pub fn check_divergence(predicted: text, confirmed: text, threshold: float)
 
 ---
 
+## Co-op over a 2-D stage — what to replicate  <!-- from @PLN144 -->
+
+**Replicate the WORLD, never the presentation.** A [@PLN144](../../plans/144-2d-stage/README.md)
+stage is a pure function of the world and the camera, so every client derives its own scene
+rather than receiving one. Replicating the scene instead ships presentation over the wire and
+desyncs on cosmetic difference — and it cannot express the case that motivates co-op here at
+all: crew_punk's six players hold six phones showing six *different* panels of one ship, where
+taking someone else's station shows the same panel **with the labels gone**. Six replicated
+scenes would have to not drift; one replicated world cannot.
+
+The gate says it in both directions: two clients with **different window sizes, different
+cameras and different roles** converge on the **same world hash** while their frames differ
+pixel-for-pixel. The frames differing is the half that proves presentation was not replicated.
+
+**The determinism this needs is already maintained** — `fixstep`'s fixed step, @PLN144's
+animation advancing off that step rather than wall time, and its ambient motion derived from
+`(time, position)`. So there is no mechanism to build, only the **harness that would catch
+losing it**: the input record/replay stream with a world hash per tick, and a divergence that
+**names the first differing tick** rather than reporting that two runs differ.
+
+⚠ **Arm that harness before the subject exists.** hexbody wrote `tests/joint.loft` and held it
+**red** before a line of body code, with both controls verified, and it caught the thing they
+had feared; their `L7` says determinism/replay is built from line one. A determinism gate
+written after co-op works only proves that day's build.
+
+Several views on *one* machine (split-screen) is @PLN144's `P6` — the stage owns *N cameras*,
+this plan owns *who gets which*.
+
 ## State synchronization
 
 The server can send either full state snapshots or incremental deltas.

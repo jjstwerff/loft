@@ -102,6 +102,7 @@ fn test_is_with_negation() {
   assert(non_circle, "negated is");
 }
 
+
 // ── &vector mutation detection ──────────────────────────────────
 
 struct MutItem {
@@ -312,6 +313,8 @@ fn test_break_value_while_not_found() {
 
 // ── `is` with field capture ─────────────────────────────────────
 
+// @FTR-034 — `is` as a variant test, and the field capture that comes with it: one field,
+// several, the wrong variant, an `else`, inside a loop, and the name not leaking past the block
 fn test_is_capture_single_field() {
   s = Circle { radius: 3.14 };
   result = 0.0;

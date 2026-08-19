@@ -1036,7 +1036,23 @@ impl Parser {
                 // the reader to find which of the line's names is the unresolved one
                 // (loft#934).
                 let name = self.vars.name(*nr).to_string();
-                diagnostic!(self.lexer, Level::Error, "Unknown variable '{name}'");
+                // loft#1008 — a METHOD (`t_<len><Type>_<name>`) has no definition under its
+                // bare name, so naming one where a VALUE is wanted reported that the file's
+                // own function does not exist. Say what it is instead.
+                let receivers = self.method_receivers_named(&name);
+                if receivers.is_empty() {
+                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{name}'");
+                } else {
+                    let on = receivers.join("`, `");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`{name}` is a method on `{on}`, and a method is not a function VALUE — \
+                         there is nothing to bind here. Wrap it: `|x| {{ x.{name}(…) }}`, or \
+                         declare the function with a plain first-parameter name (not `self` / \
+                         `both`), which makes it a free function and a usable fn-ref"
+                    );
+                }
             }
             if self.lexer.has_token(".") {
                 wrap_chain = true;

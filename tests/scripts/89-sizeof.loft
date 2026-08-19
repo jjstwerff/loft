@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // sizeof() operator on primitives, enums, structs, and collections.
 
+// @FTR-035 — `sizeof` over primitives, enums, structs and collections
 fn test_sizeof_integer() {
   a = 1;
   assert(sizeof(1 + 2 + 3)+sizeof(integer)+10 * sizeof(a) == 96, "int sizes");

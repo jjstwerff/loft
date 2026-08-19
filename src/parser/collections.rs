@@ -113,6 +113,39 @@ enum NarrowWrap {
 /// representable in 1/2/4 bytes per row.  `None` otherwise (8-byte
 /// integers stay on the regular `n_parallel_queue` path; reference /
 /// text / fn-ref returns have their own queue variants).
+/// The parts of the `any` / `all` / `count_if` loop that are the same for all three:
+/// what runs before the loop, the element the predicate is handed, how the next element
+/// is fetched, and how the loop ends.  Each builtin adds only its own accumulator step.
+///
+/// Returned by [`Parser::predicate_loop_scaffold`].
+struct PredicateLoop {
+    /// Statements that run once, before the loop: bind the vector, park the fn-ref value
+    /// (when there is one), create the iterator.
+    preamble: Vec<Value>,
+    /// The loop variable the predicate is called with.
+    for_var: u16,
+    /// Fetch of the next element into `for_var`, first statement of the loop body.
+    for_next: Value,
+    /// `if <past the end> { break }`, second statement of the loop body.
+    break_if_done: Value,
+    /// Local holding the predicate when it is a fn-ref VALUE (a capturing lambda, or a
+    /// fn-ref variable) rather than a static definition; `None` for a static fn-ref.
+    fn_ref_var: Option<u16>,
+}
+
+/// The call to the predicate for one element — `Call` for a static fn-ref, `CallRef` for a
+/// fn-ref value [`Parser::predicate_loop_scaffold`] parked in a local.
+fn predicate_call(fn_d_nr: Option<u32>, lp: &PredicateLoop) -> Value {
+    match fn_d_nr {
+        Some(d) => Value::Call(d, vec![Value::Var(lp.for_var)]),
+        None => Value::CallRef(
+            lp.fn_ref_var
+                .expect("a non-static predicate always parks its fn-ref in a local"),
+            vec![Value::Var(lp.for_var)],
+        ),
+    }
+}
+
 struct NarrowRoute {
     /// Per-row stride in bytes (1, 2, or 4).
     width: u8,
@@ -1203,7 +1236,25 @@ impl Parser {
         // inner OpGetVector) — identical to how plain enums are handled.  The old
         // special-case here destructured the two-level OpEqInt(OpGetByte(…)) read
         // shape and is obsolete (it mis-read the single-level OpGetBoolean shape).
-        let code = self.compute_op_code(op, to, val, f_type);
+        let mut code = self.compute_op_code(op, to, val, f_type);
+        // loft#1009 — a COMPOUND assignment into a narrow-alias LOCAL had no range check of
+        // any kind, so `l: u8 = 250; l += 10;` answered 260 and `b: u8 = 5; b -= 10;`
+        // answered -5.  The written-out form (`l = l + 10`) is refused at compile time, and
+        // a narrow FIELD is clamped in the store layer — measured, an out-of-range compound
+        // write on a field leaves the type's MINIMUM (u8 0, i8 -128, u16 0, i16 -32768, on
+        // both backends and in both directions).  A local lives in a stack slot and reaches
+        // neither guard, which is how one program held 260 in a `u8` local and 0 in the `u8`
+        // field it was assigned from.
+        //
+        // The compile-time check cannot close it: at the store site `code` is the OPERAND
+        // (`10`), which fits `u8` — only the composed value here can be judged, and only at
+        // run time.  So this emits what the store layer already does, at the one seam that
+        // was missing it.  `declared_range` deliberately answers `None` for a narrow alias
+        // (its comment: "already guarded at COMPILE time"), which is true of `=` and false
+        // of `+=`; this is that gap, not a second opinion about `=`.
+        if op != "=" && !self.first_pass {
+            self.guard_narrow_alias_local(&mut code, to, f_type);
+        }
         if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name().to_string();
             let args = args.clone();
@@ -2255,10 +2306,12 @@ use #count instead"
                 } else {
                     "n_hash_sorted"
                 };
-                // @PLN48 S3 — `for m in xs.within(…)`: the `.within` intercept already
-                // rewrote `expr` to an `n_spatial_within(…)` call that BUILDS the
-                // ordered scratch.  Use it directly — do not wrap it in n_radix_sorted
-                // (which would walk the scratch as if it were a tree).
+                // @PLN48 S3 — a spatial range slice (`xs[(x,y)..]`, `xs[(x,y)..:n]`,
+                // `xs[(x1,y1)..(x2,y2)]`) and a trie prefix slice have ALREADY been
+                // rewritten to a call that BUILDS the ordered scratch.  Use it directly
+                // — do not wrap it in n_radix_sorted, which would walk the scratch as
+                // if it were a tree.  (There is no `.within` / `.near` / `.nearest`
+                // method: proximity is ordinary range slicing.)
                 let already_scratch = matches!(
                     expr.unspan(),
                     Value::Call(d, _) if matches!(self.data.def(*d).name(), "n_spatial_range" | "n_trie_prefix")
@@ -3278,6 +3331,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         };
 
@@ -3292,6 +3348,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         };
         if !self.lexer.has_token("=") {
@@ -3305,6 +3364,9 @@ use #count instead"
             }
             self.skip_to_parallel_body();
             self.vars.finish_loop(loop_nr);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends; see
+            // the note on the unresolved-worker exit in `build_parallel_for_ir`.
+            *code = v_block(Vec::new(), Type::Void, "par (clause not parsed)");
             return;
         }
 
@@ -3813,8 +3875,18 @@ use #count instead"
 
         // Build IR only when we have a valid function reference.
         if fn_d_nr == u32::MAX || par_for_d_nr == u32::MAX {
-            // Errors already reported; emit nothing useful.
-            *code = Value::Null;
+            // No IR to emit — but the loop is still a STATEMENT, and the placeholder has
+            // to say so.  `Value::Null` does not: the statement parser read the loop as a
+            // value and demanded a `;` after its closing brace, so
+            // `for a in v par(b = w(a), 4) { … }` compiled with `w` declared ABOVE it and
+            // failed with `Expect token ;` on the next line with `w` declared below —
+            // the same loop, legal or not by where its worker sits.
+            //
+            // "Errors already reported" holds on the second pass.  On the FIRST it does
+            // not: an unresolved worker is the ordinary state of a forward reference, and
+            // this recovery path is on the normal route to compiling one.  Both terminal
+            // branches below answer `Type::Void`; so does this one.
+            *code = v_block(Vec::new(), Type::Void, "par (worker not resolved)");
             return;
         }
 
@@ -5287,12 +5359,18 @@ use #count instead"
     }
 
     /// Validate arguments for `any`/`all`/`count_if`: (vector, fn-pred→boolean).
+    ///
+    /// The second half of the answer is the predicate's STATIC definition number, and it is
+    /// `None` for a fn-ref VALUE — a lambda that captures, or a fn-ref held in a variable.
+    /// Those reach the callee through `CallRef` rather than `Call`, exactly as `filter` does
+    /// (`parse_filter_validate`).  Answering `None` for the whole call there instead is what
+    /// made `count_if(v, |x| { x > k })` compile to nothing at all (loft#1001).
     fn validate_predicate_args(
         &mut self,
         name: &str,
         list: &[Value],
         types: &[Type],
-    ) -> Option<(Type, u32)> {
+    ) -> Option<(Type, Option<u32>)> {
         if list.len() != 2 {
             if !self.first_pass {
                 diagnostic!(
@@ -5338,22 +5416,38 @@ use #count instead"
             );
             return None;
         }
+        // Accept both a static fn-ref (`Value::Int`) and a fn-ref VALUE (a capturing lambda
+        // or a fn-ref variable); the caller picks `Call` or `CallRef` off this.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
-            *d as u32
+            Some(*d as u32)
         } else {
-            return None;
+            None
         };
         Some((elem_type, fn_d_nr))
     }
 
     /// Build the iteration preamble shared by `any`/`all`/`count_if`: copies the
     /// vector, creates an iterator, and returns the loop scaffolding.
+    ///
+    /// `fn_d_nr` is the predicate's static definition number, or `None` for a fn-ref VALUE —
+    /// which the preamble then binds to a local so the loop body can reach it with `CallRef`.
     fn predicate_loop_scaffold(
         &mut self,
         name: &str,
         list: &[Value],
         types: &[Type],
-    ) -> (Vec<Value>, u16, Value, Value) {
+        fn_d_nr: Option<u32>,
+    ) -> PredicateLoop {
+        // A fn-ref VALUE has to live in a local: the loop body is built before the preamble
+        // runs, so it needs a slot to name rather than the expression that produced it.
+        let fn_ref_var = if fn_d_nr.is_none() {
+            let v = self.create_unique(&format!("{name}_fn"), &types[1]);
+            self.vars.defined(v);
+            Some(v)
+        } else {
+            None
+        };
+
         let mut in_type = types[0].clone();
         let vec_var = self.create_unique(&format!("{name}_vec"), &in_type);
         in_type = in_type.depending(vec_var);
@@ -5388,12 +5482,22 @@ use #count instead"
             )
         };
 
-        let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
+        let mut preamble = vec![v_set(vec_var, list[0].clone())];
+        if let Some(fv) = fn_ref_var {
+            preamble.push(v_set(fv, list[1].clone()));
+        }
+        preamble.push(create_iter);
         // N8a.4: return for_next and break_if_done as separate values so callers
         // inline them directly in the loop body.  A v_block wrapper would declare
         // `for_var` inside a nested Rust `{ }` block, making it invisible to the
         // short_circuit/count_step expression that follows in native code.
-        (preamble, for_var, for_next, break_if_done)
+        PredicateLoop {
+            preamble,
+            for_var,
+            for_next,
+            break_if_done,
+            fn_ref_var,
+        }
     }
 
     /// `any(vec, pred)` — true if pred returns true for any element.
@@ -5408,11 +5512,10 @@ use #count instead"
         let acc = self.create_unique("any_acc", &Type::Boolean);
         self.vars.defined(acc);
 
-        let (preamble, for_var, for_next, break_if_done) =
-            self.predicate_loop_scaffold("any", list, types);
+        let lp = self.predicate_loop_scaffold("any", list, types, fn_d_nr);
 
         // if pred(elem) { acc = true; break }
-        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let pred_call = predicate_call(fn_d_nr, &lp);
         let short_circuit = v_if(
             pred_call,
             v_block(
@@ -5423,6 +5526,12 @@ use #count instead"
             Value::Null,
         );
 
+        let PredicateLoop {
+            preamble,
+            for_next,
+            break_if_done,
+            ..
+        } = lp;
         let loop_body = vec![for_next, break_if_done, short_circuit];
         let mut stmts = vec![v_set(acc, Value::Boolean(false))];
         stmts.extend(preamble);
@@ -5445,11 +5554,10 @@ use #count instead"
         let acc = self.create_unique("all_acc", &Type::Boolean);
         self.vars.defined(acc);
 
-        let (preamble, for_var, for_next, break_if_done) =
-            self.predicate_loop_scaffold("all", list, types);
+        let lp = self.predicate_loop_scaffold("all", list, types, fn_d_nr);
 
         // if !pred(elem) { acc = false; break }
-        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let pred_call = predicate_call(fn_d_nr, &lp);
         let not_pred = self.cl("OpNot", &[pred_call]);
         let short_circuit = v_if(
             not_pred,
@@ -5461,6 +5569,12 @@ use #count instead"
             Value::Null,
         );
 
+        let PredicateLoop {
+            preamble,
+            for_next,
+            break_if_done,
+            ..
+        } = lp;
         let loop_body = vec![for_next, break_if_done, short_circuit];
         let mut stmts = vec![v_set(acc, Value::Boolean(true))];
         stmts.extend(preamble);
@@ -5488,14 +5602,19 @@ use #count instead"
         let acc = self.create_unique("cntif_acc", &I32);
         self.vars.defined(acc);
 
-        let (preamble, for_var, for_next, break_if_done) =
-            self.predicate_loop_scaffold("count_if", list, types);
+        let lp = self.predicate_loop_scaffold("count_if", list, types, fn_d_nr);
 
         // if pred(elem) { acc += 1 }
-        let pred_call = Value::Call(fn_d_nr, vec![Value::Var(for_var)]);
+        let pred_call = predicate_call(fn_d_nr, &lp);
         let inc = v_set(acc, self.cl("OpAddInt", &[Value::Var(acc), Value::Int(1)]));
         let count_step = v_if(pred_call, inc, Value::Null);
 
+        let PredicateLoop {
+            preamble,
+            for_next,
+            break_if_done,
+            ..
+        } = lp;
         let loop_body = vec![for_next, break_if_done, count_step];
         let mut stmts = vec![v_set(acc, Value::Int(0))];
         stmts.extend(preamble);

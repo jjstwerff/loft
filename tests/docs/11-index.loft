@@ -16,6 +16,8 @@ struct Db {
   map: index < Elm[nr, -key] >
 }
 
+// @FTR-038 — an `index` on a multi-part key: lookup by key, ordered iteration, and a
+// second key breaking ties in the other direction
 fn main() {
   // ## Adding and Looking Up Records
   // Fill the index just like a vector. Elements are automatically kept in key order.

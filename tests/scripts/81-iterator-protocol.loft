@@ -18,6 +18,8 @@ fn next(self: Counter) -> integer? {
   val
 }
 
+// @FTR-040 — a custom iterator: any type with `fn next(self) -> T?` drives a for-loop,
+// including the empty and single-element cases
 fn main() {
   // Basic custom iterator: count from 0 to 2
   c = new_counter(3);

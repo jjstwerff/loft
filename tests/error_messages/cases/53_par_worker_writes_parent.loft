@@ -1,0 +1,15 @@
+struct Bag53 { n: integer }
+
+fn add53(v: integer, bag: Bag53) -> integer {
+  bag.n = bag.n + v;
+  v
+}
+
+fn main() {
+  bag = Bag53 { n: 0 };
+  v = [1, 2, 3];
+  for x in v par(b = add53(x, bag), 4) {
+    print("{b}");
+  }
+  print("bag={bag.n}");
+}

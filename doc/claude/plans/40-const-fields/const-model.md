@@ -51,6 +51,23 @@ re-annotated to match.  No new keyword.
   `tests/issues.rs` and the LOFT.md / loft-write 4-quadrant table.  The const-suggest
   lint (const-suggest-lint.md) is now well-defined as a DUAL lint (binding-const on a
   never-rebound field, value-const on a never-mutated field/param) — its own follow-up.
+  - **Scope correction (measured 2026-08-18, @PLN141 C2 slice 5): rule 4 names the wrong
+    spelling.**  It closes `const` → `&` param, but `&` is not what lets a callee write:
+    a PLAIN struct parameter names the caller's record too (@F106 / @PLN141 `@FTR-003`).
+    Measured on both backends, a value-const parameter passed to a plain parameter is
+    accepted and the callee's field write lands in the ORIGINAL record:
+
+    ```loft
+    fn bump(a: Account) { a.balance = 999; }
+    fn describe(acct: const Account) -> text { bump(acct); "…" }   // accepted today
+    // caller's balance: 500 -> 999
+    ```
+
+    So steps 4–5 must gate every argument position that can be written — plain struct /
+    vector / value-struct parameters as well as `&` — or the rule closes the rare
+    spelling and leaves the common one open.  A direct write through the parameter is
+    already refused (`Cannot modify const parameter 'a'`), which is what makes the hole
+    invisible: the guarantee reads as enforced right up to the first call.
 
 ## First principle — two orthogonal facts, and loft already has one of them
 

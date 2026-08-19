@@ -68,6 +68,9 @@ fn score_grade(r: const Score) -> Grade {
   if r.value >= 20 { High } else if r.value >= 10 { Medium } else { Low }
 }
 
+// @FTR-065 — the program whose emitted BYTECODE and generated RUST are both pinned
+// byte-for-byte by tests/codegen_emitter.rs, so a change to either backend's output is a
+// reviewed diff rather than a surprise
 fn main() {
   // --- Form 1: global function, integer return, 1 thread ---
   q = ScoreList {};

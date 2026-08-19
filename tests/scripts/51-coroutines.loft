@@ -87,6 +87,8 @@ fn nums_p219() -> iterator < integer > {
   for n in[10, 20, 30] { yield n; }
 }
 
+// @FTR-039 — an `iterator<T>` value: `yield`, `yield from`, `next()`, `exhausted()`, a
+// for-loop over it, and locals that survive a suspend
 fn main() {
   // --- CO1.3: next() advances generator ---
   gen = count();

@@ -372,18 +372,29 @@ coordinate key fields (@PLN48):
 | `m = xs[x, y]` | Look up the record at exactly that point; `null` when nothing sits there. Note the coordinates are separate subscripts (`xs[3, 6]`), not the parenthesised pair the range forms use. |
 | `xs[x, y] = mob` | Insert-or-replace at that point (the key comes from `mob`'s own coordinate fields, as for `hash`/`sorted`/`index`). |
 | `xs[x, y] = null` | Remove the record at that point; a no-op when the point is empty. |
-| `xs[(x,y)..]` | Open outward walk from a point; caller `break`s to stop. |
+| `xs[(x,y)..]` | Walk ONWARD along the collection's Morton order from that point; caller `break`s to stop. |
 | `xs[(x,y)..:n]` | Same, capped at `n` records. |
-| `xs[(x1,y1)..(x2,y2)]` | Bounding-box range. |
+| `xs[(x1,y1)..(x2,y2)]` | Bounding-box range — exactly what is inside the box. |
 
 There are no `.near`/`.within`/`.nearest` methods — proximity is ordinary
-range slicing. All three slice forms are the raw Morton-code interval: a
-bounding box is a *superset* of the geometric box (Z-order threads through
-codes outside it, same as any keyed range slice being the raw key range) —
-filter or `break` inside the loop for an exact shape. A slice is a
-`for`-loop iterator, not a value, same as other keyed range slices. See
-[DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers) for
-the implementation.
+range slicing. The BOX form gives exactly the records inside the box and
+nothing outside it, in the collection's own order (loft#800 — it used to
+answer the raw code interval between the corners, a strict superset, because
+Z-order threads out of the box and back). A corner-swapped axis names the
+same box.
+
+The two OPEN forms are the Morton **tail**: they yield only records at or
+after the query point in the collection's order, so what you get depends on
+where that point sits in the curve, and a record just BEHIND it is not
+returned however close it is. `..:n` therefore under-delivers near the end of
+the curve — over five records it answers 3, 3, 3, 2, 1, 0 as the query moves
+along — and a query past every record answers nothing (loft#1002). For a
+neighbourhood in every direction use a symmetric box, `xs[(x-r, y-r)..(x+r,
+y+r)]`.
+
+A slice is a `for`-loop iterator, not a value, same as other keyed range
+slices. See [DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers)
+for the implementation.
 
 A text key is refused here — `spatial<Word[w]>` names `trie<Word[w]>` instead
 (loft#799).  Before that, it compiled and then answered `null` for a key just
@@ -850,9 +861,9 @@ resident count, and what a binding refuses — is [LAZY_STORES.md](LAZY_STORES.m
 | `store_bind_lazy(c: reference, source: text) -> boolean` | Bind collection `c` to `source` — an IMAGE (a local `.store` file or an `http(s)://` URL served with Range, i.e. whatever `store_load_key` accepts) or a DATABASE (`sqlite:<path>`), where the `SELECT` is derived from `c`'s own type: table = the element type's name lowercased, columns = its fields, `WHERE` = its key.  Read-only; the database source serves a keyed lookup on any ordered or hashed kind, and a binding it cannot turn into a query is refused through `store_lazy_error` rather than served wrongly.  Per COLLECTION, not per store: two collections of one type may bind differently.  Binding replaces any previous binding, and may be done before `c` holds anything.  **`false` is worth checking**: besides a null collection, an IMAGE is read a page at a time and only a `hash` or a `trie` supports that, so a `sorted`/`index`/`spatial` bound to one is refused HERE rather than answering `null` at every later lookup (loft#802) — those kinds load whole, with `store_load` / `store_load_url_trusted`.  A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. |
 | `store_lazy_range(c: reference, lo: integer, hi: integer) -> integer` | Pull a whole KEY RANGE from `c`'s bound DATABASE source in ONE query (bounds inclusive, in the collection's own key order); answers how many records `c` gained.  The cure for N+1: 500 records fetched one lookup at a time is 500 round trips, and the same 500 as a range is one.  `c` must be ORDERED (`sorted`/`index`) and keyed on one column — a `hash` has no order to range over and a composite key needs `store_lazy_query`.  A record already resident is left alone. |
 | `store_lazy_query(c: reference, condition: text) -> integer` | Run an explicit SQL `condition` against `c`'s bound DATABASE source and pull every matching row INTO `c`; answers how many records `c` gained.  The escape hatch for what the key cannot express (`name LIKE 'Ada%'`, a predicate on another column) — derived queries need no call, this one cannot be derived, so it is written down and visible.  Rows land in the collection rather than in a detached result, and a row already resident is left alone: a person found this way and the same person found by key are ONE record.  Answers `0` both for "nothing matched" and for "the query could not run"; `store_lazy_error` tells those apart. |
-| `store_lazy_error(c: reference) -> text` | Why the last fetch could not REACH the source, or `""` when healthy.  A genuine absence CLEARS it — reaching the source and not finding the key proves the source was reachable — so a stale error never outlives the truth. |
+| `store_lazy_error(c: reference) -> text` | Why a fetch could not REACH the source, or `""` when healthy.  The FIRST failure's reason, kept — it names the original cause, so a later and often more actionable one reaches stderr but not this call.  Nothing clears it but `store_lazy_clear`: neither a genuine absence nor a later success is an acknowledgement, because reaching the source now says nothing about what an earlier failure already lost. |
 | `store_lazy_faults(c: reference) -> integer` | How many fetches could not reach the source.  `0` is healthy; after a traversal it answers "how incomplete am I". |
-| `store_lazy_clear(c: reference) -> boolean` | Acknowledge those faults, answering whether there was anything to acknowledge. |
+| `store_lazy_clear(c: reference) -> boolean` | Acknowledge those faults, answering whether there was anything to acknowledge.  The ONLY thing that clears them. |
 | `store_lazy_fail(c: reference, why: text)` | **The writing end of that channel**, for a lazy driver written in loft (`fn lazy_fetch(…)`, below).  A driver's three answers do not fit its return value: `1` inserted and `0` absent are integers, and "the source is down" carries a REASON — answering `0` for it is the silent wrong answer this channel exists to prevent.  Sticky and counted exactly like a Rust source's failure. |
 
 **Ask after a null, because a null cannot say why.**  C80 means a value read never

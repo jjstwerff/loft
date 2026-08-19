@@ -12,6 +12,8 @@
 // scan.loft used `' '` (space) as a "won't appear" sentinel
 // because '\0' didn't lex; the workaround removed in phase 10.16.
 
+// @FTR-072 — the character-level details the lexer settles before the parser sees anything:
+// every escape sequence, in a string and in a character literal
 fn test_null_character() {
   // Loft treats codepoint 0 as the null character itself —
   // `'\0' as integer` returns `null`, not `0`.  This matches

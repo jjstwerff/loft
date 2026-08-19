@@ -554,6 +554,79 @@ check_examples_selftest() {
   fi
 }
 
+# ---- Self-test: the CITATION scanner's rules, pinned (@PLN141 C2) ----
+# The def scanner above decides what a tag MEANS; this decides what COUNTS as citing
+# one, and C2 gave it a second source in a different language (markdown, from a feature
+# issue body).  Two of the four rules below are ABSENCES — a scanner that gets keener
+# reads the documentation OF the convention as a use of it, which is silent drift in
+# the direction that always looks like more coverage.
+check_examples_cite_selftest() {
+  say "=== Worked-example citation scanner: both sources, and what each ignores ==="
+  local d; d=$(mktemp -d) || { red "  cite selftest: cannot create a temp dir"; DRIFT=1; return; }
+  mkdir -p "$d/src" "$d/features"
+
+  # 1. The CODE source: a `// Example:` line in a .loft cites.
+  printf '// Example: @TST-101\nfn cites_from_code() { }\n' > "$d/src/a.loft"
+  # 2. The CATALOGUE source: a markdown `Example:` line in a feature doc cites, with or
+  #    without the usual emphasis/list markers around it.
+  printf '# @F1 — a feature\n\n## Example\n\nExample: @TST-102\n' > "$d/features/F1.md"
+  printf '# @F2\n\n- **Example:** @TST-103\n' > "$d/features/F2.md"
+  # 3. ABSENCE — `## Example` is a HEADING, not a citation, and 81 feature docs carry
+  #    one.  If the colon stopped being required every one of them would start citing
+  #    whatever tag happened to appear under it.
+  printf '# @F3\n\n## Example\n\n@TST-104 is only mentioned here.\n' > "$d/features/F3.md"
+  # 4. ABSENCE — the code form shown INSIDE a feature doc is documentation of the
+  #    convention, not a use of it.  A feature explaining worked examples will contain
+  #    exactly this line, and it must stay inert.
+  printf '# @F4\n\nWrite it like this:\n\n```loft\n// Example: @TST-105\nfn demo() { }\n```\n' \
+    > "$d/features/F4.md"
+
+  local want got
+  want=$(printf '@TST-101\n@TST-102\n@TST-103\n')
+  got=$(examples_cited_in_tree "$d" "src" "features")
+  # 5. INERT — with no feature-docs directory, the code source stands alone.
+  local inert; inert=$(examples_cited_in_tree "$d" "src" "no_such_dir")
+  rm -rf "$d"
+  if [ "$got" = "$want" ] && [ "$inert" = "@TST-101" ]; then
+    green "  ok — 5 rules (code / markdown / heading-is-not / fenced-form-is-not / inert)"
+  else
+    red "  cite selftest FAILED — the citation scanner no longer follows its rules:"
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^/      /'
+    [ "$inert" = "@TST-101" ] || red "      with no feature docs it returned: $inert"
+    HITS_EXAMPLES=$((HITS_EXAMPLES + 1)); DRIFT=1
+  fi
+}
+
+# Every worked-example tag a repo CITES, one per line, sorted.  Two sources, and they
+# are deliberately different in SHAPE because they live in different kinds of text:
+#
+#   code       `// Example: @AAA-###` in a `.loft` under $2 — a function documenting
+#              its own correct use, beside the code it is about.
+#   catalogue  `Example: @AAA-###` in a feature doc under $3 — MARKDOWN, because the
+#              canonical text is a loft-lang/features ISSUE BODY and `doc/features/`
+#              is its generated shadow (@PLN141 C2).  A feature's ```loft fence is the
+#              minimal compiles-and-runs snippet; this points at a REAL use, and the
+#              two are complementary rather than alternatives.
+#
+# `//` is deliberately NOT a markdown line-marker here.  A feature doc explaining the
+# convention shows the code form inside a fence, and a scanner that accepted it would
+# read the documentation OF the mechanism as a use of it — the same class of mistake
+# the def scanner's citation rule exists for.
+#
+# The catalogue source is inert where its directory is absent, which is every library:
+# the same opt-in ratchet as the rest of the mechanism.
+examples_cited_in_tree() {
+  local root="$1" cite_roots="$2" feature_docs="$3"
+  local tag_re='@[A-Z][A-Z][A-Z]-[0-9][0-9][0-9]'
+  {
+    ( cd "$root" 2>/dev/null && grep -rhE "//[[:space:]]*Example:" $cite_roots --include='*.loft' 2>/dev/null )
+    if [ -n "$feature_docs" ] && [ -d "$root/$feature_docs" ]; then
+      ( cd "$root" 2>/dev/null && grep -rhE '^[[:space:]]*([*_>-]+[[:space:]]*)*Example:' \
+          "$feature_docs" --include='*.md' 2>/dev/null )
+    fi
+  } | grep -oE "$tag_re" | sort -u
+}
+
 # ---- Check: worked-example tags resolve to a real test/function (@PLN141) ----
 # A stdlib / library function documents its correct use by CITING a demonstrator:
 # `// Example: @AAA-###`, where the tag names a `fn` carrying `// @AAA-###` above it
@@ -588,11 +661,12 @@ check_examples() {
   # resolve there for any repo-under-test.  Its registry name is `loft` by convention.
   local host_repo="${EXAMPLES_HOST_REPO:-loft}"
   local self_name; self_name=$(basename "$(cd "$repo_root" 2>/dev/null && pwd)")
+  # Feature-catalogue citations (@PLN141 C2): present only in loft, inert elsewhere.
+  local feature_docs="${EXAMPLES_FEATURE_DOCS:-doc/features}"
   local cited cache
   cited=$(mktemp); cache=$(mktemp -d)
-  # Citations under the repo-under-test (loft: default/ + lib/).
-  ( cd "$repo_root" 2>/dev/null && grep -rhnE "//[[:space:]]*Example:" $cite_roots --include='*.loft' 2>/dev/null ) \
-    | grep -oE "$tag_re" | sort -u > "$cited"
+  # Citations under the repo-under-test (loft: default/ + lib/ + doc/features/).
+  examples_cited_in_tree "$repo_root" "$cite_roots" "$feature_docs" > "$cited"
   # Cache a repo's defs by checkout path, so each repo is scanned at most once.
   _defs() {
     local key cf; key=$(printf '%s' "$1" | tr '/.' '__'); cf="$cache/$key"
@@ -627,6 +701,8 @@ check_examples() {
     if [ -z "$def" ]; then
       red "  dangling: $t is cited but no fn carries it in $repo"
       ( cd "$repo_root" 2>/dev/null && grep -rnE "Example:.*$t" $cite_roots --include='*.loft' 2>/dev/null ) | sed 's/^/      /'
+      [ -d "$repo_root/$feature_docs" ] && \
+        ( cd "$repo_root" 2>/dev/null && grep -rnE "Example:.*$t" "$feature_docs" --include='*.md' 2>/dev/null ) | sed 's/^/      /'
       hits=$((hits + 1)); continue
     fi
     if [ "$lpath" = "$repo_root" ]; then
@@ -1135,7 +1211,7 @@ case "$CHECK" in
   refs)    check_refs ;;
   libs)    check_libs ;;
   examples) check_examples ;;
-  examples-selftest) check_examples_selftest ;;
+  examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest ;;
   examples-index) check_examples_index ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
@@ -1155,6 +1231,8 @@ case "$CHECK" in
     check_libs
     sep
     check_examples_selftest
+    sep
+    check_examples_cite_selftest
     sep
     check_examples
     sep

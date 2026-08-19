@@ -58,6 +58,8 @@ struct Box {
   inner: Cell,
 }
 
+// @FTR-073 — the two-pass property, from the side that proves it: pass 1 DEFERS on a type
+// it has not read yet instead of failing, so declaration order does not decide
 fn main() {
   assert(
     build(Map { items: [

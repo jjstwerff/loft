@@ -394,11 +394,14 @@ fn closure_capture_after_change() {
     // A5.6-2: closure is allocated at definition time, so x=10 is captured into
     // the closure record when `f = fn(...)` is evaluated.  x=99 is a later
     // reassignment that does not affect the closure → f(5) = 10 + 5 = 15.
-    // The dead-assignment warning fires because x is only "used" at the call site
-    // (var_usages), so the compiler sees x=10 as overwritten before being read.
-    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)")
-        .warning("Dead assignment — 'x' is overwritten before being read at closure_capture_after_change:2:26")
-        .result(Value::Int(15));
+    //
+    // And NO dead-assignment warning: the capture READS the 10, which the result
+    // above proves (15 is 10 + 5).  This case used to assert the warning — the
+    // capture is deliberately not counted in `uses`, so the check read it as a
+    // write overwritten before any read, and advertised deleting the line that
+    // supplies the answer.  A lint that must never make a program wrong stays
+    // silent on a captured variable (`Variables::track_write`).
+    expr!("x = 10; f = fn(y: integer) -> integer { x + y }; x = 99; f(5)").result(Value::Int(15));
 }
 
 #[test]

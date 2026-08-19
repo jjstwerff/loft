@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Control flow: if/else, for loops, ranges, break, nested loops, loop metadata.
+// @FTR-033 — `if`/`else` as an expression, and every for-loop form: exclusive and
+// inclusive ranges, `rev()`, a filter guard, `#first`/`#count`/`#index`, break by label,
+// continue, and an empty range
 fn main() {
   // --- If / else if / else ---
   a = 12;

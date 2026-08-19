@@ -36,6 +36,39 @@ pub(crate) struct FieldSinks {
 }
 
 impl Parser {
+    /// loft#1008 — the receiver TYPES of every method registered under the bare name `name`.
+    ///
+    /// A method is stored as `t_<len><Type>_<name>`, so a bare name has no definition of its
+    /// own and reads as "unknown" wherever a value is wanted. Answering the receivers lets the
+    /// diagnostic say what the name IS rather than that it is missing, and there may be more
+    /// than one — arg-type dispatch means `area` can be a method on three shapes at once.
+    /// Sorted and de-duplicated, because a diagnostic whose wording depends on hash order is
+    /// not a contract.
+    pub(crate) fn method_receivers_named(&self, name: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for d in 0..self.data.definitions() {
+            let raw = self.data.def(d).name();
+            let Some(body) = raw.strip_prefix("t_") else {
+                continue;
+            };
+            let digits: String = body.chars().take_while(char::is_ascii_digit).collect();
+            let Ok(len) = digits.parse::<usize>() else {
+                continue;
+            };
+            let rest = &body[digits.len()..];
+            if rest.len() < len {
+                continue;
+            }
+            let (ty, tail) = rest.split_at(len);
+            if tail.strip_prefix('_') == Some(name) {
+                out.push(ty.to_string());
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// @P387 / @P383 — the user-facing argument types of a fn used as a
     /// first-class `fn` value.  Excludes the SYNTHETIC return buffer the fn-ref
     /// dispatch injects: `__work_ret` / `__retbuf` while still `__`-prefixed, AND
@@ -559,7 +592,26 @@ impl Parser {
                         crate::diagnostics::suggest_similar(name, &candidates)
                             .map(std::string::ToString::to_string)
                     });
-                    if let Some(s) = suggestion {
+                    // loft#1008 — the name may be a METHOD, in which case it is not unknown at
+                    // all: a `self`/`both` function is registered as `t_<len><Type>_<name>` and
+                    // has no `n_<name>` to bind, so naming it where a VALUE is wanted (a fn-ref
+                    // argument, `map(v, f)`) reported that the file's own function does not
+                    // exist. Say what it is and what to write; the receiver types are listed
+                    // because a bare name can be a method on several.
+                    let receivers = self.method_receivers_named(name);
+                    if !receivers.is_empty() {
+                        let on = receivers.join("`, `");
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "`{name}` is a method on `{on}`, and a method is not a function \
+                             VALUE — there is nothing to bind here. Wrap it: `|x| {{ x.{name}(…) \
+                             }}`, or declare the function with a plain first-parameter name \
+                             (not `self` / `both`), which makes it a free function and a usable \
+                             fn-ref"
+                        );
+                    } else if let Some(s) = suggestion {
                         diagnostic_at!(
                             self.lexer,
                             name_pos,
@@ -714,7 +766,25 @@ impl Parser {
                              read back; give the value a name if you need it"
                         );
                     } else {
-                        diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                        // loft#1008 — a METHOD is registered as `t_<len><Type>_<name>`, so its
+                        // bare name has no definition to bind and reads as unknown wherever a
+                        // VALUE is wanted (a fn-ref argument, `map(v, f)`). Naming what it is
+                        // beats reporting that the file's own function does not exist.
+                        let receivers = self.method_receivers_named(name);
+                        if receivers.is_empty() {
+                            diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                        } else {
+                            let on = receivers.join("`, `");
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "`{name}` is a method on `{on}`, and a method is not a function \
+                                 VALUE — there is nothing to bind here. Wrap it: \
+                                 `|x| {{ x.{name}(…) }}`, or declare the function with a plain \
+                                 first-parameter name (not `self` / `both`), which makes it a \
+                                 free function and a usable fn-ref"
+                            );
+                        }
                     }
                     t = Type::Unknown(0);
                 } else {
@@ -1938,6 +2008,26 @@ impl Parser {
                 // `result` vs `reuslt` (6-char transposition, distance 2)
                 // are common and worth suggesting; the capped version's
                 // `min(2, n/4)` formula is too strict for short names.
+                // loft#1008 — a METHOD is registered as `t_<len><Type>_<name>`, so its bare
+                // name has no definition to bind and reads as unknown wherever a VALUE is
+                // wanted: a fn-ref argument, `map(v, f)`. Reporting that the file's own
+                // function does not exist sends the reader looking for a typo; name what it
+                // is and what to write instead. Checked BEFORE the spelling suggestion,
+                // which would otherwise offer the nearest local.
+                let receivers = self.method_receivers_named(&name);
+                if !receivers.is_empty() {
+                    let on = receivers.join("`, `");
+                    diagnostic_at!(
+                        self.lexer,
+                        pos,
+                        Level::Error,
+                        "`{name}` is a method on `{on}`, and a method is not a function VALUE — \
+                         there is nothing to bind here. Wrap it: `|x| {{ x.{name}(…) }}`, or \
+                         declare the function with a plain first-parameter name (not `self` / \
+                         `both`), which makes it a free function and a usable fn-ref"
+                    );
+                    return;
+                }
                 let suggestion = if name.chars().count() <= 1 {
                     None
                 } else {

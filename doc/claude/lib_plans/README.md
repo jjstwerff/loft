@@ -12,7 +12,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > number), in the unified numbering there.  This directory is a legacy archive
 > being migrated to `plans/`: an entry that already maps to a `@PLN` issue moves
 > + renumbers to it; one not on gh yet gets an issue created first, then
-> renumbers.  **Do not add new `lib_plans/` dirs.**
+> renumbers.  **Do not add new `lib_plans/` dirs.**  ⚠ Two landed anyway after this was written — @PLN141
+(2026-08-18) and @PLN144–147 (2026-08-19, since moved to `plans/`) — because the
+loft-plan-workflow skill's binding table still routed *library* plans here.  That row is
+fixed; if a new `lib_plans/` dir appears, check whether some other doc is still pointing at
+this directory rather than assuming the author ignored this line.
 
 **Distinct from `plans/`.**  `plans/` tracks core-language and
 compiler / runtime initiatives (validation matrices, codegen

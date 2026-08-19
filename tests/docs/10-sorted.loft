@@ -17,6 +17,8 @@ struct Db {
   map: sorted < Elm[-key] >
 }
 
+// @FTR-037 — a `sorted` collection keeps its order as records arrive, descending on a
+// `-key`, and answers a lookup by that key
 fn main() {
   // ## Adding Elements
   // You initialise a sorted collection the same way as a vector.

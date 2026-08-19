@@ -13,6 +13,8 @@
 
 // ---- CONFINED: read only inside the block → fix frees at block exit, stays correct ----
 
+// @FTR-071 — the store-lifetime boundary itself: which shapes may free a store at a block
+// exit and which may not, on both backends
 fn test_conf_dead_at_block_exit() {
   total = 0;
   if true {

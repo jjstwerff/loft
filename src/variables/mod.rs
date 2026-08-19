@@ -1328,7 +1328,14 @@ impl Function {
         // passes — this one runs DURING the body parse, which is why it reaches user
         // code that has not been parsed yet.
         let here = lexer.at();
-        if var.write_source != (0, 0) && var.uses == var.uses_at_write {
+        // A CLOSURE CAPTURE is a read, and it is deliberately not counted in `uses`
+        // (the capture site in `parser/vectors.rs` says so, to keep this check from
+        // seeing a capture as an ordinary use).  So a captured variable's earlier
+        // write can never be shown dead here: `s = 10; f = fn() { s }; s = 20;`
+        // hands `f` the 10, and reporting that write as dead advertises a deletion
+        // that changes the answer.  Silence on a captured variable is the safe
+        // direction for a lint that must never make a program wrong.
+        if var.write_source != (0, 0) && var.uses == var.uses_at_write && !var.captured {
             // Variable was written before but not read since — dead assignment
             let name = var.name.clone();
             let prev_source = var.write_source;
@@ -2258,9 +2265,20 @@ impl Function {
         self.variables[var_nr as usize].source
     }
 
-    pub fn test_used(&self, lexer: &mut Lexer, data: &Data, body: &Value) {
+    pub fn test_used(&self, lexer: &mut Lexer, data: &Data, body: &Value, d_nr: u32) {
         for (nr, var) in self.variables.iter().enumerate() {
             if var.name.starts_with('_') || var.name.contains('#') {
+                continue;
+            }
+            // A parameter that another parameter's DEFAULT reads is read — the body is
+            // simply not where it happens.  `fn window(rows: integer, height: integer =
+            // rows * 10)` counted no use of `rows`, because the default is parsed against
+            // temporary variables that are dropped again before the real parameter slots
+            // exist (see `definitions.rs`, the `injected` mapping).  So the lint told the
+            // author to "drop the parameter `rows` — and its callers' argument", and
+            // taking that advice deletes what the default reads: the same shape as a
+            // closure capture reading a variable the check could not see.
+            if var.argument && Self::read_by_a_parameter_default(data, d_nr, &var.name) {
                 continue;
             }
             // A variable the emitted body never even NAMES is a pass-1 leftover, not an
@@ -2350,6 +2368,28 @@ impl Function {
                 });
             }
         }
+    }
+
+    /// Does any parameter's stored default read the parameter called `name`?
+    ///
+    /// A default is held on the SIGNATURE and replayed in the caller's frame, so it
+    /// refers to earlier parameters by ARGUMENT INDEX rather than by this function's
+    /// var numbering (`definitions.rs` remaps them for exactly that reason). The
+    /// lookup therefore goes name → index → every attribute's default, which also
+    /// covers a default that was lifted into a function of its own: its arguments are
+    /// the same indices.
+    fn read_by_a_parameter_default(data: &Data, d_nr: u32, name: &str) -> bool {
+        if d_nr == u32::MAX {
+            return false;
+        }
+        let count = data.attributes(d_nr);
+        let Some(idx) = (0..count).find(|&a| data.attr_name(d_nr, a) == name) else {
+            return false;
+        };
+        let Ok(idx) = u16::try_from(idx) else {
+            return false;
+        };
+        (0..count).any(|a| data.attr_value(d_nr, a).reads_var(idx))
     }
 
     /// @PLN107 S1 — observable dump of the dead-store access classification (value-observing

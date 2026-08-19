@@ -40,6 +40,8 @@ fn firsttwo(v: vector<Tok>) -> integer {
   }
 }
 
+// @FTR-054 — a separated repetition, `(V)*(",")` — the shape a comma-separated argument
+// list has
 fn main() {
   a: vector<Tok> = [
     Num { n: 5 },

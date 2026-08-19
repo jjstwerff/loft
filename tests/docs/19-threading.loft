@@ -68,6 +68,8 @@ fn make_scores() -> ScoreList {
   thr_q
 }
 
+// @FTR-070 — a `par` loop across threads: the worker runs on every element and the results
+// come back in order, whatever the thread count
 fn main() {
   // ## Global Function (Form 1)
   // Each Score's value is doubled by `double_score` across 4 threads.

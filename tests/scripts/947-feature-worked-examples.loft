@@ -1,0 +1,1638 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for FEATURE-CATALOGUE entries (@PLN141 C2) — the `@FTR-0NN`
+// family.  A feature issue in loft-lang/features carries a `Example: @FTR-0NN`
+// line naming the demonstrator that shows the feature carrying REAL work; the
+// generated shadow (doc/features/F###.md) repeats it, and
+// `scripts/check_doc_drift.sh examples` fails if the citation goes dangling.
+//
+// This file holds only the demonstrators authored FOR a feature.  Where a
+// feature's real use is already demonstrated elsewhere — a stdlib worked
+// example, a library's own tag — the issue cites THAT acronym and nothing is
+// added here; the catalogue's gap was usually the pointer, not the example.
+
+// @FTR-001 — `store_reclaim()`: what it gives back, and why the report over-promises
+//
+// The reader's question is not what the call does but WHEN it is worth making,
+// and the doc answers it with a rule of thumb: read `store_memory()` first,
+// because "its `tail%` is exactly what this call returns".  It is not, and the
+// gap is largest exactly where the decision is marginal.
+//
+// A reclaimed store lands at `tail 11%` — measured across eight shapes whose
+// tails before the call ran from 13% to 60%, always 11% after.  That 11% is a
+// growth reserve the allocator keeps, so the bytes handed back are
+// `tail_before - 11%` of the resulting capacity, never the whole tail.  At a
+// 13% tail the report suggests ~36 KB and the call returns under 6 KB.
+//
+// So: `tail%` ranks candidates, it does not size the return.  Treat a reading
+// near 11% as "nothing to get back" rather than "a little to get back".
+fn test_store_reclaim_leaves_a_growth_reserve_the_report_does_not_show() {
+  h: hash<Rec947[id]> = [];
+  for i in 0..4000 { h += [Rec947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 2000..4000 { h[i] = null }
+
+  before = pct947(store_memory(), "tail");
+  assert(before > 11, "a store with a dropped tail reads above the reserve, got {before}%");
+
+  freed = store_reclaim(h);
+  assert(freed > 0, "and reclaiming hands bytes back, got {freed}");
+
+  after = pct947(store_memory(), "tail");
+  assert(after == 11, "a reclaimed store lands on the 11% reserve, got {after}%");
+
+  // THE POINT: the reading before the call is not the size of the return.  The
+  // reserve is still there afterwards, so the tail that was readable and the
+  // tail that was RECLAIMABLE differ by it.
+  assert(after < before,
+         "the tail shrank but did not vanish -- {before}% became {after}%, not 0%");
+
+  // and the data is untouched: reclaim moves no record
+  live = 0;
+  for r in h { live = live + 1 - r.id * 0 }
+  assert(live == 2000, "every surviving record is still there, got {live}");
+  kept = h[7];
+  assert(kept != null && kept.label == "cell-7-padding-padding",
+         "and reads back its own value, not re-faulted bytes");
+
+  // a second call with nothing newly dropped gives back nothing
+  assert(store_reclaim(h) == 0, "a second reclaim finds no new tail");
+}
+
+// @FTR-002 — what `store_reclaim()` gives back depends on WHERE you dropped
+//
+// Two collections, the same 4000 records, the same 2000 dropped.  One drops a
+// contiguous region (a map area unloaded); the other drops every other record (a
+// filter applied across the set).  They do not reclaim the same:
+//
+//                     free-blk  mergeable | after reclaim: free-blk  bytes back
+//   contiguous 2000       2004       1997 |                       7      25 400
+//   scattered  2000       2002          5 |                    1997      16 312
+//
+// `mergeable` counts adjacent free neighbours that never coalesced, so it is a
+// measure of how CONTIGUOUS the drop was — and it is exactly the part reclaim can
+// fix.  A scattered drop leaves the store permanently in ~2000 pieces, with its
+// largest hole smaller than the contiguous case's, and no call repairs that: the
+// live records between the holes are what keeps them apart.
+//
+// So the report tells you, BEFORE you call, which kind of drop you made.  A high
+// `mergeable` says there is a contiguous run to merge; a low one on a store with
+// many free blocks says the space is there and will stay unusable for anything
+// bigger than one hole.
+fn test_what_reclaim_gives_back_depends_on_where_you_dropped() {
+  contiguous: hash<Rec947[id]> = [];
+  for i in 0..4000 { contiguous += [Rec947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 2000..4000 { contiguous[i] = null }
+
+  scattered: hash<Frag947[id]> = [];
+  for i in 0..4000 { scattered += [Frag947 { id: i, label: "cell-{i}-padding-padding" }] }
+  for i in 0..4000 { if i % 2 == 0 { scattered[i] = null } }
+
+  rep = store_memory();
+  assert(num947(rep, "free-blk") > 1000 && num947f(rep, "free-blk") > 1000,
+         "both dropped 2000 records and both hold ~2000 free blocks");
+  assert(num947(rep, "mergeable") > 1000,
+         "the contiguous drop left adjacent free neighbours, got"
+         + " {num947(rep, "mergeable")}");
+  assert(num947f(rep, "mergeable") < 100,
+         "the scattered one did not -- live records keep its holes apart, got"
+         + " {num947f(rep, "mergeable")}");
+
+  freed_c = store_reclaim(contiguous);
+  freed_s = store_reclaim(scattered);
+  rep2 = store_memory();
+
+  assert(num947(rep2, "free-blk") < 100,
+         "reclaim merges the contiguous run into a handful of blocks, got"
+         + " {num947(rep2, "free-blk")}");
+  assert(num947f(rep2, "free-blk") > 1000,
+         "and cannot merge the scattered one -- it stays in ~2000 pieces, got"
+         + " {num947f(rep2, "free-blk")}");
+  assert(num947(rep2, "mergeable") == 0 && num947f(rep2, "mergeable") == 0,
+         "neither store has an unmerged adjacent pair left");
+
+  assert(freed_c > freed_s,
+         "and the same number of dropped records gives back MORE when they were"
+         + " contiguous: {freed_c} against {freed_s}");
+}
+
+// One record type PER example.  `store_memory()` reports one line per live store and
+// the tests share a process, so a parser that takes the first line naming its type can
+// read the previous test's store instead of its own -- which reads as a wrong number
+// from the library rather than as a wrong number from the harness.
+struct Rec947 { const id: integer, const label: text }
+struct Frag947 { const id: integer, const label: text }
+
+// Read `<field>  NN%` out of the store report's line for THIS test's collection.
+// The report is one line per live store, so the type name is what selects ours.
+fn pct947(report: text, field: text) -> integer {
+  // The `??` must be discharged at the PARSE SITE, not around a parenthesised
+  // cast -- `(x as integer) ?? -1` is rejected, `x as integer ?? -1` is the form.
+  raw = word947(report, field).replace("%", "");
+  raw as integer ?? -1
+}
+
+fn num947(report: text, field: text) -> integer {
+  word947(report, field) as integer ?? -1
+}
+
+fn num947f(report: text, field: text) -> integer {
+  word947f(report, field) as integer ?? -1
+}
+
+// The token after `field` on the report line naming our collection's type.
+fn word947(report: text, field: text) -> text { field947(report, "hash<Rec947[id]>", field) }
+
+fn word947f(report: text, field: text) -> text { field947(report, "hash<Frag947[id]>", field) }
+
+fn field947(report: text, type_name: text, field: text) -> text {
+  line = "";
+  for l in report.split('\n') {
+    if l.contains(type_name) && line == "" { line = l }
+  }
+  out = "";
+  seen = false;
+  for w in line.split(' ') {
+    if w != "" {
+      if seen && out == "" { out = w }
+      if w == field { seen = true }
+    }
+  }
+  out
+}
+
+// @FTR-003 — handing a value to a function: what the callee can change
+//
+// The catalogue told a reader that a parameter is a copy: @F21 said "without `&`,
+// the function only sees a copy and your original is left alone", @F95 promised a
+// value struct is one you can "hand to somebody and they cannot change yours", and
+// @F106's two rules — a whole-value bind copies, an element read is a view — never
+// mentioned a call at all.  Measured, that model holds for a SCALAR and for one
+// other case; for everything with a store behind it a callee's field or element
+// write lands in the caller's record, `&` or no `&`.
+//
+//                       callee writes a FIELD/ELEMENT   callee REPLACES the binding
+//   integer / text          (no field to write)          lost         `&` → lands
+//   vector                  lands, with or without `&`   lost         `&` → lands
+//   struct                  lands, with or without `&`   lost         `&` → lands
+//   value struct            lands, with or without `&`   lost         `&` → lands
+//
+// So `&` buys exactly two things: a SCALAR write-back, and replacing the whole
+// binding.  It buys nothing for a field write — and loft says so itself, in
+// `advice[slow-reference-parameter]`, whose text is "field mutation already
+// propagates to the caller without it" and whose fix line points at @F21.  The
+// catalogue entry the advice sends the reader to said the opposite.
+//
+// The one place a value struct is a copy is a BIND: `p = path.pts[0]` snapshots,
+// which is @F95's own example — and handing `path.pts[0]` straight to a callee is
+// not that bind, so it writes through.  Both are asserted below, because the pair
+// is the whole distinction.
+// @EXPECT_WARNING: only slows it down here
+fn test_a_parameter_is_a_link_unless_it_is_a_scalar() {
+  // A SCALAR is a copy: the callee's arithmetic has to be RETURNED to reach you.
+  n947 = 11;
+  got = add_inside947(n947);
+  assert(got == 777, "the callee computed 11 + 766, got {got}");
+  assert(n947 == 11, "and the caller's integer is untouched, got {n947}");
+
+  // ...unless the parameter is `&`, which is what `&` is for.
+  m947 = 11;
+  add_through947(m947);
+  assert(m947 == 777, "a `&integer` writes back, got {m947}");
+
+  // A STRUCT parameter names the caller's record — plain and `&` alike.
+  s947 = Cell947 { n: 11 };
+  poke947(s947);
+  assert(s947.n == 777, "a plain struct parameter wrote through, got {s947.n}");
+  t947 = Cell947 { n: 11 };
+  poke_ref947(t947);
+  assert(t947.n == 888, "and the `&` spelling does the same thing, got {t947.n}");
+
+  // A VECTOR parameter, likewise: the element write lands.
+  v947: vector<integer> = [11, 12];
+  poke_vec947(v947);
+  assert(v947[0] == 777 && len(v947) == 2,
+         "the callee's element write reached the caller's vector, got {v947[0]}");
+
+  // A VALUE STRUCT parameter is a link too — `hand one over and they cannot
+  // change yours` is false for the hand-over...
+  p947 = Point947 { x: 11 };
+  poke_value947(p947);
+  assert(p947.x == 777, "the callee changed the caller's value struct, got {p947.x}");
+
+  // ...and true for the BIND, which is the copy @F95's example shows.  Same
+  // element, two spellings, opposite answers.
+  line947 = Line947 { pts: [Point947 { x: 11 }, Point947 { x: 12 }] };
+  bound = line947.pts[0];      // a bind: an independent copy
+  poke_value947(bound);
+  assert(bound.x == 777, "the copy moved, got {bound.x}");
+  assert(line947.pts[0].x == 11,
+         "and the element it was copied FROM did not, got {line947.pts[0].x}");
+  poke_value947(line947.pts[1]);   // no bind: the place itself is handed over
+  assert(line947.pts[1].x == 777,
+         "handing the element straight over writes through it, got {line947.pts[1].x}");
+
+  // REPLACING the whole binding is the other thing `&` is for: without it the
+  // callee's new value dies with the call, and nothing at the call site says so.
+  r947 = Cell947 { n: 11 };
+  replace947(r947);
+  assert(r947.n == 11, "a plain parameter cannot be re-pointed, got {r947.n}");
+  q947 = Cell947 { n: 11 };
+  replace_ref947(q947);
+  assert(q947.n == 555, "a `&` parameter can, got {q947.n}");
+}
+
+// @FTR-004 — capturing a value in a closure: what the closure shares
+//
+// @F22 says a closure "captures its values when it's made", so it "keeps behaving
+// the same even if those values change afterwards".  That is true of a scalar and
+// false of everything else: a struct or collection capture travels as a store
+// reference, so the closure and the enclosing scope hold ONE value — writes cross
+// in both directions, for as long as both are alive.
+//
+// It is not a defect, it is what makes a real kernel work: the audience-demo
+// server (@EHK-001) hands `engine_host::run` a closure that captures `world` and
+// appends a player to it on every connect.  If the capture were the snapshot @F22
+// describes, every connection would be forgotten as the handler returned.
+//
+// The scalar half is the one the catalogue's example shows, and it is what this
+// test pins beside the other: same syntax, opposite sharing.
+fn test_a_capture_shares_a_store_and_snapshots_a_scalar() {
+  // A SCALAR is taken at definition time — a later reassignment is not seen.
+  sc947 = 10;
+  read_it = fn() -> integer { sc947 };
+  sc947 = 20;
+  assert(read_it() == 10, "the closure kept the value it captured, got {read_it()}");
+  assert(sc947 == 20, "while the variable moved on, got {sc947}");
+
+  // A STRUCT capture is shared: the closure's write reaches the enclosing scope...
+  w947 = Cell947 { n: 1 };
+  bump = fn() { w947.n = 777; };
+  run947(bump);
+  assert(w947.n == 777, "the closure wrote into the captured record, got {w947.n}");
+
+  // ...and a change made OUT here is seen IN there, which is the exact opposite
+  // of "keeps behaving the same even if those values change afterwards".
+  w947.n = 555;
+  read_w = fn() -> integer { w947.n };
+  w947.n = 999;
+  assert(read_w() == 999, "the closure reads the record as it is NOW, got {read_w()}");
+
+  // A COLLECTION capture is shared the same way — this is the shape the server
+  // kernel depends on.
+  seen947: vector<integer> = [1];
+  record = fn() { seen947 += [9]; };
+  run947(record);
+  run947(record);
+  assert(len(seen947) == 3, "both calls appended to the caller's vector, got {len(seen947)}");
+  assert(seen947[2] == 9, "and the appended element is the closure's, got {seen947[2]}");
+}
+
+struct Cell947 { n: integer }
+value struct Point947 { x: integer }
+struct Line947 { pts: vector<Point947> }
+
+// A scalar has to travel home in the RETURN...
+fn add_inside947(v: integer) -> integer {
+  v = v + 766;
+  v
+}
+
+// ...or through a `&`, which is the one spelling that writes a scalar back.
+fn add_through947(v: &integer) { v = v + 766; }
+
+fn poke947(c: Cell947) { c.n = 777; }
+
+// `&` on a parameter whose only write is a FIELD earns the advice this file
+// expects: it costs an indirection and changes nothing.
+fn poke_ref947(c: &Cell947) { c.n = 888; }
+
+fn poke_vec947(v: vector<integer>) { v[0] = 777; }
+
+fn poke_value947(p: Point947) { p.x = 777; }
+
+// Replacing the whole binding: the plain form cannot reach the caller.
+fn replace947(c: Cell947) { c = Cell947 { n: 555 }; }
+
+fn replace_ref947(c: &Cell947) { c = Cell947 { n: 555 }; }
+
+fn run947(f: fn()) { f(); }
+
+// @FTR-005 — "a calculation that cannot give a real answer produces null": true of
+// integers, and not of floats
+//
+// @F38 tells a reader that overflow and division by zero become `null`, which they
+// can then spot and handle — "the way a spreadsheet shows an error in one cell while
+// the rest of the sheet still works".  That is the INTEGER story exactly, in every
+// position: `1 / 0`, `7 % 0` and an overflowing sum are null, and `??` reaches all
+// three.
+//
+// A float does not follow it.  `1.0 / 0.0` is +INFINITY, which is a PRESENT value:
+// `??` does not fire, the comparison it feeds answers true, and it keeps spreading
+// through every later sum.  The one float shape that IS null is `0.0 / 0.0`, because
+// NaN is what loft uses for a null float — so whether the guard fires depends on
+// whether the NUMERATOR happened to be zero, which is not what a reader of
+// `x / d ?? 0.0` believes it depends on.
+//
+// The caller's rule, and what this test pins: **test the divisor; do not expect `??`
+// to catch a float divide by zero.**  It catches the integer one.
+//
+// (loft#983: the RAW quotient — bound straight to a local, or compared without a
+// `??` in between — reads as null instead, so `x = 1.0/0.0` and `1.0/0.0 ?? f` do
+// not agree about what happened.  This test asserts only the guarded form, which is
+// what a caller writes and is the same on both backends; the unguarded one is the
+// issue's to settle.  Either resolution leaves the lesson standing: `??` is not the
+// guard for a float divide.)
+//
+// Real use, in a shipped library: `mesh3d`'s `normalize3` divides each component by
+// the length and discharges with `?? 0.0` (@MSH-005), and a degenerate camera then
+// collapses the world onto the origin with no error anywhere.  It is sound there
+// only because a zero-length vector makes the numerator zero too — the division
+// really is `0.0 / 0.0`.  One component away from that shape, the same line guards
+// nothing.
+fn test_arithmetic_safety_answers_null_for_integers_and_infinity_for_floats() {
+  // Integers: every failing form answers null, and `??` supplies the fallback.
+  iz947 = 0;
+  assert(!(1 / iz947), "an integer divided by zero is null");
+  assert((1 / iz947 ?? -9) == -9, "and `??` reaches it, got {1 / iz947 ?? -9}");
+  assert(!(7 % iz947), "the same for a remainder by zero");
+  big947 = 9000000000000000000;
+  assert(!(big947 + big947), "an integer overflow is null");
+  assert((big947 + big947 ?? -9) == -9, "and `??` reaches that too");
+
+  // Floats: the guard is written the same way and does not fire.  What comes out
+  // of `?? -9.0` here is the INFINITY, not the fallback.
+  fz947: float = 0.0;
+  one947: float = 1.0;
+  assert((one947 / fz947 ?? -9.0) > 1.0e308,
+         "1.0 / 0.0 defended with `?? -9.0` is still +inf");
+  assert((one947 / fz947 ?? -9.0) != -9.0, "so the fallback never arrived");
+  assert(((0.0 - one947) / fz947 ?? -9.0) < -1.0e308, "the negative side answers -inf");
+  assert((one947 / fz947 ?? -9.0) + 1.0 > 1.0e308,
+         "and an infinity keeps spreading through every later sum");
+
+  // The one float shape that IS null: zero over zero, because a null float is NaN.
+  // Same line, same guard -- what decides is whether the NUMERATOR was zero.
+  assert((fz947 / fz947 ?? -9.0) == -9.0,
+         "0.0 / 0.0 is the null float, so `??` reaches this one");
+
+  // Float overflow behaves like the division, not like the integer overflow.
+  assert(1.0e308 * 10.0 > 1.0e308, "a float overflow answers inf, not null");
+
+  // The rule that holds: ask about the divisor, since the quotient cannot be asked.
+  assert(!can_divide947(one947, fz947), "test the divisor before dividing");
+  assert(can_divide947(one947, 2.0), "a real divisor is what makes the quotient askable");
+}
+
+// The guard @F38's `??` cannot be, for a float.
+fn can_divide947(cd_a: float, cd_b: float) -> boolean { cd_b != 0.0 }
+
+// @FTR-006 — which field modifiers constrain, and which only choose the storage
+//
+// @F12 lists them in one breath — `const`, `= default`, `limit(lo, hi)` ("a range the
+// field must stay inside"), `not null`, `assert(...)` — and they are three different
+// kinds of thing:
+//
+//   const         COMPILE time: assigning the field is an error
+//   = default     fills the field when the literal leaves it out
+//   assert(...)   RUN time: a violating write stops the run with
+//                 "field constraint failed on <Type>.<field>"
+//   limit(lo, hi) NOT a constraint.  It selects the storage width, and a value
+//                 outside the range is neither refused nor reported (loft#984:
+//                 dropped on a 1-byte field, wrapped on a 2-byte one, and `lo+256`
+//                 aliases onto `lo`).
+//   not null      nothing at all — deprecated, and the compiler says so on sight
+//                 (`advice[not-null-deprecated]`, which this file expects below)
+//
+// The real use is @IMG-004: the published `imaging` library declares each channel
+// `integer limit(0, 255)`, and doubling a bright one stores 0 — so the brighter a
+// pixel was, the more likely brightening it turns it BLACK, in a well-formed image
+// with nothing on stderr.  The clamp belongs at the call site; `limit` will not do it.
+//
+// This test pins the parts that are settled — the default, the round-trip inside the
+// range, the clamp a caller has to write, and `not null`'s silence.  What an
+// out-of-range write does is loft#984's to decide, so it is described above and not
+// asserted here.
+// @EXPECT_WARNING: `not null` is deprecated and has no effect
+fn test_which_field_modifiers_constrain() {
+  // `= default` fills an omitted field; a field without one takes its type's zero.
+  acct = Acct947 { id: 7 };
+  assert(acct.name == "unnamed", "the declared default arrived, got [{acct.name}]");
+  assert(acct.note == "", "and a field with no default took the type's zero, got [{acct.note}]");
+  assert(acct.id == 7, "the const field holds what construction gave it");
+
+  // A `limit` field round-trips every value INSIDE its range, both ends included.
+  acct.level = 255;
+  assert(acct.level == 255, "the top of the range stores, got {acct.level}");
+  acct.level = 0;
+  assert(acct.level == 0, "and the bottom, got {acct.level}");
+
+  // The clamp is the caller's to write — this is the line @IMG-004 says the imaging
+  // library's own pixel maths is missing.
+  bright947 = 200;
+  acct.level = min(bright947 * 2, 255);
+  assert(acct.level == 255, "clamped at the call site it saturates, got {acct.level}");
+
+  // `not null` changes nothing: the field behaves exactly like a plain one.
+  assert(acct.tag == "", "a `not null` field starts at its type's zero, got [{acct.tag}]");
+  acct.tag = "set";
+  assert(acct.tag == "set", "and takes ordinary values, got [{acct.tag}]");
+}
+
+struct Acct947 {
+  const id: integer,
+  name: text = "unnamed",
+  note: text,
+  level: integer limit(0, 255),
+  tag: text not null,
+}
+
+// @FTR-007 — what `x?` falls back TO, and what "a type with no default" means
+//
+// @F96 says `x?` discharges a nullable to its type's default — 0, "", false — and
+// then draws the line in the wrong place: "types with no default (a struct without
+// defaults for its fields) are a compile error rather than a guess".  A struct
+// without field defaults has one: every field takes its own type's zero, so a
+// missing element of a `vector<Point>` discharges to `Point { x: 0, y: 0 }`, nested
+// structs and vectors included.
+//
+// What has NO default is a FIELD whose type has none, and today that means one
+// thing: a plain `enum` with no variant chosen.  The compiler names it exactly —
+//
+//   `?` needs a default here, but record `WithEnum` has no default: field
+//   `c: Colour` is an enum with no explicit choice — add `c: Colour = <variant>`,
+//   or make it `Colour?` (defaults null)
+//
+// — so the rule to carry is "an enum field needs a chosen variant", not "a struct
+// needs field defaults".  The difference matters at the call site: the first is one
+// declaration away from working, the second would make `?` unusable on most records.
+fn test_what_the_default_fallback_falls_back_to() {
+  // The scalar defaults, one per type.
+  ni947: integer? = null;
+  nt947: text? = null;
+  nb947: boolean? = null;
+  nf947: float? = null;
+  assert(ni947? == 0, "an integer discharges to 0, got {ni947?}");
+  assert(nt947? == "", "text to the empty string, got [{nt947?}]");
+  assert(nb947? == false, "boolean to false");
+  assert(nf947? == 0.0, "float to 0.0, got {nf947?}");
+
+  // A record with no field defaults still HAS a default: every field's own zero.
+  empty947: vector<Pt947> = [];
+  p947 = empty947[0]?;
+  assert(p947.x == 0 && p947.y == 0, "a missing Point is the all-zero Point");
+
+  // ...including a nested record, a vector field and a text field.
+  none947: vector<Box947> = [];
+  b947 = none947[0]?;
+  assert(b947.inner.x == 0, "the nested record went to its own zero");
+  assert(len(b947.items) == 0, "the vector field to empty");
+  assert(b947.label == "", "and the text field to the empty string");
+
+  // A DECLARED default wins over the type's zero, which is the reason to write one.
+  dv947: vector<Cfg947> = [];
+  c947 = dv947[0]?;
+  assert(c947.retries == 3, "the declared default arrived, got {c947.retries}");
+  assert(c947.name == "unnamed", "and for the text field too, got [{c947.name}]");
+}
+
+struct Pt947 { x: integer, y: integer }
+struct Box947 { inner: Pt947, items: vector<integer>, label: text }
+struct Cfg947 { retries: integer = 3, name: text = "unnamed" }
+
+// @FTR-008 — a superseded spelling, and what the steer is worth
+//
+// @F109's promise is that a better name can arrive after a library has shipped
+// without splitting its users: the old form keeps working, and whoever writes a NEW
+// call learns the better one from their own compiler.  The stdlib does this to
+// itself — `sum_of(v)` is `#superseded "sum"` and is a shim over `sum(v, 0)`, the
+// general form that works on any Addable type.
+//
+// Both of @F109's checks are real, and both were measured rather than assumed:
+//   - a successor that does not exist is an ERROR (`superseded-unknown-successor`:
+//     "the steer would ship dangling"), so the signpost cannot point at nothing;
+//   - a superseded body that never CALLS its successor is a warning
+//     (`superseded-not-folded`: "two implementations of one idea, and they will
+//     drift"), so the note cannot send a reader somewhere that behaves differently.
+//
+// What this test pins is the part a caller cares about: the old spelling still
+// answers, and it answers what the successor answers.  The steer itself is the
+// `@EXPECT_WARNING` below — the advice is the feature, so the file asserts it
+// instead of silencing it.
+// @EXPECT_WARNING: `sum_of` is superseded
+fn test_a_superseded_spelling_still_answers_what_its_successor_does() {
+  nums947 = [3, 1, 4, 1, 5];
+  assert(sum_of(nums947) == 14, "the superseded form still answers, got {sum_of(nums947)}");
+  assert(sum(nums947, 0) == sum_of(nums947),
+         "and it answers what its successor does: {sum(nums947, 0)} vs {sum_of(nums947)}");
+
+  // The successor is the general one — the reason the steer exists at all.
+  assert(sum([1.5, 2.5], 0.0) == 4.0, "`sum` takes any Addable type, got {sum([1.5, 2.5], 0.0)}");
+  assert(sum_of([]) == 0, "and the old form keeps its own empty-vector answer");
+}
+
+// @FTR-009 — the write that lands in a copy, and the tier that decides whether CI
+// stops
+//
+// @F100 describes the shape exactly — `d = self.data; d[i] = x` binds a COPY, so
+// the write is lost — and then says the lint is "advice-tier, so it never fails a
+// build".  Measured, both halves are WARNINGS:
+//
+//   warning[lost-write]: 'd' is mutated but its value is never read — the write is
+//     LOST. A whole-value bind (`d = …`) COPIES the heap value (C86) …
+//   warning[never-read]: Variable total is never read
+//
+// which is the right tier by loft's own rule — a diagnostic gates if and only if
+// ignoring it can produce a wrong result, and this one produces a drawing library
+// whose primitives are all no-ops.  `LOFT_NO_DEAD_STORES=1` is the opt-out.
+//
+// And the tier is only half the story: the lost-write lint runs on the PROGRAM path
+// and is silent under `loft test` (loft#985) — the very path a library's CI uses, so
+// `LOFT_DENY_WARNINGS=1 loft --tests tests` cannot stop on it today.  `never-read`
+// does fire there, which is what makes the gap hard to notice.
+//
+// The test below is the losing shape itself: the write happens and the source is
+// unchanged afterwards.  It asserts the WRONG RESULT rather than the diagnostic,
+// because the diagnostic is exactly what a test run does not get; the `never-read`
+// half is asserted, since that one does arrive.
+// @EXPECT_WARNING: Variable dropped947 is never read
+fn test_a_write_into_a_copy_is_lost_and_the_lint_says_so() {
+  canvas947 = Canvas947 { data: [0, 0, 0] };
+  paint947(canvas947, 1, 9);
+  assert(canvas947.data[1] == 0,
+         "the write landed in the copy, so the canvas never changed, got {canvas947.data[1]}");
+
+  // Written through the record itself, the same write lands.
+  canvas947.data[1] = 9;
+  assert(canvas947.data[1] == 9, "through the record it lands, got {canvas947.data[1]}");
+
+  // The other half of the lint: a local nothing ever reads.
+  dropped947 = 0;
+  for i947 in 0..3 { dropped947 += i947; }
+}
+
+struct Canvas947 { data: vector<integer> }
+
+// The shipped-library shape: bind the collection, then write the binding.  Run this
+// FILE as a program and the warning lands here, on the function that makes the copy
+// rather than at the call site.  Run it as a test suite and nothing is said at all
+// (loft#985), which is why the assertion below is the only thing holding the shape.
+fn paint947(c: Canvas947, at: integer, colour: integer) {
+  d = c.data;
+  d[at] = colour;
+}
+
+// @FTR-010 — naming an argument, and the two spellings of one call
+//
+// @F17's promise is that a call site "reads like its own documentation" and that
+// you can "set just the one option you care about without listing everything
+// before it".  Measured, that held for a FREE call and not for the dot spelling:
+// `render947(r, dry: true)` compiled, `r.render947(dry: true)` was a parse error.
+// The same function, the same argument, the same default — `parse_call` collected
+// `name: value` and `parse_method` never did.
+//
+// The gap mattered most exactly where loft sends an author to close it.
+// `advice[trailing-boolean-parameters]` reads "give them defaults (`loud: boolean
+// = false`) so callers pass only what they change" and its fix line is tagged
+// `@F17` — but on a method, only a named argument can change a flag that is not a
+// PREFIX of the parameter list.  Take the advice on `fn f(self: T, loud: boolean =
+// false, dry: boolean = false)` and the only way to set `dry` was `f(false, true)`:
+// the `(…, true, false)` shape the advice complained about, now with a default in
+// front of it.  So the fix is in the parser, and this test is what holds it: both
+// spellings take the same arguments and answer the same thing.
+//
+// The measured facts about a default itself, none of them in the entry:
+//   - it may be a constant expression, a CALL, or an EARLIER PARAMETER;
+//   - it is evaluated at the CALL, once per call, and skipped when the argument is
+//     supplied (so a call-valued default has its side effect only when it is used);
+//   - naming is by parameter, so the order at the call site is the caller's choice.
+fn test_the_dot_spelling_and_the_free_spelling_take_the_same_arguments() {
+  r947 = Report947 { rows: 3 };
+
+  // The shape the entry describes: set the one option you care about.
+  assert(r947.render947(dry: true) == "text/3 dry=true",
+         "a named argument reaches the dot spelling, got {r947.render947(dry: true)}");
+  assert(render947(r947, dry: true) == r947.render947(dry: true),
+         "and the free spelling of the same call agrees: [{render947(r947, dry: true)}] vs [{r947.render947(dry: true)}]");
+
+  // Order is the caller's, because a name selects the slot.
+  assert(r947.render947(dry: true, format: "csv") == "csv/3 dry=true",
+         "named arguments carry their own order, got {r947.render947(dry: true, format: "csv")}");
+  assert(r947.render947("csv", dry: true) == r947.render947(dry: true, format: "csv"),
+         "positional-then-named reaches the same call");
+
+  // Nothing named at all still takes both declared defaults.
+  assert(r947.render947() == "text/3 dry=false", "both defaults, got {r947.render947()}");
+
+  // The default that is NOT a constant: `width947` defaults to `rows * 10`, an
+  // expression over an EARLIER parameter, computed at each call.
+  assert(width947(4) == 40, "a default may read an earlier parameter, got {width947(4)}");
+  assert(width947(4, 7) == 7, "and a supplied argument replaces it, got {width947(4, 7)}");
+
+  // A call-valued default runs once PER CALL, and not at all when the caller
+  // supplies the argument — the counter is what proves both halves.
+  ctr947 = Counter947 { n: 0 };
+  assert(seq947(ctr947) == 1, "first call takes the default");
+  assert(seq947(ctr947) == 2, "second call evaluates it again");
+  assert(seq947(ctr947, 99) == 99, "a supplied argument wins");
+  assert(ctr947.n == 2, "and the default was not evaluated for it, got {ctr947.n}");
+}
+
+struct Report947 { rows: integer }
+struct Counter947 { n: integer }
+
+fn render947(self: Report947, format: text = "text", dry: boolean = false) -> text {
+  "{format}/{self.rows} dry={dry}"
+}
+fn width947(rows: integer, width: integer = rows * 10) -> integer { width }
+fn bump947(c: Counter947) -> integer { c.n += 1; c.n }
+fn seq947(c: Counter947, at: integer = bump947(c)) -> integer { at }
+
+// @FTR-011 — a keyed collection is an INDEX, and two of them can be one table
+//
+// @F7 opens "A collection of records that you look up by a key field", and that
+// sentence is the model loft ships a diagnostic to correct.  Declare two
+// `hash<Person947[…]>` fields on one struct and they are not two collections:
+// they are two ROUTES to one record set.  One append through either is visible
+// through both, and `len` moves on both.
+//
+// `advice[linked-group-double-fill]` says so at the one shape where the mistake
+// costs something — a literal that fills BOTH members — and both of its fix lines
+// are tagged `[keyed collections · @F7]`.  So the entry is where the compiler sends
+// a reader to learn what a keyed collection is, and it is the one place that does
+// not say this.  It is worth knowing as a CAPABILITY, not just a hazard: a
+// multi-index table costs one extra field declaration and no extra records.
+//
+// Two more measured facts the entry's single-key example cannot show:
+//   - the type is `hash<T[keys]>` — a COMPOUND key is real (`hash<Tile947[x, y]>`,
+//     read `g.cells[1, 2]`), and the body only ever describes one field;
+//   - `+=` with a key already present REPLACES that record rather than adding one.
+//     The entry's example only ever `+=`s a fresh key ("Cy"), so a reader learns
+//     `+=` as "add" and gets an upsert.
+// A miss is null all the way down, and reading one mints nothing.
+fn test_two_keyed_fields_over_one_type_are_one_record_set() {
+  // Constructed the way LOFT.md spells a keyed group: each member `[]`.  (An
+  // EMPTY literal `Dir947 { }` cannot be written here at all — a struct declared
+  // BELOW its use parses only when the literal names a field, loft#986.)
+  d947 = Dir947 { by_name: [], by_tag: [] };
+  d947.by_name += [ Person947 { name: "Ada", tag: "math", age: 36 } ];
+
+  // One append, through ONE member — and the other member has it.
+  assert(len(d947.by_name) == 1, "the member appended to holds it, got {len(d947.by_name)}");
+  assert(len(d947.by_tag) == 1, "and so does the other member, got {len(d947.by_tag)}");
+  assert(d947.by_tag["math"].age == 36,
+         "reachable by the OTHER key, got {d947.by_tag["math"].age}");
+
+  // It works in both directions: the group has one record set, not a primary.
+  d947.by_tag += [ Person947 { name: "Bo", tag: "art", age: 20 } ];
+  assert(len(d947.by_name) == 2, "appending through by_tag grew by_name too, got {len(d947.by_name)}");
+  assert(d947.by_name["Bo"].age == 20, "and by_name finds it, got {d947.by_name["Bo"].age}");
+
+  // `+=` on a key already present REPLACES — the count does not move.
+  d947.by_name += [ Person947 { name: "Ada", tag: "math", age: 99 } ];
+  assert(len(d947.by_name) == 2, "a duplicate key did not add a record, got {len(d947.by_name)}");
+  assert(d947.by_name["Ada"].age == 99, "it replaced the old one, got {d947.by_name["Ada"].age}");
+  seen947 = 0;
+  for p947 in d947.by_name { if p947.name == "Ada" { seen947 += 1; } }
+  assert(seen947 == 1, "and walking the set finds exactly one Ada, got {seen947}");
+
+  // A miss is null, and reading through it stays null rather than faulting.
+  assert(d947.by_name["Zed"] == null, "a miss answers null");
+  assert(d947.by_name["Zed"].age == null, "and a field off the miss is null too");
+  assert(len(d947.by_name) == 2, "reading a miss minted nothing, got {len(d947.by_name)}");
+
+  // The plural in `hash<T[keys]>`: a compound key, read as one lookup.
+  g947 = Board947 { cells: [] };
+  g947.cells += [ Tile947 { x: 1, y: 2, what: "tree" }, Tile947 { x: 2, y: 1, what: "rock" } ];
+  assert(g947.cells[1, 2].what == "tree", "compound key, got {g947.cells[1, 2].what}");
+  assert(g947.cells[2, 1].what == "rock", "and the axes are not interchangeable, got {g947.cells[2, 1].what}");
+  assert(g947.cells[9, 9] == null, "a compound miss is null too");
+}
+
+struct Person947 { name: text, tag: text, age: integer }
+struct Dir947 { by_name: hash<Person947[name]>, by_tag: hash<Person947[tag]> }
+struct Tile947 { x: integer, y: integer, what: text }
+struct Board947 { cells: hash<Tile947[x, y]> }
+
+// @FTR-012 — the one operator that does not read the way you say it aloud
+//
+// @F37's promise is "familiar spelling and sensible precedence, so expressions read
+// the way you would say them aloud".  Measured across the set, that is true
+// everywhere but ONE place, and loft ships a warning for exactly that place:
+//
+//   warning[unary-minus-binds-tighter]: `-x ** y` parses as `(-x) ** y` — the
+//   leading `-` binds to `x` as a sign (tighter than `**`), not `-(x ** y)`
+//
+// So `-x ** 2` with x = 3 is 9, where the reading aloud ("minus x squared") is -9.
+// The same symbol with a left operand goes the other way — `0 - x ** 2` IS -9 —
+// so `-` reads two ways in one expression language, and the entry does not
+// mention it while `DIAGNOSTICS.md` tags the warning `@F37`.
+//
+// The warning is deliberately silent when the base is a LITERAL, on the reasoning
+// that "-3 IS a number" and the grouping is then unsurprising.  That leaves the
+// shortest spelling of the trap unmarked: `-3 ** 2` is 9 with nothing said, and
+// `-1.5 ** 2.0` is +2.25 where a formula transcribed from a page means -2.25.
+// Both cells are asserted below, because the pair is the whole boundary.
+//
+// Every other shape checked here matches the convention a reader brings:
+// `**` is right-associative, `+` binds tighter than `<<`, `and` tighter than `or`,
+// integer division and `%` truncate toward zero, and `>>` is arithmetic.
+// @EXPECT_WARNING: `-x ** y` parses as `(-x) ** y`
+fn test_the_sign_is_the_one_operator_that_reads_the_other_way() {
+  x947: integer = 3;
+
+  // The warned cell: the sign belongs to the BASE.
+  assert(-x947 ** 2 == 9, "`-x ** 2` is (-3)**2, got {-x947 ** 2}");
+  assert(-(x947 ** 2) == -9, "parenthesised, it is the reading aloud, got {-(x947 ** 2)}");
+
+  // The same symbol, with a left operand, binds the other way — and says nothing.
+  assert(0 - x947 ** 2 == -9, "binary minus is looser than `**`, got {0 - x947 ** 2}");
+  assert(1 - x947 ** 2 == -8, "in an expression too, got {1 - x947 ** 2}");
+
+  // The unwarned cells: a literal base takes the same grouping, silently.
+  assert(-3 ** 2 == 9, "a literal base groups identically, got {-3 ** 2}");
+  assert(-1.5 ** 2.0 == 2.25, "and a float literal flips the sign of the answer, got {-1.5 ** 2.0}");
+
+  // Everything else in the set reads as expected.
+  assert(2 ** 3 ** 2 == 512, "`**` is right-associative, got {2 ** 3 ** 2}");
+  assert(2 + 3 * 4 == 14, "`*` binds tighter than `+`, got {2 + 3 * 4}");
+  assert(1 << 2 + 3 == 32, "`+` binds tighter than `<<`, got {1 << 2 + 3}");
+  assert(true or false and false, "`and` binds tighter than `or`");
+  assert(-7 / 2 == -3, "integer division truncates toward zero, got {-7 / 2}");
+  assert(-7 % 3 == -1, "and `%` takes the sign of the left side, got {-7 % 3}");
+  assert(7 % -3 == 1, "not of the right side, got {7 % -3}");
+  assert(-8 >> 1 == -4, "`>>` is arithmetic, got {-8 >> 1}");
+  assert((6 ^ 3) == 5, "`^` is xor, got {6 ^ 3}");
+  assert(!(x947 > 2) == false, "`!` negates, got {!(x947 > 2)}");
+}
+
+// @FTR-013 — what "every possibility has to be covered" covers
+//
+// @F29 promises that "every possibility has to be covered" and that "nothing can
+// slip through uncovered".  Measured, that is enforced two different ways, and only
+// one of them stops a build:
+//
+//   * a CLOSED domain — an enum — is a hard error.  `match d { North => … }` on a
+//     two-variant enum is `match on Dir is not exhaustive — missing: South`.
+//   * an OPEN domain — integer, text — is enforced by the TYPE instead.  A match
+//     with no `_` compiles, and a value no arm covers answers `null`.  What reports
+//     it is the nullable-into-non-null check, which needs a non-null CONTEXT to
+//     fire: returning the match into a declared `text` warns, and binding it to a
+//     local and printing it says nothing at all.
+//
+// So "nothing slips through" is a statement about enums.  For an integer the arms
+// are a total function only if you write `_`, and the reward for writing it is that
+// the result stops being nullable.
+//
+// The `null` arm is a real pattern and covers a genuine absence — a vector overrun
+// reads null and lands there.  Its price is @F1's in-band sentinel: the most
+// negative integer IS null, so the one value a program cannot distinguish from
+// "absent" is a value of the domain.
+// @EXPECT_WARNING: a nullable `text?` is stored into the return value
+fn test_exhaustiveness_is_an_error_for_enums_and_a_type_for_everything_else() {
+  // The open domain: every arm is a value, and 7 is covered by none of them.
+  assert(open947(1) == "one", "a covered value answers its arm");
+  assert(open947(7) == null, "an uncovered value answers null, got [{open947(7)}]");
+  assert(len(open947(7)) == 1, "and it is the text null sentinel — one NUL character");
+
+  // The same match with `_` is total, and the result is no longer nullable.
+  assert(total947(7) == "rest", "`_` covers the rest, got {total947(7)}");
+
+  // Bound to a LOCAL, the same fall-through is silent — no context makes it non-null.
+  quiet947 = match 7 { 1 => "one", 2 => "two" };
+  assert(quiet947 == null, "the fall-through is null here too, and nothing said so");
+
+  // The closed domain is checked instead of typed: every variant covered, so the
+  // result is a plain `text`.  (Dropping an arm is `match on Dir947e is not
+  // exhaustive — missing: South`, a hard error, which a test cannot hold inline.)
+  assert(closed947(Dir947e.North) == "n", "got {closed947(Dir947e.North)}");
+  assert(closed947(Dir947e.South) == "s", "got {closed947(Dir947e.South)}");
+
+  // `null` is a pattern, and a real absence reaches it.
+  short947: vector<integer> = [1, 2];
+  assert(grade947(short947[9]) == "absent", "an overrun read lands on the null arm");
+  // …and so does the one integer that IS the sentinel (@F1).
+  lowest947: integer = -9223372036854775807;
+  assert(grade947(lowest947 - 1) == "absent",
+         "the most negative integer cannot be told from absent");
+  assert(grade947(lowest947) == "other", "one above it is an ordinary value");
+
+  // Range arms: `..=` includes its end, `..` does not, and the first match wins.
+  assert(grade947(90) == "A", "90 is in 90..=100, which is listed first");
+  assert(grade947(89) == "B", "89 is in 80..90");
+  assert(grade947(80) == "B", "80 is the inclusive start");
+  assert(grade947(101) == "other", "101 is past the last range");
+
+  // The two forms the title advertises and the entry's example never shows.
+  assert(odd947(3) == "odd", "an or-pattern matches any of its options");
+  assert(odd947(4) == "other", "and nothing else");
+  assert(sized947(20) == "big", "a guard narrows an arm, got {sized947(20)}");
+  assert(sized947(2) == "small", "and falls through when it does not hold");
+}
+
+enum Dir947e { North, South }
+
+fn open947(n: integer) -> text { match n { 1 => "one", 2 => "two" } }
+fn total947(n: integer) -> text { match n { 1 => "one", _ => "rest" } }
+fn closed947(d: Dir947e) -> text { match d { North => "n", South => "s" } }
+fn odd947(n: integer) -> text { match n { 1 | 3 | 5 => "odd", _ => "other" } }
+fn sized947(n: integer) -> text { match n { x if x > 10 => "big", _ => "small" } }
+fn grade947(score: integer) -> text {
+  match score { null => "absent", 90..=100 => "A", 80..90 => "B", _ => "other" }
+}
+
+// @FTR-014 — what `par` guarantees, and what it refuses to compile
+//
+// @F29's neighbour in the catalogue says only that `par(...)` "runs its work across
+// several threads" and that "the loop body then sees that worker's result".  The two
+// facts a caller actually needs before writing one are not there, and both are real:
+//
+//   1. THE BODY SEES RESULTS IN SOURCE ORDER, not completion order.  Measured with
+//      the work deliberately reversed — item 1 given the most work, item 8 the least,
+//      so the workers finish backwards — and the body still saw 1, 4, 9, … on both
+//      backends.  This is what decides whether `results += [b]` is writable at all;
+//      the entry's own example only ever does `total += b`, which is order-blind and
+//      so cannot show the difference.
+//   2. A WORKER'S CAPTURED ARGUMENTS MUST BE SCALARS, and the compiler enforces it:
+//        par worker 'f': captured argument 'tag' is a reference (text); a par worker
+//        runs on an isolated store clone and cannot read a captured reference.
+//      `text` counts as a reference, so even a literal `"x"` is refused — and a
+//      captured struct that the worker WRITES earns a second, separate error naming
+//      the data race (@PLN102 C93).  The LOOP ELEMENT is the documented exception and
+//      may be a reference, which is what makes `for r in rows par(b = f(r), 4)` the
+//      shape to reach for.  Neither refusal can be asserted inline, so this pins the
+//      shapes that DO compile and the values they produce.
+//
+// The speed claim holds and is worth a number: eight equal items on this machine ran
+// ~2.0x faster at 2 workers, ~3.2x at 4 and ~4.7x at 8 (measured twice each way,
+// because a first run after an edit times the compile, not the loop).
+fn test_par_delivers_in_source_order_and_captures_only_scalars() {
+  // Reversed completion: item 1 burns the most, item 8 the least.
+  ordered947: vector<integer> = [];
+  for a947 in 1..=8 par(bo947 = uneven947(a947), 4) { ordered947 += [bo947]; }
+  assert(len(ordered947) == 8, "every item arrives, got {len(ordered947)}");
+  expect947 = [1, 4, 9, 16, 25, 36, 49, 64];
+  for i947 in 0..8 {
+    assert(ordered947[i947] == expect947[i947],
+           "slot {i947} is source order: expected {expect947[i947]}, got {ordered947[i947]}");
+  }
+
+  // A captured SCALAR is allowed — integer, float and boolean all cross.
+  k947 = 3;
+  on947 = true;
+  half947 = 0.5;
+  ti947 = 0;
+  for a947 in 1..=4 par(bi947 = mul947(a947, k947), 4) { ti947 += bi947; }
+  assert(ti947 == 30, "captured integer, got {ti947}");
+  tb947 = 0;
+  for a947 in 1..=4 par(bb947 = gate947(a947, on947), 4) { tb947 += bb947; }
+  assert(tb947 == 10, "captured boolean, got {tb947}");
+  tf947 = 0.0;
+  // `tf947 = tf947 + bf947`, not `+=`: a FLOAT-returning worker declared below its
+  // loop mistypes a compound-assignment accumulator (loft#988).  The long form is
+  // the verified workaround, and every other shape — printing the result, appending
+  // it to a `vector<float>`, a boolean-returning worker — is unaffected.
+  for a947 in 1..=4 par(bf947 = scale947(a947, half947), 4) { tf947 = tf947 + bf947; }
+  assert(tf947 == 5.0, "captured float, got {tf947}");
+
+  // The worker may RETURN a reference type even though it cannot capture one.
+  words947 = "";
+  for a947 in 1..=4 par(bt947 = name947(a947), 4) { words947 += "{bt947} "; }
+  assert(words947 == "n1 n2 n3 n4 ", "a text return crosses back, got [{words947}]");
+
+  // The loop ELEMENT is the documented exception: it may be a reference.
+  rows947: vector<Row947> = [Row947 { n: 1 }, Row947 { n: 2 }, Row947 { n: 3 }];
+  tr947 = 0;
+  for r947 in rows947 par(br947 = twice947(r947), 4) { tr947 += br947; }
+  assert(tr947 == 12, "a struct element reaches the worker, got {tr947}");
+
+  // Worker counts that do not divide the work are ordinary, not special.
+  for w947 in [0, 1, 16] {
+    tw947 = 0;
+    for a947 in 1..=3 par(bw947 = mul947(a947, 1), w947) { tw947 += bw947; }
+    assert(tw947 == 6, "worker count {w947} answers the same, got {tw947}");
+  }
+}
+
+struct Row947 { n: integer }
+
+// Item 1 does the most work and item 8 the least, so completion order is the reverse
+// of source order — the control that makes the ordering assertion mean something.
+fn uneven947(n: integer) -> integer {
+  burn947 = 0;
+  for i947 in 0..((9 - n) * 20000) { burn947 += i947 % 7; }
+  n * n + burn947 * 0
+}
+fn mul947(v: integer, k: integer) -> integer { v * k }
+fn gate947(v: integer, on: boolean) -> integer { if on { v } else { 0 } }
+fn scale947(v: integer, k: float) -> float { v * k }
+fn twice947(r: Row947) -> integer { r.n * 2 }
+fn name947(v: integer) -> text { "n{v}" }
+
+// @FTR-015 — a literal brace, and where a backtick block's indentation goes
+//
+// @F35 teaches `{expr}` and never says how to write a brace that is NOT a hole.
+// loft does: `format-unescaped-brace` is an ERROR whose fix line is tagged `@F35`
+// and spells the cure ("double the brace", write `}}`).  So the entry is where the
+// compiler sends a reader, and it is the one place that does not answer.  The two
+// mistakes are not answered equally either — a stray `}` gets that coded, mechanical
+// fix; a stray `{` gets `Formatter error` plus a cascading `Expect token )`, with no
+// code and no mention of doubling (loft#989).
+//
+// The second promise is "the text you write looks like the text you get", and a
+// backtick block does the OPPOSITE of that on purpose — it dedents.  The base is the
+// FIRST CONTENT LINE: however many leading spaces it has come off every line that has
+// them, a line indented less comes out flush, a deeper line keeps the difference, and a
+// whitespace-only first or last line is dropped.  Where the CLOSING backtick sits does
+// not enter into it.
+//
+// It was the closing backtick's column until loft#990, and that rule had two silent
+// consequences the cells below used to pin: a line indented less than the backtick kept
+// ALL its indentation while its siblings lost theirs, and — the one that mattered — a
+// single `{expr}` anywhere switched the strip off entirely, trailing blank line included,
+// so the dedent served a shader and silently stopped serving a template.  Both are gone;
+// the cells now assert the rule that replaced them.  One edge survives, and it is still
+// silent: a TAB-indented line is never dedented, because a tab is not a space.
+fn test_a_literal_brace_is_doubled_and_a_backtick_block_dedents() {
+  // `{{` and `}}` are the escapes the entry does not mention.  The expected value
+  // is built from code points rather than written out: a bare `"{ }"` on the other
+  // side of the `==` would open a hole of its own, which is the whole point.
+  esc947 = "{{ }}";
+  assert(size(esc947) == 3, "two doubled braces are two characters, got {size(esc947)}");
+  assert(esc947[0] == (123 as character), "the first is a literal open brace");
+  assert(esc947[2] == (125 as character), "and the last a literal close brace");
+  hole947 = "{{{1 + 1}}}";
+  assert(size(hole947) == 3, "a hole between literal braces, got {size(hole947)}");
+  assert(hole947[1] == ("2"[0]), "and the hole still filled, got [{hole947}]");
+
+  // Closing backtick on its OWN line, at column 3 -> strip 2, and the
+  // whitespace-only first and last lines are dropped.
+  own947 = `
+  alpha
+  beta
+  `;
+  assert(own947 == "alpha{nl947()}beta", "fully dedented, got [{own947}]");
+  assert(size(own947) == 10, "5 + 1 + 4 bytes, got {size(own947)}");
+
+  // Closing backtick at the END of a content line.  Since loft#990 the base comes from the
+  // first CONTENT line rather than from the backtick's column, so this lays out the same as
+  // the form above — which is the point of the fix: where the closing backtick sits no
+  // longer changes the text.
+  tail947 = `alpha
+  beta`;
+  assert(size(tail947) == 10, "dedented like its twin, got {size(tail947)}");
+  assert(tail947 == own947, "the same two lines, laid out two ways, are the same text");
+
+  // The base is the FIRST content line, so it is 4 here.  `four` and `six` lose four
+  // spaces; `two` has only two, which is less than the base, so it comes out flush rather
+  // than keeping what it had.  Relative depth is preserved for everything at or below the
+  // base and collapsed for anything above it.
+  uneven947 = `
+    four
+  two
+      six
+    `;
+  assert(size(uneven947) == 14, "got {size(uneven947)}");
+  lines947 = split(uneven947, nl947()[0]);
+  assert(len(lines947) == 3, "three lines, got {len(lines947)}");
+  assert(lines947[0] == "four", "the base line is fully dedented, got [{lines947[0]}]");
+  assert(lines947[1] == "two", "the shallower line comes out flush, got [{lines947[1]}]");
+  assert(lines947[2] == "  six", "the deeper line keeps the remainder, got [{lines947[2]}]");
+  // In the SOURCE `two` sat four spaces shallower than `six`; here it is two shallower,
+  // because the base was taken off `six` and `two` had less than the base to give.
+  assert(size(lines947[2]) == size(lines947[1]) + 2,
+         "`six` sits two past `two`: {size(lines947[1])} vs {size(lines947[2])}");
+
+  // THE CELL THAT MATTERS MOST, and it is now the boring one: a block with a `{expr}` in
+  // it dedents exactly like a block without.  Until loft#990 one hole anywhere switched
+  // the strip off completely and kept the trailing whitespace-only line as well — so the
+  // dedent served the block with no values in it, a shader or a config, and silently
+  // stopped serving the template, which is the shape the feature is advertised for.  The
+  // two blocks below are the same two lines laid out identically, and the only difference
+  // in their sizes is the one character the hole contributes.
+  who947 = "x";
+  plain947 = `
+  alpha
+  beta
+  `;
+  holed947 = `
+  alpha
+  beta {who947}
+  `;
+  assert(plain947 == "alpha{nl947()}beta", "no hole: fully dedented, got [{plain947}]");
+  assert(size(plain947) == 10, "got {size(plain947)}");
+  // Same layout, same two lines, plus one character of interpolated value and one space
+  // before it: `alpha`(5) + nl + `beta x`(6) = 12, against 10 for the same two lines with
+  // no hole in them.  Two, not nine, is the whole of the difference a hole makes.
+  assert(size(holed947) == 12, "a hole dedents like anything else, got {size(holed947)}");
+  hlines947 = split(holed947, nl947()[0]);
+  assert(hlines947[0] == "alpha", "the first line is dedented too, got [{hlines947[0]}]");
+  assert(len(hlines947) == 2, "and no trailing blank line survives, got {len(hlines947)}");
+  assert(hlines947[1] == "beta x", "the hole's line carries its value, got [{hlines947[1]}]");
+
+  // A tab is not a space, so the tabbed line is skipped by the strip entirely.
+  mixed947 = `
+    spaces
+	tabbed
+    spaces2
+    `;
+  mlines947 = split(mixed947, nl947()[0]);
+  assert(mlines947[0] == "spaces", "a space-indented line dedents, got [{mlines947[0]}]");
+  assert(mlines947[2] == "spaces2", "and so does its twin");
+  assert(size(mlines947[1]) == 7, "the tabbed line keeps its tab, got {size(mlines947[1])}");
+  assert(mlines947[1] != "tabbed", "which is what makes the block come out misaligned");
+}
+
+// A one-character newline, built where the escape is available.
+fn nl947() -> text { "\n" }
+
+// @FTR-016 — which C signatures a `#c` binding can call, and what a `text` becomes
+//
+// The entry's promise is that the declaration IS the binding, and for the calls below it
+// is.  What decides WHICH calls those are is the register CLASS of each slot — not its
+// width, and not how exotic the function is.  Everything integer-class (integers, and
+// pointers, and therefore a `text`) rides the fixed trampolines loft emits; a 64-bit
+// float rides an SSE register the caller never writes.
+//
+// That splits the two ENDS of one signature apart, which is the point of this test:
+//
+//   `double(const char*)`  float in the RETURN    binds — `atof` is called below
+//   `double(double)`       float in an ARGUMENT   REFUSED
+//
+// and the refusal is not call-site-conditional the way the wasm one is.  `fn c_fabs(v:
+// float) -> float;  #c "fabs" "double(double)"` fails the build with the function
+// DECLARED AND NEVER CALLED, so it cannot appear in this file at all — it is pinned by
+// tests/error_messages/cases/44_c_binding_float_needs_shim.loft instead.  The cure that
+// message names (a `vector<float>` crossing as pointer-plus-count) is built and
+// self-tested in tests/fixtures/c_abi/, whose README calls this the BOUNDARY half.
+//
+// The other end of the range is a count: a `#c` binding covers 0..=32 C arguments, and
+// the 33rd is `error[c-binding-not-interpretable]`.
+fn test_c_binding_crosses_by_register_class_not_by_width() {
+  assert(c_abs947(-7) == 7, "an integer in and an integer out cross, got {c_abs947(-7)}");
+  assert(c_abs947(7) == 7, "and the answer is C's, not loft's");
+
+  // A `text` arrives as `const char*` — a pointer, so integer-class, so direct.
+  assert(c_strlen947("loft") == 4, "got {c_strlen947("loft")}");
+
+  // THE POINT of the text row: `strlen` counts BYTES.  loft's `len` counts characters
+  // and its `size` counts bytes, so a C byte count tracks `size` — and the two answers
+  // come apart the moment the text stops being ASCII.  Nothing at the call site says so.
+  m947 = "héllo";
+  assert(len(m947) == 5, "five characters, got {len(m947)}");
+  assert(size(m947) == 6, "six bytes -- `é` is two of them, got {size(m947)}");
+  assert(c_strlen947(m947) == 6, "and C is handed the bytes, got {c_strlen947(m947)}");
+  assert(c_strlen947(m947) == size(m947), "so a C byte count is `size`, never `len`");
+
+  // A float RETURN crosses: the allowed half of `double(double)`.
+  assert(c_atof947("2.5") == 2.5, "got {c_atof947("2.5")}");
+  assert(c_atof947("-3.75") == -3.75, "sign and fraction both, got {c_atof947("-3.75")}");
+  // The whole 64-bit double comes back, not a narrowed one — 1e300 does not fit in
+  // anything smaller and survives exactly.
+  assert(c_atof947("1e300") == 1e300, "the full double crosses, got {c_atof947("1e300")}");
+  // C's own contract crosses with it: `atof` answers 0.0 for text it cannot read, and
+  // loft gets that answer rather than a null.
+  assert(c_atof947("not a number") == 0.0, "got {c_atof947("not a number")}");
+}
+
+fn c_abs947(v: integer) -> integer;   #c "abs" "int(int)"
+fn c_strlen947(s: text) -> integer;   #c "strlen" "size_t(const char*)"
+fn c_atof947(s: text) -> float;       #c "atof" "double(const char*)"
+
+// @FTR-017 — what a `loft.lock` pins, and the one thing no field in it records
+//
+// The entry's load-bearing promise is that "a lockfile pins the exact versions so builds
+// stay reproducible".  Below is a `loft.lock` exactly as loft's own writer produced it,
+// and reading its record says how much that buys.
+//
+// Each `[[package]]` block carries five fields, and it is the last three that make it a
+// reproducibility claim rather than a version note: a URL and a SHA-256 pin the BYTES, so
+// what travels between machines is an artifact and not a label.
+//
+// What no field records is LOFT.  Measured: a project whose manifest and lock both pin
+// `random = "0.1.0"` resolves random-0.1.0 exactly as promised — and the build still fails,
+// on a lint loft added after that release, firing on the package's own source.  The
+// `[package] contract` field exists to warn about precisely that (`package-contract-drifted`,
+// @F55's other diagnostic); it is optional, so a package released before it is silent.
+//
+// And the pin only applies where a lockfile is FOUND.  A project that has none resolves
+// through the lockfile of whatever directory `loft` was invoked from — loft#991, where the
+// same project built against three different versions from three working directories.
+fn test_lockfile_pins_an_artifact_and_never_the_loft_that_reads_it() {
+  quote947 = "\"";
+  // Verbatim, line by line so the backticks in the second comment survive into loft.
+  raw947 = [
+    "# Auto-generated by loft — do not edit by hand.",
+    "# Run `loft install` to update.",
+    "schema_version = 1",
+    "",
+    "[[package]]",
+    "name = \"random\"",
+    "version = \"0.3.1\"",
+    "url = \"https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.3.1/random-0.3.1.tar.gz\"",
+    "sha256 = \"fa08d8d8d8a46888df461c070394073e57af73db6a4bae076ad380d84985b85e\"",
+    "source = \"registry\"",
+  ];
+
+  blocks947 = 0;
+  in_pkg947 = false;
+  keys947: vector<text> = [];
+  name947 = "";
+  version947 = "";
+  url947 = "";
+  sha947 = "";
+  source947 = "";
+  for line947 in raw947 {
+    if line947 == "[[package]]" { blocks947 += 1; in_pkg947 = true }
+    parts947 = split_text(line947, " = ");
+    if len(parts947) == 2 {
+      key947 = parts947[0];
+      val947 = replace(parts947[1], quote947, "");
+      if in_pkg947 { keys947 += [key947] }
+      if key947 == "name" { name947 = val947 }
+      if key947 == "version" { version947 = val947 }
+      if key947 == "url" { url947 = val947 }
+      if key947 == "sha256" { sha947 = val947 }
+      if key947 == "source" { source947 = val947 }
+    }
+  }
+
+  assert(blocks947 == 1, "one dependency, one [[package]] block, got {blocks947}");
+  assert(name947 == "random", "got [{name947}]");
+  assert(version947 == "0.3.1", "the pin is one exact version, never a range, got [{version947}]");
+  assert(source947 == "registry", "got [{source947}]");
+
+  // A version NUMBER would pin only a label.  These two pin the bytes behind it.
+  assert(size(sha947) == 64, "a sha-256 is 64 hex characters, got {size(sha947)}");
+  assert(ends_with(url947, "random-0.3.1.tar.gz"), "got [{url947}]");
+  assert(contains(url947, version947), "and the URL names the version it pins, got [{url947}]");
+
+  // THE POINT: the whole record is these five keys.  Reproducibility is therefore a claim
+  // about the PACKAGE and nothing else -- the loft that reads it is not among them, which
+  // is why a perfect pin and a broken build are compatible states.
+  assert(join(keys947, ",") == "name,version,url,sha256,source",
+         "the pinned record is exactly five fields, got [{join(keys947, ",")}]");
+}
+
+// @FTR-018 — where a drop runs, and where the value it was handed stopped being shared
+//
+// @F115 states one rule — "a drop runs exactly where the value's own free runs — the
+// same binding, the same scope exit, the same early-exit paths — and never anywhere
+// else" — and then ENUMERATES the cases it covers.  An enumeration is a completeness
+// claim, so each case below is checked against a hand-computed log rather than read.
+// All of them hold, and identically on both backends.
+//
+// The log is a file because a drop receives ONLY `self`, so it has no other channel
+// back: it cannot append to a caller's collection even when handed one.  Which is the
+// second half of this test, and the part worth reading twice —
+//
+//   fn param(v: vector<integer>) { v += [7] }                 // the caller SEES this
+//   fn infield(v: vector<integer>) { h = H { log: v };
+//                                    h.log += [8] }           // the caller does NOT
+//
+// One line apart, the same vector, and the answers differ.  A parameter NAMES the
+// caller's record — that is loft's rule everywhere else and what makes `&` unnecessary
+// for field mutation — but a STRUCT LITERAL copies what it is given.  So the copy
+// boundary is the construction, not the call, and a reader who knows the parameter rule
+// will predict the opposite.  That is exactly why a drop cannot reach a caller's data,
+// and it is the mechanism @F115 leans on in one parenthetical.
+//
+// Not covered here, because it is a defect rather than behaviour: a `match` in TAIL
+// position with a `return` in any arm frees the function's locals before the arms run,
+// so a drop fires early and then a second time (loft#992).  Every shape below keeps a
+// statement after any match, which is that bug's verified workaround.
+fn test_a_drop_runs_where_the_value_dies_and_a_struct_literal_stops_the_sharing() {
+  tmp947 = temp_dir();
+  assert(tmp947 != null, "temp_dir is where this test's log goes");
+  // Unique per run: the two backends' suites can run at the same time.
+  p947 = "{tmp947 ?? ""}/loft947_drops_{now()}_{ticks()}.txt";
+
+  // The headline case: reverse declaration order, so nothing outlives what it belongs to.
+  reset947(p947); order947(p947);
+  assert(log947(p947) == "| 2 1 ", "declared 1 then 2, dropped 2 then 1, got [{log947(p947)}]");
+
+  // An early `return` is still a scope exit.
+  reset947(p947); early947(p947, true);
+  assert(log947(p947) == "3 ", "an early return still drops, got [{log947(p947)}]");
+  reset947(p947); early947(p947, false);
+  assert(log947(p947) == "late 3 ", "and the ordinary exit drops after the body, got [{log947(p947)}]");
+
+  // A `for` body IS a scope, so a value made per iteration dies per iteration --
+  // three drops interleaved with the loop, not three at the end.
+  reset947(p947); each947(p947);
+  assert(log947(p947) == "10 11 12 ", "one drop per iteration, got [{log947(p947)}]");
+
+  // A RETURNED value does not drop in the callee; the scope that receives it owns it.
+  reset947(p947); caller947(p947);
+  assert(log947(p947) == "got7 7 ", "the caller sees it alive, then drops it, got [{log947(p947)}]");
+
+  // A value that was never created never drops.
+  reset947(p947); never947(p947, false);
+  assert(log947(p947) == "end ", "nothing was made, so nothing dropped, got [{log947(p947)}]");
+  _ = delete(p947);
+
+  // THE POINT: one line apart, the same vector, opposite answers.
+  a947: vector<integer> = []; a947 += [1]; param947(a947);
+  assert("{a947}" == "[1,7]", "a parameter NAMES the caller's vector, got {a947}");
+  b947: vector<integer> = []; b947 += [1]; infield947(b947);
+  assert("{b947}" == "[1]", "but a struct literal COPIED it, so the write is invisible, got {b947}");
+}
+
+struct Lease947 { id: integer, path: text }
+struct Hold947 { log: vector<integer> }
+fn OpDrop(self: Lease947) { note947(self.path, "{self.id} "); }
+fn note947(p: text, m: text) { old = file(p).content() ?? ""; f = file(p); f.write(old + m); }
+fn lease947(p: text, id: integer) -> Lease947 { return Lease947 { id: id, path: p }; }
+fn log947(p: text) -> text { return file(p).content() ?? ""; }
+fn reset947(p: text) { _ = delete(p); }
+fn order947(p: text) { a = lease947(p, 1); b = lease947(p, 2); note947(p, "| "); }
+fn early947(p: text, go: boolean) { a = lease947(p, 3); if go { return } note947(p, "late "); }
+fn each947(p: text) { for i in 0..3 { x = lease947(p, 10 + i) } }
+fn made947(p: text) -> Lease947 { return lease947(p, 7); }
+fn caller947(p: text) { v = made947(p); note947(p, "got{v.id} "); }
+fn never947(p: text, go: boolean) { if go { n = lease947(p, 8) } note947(p, "end "); }
+fn param947(v: vector<integer>) { v += [7]; }
+fn infield947(v: vector<integer>) { h = Hold947 { log: v }; h.log += [8]; }
+
+struct Tile947r { const key: integer, const points: vector<integer> }
+
+// @FTR-019 — `store_release()`: what it gives back, and the instrument that says it does not
+//
+// The deterministic half of @F112's contract, asserted below: `0` for a collection that is
+// not bound to a file, `0` when nothing new has been written since the last call, and
+// bytes > 0 once there is a region below the write frontier.  Content is untouched — a
+// reference taken BEFORE the release still reads its value, because the mapping is shared
+// and an access after the drop simply re-faults the same bytes from the file.
+//
+// The memory claim is the reason this entry exists, and it holds: 40 000 records of ~2.3 KB,
+// one call per record, sampled every 5 000 records DURING the build --
+//
+//   without   15.8 -> 22.1 -> 35.9 -> 47.1 -> 58.4 MB and still climbing
+//   with      15.9 -> 16.7 -> 17.0 -> 17.5 -> 18.2 MB, flat
+//
+// Above a ~15.8 MB interpreter baseline that is 42.6 MB resident against 2.3 MB, so ~18x --
+// the entry says 20x and 2.2 MB, and that is what this is.
+//
+// WHICH INSTRUMENT, though, because the obvious one says the opposite.  `/usr/bin/time -v`
+// reports Maximum resident set size UNCHANGED (104.0 MB vs 104.3 MB) across the same two
+// runs, in both write shapes, at every scale tried.  The peak is set by arena growth --
+// the store reports `cap 203 MB` holding `data 89 MB` -- and no residency hint can lower a
+// peak it does not cause.  The claim is about the WORKING SET while the build runs, so it
+// has to be sampled while the build runs; a peak-RSS reading will tell you the call does
+// nothing.  That cost several measurement rounds here, which is why it is written down.
+//
+// The wall clock is not hurt and is often helped: same 40 000 records, one call per record,
+// 6.09 s -> 3.13 s where each record is returned to and its vector grows in place, and
+// 2.74 s -> 2.76 s where the record is complete when inserted.
+fn test_store_release_answers_bytes_and_keeps_every_reference_valid() {
+  tmp947 = temp_dir();
+  assert(tmp947 != null, "temp_dir is where this test's store goes");
+  sp947 = "{tmp947 ?? ""}/loft947_release_{now()}_{ticks()}.store";
+  _ = delete(sp947); _ = delete("{sp947}.dschema");
+
+  // Not bound to a file: there is nothing to write out and nothing to drop.
+  loose947: hash<Tile947r[key]> = [];
+  for k in 0..50 { loose947 += Tile947r { key: k, points: [k, k + 1] } }
+  assert(store_release(loose947) == 0, "an unbound collection drops nothing, got {store_release(loose947)}");
+
+  held947: hash<Tile947r[key]> = [];
+  assert(store_persist_bind(held947, sp947), "the collection binds to a file");
+  assert(store_release(held947) == 0, "and an empty bound store drops nothing either");
+
+  for k in 0..2000 { held947 += Tile947r { key: k, points: [k * 10, k * 10 + 1, k * 10 + 2] } }
+
+  // A reference taken BEFORE the release -- the entry's "every reference stays valid".
+  before947 = held947[7];
+  first947 = store_release(held947);
+  assert(first947 > 0, "a written region below the frontier drops bytes, got {first947}");
+
+  // THE POINT of the return value: it is the bytes THIS call dropped, not the resident
+  // total.  Nothing new has been written, so the second call has nothing left to do.
+  assert(store_release(held947) == 0, "a second call with no new writes drops nothing");
+
+  // Content is unaffected: the same bytes, one page fault later.
+  assert(before947.points[2] == 72, "the reference taken before the release still reads, got {before947.points[2]}");
+  after947 = held947[7] ?? Tile947r { key: -1, points: [] };
+  assert(after947.points[2] == 72, "and so does a fresh lookup, got {after947.points[2]}");
+  assert(len(held947) == 2000, "with every record still there, got {len(held947)}");
+
+  _ = delete(sp947); _ = delete("{sp947}.dschema");
+}
+
+
+struct Part947z { const id: integer, name: text }
+struct Widget947z { const code: text, weight: integer }
+
+// @FTR-020 — the lazy fault channel: what an absence clears, and which reason survives
+//
+// @F108's three calls exist to split one `null` into two facts — "no such key" and "I could
+// not reach the source" — so what CLEARS the channel is the whole contract, and the entry
+// stated it two ways that cannot both hold.  Measured on both backends, the rule is one
+// rule: nothing but `store_lazy_clear` clears, and neither a reached-and-absent lookup nor
+// an outright success is an acknowledgement.  A traversal whose first fetch failed and whose
+// second succeeded is still missing data, and that is the point of the stickiness.
+//
+// The count is per FETCH, not per key: three distinct keys over a dead source read 3, and
+// asking twice more for a key already known to be missing reads 5, because a miss is not
+// remembered.  That is what makes "how incomplete am I" answerable.
+//
+// The reason is the FIRST one, kept — not the last.  Below, cause A is a source that does
+// not exist and cause B is a store whose recorded layout is another program's; the count
+// reaches 2 and the reason still names A.  So the reason identifies the ORIGINAL cause, and
+// a later, more actionable one is reported on stderr rather than through this call.
+//
+// Binding before the source exists is deliberate and is what makes the sequence testable:
+// a missing file takes no pin, so the file appearing later is not "drift" and one binding
+// carries the whole run from unreachable to serving.
+fn test_lazy_faults_are_sticky_until_acknowledged_and_keep_the_first_reason() {
+  tmp947z = temp_dir();
+  assert(tmp947z != null, "temp_dir is where this test's store goes");
+  sp947z = "{tmp947z ?? ""}/loft947_lazy_{now()}_{ticks()}.store";
+  _ = delete(sp947z); _ = delete("{sp947z}.dschema");
+
+  parts947z: hash<Part947z[id]> = [];
+  assert(store_bind_lazy(parts947z, sp947z), "a hash binds to a .store image");
+  assert(len(parts947z) == 0, "binding loads nothing, got {len(parts947z)}");
+  assert(store_lazy_faults(parts947z) == 0, "and a fresh binding is healthy");
+
+  // Cause A — the source is not there.  One fault per FETCH.
+  assert(parts947z[1] == null, "an unreachable source answers null");
+  assert(store_lazy_faults(parts947z) == 1, "one failed fetch is one fault, got {store_lazy_faults(parts947z)}");
+  assert(parts947z[2] == null && parts947z[3] == null, "and every key answers null");
+  assert(store_lazy_faults(parts947z) == 3, "three keys, three faults, got {store_lazy_faults(parts947z)}");
+  assert(parts947z[1] == null && parts947z[1] == null, "a key already missed is fetched again");
+  assert(store_lazy_faults(parts947z) == 5, "because a miss is not remembered, got {store_lazy_faults(parts947z)}");
+  reasonA947z = store_lazy_error(parts947z);
+  assert(reasonA947z != "", "an unreachable source leaves a reason");
+
+  // Make the source exist, holding 7 and 91.
+  src947z: hash<Part947z[id]> = [];
+  assert(store_persist_bind(src947z, sp947z), "the image is written at that path");
+  src947z += Part947z { id: 7, name: "bolt" };
+  src947z += Part947z { id: 91, name: "washer" };
+
+  // Reached, and the key is genuinely absent.  This is the cell the entry got wrong: it
+  // does NOT clear, because reachability now says nothing about what was already lost.
+  assert(parts947z[404] == null, "a key the image lacks reads null");
+  assert(store_lazy_faults(parts947z) == 5, "an absence acknowledges nothing, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == reasonA947z, "and leaves the reason, got [{store_lazy_error(parts947z)}]");
+
+  // Nor does a success.  One miss fetches exactly one entry.
+  hit947z = parts947z[7] ?? Part947z { id: -1, name: "" };
+  assert(hit947z.name == "bolt", "the fetch lands, got {hit947z.name}");
+  assert(len(parts947z) == 1, "a miss fetches exactly one entry, got {len(parts947z)}");
+  assert(store_lazy_faults(parts947z) == 5, "a success acknowledges nothing either, got {store_lazy_faults(parts947z)}");
+
+  // A hit never leaves the process: same value, resident count unmoved.
+  again947z = parts947z[7] ?? Part947z { id: -1, name: "" };
+  assert(again947z.name == "bolt", "the second read answers the same record");
+  assert(len(parts947z) == 1, "and fetches nothing, got {len(parts947z)}");
+
+  // The only acknowledgement there is, and it reports whether there was one to make.
+  assert(store_lazy_clear(parts947z), "the clear had faults to acknowledge");
+  assert(store_lazy_faults(parts947z) == 0, "after which the count is 0, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == "", "and the reason is gone, got [{store_lazy_error(parts947z)}]");
+  assert(!store_lazy_clear(parts947z), "a second clear has nothing to acknowledge");
+
+  // Which reason survives, on one collection that fails two different ways.
+  sq947z = "{tmp947z ?? ""}/loft947_lazy2_{now()}_{ticks()}.store";
+  _ = delete(sq947z); _ = delete("{sq947z}.dschema");
+  assert(store_bind_lazy(parts947z, sq947z), "the same collection rebinds to a second path");
+  assert(parts947z[7] != null, "a rebind does not drop what is already resident");
+  assert(parts947z[404] == null, "cause A again: the new source is not there");
+  causeA947z = store_lazy_error(parts947z);
+  assert(store_lazy_faults(parts947z) == 1, "one fault so far, got {store_lazy_faults(parts947z)}");
+
+  // Cause B — a store at that path whose recorded layout is not this collection's.
+  other947z: hash<Widget947z[code]> = [];
+  assert(store_persist_bind(other947z, sq947z), "a foreign-layout image lands at that path");
+  other947z += Widget947z { code: "aa", weight: 5 };
+  assert(parts947z[404] == null, "a foreign layout is refused rather than range-read");
+  assert(store_lazy_faults(parts947z) == 2, "which counts as a second fault, got {store_lazy_faults(parts947z)}");
+  assert(store_lazy_error(parts947z) == causeA947z, "and the FIRST reason is the one kept, got [{store_lazy_error(parts947z)}]");
+
+  _ = delete(sp947z); _ = delete("{sp947z}.dschema");
+  _ = delete(sq947z); _ = delete("{sq947z}.dschema");
+}
+
+struct Leaf947t { p: integer, q: integer }
+struct Doc947t { id: integer, leaf: Leaf947t, label: text, note: text?, tags: vector<integer> }
+
+// Position of a field by name, or -1 — so this test pins the CONTRACT and not the
+// byte layout, which is free to change.
+fn pos947t(t: TypeInfo, name: text) -> integer {
+  for f in t.fields { if f.name == name { return f.position } }
+  return -1;
+}
+
+// @FTR-021 — a reflected position: what begins there, and what adding two of them gives
+//
+// @F107's load-bearing rule is that a position is CHECKED against the type's own
+// descriptor rather than trusted, so only a field that BEGINS at that byte is read.
+// Everything below is that one rule seen from a different side: the interior of a
+// wider field, a position belonging to another type, a path step onto something that
+// is not an inline record, and the empty path all answer `OtherKind` and read nothing.
+//
+// The cell worth naming is the SUM. The entry justified "a path is walked, never
+// summed" with "`origin`'s offset plus `x`'s begins nothing in the owner" — and for the
+// field it illustrates with, `[8, 0]`, that is not what happens. A nested record's first
+// field sits at offset 0, so the sum is the record's OWN offset and answers the record
+// itself. The rule is right and the reason is not: summing does not fail safely into
+// "nothing here", it silently answers a DIFFERENT field, and only for a non-first field
+// does the sum land in the interior and report `OtherKind`. Both cells are asserted.
+// `default/07_reflect.loft` had this right ("which is `origin` itself").
+//
+// The nullability half is only half assertable. `FieldInfo.nullable` tracks the
+// declaration exactly for the scalar kinds, and reports a constant `true` for a record,
+// enum, vector or keyed field, so `T` and `T?` are indistinguishable there (loft#995).
+// What this test pins instead is the GROUND TRUTH the flag is meant to carry — that the
+// two spellings really do differ — so the fact stays guarded while the reporting of it
+// is broken.
+fn test_a_reflected_position_is_checked_against_the_descriptor_not_trusted() {
+  doc947t = Doc947t { id: 7, leaf: Leaf947t { p: 30, q: 40 },
+                      label: "", note: null, tags: [9, 8] };
+  t947t = type_of(doc947t);
+  lt947t = type_of(doc947t.leaf);
+
+  assert(t947t.name == "Doc947t", "type_of names the type, got {t947t.name}");
+  assert(t947t.kind == RecordKind, "a struct is a RecordKind");
+  assert(len(t947t.fields) == 5, "with every declared field, got {len(t947t.fields)}");
+
+  // EVERY position `type_of` hands out is one `field_value` can read — the entry's
+  // reason for both halves reading one descriptor.
+  for f in t947t.fields {
+    assert(field_value(doc947t, f.position).kind != OtherKind,
+           "position {f.position} ({f.name}) came from type_of and must read");
+  }
+
+  id947t = pos947t(t947t, "id");
+  leaf947t = pos947t(t947t, "leaf");
+  label947t = pos947t(t947t, "label");
+  p947t = pos947t(lt947t, "p");
+  q947t = pos947t(lt947t, "q");
+  assert(p947t == 0, "a nested record's first field sits at 0, got {p947t}");
+  assert(q947t > 0, "and its second does not, got {q947t}");
+
+  // A bare position answers the field that BEGINS there.
+  assert(field_value(doc947t, id947t).i == 7, "id reads its value");
+  assert(field_value(doc947t, leaf947t).kind == RecordKind, "leaf reads as a record");
+
+  // A PATH is walked, one descriptor step per element.
+  assert(field_value(doc947t, [leaf947t, p947t]).i == 30, "leaf.p through a path");
+  assert(field_value(doc947t, [leaf947t, q947t]).i == 40, "leaf.q through a path");
+
+  // THE SUM. leaf + p is leaf's own offset, so it answers leaf — not "nothing".
+  assert(leaf947t + p947t == leaf947t, "the first field's offset is 0, so the sum is leaf's own");
+  assert(field_value(doc947t, leaf947t + p947t).kind == RecordKind,
+         "so summing answers the RECORD, got {field_value(doc947t, leaf947t + p947t).kind}");
+  // leaf + q lands inside leaf, which begins nothing in the owner.
+  assert(field_value(doc947t, leaf947t + q947t).kind == OtherKind,
+         "a sum landing in the interior reads nothing, got {field_value(doc947t, leaf947t + q947t).kind}");
+
+  // The interior of a wider field, and a position out of another type's range.
+  assert(field_value(doc947t, id947t + 4).kind == OtherKind, "inside a wider field reads nothing");
+  assert(field_value(doc947t.leaf, label947t).kind == OtherKind,
+         "a position from another type reads nothing");
+
+  // Path edge cases. An empty path needs a typed local — a bare `[]` does not type.
+  empty947t: vector<integer> = [];
+  assert(field_value(doc947t, empty947t).kind == OtherKind, "an empty path names no field");
+  assert(field_value(doc947t, [id947t]).i == field_value(doc947t, id947t).i,
+         "a one-element path is the single-position form");
+  assert(field_value(doc947t, [id947t, 0]).kind == OtherKind,
+         "a step onto a scalar reads nothing");
+  assert(field_value(doc947t, [pos947t(t947t, "tags"), 0]).kind == OtherKind,
+         "and a step onto a vector reads nothing");
+
+  // The three answers `ValueInfo` keeps apart: null is not "".
+  assert(field_value(doc947t, pos947t(t947t, "note")).is_null, "a null text? reads is_null");
+  assert(!field_value(doc947t, label947t).is_null, "an empty text is NOT null");
+  assert(field_value(doc947t, label947t).t == "", "and reads back as the empty string");
+
+  // `nullable` follows the declaration for the scalar kinds.
+  assert(!field_value(doc947t, id947t).is_null, "id holds a value");
+  for f in t947t.fields {
+    if f.name == "id" { assert(!f.nullable, "integer is not declared nullable") }
+    if f.name == "label" { assert(!f.nullable, "text is not declared nullable") }
+    if f.name == "note" { assert(f.nullable, "text? is declared nullable") }
+  }
+
+  // The ground truth loft#995 cannot report: the two spellings really do differ.
+  hole947t = Doc947t { id: 1, leaf: null, label: "", note: null, tags: null };
+  assert(hole947t.leaf != null, "a non-nullable record field cannot hold null");
+  assert(hole947t.tags != null, "nor can a non-nullable vector field");
+
+  // A name that arrives at runtime, and one that names nothing.
+  assert(type_named("Nope947t") == null, "an unknown name answers null");
+  assert((type_named("Doc947t") ?? lt947t).name == "Doc947t", "a known one answers its type");
+}
+
+struct Part947p { const id: integer, name: text }
+struct Word947p { const w: text, body: text }
+struct Pin947p  { const x: integer, const y: integer }
+
+// @FTR-022 — a paged read pays for the WALK, and for the order the file was written in
+//
+// @F93's load-bearing claim is that `limit` caps the WALK and not just the answer, so
+// "asking for twenty matches never pays for the rest". Asserted below as the counts it
+// decides, and measured with `LOFT_LOADER_STATS=1`, which reports `bytes_fetched` in
+// exact multiples of the 64 KiB page. Over a `trie` run of the same prefix, at limit 8:
+//
+//   2 000 words (566 KB file)    3 pages     uncapped   9 pages
+//   8 000 words (2.38 MB file)   3 pages     uncapped  32 pages
+//  32 000 words (9.72 MB file)   6 pages     uncapped 129 pages
+//
+// The capped read is FLAT while the file grows 17x and the uncapped read grows 14x, so
+// the cap really does stop the walk. The 3 -> 6 is the trie getting deeper, which is the
+// honest cost: a capped prefix read grows with the structure's DEPTH, not with the size
+// of the run it matched. Any NEGATIVE limit means no cap (not just -1), a limit past the
+// run reads the run, and limit 0 reads nothing while still paying the 2-page descent.
+//
+// The spatial half carries a cost nothing in the entry mentions, and it dominates
+// everything else: `store_load_box` is priced by the order the records were INSERTED,
+// not by the box or the index. Same 62 500-point grid, same query, same 500 records
+// returned, pages fetched --
+//
+//   box shape     x-major insert   y-major insert   tiled insert
+//   250 x   2         107                7               15
+//   100 x   5          45                7                9
+//    25 x  20          15               13                6
+//    20 x  25          13               15                7
+//     5 x 100           7               45               15
+//     2 x 250           7              107               29
+//
+// A 15x swing between two files holding identical data. The mirror is exact, which is
+// what proves the cause: the Morton walk is symmetric and the FILE is not, so a box
+// laid out across the insertion order pays for every stride it crosses. At 107 pages
+// the read pulls 81 % of the image in 107 range requests to return 0.8 % of the records
+// — worse than fetching the whole file once.
+//
+// So the cure is a write-time one: lay the dataset out with locality in both axes.
+// Tiling has no catastrophic orientation and is the best of the three for the
+// square-ish boxes a real viewport uses. This is asserted only as far as a count can
+// see it; the page numbers above are the reason the note exists.
+fn test_a_paged_read_pays_for_the_walk_it_takes_not_for_the_rest() {
+  tmp947p = temp_dir();
+  assert(tmp947p != null, "temp_dir is where this test's stores go");
+  stem947p = "{tmp947p ?? ""}/loft947_paged_{now()}_{ticks()}";
+  hp947p = "{stem947p}_h.store";
+  tp947p = "{stem947p}_t.store";
+  sp947p = "{stem947p}_s.store";
+
+  // ONE entry, and a batch that skips what the image does not hold.
+  all947p: hash<Part947p[id]> = [];
+  assert(store_persist_bind(all947p, hp947p), "the hash image is written");
+  for i in 0..50 { all947p += Part947p { id: i, name: "p{i}" } }
+
+  one947p: hash<Part947p[id]> = [];
+  assert(store_load_key(one947p, hp947p, 42), "a present key loads");
+  assert(len(one947p) == 1, "and brings exactly one entry, got {len(one947p)}");
+  assert((one947p[42] ?? Part947p { id: -1, name: "" }).name == "p42", "the right one");
+
+  miss947p: hash<Part947p[id]> = [];
+  assert(!store_load_key(miss947p, hp947p, 999), "an absent key answers false");
+  assert(len(miss947p) == 0, "and loads nothing, got {len(miss947p)}");
+
+  batch947p: hash<Part947p[id]> = [];
+  assert(store_load_keys(batch947p, hp947p, [7, 13, 999]) == 2,
+         "a batch answers how many were FOUND, skipping the absent");
+  assert(len(batch947p) == 2, "and brings just those, got {len(batch947p)}");
+
+  // A prefix run, and what `limit` bounds.
+  words947p: trie<Word947p[w]> = [];
+  assert(store_persist_bind(words947p, tp947p), "the trie image is written");
+  for i in 0..300 { words947p += Word947p { w: "kerk{i}", body: "x" } }
+
+  eight947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(eight947p, tp947p, "kerk", 8) == 8, "the cap decides the count");
+  assert(len(eight947p) == 8, "and the resident set, got {len(eight947p)}");
+
+  zero947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(zero947p, tp947p, "kerk", 0) == 0, "limit 0 reads nothing");
+
+  every947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(every947p, tp947p, "kerk", -1) == 300, "-1 is no cap");
+  neg947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(neg947p, tp947p, "kerk", -5) == 300, "and so is any negative");
+  over947p: trie<Word947p[w]> = [];
+  assert(store_load_prefix(over947p, tp947p, "kerk", 9999) == 300, "a cap past the run reads the run");
+
+  // A bounding box, and the corners written either way round.
+  pins947p: spatial<Pin947p[x, y]> = [];
+  assert(store_persist_bind(pins947p, sp947p), "the spatial image is written");
+  for gx in 0..40 { for gy in 0..40 { pins947p += Pin947p { x: gx, y: gy } } }
+
+  b1947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b1947p, sp947p, [10, 10], [19, 19], -1) == 100,
+         "a 10x10 box holds 100 of the 1600 points");
+  b2947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b2947p, sp947p, [19, 19], [10, 10], -1) == 100,
+         "and the corners the other way round name the same box");
+  b3947p: spatial<Pin947p[x, y]> = [];
+  assert(store_load_box(b3947p, sp947p, [10, 10], [19, 19], 5) == 5,
+         "the box cap bounds the walk the same way the prefix cap does");
+
+  _ = delete(hp947p); _ = delete("{hp947p}.dschema");
+  _ = delete(tp947p); _ = delete("{tp947p}.dschema");
+  _ = delete(sp947p); _ = delete("{sp947p}.dschema");
+}

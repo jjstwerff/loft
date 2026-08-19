@@ -1618,12 +1618,16 @@ fn op_drop_cannot_return() {
     )
     .error(
         "`OpDrop` cannot return — it runs at scope end with no caller to answer; \
-         anything whose failure matters stays an explicit call at op_drop_cannot_return:3:12",
+         anything whose failure matters stays an explicit call at op_drop_cannot_return:2:32",
     );
 }
 
 /// @PLN125 arc B: `OpDrop` takes only the receiver — the compiler calls it, so a
 /// second argument has nowhere to come from.
+///
+/// The POSITION is part of the promise. Both checks run after the whole body is
+/// parsed, so the lexer cursor has already reached the next declaration — these
+/// used to assert `3:12`, which is `fn test`, a function neither message names.
 #[test]
 fn op_drop_takes_only_self() {
     code!(
@@ -1633,7 +1637,7 @@ fn op_drop_takes_only_self() {
     )
     .error(
         "`OpDrop` takes only `self` — the compiler calls it, so a second argument has \
-         nowhere to come from at op_drop_takes_only_self:3:12",
+         nowhere to come from at op_drop_takes_only_self:2:47",
     );
 }
 

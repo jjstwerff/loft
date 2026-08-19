@@ -15,6 +15,8 @@ struct Mixed {
   score: float,
 }
 
+// @FTR-045 — `for f in s#fields`: a compile-time loop over a struct's scalar fields,
+// reading each one's name and value
 fn main() {
   // --- Iterate over uniform struct ---
   p = Point { x: 1.0, y: 2.0, z: 3.0 };

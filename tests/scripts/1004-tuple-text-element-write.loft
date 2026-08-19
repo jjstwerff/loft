@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Writing a `text` element of a tuple lands where it was aimed (loft#1004).
+//
+// It used to land at index + 1.  One rule, five faces, and every one of them silent: on a
+// `(text, text)` a write to `.0` changed `.1`; a write to the LAST element fell off the end
+// and was discarded with no diagnostic; a write onto a non-text neighbour SEGFAULTED the
+// interpreter; and `--native` refused the whole program with *"expected `String`, found
+// `&str`"*.  Reading a text element was always correct, and so was every other element type,
+// which is what kept it hidden.
+//
+// Cause: the `TuplePut` arm of `src/state/codegen.rs` emitted `OpAppendText` where every
+// sibling emits an `OpPut*` taking the distance from the stack top to the element.
+// `OpPutText` has been declared beside `OpAppendText` in `default/01_code.loft` all along, and
+// the three OTHER element-write matches in the same file use it — that arm's match list is
+// character-for-character the one at codegen.rs:1466 apart from this line.  The `--native`
+// half was the same feature from two more sides: the write emitted `var_t.N = <&str>` into a
+// `String` slot, and a tuple-element READ inside a tuple literal emitted `&x.to_string()`,
+// `&String` where a `String` was wanted.  Both now go through the `tuple_text_to_string` flag
+// the tuple-literal arm already used.
+//
+// The cells are written as an off-by-one PROBE, not as a list of shapes: the index written and
+// the index read are different in every one, so a write that moves by any amount shows up as a
+// specific wrong string rather than as a failure somewhere.  The two non-text rows are the
+// controls that were correct throughout — without them this reads as "tuple writes are broken"
+// rather than "text tuple writes are".
+
+fn t1004_2(a: text, b: text) -> text { "{a}{b}" }
+fn t1004_3(a: text, b: text, c: text) -> text { "{a}{b}{c}" }
+
+// @FTR-030 — a tuple's text element is written where it is aimed, at every index and width
+fn main() {
+  // FIRST element of a (text, text).  The bug wrote `.1`, giving "pX".
+  a: (text, text) = ("p", "q");
+  a.0 = "X";
+  assert(t1004_2(a.0, a.1) == "Xq", "write .0 of (text,text) = {t1004_2(a.0, a.1)}, want Xq");
+
+  // LAST element.  Index + 1 is off the end, so the write was DISCARDED and the assertion
+  // that would have caught it is the one comparing against the unwritten value.
+  b: (text, text) = ("p", "q");
+  b.1 = "X";
+  assert(t1004_2(b.0, b.1) == "pX", "write .1 of (text,text) = {t1004_2(b.0, b.1)}, want pX");
+
+  // A mixed tuple, text LAST — also off the end.
+  c: (integer, text) = (3, "q");
+  c.1 = "X";
+  assert("{c.0}{c.1}" == "3X", "write .1 of (integer,text) = {c.0}{c.1}, want 3X");
+
+  // A mixed tuple, text FIRST.  Index + 1 is the INTEGER slot, so the interpreter wrote a
+  // text into it and segfaulted.  This is the cell that makes the defect a crash rather than
+  // a wrong answer.
+  d: (text, integer) = ("p", 3);
+  d.0 = "X";
+  assert("{d.0}{d.1}" == "X3", "write .0 of (text,integer) = {d.0}{d.1}, want X3");
+
+  // Three wide, MIDDLE element — the shape that shows the drift is one index and not "the
+  // last one".  The bug gave "pqX".
+  e: (text, text, text) = ("p", "q", "r");
+  e.1 = "X";
+  assert(t1004_3(e.0, e.1, e.2) == "pXr", "write .1 of 3-tuple = {t1004_3(e.0, e.1, e.2)}, want pXr");
+
+  // Three wide, FIRST and LAST, so all three indices of one width are covered.
+  f: (text, text, text) = ("p", "q", "r");
+  f.0 = "X";
+  assert(t1004_3(f.0, f.1, f.2) == "Xqr", "write .0 of 3-tuple = {t1004_3(f.0, f.1, f.2)}, want Xqr");
+
+  g: (text, text, text) = ("p", "q", "r");
+  g.2 = "X";
+  assert(t1004_3(g.0, g.1, g.2) == "pqX", "write .2 of 3-tuple = {t1004_3(g.0, g.1, g.2)}, want pqX");
+
+  // Four wide: the drift is one index at every width, not a property of a 2- or 3-tuple.
+  h: (text, text, text, text) = ("p", "q", "r", "s");
+  h.1 = "X";
+  assert("{h.0}{h.1}{h.2}{h.3}" == "pXrs", "write .1 of 4-tuple = {h.0}{h.1}{h.2}{h.3}, want pXrs");
+
+  // Text between two integers — the segfault cell again, with the neighbour on both sides.
+  i: (integer, text, integer) = (1, "q", 3);
+  i.1 = "X";
+  assert("{i.0}{i.1}{i.2}" == "1X3", "write .1 of (int,text,int) = {i.0}{i.1}{i.2}, want 1X3");
+
+  // A whole-tuple REBIND that reads a text element of itself.  This is the shape that looked
+  // like the workaround and was refused by `--native` on its own account.
+  j: (text, text) = ("p", "q");
+  j = ("X", j.1);
+  assert(t1004_2(j.0, j.1) == "Xq", "whole-tuple rebind = {t1004_2(j.0, j.1)}, want Xq");
+
+  // CONTROLS — a non-text element of a mixed tuple, and an all-integer tuple.  Both were
+  // correct before the fix and must stay so: they are what says the defect was the text
+  // opcode and not tuple writes in general.
+  k: (text, integer) = ("p", 3);
+  k.1 = 9;
+  assert("{k.0}{k.1}" == "p9", "CONTROL write .1 of (text,integer) = {k.0}{k.1}, want p9");
+
+  m: (integer, integer) = (1, 2);
+  m.0 = 9;
+  assert("{m.0}{m.1}" == "92", "CONTROL write .0 of (integer,integer) = {m.0}{m.1}, want 92");
+
+  println("tuple text writes land where aimed");
+}
