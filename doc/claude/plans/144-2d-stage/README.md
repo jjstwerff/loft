@@ -118,7 +118,7 @@ phase is cut, not when it is implemented.
 | **A5** — per-node alpha + tint, blending instead of discard | `stage` | ✅ **Shipped** as `stage` 0.5.0 — every expected byte hand-computed and classified by **exact colour with `other` = 0**: alpha 1 is the colour, alpha 0 paints nothing, half-alpha over black and over a non-black destination both exact, two translucent nodes stack in order, and `render` / `render_stage` agree wherever alpha is 1. **Premultiplied** on both paths; the straight-alpha control fails both half-alpha cells | ✅ **Shipped** |
 | **A6** — clip / mask rect | `stage` | ✅ **Shipped** as `stage` 0.6.0 — hand-counted pixels: a child cut at the exact parent boundary, **nested clips intersecting** (not innermost-wins), disjoint clips showing nothing, a sibling untouched, and the unclipped scene unchanged. Plus the A3a interaction: **a run is `(atlas, clip)`** — one atlas under two clips is two runs. Three controls fire | ✅ **Shipped** |
 | *— arc **P**: the presentation model —* | | | |
-| **P1** — sprite origin, `layer` + `depth`, so a 2D scene presents a 3D world | `stage` | a hand-computed occlusion table over a lattice with stacked heights: a sprite whose origin sits on row `r` occludes `r−1` and never `r+1` **however far up its pixels reach**, within a cell order is by height, `(row, height)` ties break by `q`, and a layer always outranks any depth inside another — **all of it with the sprites split across two atlases**, the cell A3 gets wrong if batching groups globally. Second gate, run by the vehicle: picking one screen point in the **2D and 3D presentations of the same world answers the same `(q, r, height)`** | Open |
+| **P1** — sprite origin, `layer` + `depth`, and the 2.5-D cue | `stage` | ✅ **Shipped** as `stage` 0.7.0 — layer outranks depth, depth is distance *into* the screen (larger draws first, so `depth = -y` works), ties stable. Plus `depth_cue`: distance is **smaller and hazier**, scaled about the **origin** so a mob's feet stay on its tile. ⚠ It found a defect carried since `A1` — the origin was a point inside the sprite to `compose` and the rect's corner to everything else, indistinguishable at `(0,0)` where 56 green tests all sat | ✅ **Shipped** |
 | **P2** — camera with a per-layer parallax factor | `stage` | with every factor `1.0`, a camera pan is **pixel-identical** to translating every node by hand — the flat mode proved to be the degenerate case, not a second path. With factors varying, a pan of `d` moves each layer by `d × factor`, hand-computed per layer. **And a pure camera move re-uploads no instance data** (assert zero uploads), which is the entire reason the camera lives here and not in the node positions | Open |
 | **P3** — world sprites: ambient motion, no per-instance state | `stage` | 500 wind-swayed sprites cost **zero per-frame instance updates** — the phase is derived from time and position, not stored and stepped — and two instances at different positions are visibly out of phase rather than marching in lockstep | Open |
 | **P4** — mob animation: sequences, rate, loop mode | `stage` | one loop's worth of ticks returns to frame 0 exactly; the frame sequence at **30 Hz equals the sequence at 60 Hz** sampled at the same times, so it is frame-rate independent and replayable; a `once` animation stops on its last frame without wrapping; **ping-pong reverses without repeating the end frame**, the classic off-by-one | Open |
@@ -180,6 +180,32 @@ phases carry a design call that decides the effort, made here rather than discov
 | **P6** | S | Two cameras over one stage, two composite passes (L2 already builds one). The split it enforces is the useful part: **world deterministic and replicated, presentation local and free** — window size, camera, particles and ambient sway may differ per client, and must be allowed to. |
 | **G** | H | Deferred. A path rasterizer with AA fills, gradients and stroke joins is the one genuinely research-shaped item here, which is why it is behind a trigger rather than in the queue. |
 
+## A third vehicle: dryopea's tower defence in 2.5-D
+
+The consumer asked for it, and it is the case this arc was designed against, so it belongs in
+the plan rather than in a conversation.
+
+**Buildings, walls and hills are authored in 3-D** — that is the intended long-term path, not
+a demo shortcut: the 3-D routines already draw them and will keep doing so. What `stage`
+adds is a **presentation**: those meshes project to a footprint and a depth, and mobs,
+workers and the player are sprites that sort against them by the same key. The world stays
+3-D; only the view is flat.
+
+Three things that shape follows from, all now built or named:
+
+- **Depth bands are LAYERS.** "Very blurry in the far distance, sharp up close" is not a
+  per-node blur — it is a handful of bands, each with its own parallax factor (`P2`), blur
+  and fog (`L3`), and cue range. A mob crossing from background work to the fight migrates
+  between bands. Per-node blur would cost a pass each; per-band costs one.
+- **The cue scales about the origin**, so a shrinking distant worker keeps its feet on its
+  tile. That is `P1`, and it only works because the origin is the anchor (`A1`).
+- **Riding left/right is a camera pan**, which is `P2` — one uniform per layer, not an O(N)
+  rewrite of every node. Distant mobs already working when the player arrives is then just
+  scene content at a far depth, not a spawning system.
+
+⚠ **`dryopea` is a consumer tree: read it, never write to it.** What this plan owes that demo
+is the capability and the recipe; the game is theirs to build.
+
 ## The vehicle
 
 **Brick Buster II**, rebuilt arc by arc across all three plans, with the shipped 1983-line
@@ -211,7 +237,7 @@ dirty per frame?** before adding it.
 | Arc | Waits on | Then |
 |---|---|---|
 | **A** scene | ✅ **complete** | `A0`–`A6` all shipped as `stage` 0.6.0 |
-| **P** presentation | `A3` | `P1` → `P6` |
+| **P** presentation | `A3` | `P1` ✅ · **`P2` next** → `P6` |
 | **L** light | `A5`'s tint (`L1`), `A3` (`L2`/`L3`) | `L1` alone is the whole feature for a flat-lit game |
 | **G** vector paths | deferred behind its trigger | — |
 
