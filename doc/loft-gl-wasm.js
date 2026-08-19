@@ -378,7 +378,8 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       },
       loft_gl_destroy_window() {
         for (const p of programs) if (p) gl.deleteProgram(p);
-        for (const v of vaos) if (v) gl.deleteVertexArray(v.vao);
+        for (const v of vaos) if (v) { if (v.vao) gl.deleteVertexArray(v.vao);
+                                       if (v.vbo) gl.deleteBuffer(v.vbo); }
         for (const t of textures) if (t) gl.deleteTexture(t);
         for (const f of fbos) if (f) gl.deleteFramebuffer(f);
         programs = []; vaos = []; textures = []; fbos = [];
@@ -419,6 +420,56 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (stride >= 10) { gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, bpv, 24); }
         gl.bindVertexArray(null);
         return hold(vaos, { vao, vbo, n: count / stride });
+      },
+      // ── Instancing (@PLN144 A0 found these four absent) ───────────────────
+      //
+      // A0 built its batching probe with `--html` and the page reported all four
+      // of these unimplemented: it BUILT, each returned its zero value, and the
+      // stage drew nothing — the third time this shape has appeared (loft#737's
+      // text stubs, E1's audio stubs).  A3's whole design is one instanced call
+      // instead of N draws, so without these the browser half of the 2-D stack is
+      // dead on arrival.
+      //
+      // An instance buffer is held in the SAME table as a VAO, as `{vao: null,
+      // vbo, n}`.  That is not tidiness: `gl_update_buffer` documents its argument
+      // as "a handle returned by gl_upload_vertices OR gl_upload_instance_buffer",
+      // and two index spaces would make handle 1 ambiguous between them.
+      loft_gl_upload_instance_buffer(ptr, count) {
+        const data = new Float32Array(getMem().buffer, ptr, count);
+        const vbo = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        return hold(vaos, { vao: null, vbo, n: count });
+      },
+      loft_gl_instance_attrib(vaoIdx, ivboIdx, location, components, strideFloats, offsetFloats) {
+        const v = slot(vaos, vaoIdx), b = slot(vaos, ivboIdx);
+        if (!v || !v.vao || !b) return;
+        gl.bindVertexArray(v.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b.vbo);
+        gl.vertexAttribPointer(location, components, gl.FLOAT, false,
+                               strideFloats * 4, offsetFloats * 4);
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribDivisor(location, 1);   // the line that makes it per-INSTANCE
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindVertexArray(null);
+      },
+      loft_gl_draw_instanced(vaoIdx, vertexCount, instanceCount) {
+        const o = slot(vaos, vaoIdx);
+        if (!o || !o.vao) return;
+        gl.bindVertexArray(o.vao);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, vertexCount, instanceCount);
+        gl.bindVertexArray(null);
+      },
+      // Orphan + re-upload, matching the native contract's DYNAMIC_DRAW: a
+      // per-frame update must not stall on the buffer still being read.
+      loft_gl_update_buffer(h, ptr, count) {
+        const o = slot(vaos, h);
+        if (!o || !o.vbo) return;
+        const data = new Float32Array(getMem().buffer, ptr, count);
+        gl.bindBuffer(gl.ARRAY_BUFFER, o.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
       },
       loft_gl_draw(vaoIdx, n) {
         const o = slot(vaos, vaoIdx); if (o) { gl.bindVertexArray(o.vao); gl.drawArrays(gl.TRIANGLES, 0, n); gl.bindVertexArray(null); }
