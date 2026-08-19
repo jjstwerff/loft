@@ -1150,24 +1150,45 @@ impl Output<'_> {
                 // owned/borrowed split, runs it.  Every failing shape funnels through
                 // here: a match temp, `local = t`, a struct field, and the synthetic
                 // return work var all reach `set_var` with this exact pair.
+                //
+                // loft#1005 — and the same pair one level in.  A NESTED tuple parameter
+                // (`p: ((integer, text), text)`) reaches its inner tuple as `TupleGet(p, 0)`,
+                // not as a bare `Var`, so the whole-parameter rule above did not see it and
+                // `let mut var___ref_1: (i64, String) = var_p.0;` was the identical E0308.
+                // Both are one fact — a tuple crossing from a BORROWED parameter into an
+                // OWNED slot — so they share the re-spelling and differ only in the place
+                // they name.
                 let tuple_arg_owned_elems = match variables.tp(var) {
-                    Type::Tuple(elems) if tuple_has_text_leaf(elems) => matches!(
-                        to_inner, Value::Var(v) if {
-                            let vars = self.data.def(self.def_nr).variables();
-                            vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
-                        }
-                    )
-                    .then(|| elems.clone()),
+                    Type::Tuple(elems) if tuple_has_text_leaf(elems) => {
+                        let from_param = match to_inner {
+                            Value::Var(v) => {
+                                let vars = self.data.def(self.def_nr).variables();
+                                vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
+                            }
+                            Value::TupleGet(v, _) => {
+                                let vars = self.data.def(self.def_nr).variables();
+                                vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
+                            }
+                            _ => false,
+                        };
+                        from_param.then(|| elems.clone())
+                    }
                     _ => None,
                 };
                 if let Some(elems) = tuple_arg_owned_elems {
-                    if let Value::Var(v) = to_inner {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
-                        write!(
-                            w,
-                            "{}",
-                            owned_tuple_from_arg(&format!("var_{src_name}"), &elems)
-                        )?;
+                    let place = match to_inner {
+                        Value::Var(v) => Some(format!(
+                            "var_{}",
+                            sanitize(self.data.def(self.def_nr).variables().name(*v))
+                        )),
+                        Value::TupleGet(v, idx) => Some(format!(
+                            "var_{}.{idx}",
+                            sanitize(self.data.def(self.def_nr).variables().name(*v))
+                        )),
+                        _ => None,
+                    };
+                    if let Some(place) = place {
+                        write!(w, "{}", owned_tuple_from_arg(&place, &elems))?;
                     }
                 } else if text_local_clone {
                     if let Value::Var(v) = to.unspan() {
@@ -1443,7 +1464,7 @@ impl Output<'_> {
 /// `tuple_text_to_string` activation in `output_set` so a tuple
 /// destination like `((i64, String), (i64, String))` triggers the
 /// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
-fn tuple_has_text_leaf(elems: &[Type]) -> bool {
+pub(crate) fn tuple_has_text_leaf(elems: &[Type]) -> bool {
     for e in elems {
         match e {
             Type::Text(_) => return true,
@@ -1476,6 +1497,38 @@ fn owned_tuple_from_arg(expr: &str, elems: &[Type]) -> String {
             match e.base() {
                 Type::Text(_) => format!("{field}.to_string()"),
                 Type::Tuple(inner) => owned_tuple_from_arg(&field, inner),
+                _ => field,
+            }
+        })
+        .collect();
+    format!("({})", parts.join(", "))
+}
+
+/// Re-spell a tuple ARGUMENT element-wise so it fits a BORROWED tuple parameter.
+///
+/// The mirror of [`owned_tuple_from_arg`], for the direction a call takes. `text` is
+/// `String` in [`Context::Variable`] and `&str` in [`Context::Argument`] (`rust_type`), so a
+/// tuple LOCAL is `(i64, String)` while the parameter it is passed to is `(i64, &str)`, and
+/// rustc rejects the call. A tuple LITERAL argument is emitted in place and already spells
+/// `&str`, which is why the literal form compiled and only the variable form did not
+/// (loft#1005).
+///
+/// `expr` is the Rust place holding the owned tuple; each text leaf becomes `&*place`, which
+/// derefs `String`, `Str` and `&str` alike — so this is also correct when the argument is
+/// itself a parameter and already borrowed. Every other leaf passes through untouched.
+///
+/// Borrowing rather than cloning: the callee reads through the parameter, and a by-value
+/// tuple parameter is a COPY in loft, so nothing the callee does to its own binding is
+/// visible here. That keeps the call free of an allocation the language never asked for.
+pub(crate) fn borrowed_tuple_from_owned(expr: &str, elems: &[Type]) -> String {
+    let parts: Vec<String> = elems
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let field = format!("{expr}.{i}");
+            match e.base() {
+                Type::Text(_) => format!("&*{field}"),
+                Type::Tuple(inner) => borrowed_tuple_from_owned(&field, inner),
                 _ => field,
             }
         })

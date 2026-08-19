@@ -388,13 +388,54 @@ impl Output<'_> {
                 // is idempotent for a u8 arg, 0/1 for a bool.
                 let param_is_boolean = idx < def_fn.attributes().len()
                     && matches!(def_fn.attributes()[idx].typedef.base(), Type::Boolean);
+                // loft#1005 — a tuple ARGUMENT carrying text has to be re-spelled to reach a
+                // tuple PARAMETER.  `text` is `String` in a variable slot and `&str` in a
+                // parameter (`rust_type`), so a tuple local is `(i64, String)` against a
+                // parameter of `(i64, &str)` and rustc refused the whole program.  A tuple
+                // LITERAL argument is emitted in place and already spells `&str`, which is
+                // why only the variable form failed.
+                //
+                // Applied to a PLACE (a variable), not to an arbitrary expression: the
+                // re-spelling names `expr.0` / `expr.1`, so it must be something that can be
+                // projected more than once without re-evaluating it.  A literal needs no
+                // conversion anyway, and a call result is materialised into a local before
+                // it gets here.
+                let tuple_arg_place = match (v_unspanned, idx < def_fn.attributes().len()) {
+                    (Value::Var(var), true) => {
+                        match (
+                            &def_fn.attributes()[idx].typedef,
+                            self.data.def(self.def_nr).variables().tp(*var),
+                        ) {
+                            (Type::Tuple(param_elems), Type::Tuple(_))
+                                if crate::generation::dispatch::tuple_has_text_leaf(
+                                    param_elems,
+                                ) =>
+                            {
+                                let name = self
+                                    .data
+                                    .def(self.def_nr)
+                                    .variables()
+                                    .name(*var)
+                                    .to_string();
+                                Some(crate::generation::dispatch::borrowed_tuple_from_owned(
+                                    &format!("var_{name}"),
+                                    param_elems,
+                                ))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
                 if needs_deref {
                     write!(w, "&*(")?;
                 }
                 if param_is_boolean {
                     write!(w, "((")?;
                 }
-                if param_is_narrow {
+                if let Some(respelled) = tuple_arg_place {
+                    write!(w, "{respelled}")?;
+                } else if param_is_narrow {
                     self.emit_i32_slot(w, v)?;
                 } else {
                     self.output_code_inner(w, v)?;
