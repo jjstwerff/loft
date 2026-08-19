@@ -312,6 +312,107 @@ pub fn range(
     out
 }
 
+/// `|a - b|` over two `n`-word Morton codes, word 0 most significant.
+///
+/// A single axis is 64 bits, so two axes are already 128 and three are 192 — wider than
+/// any integer this crate can subtract in one step, which is why the distance is computed
+/// word by word with a borrow rather than by casting down to `u64`. Truncating instead
+/// would make every pair of points sharing their high word look equidistant, which is most
+/// of a map.
+fn code_abs_diff(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> [u64; MAX_AXES] {
+    let (hi, lo) = if code_gt(a, b, n) { (a, b) } else { (b, a) };
+    let mut out = [0u64; MAX_AXES];
+    let mut borrow = 0u64;
+    for i in (0..n).rev() {
+        let (d, b1) = hi[i].overflowing_sub(lo[i]);
+        let (d, b2) = d.overflowing_sub(borrow);
+        out[i] = d;
+        borrow = u64::from(b1 || b2);
+    }
+    out
+}
+
+/// The records nearest `from`, in roughly-increasing distance, capped at `limit`.
+///
+/// The n-axis form of [`crate::spatial::near`], and what the OPEN `spatial` slices
+/// (`xs[(x,y)..]`, `xs[(x,y)..:n]`) are documented to do. [`range`] answers the Z-order
+/// TAIL — every record whose code is `>= from` — so half the neighbourhood is structurally
+/// unreachable: a query at the far end of the map answered nothing at all, and `..:n`
+/// silently under-delivered by however close the query sat to the end of the curve
+/// (loft#1002).
+///
+/// Two cursors, seeded either side of the query, each step yielding whichever is closer.
+/// That is what makes the answer independent of where the query lands, and it costs no
+/// allocation and no distance sort.
+///
+/// **Approximate**, exactly as `spatial::near` is: the order is by MORTON distance, which
+/// tracks spatial distance closely but jumps at quadrant boundaries, so a truly-near point
+/// can arrive a little late. `xs[lo..hi]` is the exact form and stays the answer when the
+/// caller needs containment. Every record is yielded eventually, each once.
+#[must_use]
+pub fn near_range(
+    coll: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[i64],
+    limit: Option<usize>,
+) -> Vec<u32> {
+    let store = keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return Vec::new();
+    }
+    let n = keys.len();
+    if n == 0 || n > MAX_AXES {
+        return Vec::new();
+    }
+    let query = morton_words(n, |a| coord_code(from[a]));
+    let oracle = RadixOracle { keys };
+    let probe = |word: u32| interleave(word, n, |a| coord_code(from[a]));
+    // `fore` is the first record with code >= query.  When the query sits past every
+    // record `fore` is empty, and then the LAST record is the nearest — which is the
+    // case that used to answer nothing.
+    let mut fore = rt::rtree_seek(store, tree, &probe, key_bits(keys), &oracle);
+    let mut back = if fore.rec() == 0 {
+        rt::rtree_last(store, tree)
+    } else {
+        let mut b = fore;
+        b.prev(store, tree);
+        b
+    };
+    let cap = limit.unwrap_or(usize::MAX);
+    let mut out = Vec::new();
+    while out.len() < cap {
+        let gap = |rec: u32| {
+            let code = morton_words(n, |a| axis_code(store, rec, &keys[a]));
+            code_abs_diff(&code, &query, n)
+        };
+        match (back.rec(), fore.rec()) {
+            (0, 0) => break,
+            (b, 0) => {
+                back.prev(store, tree);
+                out.push(b);
+            }
+            (0, f) => {
+                fore.next(store, tree);
+                out.push(f);
+            }
+            (b, f) => {
+                // Ties go to `back`, so a record sitting exactly on the query is yielded
+                // before its forward neighbour rather than after it.
+                if code_gt(&gap(b), &gap(f), n) {
+                    fore.next(store, tree);
+                    out.push(f);
+                } else {
+                    back.prev(store, tree);
+                    out.push(b);
+                }
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // The bounding-box WALK — @PLN136
 // ---------------------------------------------------------------------------

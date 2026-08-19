@@ -372,8 +372,8 @@ coordinate key fields (@PLN48):
 | `m = xs[x, y]` | Look up the record at exactly that point; `null` when nothing sits there. Note the coordinates are separate subscripts (`xs[3, 6]`), not the parenthesised pair the range forms use. |
 | `xs[x, y] = mob` | Insert-or-replace at that point (the key comes from `mob`'s own coordinate fields, as for `hash`/`sorted`/`index`). |
 | `xs[x, y] = null` | Remove the record at that point; a no-op when the point is empty. |
-| `xs[(x,y)..]` | Walk ONWARD along the collection's Morton order from that point; caller `break`s to stop. |
-| `xs[(x,y)..:n]` | Same, capped at `n` records. |
+| `xs[(x,y)..]` | Walk OUTWARD from that point, nearest first; caller `break`s to stop. Approximate — ordered by Morton distance, so a truly-near point can arrive a little late. |
+| `xs[(x,y)..:n]` | Same, capped at `n` records. Answers `n` from any origin (it used to answer the Morton TAIL, so it under-delivered near the end of the curve — loft#1002). |
 | `xs[(x1,y1)..(x2,y2)]` | Bounding-box range — exactly what is inside the box. |
 
 There are no `.near`/`.within`/`.nearest` methods — proximity is ordinary

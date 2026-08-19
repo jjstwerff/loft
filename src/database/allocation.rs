@@ -1594,8 +1594,8 @@ impl Stores {
         let cap = (limit >= 0).then_some(limit as usize);
         // Two different queries share this entry point, and `has_till` is the fact
         // that tells them apart. A CLOSED box promises containment (loft#800); the
-        // open forms (`xs[(x,y)..]`, `xs[(x,y)..:n]`) promise the Z-order tail and
-        // would be WRONG to filter.
+        // OPEN forms (`xs[(x,y)..]`, `xs[(x,y)..:n]`) promise an outward walk from the
+        // point, which is what four docs and the catalogue entry all describe.
         //
         // @PLN136 — the box form walks the box rather than the code interval between
         // its corners. The interval is a superset that Z-order threads in and out of:
@@ -1603,10 +1603,18 @@ impl Stores {
         // shapes a map issues is 1.46 M records read to return 4 k. `box_range` seeks
         // over each gap instead, and its cap bounds the WALK, so the two reasons the
         // old composition had to cap AFTER filtering are both gone.
+        //
+        // loft#1002 — the open forms used to route to `range`, the one-directional walk,
+        // so they answered the Z-order TAIL: only records whose code is >= the query's.
+        // Half the neighbourhood was structurally unreachable, `..:n` under-delivered by
+        // however close the query sat to the end of the curve, and a query past every
+        // record answered nothing at all. `near_range` is the two-cursor walk the surface
+        // was always described as, and the outward walk that already existed in
+        // `spatial::near` with no way for a loft program to reach it.
         let recs = if has_till != 0 {
             crate::radix_db::box_range(coll, &self.allocations, &keys, &from[..n], &till[..n], cap)
         } else {
-            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], None, cap)
+            crate::radix_db::near_range(coll, &self.allocations, &keys, &from[..n], cap)
         };
         self.build_rec_scratch(coll, &recs)
     }
