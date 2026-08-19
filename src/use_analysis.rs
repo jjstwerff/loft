@@ -2252,6 +2252,15 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
             {
                 protectable.push(*av);
             }
+            // A `null` argument holds NO STORE, so nothing the callee returns can be a
+            // borrow of it — it neither needs protecting nor leaves the witness set
+            // incomplete.  Reading it as uncovered is what made the caller keep the
+            // conservative never-free answer for an OMITTED `τ? = null` parameter,
+            // which the parser fills with exactly this `Value::Null`: `fn f(a: P? = null)
+            // -> P { a? }` called as `f()` then leaked the record the null path built,
+            // once per call.  The same call with a bare VAR holding null was always
+            // clean, which is what localised it (loft#1021).
+            Value::Null => {}
             _ => covers_all = false,
         }
     }
