@@ -500,6 +500,24 @@ needs `LD_LIBRARY_PATH=$HOME/.local/lib` unless the library is on the loader
 path.  A backend that is not reachable prints `SKIP` and is never counted as a
 pass — which is the reason the mode is a variable rather than a compiled-in list.
 
+**The general rule, for every probe that needs something outside the process** (a
+database, a browser, a server): *reaching the subject is a PRECONDITION, not a
+measurement.* A probe that could not reach it rendered nothing and asserted nothing, so a
+FAILURE from it is a claim it never made — it must SKIP. Everything after the connection
+keeps its failure codes: once the subject answers, a wrong result is a real result and
+stays red.
+
+`tools/html_render_check.mjs` had this one case too narrow and it cost two weeks of red:
+a MISSING chrome exited 2 (skip), but a chrome that was installed and never answered its
+debugging port fell into the generic catch and exited 3, which reads as "the page was
+wrong". `tests/gl_text_bridge.rs` was red on `main` from 2026-08-06 on a probe that never
+loaded a page.
+
+⚠ **Widening a skip is a reduction in coverage, so prove BOTH directions before believing
+it** — that the unreachable case now skips, AND that the reachable case still runs and
+still asserts. A skip that swallows a genuine failure is worse than the red it replaced
+(the sibling hazard is § "a gate that skips looks like a gate that passes").
+
 ### Running the other three
 
 Both servers run as ordinary system services on a development box; the fixtures
