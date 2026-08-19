@@ -239,8 +239,19 @@ act on five: `unknown-function`, `unknown-field`, `unknown-variable`,
 decisions written up above are the ones on record; the other twenty are omissions rather
 than decisions, and several are pure deletions at a span the compiler already knows —
 `redundant-coalesce`, `unreachable-code`, `empty-parallel-block`, `needless-const-parameter`.
-loft#1003 tracks closing that, and the shape it proposes is this file's own `FIX_BLOCKED`
-pattern one level down: a listed reason per row, so a missing edit reads as a decision.
+That is now a GATE rather than a note. `every_mechanical_fix_is_applicable_or_listed`
+(`tests/e1_code_set.rs`) drives `loft fix` itself over each code's trigger program and requires
+that a code whose `--explain` output offers a fix with no `needs:` clause is one `loft fix` can
+name — or carries a row in `EDIT_BLOCKED` saying what stops it. Both directions are red: a
+missing row, and a row for a code that has since graduated. The twenty above are that list, each
+with its reason, so a missing edit is a decision on record instead of a silence; four of them
+say outright that they SHOULD carry an edit and name what is missing (a span the emit site has
+not captured). loft#1003 tracks attaching those.
+
+The scan is scoped to each code's own diagnostic block, from its header to the next. A trigger
+program often reports more than the code it was written for — the `double-move` probe also
+raises `avoidable-copy` — and reading the whole output attributes one code's mechanical fix to
+another, which is exactly how the first version of this gate failed on a code already listed.
 
 `superseded-call` is worth naming separately, because it is the only advice with an edit and
 it is REJECTED every time it fires. The edit is a bare rename, and the stdlib's only

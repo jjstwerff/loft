@@ -355,6 +355,104 @@ fn root() -> PathBuf {
 /// nowhere is not finished.  `@F109` cleared that, exactly as `@F106` had for `move`.
 const FIX_BLOCKED: &[(&str, &str)] = &[];
 
+/// loft#1003 — codes whose fix is offered as MECHANICAL but carries no machine EDIT, each
+/// with what blocks it.
+///
+/// A mechanical fix is one *"whose meaning is settled by the code alone"*, and that is the
+/// tier `loft fix --apply` is allowed to write.  Carrying an `edit` is a SEPARATE fact: it is
+/// the span and replacement text, without which `fix_apply::spelled` cannot see the fix at
+/// all.  The two are orthogonal, and DIAGNOSTICS.md says so — the tiers "gate who may affirm
+/// the condition, not whether a fix is clickable" — but nothing checked the second axis, so
+/// eight of seventy-six `Fix` constructions carry an edit and `loft fix` reaches five of the
+/// twenty-five codes marked `M`.
+///
+/// The rows below are the ones that ship an `M` with no edit.  Each is a REVIEWED omission
+/// rather than a silence: the same argument `FIX_BLOCKED` makes one level up — a mechanical
+/// fix with no edit looks exactly like one that can be applied.  Removing a row is how a code
+/// graduates; adding one is a decision, and the reason is what the next reader checks.
+const EDIT_BLOCKED: &[(&str, &str)] = &[
+    (
+        "avoidable-copy",
+        "the rewrite is 'build the value in place', which is a restructure of the construction site rather than an edit at the notice's own span",
+    ),
+    (
+        "c-binding-not-interpretable",
+        "the fix is C the compiler cannot write — an ANSI-C shim taking at most 32 parameters",
+    ),
+    (
+        "redundant-coalesce",
+        "the deletion spans `?? <default>`, and the diagnostic fires BEFORE the default is parsed, so its end is not yet known at the emit site",
+    ),
+    (
+        "redundant-default-fallback",
+        "same shape as `redundant-coalesce`: the `?` and what it defaults over are not one span at the emit site",
+    ),
+    (
+        "redundant-null-check",
+        "deleting a comparison changes the enclosing condition's shape (`a && b` becomes `b`), which is not a span deletion",
+    ),
+    (
+        "upper-case-local",
+        "the rename touches every reference, not the declaration alone",
+    ),
+    (
+        "unreachable-code",
+        "the span runs to the end of the block, which the emit site has not parsed yet",
+    ),
+    (
+        "unreachable-match-arm",
+        "same: the arm's extent is not known where the overlap is detected",
+    ),
+    (
+        "empty-parallel-block",
+        "deleting the block removes a statement, so the span includes its terminator",
+    ),
+    (
+        "text-slice-char-bound",
+        "`len(t)` -> `size(t)` is a span edit and SHOULD carry one; unblocked as soon as the call's span is threaded to the emit site",
+    ),
+    (
+        "text-index-char-bound",
+        "the cure is a different loop form (`for c in t`), not a substitution",
+    ),
+    (
+        "trailing-boolean-parameters",
+        "adding a default touches the declaration's parameter list, and which default is the author's choice",
+    ),
+    (
+        "needless-reference-parameter",
+        "dropping the `&` is a one-token deletion and SHOULD carry an edit; unblocked as soon as the `&`'s own position is captured",
+    ),
+    (
+        "needless-const-parameter",
+        "same one-token deletion as `needless-reference-parameter`",
+    ),
+    (
+        "not-null-deprecated",
+        "deleting `not null` is a span edit and SHOULD carry one; the annotation's span is not captured at the emit site",
+    ),
+    (
+        "module-name-shadowed",
+        "the cure renames a FILE, which is not an edit to any source span",
+    ),
+    (
+        "undeclared-dependency",
+        "the cure is running `loft install <pkg>`, which edits the manifest rather than the source",
+    ),
+    (
+        "empty-braces-not-collection",
+        "`{}` -> `[]` is a span edit and SHOULD carry one",
+    ),
+    (
+        "read-size-not-element-multiple",
+        "the replacement is an expression the author must supply (`element_count * <width>`)",
+    ),
+    (
+        "file-write-width",
+        "which width is meant is the author's choice, so there is no single replacement",
+    ),
+];
+
 /// Run `prog` on the interpreter with compact errors (so a typed diagnostic surfaces as
 /// its stable `[code]` tag), returning stdout+stderr.
 fn compact_output(prog: &str) -> String {
@@ -370,6 +468,33 @@ fn compact_output(prog: &str) -> String {
         .env("LOFT_TIMEOUT", "60")
         .output()
         .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&path);
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+/// Run `loft fix` (no `--apply`) over `prog` and return what it printed.
+///
+/// The probe for loft#1003's gate: `--explain` renders every fix, `loft fix` only the ones
+/// carrying an applicable `edit`, and the difference between the two is the whole finding.
+/// Writing nothing is the answer for a code it cannot reach, so an empty string is data.
+fn fix_output(prog: &str) -> String {
+    static NEXT_FIX: AtomicU32 = AtomicU32::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "loft_e1_applic_{}_{}.loft",
+        std::process::id(),
+        NEXT_FIX.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, prog).unwrap();
+    let out = Command::new(loft_bin())
+        .arg("fix")
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_LINT_STRICT_INDEX", "1")
+        .output()
+        .expect("run loft fix");
     let _ = std::fs::remove_file(&path);
     format!(
         "{}{}",
@@ -425,6 +550,75 @@ fn doors(out: &str) -> Vec<u32> {
 /// wrong is half-built.  The exceptions are listed rather than tolerated: `FIX_BLOCKED`
 /// names each one and what blocks it, which is what stops "no fix yet" from quietly
 /// becoming "no fix ever".
+/// loft#1003 — a fix advertised MECHANICAL carries an applicable EDIT, or is listed.
+///
+/// `loft fix` reports a fix only when it spells an `edit`; without one, a mechanical fix is
+/// visible to `--explain` and to nothing else — not to `loft fix`, not to `--apply`, not to an
+/// editor's quick-fix. That is a second axis the tier does not carry, and it went unchecked, so
+/// `loft fix` reaches five of the twenty-five codes marked `M` and can act on no warning-level
+/// fix at all.
+///
+/// This asserts the pair rather than the count: a code whose `--explain` output offers a
+/// mechanical fix must be one `loft fix` can name, unless `EDIT_BLOCKED` says what stops it.
+/// The probe is `loft fix` itself, not the `Fix` struct, because what matters is the reach a
+/// user gets.
+// @speed 2.2
+#[test]
+fn every_mechanical_fix_is_applicable_or_listed() {
+    let mut missing: Vec<String> = Vec::new();
+    let mut stale: Vec<&str> = Vec::new();
+    for (code, prog) in CODES {
+        if NO_MINIMAL_TRIGGER.iter().any(|(c, _)| c == code)
+            || FIX_BLOCKED.iter().any(|(c, _)| c == code)
+        {
+            continue;
+        }
+        // A trigger program often reports MORE than the code it was written for — the
+        // double-move probe also raises `avoidable-copy` — so the scan has to be scoped to
+        // this code's own block, from its header line to the next diagnostic. Reading the
+        // whole output attributes another code's mechanical fix to this one, which is how
+        // the first version of this gate failed on a code that was already listed.
+        let explained = explain_output(prog);
+        let mut in_block = false;
+        let mut has_mechanical = false;
+        for line in explained.lines() {
+            let is_header = line.starts_with("error[")
+                || line.starts_with("warning[")
+                || line.starts_with("advice[");
+            if is_header {
+                in_block = line.contains(&format!("[{code}]"));
+                continue;
+            }
+            // A mechanical fix is what `--explain` renders WITHOUT a `needs:` clause.
+            if in_block && line.trim_start().starts_with("fix  ") && !line.contains("needs:") {
+                has_mechanical = true;
+            }
+        }
+        if !has_mechanical {
+            continue;
+        }
+        let reported = fix_output(prog);
+        let blocked = EDIT_BLOCKED.iter().any(|(c, _)| c == code);
+        if reported.trim().is_empty() {
+            if !blocked {
+                missing.push(format!(
+                    "`{code}` offers a MECHANICAL fix that `loft fix` cannot name — attach an \
+                     `edit` to it, or add a row to EDIT_BLOCKED saying what stops it.\n\
+                     --explain said:\n{explained}"
+                ));
+            }
+        } else if blocked {
+            stale.push(code);
+        }
+    }
+    assert!(missing.is_empty(), "{}", missing.join("\n\n"));
+    assert!(
+        stale.is_empty(),
+        "these codes are listed in EDIT_BLOCKED but `loft fix` now reports them — drop their \
+         rows: {stale:?}"
+    );
+}
+
 // @speed 2.2
 #[test]
 fn every_pinned_code_offers_a_fix() {
