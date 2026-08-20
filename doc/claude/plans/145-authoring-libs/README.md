@@ -43,7 +43,7 @@ cut, not when it is implemented.
 | **B2** — wrapping + alignment | `text2d` | ✅ **Shipped** as `text2d` 0.4.0 — the trap is **measured, not assumed**: `"héllo"[0..5]` is `"héll"`, four characters, and loft snaps a byte cut outward so it under-fills rather than corrupting. ⚠ **`fit_text` had shipped that way in `B1m`** and is fixed here. Hand-computed table on the **built-in** face (the one target measurable without a font); self-consistency gated over fixed-pitch, fractional-advance and proportional metrics. Two design calls stated: a line always takes **≥1 character** (its control HANGS rather than asserting, and the timeout names the termination test), and an overlong line starts **at** its box under every alignment. Nine controls fire | ✅ **Shipped** |
 | **C1** — tween core + easing set | `tween` | ✅ **Shipped** as `tween` 0.1.0 — the two gates turned out to be **one defect with two faces**: float seconds sum to `0.99999999999999989` at 30 Hz and `1.00000000000000133` at 60 Hz, so the animation both parts by rate AND never arrives. Integer base units make the two rates equal *to the bit*. The endpoint needed the **other spelling of a lerp**: `a+(b−a)·t` lands on `b` for 5 of 8 pairs and answers **0.0** for `(1e17, 1.0)`; `a(1−t)+bt` lands 8 of 8. Eleven curves cover 33 by reflection, with the clamp **underneath** the reflections — in front of them an in-out at its midpoint asks the raw curve for `in(1)` and answers `0.5000000000000001`. Chains carry their leftover: discarding runs **43 % long at 30 Hz**. 20 tests, both backends, three controls fire | ✅ **Shipped** |
 | **C2** — bind to node properties | **`stage`** (0.16.0) | ✅ **Shipped** — and `advance` settled the placement: `stage.advance(dt_us)` already walks every node once a frame, so a bound tween **rides it** and one call steps the sequences and the property tweens together. That keeps `tween` dependency-free and decides the unit too — **microseconds**, because that is what `advance` takes. THE GATE is a parallel run (`draw_list.loft`'s A2 shape): eight frames of a tweened `x` compared **pixel for pixel** against a hand-moved node, with numbers picked so the hand side needs **no library call** (64 px / 800 000 µs sampled every 100 000 µs is exactly 8 px a frame). ⚠ The switch is gated **cell by cell** — each of nine properties must move its own field and no other. ⚠⚠ **At most one tween per (node, property)**; a second replaces it, and a finished one releases the property. 9 tests, suite 144 on both backends, three controls fire | ✅ **Shipped** |
-| **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
+| **D0** — publish `lavition_ui` | upstream | ⛔ **Asked 2026-08-20; answered "yes in principle, blocked on making the hit-test half honest here first"** — and the answer corrected this row's Verify, see below. Not our work and not our clock | ⛔ **Blocked on moros** |
 | **D0b** — does `input` fit a consumer that already exists? | probe only | ✅ **Answered** ([`probe-d0b.loft`](probe-d0b.loft), both backends identical) — **adopt it, and do not expect it to resolve modifiers.** dryopea's 33-row action set expresses through `Bindings` and replays through `input_tick_from_state` exactly as `D1` needs; edge detection is correct headless. ⚠ But a **modifier is not expressible**, and it is structural: `ActionBinding` is a name + key list, `AxisBinding` is two key *codes*, and neither has a slot for *"suppressed while Ctrl is held"*. Measured: `input` answers **identically** for plain `S` and `Ctrl+S` (`pan_south=true, save=true` both times), so all five of dryopea's Ctrl-combos are indistinguishable from their plain twins — and an axis cannot carry the rule either, which is why dryopea's `bnd_axes` is **empty** and its four pan keys are four actions. ⚠⚠ **The premise was wrong**: dryopea ADOPTED `input`, so the widgets would be its *second* consumer, not the fourth — [PRIOR_ART](../144-2d-stage/PRIOR_ART.md) corrected | ✅ **Answered** |
 | **D1** — widget states over stage routing | **`stage`** (0.17.0) | ✅ **Shipped** — a replayed stream drives the exact state sequence (8 events, both buttons, every state hand-computed first); press-then-leave-then-release does **not** fire while press-then-drift-a-pixel does; touch never shows `Over`, and **one** recorded stream replayed as mouse and as touch fires identically, so the pointer kind changes only what is *shown*. ⚠⚠ **The invariant: a node reads `Down` exactly when a release would FIRE it** — one predicate serves the picture and the click, so a control that breaks the capture check does not even redden the down-means-fires gate: that class is **unrepresentable**, not caught. ⚠ **The fourth clause was struck**, not met — it rested on a premise that did not survive contact; see § The `ui` package that is not ours. 7 tests, suite 151 both backends, three controls fire | ✅ **Shipped** |
 | **D2** — focus, tab order, text field | **`stage`** (0.18.0) | ✅ **Shipped** — replayed keystrokes (incl. multi-character IME commits) produce the exact buffer; tab order is the declared order and wraps both ways. ⚠⚠ **Every index is a CHARACTER index and no byte index ever enters** — a caret *is* a count, and the control proves it: byte-slicing the one edit primitive leaves `"héllo"` **unchanged** after a backspace over the `é`, while all ten ASCII tests still pass. ⚠ **One `splice` does every edit** (insert / backspace / delete / replace-selection / paste). ⚠⚠ **The modifier dilemma was a false dichotomy** — neither answer was needed: `graphics`'s event queue already delivers `gl_event_mods()` per event, and a text field wants *this keystroke with these modifiers*, not an action. 11 tests, suite 162 both backends, three controls fire | ✅ **Shipped** |
@@ -57,7 +57,7 @@ cut, not when it is implemented.
 | **B2** | S ✅ | *Done.* Greedy breaking on measured advances, three alignments, and the character-vs-byte trap — `len(text)` counts characters, the indexed read is bytes. Per-target break tables (see the Verify column). |
 | **C1** | S ✅ | *Done.* Shipped WITHOUT the setter (that is `C2`) and without a `fixstep` dependency: a duration is an integer count of whatever unit the consumer's clock already runs in, so a second definition of *how long a second is* never gets made. ⚠ The predicted effort — "a clamp everyone forgets" — was the wrong half. The clamp is real but it is a **placement** question, not a forgetting one, and the accumulation defect underneath it is the one that makes a 30 Hz animation never arrive. Sequencing is eleven lines because `advance` answers a **leftover** rather than a boolean. |
 | **C2** | XS ✅ | *Done, and the enum-plus-switch prediction held exactly.* What the note did not see is that the switch is also the first public way to **move** a node — `stage` could place one and never shift it, so a consumer had to write `st_nodes[i].nd_x` directly. So `set_prop` ships beside `tween_prop`, through the same switch. ⚠ Filed on the way: [loft#1039](https://github.com/loft-lang/loft/issues/1039) — `lib::Enum.Variant` does not parse, though `lib::Struct{}`, `lib::CONST`, `std::abs()` and `lib::Enum` *as a type* all do. |
-| **D0** | — | A request, not an effort: `lavition_ui` is unpublished and lives in a tree this stream reads and never writes. Costs a conversation and their release cycle. |
+| **D0** | — | *Asked.* The conversation cost what it was predicted to cost, and paid for itself twice — it corrected our Verify and found a live bug in their `src/`. |
 | **D0b** | XS ✅ | *Done.* One probe program, and it did the job a probe is for — it did **not** retire the dependency, it retired the *reason to doubt it* and replaced it with a named limit `D1` and `D2` can plan around. ⚠ The phase's own framing was the thing that broke: two of the three "wrote their own" consumers were miscounted, one of them because a file was judged by its NAME (`framekey.loft` is a frame-reuse digest, not a keyboard file). |
 | **D1** | S ✅ | *Done.* The predicted effort — *"the effort is the replay harness"* — was **wrong in a good way**: A4's path was already injectable (every entry point takes coordinates and reads no device), so the harness cost nothing and no second seam was invented. The real effort was deciding what `Down` MEANS, and that answer made a bug class unrepresentable rather than tested. The **extraction** half turned out not to be ours to do at all. |
 | **D2** | M ✅ | *Done, and the effort note called it: the text field WAS the phase.* ⚠ It also predicted *"multi-byte indexing returns for a third time"* — it did, and the cure was to refuse it entry: the model counts characters everywhere and pixels never appear, so caret↔x stays with whoever draws (`text2d`). ⚠ A gap found on the way, **recorded not fixed**: the **stdlib has no character slicing** — `len` (chars), `size` (bytes), `byte_at`, byte-range `s[a..b]`, nothing between. `text2d` hand-rolled `take_chars` for `B2` and this phase needed the same walk again; **two libraries independently** is the admission test for a primitive belonging one level down. |
@@ -103,6 +103,46 @@ Nothing is red today only because `loft-libs-graphics`'s `library-ci.yml` still 
 package dirs** by `scripts/deploy-library-ci.sh`, so the next refresh adds `stage` and the
 gate goes red. `text2d` (35 tests) and `tween` (20) both pass it today. The `:931 self` case
 is not a rename away: a method's receiver has to be spelled `self`.
+
+### `D0` — asked and answered, 2026-08-20
+
+Asked moros directly. The answer is **not yet**, and to be recorded as *"yes in principle,
+blocked on making the hit-test half honest here first"* rather than as a refusal. No date:
+publishing a registry entry is that tree's maintainer's call, and their agent has put the
+recommendation in front of them.
+
+⚠⚠ **The reason lands on the exact property we asked to pin, and it corrects THIS ROW'S
+VERIFY.** `panel_hit_test` has **zero production callers** in moros — it is exercised by its
+own tests and by nothing else, and their `editor_client.loft` says so in its own words
+(*"`verbbar_hit` and `panel_hit_test` were both built, tested green and invoked by nothing —
+the commonest defect here"*). Counted there: **15 of 31 public functions have no production
+caller**, because that `pub` list is sized for the test suite rather than for a consumer.
+
+So this row's Verify — *"its own tests pass unchanged after the move"* — **could not have
+caught that**. It is the right check for the *move* and says nothing about whether the surface
+was ever **honoured**. Their observation, and it is correct; the Verify is widened accordingly:
+
+> **`D0` verify (revised):** the package resolves from the registry, its own tests pass
+> unchanged after the move, **and every public function we depend on has at least one
+> production caller in the tree that owns it** — a surface proven only by its own tests is a
+> surface nobody has agreed to.
+
+⚠ **A second warning for `@PLN147`:** the **verbbar** half (`spec_verb`, `spec_verb_on`,
+`verbbar_build`) *will* change shape — their `EDITING_MODES` work makes the verb table data, so
+adding a house type touches no code and those signatures move. Their advice: **depend on the
+panel half; treat verbbar as 0.x that moves.**
+
+Not blocking, measured on their side: 80 pass on both backends, `LOFT_STORE_GUARD=1` clean, and
+`LOFT_DENY_WARNINGS=1` fails on two **test** files only. Pin #2 is safe — their `src/` has no
+`while` at all, no `#native`, no I/O and no GL, so it is admissible loft by construction; they
+would declare a `[sandbox]` policy before publishing.
+
+**The conversation also found a live bug in their `src/`** (not just their tests):
+`font.loft:105`–`111` computes a CHARACTER count and applies it as a BYTE range — the same
+defect `B2` fixed in `text2d`'s `fit_text`, which is where `font.loft` was lifted from. **Seven
+call sites inside the package**: every button label, every hotkey, every list entry, the status
+line, the subject line and both verb slots. Every one of their tests is ASCII, which is exactly
+why it has stayed green.
 
 ### The `ui` package that is not ours — decided 2026-08-20
 
