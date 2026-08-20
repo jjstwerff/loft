@@ -115,13 +115,80 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
 #[must_use]
 pub fn loft_extern_args(rlib: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(rmeta) = loft_rmeta_beside(rlib) {
+    // Only when the rlib REALLY lacks its metadata.  Asking "does a `.rmeta` sit nearby?"
+    // instead is wrong on any tree with history: a leftover `.rmeta` from an older build
+    // is debris cargo does not own and does not clean, and naming it beside a
+    // self-contained rlib gives rustc two candidates for one crate —
+    // `error[E0464]: multiple candidates for `rlib` dependency `loft``, which names the
+    // crate and never the staleness.  That failure is asymmetric in the worst way: CI is a
+    // fresh checkout and stays green while every established working tree breaks.
+    // (Reported by a peer session hitting it on `tuxedo-pln145`; reproduced here.)
+    if rlib_metadata_is_stub(rlib)
+        && let Some(rmeta) = loft_rmeta_beside(rlib)
+    {
         out.push("--extern".to_string());
         out.push(format!("loft={}", rmeta.display()));
     }
     out.push("--extern".to_string());
     out.push(format!("loft={}", rlib.display()));
     out
+}
+
+/// The floor under which `lib.rmeta` inside an rlib cannot be real metadata.
+///
+/// A `-Zembed-metadata=no` stub is an ELF wrapper with an empty payload — 688 bytes for
+/// loft's own rlib — while the genuine blob is the whole crate interface (11 MB for the
+/// same rlib).  Four orders of magnitude apart, and this predicate is only ever asked of
+/// `libloft.rlib`, so the floor does not have to hold for small crates in general.
+const RMETA_STUB_FLOOR: u64 = 4096;
+
+/// True when this rlib carries only a metadata STUB, so the full metadata lives in a
+/// separate `.rmeta` that the compiler must be given as well.
+///
+/// Reads the archive rather than the file system: mtimes are the signal this codebase
+/// already rejected for staleness ([`crate::cache::loft_build_fingerprint`] is
+/// content-based precisely because a CI cache restore resets them), and a stale `.rmeta`
+/// beside a fresh rlib is exactly the case that must NOT be mistaken for a split pair.
+/// Unreadable or unparseable answers `false` — the pre-existing behaviour, one `--extern`.
+fn rlib_metadata_is_stub(rlib: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(rlib) else {
+        return false;
+    };
+    metadata_member_size(&bytes).is_some_and(|n| n < RMETA_STUB_FLOOR)
+}
+
+/// The size of an `ar` archive's `lib.rmeta` member, or `None` when there is no such
+/// member (or the file is not an archive this can read).
+///
+/// The `ar` format is a magic line then a chain of 60-byte headers, each naming a member
+/// and its size in ASCII; members are padded to an even offset.  Only the name and size
+/// fields are read, and `lib.rmeta-link` — a different member that also starts with
+/// `lib.rmeta` — is excluded by matching the name exactly.
+fn metadata_member_size(bytes: &[u8]) -> Option<u64> {
+    const MAGIC: &[u8] = b"!<arch>\n";
+    const HEADER: usize = 60;
+    if !bytes.starts_with(MAGIC) {
+        return None;
+    }
+    let mut at = MAGIC.len();
+    while at + HEADER <= bytes.len() {
+        let header = &bytes[at..at + HEADER];
+        let name = std::str::from_utf8(&header[0..16]).ok()?.trim_end();
+        // GNU `ar` terminates a short name with `/`.
+        let name = name.strip_suffix('/').unwrap_or(name);
+        let size: u64 = std::str::from_utf8(&header[48..58])
+            .ok()?
+            .trim_end()
+            .parse()
+            .ok()?;
+        if name == "lib.rmeta" {
+            return Some(size);
+        }
+        at += HEADER + usize::try_from(size).ok()?;
+        // Members start on an even offset.
+        at += at % 2;
+    }
+    None
 }
 
 /// The `.rmeta` holding the full metadata for this `libloft.rlib`, when the toolchain
@@ -2235,5 +2302,70 @@ mod rlib_search_tests {
         let dirs = rlib_search_dirs(Path::new("target/release/deps"));
         assert_eq!(dirs[0].0, PathBuf::from("target/release/deps"));
         assert_eq!(dirs[0].1, PathBuf::from("target/release/deps"));
+    }
+}
+
+#[cfg(test)]
+mod rmeta_stub_tests {
+    use super::{RMETA_STUB_FLOOR, metadata_member_size};
+
+    /// Build a minimal `ar` archive holding the named members, so the parser is tested
+    /// against the format rather than against whatever rlib happens to sit in `target/`.
+    fn archive(members: &[(&str, usize)]) -> Vec<u8> {
+        let mut out = b"!<arch>\n".to_vec();
+        for (name, size) in members {
+            let mut header = vec![b' '; 60];
+            let named = format!("{name}/");
+            header[..named.len()].copy_from_slice(named.as_bytes());
+            let s = size.to_string();
+            header[48..48 + s.len()].copy_from_slice(s.as_bytes());
+            header[58] = b'`';
+            header[59] = b'\n';
+            out.extend_from_slice(&header);
+            out.extend(std::iter::repeat_n(b'x', *size));
+            if size % 2 == 1 {
+                out.push(b'\n');
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_full_metadata_member_is_not_a_stub() {
+        let a = archive(&[("lib.rmeta", 11_220_440), ("lib.rmeta-link", 1256)]);
+        let n = metadata_member_size(&a).expect("member found");
+        assert!(n >= RMETA_STUB_FLOOR, "{n} should read as real metadata");
+    }
+
+    /// The shape a `-Zembed-metadata=no` rlib has: the member exists and is an empty ELF
+    /// wrapper.  688 bytes is what loft's own rlib measured under the nightly that
+    /// introduced it.
+    #[test]
+    fn an_empty_wrapper_reads_as_a_stub() {
+        let a = archive(&[("lib.rmeta", 688), ("lib.rmeta-link", 1256)]);
+        let n = metadata_member_size(&a).expect("member found");
+        assert!(n < RMETA_STUB_FLOOR, "{n} should read as a stub");
+    }
+
+    /// `lib.rmeta-link` starts with the same nine characters and is a DIFFERENT member;
+    /// matching on a prefix would read its size and call every rlib a stub.
+    #[test]
+    fn the_link_member_is_not_mistaken_for_the_metadata() {
+        let a = archive(&[("lib.rmeta-link", 1256), ("lib.rmeta", 11_220_440)]);
+        assert_eq!(metadata_member_size(&a), Some(11_220_440));
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_archive_answers_none() {
+        assert_eq!(metadata_member_size(b"not an archive at all"), None);
+        assert_eq!(metadata_member_size(&[]), None);
+    }
+
+    /// An odd-sized member is padded to an even offset; miss that and every member after
+    /// it is read from the wrong place.
+    #[test]
+    fn an_odd_sized_member_does_not_desync_the_walk() {
+        let a = archive(&[("first.o", 7), ("lib.rmeta", 4096)]);
+        assert_eq!(metadata_member_size(&a), Some(4096));
     }
 }
