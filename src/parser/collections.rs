@@ -427,24 +427,17 @@ impl Parser {
             // byte off in `fill.rs::coroutine_next` and `state/codegen.rs`'s
             // `OpCoroutineNext` arm; only native inspects it.  See
             // `plans/16-coroutine-validation/01-unified-channel.md`.
-            let byte_size = i32::from(crate::variables::size(
-                &yield_tp,
-                &crate::data::Context::Argument,
-            ));
             // @PLAN16 phase 02 — a tuple whose every element classifies into a
             // transport slot rides channel 1 (the layout-driven flatten-walk);
             // the per-slot kind codes ride as extra args so the native consumer
             // reconstructs the tuple.  `tuple_kinds` is the SAME decision the
             // producer's `is_tuple_into` makes, so the two ends agree.
-            let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
             // #401 — one shared home for the channel decision (float/single/enum
-            // need their own tags); see `coroutine_layout::channel_tag`.
-            let channel_tag = crate::coroutine_layout::channel_tag(&yield_tp);
-            let value_size: i32 = (channel_tag << 8) | byte_size;
+            // need their own tags), and loft#1032 made it the home a monomorph
+            // re-asks: see `coroutine_layout::next_operands`.
+            let (value_size, kinds) = crate::coroutine_layout::next_operands(&yield_tp);
             let mut call_args = vec![Value::Var(gen_var), Value::Int(value_size)];
-            if let Some(kinds) = &tkinds {
-                call_args.extend(kinds.iter().map(|k| Value::Int(k.code())));
-            }
+            call_args.extend(kinds.into_iter().map(Value::Int));
             return Value::Call(op, call_args);
         }
         if is_type == should {

@@ -98,6 +98,36 @@ different route than the identical function written out by hand. It now takes th
 so it returns its text through the caller's buffer like every other text-returning function.
 `T = integer` and a struct `T` were never affected.
 
+### A generator can be called before it is written, and a generic can return one
+
+```loft
+fn main() { for y in count() { … } }      // was a crash — now runs
+fn count() -> iterator<integer> { yield 1; yield 2; }
+
+fn each<T>(v: vector<T>) -> iterator<T> { for e in v { yield e; } }
+for y in each([1, 2, 3]) { … }            // was a crash; y was unusable — now an integer
+```
+
+Three separate things, all reached from one report.
+
+A generator **called above its own declaration** crashed the interpreter. The call site
+records where to write the function's address once the body has been compiled, and the
+arithmetic that found that spot assumed the instruction was one byte wide. Generator calls
+use one of the wide instructions, so the address landed a byte early, on top of the frame
+size — which then read as tens of kilobytes, and the interpreter subtracted it from a much
+smaller number. Declaration order is not supposed to matter, and now it does not.
+
+A generator **given a list literal** — `each([1, 2, 3])` — did not compile with `--native`.
+Neither needed a generic to go wrong.
+
+And a **generic returning `iterator<T>`** never learned what `T` was, so its loop variable
+stayed abstract: it could not be added up or put in a message, `--native` refused the
+program, and one generic iterating another's generator corrupted the heap. `vector<T>`,
+`(T, T)` and `T?` returns already worked; `iterator<T>` now joins them.
+
+Yielding a struct or a vector from inside a generator's loop is still `--native`'s one
+remaining gap here, and says so.
+
 ### An accessor that sometimes borrows and sometimes builds is safe on `--native`
 
 ```loft

@@ -381,8 +381,15 @@ fn reload_fn(
     state.code_pos = saved_pc;
 
     // Patch the dispatch targets: fn-refs re-resolve via fn_positions per
-    // call; direct OpCall sites carry an embedded `to` at opcode+11
-    // ([op:u8][d_nr:i64][args_size:u16][to:i64]).
+    // call; a direct call site carries an embedded `to`, and `state.calls`
+    // records the address of that i64 operand itself.
+    //
+    // loft#1032 — it used to record the OPCODE's address, and both this site and
+    // codegen's own back-patch re-derived the operand as `+ opcode(1) + d_nr(8) +
+    // args_size(2)`.  That opcode is one byte only below 255 and TWO at or above it
+    // (`state::emit_op`), so the derivation was wrong for `OpCoroutineCreate` in both
+    // copies.  Recording the operand address at emission removes the arithmetic from
+    // both, which is why this reads `site` and not `site + 11`.
     let new_pos = parser.data.def(temp).code_position;
     if state.fn_positions.len() < parser.data.definitions() as usize {
         let mut ext: Vec<u32> = Vec::new();
@@ -394,7 +401,7 @@ fn reload_fn(
     state.fn_positions[orig as usize] = new_pos;
     let sites = state.calls.get(&orig).cloned().unwrap_or_default();
     for site in &sites {
-        state.code_put::<i64>(site + 11, i64::from(new_pos));
+        state.code_put::<i64>(*site, i64::from(new_pos));
     }
     eprintln!(
         "live-reload: '{name}' v{v} live ({} call site(s) patched, fn-refs via dispatch)",

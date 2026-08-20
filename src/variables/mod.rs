@@ -1185,6 +1185,18 @@ impl Function {
                     .map(|e| Self::subst_type(e, tv_nr, concrete))
                     .collect(),
             ),
+            // loft#1032 — and through an iterator, so a generic body that binds a
+            // generator handle (`for y in inner(v)` inside another generic) records the
+            // CONCRETE `iterator<τ>` in its variable table.  Left out, the handle kept
+            // `iterator<Reference(tv)>` while the loop variable beside it was
+            // substituted, which is the pairing `retarget_parametric_coroutine_next`
+            // reads to re-decide the yield channel — so the accessor stayed on the
+            // 12-byte DbRef channel for an 8-byte scalar and walked off the store.
+            // The `Parser::substitute_type` twin this mirrors carries the same arm.
+            Type::Iterator(step, state) => Type::Iterator(
+                Box::new(Self::subst_type(*step, tv_nr, concrete)),
+                Box::new(Self::subst_type(*state, tv_nr, concrete)),
+            ),
             _ => tp,
         }
     }

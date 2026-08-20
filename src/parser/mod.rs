@@ -5633,6 +5633,7 @@ impl Parser {
         // could see, which is a vector over the type variable's own storage.  Substitution
         // replaces the type and leaves that row behind, so the dump walked a
         // `vector<integer>` through the wrong schema and printed `{}`.
+        self.retarget_parametric_coroutine_next(d_nr);
         self.retarget_parametric_vector_format(d_nr);
     }
 
@@ -6136,6 +6137,66 @@ impl Parser {
     /// Both op spellings appear because they are one op with two delivery targets
     /// (`__work_N` on the stack vs a heap text); `append_data` chooses between them by the
     /// accumulator's storage, long before any of this.
+    /// loft#1032 — re-decide every `OpCoroutineNext` in a monomorph from the
+    /// generator variable's now-concrete `iterator<τ>`.
+    ///
+    /// The operands pair a SIZE with a CHANNEL, and both are a function of the
+    /// yielded type, so a template that lowered `for y in inner(v)` while `T` was
+    /// still the type variable baked the DbRef channel and 12 bytes.  Substitution
+    /// then retyped the loop variable to the concrete `T` and left that pairing
+    /// behind — the same shape as loft#1016 (`x?`'s default), loft#1020
+    /// (`x == null`) and loft#1028 (a `null` literal): an operation whose choice
+    /// depends on `τ` decided before `τ` was known.  At `T = integer` the loop read
+    /// a 12-byte DbRef out of an 8-byte slot and indexed the store off its end
+    /// ("Store access out of bounds … the reference is corrupt"); at `T = text` or a
+    /// struct the DbRef channel is the right answer anyway, which is why the
+    /// existing generic corpus never saw it — the scalar axis `formal/interfaces.md`
+    /// records as this doc's missing one.
+    ///
+    /// Reads the generator VARIABLE's type rather than pattern-matching the baked
+    /// constant, so a genuinely non-parametric nested iterator in a generic body
+    /// re-derives to what it already had, and only a stale pairing moves.
+    fn retarget_parametric_coroutine_next(&mut self, d_nr: u32) {
+        let op = self.data.def_nr("OpCoroutineNext");
+        if op == u32::MAX {
+            return;
+        }
+        // Collect first — the walk borrows the IR while re-deriving needs the table.
+        let mut fixes: Vec<(u16, i32, Vec<i32>)> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == op
+                && args.len() >= 2
+                && let Value::Var(g) = args[0].unspan()
+                && let Type::Iterator(inner, _) = self.data.def(d_nr).variables.tp(*g).base()
+            {
+                let (value_size, kinds) = crate::coroutine_layout::next_operands(inner);
+                let stale = matches!(&args[1], Value::Int(n) if *n != value_size)
+                    || args.len() - 2 != kinds.len();
+                if stale && !fixes.iter().any(|(v_nr, _, _)| *v_nr == *g) {
+                    fixes.push((*g, value_size, kinds));
+                }
+            }
+        });
+        if fixes.is_empty() {
+            return;
+        }
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == op
+                && args.len() >= 2
+                && let Value::Var(g) = args[0].unspan()
+                && let Some((_, value_size, kinds)) = fixes.iter().find(|(v_nr, _, _)| *v_nr == *g)
+            {
+                let gen_arg = args[0].clone();
+                *args = vec![gen_arg, Value::Int(*value_size)];
+                args.extend(kinds.iter().copied().map(Value::Int));
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
+    }
+
     fn retarget_parametric_vector_format(&mut self, d_nr: u32) {
         let ops: Vec<u32> = ["OpFormatDatabase", "OpFormatStackDatabase"]
             .iter()
@@ -6376,6 +6437,20 @@ impl Parser {
             // native.  Mirrors the Vector/Tuple arms above; `Type::optional` is
             // idempotent so it never double-wraps.
             Type::Optional(inner) => Type::optional(Self::substitute_type(*inner, tv_nr, concrete)),
+            // loft#1032 — substitute through an iterator so a generic returning
+            // `iterator<T>` monomorphises, the way `vector<T>`, `(T, T)` and `T?`
+            // already do.  formal/interfaces.md `(G-Mono)` requires `[T ↦ C]` to reach
+            // "attribute, RETURN, and body types", so leaving this arm out was a
+            // deviation, not a boundary: the return stayed `iterator<Reference(tv)>`,
+            // which typed the caller's generator slot as a bare `DbRef` (native:
+            // `expected DbRef, found Box<dyn LoftCoroutine>`) and left the loop
+            // variable at `T`, so a yielded value could be neither summed nor
+            // formatted at a fully concrete instantiation.  Both halves of the type
+            // are rewritten — the STATE half mentions `T` whenever the step does.
+            Type::Iterator(step, state) => Type::Iterator(
+                Box::new(Self::substitute_type(*step, tv_nr, concrete)),
+                Box::new(Self::substitute_type(*state, tv_nr, concrete)),
+            ),
             other => other,
         }
     }

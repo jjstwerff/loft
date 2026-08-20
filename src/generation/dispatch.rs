@@ -938,6 +938,18 @@ impl Output<'_> {
             } else {
                 crate::codegen_runtime::Abi::Cell
             };
+            // loft#1032 — a generator callee answers `Box<dyn LoftCoroutine>`, and every
+            // caller holds the handle as a `DbRef` from the coroutine table, so the call
+            // must be wrapped exactly as `user_fn_call_body` wraps it.  This path had the
+            // per-parameter coercions in lockstep (issue #366) but not the RETURN side, so
+            // a generator reached through it emitted a bare call into a `DbRef` local:
+            // `expected DbRef, found Box<dyn LoftCoroutine>`.  The hoist fires when an
+            // argument mutates a store, which a vector literal does — so `h([4,5,6])` on a
+            // plain `fn h(v: vector<integer>) -> iterator<integer>` did not compile either.
+            let is_generator = matches!(def_fn.returned(), Type::Iterator(_, _));
+            if is_generator {
+                write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
+            }
             write!(w, "{}(", self.fn_ident(def_fn))?;
             let mut first_arg = true;
             if matches!(abi, crate::codegen_runtime::Abi::Cell) {
@@ -961,6 +973,9 @@ impl Output<'_> {
                 }
             }
             write!(w, ")")?;
+            if is_generator {
+                write!(w, ")")?; // close alloc_coroutine(…)
+            }
             if needs_to_string {
                 write!(w, ".to_string()")?;
             }

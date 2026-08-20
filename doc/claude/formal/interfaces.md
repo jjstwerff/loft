@@ -126,21 +126,36 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
 - **Conformance is differential + directly checkable** — satisfaction is a single static judgment,
   so accept/reject must agree across the drivers (D-op-1's driver-agreement facet). `G-Sat`/`G-Check`
   are checkable directly (a missing method rejects on both backends); the runtime behaviour of a
-  monomorphized generic is pinned by `tests/scripts/86-interfaces.loft`, `tests/scripts/48-generics.loft`
-  and `tests/scripts/1028-generic-null-typed-per-monomorph.loft`.
+  monomorphized generic is pinned by `tests/scripts/86-interfaces.loft`, `tests/scripts/48-generics.loft`,
+  `tests/scripts/1028-generic-null-typed-per-monomorph.loft` and
+  `tests/scripts/1032-generic-iterator-return.loft`.
 
 - **What `OPEN: 0` rests on here — "applied throughout" is the load-bearing phrase.** `(G-Mono)`
-  says `[T ↦ C]` reaches *attribute, return, and body types, and every method call*. Three
+  says `[T ↦ C]` reaches *attribute, return, and body types, and every method call*. Four
   defects have now been the same omission: an operation whose choice is a function of `τ` was
   DECIDED while `τ` was still the type variable, and substitution then rewrote the type and left
   the choice behind — loft#1016 (`x?`'s default), loft#1020 (`x == null`), loft#1028 (a `null`
-  literal's conversion). Each was invisible to the oracle above, because both scripts instantiate
+  literal's conversion), loft#1032 (the yield channel a `for` over a generator is paired with).
+  Each was invisible to the oracle above, because both scripts instantiate
   over records; none of the three misbehaves at `T = <a struct>`, where a reference sentinel is
   the right answer anyway. loft#1028 is the sharpest reading of that gap: it made the two backends
   disagree — the interpreter answered a `text` monomorph the empty text, `--native` refused to
   compile the program — which is the one thing this section says monomorphization cannot do.
   A scalar instantiation is therefore one axis this doc's oracle was missing, and the count
   stays 0 only as long as the tests keep one.
+
+  loft#1032 is the same reading a second time, and adds a **third** thing the oracle did not
+  carry: a RETURN TYPE that is not the bare `T`. `substitute_type` had arms for `vector<T>`,
+  `(T, T)` and `T?` and none for `iterator<T>`, in BOTH twins — the parser's and the variable
+  table's — so a generic returning a generator kept the type variable in its return and in the
+  handle its caller bound, while the loop variable beside it was substituted. `(G-Mono)` names
+  the return explicitly, so this was a deviation and not a boundary; the rule did not move. The
+  scalar axis is again what made it visible: at `T = text` or a struct the DbRef yield channel
+  is the right answer anyway, so every cell of the new script passes before the fix at those
+  types. Two of the three other defects the same repro surfaced were NOT monomorphization
+  deviations at all — a forward call's back-patch and `--native`'s argument-hoist path each
+  broke for a generator with no generic in the program — which is the loft#1029 lesson
+  restated: a generic corpus is where such a thing becomes visible, not where it lives.
 
   The corpus is thin on a **second** axis, and loft#1029 is how that surfaced: it varies the
   instantiating TYPE and never varies how the ARGUMENT is spelled. Every call in both scripts

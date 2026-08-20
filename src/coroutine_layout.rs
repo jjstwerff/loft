@@ -174,6 +174,32 @@ pub fn channel_tag(tp: &Type) -> i32 {
     }
 }
 
+/// The `OpCoroutineNext` operands for a yield type: the packed `value_size`
+/// (channel tag in the high byte, byte size in the low) and the per-slot kind
+/// codes a tuple channel carries as extra arguments.
+///
+/// One home, because the decision is made TWICE: once where a `for` over a
+/// generator is lowered, and again per MONOMORPH, where a generic's
+/// `iterator<T>` finally learns what `T` is (loft#1032).  A template bakes
+/// these against the type VARIABLE — 12 bytes on the DbRef channel — and
+/// substitution rewrites the loop variable's type without revisiting the
+/// accessor it was paired with, so a scalar `T` read a 12-byte DbRef out of an
+/// 8-byte slot and walked off the end of the store.  Deriving both ends from
+/// this one function is what keeps the size and the channel from drifting apart
+/// the way the producer and consumer lists already must not.
+#[must_use]
+pub fn next_operands(yield_tp: &Type) -> (i32, Vec<i32>) {
+    let byte_size = i32::from(crate::variables::size(
+        yield_tp,
+        &crate::data::Context::Argument,
+    ));
+    let value_size = (channel_tag(yield_tp) << 8) | byte_size;
+    let kinds = tuple_kinds(yield_tp)
+        .map(|ks| ks.iter().map(|k| k.code()).collect())
+        .unwrap_or_default();
+    (value_size, kinds)
+}
+
 /// Total `i64` transport slots a kind list occupies (the `[i64; N]` buffer
 /// size both ends allocate / write).
 #[must_use]

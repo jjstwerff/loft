@@ -948,9 +948,24 @@ impl Output<'_> {
         // on EVERY `next_*` call, so it leaked one store per hidden work-ref per resume — six
         // records for a two-`__ref` generator advanced three times.  Each state re-initialises
         // these before use, so there is nothing for the placeholder to carry.
+        //
+        // loft#1032 — ask the variable's TYPE rather than assuming `DbRef`.  The `__ref_*`
+        // family is named for the Reference-typed yield arms that motivated it, but a
+        // generic's hidden return buffer joins the same family and takes the type the
+        // monomorph bound: `-> iterator<T>` at `T = integer` gives an INTEGER `__ref_1`,
+        // which the hardcoded pair declared `DbRef` and then assigned `0` (E0308, so a
+        // generic generator over any scalar did not compile).  `persistent_default` is
+        // already the one home for "the zero of whatever `rust_type` decided" — its own
+        // doc records a hand-maintained second list drifting on three arms — so this asks
+        // it instead of becoming a fourth.  A `__vdb_*` handle is Reference-typed and
+        // still gets `DbRef` / `DbRef::NULL` from it, unchanged.
         for v in &to_predeclare_vdb {
-            let name = sanitize(self.data.def(self.def_nr).variables().name(*v));
-            writeln!(w, "        let mut var_{name}: DbRef = DbRef::NULL;")?;
+            let vars = self.data.def(self.def_nr).variables();
+            let name = sanitize(vars.name(*v));
+            let tp = vars.tp(*v).clone();
+            let tp_str = rust_type(&tp, &Context::Variable);
+            let init = persistent_default(&tp);
+            writeln!(w, "        let mut var_{name}: {tp_str} = {init};")?;
             self.declared.insert(*v);
         }
         // These, plus `__work_*` above, are in scope for the WHOLE `next_*` body, so the tail

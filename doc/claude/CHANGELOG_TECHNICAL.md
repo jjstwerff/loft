@@ -9,6 +9,82 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A generator call was back-patched at a one-byte opcode, and a generic never learned its `iterator<T>` (loft#1032, 2026-08-20)
+
+Filed as one generic bug; it was four, and only one of the four is about generics.
+
+```loft
+fn main() { for y in h() { … } }                 // interp: subtract overflow in coroutine_create
+fn h() -> iterator<integer> { yield 11; }        // NO generics needed
+
+fn h2(v: vector<integer>) -> iterator<integer> { for e in v { yield e; } }
+for y in h2([4,5,6]) { … }                       // --native: E0308, also no generics
+
+fn g<T>(v: vector<T>) -> iterator<T> { for e in v { yield e; } }
+fn o<T>(v: vector<T>) -> integer { c=0; for y in g(v) { c+=1; } c }
+o([1,2,3])                                       // store corruption at SCALAR T only
+```
+
+**1 — the back-patch assumed a one-byte opcode.** A forward call emits its target as a
+placeholder and `Codegen::calls` remembers where to write the real address once the callee's
+body is generated. Both the recorder and the two consumers derived that spot as
+`opcode(1) + d_nr(8) + args_size(2)`, but `state::emit_op` writes TWO bytes at or above op_code
+255 and `OpCoroutineCreate` is one of those. The i64 landed a byte early, over `args_size`'s high
+byte: codegen computed 24 and the bytecode decoded 61720, then `coroutine_create`'s
+`stack_pos - args_size` underflowed. Measured exactly — the clobbered byte is the target's byte 0,
+and the reported `to` is the target shifted down eight bits.
+
+`calls` now records the address of the i64 operand ITSELF, so no consumer re-derives it. There
+were **two** consumers with the same hardcoded `+ 11`: `byte_code_for` and `live_reload`'s
+dispatch re-link. Changing the meaning in one and not the other is a real trap — it turned three
+`engine_host_*` live-reload tests red until the second was updated, which is the measurement that
+the duplication was load-bearing.
+
+**2 — `--native`'s argument-hoist path was out of lockstep on the RETURN side.** A generator call
+is wrapped in `alloc_coroutine(…)` to turn `Box<dyn LoftCoroutine>` into the `DbRef` every caller
+holds. The hoist path (taken when an argument mutates a store — a vector literal does) duplicated
+the call emission and applied the per-parameter coercions issue #366 put in lockstep, but not the
+wrapper. A bare call went into a `DbRef` local.
+
+**3 — `substitute_type` had no `Iterator` arm, in BOTH twins.** `Parser::substitute_type` and the
+variable table's `Function::subst_type` each carried `Vector` / `Tuple` / `Optional` and stopped
+there, so a generic's `iterator<T>` return kept the type variable — the caller's handle typed
+`DbRef` on native (`expected DbRef, found Box<dyn LoftCoroutine>`) and the loop variable left at
+`T`, unusable in a sum or a format string. `formal/interfaces.md` `(G-Mono)` names the RETURN
+explicitly, so this was a deviation; the rule did not move.
+
+**4 — `OpCoroutineNext` pairs a size with a channel, and only the type moved.** The operands are
+`(channel_tag << 8) | byte_size`, both a function of the yielded type. A template lowering
+`for y in g(v)` while `T` was the type variable baked the 12-byte DbRef channel; substitution
+retyped the loop variable and left the pairing behind, so a scalar `T` read a 12-byte DbRef out of
+an 8-byte slot and indexed off the end of the store. This is the same shape as loft#1016, #1020 and
+#1028 — an operation whose choice depends on `τ` decided before `τ` was known — and is now the
+FOURTH entry in that class in `formal/interfaces.md`. The decision moved into one home,
+`coroutine_layout::next_operands`, which the for-loop lowering and the new per-monomorph
+`retarget_parametric_coroutine_next` both ask; the retarget reads the generator VARIABLE's
+now-concrete type rather than pattern-matching the baked constant, so a genuinely non-parametric
+nested iterator re-derives to what it already had.
+
+**5 — the hidden return buffer was declared `DbRef` by name.** The coroutine emitter pre-declares
+every `__ref_*` work-var as `DbRef`/`DbRef::NULL`, named for the Reference-typed yield arms that
+motivated it. A generic's return buffer joins that family with the monomorph's own type, so
+`-> iterator<T>` at `T = integer` got a `DbRef` declaration and an integer assignment. It now asks
+`persistent_default` / `rust_type` — the existing one home, whose doc already records a
+hand-maintained second list drifting on three arms.
+
+⚠ **The scalar axis is what made 3–5 invisible.** At `T = text` or a struct the DbRef channel and a
+DbRef buffer are the right answers anyway, so every cell of the new guard passes before the fix at
+those types — exactly the missing oracle axis `formal/interfaces.md` records for loft#1028.
+
+Guard: `tests/scripts/1032-generic-iterator-return.loft` — count AND accumulated value per cell,
+because a yield channel reading the wrong width still advances the right number of times. It
+carries the two generic-free cells (forward declaration, hoisted argument) beside the generic ones,
+since those are where the filed scope was wrong.
+
+Out of scope, both verified generic-independent and left alone: yielding a struct/vector from a
+generator's LOOP body is still a documented `--native` refusal, and a `text?` generator parameter
+does not compile on `--native` (filed as loft#1035).
+
 ### A keyed collection argument was neither protected nor countable, so its callee's record was orphaned (2026-08-20)
 
 

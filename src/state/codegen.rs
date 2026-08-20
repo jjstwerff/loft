@@ -329,8 +329,10 @@ impl State {
         if let Some(v) = self.calls.get(&def_nr) {
             let old = self.code_pos;
             for pos in v.clone() {
-                // skip opcode(1) + d_nr(8) + args_size(2) to reach the i64 target
-                self.code_pos = pos + 11;
+                // `pos` IS the address of the i64 target operand — recorded at
+                // emission rather than re-derived from the opcode, which is not a
+                // fixed width (loft#1032).
+                self.code_pos = pos;
                 self.code_add(i64::from(start));
             }
             self.code_pos = old;
@@ -3604,7 +3606,6 @@ impl State {
             stack.position += stack.step(size(stack.data.def(op).returned(), &Context::Argument));
             stack.data.def(op).returned().clone()
         } else {
-            self.calls.entry(op).or_default().push(self.code_pos);
             // CO1.3c: emit OpCoroutineCreate for generator function calls.
             let is_generator = matches!(stack.data.def(op).returned(), Type::Iterator(_, _));
             if is_generator {
@@ -3624,6 +3625,16 @@ impl State {
                 .map(|a| stack.step(size(&a.typedef, &Context::Argument)))
                 .sum();
             self.code_add(args_size);
+            // loft#1032 — remember the address of the i64 target operand ITSELF, so
+            // a forward call's back-patch (`byte_code_for`) cannot drift from what
+            // was emitted here.  It used to remember the address of the OPCODE and
+            // re-derive the operand as `+ opcode(1) + d_nr(8) + args_size(2)`, but an
+            // opcode is one byte only below 255 and TWO at or above it (`emit_op`).
+            // `OpCoroutineCreate` sits above 255, so every call to a generator whose
+            // body had not been generated yet was patched one byte early — over the
+            // high byte of `args_size`.  The interpreter then read a multi-kilobyte
+            // frame size and `coroutine_create`'s `stack_pos - args_size` underflowed.
+            self.calls.entry(op).or_default().push(self.code_pos);
             self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
             for a in stack.data.def(op).attributes() {
