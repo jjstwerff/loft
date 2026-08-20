@@ -122,6 +122,29 @@ struct ResolvedPkg {
     manifest: Option<manifest::Manifest>,
 }
 
+/// loft#1040 — what a deferred `par` needs that substitution cannot supply: names and
+/// slot numbers, which a monomorph shares with its template because its variable table is
+/// a COPY of the template's.  The types are deliberately absent — they are re-read from
+/// the monomorph's own table at expansion, which is the whole point of deferring.
+#[derive(Clone)]
+struct DeferredPar {
+    /// The name the clause binds its result to (`par(r = …)`), which also names the
+    /// result variable the body was parsed against.
+    result_name: String,
+    /// The worker as the TEMPLATE resolved it — still a generic when the element type is
+    /// a type variable, which is exactly why this clause was deferred.
+    worker: u32,
+    /// The loop's number, which keys the result variable's name across passes.
+    loop_nr: u16,
+    /// The loop element's variable, whose type IS the substituted element type once the
+    /// monomorph's table has been written.
+    elem_var: u16,
+    /// The loop's COUNTER variable, or `u16::MAX` when the body needs none.  A number,
+    /// not a count — passing `0` here made the lowering initialise and increment variable
+    /// zero, which is the input vector.
+    count: u16,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -477,6 +500,24 @@ pub struct Parser {
     /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
     /// set is complete, so `parse_function` reproduces the promoted type.
     par_worker_defs: std::collections::HashSet<u32>,
+    /// loft#1040 — one entry per `par` clause whose ROUTE could not be decided where it
+    /// was written, because the function holding it is a TEMPLATE and the element and
+    /// return types are its type variable.
+    ///
+    /// A par lowering is more than a call target: it picks a queue variant, an element
+    /// and a return SIZE, a result accessor and a re-wrap, all from those two types.
+    /// Inside a template they are the type VARIABLE, so a route chosen there is a route
+    /// for a 12-byte reference; substitution then rewrites the types and leaves the whole
+    /// route behind.  So the template parses the BODY (which is what types it) and stops,
+    /// leaving a marker call the monomorph replaces by lowering the same clause again —
+    /// against the types it actually has.  Everything that must be substituted rides in
+    /// the marker's arguments, where the ordinary machinery reaches it; this side holds
+    /// only what substitution cannot change.
+    par_deferred: Vec<DeferredPar>,
+    /// The body of the par clause being REPLAYED, with the loop-counter variable that
+    /// belongs to it, so `build_parallel_for_ir` uses the IR the template already parsed
+    /// instead of reading tokens that are long gone.
+    par_replay_body: Option<(Value, u16)>,
     /// loft#918 — every `(function, tail variable)` whose promotion pass 1 could not
     /// decide: the tail is a bare local, the function returns `text` / `text?`, and the
     /// local's type is still `Unknown` because it was bound to a call declared lower in
@@ -982,6 +1023,8 @@ impl Parser {
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
+            par_deferred: Vec::new(),
+            par_replay_body: None,
             late_text_tails: Vec::new(),
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
@@ -5635,6 +5678,131 @@ impl Parser {
         // `vector<integer>` through the wrong schema and printed `{}`.
         self.retarget_parametric_coroutine_next(d_nr);
         self.retarget_parametric_vector_format(d_nr);
+        // loft#1040 — and lower any `par` clause the template could not: it needs the
+        // types this body now carries, so it runs after every substitution above.
+        self.expand_deferred_par(d_nr);
+    }
+
+    /// loft#1040 — lower every `par` clause the TEMPLATE deferred, now that this monomorph
+    /// has the types the route is picked from.
+    ///
+    /// The template left a marker call carrying everything substitution had to reach: the
+    /// parsed body, the input vector expression, the thread count, the pre-loop fill and
+    /// the worker's extra arguments — all already rewritten for this monomorph by the
+    /// time this runs.  What it did NOT carry is the types: they are read back here from
+    /// the monomorph's own variable table (the element) and from the worker instantiated
+    /// for that element (the return).  Re-running the ordinary lowering against them
+    /// picks the queue variant, the sizes, the accessor and the re-wrap the same way any
+    /// non-generic par site does — which is the whole point of waiting.
+    ///
+    /// Runs in the MONOMORPH's frame: the lowering creates its own index / length /
+    /// result variables, and they belong to the function the code lands in.
+    fn expand_deferred_par(&mut self, d_nr: u32) {
+        let marker = self.data.def_nr(crate::parser::collections::PAR_MARKER_FN);
+        if marker == u32::MAX || self.par_deferred.is_empty() {
+            return;
+        }
+        // Collect first — re-lowering needs `&mut self` while the walk holds the IR.
+        let mut sites: Vec<(usize, Vec<Value>)> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == marker
+                && let Some(Value::Int(id)) = args.first().map(Value::unspan)
+                && let Ok(id) = usize::try_from(*id)
+                && id < self.par_deferred.len()
+                && !sites.iter().any(|(seen, _)| *seen == id)
+            {
+                sites.push((id, args.clone()));
+            }
+        });
+        if sites.is_empty() {
+            return;
+        }
+        // Instantiate the workers BEFORE the context swap below: instantiation parses
+        // against `self.vars` / `self.context` and must see the ordinary ones, not this
+        // monomorph's (the same ordering `instantiate_nested_generics` keeps).
+        let mut plans: Vec<(usize, Vec<Value>, u32, Type, Type)> = Vec::new();
+        for (id, args) in sites {
+            let plan = self.par_deferred[id].clone();
+            // The element type IS the loop variable's type, and this table has been
+            // substituted — so `T` is whatever this monomorph bound it to.
+            let elem_tp = self.data.def(d_nr).variables.tp(plan.elem_var).clone();
+            // The worker is generic for the same reason this clause was deferred; give it
+            // the element type an ordinary call site would have given it.
+            let worker = if matches!(self.data.def_type(plan.worker), DefType::Generic) {
+                let name = self
+                    .data
+                    .def(plan.worker)
+                    .name()
+                    .strip_prefix("n_")
+                    .unwrap_or_default()
+                    .to_string();
+                let inst = self.try_generic_instantiation(&name, std::slice::from_ref(&elem_tp));
+                if inst == u32::MAX { plan.worker } else { inst }
+            } else {
+                plan.worker
+            };
+            let ret_type = self.data.def(worker).returned().clone();
+            plans.push((id, args, worker, ret_type, elem_tp));
+        }
+        // Now the monomorph's frame: the lowering creates its own index / length / result
+        // variables, and they belong to the function the code lands in.
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut built: Vec<(usize, Value)> = Vec::new();
+        for (id, args, worker, ret_type, elem_tp) in plans {
+            let plan = self.par_deferred[id].clone();
+            let return_size = self.par_return_size(&ret_type, worker);
+            let elem_size = self.par_elem_size(&elem_tp);
+            let mut it = args.into_iter().skip(1);
+            let (Some(body), Some(vec_expr), Some(threads_expr), Some(fill)) =
+                (it.next(), it.next(), it.next(), it.next())
+            else {
+                continue;
+            };
+            let extra_args: Vec<Value> = it.collect();
+            self.par_replay_body = Some((body, plan.count));
+            let mut out = Value::Null;
+            self.build_parallel_for_ir(
+                &mut out,
+                &plan.result_name,
+                worker,
+                &ret_type,
+                elem_size,
+                return_size,
+                &vec_expr,
+                threads_expr,
+                fill,
+                plan.loop_nr,
+                extra_args,
+                plan.elem_var,
+                &elem_tp,
+            );
+            self.par_replay_body = None;
+            built.push((id, out));
+        }
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == marker
+                && let Some(Value::Int(id)) = args.first().map(Value::unspan)
+                && let Ok(id) = usize::try_from(*id)
+                && let Some((_, lowered)) = built.iter().find(|(b, _)| *b == id)
+            {
+                *v = lowered.clone();
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
     }
 
     /// loft#1023 — re-derive every monomorph that was built from a template's PASS-1 body.
@@ -5977,6 +6145,10 @@ impl Parser {
     /// Extract the type variable `def_nr` from a type tree.
     /// Returns the `def_nr` of the first `Reference` that refers to the type variable,
     /// or `u32::MAX` if not found.
+    pub(crate) fn type_var_of(tp: &Type) -> u32 {
+        Self::extract_type_var(tp)
+    }
+
     fn extract_type_var(tp: &Type) -> u32 {
         match tp {
             Type::Reference(d, _) => *d,

@@ -212,6 +212,10 @@ fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
     }
 }
 
+/// The synthetic definition a deferred `par` marker calls, in its MANGLED spelling —
+/// the one `Data::def_nr` answers to (loft#1040).
+pub(crate) const PAR_MARKER_FN: &str = "n___par_template";
+
 impl Parser {
     pub(crate) fn iter_text(
         &mut self,
@@ -3515,10 +3519,39 @@ use #count instead"
         // Compute element size from the return type.
         // return_size =  0 signals text mode to n_parallel_for.
         // return_size = -1 signals reference (struct) mode.
-        let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
+        let return_size: i32 = self.par_return_size(&ret_type, fn_d_nr);
+        let elem_size = self.par_elem_size(&elem_tp);
+
+        self.build_parallel_for_ir(
+            code,
+            &result_name,
+            fn_d_nr,
+            &ret_type,
+            elem_size,
+            return_size,
+            vec_expr,
+            threads_expr,
+            fill,
+            loop_nr,
+            extra_vals,
+            elem_var_nr,
+            &elem_tp,
+        );
+    }
+
+    // parallel_for IR builder; threads unrelated IR params alongside &mut self — no sensible grouping
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    /// The `return_size` a par route is built from: the worker's return width, with two
+    /// sentinels — `0` for text (workers collect Strings and the main thread stores refs)
+    /// and `-1` for a heap value (the worker builds it in its own store and the main
+    /// thread deep-copies).  One home, because a monomorph re-derives it when it lowers a
+    /// clause its template could not (loft#1040).
+    pub(crate) fn par_return_size(&mut self, ret_type: &Type, fn_d_nr: u32) -> i32 {
+        if matches!(ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
         } else if matches!(
-            &ret_type,
+            ret_type,
             Type::Reference(_, _)
                 | Type::Enum(_, true, _)
                 | Type::Vector(_, _)
@@ -3545,13 +3578,13 @@ use #count instead"
             // internal owned-DbRef fields.
             -1
         } else {
-            let sz = i32::from(var_size(&ret_type, &Context::Argument));
+            let sz = i32::from(var_size(ret_type, &Context::Argument));
             // Plan-06 phase 1 G4 — accept Type::Function returns
             // (size 20 = 8B d_nr + 12B closure DbRef).  Workers
             // write the 20-byte fn-ref into per-worker output
             // slots; main thread copies bytes back via the
             // execute_at_raw_to path in run_parallel_direct.
-            let is_fn_ref = matches!(&ret_type, Type::Function(_, _, _));
+            let is_fn_ref = matches!(ret_type, Type::Function(_, _, _));
             if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || (sz > 8 && !is_fn_ref)) {
                 diagnostic!(
                     self.lexer,
@@ -3580,12 +3613,15 @@ use #count instead"
                 );
             }
             sz.max(1) // fallback to 1 if unknown
-        };
-        // Use the actual inline element size from the database (e.g. 4 for Score{value:integer},
-        // 8 for Range{lo,hi:integer}).  var_size() returns size_of::<DbRef>() for reference types,
-        // which is wrong for inline vector element storage.
-        let elem_size = {
-            let elm_td = self.data.type_elm(&elem_tp);
+        }
+    }
+
+    /// The `elem_size` a par route steps the INPUT vector by — the element's own storage
+    /// stride, which is what the dispatcher partitions on.  One home, for the same reason
+    /// as [`Self::par_return_size`].
+    pub(crate) fn par_elem_size(&mut self, elem_tp: &Type) -> i32 {
+        {
+            let elm_td = self.data.type_elm(elem_tp);
             // Plan-06 phase 1 G2.1 — narrow-integer vector inputs
             // (vector<u8>, vector<i32>) store one element per
             // forced_size byte slot.  IntegerSpec::vector_narrow_width
@@ -3593,11 +3629,11 @@ use #count instead"
             // dispatch in collections.rs:105-113 for non-par for loops.
             // Without this, var_size() returned 8 for any Integer
             // and par read garbage at row_idx*8 instead of row_idx*4.
-            if let Type::Integer(spec) = &elem_tp
+            if let Type::Integer(spec) = elem_tp
                 && let Some(n) = spec.vector_narrow_width(false)
             {
                 i32::from(n)
-            } else if matches!(&elem_tp, Type::Function(_, _, _)) {
+            } else if matches!(elem_tp, Type::Function(_, _, _)) {
                 // Plan-06 phase 4d.A.2 — fn-ref vector storage is
                 // 4-byte i32 d_nr (matches `data::element_stack_size(Type::Function)`).
                 // The known_type / db_size lookup below would return
@@ -3613,26 +3649,57 @@ use #count instead"
                 if db_size > 0 {
                     db_size
                 } else {
-                    i32::from(var_size(&elem_tp, &Context::Argument))
+                    i32::from(var_size(elem_tp, &Context::Argument))
                 }
             }
-        };
+        }
+    }
 
-        self.build_parallel_for_ir(
-            code,
-            &result_name,
-            fn_d_nr,
-            &ret_type,
-            elem_size,
-            return_size,
-            vec_expr,
-            threads_expr,
-            fill,
-            loop_nr,
-            extra_vals,
-            elem_var_nr,
-            &elem_tp,
-        );
+    /// True when this `par` clause must wait for a monomorph to be lowered — the
+    /// enclosing function is a TEMPLATE and the clause's element or return type is its
+    /// type VARIABLE, so every route decision here would be made for a 12-byte reference
+    /// and left behind by substitution (loft#1040).
+    ///
+    /// Both halves are load-bearing.  A par inside a template over a CONCRETE vector
+    /// (`for x in [1, 2] par(…)` in a generic function) has real types and lowers here as
+    /// it always did; and outside a template there is no variable to wait for.
+    fn defer_parametric_par(&mut self, ret_type: &Type, elem_tp: &Type) -> bool {
+        if self.data.def_type(self.context) != DefType::Generic {
+            return false;
+        }
+        let attrs = self.data.def(self.context).attributes();
+        let tv = attrs
+            .iter()
+            .map(|a| Self::type_var_of(&a.typedef))
+            .find(|t| *t != u32::MAX)
+            .unwrap_or(u32::MAX);
+        if tv == u32::MAX {
+            return false;
+        }
+        ret_type.contains_def(tv) || elem_tp.contains_def(tv)
+    }
+
+    /// The definition a deferred `par` marker calls.  It is a placeholder, never emitted:
+    /// a template produces no code, and every monomorph replaces the marker with the real
+    /// lowering before anything reads the body again.
+    fn par_marker_def(&mut self) -> u32 {
+        // `add_fn` mangles to `n_<name>`, so the lookup has to spell the MANGLED name —
+        // asking for the source name found nothing on the second pass and minted a
+        // `#dup`, which the H5 cross-pass guard reports as a real divergence.
+        let existing = self.data.def_nr(PAR_MARKER_FN);
+        if existing != u32::MAX {
+            return existing;
+        }
+        let d_nr = self.data.add_fn(&mut self.lexer, "__par_template", &[]);
+        if d_nr != u32::MAX {
+            // VOID, so the emitted stub is valid Rust.  It is never called: every
+            // monomorph replaces the marker before anything reads the body again, and a
+            // TEMPLATE emits no code — but a definition with no declared return renders
+            // as `-> ??` and refuses to compile, which would make a deferral break the
+            // build of a program that merely CONTAINS one.
+            self.data.definitions[d_nr as usize].returned = Type::Void;
+        }
+        d_nr
     }
 
     // parallel_for IR builder; threads unrelated IR params alongside &mut self — no sensible grouping
@@ -3852,25 +3919,77 @@ use #count instead"
         }
 
         // Parse the body block.
-        self.vars.loop_var(b_var);
-        let in_loop = self.in_loop;
-        self.in_loop = true;
-        // M11-a: flag that we are inside a par() body so that any `yield`
-        // encountered during parsing can emit a compile-time error.
-        let outer_par = self.in_par_body;
-        self.in_par_body = true;
+        //
+        // loft#1040 — a REPLAY (a monomorph re-lowering a clause its TEMPLATE deferred)
+        // has no tokens left to read: the template parsed this body once, and the
+        // monomorph inherited it through the marker's arguments, substituted like any
+        // other IR.  Everything else in this function is type-driven, so injecting the
+        // body is the whole of what a replay needs — and the loop BOOKKEEPING around the
+        // parse is skipped with it, because that loop was opened, counted and finished
+        // while the template was read.
+        let replayed = self.par_replay_body.take();
+        let is_replay = replayed.is_some();
         let mut block = Value::Null;
-        self.parse_block("parallel for", &mut block, &Type::Void);
-        let count = self.vars.loop_counter();
-        self.in_par_body = outer_par;
-        self.in_loop = in_loop;
-        self.vars.finish_loop(loop_nr);
+        let count;
+        if let Some((body, replay_count)) = replayed {
+            block = body;
+            count = replay_count;
+        } else {
+            self.vars.loop_var(b_var);
+            let in_loop = self.in_loop;
+            self.in_loop = true;
+            // M11-a: flag that we are inside a par() body so that any `yield`
+            // encountered during parsing can emit a compile-time error.
+            let outer_par = self.in_par_body;
+            self.in_par_body = true;
+            self.parse_block("parallel for", &mut block, &Type::Void);
+            count = self.vars.loop_counter();
+            self.in_par_body = outer_par;
+            self.in_loop = in_loop;
+            self.vars.finish_loop(loop_nr);
+        }
         // Restore prior `result_name` alias (or remove ours if none).
         match prior_name_target {
             Some(nr) => {
                 self.vars.set_name(result_name, nr);
             }
             None => self.vars.remove_name(result_name),
+        }
+
+        // loft#1040 — the route cannot be picked here when the types it is picked FROM are
+        // this function's type variable.  The body is parsed (that is what types it, and
+        // it is what a monomorph inherits); the LOWERING waits for a monomorph, which has
+        // the element and return types this clause is really about.  Everything the
+        // re-lowering must see substituted rides in the marker's arguments.
+        if !is_replay && self.defer_parametric_par(ret_type, elem_tp) {
+            let id = self.par_deferred.len();
+            self.par_deferred.push(crate::parser::DeferredPar {
+                result_name: result_name.to_string(),
+                worker: fn_d_nr,
+                loop_nr,
+                elem_var,
+                count,
+            });
+            let marker = self.par_marker_def();
+            let mut args = vec![
+                Value::Int(i32::try_from(id).unwrap_or(i32::MAX)),
+                block,
+                vec_expr.clone(),
+                threads_expr,
+                fill,
+            ];
+            args.extend(extra_args);
+            // A `for … par(…) { … }` is a STATEMENT whichever way its parse ends, so the
+            // marker is wrapped in a VOID block — a bare call carries its callee's type,
+            // and the statement parser then read the loop as a value and demanded a `;`
+            // after its closing brace.  The same reason the unresolved-worker exit below
+            // answers with a block.
+            *code = v_block(
+                vec![Value::Call(marker, args)],
+                Type::Void,
+                "par (deferred to the monomorph)",
+            );
+            return;
         }
 
         // Build IR only when we have a valid function reference.

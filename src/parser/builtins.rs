@@ -251,35 +251,28 @@ impl Parser {
                 d_nr = inst;
             }
         }
-        // A generic worker inside a generic FUNCTION is refused, and deliberately so.
+        // loft#1040 — a worker that is STILL generic here is one whose element type is
+        // this function's own type VARIABLE: a generic par worker inside a generic
+        // function.  It is admitted, and the clause it belongs to is lowered per
+        // MONOMORPH instead (`Parser::expand_deferred_par`), because a par lowering is
+        // more than a call target — it picks a queue variant, an element and return SIZE,
+        // a result accessor and a re-wrap, all from types that are not known yet here.
+        // Deciding them against the type variable and letting substitution rewrite the
+        // types underneath is what left the route behind: the result buffer was read with
+        // the REFERENCE accessor and cast to the monomorph's scalar, so `--native` failed
+        // to compile while `--interpret` answered correctly — the divergence
+        // `formal/operational.md` D-op-1 forbids.
         //
-        // `instantiate_nested_generics` now retargets the worker's d_nr, so the call
-        // resolves — but the par LOWERING is more than a call target: `build_parallel_for_ir`
-        // picks a queue variant, an element and return SIZE, a result accessor and a
-        // re-wrap from the element and return types, and inside a template those types are
-        // the type VARIABLE.  Substitution rewrites the types and leaves that whole route
-        // behind, so the buffer is read with the reference accessor and cast to the
-        // monomorph's scalar: `--native` fails with "non-primitive cast: DbRef as i64"
-        // while `--interpret` dispatches by d_nr and answers correctly.
-        //
-        // One backend running a program the other cannot compile is precisely what
-        // `formal/operational.md` D-op-1 forbids, so this refuses on BOTH rather than
-        // shipping the divergence.  Closing it properly means DEFERRING the route decision
-        // and replaying it per monomorph, the way loft#1016 / #1020 / #1028 / #1032 defer
-        // theirs — a real piece of work, tracked as loft#1040.
-        //
-        // The ordinary case — a generic worker called from a NON-generic function — is
-        // fully supported: `elem_tp` is concrete there, so the instantiation above gives a
-        // monomorph and the route is decided against real types.
-        if !self.first_pass && matches!(self.data.def_type(d_nr), DefType::Generic) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "parallel worker '{first_id}' is generic and this function is generic too,                  so the worker's element type is not known here — call it from a                  non-generic function, or give the worker a concrete parameter type"
-            );
-            return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
-        }
-        if !self.first_pass && !matches!(self.data.def_type(d_nr), DefType::Function) {
+        // The return type is already right for both passes: `predict_generic_return_type`
+        // substitutes the worker's variable with the ELEMENT type, which inside a template
+        // is the enclosing function's own variable — so the result binding is typed `T`
+        // here and concrete in every monomorph.
+        if !self.first_pass
+            && !matches!(
+                self.data.def_type(d_nr),
+                DefType::Function | DefType::Generic
+            )
+        {
             diagnostic!(self.lexer, Level::Error, "'{first_id}' is not a function");
             return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
