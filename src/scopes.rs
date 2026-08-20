@@ -7520,6 +7520,7 @@ fn returned_var_null_unified(expr: &Value, null_nr: u32) -> u16 {
 /// delivers looks like a local nobody frees — which is exactly what it is NOT, because
 /// returning it transfers it to the caller.  `check_ref_leaks` asserted on that shape as a
 /// leak (a generic instantiated at a STRUCT, where the return is a heap ref).
+#[cfg(debug_assertions)]
 fn collect_all_return_vars(expr: &Value, data: &Data, out: &mut Vec<u16>) {
     if let Value::Return(inner) = expr.unspan() {
         collect_return_sources(inner, data, out);
