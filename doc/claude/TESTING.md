@@ -203,6 +203,14 @@ binaries with `LOFT_NATIVE_LEAK_CHECK=1` (`tests/leak_cases.rs`,
 `tests/common/cross_mode.rs`); the dedicated shape corpus lives in
 `tests/leak.rs`.
 
+⚠ **`loft --tests <file>` does NOT run this gate** — only `wrap.rs` does.  Running a
+leak regression test the quick way therefore reports `ok` while the file leaks, which
+reads exactly like a fix that works.  Check a new leak guard with
+`cargo test --test wrap`, or run the file the plain way (`loft --interpret <file>` with
+a `main`, which does print the by-type warning).  Measured: a loft#1019 guard passed
+under `--tests` on the very binary it was written to fail on, and `wrap.rs` then
+hard-failed it with ten leaked records.
+
 ---
 
 ## The Testing Framework (`tests/testing.rs`)
