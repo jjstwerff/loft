@@ -110,7 +110,7 @@ jobs:
             }
 
             // 1) Apply what the body asked for.
-            const toApply = guard.chooseLabels(body).filter(l => !labels.has(l));
+            const toApply = guard.applicable(guard.chooseLabels(body), [...labels]);
             if (toApply.length) {
               await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: toApply });
               toApply.forEach(l => labels.add(l));

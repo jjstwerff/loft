@@ -16,7 +16,7 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const { chooseLabels, CATEGORIES } = require(
+const { chooseLabels, CATEGORIES, applicable } = require(
   path.join(here, "..", ".github", "scripts", "label-guard.js"),
 );
 
@@ -157,6 +157,57 @@ check(
 );
 
 check("an empty body is not an error", "", []);
+
+
+// ---- loft#1048: a filer's own label outranks a mention in prose --------------
+//
+// The issue was filed with `sev:medium` and came back also carrying `sev:high`,
+// because its only `sev:` token sat in the heading "Why it is not `sev:high`".
+// The prose channel cannot tell an assertion from its negation.  The cure is not
+// to teach it to: a category the filer has ALREADY answered is not open.
+
+const checkApplicable = (name, chosen, current, want) => {
+  const got = applicable(chosen, current).sort();
+  const expect = [...want].sort();
+  const ok = got.length === expect.length && got.every((g, i) => g === expect[i]);
+  if (!ok) {
+    failed += 1;
+    console.log(`  FAIL  ${name}\n        want [${expect}]\n        got  [${got}]`);
+  } else {
+    console.log(`  ok    ${name}`);
+  }
+};
+
+checkApplicable(
+  "a prose sev: does not override the sev: the filer set",
+  ["sev:high", "area:packages"],
+  ["sev:medium", "bug"],
+  ["area:packages"],
+);
+checkApplicable(
+  "the same label already present is still skipped",
+  ["sev:medium"],
+  ["sev:medium"],
+  [],
+);
+checkApplicable(
+  "an unanswered single-choice category is still filled",
+  ["sev:high", "wa:clean"],
+  ["bug"],
+  ["sev:high", "wa:clean"],
+);
+checkApplicable(
+  "area: is multi-valued, so a second one is added, not blocked",
+  ["area:native"],
+  ["area:packages"],
+  ["area:native"],
+);
+checkApplicable(
+  "hit-by: is single-choice like sev:, so the filer's stands",
+  ["hit-by:loft"],
+  ["hit-by:moros"],
+  [],
+);
 
 console.log(failed === 0 ? "label-guard: all cases pass" : `label-guard: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
