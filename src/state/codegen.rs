@@ -693,6 +693,11 @@ impl State {
                         Type::Float => stack.add_op("OpGetFloat", self),
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
+                        Type::Boolean => stack.add_op("OpGetBoolean", self),
+                        // Unreachable: `ref_tuple_element_ok` refuses anything this
+                        // match cannot emit, at the signature, with a message naming the
+                        // element type.  The two lists are one list on purpose —
+                        // loft#1006 was them disagreeing.
                         _ => panic!("RefTupleGet: unsupported element type {elem_tp:?}"),
                     }
                     self.code_add(elem_offset);
@@ -798,7 +803,10 @@ impl State {
                             stack.add_op("OpSetInt", self);
                         }
                         Type::Float => stack.add_op("OpSetFloat", self),
+                        Type::Single => stack.add_op("OpSetSingle", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
+                        Type::Boolean => stack.add_op("OpSetBoolean", self),
+                        // Unreachable — see the RefTupleGet arm above.
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
                     }
                     self.code_add(elem_offset);

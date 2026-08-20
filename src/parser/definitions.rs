@@ -2126,16 +2126,8 @@ impl Parser {
                         // op table alone answers an out-of-bounds store.
                         if !self.first_pass
                             && let Type::Tuple(ref elems) = tp
-                            && let Some(bad) = elems.iter().find(|e| {
-                                !matches!(
-                                    e.base(),
-                                    Type::Integer(_)
-                                        | Type::Float
-                                        | Type::Single
-                                        | Type::Character
-                                        | Type::Function(_, _, _)
-                                )
-                            })
+                            && let Some(bad) =
+                                elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
                         {
                             let bad_name = bad.name(&self.data);
                             diagnostic!(

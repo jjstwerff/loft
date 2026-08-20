@@ -370,3 +370,38 @@ fn pe_default_reading_the_record_and_needing_a_temporary() {
   p = Pe698 { pe_x: 1 };
   assert(p.pe_x == 1, "unreached");
 }
+
+// loft#1006 — a `&(…)` reference tuple admits exactly the scalars its element opcodes are
+// laid out for (`formal/tuples.md` T-Ref-El, one list in `data::ref_tuple_element_ok`).
+// Anything else is refused HERE, at the signature, naming the offending element type —
+// where it used to reach codegen and die as an internal compiler error.  The admitted
+// types are exercised in `1006-reference-tuple-element-types.loft`.
+//
+// `text` is refused for layout, not for a missing opcode: `OpGetText` / `OpSetText` take
+// the same `(ref, offset)` pair, but a reference tuple's storage is not a record with a
+// text slot the way a struct is.
+// @EXPECT_ERROR: reference tuple may only hold scalar elements
+fn rt1006_text_element(p: &(text, text)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}
+
+// A function reference was ADMITTED by the old guard and died in the stack allocator
+// instead of codegen — a different internal error, same missing rule.
+// @EXPECT_ERROR: reference tuple may only hold scalar elements
+fn rt1006_function_element(p: &(fn() -> integer, fn() -> integer)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}
+
+// A struct element: the message names the cure, which is to use a struct for the whole
+// thing — its fields of any type write through a `&` parameter.
+struct Rt1006 { a: integer }
+// @EXPECT_ERROR: reference tuple may only hold scalar elements
+fn rt1006_struct_element(p: &(Rt1006, Rt1006)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}

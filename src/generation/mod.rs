@@ -659,7 +659,7 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
 /// @PLN25: a nullable boolean (`boolean?`) stores as the same tri-state `u8` —
 /// unlike a nullable narrow INTEGER, which is carried full-width `i64`.
 #[must_use]
-fn boolean_u8_cast(tp: &Type) -> Option<&'static str> {
+pub(crate) fn boolean_u8_cast(tp: &Type) -> Option<&'static str> {
     match tp {
         Type::Boolean => Some("u8"),
         Type::Optional(inner) if matches!(inner.base(), Type::Boolean) => Some("u8"),

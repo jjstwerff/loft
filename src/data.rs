@@ -4099,7 +4099,30 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
     Value::If(Box::new(test), Box::new(t), Box::new(f))
 }
 
+/// May a `&(…)` reference tuple hold an element of this type (loft#1006)?
+///
+/// A reference tuple's element is read and written through the tuple's stored DbRef with
+/// the same `(ref, offset)` opcodes an ordinary struct FIELD uses, so the admitted set is
+/// exactly the set those opcode pairs are laid out for.  This is the ONE list: the
+/// signature guard and both `RefTupleGet` / `RefTuplePut` arms read it, because loft#1006
+/// was three lists disagreeing — the guard admitted `single` and a function reference that
+/// codegen then died on, and refused `boolean`, which every layer could always have
+/// handled.
+///
+/// `text` is refused, and the opcode pair is not what it is missing: `OpGetText` /
+/// `OpSetText` exist and take the same `(ref, offset)`, but a reference tuple's storage is
+/// not a record with a text SLOT the way a struct is, so wiring them up read out of bounds
+/// on the interpreter (SIGSEGV) and would not compile on `--native`.  Implementing it is
+/// layout work; until then the signature says so and names the element type.  A struct
+/// takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
+pub fn ref_tuple_element_ok(tp: &Type) -> bool {
+    matches!(
+        tp.base(),
+        Type::Integer(_) | Type::Float | Type::Single | Type::Character | Type::Boolean
+    )
+}
+
 pub fn v_set(var: u16, value: Value) -> Value {
     Value::Set(var, Box::new(value))
 }

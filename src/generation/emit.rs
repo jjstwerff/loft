@@ -352,17 +352,44 @@ impl Output<'_> {
                 // the same rule the tuple LITERAL arm below obeys through this flag.
                 // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
                 // whole program with *"expected `String`, found `&str`"* (loft#1004).
-                let elem_is_text = match variables.tp(var).base() {
-                    Type::Tuple(elems) => elems
-                        .get(idx as usize)
-                        .is_some_and(|e| matches!(e.base(), Type::Text(_))),
-                    _ => false,
+                // Both spellings reach here: a by-value tuple local (`t.0 = …`) is
+                // `Type::Tuple`, a `&(…)` REFERENCE-tuple parameter is
+                // `Type::RefVar(Tuple)`.  Reading only the first is why the boolean cast
+                // below silently did not fire on the reference form (loft#1006).
+                let var_tp = variables.tp(var).clone();
+                let tuple_elems = match var_tp.base() {
+                    Type::Tuple(elems) => Some(elems.clone()),
+                    Type::RefVar(inner) => match inner.base() {
+                        Type::Tuple(elems) => Some(elems.clone()),
+                        _ => None,
+                    },
+                    _ => None,
                 };
+                let elem_tp = tuple_elems.and_then(|e| e.get(idx as usize).cloned());
+                let elem_is_text = elem_tp
+                    .as_ref()
+                    .is_some_and(|e| matches!(e.base(), Type::Text(_)));
+                // A boolean element's SLOT is `u8` (0/1/255) while a transient expression
+                // is `bool`, so a tuple-element write is one of the store positions
+                // `boolean_u8_cast` exists for — and was the one missing from that list.
+                // `var_p.1 = true;` on a `&(integer, boolean)` was rustc E0308 *"expected
+                // `u8`, found `bool`"*, while `&(boolean, boolean)` compiled because both
+                // sides of its swap were already `u8` (loft#1006).  The wrap is idempotent
+                // for `u8`, so it is right for both.
+                let bool_cast = elem_tp
+                    .as_ref()
+                    .and_then(|e| crate::generation::boolean_u8_cast(e));
                 write!(w, "var_{name}.{idx} = ")?;
+                if bool_cast.is_some() {
+                    write!(w, "(")?;
+                }
                 let prev = self.tuple_text_to_string;
                 self.tuple_text_to_string = elem_is_text;
                 let r = self.output_code_node(w, node.tupleput_inner());
                 self.tuple_text_to_string = prev;
+                if let Some(cast) = bool_cast {
+                    write!(w, ") as {cast}")?;
+                }
                 return r;
             }
             _ => {}
