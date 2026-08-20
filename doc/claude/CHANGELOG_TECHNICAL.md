@@ -9,6 +9,60 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A compound assignment is bounded by the range it DECLARES, not by how the range is spelled (loft#1030 + loft#1031, 2026-08-20)
+
+The two residuals 447564a1 recorded and deliberately did not fold in. They are one guard
+missing one axis each, in opposite directions:
+
+```loft
+l: integer limit(0,255) = 250;  l += 10;    // kept 260 — the u8 spelling clamped to 0
+s.f -= 10;  // f: u32, was 5                 // wrapped to 2^32-5 — the u32 LOCAL clamped to 0
+```
+
+**loft#1030 — the guard read the width SPELLING.** `guard_narrow_alias_local` tested
+`forced_size`, which only a narrow ALIAS sets, so `limit(lo, hi)` reached no guard on the
+compound path at all. `formal/types.md` `(C-Int)` puts width INSIDE the conversion relation
+— "an integer flows into another integer iff its range fits", with no separate width
+authority — so `u8` and `integer limit(0,255)` are one range and a guard keyed on the
+spelling could only ever disagree with itself. Not a design call; the rule already said so.
+
+**loft#1031 — the store guard covers 1 and 2 bytes only.** `set_byte` / `set_short` carry a
+`min` operand and substitute the range's low end when a write does not fit; the 4-byte
+setters take no range and truncate. So a `u32` field wrapped where its local clamped. `i32`
+was wrong the same way and the issue did not notice — which also closes the residual
+447564a1 recorded (an `i32` FIELD answering `null`, because a wrapped value could land on
+`i32::MIN`): clamping now happens before the store, so the sentinel is never written.
+
+Both close at ONE seam — the composed value in `compute_op_code`'s caller, which every
+compound assignment passes through while `to` is still a `Var`, a field read or an element
+read and before the store-op dispatch. So the local, the field and the element cannot
+disagree, and `compound_range` answers the range for either spelling in one place.
+
+Teaching the four 4-byte opcodes a range was the alternative and was rejected: it changes
+opcode signatures (and `fill.rs` is generated), where the guard is one rule in one place.
+For the 1- and 2-byte widths the store guard becomes a backstop this path can no longer
+trip — the value reaching it is already in range, clamping is idempotent, and `set_byte`'s
+out-of-range return is discarded, so nothing is judged or reported twice.
+
+⚠ **Plain `integer` stays unbounded on purpose.** 447564a1 measured that a guard clamping
+every integer satisfies every other assertion in the file, so `integer` running past the
+4-byte range is a live regression cell, not an oversight.
+
+Measured on both backends, all three target kinds, both directions — and the sweep found
+two cells neither issue named: `integer limit(0,70000)` was wrong in ALL THREE positions
+(a 4-byte span, so neither the alias arm nor the store guard saw it), and it is fixed by
+the same change.
+
+Guard: `tests/scripts/1030-compound-range-both-spellings.loft`, written as local/field/
+element TRIPLES so a fix reaching one target kind and not the others fails. Both halves
+were falsified independently: removing the `limit` arm reds the limit cells, restoring the
+Var-only target reds the field cells.
+
+Two further defects surfaced by the sweep and NOT folded in — both are plain write-then-read
+with no arithmetic, so neither is this guard: a `limit` element with a non-zero `lo` reads
+back exactly `lo` too high (loft#1036), and a `limit` span wider than 4 bytes cannot hold a
+value inside its own declared range (loft#1037).
+
 ### A generator call was back-patched at a one-byte opcode, and a generic never learned its `iterator<T>` (loft#1032, 2026-08-20)
 
 Filed as one generic bug; it was four, and only one of the four is about generics.

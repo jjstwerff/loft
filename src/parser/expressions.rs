@@ -4415,48 +4415,73 @@ use a separate collection or add after the loop"
     /// (`is_narrowing_int_store`), and `declared_range`'s own comment records what happens
     /// when a runtime default is added on top of a check that already holds — it handed 24
     /// of the stdlib's own `i8` stores a `-128`.
-    pub(crate) fn guard_narrow_alias_local(&mut self, code: &mut Value, to: &Value, target: &Type) {
-        // A whole-variable target only. `s.f += n` / `v[i] += n` reach `call_to_set_op` and
-        // the store's own guard; wrapping them here would report and clamp twice.
-        if !matches!(to.unspan(), Value::Var(_)) {
-            return;
-        }
-        let Type::Integer(spec) = target.base() else {
+    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type) {
+        let Some((lo, hi, dflt)) = Self::compound_range(target) else {
             return;
         };
-        // `forced_size` is what marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`); the
-        // `limit(lo, hi)` spelling sets none and is `guard_declared_range`'s business.
-        //
-        // There is deliberately no `is_signed32_template()` test here. It reads like a
-        // guard against the plain `integer` type, but that carries no `forced_size` and
-        // has already returned above — so by this line the only spec whose range IS the
-        // signed-32 range is the `i32` ALIAS, and testing for it excluded exactly one
-        // alias of the five. `l: i32 = 2147483647; l += 1` kept 2147483648, a value the
-        // slot cannot hold, while the same write to a `u8` clamped correctly.
-        if spec.forced_size.is_none() || spec.is_wide_template() {
+        // Two seams can reach one store, so never wrap a guard in a guard: harmless
+        // arithmetically (the inner already answers a value in range) but it would judge
+        // the same write twice.  Mirrors `guard_declared_range`.
+        if let Value::Call(d, _) = code.unspan()
+            && self.data.def(*d).name() == "OpRangeDefault"
+        {
             return;
         }
-        let (lo, hi) = (i64::from(spec.min), i64::from(spec.max));
-        // The default a narrow slot takes when a write does not fit is its MINIMUM — read
-        // off the field oracle rather than chosen here, so the local and the field agree.
-        //
-        // They agree for four of the five aliases. A narrow `i32` FIELD answers `null`
-        // instead of the minimum, because a stored `i32::MIN` is the null sentinel that
-        // `OpGetInt4` decodes (which is why an `i32`'s own `min` is `i32::MIN + 1`). Both
-        // answers say the write did not fit; only the spelling differs, and a local cannot
-        // spell `null` unless it was declared nullable. Making the two identical means
-        // reclaiming `i32::MIN`, which is tracked separately — see STABILITY_ROADMAP's
-        // deferred `i32` row.
         let guarded = self.cl(
             "OpRangeDefault",
             &[
                 code.clone(),
                 Value::Long(lo),
                 Value::Long(hi),
-                Value::Long(lo),
+                Value::Long(dflt),
             ],
         );
         *code = guarded;
+    }
+
+    /// The bounded range a compound assignment's target declares — `None` when it
+    /// declares none, which is the plain `integer` case and the only unbounded one.
+    ///
+    /// **One range, whatever the spelling.** `formal/types.md` `(C-Int)` puts width
+    /// INSIDE the conversion relation — "an integer flows into another integer iff its
+    /// range fits", with no separate width authority — so `u8` and `integer limit(0,255)`
+    /// are the same range and must bound a write the same way.  Keying the guard on the
+    /// width SPELLING instead is how they came apart: `guard_narrow_alias_local` tested
+    /// `forced_size`, which only a narrow ALIAS sets, so the `limit(...)` spelling reached
+    /// no guard on the compound path at all and `l: integer limit(0,255) = 250; l += 10`
+    /// kept 260 while the `u8` spelling of that identical range clamped (loft#1030).
+    ///
+    /// The default is the range's LOW end, which is what a slot that cannot take the
+    /// write already answers — measured across `u8` / `i8` / `u16` / `i16` in both
+    /// directions and on both backends (commit 447564a1's table), so this reads the
+    /// existing behaviour off rather than choosing a new one.
+    fn compound_range(tp: &Type) -> Option<(i64, i64, i64)> {
+        // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
+        // else — it returns `None` the moment `forced_size` is set.  So the two arms
+        // below partition the bounded types rather than overlapping.
+        if let Some(r) = declared_range(tp) {
+            return Some(r);
+        }
+        let Type::Integer(spec) = tp.base() else {
+            return None;
+        };
+        // `forced_size` marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`/`u32`).
+        //
+        // There is deliberately no `is_signed32_template()` test here.  It reads like a
+        // guard against the plain `integer` type, but that carries no `forced_size` and
+        // has already returned above — so by this line the only spec whose range IS the
+        // signed-32 range is the `i32` ALIAS, and testing for it excluded exactly one
+        // alias of the six (loft#1009).
+        //
+        // Plain `integer` and the wide template stay unbounded ON PURPOSE: 447564a1
+        // measured that a guard clamping every integer satisfies every other assertion in
+        // the regression file, so `integer` running past the 4-byte range is a live cell
+        // there, not an oversight.
+        if spec.forced_size.is_none() || spec.is_wide_template() {
+            return None;
+        }
+        let lo = i64::from(spec.min);
+        Some((lo, i64::from(spec.max), lo))
     }
 
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {

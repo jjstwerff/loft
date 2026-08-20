@@ -98,6 +98,21 @@ different route than the identical function written out by hand. It now takes th
 so it returns its text through the caller's buffer like every other text-returning function.
 `T = integer` and a struct `T` were never affected.
 
+### A range you declare is enforced however you spell it
+
+```loft
+l: integer limit(0,255) = 250;  l += 10;   // was 260 — now 0, like the u8 spelling
+w.f = 5;  w.f -= 10;            // f: u32     was 4294967291 — now 0, like the local
+```
+
+`u8` and `integer limit(0,255)` name the same range, so they now bound a `+=` the same way;
+before, only the `u8` spelling did. And a `u32` or `i32` **field** wrapped around where the
+local beside it stopped at the edge — the two now agree, and so does a vector element.
+
+Four-byte ranges were the gap in both directions, so `integer limit(0,70000)` was wrong
+everywhere and is fixed too. Plain `integer` is unchanged: it declares no range and still
+counts past four bytes.
+
 ### A generator can be called before it is written, and a generic can return one
 
 ```loft
