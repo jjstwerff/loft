@@ -10,6 +10,54 @@ All notable changes to the loft language and interpreter.
 ## [Unreleased]
 
 ### A package's manifest chose where the package landed on disk (2026-08-20)
+### A call site could not NAME an argument built inline, so the store its callee minted was orphaned (loft#1029, 2026-08-20)
+
+A callee whose return may be a BORROW of an argument cannot be classified statically — it
+hands back either the argument's store or one it minted. loft#981/#982 settled that with a
+RUNTIME decision: the @P290 bracket marks each ref argument's store, and `OpCopyRecord`'s
+source-free is refused for a marked one and taken for a callee-minted one. The bracket needs a
+SLOT to name, so `protectable_ref_args` accepts only a bare `Var` — and its own doc-comment
+records the consequence: *"When some ref argument is not one, the witness set is incomplete and
+the caller keeps the old, conservative 'never free' answer — the leak stays for that shape."*
+
+Two argument shapes were sitting in that hole, one record leaked per call on both backends:
+
+```loft
+fn pick(s: S, c: boolean) -> S { if c { s } else { mk() } }
+pick(S { a: 7 }, false)     // the literal is a construction BLOCK, not a Var
+fn take(f: S?) -> S { f? }
+take(null)                  // `convert` lowered it to `OpNullRefSentinel()`, not `Value::Null`
+```
+
+The first is cured where it went wrong — at the CALL SITE, not in the witness test. The slot
+always existed and this frame always freed it (the parser builds a literal argument into a
+function-scope work-ref whose block yields it); only the call site could not say its name. So
+`scan_args` hoists the construction into the preamble and passes `Var(w)`, and the emitted code
+becomes byte-for-byte the hand-written spelling that was always clean (`q = S { a: 7 };
+pick(q, …)`). Widening `protectable_ref_args` to see through the block instead would have been
+WRONG: `protect_store_frees` reads the DbRef VALUE and the bracket is emitted BEFORE the
+arguments are evaluated, so a work-ref still holding its null would be "protected" while empty —
+the witness set would read complete while protecting nothing, and the source-free it then
+licenses would release a store the caller still reaches. That trades a leak for a UAF.
+
+The second is loft#1021 one lowering later, and its own reasoning applies unchanged: a sentinel
+holds no store, so nothing the callee returns can be a borrow of it.
+
+**⚠ The issue's filed boundary was wrong, and the correction is the finding.** It named the
+axis as *"the borrow arm names a PARAMETER"* versus loft#1019's vector element. Moving the axis
+I had pinned shows the real one is the ARGUMENT SPELLING: a vector-element borrow arm leaks too
+when its argument is a literal, and a parameter borrow arm is clean when its argument is a
+variable. #1019's guard is not narrow in the way I filed — it binds every argument to a
+variable first, which is what its cells hold fixed.
+
+**Three shapes stay open under #1029**, each measured to be a different site: a VECTOR literal
+argument (its block yields a view opened at the block's own scope, so hoisting would carry a
+declaration out of the scope that registered it — the gate declines on exactly that test); a
+result read INLINE and discarded rather than bound (the discarded-owned-temp lift, which leaks
+for a plain variable argument too); and an inline literal inside a LOOP (A/B-built with this fix
+disabled, the leak is identical either way).
+
+### A generic returning a discharged `T?` was lowered by a route its non-generic twin never takes (loft#1026, 2026-08-20)
 
 `loft install <dir>` files a package under `~/.loft/lib/<name>`, and since the name became
 the MANIFEST's rather than the checkout directory's, nothing checked it before the join. A

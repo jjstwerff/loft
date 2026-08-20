@@ -6114,11 +6114,109 @@ impl Scopes {
                 self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
+            } else if let Some(w) = self.inline_built_borrow_source(&scanned, outer_call, data) {
+                // loft#1029 — an argument BUILT INLINE (`pick(S { a: 7 }, …)`) that the
+                // callee's return may BORROW.  The @P290 bracket that decides borrow-vs-
+                // owned at runtime can only name a bare `Var` slot, so an argument still
+                // wrapped in its construction block leaves the witness set incomplete
+                // (`use_analysis::protectable_ref_args`) and the caller keeps the
+                // conservative answer: it COPIES the returned store and orphans the one
+                // the callee minted — one leaked record per call, both backends.
+                //
+                // The slot already exists and this frame already frees it: the parser
+                // builds the literal into a function-scope work-ref and the block's tail
+                // IS that work-ref.  So nothing needs a new owner — only the CALL SITE
+                // needs to be able to say its name.  Hoisting the construction into the
+                // preamble and passing `Var(w)` makes the argument nameable, which is
+                // exactly the hand-written spelling that was always clean
+                // (`q = S { a: 7 }; pick(q, …)`), and the emitted code becomes identical
+                // to it.
+                //
+                // Deliberately NOT done by widening `protectable_ref_args` to see through
+                // the block: `protect_store_frees` reads the DbRef VALUE at call time and
+                // the bracket is emitted BEFORE the arguments are evaluated, so a work-ref
+                // still holding its null would be "protected" while empty — the witness
+                // set would read complete while protecting nothing, and the source-free it
+                // then licenses would release a store the caller still reaches.  That
+                // trades this leak for a use-after-free.
+                let Value::Block(bl) = scanned else {
+                    unreachable!("inline_built_borrow_source matched a non-Block")
+                };
+                let mut ops = bl.operators;
+                ops.pop();
+                preamble.extend(ops);
+                ls.push(Value::Var(w));
             } else {
                 ls.push(scanned);
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
+    /// may borrow it.
+    ///
+    /// `Some(w)` for a value block that fills a work-ref and ends in it — the shape the
+    /// parser gives `S { … }` / a collection literal in argument position — at a call whose
+    /// return names a visible parameter (`returns_borrowed_view`). `w` is a function-scope
+    /// slot this frame already allocates and frees, so hoisting the block moves nothing's
+    /// ownership; it only lets the call site NAME the borrow source.
+    ///
+    /// Gated on `returns_borrowed_view` on purpose. Every other call is already correct as
+    /// it stands, and hoisting an argument reorders it relative to its left-hand siblings —
+    /// a cost worth paying only where the alternative is a leak.
+    fn inline_built_borrow_source(&self, arg: &Value, outer_call: u32, data: &Data) -> Option<u16> {
+        // `scan_args` runs for argument lists with no enclosing DEF as well (the
+        // `u32::MAX` no-call sentinel), and `Data::def` asserts on it. Nothing to decide
+        // there: with no callee there is no return that could borrow the argument.
+        if outer_call == u32::MAX {
+            return None;
+        }
+        let callee = data.def(outer_call);
+        // Only a call into a LOFT-DEFINED body, which is what the @P290 copy-or-adopt
+        // bracket serves. A native accessor answers a borrowed view too (`OpGetText` is
+        // `text[v1]`), but it never goes through that machinery, so hoisting its argument
+        // buys nothing — and it is reached in EXPRESSION position, where the preamble is
+        // not a statement list: the hoisted ops were rendered into the argument parens and
+        // `--native` rejected the call with E0277 (`((), (), (), (), &str): AsRef<str>` in
+        // 875-json-absent-text-field).
+        if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
+            return None;
+        }
+        let Value::Block(bl) = arg else {
+            return None;
+        };
+        // At least one construction op plus the trailing `Var` — a bare `{ v }` has
+        // nothing to hoist and is already a nameable value.
+        if bl.operators.len() < 2
+            || !matches!(
+                bl.result.base(),
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            return None;
+        }
+        let Value::Var(w) = bl.operators.last()?.unspan() else {
+            return None;
+        };
+        // The block must YIELD A VIEW OF THE SLOT IT JUST FILLED — its result dep is
+        // exactly `[w]` and its tail is `Var(w)`. That is the structural signature of
+        // "constructed into `w`", and it is what makes hoisting ownership-neutral: the
+        // ops move earlier in the same statement list, nothing changes who owns `w`.
+        //
+        // Not `is_work_ref`: that set is the return-delivery materialiser's own register
+        // and does not contain the parser's object work-ref (measured — it answers false
+        // for the `__ref_1` this very shape builds into). A second list of the same fact
+        // drifts; the dep the block already carries is the fact itself.
+        if bl.result.depend() != vec![*w] {
+            return None;
+        }
+        // And `w` must already live at the scope we are hoisting INTO. A tail naming a
+        // var the block itself opened (a vector literal yields `_vec_N` at the block's own
+        // scope, a view of the `__vdb_N` one level up) would have its declaration carried
+        // out of the scope that registered it. Declining there costs this shape the fix and
+        // keeps the scope table honest; loft#1029 records it as the half still open.
+        (self.var_scope.get(w) == Some(&self.scope)).then_some(*w)
     }
 
     /// The A5.6 hoistable preamble: `Insert([Set(v, Null), value])` whose `v` OWNS a

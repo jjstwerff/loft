@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A call whose return may BORROW one of its arguments decides borrow-vs-owned at RUNTIME,
+// with the @P290 bracket: `protect_store_frees` marks each ref argument's store, and a
+// returned store that is marked is refused the free while a callee-minted one is freed.
+// The bracket can only name a bare `Var` slot, so an argument still wrapped in its
+// CONSTRUCTION block left the witness set incomplete (`protectable_ref_args`), the caller
+// kept the conservative never-free answer, COPIED the result, and orphaned the store the
+// callee had minted — one record per call, both backends.
+//
+// The slot always existed and this frame always freed it: the parser builds a literal
+// argument into a function-scope work-ref whose block yields it. Only the CALL SITE could
+// not say its name. `scan_args` now hoists that construction into the preamble and passes
+// `Var(w)`, which is exactly the hand-written spelling that was always clean —
+// `q = S { a: 7 }; pick(q, …)` — so the two now emit the same code.
+//
+// The `null` literal is the same argument one lowering later: `Parser::convert` turns it
+// into `OpNullRefSentinel()`, so loft#1021's `Value::Null` arm no longer matched it and the
+// site read as uncovered. A sentinel holds no store, exactly like the `Null` it came from.
+//
+// ⚠ THREE SHAPES OF loft#1029 ARE STILL OPEN and are deliberately NOT cells here — a leaking
+// cell would redden the suite's store gate for a defect this file is not about:
+//   * a VECTOR literal argument (`pick([S { a: 7 }], 5)`). Its block yields `_vec_N`, a view
+//     opened at the BLOCK's own scope, so hoisting would carry a declaration out of the
+//     scope that registered it. The gate declines on exactly that test.
+//   * a result read INLINE and discarded (`assert(pick(q, …).x == 3, …)`) rather than bound.
+//     That is a different chokepoint — the discarded-owned-temp lift, not argument naming —
+//     and it leaks for a non-generic with a plain variable argument too.
+//   * an inline literal argument inside a LOOP. The single call is cured; the loop is not,
+//     and A/B-building with this fix disabled shows the same leak either way, so it is a
+//     third site rather than a hole in this one.
+//
+// The harness's store-leak gate is what this file asserts; the values are here so a fix that
+// silenced the leak by freeing the DELIVERED store would fail too, which is the over-free
+// this shape sits one step away from. Both arms of every join are exercised.
+
+struct S1029 { a: integer = 3 }
+struct B1029 { q: integer }
+
+fn mk1029() -> S1029 { S1029 { a: -1 } }
+
+// The join: a BORROW arm naming a parameter, an OWNED arm minting a record.
+fn pick1029(s: S1029, c: boolean) -> S1029 { if c { s } else { mk1029() } }
+
+// The `?` discharge is the same join written shorter — the fallback mints the record.
+fn discharge1029(f: S1029?) -> S1029 { f? }
+
+// A METHOD, because a name-shaped gate covering `mk()` and missing `bx.make()` is the
+// mistake loft#1017 and loft#1019 both were.
+fn make1029(self: B1029) -> S1029 { S1029 { a: self.q } }
+fn pick_method1029(s: S1029, b: B1029, c: boolean) -> S1029 { if c { s } else { b.make1029() } }
+
+fn test_an_inline_literal_argument_is_freed_on_the_owning_arm() {
+  // The filed cell. The callee mints; the caller must end up owning that record.
+  p = pick1029(S1029 { a: 7 }, false);
+  assert(p.a == -1, "the owning arm answers the fresh record, got {p.a}");
+}
+
+fn test_the_borrowing_arm_of_the_same_call_still_reads_its_argument() {
+  // The adversarial half: a cure that freed the DELIVERED store would break this, because
+  // on this path the store belongs to the caller's own literal.
+  p = pick1029(S1029 { a: 7 }, true);
+  assert(p.a == 7, "the borrowing arm answers the argument, got {p.a}");
+}
+
+fn test_a_variable_argument_is_unchanged() {
+  // The control that was always clean — the shape the fix makes the literal spelling match.
+  q = S1029 { a: 7 };
+  r = pick1029(q, false);
+  assert(r.a == -1, "the owning arm still answers fresh");
+  s = pick1029(q, true);
+  assert(s.a == 7, "and the borrowing arm still reads q");
+  assert(q.a == 7, "and q itself is untouched");
+}
+
+fn test_a_null_literal_argument_is_freed_on_the_discharge_path() {
+  // `null` reaches the witness test as `OpNullRefSentinel()`, not as `Value::Null`.
+  d = discharge1029(null);
+  assert(d.a == 3, "the discharge answers the record's own field default, got {d.a}");
+}
+
+fn test_a_supplied_argument_to_the_same_discharge_is_unchanged() {
+  e = discharge1029(S1029 { a: 5 });
+  assert(e.a == 5, "an inline literal arrives");
+  f = S1029 { a: 6 };
+  g = discharge1029(f);
+  assert(g.a == 6, "and so does a variable");
+  assert(f.a == 6, "which is untouched");
+}
+
+fn test_a_method_owning_arm_is_freed_too() {
+  b = B1029 { q: 9 };
+  m = pick_method1029(S1029 { a: 7 }, b, false);
+  assert(m.a == 9, "the method arm answers its own record, got {m.a}");
+  n = pick_method1029(S1029 { a: 7 }, b, true);
+  assert(n.a == 7, "and the borrow arm is still the argument");
+}
+
+fn test_it_does_not_scale_with_the_iteration_count() {
+  // One leak per call is what makes this matter: a loop is where a record becomes a session.
+  // The argument is a VARIABLE here — the inline-literal spelling of this same loop still
+  // leaks and is the third shape loft#1029 keeps open (measured identical with this fix
+  // disabled, so it is neither caused nor cured by it).
+  total = 0;
+  for i in 0..16 {
+    q = S1029 { a: i };
+    p = pick1029(q, false);
+    total += p.a;
+  }
+  assert(total == -16, "sixteen calls each answered -1, got {total}");
+}

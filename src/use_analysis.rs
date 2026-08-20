@@ -2261,6 +2261,16 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
             // once per call.  The same call with a bare VAR holding null was always
             // clean, which is what localised it (loft#1021).
             Value::Null => {}
+            // loft#1029 — the same argument one lowering later. `Parser::convert` turns a
+            // `null` LITERAL in a reference-typed argument position into a call to
+            // `OpNullRefSentinel`, so by the time this runs the `Value::Null` arm above no
+            // longer matches and the site read as uncovered — the conservative never-free
+            // answer, and one leaked record per call for `fn pick(f: S?) -> S { f? }`
+            // called as `pick(null)`. The sentinel holds NO STORE (`store_nr == u16::MAX`),
+            // exactly like the bare `Null` it was lowered from, so nothing the callee
+            // returns can be a borrow of it: it neither needs protecting nor blocks.
+            Value::Call(d, cargs)
+                if cargs.is_empty() && data.def(*d).name() == "OpNullRefSentinel" => {}
             _ => covers_all = false,
         }
     }
