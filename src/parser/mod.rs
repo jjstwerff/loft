@@ -5237,15 +5237,6 @@ impl Parser {
     /// fn-element tuples keep their existing ABI (mirrors the deferral predicate).
     /// Does `t` mention the type variable `tv_nr` anywhere?  A type variable appears
     /// as a `Reference`/`Enum` to its def; recurses `Vector`/`Optional`/`Tuple`.
-    fn type_mentions_tv(t: &Type, tv_nr: u32) -> bool {
-        match t {
-            Type::Reference(d, _) | Type::Enum(d, _, _) => *d == tv_nr,
-            Type::Vector(inner, _) | Type::Optional(inner) => Self::type_mentions_tv(inner, tv_nr),
-            Type::Tuple(elems) => elems.iter().any(|e| Self::type_mentions_tv(e, tv_nr)),
-            _ => false,
-        }
-    }
-
     /// Does the current def's return SHAPE depend on its generic type variable
     /// (`-> T`, `-> (T, T)`, `-> vector<T>`)?  False for a non-generic context and
     /// for a generic template whose return is already CONCRETE (`-> (text, text)`).
@@ -5267,7 +5258,15 @@ impl Parser {
             return false;
         }
         let tv_nr = Self::extract_type_var(&attrs[0].typedef);
-        tv_nr != u32::MAX && Self::type_mentions_tv(t, tv_nr)
+        // `Type::contains_def` is the keystone-backed answer to "does this type mention
+        // `d_nr`?" — `any_node` over `Type::for_each_child`, so it descends every
+        // child-bearing variant and a new one extends ONE match.  The hand-rolled
+        // `type_mentions_tv` this replaces knew Vector / Optional / Tuple and answered
+        // `_ => false` for the rest, so a type variable inside an `Iterator`, a
+        // `Function`, a `RefVar` or a keyed collection read as "no type variable here".
+        // `contains_def`'s own doc records being unified from two earlier copies with
+        // exactly that drift; this was a third, two hundred lines from a call to it.
+        tv_nr != u32::MAX && t.contains_def(tv_nr)
     }
 
     fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
