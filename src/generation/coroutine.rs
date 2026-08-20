@@ -142,12 +142,30 @@ fn tail_is_yield(v: &Value) -> bool {
     }
 }
 
+/// True when a coroutine slot of this type is a Rust `String`.
+///
+/// @PLN25 — `Optional(τ)` shares τ's storage exactly, and loft's absent text IS a
+/// `String` (the `STRING_NULL` sentinel), so a `text?` slot is a `String` slot.  Every
+/// site in this file that decides "String or scalar?" reads THIS one predicate, because
+/// they have to agree: the struct field, the factory that fills it, the shadow-bind that
+/// reads it back, and the yield channel are four views of a single slot.
+///
+/// loft#1035 — while each site matched `Type::Text` unpeeled, a `text?` PARAMETER was a
+/// `String` field (via `rust_type`) that the factory filled with a bare `&str` and the
+/// body moved out of `&mut self`: rustc E0308 + E0507, so a generator taking a `text?`
+/// did not compile at all on `--native` while `--interpret` ran it.
+fn is_text_slot(tp: &Type) -> bool {
+    matches!(tp.base(), Type::Text(_))
+}
+
 /// The placeholder a lazily-lowered loop's iteration state gives `__y` before running the
 /// body.  The `yield` always overwrites it before it is read, so it only has to type-check
 /// against the channel this generator answers on.
 fn lazy_yield_init(yield_tp: &Type) -> &'static str {
+    if is_text_slot(yield_tp) {
+        return "String::new()";
+    }
     match yield_tp {
-        Type::Text(_) => "String::new()",
         Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef::NULL",
         _ => "0i64",
     }
@@ -584,18 +602,20 @@ fn emit_struct_def(
     writeln!(w, "struct {struct_name} {{")?;
     writeln!(w, "    state: u32,")?;
     for attr in attrs {
-        let field_tp = match &attr.typedef {
-            Type::Text(_) => "String".to_string(),
-            other => rust_type(other, &Context::Variable),
+        let field_tp = if is_text_slot(&attr.typedef) {
+            "String".to_string()
+        } else {
+            rust_type(&attr.typedef, &Context::Variable)
         };
         writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
     }
     // P224: persistent function-locals as struct fields.
     for (v, tp) in persistent {
         let n = &fields[v];
-        let field_tp = match tp {
-            Type::Text(_) => "String".to_string(),
-            other => rust_type(other, &Context::Variable),
+        let field_tp = if is_text_slot(tp) {
+            "String".to_string()
+        } else {
+            rust_type(tp, &Context::Variable)
         };
         writeln!(w, "    var_{n}: {field_tp},")?;
     }
@@ -615,11 +635,14 @@ fn emit_struct_def(
         .iter()
         .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
     {
-        let elem_ty = match yield_tp {
-            Type::Text(_) => "String",
-            // @P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef",
-            _ => "i64",
+        let elem_ty = if is_text_slot(yield_tp) {
+            "String"
+        } else {
+            match yield_tp {
+                // @P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef",
+                _ => "i64",
+            }
         };
         writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
@@ -656,9 +679,10 @@ fn emit_factory_fn(
     writeln!(w, "        state: 0,")?;
     for attr in attrs {
         let aname = sanitize(&attr.name);
-        match &attr.typedef {
-            Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
-            _ => writeln!(w, "        var_{aname},")?,
+        if is_text_slot(&attr.typedef) {
+            writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?;
+        } else {
+            writeln!(w, "        var_{aname},")?;
         }
     }
     // P224: initialise persistent locals to default.
@@ -681,8 +705,10 @@ fn emit_factory_fn(
 /// Mirrors `default_native_value` but inlined here so the helper
 /// stays usable from the free function `emit_factory_fn`.
 fn persistent_default(tp: &Type) -> String {
+    if is_text_slot(tp) {
+        return "String::new()".to_string();
+    }
     match tp {
-        Type::Text(_) => "String::new()".to_string(),
         // A heap local starts as the null reference and the body's own `OpDatabase` fills
         // it — the same initialiser the per-arm `let` used before these became fields.
         Type::Reference(_, _)
@@ -740,7 +766,7 @@ impl Output<'_> {
         has_yf: bool,
         yield_tp: &Type,
     ) -> std::io::Result<()> {
-        let is_text = matches!(yield_tp, Type::Text(_));
+        let is_text = is_text_slot(yield_tp);
         // @P326 — Reference-yielding generators override `next_dbref` (not
         // `next_i64`), so a consumer's `coroutine_next_dbref(gen)` reads the
         // yielded DbRef directly.  Mirrors the text branch's `next_text`
@@ -891,7 +917,7 @@ impl Output<'_> {
                 if var_table.is_argument(v) {
                     continue;
                 }
-                if !matches!(var_table.tp(v), Type::Text(_)) {
+                if !is_text_slot(var_table.tp(v)) {
                     continue;
                 }
                 if !var_table.name(v).starts_with("__work") {
@@ -1000,12 +1026,13 @@ impl Output<'_> {
             // Shadow-bind parameters.
             for attr in attrs {
                 let aname = sanitize(&attr.name);
-                match &attr.typedef {
-                    Type::Text(_) => writeln!(
+                if is_text_slot(&attr.typedef) {
+                    writeln!(
                         w,
                         "                let var_{aname}: &str = &self.var_{aname};"
-                    )?,
-                    _ => writeln!(w, "                let var_{aname} = self.var_{aname};")?,
+                    )?;
+                } else {
+                    writeln!(w, "                let var_{aname} = self.var_{aname};")?;
                 }
             }
             match segment {
@@ -1137,14 +1164,13 @@ impl Output<'_> {
                     writeln!(w, "            {} => {{", state_idx + 1)?;
                     for attr in attrs {
                         let aname = sanitize(&attr.name);
-                        match &attr.typedef {
-                            Type::Text(_) => writeln!(
+                        if is_text_slot(&attr.typedef) {
+                            writeln!(
                                 w,
                                 "                let var_{aname}: &str = &self.var_{aname};"
-                            )?,
-                            _ => {
-                                writeln!(w, "                let var_{aname} = self.var_{aname};")?;
-                            }
+                            )?;
+                        } else {
+                            writeln!(w, "                let var_{aname} = self.var_{aname};")?;
                         }
                     }
                     writeln!(w, "                let mut __exhausted = true;")?;
@@ -1455,7 +1481,7 @@ impl Output<'_> {
         persistent: &[(u16, Type)],
         fields: &std::collections::HashMap<u16, String>,
     ) -> std::io::Result<()> {
-        let is_text = matches!(yield_tp, Type::Text(_));
+        let is_text = is_text_slot(yield_tp);
         // @P326 — for-body factory must use the DbRef channel for
         // Reference-yielding generators (the eager-collect buffer is
         // `Vec<DbRef>`, the sub-generator advances via `next_dbref`).
@@ -1506,9 +1532,10 @@ impl Output<'_> {
         // Declare local copies of params for use in the body.
         for attr in attrs {
             let aname = sanitize(&attr.name);
-            match &attr.typedef {
-                Type::Text(_) => writeln!(w, "    let var_{aname}: &str = var_{aname};")?,
-                _ => writeln!(w, "    let var_{aname} = var_{aname};")?,
+            if is_text_slot(&attr.typedef) {
+                writeln!(w, "    let var_{aname}: &str = var_{aname};")?;
+            } else {
+                writeln!(w, "    let var_{aname} = var_{aname};")?;
             }
         }
         // P218: same pre-declaration as `emit_next_i64` — `__work_*`
@@ -1525,7 +1552,7 @@ impl Output<'_> {
                 if var_table.is_argument(v) {
                     continue;
                 }
-                if !matches!(var_table.tp(v), Type::Text(_)) {
+                if !is_text_slot(var_table.tp(v)) {
                     continue;
                 }
                 if !var_table.name(v).starts_with("__work") {
@@ -1621,9 +1648,10 @@ impl Output<'_> {
         writeln!(w, "        state: 0,")?;
         for attr in attrs {
             let aname = sanitize(&attr.name);
-            match &attr.typedef {
-                Type::Text(_) => writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?,
-                _ => writeln!(w, "        var_{aname},")?,
+            if is_text_slot(&attr.typedef) {
+                writeln!(w, "        var_{aname}: var_{aname}.to_string(),")?;
+            } else {
+                writeln!(w, "        var_{aname},")?;
             }
         }
         // P224: initialise persistent locals to default — same as the
