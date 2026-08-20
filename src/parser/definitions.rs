@@ -3056,23 +3056,59 @@ impl Parser {
     }
 
     // <field_limit> ::= 'limit' '(' [ '-' ] <min-integer> ',' [ '-' ] <max-integer> ')'
+    ///
+    /// loft#1037 — a bound the spec cannot CARRY is refused here, not truncated.
+    /// `IntegerSpec` holds `min: i32` / `max: u32`, so `limit(0, 5000000000)` used to
+    /// store `5000000000 as u32` = `705032704`: the declaration silently became a
+    /// range narrower than the one written, and the range guard then mapped every
+    /// in-range value to the slot's default — `4999999995` read back as `0`, an
+    /// ordinary value of the type, with nothing to distinguish it from a genuine
+    /// out-of-range write.  A bound is the one thing in a declaration a program cannot
+    /// check for itself, so an unrepresentable one is a compile error naming the
+    /// representable edge and the type that does hold the value.
     pub(crate) fn parse_type_limit(&mut self, min: &mut i32, max: &mut u32) -> bool {
         if self.lexer.has_keyword("limit") {
             self.lexer.token("(");
             let min_neg = self.lexer.has_token("-");
             if let Some(nr) = self.lexer.has_integer() {
                 *min = if min_neg { -(nr as i32) } else { nr as i32 };
+            } else if let Some(nr) = self.lexer.has_long() {
+                // Beyond `i32`, so it tokenised as a Long and never reached the
+                // branch above — which left `min` at its default and desynced the
+                // parser into *"Expect token ,"*, an error about punctuation for a
+                // bound that is simply too wide.  `i32::MIN` itself is reserved as the
+                // null sentinel, so the lowest bound a declaration may name is
+                // `i32::MIN + 1`.
+                let sign = if min_neg { "-" } else { "" };
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "lower bound {sign}{nr} is outside the range `limit(...)` can carry \
+                     ({} to {}); declare it plain `integer`, which holds the full 64-bit \
+                     range, and check the bound in code",
+                    i32::MIN + 1,
+                    i32::MAX
+                );
             }
             self.lexer.token(",");
             // C54.A incremental 2a — accept both Integer and Long literals.
-            // Values > i32::MAX now tokenise as Long (so u32-range bounds
-            // like `limit(0, 4_294_967_294)` work).  Truncate to u32
-            // (current `max: u32` param); future phases can widen to i64
-            // if signed-bound support for > i32 ranges is needed.
+            // Values > i32::MAX tokenise as Long, so u32-range bounds like
+            // `limit(0, 4_294_967_294)` work.
             if let Some(nr) = self.lexer.has_integer() {
                 *max = nr;
             } else if let Some(nr) = self.lexer.has_long() {
-                *max = nr as u32;
+                if let Ok(fits) = u32::try_from(nr) {
+                    *max = fits;
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "upper bound {nr} is outside the range `limit(...)` can carry \
+                         (up to {}); declare it plain `integer`, which holds the full \
+                         64-bit range, and check the bound in code",
+                        u32::MAX
+                    );
+                }
             }
             self.lexer.token(")");
             true
