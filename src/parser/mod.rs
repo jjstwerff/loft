@@ -694,6 +694,11 @@ pub struct Parser {
     /// context — parsing it standalone leaks).  `build_null_coalesce_default` swaps the
     /// lexer to this source at its own parse site, so `x?` matches `x ?? []` exactly.
     pub(crate) pending_default_src: Option<String>,
+    /// loft#1003 — where the `??` default ENDED, for the `redundant-coalesce` deletion
+    /// span.  Set as the default is parsed and consumed by `handle_null_coalesce`, because
+    /// the notice fires before the default exists and the caller's cursor has moved past
+    /// the statement terminator by the time it returns.
+    pub(crate) ncc_default_end: Option<(u32, u32)>,
     /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
     /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
     /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
@@ -1034,6 +1039,7 @@ impl Parser {
             in_explicit_cast: false,
             pending_default_rhs: None,
             pending_default_src: None,
+            ncc_default_end: None,
             conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),

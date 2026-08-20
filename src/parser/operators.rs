@@ -1920,6 +1920,7 @@ impl Parser {
         parent_tp: &mut Type,
         precedence: usize,
         ctp: &mut Type,
+        op_pos: &Position,
     ) {
         // Redundant-coalesce warning — fire ONLY when the LHS type is genuinely
         // non-null.  `expr_not_null` tracks the last-read name's not-null-ness but
@@ -1931,6 +1932,9 @@ impl Parser {
         // Grandfather (case-B flip): a call to a fn DECLARED `-> τ?` whose result the
         // domain lattice just narrowed to non-null (`sqrt(a*a+b*b) ?? d`) is a real
         // defense, not redundant — never warn on a declared-nullable-returning call.
+        // loft#1003 — `(diagnostic index, line, column)` of a `redundant-coalesce` notice
+        // whose deletion span is still open, or `None` when none fired.
+        let mut redundant_at: Option<(usize, u32, u32)> = None;
         if self.expr_not_null
             && !self.first_pass
             && !matches!(ctp, Type::Optional(_))
@@ -1947,10 +1951,23 @@ impl Parser {
                 kind: crate::diagnostics::FixKind::Mechanical,
                 title: "delete the `?? <default>`".to_string(),
                 condition: None,
+                // Spelled below, once the default has been parsed and the span has an end
+                // (loft#1003).  The notice has to fire HERE — it is about the `??` — but
+                // the deletion runs through a default that does not exist yet.
                 edit: None,
                 concept: "null coalescing",
                 concept_ref: "@F2",
             });
+            // `op_pos` is the `??`'s own position — the lexer's cursor is no help here,
+            // it has already scanned past the default (loft#1003).
+            // `op_pos` is the cursor just PAST the `??`, so the token itself starts two
+            // columns back.  The lexer's own cursor is no help — it has already scanned
+            // beyond the default (loft#1003).
+            redundant_at = self
+                .lexer
+                .last_diagnostic_index()
+                .filter(|_| op_pos.pos >= 3)
+                .map(|i| (i, op_pos.line, op_pos.pos - 2));
         }
         self.expr_not_null = false;
         // Plan-07 phase 4h — if the `??` LHS is the just-emitted
@@ -1986,6 +2003,32 @@ impl Parser {
         } else {
             self.build_null_coalesce_default(var_tp, code, parent_tp, precedence, ctp, &lhs_type);
         }
+        // loft#1003 — the default is parsed, so the deletion now has an end.  Spelling it
+        // here is what lets `loft fix` see this fix at all: it reports only fixes carrying
+        // an `edit`, which is why it could act on no warning-level fix in the whole index.
+        //
+        // Only when the whole `?? <default>` sits on ONE line — an `Edit` is a single-line
+        // span, and a fix that cannot be placed must not be spelled (the same rule the
+        // checked-cast edit above follows).
+        if let Some((idx, line, start_col)) = redundant_at
+            && let Some((end_line, end_col)) = self.ncc_default_end.take()
+            && end_line == line
+            && end_col > start_col
+        {
+            {
+                self.lexer.set_fix_edit(
+                    idx,
+                    0,
+                    crate::diagnostics::Edit {
+                        line,
+                        col: start_col,
+                        len: end_col - start_col,
+                        text: String::new(),
+                    },
+                );
+            }
+        }
+        self.ncc_default_end = None;
     }
 
     /// `lhs ?? return ret_expr` — emit the block that returns early when `lhs`
@@ -2076,6 +2119,17 @@ impl Parser {
         } else {
             self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1)
         };
+        // loft#1003 — the default's END, for the `redundant-coalesce` deletion span.
+        // Taken HERE and not at the caller's tail: by then the cursor has moved past the
+        // statement terminator, and a span that swallows the `;` is a rewrite that
+        // introduces a syntax error — which the fix verifier duly REJECTED.
+        // `peek_pos()`, not `at()`: positions here are the cursor AFTER a token and the
+        // lexer peeks one ahead, so `at()` is already past the statement terminator.  The
+        // START of the following token is the default's exclusive end.
+        self.ncc_default_end = Some({
+            let p = self.lexer.peek_pos();
+            (p.line, p.pos)
+        });
         self.known_var_or_type(&rhs, &rhs_pos);
 
         // @PLN102 gate-2 `?? null` soundness — `a ?? b` yields `a` when non-null else `b`, so it
@@ -2758,7 +2812,7 @@ impl Parser {
         }
         // @F2 — ?? null-coalescing operator (incl. `?? return`)
         if operator == "??" {
-            self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
+            self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp, op_pos);
         // @F5 — type conversions: explicit `as` cast (+ implicit / format-only OpConv*)
         } else if operator == "as" {
             self.expr_not_null = false;

@@ -689,6 +689,19 @@ impl Lexer {
         self.diagnostics.fix_last(fix);
     }
 
+    /// The index of the entry a following [`Self::fix_last`] attaches to — for a fix whose
+    /// edit is only spellable once more source has been parsed (loft#1003).
+    #[must_use]
+    pub fn last_diagnostic_index(&self) -> Option<usize> {
+        self.diagnostics.last_index()
+    }
+
+    /// Attach the edit to an earlier fix, named by the index
+    /// [`Self::last_diagnostic_index`] answered.
+    pub fn set_fix_edit(&mut self, entry: usize, fix_at: usize, edit: crate::diagnostics::Edit) {
+        self.diagnostics.set_fix_edit(entry, fix_at, edit);
+    }
+
     /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
     /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
     pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {

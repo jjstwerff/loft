@@ -230,23 +230,36 @@ code index landed first — prose is free to change, the code is not.
 | verifies | a fix that does not clear its own diagnostic, or that breaks something else |
 
 **How much the second gate rejects, today.** `spells an edit` is not a rare exclusion — it is
-the one that decides the whole of `loft fix`'s reach. Eight of the seventy-six `Fix`
-constructions in `src/` carry an `edit`, and seven of those eight sit on ERROR codes, so
-`loft fix` reports NO warning-level fix at all and of the 25 codes marked `M` above it can
-act on five: `unknown-function`, `unknown-field`, `unknown-variable`,
-`format-unescaped-brace` and `superseded-call`. (`cast-constant-out-of-range` and
-`text-parse-may-fail` carry edits too, on their conditional tier.) The four withheld-`edit`
-decisions written up above are the ones on record; the other twenty are omissions rather
-than decisions, and several are pure deletions at a span the compiler already knows —
-`redundant-coalesce`, `unreachable-code`, `empty-parallel-block`, `needless-const-parameter`.
+the one that decides the whole of `loft fix`'s reach. Of the 25 codes marked `M` above,
+`loft fix` acts on six: `unknown-function`, `unknown-field`, `unknown-variable`,
+`format-unescaped-brace`, `superseded-call` and `redundant-coalesce`.
+(`cast-constant-out-of-range` and `text-parse-may-fail` carry edits too, on their conditional
+tier.) The rest are omissions rather than decisions, and several are pure deletions at a span
+the compiler already knows — `unreachable-code`, `empty-parallel-block`,
+`needless-const-parameter`.
+
+`redundant-coalesce` is the first WARNING-level fix in that list, and how it got there is the
+pattern for the rest (loft#1003). Its blocker was real — *"the diagnostic fires BEFORE the
+default is parsed, so its end is not yet known at the emit site"* — but that is a reason to
+spell the edit LATER, not a reason to have none. The notice keeps its own position and
+`Diagnostics::set_fix_edit` attaches the span once the default has an end. Every remaining row
+that gives the same reason can close the same way.
+
+⚠ **And it changed how a fix is VERIFIED.** The check used to ask whether ANY diagnostic with
+this code remained, which made two instances mask each other: a file with two redundant `??`s
+verified neither, because whichever fix was applied the other still answered yes. That is not a
+hypothetical — one instance is a demo, two is what real code looks like — and it only surfaced
+once a code that fires OFTEN carried an edit. It is a count now: a fix clears when its tally
+drops by one, whichever instance it was.
 That is now a GATE rather than a note. `every_mechanical_fix_is_applicable_or_listed`
 (`tests/e1_code_set.rs`) drives `loft fix` itself over each code's trigger program and requires
 that a code whose `--explain` output offers a fix with no `needs:` clause is one `loft fix` can
 name — or carries a row in `EDIT_BLOCKED` saying what stops it. Both directions are red: a
 missing row, and a row for a code that has since graduated. The twenty above are that list, each
-with its reason, so a missing edit is a decision on record instead of a silence; four of them
-say outright that they SHOULD carry an edit and name what is missing (a span the emit site has
-not captured). loft#1003 tracks attaching those.
+with its reason, so a missing edit is a decision on record instead of a silence; several say
+outright that they SHOULD carry an edit and name what is missing (a span the emit site has not
+captured). `redundant-coalesce` graduated off that list first and is the worked example for
+the others.
 
 The scan is scoped to each code's own diagnostic block, from its header to the next. A trigger
 program often reports more than the code it was written for — the `double-move` probe also

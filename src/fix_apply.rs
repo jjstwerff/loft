@@ -85,6 +85,22 @@ pub fn apply_edits(source: &str, edits: &[Edit]) -> String {
         if e.len > 0 && !line.is_char_boundary(end) {
             continue;
         }
+        // A pure DELETION absorbs one space in front of it, so removing a trailing clause
+        // does not leave `t.name ;` behind.  Only when what FOLLOWS is punctuation or the
+        // line's end — deleting between two words has to keep the space that separates
+        // them.  loft#1003's `?? <default>` is the first deletion edit; every other one is
+        // an insertion or a rename, where this cannot fire.
+        let mut start = start;
+        if e.text.is_empty() && e.len > 0 && start > 0 {
+            let rest = line[end..].trim_start_matches('\r');
+            let follows_word = rest
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            if line.as_bytes()[start - 1] == b' ' && !follows_word {
+                start -= 1;
+            }
+        }
         line.replace_range(start..end, &e.text);
     }
     lines.join("\n")
@@ -139,7 +155,7 @@ pub fn verify_fix(
     }
     // The BEFORE parse is re-run for its reach, not for its diagnostics: `before` was
     // produced by the caller and may have come from a parse whose reach is unknown here.
-    let (_, before_reached) = crate::lsp::diagnose_reach(source, name, stdlib_dir);
+    let (before_rerun, before_reached) = crate::lsp::diagnose_reach(source, name, stdlib_dir);
     let (after, after_reached) = crate::lsp::diagnose_reach(&rewritten, name, stdlib_dir);
 
     // A new error only counts against the fix when the two parses are COMPARABLE.
@@ -163,11 +179,31 @@ pub fn verify_fix(
             }
         }
     }
-    let still_there = after
-        .entries()
-        .iter()
-        .any(|e| e.code.is_some() && e.code == entry.code);
-    if still_there {
+    // Did THIS instance clear — not "did every instance of this code vanish".
+    //
+    // Asking whether ANY diagnostic with this code remains makes two instances mask each
+    // other: a file with two redundant `??`s verified NEITHER fix, because whichever one
+    // was applied, the other still reported the same code. That is not a hypothetical
+    // — it is what an ordinary file looks like, and it made the first warning-level fix
+    // `loft fix` could reach (loft#1003) inapplicable in practice as soon as a second one
+    // existed.
+    //
+    // A COUNT is the position-independent way to ask it: a fix that clears its own
+    // diagnostic lowers the tally by one, whichever instance it was. Positions cannot be
+    // compared directly — a single-line deletion shifts every later diagnostic on that
+    // same line. The count is taken from the re-run BEFORE parse rather than the caller's
+    // `before`, so both sides come from the same settings and the same reach.
+    //
+    // Conservative in the one direction that matters: a rewrite that clears one instance
+    // and introduces another nets zero and reads as `Remains`, which refuses rather than
+    // writes.
+    let tally = |d: &Diagnostics| {
+        d.entries()
+            .iter()
+            .filter(|e| e.code.is_some() && e.code == entry.code)
+            .count()
+    };
+    if tally(&after) >= tally(&before_rerun) {
         Verdict::Remains
     } else {
         Verdict::Clears
