@@ -539,10 +539,25 @@ after its own bug — read their comments), so the gap is the COMPOSITION, not e
 arm.
 
 ⚠ **This doc previously said the predicate collapse would fix this. It does not** —
-measured identical before and after the collapse. The refusal is the `__nullable<T>`
-SYNTHETIC DEF never being re-minted for a tuple ELEMENT: the same-shaped defect one
-layer down (a fact re-derived per position) through a different mechanism, and still
-open.
+measured identical before and after the collapse. The cause was one layer down and is
+now **FIXED**: nothing stopped the synthetic `__nullable<S>` enum being minted for a
+template's `T`, which is a `DefType::Struct` from user source with no attributes and so
+satisfied every eligibility condition. A bare `-> T?` never reached that path at all —
+it stays an `Optional` and substitution answers it per monomorph — so the tuple went
+through a different door.
+
+True to the cluster's shape, the eligibility question had **two spellings**:
+`nullable_vector_elem` calls itself "the ONE home" for it, while the field-rewrite
+sweep asked its own narrower version. Both now read one `synth_nullable_target`.
+Verified on both backends across integer, float, struct and vector, each tuple
+against its BARE twin — `struct` being the cell that must still get a real synth enum,
+so a fix that merely stopped minting would fail it.
+
+**Still open:** `T = text` in a tuple. Correct on the interpreter, still refused by
+`--native`, because a tuple element's emitter flag means two things at once (append
+`.to_string()` to a literal; do not borrow a `TupleGet`). A scoped fix was tried and
+reverted — it re-breaks loft#1004, whose fix is the second meaning. Separating the two
+facts is its own change.
 
 **Deliberately not filed.** It is here as the probe that proves the duplicate is
 load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
