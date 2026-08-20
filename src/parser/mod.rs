@@ -5328,6 +5328,15 @@ impl Parser {
     /// answer belongs to the monomorph.  [`rewrite_generic_type_defaults`] finds it by
     /// this name once `T` is concrete (loft#1016).
     pub(crate) const TV_DEFAULT_BLOCK: &'static str = "tvdefault";
+    /// loft#1020 — an `x == null` / `x != null` whose operand is still a TYPE VARIABLE.
+    ///
+    /// Which null test `τ` wants is a function of `τ`, and inside a template `τ` is not
+    /// known yet, so the site is stamped and [`rewrite_generic_type_defaults`] answers it
+    /// per monomorph.  The block holds the OPERAND and its `result` is the operand's
+    /// type, which substitution rewrites to the concrete one.
+    pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
+    /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
+    pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
 
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
@@ -6512,6 +6521,30 @@ impl Parser {
     /// deferred until the outer instantiation names a real type.
     fn rewrite_generic_type_defaults(&mut self, val: Value, concrete: &Type) -> Value {
         match val {
+            // loft#1020 — the deferred `== null` / `!= null`.  `bl.result` came through
+            // type substitution, so it is the CONCRETE operand type by now, and
+            // `null_test` is the same dispatch the parse site uses.  `None` is the
+            // ordinary path (an integer, a text): compare against the typed null, which
+            // is what the concrete spelling of this declaration already emits.
+            Value::Block(bl)
+                if bl.name == Self::TV_NULLTEST_EQ || bl.name == Self::TV_NULLTEST_NE =>
+            {
+                let negate = bl.name == Self::TV_NULLTEST_NE;
+                let mut bl = *bl;
+                let operand = self.rewrite_generic_type_defaults(bl.operators.remove(0), concrete);
+                let tp = bl.result.clone();
+                if let Some(test) = self.null_test(operand.clone(), &tp, negate) {
+                    return test;
+                }
+                let mut out = operand.clone();
+                self.call_op(
+                    &mut out,
+                    if negate { "!=" } else { "==" },
+                    &[operand, Value::Null],
+                    &[tp, Type::Null],
+                );
+                out
+            }
             Value::Block(bl) if bl.name == Self::TV_DEFAULT_BLOCK => {
                 match self.monomorph_default(concrete) {
                     Some((v, _)) => v,

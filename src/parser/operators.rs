@@ -506,6 +506,115 @@ impl Parser {
         }
     }
 
+    /// Is this operand's type still a TYPE VARIABLE — a template's `T` / `T?`, whose
+    /// placeholder is an attribute-less struct rather than a real type (loft#1020)?
+    fn is_type_var_operand(&self, tp: &Type) -> bool {
+        matches!(tp.base(), Type::Reference(d, _) if self.data.is_type_var_placeholder(*d))
+    }
+
+    /// The lowering of `x == null` / `x != null` for an operand of CONCRETE type `tp`
+    /// — the ONE place that answers *"what is `τ`'s null?"* for a comparison.
+    ///
+    /// Four types answer it with a dedicated test rather than an equality, each for its
+    /// own reason:
+    ///
+    /// - a **collection** null is the store_nr sentinel, which `OpVectorIsNull` reads;
+    ///   `eq_ref`'s `rec == 0` would also match an empty `[]` (loft#917 covers every
+    ///   keyed kind, not just `vector`).
+    /// - a **float/single** null is the NaN sentinel, and NaN compares unequal to
+    ///   everything including itself, so equality can only ever answer false.  Test
+    ///   VALIDITY instead — `convert(float, bool)` is `!is_nan` — and read it the right
+    ///   way round.
+    /// - an **enum** null is discriminant 0 for an inline `__nullable<S>` or a value
+    ///   enum, and the store_nr sentinel for a struct-enum reference.
+    /// - a nullable **struct reference** holds the store_nr sentinel, which
+    ///   `OpRefIsNull` reads; the generic path compared `rec != 0` against the bool
+    ///   sentinel and answered false for every input (@PLN99 A5).
+    ///
+    /// Anything else — an integer, a text, a boolean — answers `None`, and the caller
+    /// falls through to the ordinary `==` dispatch against the typed null.
+    ///
+    /// It is a function of the type ALONE so a generic body can defer it: inside a
+    /// template `T?` is `Optional(Reference(<type var>))`, whose placeholder is a
+    /// STRUCT, so the reference branch used to win and the monomorph kept `OpRefIsNull`
+    /// over an `integer` slot (loft#1020).  [`Parser::rewrite_generic_type_defaults`]
+    /// re-asks it once `T` is real.  Answering it anywhere else would mint a sixth
+    /// spelling of `τ`'s null, which is the defect loft#1014 was.
+    pub(crate) fn null_test(&mut self, operand: Value, tp: &Type, negate: bool) -> Option<Value> {
+        let is_null = if Self::is_collection_type(tp.base()) {
+            // A heap-owning collection TEMP (a call result) consumed by the null test
+            // would be orphaned — `OpVectorIsNull` reads the sentinel and discards the
+            // store — so capture it in a work-ref for scopes.rs to free.  A `Var` already
+            // owns its store, and an operand whose type declares a BORROW (a field read,
+            // `optional(vector(…, deps { items: [0] }))`) is not ours to free at all:
+            // freeing it took the holder's storage with it and the next read of the same
+            // field dereferenced poison (loft#920).
+            let borrows = !tp.depend().is_empty();
+            let w = if matches!(operand.unspan(), Value::Var(_)) || borrows {
+                u16::MAX
+            } else {
+                self.vars.work_refs(tp, &mut self.lexer)
+            };
+            if w == u16::MAX {
+                self.cl("OpVectorIsNull", &[operand])
+            } else {
+                self.vars.mark_inline_ref(w);
+                crate::data::v_block(
+                    vec![
+                        crate::data::v_set(w, operand),
+                        self.cl("OpVectorIsNull", &[Value::Var(w)]),
+                    ],
+                    Type::Boolean,
+                    "vec-null-workref",
+                )
+            }
+        } else if matches!(tp.base(), Type::Float | Type::Single) {
+            // `valid` is is-NON-null, so the two answers are the other way round here.
+            let mut valid = operand;
+            self.convert(&mut valid, tp, &Type::Boolean);
+            return Some(if negate {
+                valid
+            } else {
+                self.cl("OpNot", &[valid])
+            });
+        } else if let Type::Enum(e_def, _, _) = tp {
+            let e_def = *e_def;
+            // A synthetic `__nullable<S>` enum backs an INLINE struct field / vector
+            // element (no DbRef slot), so null is discriminant 0 — read it directly,
+            // NEVER `OpRefIsNull`, whose store_nr test would deref the absent record.
+            let inline = e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+            // A VALUE enum (`Color`, no payload variants) is a disc byte whose null is
+            // discriminant 0.  Read the shape from the enum DEFINITION's `returned`
+            // type: the ACCESS type is polluted — a field read of a simple enum comes
+            // back `Enum(_, true, _)` even though the enum itself is a value enum.
+            let value_enum = e_def != u32::MAX
+                && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
+            if inline {
+                let get_enum = self.cl("OpGetEnum", &[operand, Value::Int(0)]);
+                let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                self.cl("OpEqInt", &[disc, Value::Int(0)])
+            } else if value_enum {
+                let disc = self.cl("OpConvIntFromEnum", &[operand]);
+                self.cl("OpEqInt", &[disc, Value::Int(0)])
+            } else {
+                // A struct-enum reference: null IS the store_nr sentinel, NOT
+                // `OpEqRef`'s `rec == 0` (a present enum is inline on native).
+                self.cl("OpRefIsNull", &[operand])
+            }
+        } else if matches!(tp, Type::Optional(_)) && matches!(tp.base(), Type::Reference(_, _)) {
+            // Gate on `Optional`, NOT bare `Reference`: a collection LOOKUP result is a
+            // bare `Reference` whose miss is `rec == 0`, and `OpRefIsNull` misreads it.
+            self.cl("OpRefIsNull", &[operand])
+        } else {
+            return None;
+        };
+        Some(if negate {
+            self.cl("OpNot", &[is_null])
+        } else {
+            is_null
+        })
+    }
+
     /// loft#953 — does this call hand back a buffer the CALLER already owns?
     ///
     /// A heap-returning callee is given a hidden destination argument: the caller mints
@@ -3134,152 +3243,49 @@ impl Parser {
                      if that is really what you mean)"
                 );
             }
-            if vec_null {
-                // @PLN25: `vector == null` / `vector != null` tests the null
-                // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
-                // whose rec==0 null test would also match an empty `[]`.
+            // loft#1020 — the operand is still a TYPE VARIABLE, so which null test it
+            // wants is not decidable here.  Inside a template `T?` is
+            // `Optional(Reference(<type var>))` and the placeholder is a STRUCT, so
+            // `ref_null` below would win and the monomorph would keep `OpRefIsNull` over
+            // whatever `T` became — a 12-byte DbRef read out of an 8-byte `integer` slot
+            // (interpreter panic, `--native` E0610 on `.store_nr` of an `i64`).
+            //
+            // Stamp the site instead and let `rewrite_generic_type_defaults` re-ask
+            // `null_test` once `T` is real, exactly as loft#1016 does for the DEFAULT of
+            // the same declaration.  The block's `result` is the operand's type, which
+            // substitution rewrites to the concrete one; a nested generic re-marks and
+            // stays deferred.
+            let tv_null = (operator == "==" || operator == "!=")
+                && ((self.is_type_var_operand(ctp) && second_type == Type::Null)
+                    || (*ctp == Type::Null && self.is_type_var_operand(&second_type)));
+            if tv_null {
                 if !self.first_pass {
-                    let (vec_code, vec_tp) = if Self::is_collection_type(ctp.base()) {
-                        (code.clone(), ctp.clone())
-                    } else {
-                        (second_code, second_type.clone())
-                    };
-                    // A heap-owning vector TEMP (a call result / non-var) consumed by the
-                    // null test would be orphaned: OpVectorIsNull reads only the sentinel and
-                    // discards the vector store. Capture it in a work-ref so scopes.rs emits
-                    // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
-                    // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
-                    // store, so it needs no work-ref.
-                    //
-                    // Neither does an operand whose type declares a BORROW.  "Non-`Var`" was
-                    // standing in for "a temp that owns its store", and a FIELD READ is
-                    // non-`Var` too: `h.vec == null` captured `OpGetField(h, …)` — a DbRef
-                    // into `h`'s record — and freed it, taking the holder's storage with it.
-                    // The next read of the same field then returned poisoned bytes, which
-                    // `len()` dereferenced: SIGSEGV under `LOFT_POISON=1`, and the nightly
-                    // UB gate's failure (loft#920).  The type already answers this — the
-                    // field read is typed `optional(vector(…, deps { items: [0] }))` — so ask
-                    // it rather than inferring ownership from the value's shape.
-                    //
-                    // Strictly narrowing: only an operand that POSITIVELY declares a borrow
-                    // loses its work-ref.  A call result still gets one, so this does not
-                    // touch loft#938, whose difficulty is the opposite case — an owning and a
-                    // borrowing nullable-collection RETURN are both spelled with EMPTY deps
-                    // and cannot be told apart here at all.
-                    let borrows = !vec_tp.depend().is_empty();
-                    let w = if matches!(vec_code.unspan(), Value::Var(_)) || borrows {
-                        u16::MAX
-                    } else {
-                        self.vars.work_refs(&vec_tp, &mut self.lexer)
-                    };
-                    let is_null = if w == u16::MAX {
-                        self.cl("OpVectorIsNull", &[vec_code])
-                    } else {
-                        self.vars.mark_inline_ref(w);
-                        crate::data::v_block(
-                            vec![
-                                crate::data::v_set(w, vec_code),
-                                self.cl("OpVectorIsNull", &[Value::Var(w)]),
-                            ],
-                            Type::Boolean,
-                            "vec-null-workref",
-                        )
-                    };
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
-                }
-                *ctp = Type::Boolean;
-            } else if float_null {
-                if !self.first_pass {
-                    let (f_code, f_tp) = if *ctp == Type::Null {
+                    let (n_code, n_tp) = if *ctp == Type::Null {
                         (second_code, second_type.clone())
                     } else {
                         (code.clone(), ctp.clone())
                     };
-                    // convert(float, boolean) = !is_nan = "is non-null".
-                    let mut valid = f_code;
-                    self.convert(&mut valid, &f_tp, &Type::Boolean);
-                    *code = if operator == "==" {
-                        self.cl("OpNot", &[valid])
-                    } else {
-                        valid
-                    };
+                    *code = v_block(
+                        vec![n_code],
+                        n_tp,
+                        if operator == "==" {
+                            Self::TV_NULLTEST_EQ
+                        } else {
+                            Self::TV_NULLTEST_NE
+                        },
+                    );
                 }
                 *ctp = Type::Boolean;
-            } else if enum_null {
+            } else if vec_null || float_null || enum_null || ref_null {
                 if !self.first_pass {
-                    let (e_code, e_def) = if *ctp == Type::Null {
-                        let d = match &second_type {
-                            Type::Enum(d, _, _) => *d,
-                            _ => u32::MAX,
-                        };
-                        (second_code, d)
+                    let (n_code, n_tp) = if *ctp == Type::Null {
+                        (second_code, second_type.clone())
                     } else {
-                        let d = match &*ctp {
-                            Type::Enum(d, _, _) => *d,
-                            _ => u32::MAX,
-                        };
-                        (code.clone(), d)
+                        (code.clone(), ctp.clone())
                     };
-                    // @PLN25 E2a.4 — a synthetic `__nullable<S>` enum backs an INLINE
-                    // struct field / vector element (no DbRef slot), so null is
-                    // discriminant 0 — read it directly (OpGetEnum @ offset 0), NEVER
-                    // OpRefIsNull, whose store_nr sentinel test would deref the absent
-                    // record and OOB-crash.  A user enum VARIABLE is a DbRef whose null
-                    // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
-                    let inline =
-                        e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
-                    // A VALUE enum (`Color`, no payload variants) is a disc byte whose
-                    // null is discriminant 0 — test `OpConvIntFromEnum(v) == 0`, NOT
-                    // OpRefIsNull (its store_nr sentinel test on a u8 field-read →
-                    // native E0610 `.store_nr` on a primitive).  Read the value/reference
-                    // shape from the enum DEFINITION's `returned` type: the ACCESS type
-                    // is polluted — a field read of a simple enum comes back
-                    // `Enum(_, true, _)` even though the enum itself is a value enum.
-                    // Only a genuine struct-enum (`returned` = `Enum(_, true, _)`) is a
-                    // DbRef and keeps OpRefIsNull.
-                    let value_enum = e_def != u32::MAX
-                        && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
-                    let is_null = if inline {
-                        let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
-                        let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
-                        self.cl("OpEqInt", &[disc, Value::Int(0)])
-                    } else if value_enum {
-                        // `e_code` is the disc byte already (a field read / a value var);
-                        // disc 0 is the absent variant.
-                        let disc = self.cl("OpConvIntFromEnum", &[e_code]);
-                        self.cl("OpEqInt", &[disc, Value::Int(0)])
-                    } else {
-                        // A struct-enum reference: null IS the store_nr sentinel
-                        // (OpRefIsNull), NOT OpEqRef's rec==0 (a present enum is
-                        // inline-represented on native and carries rec==0).
-                        self.cl("OpRefIsNull", &[e_code])
-                    };
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
-                }
-                *ctp = Type::Boolean;
-            } else if ref_null {
-                if !self.first_pass {
-                    let r_code = if *ctp == Type::Null {
-                        second_code
-                    } else {
-                        code.clone()
-                    };
-                    // A struct reference variable is a DbRef whose null IS the store_nr
-                    // sentinel (OpRefIsNull), NOT rec==0 (a present record can carry rec==0).
-                    let is_null = self.cl("OpRefIsNull", &[r_code]);
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
+                    if let Some(test) = self.null_test(n_code, &n_tp, operator == "!=") {
+                        *code = test;
+                    }
                 }
                 *ctp = Type::Boolean;
             } else if operator == ">" {
