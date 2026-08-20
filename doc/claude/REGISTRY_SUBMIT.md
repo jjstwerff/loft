@@ -215,6 +215,22 @@ is trusted.  The **`submissions/` path** fixes both (@PLN102 C96): you add a sma
 staging file that *never touches `index.json`*, and the maintainer's `loft ship` run
 puts it through the full validation gate before folding it in.
 
+> ⚠ **Only the maintainer half of this is wired, and the registry repo says
+> otherwise.**  `scripts/registry_maintain.sh` drains `submissions/` (vet → fold →
+> re-sign → `git rm`, one atomic commit) and treats an absent directory as an empty
+> one, so staging a file here works.  But `loft-lang/registry` has **no
+> `submissions/` directory**, nothing in its `tools/validate.py` or
+> `.github/` mentions one, and its own `SUBMITTING.md` documents the
+> `index.json` edit — so a submitter reading the repo they are opening a PR
+> against is told to do the opposite of this page, and the two have to be
+> reconciled THERE before this can be called the recommended route.  What a
+> submitter should expect meanwhile: their PR creates that directory's first
+> file, the registry's PR CI validates `index.json` and therefore says nothing
+> about the submission, and the vetting happens later on the maintainer's run
+> rather than on the PR.  A contributor who follows the registry's own page
+> instead has not made a mistake.  Reported by a consumer submitting
+> `lavition_ui` 0.1.0, who followed `SUBMITTING.md` on exactly that reasoning.
+
 Add **one file**, `submissions/<name>-<version>.json`, in your registry PR — nothing
 else:
 
