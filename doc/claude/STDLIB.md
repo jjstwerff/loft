@@ -1029,12 +1029,16 @@ return response.to_json_pretty();
 | `"{value:j}"` | Serialise any struct/enum/vector to JSON text |
 | `Type.parse(text)` | Parse JSON or loft-native text into a struct (P54 step 5 will require `Type.parse(JsonValue)` for structs) |
 | `vector<T>.parse(text)` | Parse a JSON array into an iterable vector |
-| `record#errors` | Iterate parse errors from the last `Type.parse()` call |
+| `record#errors` | The last `Type.parse()` call's errors as ONE text (newline-separated), cleared by the read |
 
 ```loft
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
 scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
-for e in user#errors { log_warn(e); }
+
+// A failed parse leaves the record at its type's zeros, so ask whether it failed.
+if json_errors() != "" { log_warn(json_errors()); }
+errs = user#errors;              // TEXT, not a collection — and the read clears it, so
+if errs != "" { log_warn(errs); } // `for e in user#errors` iterates nothing
 ```
 
 New code should prefer the `JsonValue` surface; the text-based `Struct.parse(text)` form is slated for withdrawal in the 0.9.0 milestone (see [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum)).

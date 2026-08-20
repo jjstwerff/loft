@@ -31,7 +31,7 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap — RE-VERIFIED 2026-07-10 on BOTH backends (identical output; a shared semantic defect, not a parity bug): the auto-wrap path parses but DROPS diagnostics.**  Probe (`struct Cfg { name: text, port: integer }`, malformed `"{ this is not json"`):
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap — CLOSED 2026-08-20 (was: RE-VERIFIED 2026-07-10 on BOTH backends — identical output, a shared semantic defect rather than a parity bug: the auto-wrap path parsed but DROPPED diagnostics).**  The probe below now reads: A reports the parse error, B is unchanged, and C is EMPTY after a successful parse.  See the Q1 row in § Open work.  Probe (`struct Cfg { name: text, port: integer }`, malformed `"{ this is not json"`):
 
 ```
 A  Cfg.parse(bad)               → json_errors() == ""        (len 0)   ← silent
@@ -81,7 +81,7 @@ Items below are "what to BUILD" derived from the design content in this document
 | Item | Section | Status |
 |---|---|---|
 | **P54** — `JsonValue` enum (active sprint) | [§ Active sprint — P54](#active-sprint--p54-jsonvalue-enum) | Multi-step transition from text-based JSON to first-class `JsonValue` enum |
-| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **S-class** — the two-stage form reports rich diagnostics; the remaining silent shape is the one-stage auto-wrap `Struct.parse(text)`, which drops parse AND schema errors and leaves stale `json_errors()` state (pinned 2026-07-02; see the P54 row's Step-6 caveat) |
+| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **CLOSED 2026-08-20.**  The one-stage `Struct.parse(text)` filed its diagnostics only under `#errors`, and `json_errors()` reads the other register — so the documented JSON pairing answered `""` for malformed input AND for a schema mismatch, while the program read a struct of zeros.  Nothing cleared the json register there either, so `json_errors()` after a SUCCESSFUL one-stage parse still returned an earlier call's error (a validator reporting failure on correct data), and a `vector<T>.parse` reported an error naming a different type entirely.  One entry point now files both: cleared on entry, written on failure.  Guarded by `tests/scripts/json-one-stage-parse-reports.loft` on both backends |
 | **Q2** — free-form object iteration + kind peek | [§ Active design — Q2](#active-design--q2-free-form-object-iteration--kind-peek) | API for iterating untyped JSON + peeking at value kinds |
 | **Q3** — `to_json` serialiser | [§ Active design — Q3](#active-design--q3-to_json-serialiser--struct-serialisation) | Symmetric serialisation API to `Type.parse()` |
 | **Q4** — `JsonValue` construction in loft code | [§ Active design — Q4](#active-design--q4-jsonvalue-construction-in-loft-code) | Builder API for constructing `JsonValue` trees in loft |
@@ -127,6 +127,24 @@ not a regression of the render fix. The suspect is the field-DEFAULT writer
 a sentinel written by one site and read by another, with the two encodings disagreeing —
 so it belongs to Cluster D and should be fixed at `Stores::is_null`'s write-side twin, not
 per width. `silent-wrong`: a null becomes a plausible number with nothing reported.
+
+**`record#errors` is a text, and the docs said "iterate" — OPEN (design, XS-if-decided).**
+Both `STDLIB.md` and `LOFT.md` showed `for e in user#errors { log_warn(e); }`.  That
+iterates NOTHING: the accessor returns one newline-separated text, the for-loop
+re-evaluates it per iteration, and the read CLEARS it — so the first evaluation empties the
+register and the loop ends.  Bound to a variable first it iterates the message's
+CHARACTERS, which is what `for` over a text means.
+
+Measured, not inferred: `for e in a#errors` → 0 iterations; `t = a#errors; for e in t` → 14
+(the message's length).
+
+The docs now show the shape that works (read it into a variable and test it), so nobody is
+taught a no-op.  What is NOT decided is whether the accessor should BE a collection —
+`vector<text>`, one entry per error — which is what the old text promised.  That is a
+compatibility call, not a bug fix: `tests/scripts/197-struct-json-parse-errors-dest.loft`
+depends on the text shape (`len(b1#errors) > 0`, `b2#errors != empty`,
+`"[{b3#errors}]"`) and on the clear-on-read, and it says so in its own comment.  Deciding it
+belongs to [COMPATIBILITY.md](COMPATIBILITY.md)'s process, not to a fix pass.
 
 ### Native runtime cluster
 

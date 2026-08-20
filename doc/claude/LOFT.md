@@ -949,18 +949,28 @@ text = reply.to_json();   // {{"ok":true,"count":3}}
 ```
 
 **2. `Type.parse(text)` (legacy, transitional).**  Parses JSON or loft-native text
-directly into a struct record; parse errors via `record#errors`.  `Type.parse(JsonValue)`
-is the preferred replacement (shipped).
+directly into a struct record.  `Type.parse(JsonValue)` is the preferred replacement
+(shipped).
 
 Works for plain structs AND struct-enums (P159).  Struct-enum JSON uses a
 discriminant wrapper: `{"Circle":{"radius":3.14}}`.
+
+A failed parse leaves the record at its type's zeros, so ASK whether it failed — either
+surface answers, and both are cleared by the next parse:
 
 ```
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
 scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
 shape = Shape.parse(`{{"Circle":{{"radius":3.14}}}}`);   // struct-enum round-trip
-for e in user#errors { log_warn(e); }
+
+if json_errors() != "" { log_warn(json_errors()); }   // the JSON surface
+errs = user#errors;                                   // the record surface: TEXT, and
+if errs != "" { log_warn(errs); }                     // reading it clears it
 ```
+
+`record#errors` is a single text (newline-separated when a parse produced several), not a
+collection — `for e in user#errors` iterates CHARACTERS, and because the read clears, it
+iterates none at all.  Read it into a variable and test it, as above.
 
 ---
 
