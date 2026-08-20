@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I68 — Native Rust code generator (--native)
 
-use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, DefType, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
 use crate::ir_node::{IrBlock, IrNode};
@@ -3881,20 +3881,24 @@ extern crate loft;"
             if let Type::Integer(spec) = c
                 && let Some(n) = spec.vector_narrow_width(elm_nullable)
             {
+                // The NAME is the schema key, so it has to carry the same offset
+                // `narrow_vector_content` registered — `part_min`, not the declared `min`
+                // (they differ for a nullable signed narrow element).
+                let elm_min = spec.part_min(n, elm_nullable);
                 let name = match n {
                     1 => {
-                        if spec.min == 0 && !elm_nullable {
+                        if elm_min == 0 && !elm_nullable {
                             "byte".to_string()
                         } else {
-                            format!("byte<{},{elm_nullable}>", spec.min)
+                            format!("byte<{elm_min},{elm_nullable}>")
                         }
                     }
                     // A nullable 2-byte element is the `+1` sentinel encoding
                     // (`Parts::Short`), the non-null one direct (`ShortRaw`) —
                     // mirroring `Data::narrow_vector_content`.
-                    2 if elm_nullable => format!("short<{},true>", spec.min),
-                    2 => format!("short_raw<{},false>", spec.min),
-                    4 => format!("int<{},{elm_nullable}>", spec.min),
+                    2 if elm_nullable => format!("short<{elm_min},true>"),
+                    2 => format!("short_raw<{elm_min},false>"),
+                    4 => format!("int<{elm_min},{elm_nullable}>"),
                     _ => String::new(),
                 };
                 if !name.is_empty() {
@@ -4045,13 +4049,19 @@ extern crate loft;"
             }
             return Ok(());
         }
-        if let Type::Integer(IntegerSpec { min, .. }) = typedef {
+        if let Type::Integer(int_spec) = typedef {
             // Post-2c: the field's size may come from the integer alias's
             // `size(N)` annotation (captured in `Attribute.alias_d_nr` →
             // `Data::forced_size`) OR from the `Type::Integer` range.
             // Mirrors `src/typedef.rs:354-373` exactly so the runtime
             // Parts matches the interpreter's (Byte/Short/Int/base).
             let field_size = forced_size.unwrap_or_else(|| typedef.size(nullable));
+            // …including the OFFSET the Part carries: `part_min`, the same one the field's
+            // ops encode against, which a nullable signed narrow field shifts by one.
+            // Emitting the declared `min` here left the generated `init()` registering a
+            // type the compiler no longer names, which loft#739's guard reports as a
+            // schema-id divergence.
+            let min = int_spec.part_min(field_size, nullable);
             debug_assert!(
                 matches!(field_size, 1 | 2 | 4 | 8),
                 "emit_field: unexpected integer field width \

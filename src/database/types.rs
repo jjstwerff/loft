@@ -2340,15 +2340,21 @@ impl Stores {
             // dropped from `{x:j}` output.  (Was `handle == 0`, which omitted
             // empty vectors and broke the save→load round-trip.)
             false
-        } else if let Parts::Byte(from, nullable) = &self.types[known_type as usize].parts {
-            let v = store.get_byte(rec, pos, *from);
-            *nullable && v == 255
-        } else if let Parts::Short(from, nullable) = &self.types[known_type as usize].parts {
-            let v = store.get_short(rec, pos, *from);
-            *nullable && v == 65535
-        } else if let Parts::ShortRaw(from, nullable) = &self.types[known_type as usize].parts {
-            let v = store.get_i16_raw(rec, pos, *from);
-            *nullable && v == i32::MIN
+        } else if let Parts::Byte(_, nullable) = &self.types[known_type as usize].parts {
+            // The sentinel is the RAW stored code, so read it with NO offset: `get_byte`
+            // answers `stored + min`, and testing THAT against the sentinel only works
+            // when `min` is 0.  A `limit(10, 255)?` slot answered `265 == 255` — never
+            // true — so its null rendered as the number 265.
+            *nullable && store.get_byte(rec, pos, 0) == 255
+        } else if let Parts::Short(_, nullable) = &self.types[known_type as usize].parts {
+            // The `+1` encoding reserves the stored code 0 for null, and `get_short`
+            // maps that to `i32::MIN`.  The old test (`== 65535`) could not fire at all,
+            // so every nullable 2-byte slot rendered its null as `-2147483648`.
+            *nullable && store.get_short(rec, pos, 0) == i32::MIN
+        } else if let Parts::ShortRaw(_, nullable) = &self.types[known_type as usize].parts {
+            // The direct encoding reserves the top code.  `get_i16_raw` answers
+            // `stored + min`, never `i32::MIN`, so this test could not fire either.
+            *nullable && store.get_short_full(rec, pos, 0) == i32::from(u16::MAX)
         } else {
             false
         }

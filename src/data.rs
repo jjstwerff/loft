@@ -296,6 +296,24 @@ impl IntegerSpec {
         }
     }
 
+    /// The `min` a narrow slot's schema Part must carry — the SAME offset the READ op
+    /// (`get_val`) and the WRITE op (`set_field_check` / `narrow_elm_set`) encode
+    /// against, which is [`Self::usable_min`] under the kind's sentinel rule.
+    ///
+    /// A nullable 1- or 2-byte slot reserves one code for null, and when the declared
+    /// range FILLS the width a SIGNED spec pays for that by dropping its bottom edge
+    /// (`min + 1`).  The ops moved with it; the schema registration passed the raw
+    /// `min`, so a present `i16?` rendered exactly one too LOW — `-300` stored, `-301`
+    /// printed — while reading the same slot answered `-300`.  Unsigned specs drop the
+    /// TOP edge instead, which is why `u8?` / `u16?` looked fine.
+    #[must_use]
+    pub fn part_min(&self, width: u8, nullable: bool) -> i32 {
+        // `reserves_sentinel()` is true exactly for the nullable 1- and 2-byte kinds
+        // (`ByteNullable` / `Short`); the raw-vs-full choice a narrow-vector element
+        // makes never reserves one, so the width and nullability decide it alone.
+        self.usable_min(nullable && matches!(width, 1 | 2))
+    }
+
     /// element stride for narrow vectors, matching
     /// what `typedef.rs::fill_database`'s Vector arm registers.
     /// Returns `Some(n)` for the direct-encoded widths:
@@ -4289,14 +4307,17 @@ impl Data {
         };
         if let Some((spec, nullable)) = narrow {
             let n = spec.vector_narrow_width(nullable)?;
+            // The Part carries the offset the OPS encode against (`part_min`), not the
+            // declared `min` — they differ for a nullable signed narrow slot.
+            let m = spec.part_min(n, nullable);
             return match n {
-                1 => Some(database.byte(spec.min, nullable)),
+                1 => Some(database.byte(m, nullable)),
                 // a nullable 2-byte element uses the `+1` sentinel encoding
                 // (`Parts::Short`), matching the nullable field; the non-null
                 // element stays direct (`Parts::ShortRaw`, full 65536 range).
-                2 if nullable => Some(database.short(spec.min, true)),
-                2 => Some(database.short_raw(spec.min, false)),
-                4 => Some(database.int(spec.min, nullable)),
+                2 if nullable => Some(database.short(m, true)),
+                2 => Some(database.short_raw(m, false)),
+                4 => Some(database.int(m, nullable)),
                 _ => None,
             };
         }

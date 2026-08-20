@@ -1072,6 +1072,14 @@ impl ShowDb<'_> {
         self.stores.store(&r)
     }
 
+    /// True when the slot this walker points at holds NULL — one call to the same
+    /// `Stores::is_null` a struct field's omission asks, so a render and an omission
+    /// cannot disagree about whether a value is there.
+    fn is_null_slot(&self) -> bool {
+        self.stores
+            .is_null(self.store(), self.rec, self.pos, self.known_type)
+    }
+
     /**
     Write data from the database into String s.
     # Panics
@@ -1087,10 +1095,21 @@ impl ShowDb<'_> {
             write!(s, "null").unwrap();
             return;
         }
-        if self.known_type == 0 {
-            write!(s, "{}", self.store().get_int(self.rec, self.pos)).unwrap();
-        } else if self.known_type == 1 {
-            write!(s, "{}", self.store().get_long(self.rec, self.pos)).unwrap();
+        if self.known_type == 0 || self.known_type == 1 {
+            // A wide integer's null IS `i64::MIN` — the sentinel `Stores::is_null` reads,
+            // and a value the `integer` range excludes, so no real number can be mistaken
+            // for it.  Rendering it raw printed `-9223372036854775808` where the element
+            // read of the same slot answers `null`: one absent value, two answers.  (The
+            // schema carries no nullable flag for the wide widths — nullability is a
+            // schema fact per `formal/layout.md` (L-Null) and the base type is shared —
+            // so the sentinel is the only thing that can say it, for both.)
+            if self.is_null_slot() {
+                s.push_str("null");
+            } else if self.known_type == 0 {
+                write!(s, "{}", self.store().get_int(self.rec, self.pos)).unwrap();
+            } else {
+                write!(s, "{}", self.store().get_long(self.rec, self.pos)).unwrap();
+            }
         } else if self.known_type == 2 {
             let v = self.store().get_single(self.rec, self.pos);
             if self.loft {
@@ -1337,36 +1356,40 @@ impl ShowDb<'_> {
                 | Parts::Radix(tp, _) => {
                     self.write_list(s, *tp, indent);
                 }
-                Parts::Byte(from, nullable) => {
-                    let v = self.store().get_byte(self.rec, self.pos, *from);
-                    if *nullable && v == 255 {
+                // The four narrow widths ask the ONE null home (`Stores::is_null`, the
+                // same one a struct field's omission asks) rather than re-deriving the
+                // sentinel here.  Each re-derivation tested a DECODED value against a
+                // RAW sentinel, which is only right at `min == 0`: a nullable
+                // `limit(10, 255)` element rendered its null as `265`, and the two-byte
+                // encodings could not match theirs at all, so a null `u16?` rendered as
+                // `-2147483648` — a number, in the place of an absent value.
+                Parts::Byte(from, _) => {
+                    if self.is_null_slot() {
                         s.push_str("null");
                     } else {
-                        write!(s, "{v}").unwrap();
+                        write!(s, "{}", self.store().get_byte(self.rec, self.pos, *from)).unwrap();
                     }
                 }
-                Parts::Short(from, nullable) => {
-                    let v = self.store().get_short(self.rec, self.pos, *from);
-                    if *nullable && v == 65535 {
+                Parts::Short(from, _) => {
+                    if self.is_null_slot() {
                         s.push_str("null");
                     } else {
-                        write!(s, "{v}").unwrap();
+                        write!(s, "{}", self.store().get_short(self.rec, self.pos, *from)).unwrap();
                     }
                 }
-                Parts::ShortRaw(from, nullable) => {
-                    let v = self.store().get_i16_raw(self.rec, self.pos, *from);
-                    if *nullable && v == i32::MIN {
+                Parts::ShortRaw(from, _) => {
+                    if self.is_null_slot() {
                         s.push_str("null");
                     } else {
-                        write!(s, "{v}").unwrap();
+                        write!(s, "{}", self.store().get_i16_raw(self.rec, self.pos, *from))
+                            .unwrap();
                     }
                 }
-                Parts::Int(_, nullable) => {
-                    let v = self.store().get_i32_raw(self.rec, self.pos);
-                    if *nullable && v == i32::MIN {
+                Parts::Int(_, _) => {
+                    if self.is_null_slot() {
                         s.push_str("null");
                     } else {
-                        write!(s, "{v}").unwrap();
+                        write!(s, "{}", self.store().get_i32_raw(self.rec, self.pos)).unwrap();
                     }
                 }
                 // Plan-06 phase 4d.C step 2: format a stored DbRef
@@ -2086,28 +2109,26 @@ impl ShowDb<'_> {
                 let len = vector::length_vector(&data, &self.stores.allocations);
                 write!(s, "#{}.? [{len} items]", self.store).unwrap();
             }
-            Parts::Byte(from, nullable) => {
-                let v = self.store().get_byte(self.rec, self.pos, *from);
-                if *nullable && v == 255 {
+            // Same one null home as the user-facing render above.
+            Parts::Byte(from, _) => {
+                if self.is_null_slot() {
                     s.push_str("null");
                 } else {
-                    write!(s, "{v}").unwrap();
+                    write!(s, "{}", self.store().get_byte(self.rec, self.pos, *from)).unwrap();
                 }
             }
-            Parts::Short(from, nullable) => {
-                let v = self.store().get_short(self.rec, self.pos, *from);
-                if *nullable && v == 65535 {
+            Parts::Short(from, _) => {
+                if self.is_null_slot() {
                     s.push_str("null");
                 } else {
-                    write!(s, "{v}").unwrap();
+                    write!(s, "{}", self.store().get_short(self.rec, self.pos, *from)).unwrap();
                 }
             }
-            Parts::ShortRaw(from, nullable) => {
-                let v = self.store().get_i16_raw(self.rec, self.pos, *from);
-                if *nullable && v == i32::MIN {
+            Parts::ShortRaw(from, _) => {
+                if self.is_null_slot() {
                     s.push_str("null");
                 } else {
-                    write!(s, "{v}").unwrap();
+                    write!(s, "{}", self.store().get_i16_raw(self.rec, self.pos, *from)).unwrap();
                 }
             }
             Parts::Int(_, nullable) => {
