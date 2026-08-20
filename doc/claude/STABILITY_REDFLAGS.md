@@ -553,11 +553,25 @@ Verified on both backends across integer, float, struct and vector, each tuple
 against its BARE twin — `struct` being the cell that must still get a real synth enum,
 so a fix that merely stopped minting would fail it.
 
-**Still open:** `T = text` in a tuple. Correct on the interpreter, still refused by
-`--native`, because a tuple element's emitter flag means two things at once (append
-`.to_string()` to a literal; do not borrow a `TupleGet`). A scoped fix was tried and
-reverted — it re-breaks loft#1004, whose fix is the second meaning. Separating the two
-facts is its own change.
+**The emitter conflation is now FIXED too, and it was the same red flag twice more.**
+`tuple_text_to_string` meant "this slot is an owned `String`", read at four places; three
+were *"produce something ownable HERE"* and the literal was the odd one, converting
+wherever it sat — including inside a sub-expression merely passing through the element.
+The split is positional rather than another flag: *don't borrow here* stays a flag, while
+*convert to owned* becomes the job of whoever knows the slot (the element loop, and
+`TuplePut`, which had no loop to inherit one). Six references stayed byte-identical.
+
+One site along sat a third instance: `tuple_has_text_leaf` matched `Type::Text` without
+peeling `Optional`, so `-> (text?, integer)` was invisible to it — and the return path had
+its own inline `any(Text)` copy besides. **Not a generic problem at all**: a plain
+`fn ret() -> (text?, integer)` would not compile on `--native`.
+
+**Still open, and it moved sides:** the discharged `a?` in a text tuple now answers
+correctly on `--native` and *wrongly on the interpreter*, which gives the one-character
+text null sentinel where the bare twin gives the empty text. Both render as nothing, so
+printing cannot tell them apart — it took `len()` and `== ""` to see it, and an earlier
+read of this matrix looked clean because of that. The backends disagree, which by
+[CODEGEN_METHOD](CODEGEN_METHOD.md)'s rule is itself the bug.
 
 **Deliberately not filed.** It is here as the probe that proves the duplicate is
 load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
