@@ -3954,6 +3954,33 @@ impl Parser {
             );
             return true;
         }
+        // loft#1028 — the target is still a TYPE VARIABLE, so which null this is has not
+        // been decided yet.  A template's `T` is an attribute-less placeholder STRUCT, so
+        // the `Reference` arm of the loop below wins and every monomorph keeps
+        // `OpNullRefSentinel`: a 12-byte DbRef written into whatever slot `T` turned out
+        // to be.  Substitution rewrites the TYPE and leaves the already-chosen OP, and
+        // nothing downstream re-asks.  The interpreter then read the sentinel's own bytes
+        // back as the answer — `65535` for an `integer`, U+FFFF for a `character`, a
+        // denormal for a `float`, the empty text for a `text` — while `--native` refused
+        // the program outright, `DbRef` having no `Display`.  A `boolean` came out right,
+        // but by coincidence: the sentinel's low byte is `0xFF`, which is also boolean
+        // null, so it is a control that does not control.
+        //
+        // Stamp the site and let `rewrite_generic_type_defaults` re-run THIS conversion
+        // once `T` is concrete, exactly as loft#1016 does for that declaration's DEFAULT
+        // and loft#1020 for its `== null`.  Re-running the same dispatch rather than
+        // answering here is what keeps one spelling of "what is `τ`'s null?" — minting a
+        // second is the defect loft#1014 was.  The wrapped sentinel keeps the template's
+        // own IR as well-formed as it was — a template is type-checked and slot-allocated
+        // even though it never runs — and the rewrite discards it.
+        if *is_type == Type::Null
+            && let Type::Reference(target, _) = should.base()
+            && self.data.is_type_var_placeholder(*target)
+        {
+            let placeholder = Value::Call(self.data.def_nr("OpNullRefSentinel"), vec![]);
+            *code = v_block(vec![placeholder], should.clone(), Self::TV_NULL_BLOCK);
+            return true;
+        }
         // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
         // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
         // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan
@@ -5358,6 +5385,14 @@ impl Parser {
     pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
     /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
     pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
+    /// loft#1028 — a `null` VALUE whose type is still a TYPE VARIABLE.
+    ///
+    /// Which sentinel `τ`'s null is written as is a function of `τ`, and inside a
+    /// template `τ` is not known yet, so [`convert`](Parser::convert) stamps the site and
+    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) re-runs
+    /// the conversion once `T` is concrete.  The block's `result` is the target type,
+    /// which substitution rewrites to the concrete one.
+    pub(crate) const TV_NULL_BLOCK: &'static str = "tvnull";
 
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
@@ -6663,6 +6698,24 @@ impl Parser {
                     &[tp, Type::Null],
                 );
                 out
+            }
+            // loft#1028 — the deferred `null`.  `bl.result` came through type
+            // substitution, so it names the CONCRETE type by now, and `null` is the same
+            // dispatch the parse site uses — the ONE place that answers "what is `τ`'s
+            // null?".  A nested generic (`concrete` still a type variable) re-stamps
+            // through that same call and stays deferred until an outer instantiation
+            // names a real type.
+            Value::Block(bl) if bl.name == Self::TV_NULL_BLOCK => {
+                let tp = bl.result.clone();
+                let mut null = Value::Null;
+                if self.convert(&mut null, &Type::Null, &tp) {
+                    null
+                } else {
+                    // The conversion the template deferred does not exist for this `T`.
+                    // Leave the site as parsed rather than dropping the value: the call
+                    // is already an error, and the same reasoning loft#1016 uses.
+                    Value::Block(bl)
+                }
             }
             Value::Block(bl) if bl.name == Self::TV_DEFAULT_BLOCK => {
                 match self.monomorph_default(concrete) {

@@ -9,6 +9,88 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The registry index's download cap truncated instead of refusing, and every compile parsed the whole catalog (2026-08-20)
+
+`http_get_bytes` bounded a response with `.take(50 MB)`, so a body past the ceiling came back
+SHORT and passed for a complete document. A 70 MB index cut to exactly 52,428,800 bytes failed
+as `JSON parse error: unterminated string` at a byte offset inside an unrelated package. That
+number is compiled into every released binary, so an index growing past it would have taken the
+registry down for every client already in the wild, with nothing the registry could do about it.
+The ceiling is now 512 MiB, overridable with `LOFT_MAX_DOWNLOAD`, and exceeding it is a refusal
+that names the ceiling.
+
+Separately, the parser's Tier-1 trigger fallback parsed the ENTIRE index to read the `triggers`
+field — ~300 bytes of a 693 kB document, on the compile path. The map now lives in a derived
+sidecar (`~/.loft/registry/triggers.json`) stamped with the index's length + mtime. `loft --check`
+on a four-line program, against a catalog 100× today's size: **1.13 s / 344 MB RSS → 0.02 s /
+12.3 MB** — what the same program costs with no catalog installed at all. The stamp is the
+caller's, taken before the map's source is read, so a concurrent refresh can only cost an extra
+rebuild, never mark stale triggers as current.
+
+`PKG_REGISTRY.md`'s sizing predated the per-version `api` field, which is 91 % of the live index:
+its "10,000 packages × 20 versions, ~80 MB" is **825 MB** measured. Corrected there, with the
+shape that keeps scaling (a thin resolution index, `api` per package on demand).
+
+### `registry_validate.sh` validated whatever was cached locally and reported OK about it (loft#1027, 2026-08-20)
+
+Run straight after publishing `hex_way 0.1.1`, it validated 0.1.0 and printed a bare `OK`. Two
+steps compounded: `loft install <pkg>` resolved against an un-refreshed index that still ended at
+0.1.0 (so the install was a no-op), and the next step picked the highest version DIRECTORY under
+`~/.loft/registry` — which also made the verdict depend on what that machine had downloaded
+before. The version is now resolved from the index with a forced refresh and installed as an
+explicit `<pkg>@<version>` pin, `<pkg>@<version>` is accepted on the command line, the verdict
+names the version, and a non-newest version says so on its own line. The cache root honours
+`LOFT_HOME`, which the hardcoded `$HOME` did not.
+
+### A `null` written inside a generic was the TYPE VARIABLE's null, not the concrete type's (loft#1028, 2026-08-20)
+
+`Parser::convert` lowers a `null` literal to its target's typed null. A template's `T` is an
+attribute-less placeholder STRUCT, so `Type::Reference` won and the site became
+`OpNullRefSentinel` — a 12-byte DbRef. Monomorphisation then substituted the TYPE and left the
+already-chosen OP, so `t_4text_nl` wrote that sentinel into a `&text` slot:
+
+```
+n_nl        (non-generic)   ___tret_1(0):&text = OpConvTextFromNull();
+t_4text_nl  (monomorph)     ___tret_1(0):&text = OpNullRefSentinel();     <-- the defect
+```
+
+The interpreter read the sentinel's own bytes back as the answer and said nothing; `--native`
+refused the program (`DbRef` has no `Display`). `(G-Mono)` in `formal/interfaces.md` requires
+`[T ↦ C]` "applied throughout … body types", and it also promises the two backends cannot drift
+on a monomorph — this broke both halves.
+
+**The filed scope was too narrow in two ways, and both matter.** The issue named `Parser::null`
+as the site: patching it changes nothing, because `null()` is never called with a reference type
+for this shape (18 calls in the reproducer, none of them a `Reference`), and
+`cl("OpNullRefSentinel")` is never called at all. A backtrace on every resolution of that op
+names `Parser::convert`. The issue also reported `T = integer` as clean; it answers **65535**.
+Measured across a type sweep, generic against the non-generic twin as control:
+
+| `T` | before | why |
+|---|---|---|
+| `text` | the empty text | sentinel bytes read as a string |
+| `integer` | `65535` | the sentinel's low 16 bits |
+| `character` | U+FFFF | same bits, char domain |
+| `float` | a denormal | same bits, float domain |
+| `boolean` | *correct* | **coincidence** — the sentinel's low byte is `0xFF`, which is also boolean null |
+| `struct`, `vector` | correct | for a reference the sentinel IS the answer |
+
+`boolean` is a control that does not control: a sweep starting there reads "generics are fine".
+
+The cure is the one loft#1016 (`x?`'s default) and loft#1020 (`x == null`) already use — the
+template MARKS the site, `rewrite_generic_type_defaults` answers it once `T` is concrete. Here
+the answer is to re-run `convert` itself rather than to pick a null, so there is still exactly
+one spelling of *"what is `τ`'s null?"* (minting a second is what loft#1014 was). A nested
+generic re-stamps through that same call and stays deferred until an outer instantiation names a
+real type. Two further symptoms went with it: `x == null` answered **false** for a null returned
+from a generic, and one program instantiating a template at two types got neither answer right.
+
+Blast radius, measured rather than argued: a corpus with one function per null→type conversion
+path (struct, vector, value enum, text, integer, float, character, a reference-kind generic, a
+generic with no null) emits a **byte-identical** `loft introspect` before and after. The
+`Parser::null` arm patched first was removed again — it was never on the path.
+
+
 ### The `--native` copy-or-adopt guard was gated on a NAME, so a METHOD never got it (loft#1017, 2026-08-20)
 
 A callee whose return may be a BORROW of an argument cannot have its result aliased into a

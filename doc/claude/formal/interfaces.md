@@ -126,7 +126,31 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
 - **Conformance is differential + directly checkable** — satisfaction is a single static judgment,
   so accept/reject must agree across the drivers (D-op-1's driver-agreement facet). `G-Sat`/`G-Check`
   are checkable directly (a missing method rejects on both backends); the runtime behaviour of a
-  monomorphized generic is pinned by `tests/scripts/86-interfaces.loft` and `tests/scripts/48-generics.loft`.
+  monomorphized generic is pinned by `tests/scripts/86-interfaces.loft`, `tests/scripts/48-generics.loft`
+  and `tests/scripts/1028-generic-null-typed-per-monomorph.loft`.
+
+- **What `OPEN: 0` rests on here — "applied throughout" is the load-bearing phrase.** `(G-Mono)`
+  says `[T ↦ C]` reaches *attribute, return, and body types, and every method call*. Three
+  defects have now been the same omission: an operation whose choice is a function of `τ` was
+  DECIDED while `τ` was still the type variable, and substitution then rewrote the type and left
+  the choice behind — loft#1016 (`x?`'s default), loft#1020 (`x == null`), loft#1028 (a `null`
+  literal's conversion). Each was invisible to the oracle above, because both scripts instantiate
+  over records; none of the three misbehaves at `T = <a struct>`, where a reference sentinel is
+  the right answer anyway. loft#1028 is the sharpest reading of that gap: it made the two backends
+  disagree — the interpreter answered a `text` monomorph the empty text, `--native` refused to
+  compile the program — which is the one thing this section says monomorphization cannot do.
+  A scalar instantiation is therefore one axis this doc's oracle was missing, and the count
+  stays 0 only as long as the tests keep one.
+
+  The corpus is thin on a **second** axis, and loft#1029 is how that surfaced: it varies the
+  instantiating TYPE and never varies where a borrowed value comes FROM. Every borrow in both
+  scripts is a vector ELEMENT; a PARAMETER is the more ordinary spelling and was never asked, and
+  a fresh-arm/borrow-arm join over one leaks a record on both backends. That defect is NOT a
+  monomorphization deviation — it reproduces with no generic in the program at all, so it is
+  `ownership.md`'s to own — but it was a generic corpus that made it visible, and the same
+  omission would hide a monomorph-only variant of it here. `(G-Mono)`'s promise is that a
+  specialised copy behaves as the hand-written concrete one would; an oracle that fixes the
+  borrow source cannot see the cases where it would not.
 - **Test-hygiene note (resolved 2026-08-09):** `86-interfaces.loft::test_bounded_for_loop_struct`
   — a bounded `<T: Validatable>` for-loop over a struct vector calling a method per element — was
   commented out under a stale "crashes with P136 (use-after-free)" note. That bug is FIXED and the

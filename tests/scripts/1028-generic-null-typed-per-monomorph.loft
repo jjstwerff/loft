@@ -1,0 +1,107 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `null` written inside a generic is the CONCRETE type's null, not the type variable's
+// (loft#1028).
+//
+// `Parser::null` picks the sentinel from the type, and a template's `T` is an
+// attribute-less placeholder STRUCT — so `Type::Reference` won and every monomorph kept
+// `OpNullRefSentinel`, a 12-byte DbRef written into whatever slot `T` turned out to be.
+// Substitution rewrote the TYPE and left the already-chosen OP behind.  Nothing said so:
+// the interpreter read the sentinel's own bytes back as the answer, and `--native`
+// refused the program because `DbRef` has no `Display`.
+//
+// The cells are a TYPE sweep, because the filed scope was too narrow — it reported `text`
+// as the break and `integer` as clean, and `integer` answered 65535.  Every scalar was
+// broken; what differs is only how the sentinel's bytes read back:
+//
+//     text       the empty text            integer    65535        (the sentinel's low 16 bits)
+//     character  U+FFFF                    float      a denormal
+//
+// `boolean` is here as the cell that PASSED for the wrong reason — the sentinel's low byte
+// is 0xFF, which is also boolean null — so it cannot witness the fix on its own, and a
+// sweep that stopped at it would have read as "generics are fine".  `struct` and `vector`
+// are the controls that were always right: for a reference the sentinel IS the answer, so
+// they prove the fix re-points the null rather than replacing one blanket choice with
+// another.
+//
+// Each cell asks for the value AND the fallback from one template: the true call must
+// deliver `x`, the false call must reach the null tail so `??` supplies the fallback.  The
+// two are always distinct and never zero, so a sentinel read back as data cannot pass for
+// either.
+
+struct P1028 { a: integer }
+
+pub fn nl1028<T>(x: T, c: boolean) -> T? { if c { return x; } null }
+
+// The null bound to a LOCAL first rather than written as the tail — the same defect
+// reached through a variable's default-init instead of a return value.
+pub fn nl1028_local<T>(x: T, c: boolean) -> T? { if c { return x; } n: T? = null; n }
+
+// A generic calling a generic: at `inner`'s instantiation `T` is still `outer`'s type
+// VARIABLE, so the site has to stay deferred and be answered at the outer instantiation.
+pub fn inner1028<T>(x: T, c: boolean) -> T? { if c { return x; } null }
+pub fn outer1028<S>(s: S, c: boolean) -> S? { inner1028(s, c) }
+
+fn test_generic_null_is_the_concrete_types_null() {
+  assert((nl1028("sss", true) ?? "NNN") == "sss", "text value");
+  assert((nl1028("sss", false) ?? "NNN") == "NNN", "text null: got {nl1028("sss", false) ?? "NNN"}");
+
+  assert((nl1028(7, true) ?? -42) == 7, "integer value");
+  assert((nl1028(7, false) ?? -42) == -42, "integer null: got {nl1028(7, false) ?? -42}");
+
+  assert((nl1028('a', true) ?? 'z') == 'a', "character value");
+  assert((nl1028('a', false) ?? 'z') == 'z', "character null: got {nl1028('a', false) ?? 'z'}");
+
+  assert((nl1028(1.5, true) ?? -2.25) == 1.5, "float value");
+  assert((nl1028(1.5, false) ?? -2.25) == -2.25, "float null: got {nl1028(1.5, false) ?? -2.25}");
+
+  // Passed before the fix too, by coincidence — kept so a future change that re-broke the
+  // sentinel could not hide behind it.
+  assert((nl1028(false, true) ?? true) == false, "boolean value");
+  assert((nl1028(false, false) ?? true) == true, "boolean null");
+}
+
+fn test_generic_null_still_answers_the_sentinel_for_a_reference() {
+  p = P1028 { a: 7 };
+  q = P1028 { a: -42 };
+  assert((nl1028(p, true) ?? q).a == 7, "struct value");
+  assert((nl1028(p, false) ?? q).a == -42, "struct null");
+
+  v = [7, 8];
+  w = [-42];
+  assert((nl1028(v, true) ?? w)[0] == 7, "vector value");
+  assert((nl1028(v, false) ?? w)[0] == -42, "vector null");
+}
+
+fn test_the_deferred_null_survives_every_spelling() {
+  assert((nl1028_local("sss", false) ?? "NNN") == "NNN", "via a local");
+  assert((nl1028_local(7, false) ?? -42) == -42, "via a local, integer");
+  assert((outer1028("sss", false) ?? "NNN") == "NNN", "via a nested generic");
+  assert((outer1028(7, false) ?? -42) == -42, "via a nested generic, integer");
+}
+
+fn test_a_generic_null_reads_as_null() {
+  // The wrong sentinel did not only answer wrong — it made the null TEST lie: `a == null`
+  // was false for a value that was null.
+  a = nl1028("sss", false);
+  b = nl1028("sss", true);
+  assert(a == null, "a null from a generic must test as null");
+  assert(b != null, "a value from a generic must not test as null");
+}
+
+fn test_two_monomorphs_of_one_template_each_get_their_own_null() {
+  // The answer belongs to the monomorph, not to the template: one program instantiating
+  // the same declaration at two types must get two different sentinels.
+  assert((nl1028(7, false) ?? -42) == -42, "integer monomorph");
+  assert((nl1028("sss", false) ?? "NNN") == "NNN", "text monomorph beside it");
+}
+
+fn main() {
+  test_generic_null_is_the_concrete_types_null();
+  test_generic_null_still_answers_the_sentinel_for_a_reference();
+  test_the_deferred_null_survives_every_spelling();
+  test_a_generic_null_reads_as_null();
+  test_two_monomorphs_of_one_template_each_get_their_own_null();
+  print("1028 ok\n");
+}
