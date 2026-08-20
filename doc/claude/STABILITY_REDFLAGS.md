@@ -227,6 +227,60 @@ of a distribution and leaves the rest of the tail loaded. The cure is the one th
 tree already has: a walker that must be total delegates recursion to the keystone,
 so the tail is never enumerated by hand at all.
 
+### Result 4 — the fifteen fixes on `tuxedo-post-973`, read against this map
+
+The map above was written on 2026-08-20 from `main`. The branch that closes every open
+issue landed the same week, so it is the first chance to ask the map's own question of a
+batch of fixes: **did they fold facts, or patch arms?** Counts are `git show origin/main:…`
+against the branch.
+
+| fact | sites on `main` | sites on the branch |
+|---|---|---|
+| "is this slot text?" — coroutine emitter | 15 hand-rolled `Type::Text(_)` | **1 predicate**, 15 callers (`is_text_slot`) |
+| "is this tuple element text?" | 3 hand-rolled, two of them disagreeing | **1 pair** (`tuple_elem_type` / `_is_text`), 6 callers |
+| "is this narrow slot null?" — renderer | 8 hand-rolled sentinel tests | **1 home** (`Stores::is_null`), 9 callers |
+| "what offset does this narrow slot use?" | declared `min` at 4 registration sites | **1 home** (`IntegerSpec::part_min`) |
+| "how wide is this integer?" | 2 homes (`byte_width` / `forced_size`) | **1 home**; `vector_narrow_width` now derives from it |
+
+Every one is the *one fact, N spellings* shape — and in four of the five the spellings had
+already drifted far enough to produce the bug that was filed. The fifth (#1040) is the
+thesis's other half, a fact computed in the wrong PLACE: the par route was picked in the
+template, where the types it is picked from do not exist yet, so it now waits for the
+monomorph. None of the five was patched arm-by-arm.
+
+**The prediction in Result 3 is not yet tested, and this batch is not the test.** It says
+`Parallel`, `ParFor`, `Yield` and `TuplePut` are the next `Tuple` *when a consumer leans on
+them*. Three of those four variants appear in these fixes (#1040 ParFor, #1035 Yield, #1038
+TuplePut) — but every one carries `hit-by:loft`: they were surfaced by loft's own generics
+work, not by a consumer. So they are consistent with the exposure model without confirming
+it: the same mechanism (a shape gets exercised in new combinations, and the tail's omissions
+surface) driven from inside rather than from a dogfood repo. The prediction stands, still
+waiting on real `par` / coroutine dogfooding.
+
+What the batch DOES move is the exposure itself, which is the model's own remedy — the tail
+is less unexercised than it was:
+
+| variant | test files on `main` | on the branch |
+|---|---|---|
+| `par(…)` | 18 | **20** |
+| `yield` | 19 | **21** |
+| tuple declarations | 51 | **53** |
+
+Fifteen new `tests/scripts/` guards, each run on both backends. That is a 10 % lift on the
+two thinnest surfaces, which is small — but it is the direction the model says matters more
+than adding arms to walkers.
+
+**One prediction this batch does support.** Result 1 credits `IntegerSpec::range_to_width`
+with the only measured payoff (narrow-int/width fell by roughly two thirds). `make
+bug-review` re-run today still reads `PAID OFF` (9.5 % → 3.3 %) — and the four narrow-int
+bugs in this batch (#1030, #1031, #1036, #1037) are all *residual second homes of that same
+keystone*, not new mechanisms: a compound assignment, a field-vs-local disagreement, a
+vector element's stride, and a bound the spec could not carry. A keystone that pays off
+does not finish the class; it converts the class into a finite list of sites that still ask
+the question somewhere else. That is a useful refinement of the payoff claim, and it is
+falsifiable: if the next narrow-int bug is NOT a second home of `byte_width`, this reading
+is wrong.
+
 ---
 
 ## Cluster A — the return/bind transfer-vs-borrow fact (cluster-II root)

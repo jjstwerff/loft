@@ -87,6 +87,47 @@ Items below are "what to BUILD" derived from the design content in this document
 | **Q4** — `JsonValue` construction in loft code | [§ Active design — Q4](#active-design--q4-jsonvalue-construction-in-loft-code) | Builder API for constructing `JsonValue` trees in loft |
 | **P54-U** — unified JSON parser | [§ Active design — P54-U](#active-design--p54-u-unified-json-parser) | Phase 3 deletes ~540 lines of legacy scanner |
 
+**Q3 correctness — narrow nullable fields serialised wrong, fixed 2026-08-20.**
+`T.to_json()` delegates to the `ShowDb` schema walker, and that walker re-derived "is this
+slot null?" per width instead of asking `Stores::is_null`. Every re-derivation compared a
+DECODED value against a RAW sentinel, so on one struct it produced three wrong values in a
+single line:
+
+```
+struct Cfg { name: text, port: u16?, gain: i16?, level: integer limit(10,255)? }
+Cfg { name: "x", port: null, gain: -300, level: null }.to_json()
+  was  {"name":"x","port":-2147483648,"gain":-301,"level":265}
+  now  {"name":"x","gain":-300}
+```
+
+`port` was an absent value serialised as a number, `level` likewise, and `gain` was a
+PRESENT value one too low — a nullable SIGNED narrow slot sacrifices its bottom value to
+the null code, so its ops encode against `min + 1` while the schema carried the declared
+`min`. All three are on the wire, so a consumer of that JSON read numbers where the value
+was absent. Fixed at the one home (`is_null` + `IntegerSpec::part_min`); guarded by
+`tests/scripts/narrow-null-render.loft` on both backends.
+
+**Q1/P54 — an ABSENT nullable field does not read back null at every width (OPEN, S).**
+The fix above stopped `to_json` from masking this, and it is worth stating precisely
+because it is the round-trip's remaining asymmetry. Parsing a JSON object that omits a
+nullable field — or gives it an explicit `null` — lands:
+
+| field type | absent field reads back |
+|---|---|
+| `u8?`, `integer limit(lo,hi)?`, `integer?`, `float?`, `text?` | `null` ✅ |
+| `u16?` | **`0`** |
+| `i16?` | **`-32767`** (the slot's usable minimum) |
+| `boolean?` | **`false`** |
+
+Identical on `--interpret` and `--native`, and identical on `main` — this is pre-existing,
+not a regression of the render fix. The suspect is the field-DEFAULT writer
+(`structures.rs`'s clear-to-default arm), which writes the 2-byte null as the *value*
+`65535` where `Parts::Short`'s encoding reserves the raw code `0`; the boolean arm writes
+`false` where @PLN17's tri-state reserves `255`. It is the same class as the render bug —
+a sentinel written by one site and read by another, with the two encodings disagreeing —
+so it belongs to Cluster D and should be fixed at `Stores::is_null`'s write-side twin, not
+per width. `silent-wrong`: a null becomes a plausible number with nothing reported.
+
 ### Native runtime cluster
 
 | Item | Section | Status |
