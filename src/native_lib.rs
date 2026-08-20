@@ -191,49 +191,75 @@ fn metadata_member_size(bytes: &[u8]) -> Option<u64> {
     None
 }
 
-/// The `.rmeta` holding the full metadata for this `libloft.rlib`, when the toolchain
-/// split them.  `None` when the rlib embeds its own metadata, which is every toolchain
-/// that has not turned `-Zembed-metadata=no` on.
+/// The `.rmeta` holding the full metadata for THIS `libloft.rlib`, when the toolchain
+/// split them.  `None` when nothing can be shown to belong to it.
 ///
-/// Three places, because the artifact layout is cargo's business and it has moved: the
-/// SIBLING (`<dir>/libloft.rmeta`, the classic uplifted layout), the `deps/` copy that
-/// carries a hash suffix, and the per-crate artifact directory a 2026-08 nightly writes
-/// (`<profile>/build/loft/<hash>/out/`), where the uplifted rlib is a hard link to the
-/// stub and only this copy has the metadata beside it.  Newest wins when several match,
-/// since a stale one belongs to an older build of the same tree.
+/// Identity, not proximity.  A stale `.rmeta` from an older build is debris cargo neither
+/// owns nor cleans, and picking "the newest one nearby" can choose it — which hands rustc
+/// two candidates for one crate (`error[E0464]`) or, worse, metadata that does not
+/// describe the rlib being linked.  The pairing is exact instead: cargo writes the pair
+/// `libloft-<hash>.rlib` + `libloft-<hash>.rmeta` in one unit and then UPLIFTS the rlib —
+/// as a hard link — so the rmeta we want is the one beside the file our rlib IS.
+///
+/// A sibling `libloft.rmeta` next to the rlib is taken first (the layout where nothing was
+/// uplifted); otherwise the search is for the file that IS ours, and only the `.rmeta`
+/// beside that.  Nothing unpaired is accepted — passing an unpaired one is how this went
+/// wrong.
 fn loft_rmeta_beside(rlib: &std::path::Path) -> Option<std::path::PathBuf> {
     let sibling = rlib.with_extension("rmeta");
     if sibling.exists() {
         return Some(sibling);
     }
     let dir = rlib.parent()?;
-    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    let mut consider = |p: std::path::PathBuf| {
-        let Ok(m) = p.metadata().and_then(|m| m.modified()) else {
-            return;
+    let mut search: Vec<std::path::PathBuf> = vec![dir.join("deps")];
+    if let Ok(units) = std::fs::read_dir(dir.join("build").join("loft")) {
+        search.extend(units.flatten().map(|u| u.path().join("out")));
+    }
+    for candidate_dir in search {
+        let Ok(entries) = std::fs::read_dir(&candidate_dir) else {
+            continue;
         };
-        if best.as_ref().is_none_or(|(t, _)| m > *t) {
-            best = Some((m, p));
-        }
-    };
-    if let Ok(entries) = std::fs::read_dir(dir.join("deps")) {
         for e in entries.flatten() {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("libloft-") && name.ends_with(".rmeta") {
-                consider(e.path());
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "rlib") {
+                continue;
+            }
+            let is_loft = path
+                .file_stem()
+                .is_some_and(|st| st == "libloft" || st.to_string_lossy().starts_with("libloft-"));
+            if !is_loft || !same_file(&path, rlib) {
+                continue;
+            }
+            let paired = path.with_extension("rmeta");
+            if paired.exists() {
+                return Some(paired);
             }
         }
     }
-    if let Ok(crates) = std::fs::read_dir(dir.join("build").join("loft")) {
-        for c in crates.flatten() {
-            let candidate = c.path().join("out").join("libloft.rmeta");
-            if candidate.exists() {
-                consider(candidate);
-            }
+    None
+}
+
+/// Are these two paths the SAME file?  Hard-link identity first (which is what an uplift
+/// produces, and is free), then content — a copy is as good as a link for this question,
+/// and answering `false` only costs the caller the metadata it was looking for.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (a.metadata(), b.metadata()) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if ma.dev() == mb.dev() && ma.ino() == mb.ino() {
+            return true;
         }
     }
-    best.map(|(_, p)| p)
+    if ma.len() != mb.len() {
+        return false;
+    }
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// @PLN11 Arc N / N3 — mark a library's functions for native dispatch.  Of the
@@ -2302,6 +2328,97 @@ mod rlib_search_tests {
         let dirs = rlib_search_dirs(Path::new("target/release/deps"));
         assert_eq!(dirs[0].0, PathBuf::from("target/release/deps"));
         assert_eq!(dirs[0].1, PathBuf::from("target/release/deps"));
+    }
+}
+
+#[cfg(test)]
+mod rmeta_pairing_tests {
+    use super::loft_rmeta_beside;
+
+    /// A cargo-shaped layout: the pair in `deps/`, the rlib UPLIFTED beside it as a hard
+    /// link.  That link is what makes the pairing findable without guessing.
+    fn layout(root: &std::path::Path, uplift_links_to_hash: bool) -> std::path::PathBuf {
+        let deps = root.join("deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        let hashed = deps.join("libloft-1111111111111111.rlib");
+        std::fs::write(&hashed, b"rlib-bytes").unwrap();
+        std::fs::write(
+            deps.join("libloft-1111111111111111.rmeta"),
+            b"the-paired-one",
+        )
+        .unwrap();
+        let uplifted = root.join("libloft.rlib");
+        if uplift_links_to_hash {
+            std::fs::hard_link(&hashed, &uplifted).unwrap();
+        } else {
+            std::fs::write(&uplifted, b"a-different-rlib-entirely").unwrap();
+        }
+        uplifted
+    }
+
+    #[test]
+    fn the_rmeta_paired_with_our_rlib_is_the_one_chosen() {
+        let root = std::env::temp_dir().join(format!("loft_pair_ok_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, true);
+        let found = loft_rmeta_beside(&rlib).expect("the paired rmeta");
+        assert_eq!(std::fs::read(&found).unwrap(), b"the-paired-one");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reported failure: debris from an older build, NEWER than the pair, sitting in
+    /// the same directory.  Choosing by recency picks it; choosing by identity does not.
+    #[test]
+    fn newer_unpaired_debris_is_not_chosen() {
+        let root = std::env::temp_dir().join(format!("loft_pair_debris_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, true);
+        // Debris: an rmeta with no rlib of its own, written last so it is the newest file.
+        std::fs::write(
+            root.join("deps").join("libloft-9999999999999999.rmeta"),
+            b"stale-debris",
+        )
+        .unwrap();
+        let found = loft_rmeta_beside(&rlib).expect("still the paired rmeta");
+        assert_eq!(
+            std::fs::read(&found).unwrap(),
+            b"the-paired-one",
+            "recency must not decide this"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// When nothing can be shown to belong to the rlib, answer None: one `--extern`, and
+    /// the honest "only metadata stub found" if the rlib really was split.  Passing an
+    /// unpaired rmeta instead is what produced `E0464: multiple candidates`, an error that
+    /// names the crate and never the staleness.
+    #[test]
+    fn an_unpaired_rmeta_alone_answers_none() {
+        let root = std::env::temp_dir().join(format!("loft_pair_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, false); // uplifted rlib is NOT our deps rlib
+        assert!(
+            loft_rmeta_beside(&rlib).is_none(),
+            "an rmeta that belongs to a different rlib must not be offered"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The layout where nothing was uplifted: the rmeta sits directly beside the rlib.
+    #[test]
+    fn a_sibling_rmeta_is_taken_directly() {
+        let root = std::env::temp_dir().join(format!("loft_pair_sib_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = root.join("libloft.rlib");
+        std::fs::write(&rlib, b"rlib").unwrap();
+        std::fs::write(root.join("libloft.rmeta"), b"sibling").unwrap();
+        let found = loft_rmeta_beside(&rlib).expect("the sibling");
+        assert_eq!(std::fs::read(&found).unwrap(), b"sibling");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
