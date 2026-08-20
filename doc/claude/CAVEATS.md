@@ -158,6 +158,36 @@ against a uniform run — whole-program `--native`, or `--interpret` with
 
 ---
 
+## Surfaced 2026-08-20 while fixing something else — filed
+
+Each was met while working a neighbouring defect and verified against the pre-fix
+binary as PRE-EXISTING, then deliberately left rather than folded into an unrelated
+change. All five are now tracked; the repro, the measured workaround and the
+both-backends result live on the issue.
+
+| | issue | shape |
+|---|---|---|
+| `integer limit(lo,hi)` is not bounded on `+=` — the `u8` spelling of the same range is; the local keeps `260` | [#1030](https://github.com/loft-lang/loft/issues/1030) | `silent-wrong` |
+| a `u32` local clamps to `0` where the `u32` FIELD wraps to `4294967291`, same write; and `u32 = 4294967295` is refused inside its own range | [#1031](https://github.com/loft-lang/loft/issues/1031) | `silent-wrong` |
+| a generic returning `iterator<T>` panics the interpreter and will not compile on `--native`; its element type does not monomorphise | [#1032](https://github.com/loft-lang/loft/issues/1032) | `sev:high` |
+| a generic function is not callable inside a `par` worker | [#1033](https://github.com/loft-lang/loft/issues/1033) | `sev:low` |
+| a declared `(text?, integer)` local is refused, though the same tuple type is accepted as a return | [#1034](https://github.com/loft-lang/loft/issues/1034) | `sev:low` |
+
+**Two entries that were here are gone because they are FIXED**, both confirmed by
+re-running their repros on both backends before filing anything — which is the reason
+to re-verify a caveat rather than file it from a note:
+
+- a tuple's text element assigned from its sibling (`k = ("a","b"); k.1 = k.0`) no
+  longer fails `--native` with E0382;
+- the Cluster F residual — a discharged `a?` in a TEXT tuple answering the null
+  sentinel on the interpreter — is correct on all four carriers on both backends.
+  Closed by loft#1026, whose own account (*"`parse_block` has two mutually exclusive
+  text-return promotions … the monomorph promoter was replicating half of it"*) is the
+  machinery [STABILITY_REDFLAGS](STABILITY_REDFLAGS.md)'s investigation had isolated
+  from the other side.
+
+---
+
 ## Scheduled — 0.8.5
 
 ### ~~P137~~ — `loft --html` Brick Buster: runtime `unreachable` panic — DONE

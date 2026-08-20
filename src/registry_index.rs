@@ -930,6 +930,164 @@ pub fn trigger_providers(index: &RegistryIndex) -> BTreeMap<String, String> {
         .collect()
 }
 
+// ── Derived trigger sidecar ───────────────────────────────────────
+
+/// Path of the derived trigger sidecar, beside the cached index.
+#[must_use]
+pub fn triggers_sidecar_path() -> PathBuf {
+    cache_dir().join("triggers.json")
+}
+
+/// `(byte length, mtime seconds)` of the cached index — the stamp a sidecar
+/// carries so a stale one is recognised from the index's METADATA, without
+/// reading the index itself.  Both halves are kept because either alone can
+/// miss: two writes inside one second share an mtime, and a replacement of the
+/// same byte count shares a length.
+fn index_stamp(index: &std::path::Path) -> Option<(u64, u64)> {
+    let meta = std::fs::metadata(index).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some((meta.len(), mtime))
+}
+
+/// The sidecar's map, or `None` when it is absent, unreadable, or stamped for a
+/// different index.  Derived data is rebuilt on any doubt, never trusted.
+fn read_trigger_sidecar_at(
+    sidecar: &std::path::Path,
+    index: &std::path::Path,
+) -> Option<BTreeMap<String, String>> {
+    let (len, mtime) = index_stamp(index)?;
+    let text = std::fs::read_to_string(sidecar).ok()?;
+    let Parsed::Object(root) = parse_json(&text).ok()? else {
+        return None;
+    };
+    let mut stamped_len: Option<i64> = None;
+    let mut stamped_mtime: Option<i64> = None;
+    let mut map = BTreeMap::new();
+    for (k, _, v) in &root {
+        match k.as_str() {
+            "index_len" => stamped_len = v.as_i64(),
+            "index_mtime" => stamped_mtime = v.as_i64(),
+            "triggers" => {
+                if let Parsed::Object(entries) = v {
+                    for (method, _, pkg) in entries {
+                        if let Parsed::Str(p) = pkg {
+                            map.insert(method.clone(), p.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (stamped_len? == i64::try_from(len).ok()? && stamped_mtime? == i64::try_from(mtime).ok()?)
+        .then_some(map)
+}
+
+/// Write the sidecar for a map derived from the index that carried `stamp`.
+///
+/// The stamp is the CALLER's, taken before the map's source was read, never
+/// re-measured here: a stamp younger than the map it describes would mark stale
+/// triggers as current, while one older than the map only costs a rebuild.  Of
+/// the two ways to be wrong, only one is recoverable.
+///
+/// Best-effort: this runs while the COMPILER is asking a question, so a
+/// read-only cache directory costs the fast path and nothing else.  Written to a
+/// temporary name and renamed, because parallel compiles reach here at once and
+/// a half-written sidecar reads as a parse failure.
+fn write_trigger_sidecar_at(
+    sidecar: &std::path::Path,
+    stamp: (u64, u64),
+    map: &BTreeMap<String, String>,
+) {
+    let (Ok(len), Ok(mtime)) = (i64::try_from(stamp.0), i64::try_from(stamp.1)) else {
+        return;
+    };
+    let entries = map
+        .iter()
+        .map(|(method, pkg)| (method.clone(), 0, Parsed::Str(pkg.clone())))
+        .collect();
+    let doc = Parsed::Object(vec![
+        ("index_len".to_string(), 0, Parsed::Int(len)),
+        ("index_mtime".to_string(), 0, Parsed::Int(mtime)),
+        ("triggers".to_string(), 0, Parsed::Object(entries)),
+    ]);
+    if let Some(parent) = sidecar.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = sidecar.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&tmp, crate::json::to_json_string(&doc)).is_ok()
+        && std::fs::rename(&tmp, sidecar).is_err()
+    {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// [`catalog_trigger_map`] against explicit paths.
+fn catalog_trigger_map_at(
+    sidecar: &std::path::Path,
+    index: &std::path::Path,
+) -> BTreeMap<String, String> {
+    if let Some(map) = read_trigger_sidecar_at(sidecar, index) {
+        return map;
+    }
+    let (Some(stamp), Ok(content)) = (index_stamp(index), std::fs::read_to_string(index)) else {
+        return BTreeMap::new();
+    };
+    let Ok(parsed) = parse_index(&content) else {
+        return BTreeMap::new();
+    };
+    let map = trigger_providers(&parsed);
+    write_trigger_sidecar_at(sidecar, stamp, &map);
+    map
+}
+
+/// The catalog trigger map (`method -> package`) for the cached index — what the
+/// parser consults when a bare `line.matches(p)` names no declared dependency.
+///
+/// The answer is a few hundred bytes of a 700 kB index, and the compiler asks for
+/// it mid-parse, so it must not cost a full index parse: it is kept in a derived
+/// sidecar (`~/.loft/registry/triggers.json`) stamped with the index's length +
+/// mtime, and only a missing or stale stamp pays the parse — which writes the
+/// sidecar back, so that cost lands once per index rather than once per compile.
+/// Measured on a four-line program against a catalog 100× today's size:
+/// `loft --check` 1.05 s → 0.03 s, peak RSS 345 MB → 12 MB.
+#[must_use]
+pub fn catalog_trigger_map() -> BTreeMap<String, String> {
+    let (index, _, _) = index_paths();
+    catalog_trigger_map_at(&triggers_sidecar_path(), &index)
+}
+
+/// Bring the derived trigger sidecar in line with an index that has just been
+/// loaded.  Costs one `stat` plus a short read when it is already current, and
+/// reuses the caller's parsed index when it is not — so the registry commands
+/// that fetch the index are the ones that pay to rebuild it, not the next
+/// compile.
+///
+/// `source_len` is the byte length `index` was parsed from.  A file on disk of
+/// some other length is a different index — another process refreshed it between
+/// that parse and this call — and stamping those bytes for THIS map would claim
+/// more than the caller knows, so the sidecar is left for the next reader to
+/// rebuild.
+pub fn refresh_trigger_sidecar(index: &RegistryIndex, source_len: u64) {
+    let (idx_path, _, _) = index_paths();
+    let sidecar = triggers_sidecar_path();
+    if read_trigger_sidecar_at(&sidecar, &idx_path).is_some() {
+        return;
+    }
+    let Some(stamp) = index_stamp(&idx_path) else {
+        return;
+    };
+    if stamp.0 != source_len {
+        return;
+    }
+    write_trigger_sidecar_at(&sidecar, stamp, &trigger_providers(index));
+}
+
 /// Map every `method:receiver` trigger in the catalog to its owning package.
 ///
 /// A `text.matches` trigger may be owned by exactly one package across the whole
@@ -997,6 +1155,70 @@ pub fn download_tarball(url: &str, dest: &std::path::Path) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
+/// Default ceiling on a single HTTP response — the registry index, or a package
+/// tarball.  A ceiling has to exist (an unbounded response is an unbounded
+/// allocation), but it must never be reached by SILENCE: the previous 50 MB cap
+/// TRUNCATED the body and handed the caller a short file, which surfaced as
+/// `JSON parse error: unterminated string` at byte 52,428,800 rather than as
+/// "the index is bigger than this loft will read".  That number is compiled into
+/// every released binary, so an index growing past it would have taken the
+/// registry down for every client already in the wild, with nothing the registry
+/// itself could do about it.  Raised, and — the part that matters — turned into a
+/// refusal, so the day it is reached the message names the ceiling and the way
+/// past it.
+pub const DEFAULT_MAX_DOWNLOAD: u64 = 512 << 20;
+
+/// The download ceiling in bytes, or `0` for none — `LOFT_MAX_DOWNLOAD`
+/// overriding [`DEFAULT_MAX_DOWNLOAD`], written the way a person writes a size
+/// (`1G`, `512M`).  An unparseable value keeps the default and says so: a typo
+/// in a limit must not silently remove the limit.
+#[must_use]
+pub fn max_download_bytes() -> u64 {
+    let Ok(v) = std::env::var("LOFT_MAX_DOWNLOAD") else {
+        return DEFAULT_MAX_DOWNLOAD;
+    };
+    if let Some(bytes) = crate::store_budget::parse_limit(&v) {
+        bytes
+    } else {
+        eprintln!(
+            "loft: LOFT_MAX_DOWNLOAD='{v}' is not a size (try 1G, 512M or 0) — \
+             keeping the default {}",
+            crate::store_budget::human(DEFAULT_MAX_DOWNLOAD)
+        );
+        DEFAULT_MAX_DOWNLOAD
+    }
+}
+
+/// Read a whole response body, REFUSING one longer than `limit` bytes (`0` = no
+/// limit) rather than truncating it.  Reads one byte past the ceiling, so a body
+/// exactly at it still passes and the first byte over is what trips the refusal.
+/// The message leaves the URL to the caller, which already names it.
+fn read_capped(reader: impl std::io::Read, limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let ceiling = if limit == 0 {
+        u64::MAX
+    } else {
+        limit.saturating_add(1)
+    };
+    let mut buf = Vec::new();
+    reader
+        .take(ceiling)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read body: {e}"))?;
+    if limit != 0 && u64::try_from(buf.len()).unwrap_or(u64::MAX) > limit {
+        return Err(format!(
+            "response is larger than the {} download ceiling — refusing it rather \
+             than handing back a truncated file; raise the ceiling with \
+             LOFT_MAX_DOWNLOAD=<size> (e.g. 1G, or 0 for no ceiling)",
+            crate::store_budget::human(limit)
+        ));
+    }
+    Ok(buf)
+}
+
+/// Fetch `url` in full.  A `file://` URL reads the local path directly and is not
+/// subject to the download ceiling — nothing about a local mirror is unbounded in
+/// the way a remote response is.
 pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     // @PLAN12 Phase 6.11 — support `file://` URLs for offline
     // mirrors + bundle-import-served indexes.  Same contract as the
@@ -1016,14 +1238,7 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !(200..300).contains(&status) {
         return Err(format!("HTTP {status} for {url}"));
     }
-    let mut buf = Vec::new();
-    use std::io::Read as _;
-    response
-        .into_reader()
-        .take(50 * 1024 * 1024) // 50 MB cap on a single response
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("read body: {e}"))?;
-    Ok(buf)
+    read_capped(response.into_reader(), max_download_bytes())
 }
 
 // ── Tarball extraction ────────────────────────────────────────────
@@ -1883,5 +2098,138 @@ mod tests {
         assert_eq!(search_results(&index, &stdlib, "sha256 returns").len(), 1);
         // Any term absent → no hit (AND-semantics, not OR).
         assert!(search_results(&index, &stdlib, "hash xml").is_empty());
+    }
+
+    // ── The download ceiling refuses, it does not truncate ───────────────────────
+    //
+    // The defect these guard: the ceiling used to be `.take(50 MB)`, so an index
+    // past it came back SHORT and passed for a complete document — the failure
+    // surfaced as a JSON syntax error deep inside a package nobody had touched.
+    // What is asserted is therefore the REFUSAL, not the size.
+
+    #[test]
+    fn a_body_at_the_ceiling_is_kept_whole() {
+        let body = vec![b'x'; 1000];
+        let got = read_capped(&body[..], 1000).expect("at the ceiling");
+        assert_eq!(got.len(), 1000);
+    }
+
+    #[test]
+    fn a_body_over_the_ceiling_is_refused_rather_than_truncated() {
+        let body = vec![b'x'; 1000];
+        let err =
+            read_capped(&body[..], 999).expect_err("one byte over the ceiling must not succeed");
+        assert!(
+            err.contains("larger than the 999 B download ceiling"),
+            "the message must name the ceiling it hit: {err}"
+        );
+        assert!(
+            err.contains("LOFT_MAX_DOWNLOAD"),
+            "the message must name the way past the ceiling: {err}"
+        );
+    }
+
+    #[test]
+    fn a_zero_ceiling_reads_without_limit() {
+        let body = vec![b'x'; 4096];
+        let got = read_capped(&body[..], 0).expect("0 = no ceiling");
+        assert_eq!(got.len(), 4096);
+    }
+
+    // ── The derived trigger sidecar ──────────────────────────────────────────────
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("loft-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn index_with_trigger(pkg: &str, trigger: &str, pad: &str) -> String {
+        format!(
+            r#"{{
+            "schema_version": 1,
+            "updated": "2026-08-20T00:00:00Z{pad}",
+            "packages": {{
+                "{pkg}": {{
+                    "categories": [], "yanked": [],
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["{trigger}:text"],
+                            "published": "2026-08-20T00:00:00Z"
+                        }}
+                    }}
+                }}
+            }}
+        }}"#
+        )
+    }
+
+    #[test]
+    fn the_sidecar_is_built_from_the_index_and_then_answers_on_its_own() {
+        let dir = scratch_dir("sidecar-build");
+        let index = dir.join("index.json");
+        let sidecar = dir.join("triggers.json");
+        std::fs::write(&index, index_with_trigger("regex", "matches", "")).unwrap();
+
+        // First ask: no sidecar yet, so the index is parsed and the sidecar written.
+        let first = catalog_trigger_map_at(&sidecar, &index);
+        assert_eq!(first.get("matches").map(String::as_str), Some("regex"));
+        assert!(
+            sidecar.exists(),
+            "the first ask must leave a sidecar behind"
+        );
+
+        // Prove the second ask reads the SIDECAR and not the index: rewrite the
+        // sidecar's answer, keeping its stamp, and watch that answer come back.
+        // A reader that re-parsed the index would still say `regex`.
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        std::fs::write(&sidecar, text.replace("\"regex\"", "\"impostor\"")).unwrap();
+        let second = catalog_trigger_map_at(&sidecar, &index);
+        assert_eq!(
+            second.get("matches").map(String::as_str),
+            Some("impostor"),
+            "the sidecar is the fast path; this ask must not have touched the index"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sidecar_stamped_for_a_different_index_is_rebuilt() {
+        let dir = scratch_dir("sidecar-stale");
+        let index = dir.join("index.json");
+        let sidecar = dir.join("triggers.json");
+        std::fs::write(&index, index_with_trigger("regex", "matches", "")).unwrap();
+        catalog_trigger_map_at(&sidecar, &index);
+
+        // The index moves on — a different package, and a different length, so the
+        // stamp mismatches even for two writes inside one second.
+        std::fs::write(&index, index_with_trigger("globbing", "matches", "   ")).unwrap();
+        let rebuilt = catalog_trigger_map_at(&sidecar, &index);
+        assert_eq!(
+            rebuilt.get("matches").map(String::as_str),
+            Some("globbing"),
+            "a stale stamp must send the reader back to the index"
+        );
+        // And the rebuild is persisted, not recomputed on every ask.
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(text.contains("globbing"), "sidecar not rewritten: {text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_absent_index_yields_an_empty_map_and_writes_nothing() {
+        let dir = scratch_dir("sidecar-absent");
+        let index = dir.join("index.json");
+        let sidecar = dir.join("triggers.json");
+        assert!(catalog_trigger_map_at(&sidecar, &index).is_empty());
+        assert!(
+            !sidecar.exists(),
+            "nothing was derived, so there is nothing to cache"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

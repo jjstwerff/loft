@@ -3402,6 +3402,40 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
+        // loft#1034 — a TUPLE target reaches `convert` too.
+        //
+        // `scalar_target` above lists the types whose annotation drives a conversion, and
+        // a tuple is not one of them, so `c: (text?, integer) = ("c0", 3)` never converted
+        // the literal against what the annotation asked for.  That had two consequences,
+        // one loud and one silent:
+        //
+        //   * `change_var_type` then compared the declared `(text?, integer)` against the
+        //     literal's own inferred `(text, integer)` and refused the declaration —
+        //     "cannot change type from (text?, integer) to (text, integer)" — for a
+        //     widening that is legal in every other position;
+        //   * a `null` ELEMENT stayed a bare null instead of becoming the element type's
+        //     sentinel, so `(null, 3)` stored the empty text (`h.0 == null` answered
+        //     false) and would not compile at all on `--native`, which emitted `()`.
+        //
+        // The RETURN position always converted — `convert`'s own Tuple arm walks the
+        // elements and applies each one's coercion — which is exactly why the identical
+        // type was accepted there and the issue read as a local-only refusal.  Routing the
+        // local through the same function is what makes the two positions agree, rather
+        // than teaching this site a second opinion about tuples.
+        //
+        // Adopting `f_type` on success is what lets the rest of this function, and
+        // `change_var_type` after it, see the declared type rather than the literal's.
+        let s_type = if op == "="
+            && !self.first_pass
+            && matches!(f_type, Type::Tuple(_))
+            && matches!(s_type, Type::Tuple(_))
+            && !f_type.is_equal(&s_type)
+            && self.convert(code, &s_type, f_type)
+        {
+            f_type.clone()
+        } else {
+            s_type
+        };
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.
@@ -4415,33 +4449,73 @@ use a separate collection or add after the loop"
     /// (`is_narrowing_int_store`), and `declared_range`'s own comment records what happens
     /// when a runtime default is added on top of a check that already holds — it handed 24
     /// of the stdlib's own `i8` stores a `-128`.
-    pub(crate) fn guard_narrow_alias_local(&mut self, code: &mut Value, to: &Value, target: &Type) {
-        // A whole-variable target only. `s.f += n` / `v[i] += n` reach `call_to_set_op` and
-        // the store's own guard; wrapping them here would report and clamp twice.
-        if !matches!(to.unspan(), Value::Var(_)) {
-            return;
-        }
-        let Type::Integer(spec) = target.base() else {
+    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type) {
+        let Some((lo, hi, dflt)) = Self::compound_range(target) else {
             return;
         };
-        // `forced_size` is what marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`); the
-        // `limit(lo, hi)` spelling sets none and is `guard_declared_range`'s business.
-        if spec.forced_size.is_none() || spec.is_wide_template() || spec.is_signed32_template() {
+        // Two seams can reach one store, so never wrap a guard in a guard: harmless
+        // arithmetically (the inner already answers a value in range) but it would judge
+        // the same write twice.  Mirrors `guard_declared_range`.
+        if let Value::Call(d, _) = code.unspan()
+            && self.data.def(*d).name() == "OpRangeDefault"
+        {
             return;
         }
-        let (lo, hi) = (i64::from(spec.min), i64::from(spec.max));
-        // The default a narrow slot takes when a write does not fit is its MINIMUM — read
-        // off the field oracle rather than chosen here, so the local and the field agree.
         let guarded = self.cl(
             "OpRangeDefault",
             &[
                 code.clone(),
                 Value::Long(lo),
                 Value::Long(hi),
-                Value::Long(lo),
+                Value::Long(dflt),
             ],
         );
         *code = guarded;
+    }
+
+    /// The bounded range a compound assignment's target declares — `None` when it
+    /// declares none, which is the plain `integer` case and the only unbounded one.
+    ///
+    /// **One range, whatever the spelling.** `formal/types.md` `(C-Int)` puts width
+    /// INSIDE the conversion relation — "an integer flows into another integer iff its
+    /// range fits", with no separate width authority — so `u8` and `integer limit(0,255)`
+    /// are the same range and must bound a write the same way.  Keying the guard on the
+    /// width SPELLING instead is how they came apart: `guard_narrow_alias_local` tested
+    /// `forced_size`, which only a narrow ALIAS sets, so the `limit(...)` spelling reached
+    /// no guard on the compound path at all and `l: integer limit(0,255) = 250; l += 10`
+    /// kept 260 while the `u8` spelling of that identical range clamped (loft#1030).
+    ///
+    /// The default is the range's LOW end, which is what a slot that cannot take the
+    /// write already answers — measured across `u8` / `i8` / `u16` / `i16` in both
+    /// directions and on both backends (commit 447564a1's table), so this reads the
+    /// existing behaviour off rather than choosing a new one.
+    fn compound_range(tp: &Type) -> Option<(i64, i64, i64)> {
+        // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
+        // else — it returns `None` the moment `forced_size` is set.  So the two arms
+        // below partition the bounded types rather than overlapping.
+        if let Some(r) = declared_range(tp) {
+            return Some(r);
+        }
+        let Type::Integer(spec) = tp.base() else {
+            return None;
+        };
+        // `forced_size` marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`/`u32`).
+        //
+        // There is deliberately no `is_signed32_template()` test here.  It reads like a
+        // guard against the plain `integer` type, but that carries no `forced_size` and
+        // has already returned above — so by this line the only spec whose range IS the
+        // signed-32 range is the `i32` ALIAS, and testing for it excluded exactly one
+        // alias of the six (loft#1009).
+        //
+        // Plain `integer` and the wide template stay unbounded ON PURPOSE: 447564a1
+        // measured that a guard clamping every integer satisfies every other assertion in
+        // the regression file, so `integer` running past the 4-byte range is a live cell
+        // there, not an oversight.
+        if spec.forced_size.is_none() || spec.is_wide_template() {
+            return None;
+        }
+        let lo = i64::from(spec.min);
+        Some((lo, i64::from(spec.max), lo))
     }
 
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {

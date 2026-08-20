@@ -575,6 +575,20 @@ fn install_package(pkg_path: &std::path::Path) {
         println!("loft install: cannot determine package name from path");
         std::process::exit(1);
     }
+    // `pkg_name` is about to become a directory component under `~/.loft/lib/`, and
+    // it came from the manifest — which, for a package fetched from anywhere, is a
+    // string somebody else chose.  Without this a `name = "../../x"` writes the whole
+    // package tree wherever it points: the package would be choosing where it lands.
+    // `loft new` enforces the same rule when a package is created, so no name that
+    // could legitimately reach here is refused by it.
+    if !loft::libscan::is_valid_package_name(&pkg_name) {
+        println!(
+            "loft install: `{pkg_name}` is not a usable package name (lowercase ascii, \
+             digits and `_` only) — the manifest's `[package] name` decides the install \
+             directory, so it has to be a plain name"
+        );
+        std::process::exit(1);
+    }
     // Target: ~/.loft/lib/<name>/
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -2587,13 +2601,10 @@ fn escape_json_string(s: &str) -> String {
 fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     use std::io::Write as _;
 
-    // Sanity-check name (lowercase + alphanumeric + underscore;
-    // matches loft's identifier rules).
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    {
+    // The package-name rule lives in ONE place (`libscan::is_valid_package_name`)
+    // because it is also what keeps a manifest-supplied name from walking out of
+    // the directory it is joined into — see that function.
+    if !loft::libscan::is_valid_package_name(name) {
         eprintln!(
             "loft new: library name must be lowercase ascii + digits + underscore (got `{name}`)"
         );

@@ -405,3 +405,53 @@ fn rt1006_struct_element(p: &(Rt1006, Rt1006)) {
   p.0 = p.1;
   p.1 = t;
 }
+
+// loft#1037 — a `limit(...)` bound the type cannot CARRY is refused instead of
+// truncated.  `IntegerSpec` holds `min: i32` / `max: u32`, so `limit(0, 5000000000)`
+// silently became `limit(0, 705032704)` and every in-range value then read back as the
+// slot's default — `4999999995` answered `0`, an ordinary value of the type.
+// @EXPECT_ERROR: upper bound 5000000000 is outside the range
+fn limit1037_upper_bound_beyond_representation() {
+  x: integer limit(0, 5000000000) = 4999999995;
+  _ = x;
+}
+
+// The lower half.  This used to desync into *"Expect token ,"* — an error about
+// punctuation for a bound that is simply too wide — because a value past `i32::MAX`
+// tokenises as a Long and the `min` reader only accepted an Integer.
+// @EXPECT_ERROR: lower bound 3000000000 is outside the range
+fn limit1037_lower_bound_beyond_representation() {
+  x: integer limit(3000000000, 4000000000) = 3500000000;
+  _ = x;
+}
+
+// `i32::MIN` itself is reserved as the null sentinel, so the lowest bound a declaration
+// may name is `i32::MIN + 1` — and the message says which.
+// @EXPECT_ERROR: lower bound -2147483648 is outside the range
+fn limit1037_lower_bound_is_the_null_sentinel() {
+  x: integer limit(-2147483648, 0) = -2000000000;
+  _ = x;
+}
+
+// Two vectors whose INTEGER elements are stored differently cannot be concatenated: the
+// concat copies element BYTES and cannot re-encode, so `vector<u8> + vector<integer>`
+// answered `[1,250,7,0]` for `[7,8]` and nothing said so.  Both the width mismatch and
+// the same-width/different-offset case are refused; see
+// tests/scripts/vector-concat-element-encoding.loft for everything that keeps working.
+// @EXPECT_ERROR: cannot concatenate
+fn concat_mixed_width_elements() {
+  u: vector<u8> = [1, 250];
+  w: vector<integer> = [7, 8];
+  x = u + w;
+  _ = x;
+}
+
+// Same width, different offset — `u8` starts at 0 and `i8` at -128, so the copied bytes
+// decode against the wrong base: `[-5, 5]` came back as `[123, 133]`.
+// @EXPECT_ERROR: cannot concatenate
+fn concat_mixed_offset_elements() {
+  u: vector<u8> = [1, 250];
+  s: vector<i8> = [-5, 5];
+  x = u + s;
+  _ = x;
+}

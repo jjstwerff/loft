@@ -299,3 +299,54 @@ fn a_bare_install_without_a_manifest_names_both_spellings() {
         "both spellings must be named\n{all}"
     );
 }
+
+/// A manifest's `[package] name` decides the install directory, and a manifest is data —
+/// on a fetched package, data somebody else wrote.  A name that is a PATH rather than a
+/// name therefore chose where the package landed: `name = "../../escaped"` wrote the whole
+/// tree outside `~/.loft/lib` entirely.
+///
+/// The rule that refuses it is `libscan::is_valid_package_name`, the same one `loft new`
+/// enforces when a package is created — so no name that could legitimately arrive here is
+/// refused by it.
+#[test]
+fn an_install_refuses_a_package_name_that_is_a_path() {
+    let base = std::env::temp_dir().join(format!("loft_instsec_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let pkg = base.join("evil");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    write(
+        &pkg.join("loft.toml"),
+        "[package]\nname    = \"../../escaped\"\nversion = \"0.1.0\"\n\n\
+         [library]\nentry = \"src/pkg.loft\"\n",
+    );
+    write(&pkg.join("src/pkg.loft"), "pub fn hi() -> integer { 1 }\n");
+
+    let out = Command::new(loft_bin())
+        .args(["install", "."])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("LOFT_TIMEOUT", "90")
+        .current_dir(&pkg)
+        .output()
+        .expect("spawn loft install .");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The load-bearing assertion is the third one: a refusal that still copied the files
+    // would satisfy the first two.  `escaped` is where `~/.loft/lib/../../escaped` lands.
+    assert_ne!(out.status.code(), Some(0), "the install must fail\n{all}");
+    assert!(
+        all.contains("not a usable package name"),
+        "the refusal must say what is wrong with the name\n{all}"
+    );
+    assert!(
+        !home.join("escaped").exists(),
+        "the package escaped ~/.loft/lib and wrote to {}\n{all}",
+        home.join("escaped").display()
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

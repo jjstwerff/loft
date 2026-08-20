@@ -797,7 +797,7 @@ examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:li
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-progress features-review libraries-review
+.PHONY: examples-index examples-progress features-review libraries-review bug-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -820,6 +820,19 @@ features-review:  ## Feature-catalogue review aid: what is missing + what to re-
 #   make libcatalogue && make libraries-review
 libraries-review:  ## Library review aid: which libraries owe a review + which ones moved
 	@bash scripts/check_doc_drift.sh libraries-progress
+
+# The THIRD monthly pass (BUG_REVIEW.md): the two above ask whether the docs still
+# describe the code; this one asks whether the month's bugs share a cause worth
+# collapsing.  Same non-gate status, same monthly beat, and equally not in CI -- it
+# needs the network (gh) and a month of evidence, neither of which belongs in a
+# 20-minute PR budget (CI_BUDGET.md).  It REPORTS four things and judges none: the
+# population, each mechanism class's share over time, whether keystones already landed
+# actually moved their class, and which IR variants hand-written walkers omit.  Which
+# rising class is worth one generalization is the judgement, and stays an agent task.
+#   make bug-review                       # fetch from gh and report
+#   make bug-review ARGS="--bands 6"      # finer slicing on a busy cycle
+bug-review:  ## Monthly bug-review aid: which mechanism classes are still producing bugs
+	@python3 scripts/bug-review.py $(ARGS)
 
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft

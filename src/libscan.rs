@@ -47,6 +47,29 @@ pub fn is_reserved_package_name(name: &str) -> bool {
     RESERVED_PACKAGE_NAMES.contains(&name)
 }
 
+/// True when `name` may be used as a package name: lowercase ASCII letters,
+/// digits and `_`, and not empty.
+///
+/// Call this on any name that arrives from a **manifest** before using it — a
+/// manifest is data, and on an installed or downloaded package it is data
+/// somebody else wrote. Two things depend on it:
+///
+/// * the name becomes a directory component (`~/.loft/lib/<name>`), and the
+///   character set here admits no `/`, `\`, or `.`, so a name cannot walk out
+///   of the directory it is joined into;
+/// * `use <name>` has to be able to reach the package afterwards, and that
+///   spelling is a loft identifier.
+///
+/// The same rule therefore covers a `[library] native` stem, which becomes a
+/// filename in a per-package directory.
+#[must_use]
+pub fn is_valid_package_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 #[inline]
 fn is_ident_start(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'
@@ -237,6 +260,36 @@ mod tests {
             scan_method_calls("print(\"{s.matches(p)}\"); for i in 0..3 {}"),
             vec!["matches".to_string()]
         );
+    }
+
+    #[test]
+    fn a_package_name_is_lowercase_ascii_digits_and_underscore() {
+        for ok in [
+            "goodpkg",
+            "hex_world",
+            "loft_graphics_native",
+            "arcf",
+            "loft_b3",
+            "a",
+        ] {
+            assert!(is_valid_package_name(ok), "{ok} is a real package name");
+        }
+        // Every rejection here is also a path component that could leave the directory
+        // it is joined into, or a spelling no `use` could reach.
+        for bad in [
+            "",
+            "..",
+            ".",
+            "../../escaped",
+            "a/b",
+            "a\\b",
+            "/etc",
+            "Cargo",
+            "my-pkg",
+            "a b",
+        ] {
+            assert!(!is_valid_package_name(bad), "{bad:?} must be refused");
+        }
     }
 
     #[test]

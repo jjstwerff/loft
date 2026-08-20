@@ -1504,7 +1504,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // encoding with raw-byte copies.  Falls back to the
         // bounds-heuristic via `database.size(known_type)` otherwise.
         let elm_size_raw = if let Type::Integer(spec) = etp
-            && let Some(n) = spec.vector_narrow_width()
+            && let Some(n) = spec.vector_narrow_width(false)
         {
             i32::from(n)
         } else if let Some(elem) = self.data.vector_element_type(etp, &mut self.database) {
@@ -2350,17 +2350,19 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
     /// rooted at a CALL.  `None` for anything else, including a chain rooted at a
     /// variable — that root already has a name, and `parse_index` inherits its dep.
     fn projection_root_mut<'a>(&self, code: &'a mut Value) -> Option<&'a mut Value> {
-        let get_field = self.data.def_nr("OpGetField");
-        let get_vector = self.data.def_nr("OpGetVector");
         let Value::Call(d, args) = code.unspan_mut() else {
             return None;
         };
-        if *d != get_field && *d != get_vector {
+        // ONE list of the projection ops, shared with the @P290 bracket's witness walk
+        // (`use_analysis::view_root_slots`), which asks the same question for the
+        // opposite reason: this decides which inline container needs a NAME, that
+        // decides which store the bracket MARKS.
+        if !crate::use_analysis::is_projection_op(&self.data, *d) {
             return None;
         }
         let base = args.first_mut()?;
         match base.unspan() {
-            Value::Call(bd, _) if *bd == get_field || *bd == get_vector => {
+            Value::Call(bd, _) if crate::use_analysis::is_projection_op(&self.data, *bd) => {
                 self.projection_root_mut(base)
             }
             Value::Call(_, _) => Some(base),

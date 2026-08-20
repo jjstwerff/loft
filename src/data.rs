@@ -296,6 +296,24 @@ impl IntegerSpec {
         }
     }
 
+    /// The `min` a narrow slot's schema Part must carry — the SAME offset the READ op
+    /// (`get_val`) and the WRITE op (`set_field_check` / `narrow_elm_set`) encode
+    /// against, which is [`Self::usable_min`] under the kind's sentinel rule.
+    ///
+    /// A nullable 1- or 2-byte slot reserves one code for null, and when the declared
+    /// range FILLS the width a SIGNED spec pays for that by dropping its bottom edge
+    /// (`min + 1`).  The ops moved with it; the schema registration passed the raw
+    /// `min`, so a present `i16?` rendered exactly one too LOW — `-300` stored, `-301`
+    /// printed — while reading the same slot answered `-300`.  Unsigned specs drop the
+    /// TOP edge instead, which is why `u8?` / `u16?` looked fine.
+    #[must_use]
+    pub fn part_min(&self, width: u8, nullable: bool) -> i32 {
+        // `reserves_sentinel()` is true exactly for the nullable 1- and 2-byte kinds
+        // (`ByteNullable` / `Short`); the raw-vs-full choice a narrow-vector element
+        // makes never reserves one, so the width and nullability decide it alone.
+        self.usable_min(nullable && matches!(width, 1 | 2))
+    }
+
     /// element stride for narrow vectors, matching
     /// what `typedef.rs::fill_database`'s Vector arm registers.
     /// Returns `Some(n)` for the direct-encoded widths:
@@ -307,23 +325,42 @@ impl IntegerSpec {
     /// `vector_add`'s raw-byte copy path works across source literal
     /// vectors and destination fields without re-encoding.
     ///
-    /// Returns `None` for any Type without a `forced_size` annotation
-    /// (caller falls back to the default wide-integer stride) and for
-    /// `forced_size` values outside the narrow gate.  `u16` struct
-    /// fields continue to use `Parts::Short` (the legacy `+1` encoding)
-    /// via the `alias != u32::MAX` path in `get_val` / `set_field_check`.
+    /// Returns `None` when the element stores at the wide 8-byte stride, so the
+    /// caller keeps the default wide-integer path.  `u16` struct fields continue
+    /// to use `Parts::Short` (the legacy `+1` encoding) via the
+    /// `alias != u32::MAX` path in `get_val` / `set_field_check`.
     ///
     /// Callers use this at compile time to emit matching `elm_size` in
     /// `OpGetVector` / `OpSetVector`, and in `get_val` to choose the
     /// right-width scalar-read opcode.  Keeping the predicate in one
     /// place avoids the narrow-read / wide-storage skew that bit the
     /// first Phase 3 attempt.
+    ///
+    /// loft#1036 — the width comes from [`Self::byte_width`], the ONE
+    /// range→width home, NOT from `forced_size` alone.  `formal/layout.md`
+    /// settles which: `(L-Narrow)` stores a range-annotated integer in the
+    /// smallest width that holds its RANGE, and `(L-Ref)` makes a collection's
+    /// element stride exactly `width(element)` — so `integer limit(10, 255)`
+    /// is a 1-byte element whether or not it was also spelled `size(1)`.
+    /// While this asked `forced_size`, the `limit(...)` spelling answered
+    /// `None` here (element stride + schema stayed wide 8-byte) while the READ
+    /// (`get_val`) already asked `byte_width` and emitted a 1-byte `OpGetByte`
+    /// with the `- min` offset decode.  Two homes, two layouts for one type —
+    /// `(L-Total)`'s "the layout is decided by the type alone, never by which
+    /// call site reads it" — so every element read came back exactly `lo` too
+    /// high (12 stored, 22 returned) while a struct FIELD of the identical type
+    /// was correct.
+    ///
+    /// `nullable` is the element's own nullability (`vector<u8?>`): a nullable
+    /// narrow element reserves one code for the null sentinel, which can widen
+    /// the slot (`limit(0, 255)?` needs 257 codes → 2 bytes).  Passing `false`
+    /// where the caller has already peeled `Optional` is only correct when that
+    /// caller routes the nullable case elsewhere — `Data::vector_element_type`
+    /// is the one that answers for it.
     #[must_use]
-    pub fn vector_narrow_width(&self) -> Option<u8> {
-        match self.forced_size?.get() {
-            1 => Some(1),
-            2 => Some(2),
-            4 => Some(4),
+    pub fn vector_narrow_width(&self, nullable: bool) -> Option<u8> {
+        match self.byte_width(nullable) {
+            w @ (1 | 2 | 4) => Some(w),
             _ => None,
         }
     }
@@ -363,8 +400,11 @@ impl IntegerSpec {
     /// it emitted `-> vector<integer(-2147483647, 4294967295)>`, which does not
     /// parse (#618).
     ///
-    /// Narrow aliases (`u8`/`i16`/…) carry a `forced_size` and match no template
-    /// here, so they keep a distinct name and a distinct storage width.
+    /// Narrow aliases (`u8`/`i16`/…) carry a `forced_size`, so they keep a distinct
+    /// name and a distinct storage width. Note that carrying one does not stop a
+    /// spec matching a template *predicate*: `i32`'s range is exactly the signed-32
+    /// template's, so [`IntegerSpec::is_signed32_template`] answers true for it.
+    /// Test `forced_size` to tell an alias from a template; the range alone cannot.
     #[must_use]
     pub fn source_name(&self) -> Option<&'static str> {
         if self.is_signed32_template() || self.is_wide_template() {
@@ -4266,15 +4306,18 @@ impl Data {
             _ => None,
         };
         if let Some((spec, nullable)) = narrow {
-            let n = spec.vector_narrow_width()?;
+            let n = spec.vector_narrow_width(nullable)?;
+            // The Part carries the offset the OPS encode against (`part_min`), not the
+            // declared `min` — they differ for a nullable signed narrow slot.
+            let m = spec.part_min(n, nullable);
             return match n {
-                1 => Some(database.byte(spec.min, nullable)),
+                1 => Some(database.byte(m, nullable)),
                 // a nullable 2-byte element uses the `+1` sentinel encoding
                 // (`Parts::Short`), matching the nullable field; the non-null
                 // element stays direct (`Parts::ShortRaw`, full 65536 range).
-                2 if nullable => Some(database.short(spec.min, true)),
-                2 => Some(database.short_raw(spec.min, false)),
-                4 => Some(database.int(spec.min, nullable)),
+                2 if nullable => Some(database.short(m, true)),
+                2 => Some(database.short_raw(m, false)),
+                4 => Some(database.int(m, nullable)),
                 _ => None,
             };
         }

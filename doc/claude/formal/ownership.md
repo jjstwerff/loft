@@ -104,7 +104,53 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **0** (2026-07-04) — **the ownership register is at zero.**  All five D-own
+OPEN: **0** (2026-08-20) — **D-own-6 is CLOSED**; the five original D-own deviations remain
+resolved.  Read the entry below for what its oracle now varies before treating this zero as a
+measurement: it rested on a Join corpus that pinned the argument spelling, and moving that one
+axis found six leaking spellings nobody had asked about.
+
+### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
+
+`(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a
+parameter is completed per-path by the @P290 bracket — `protect_store_frees` marks each ref
+argument's store, and a returned store that is marked is refused the source-free while a
+callee-minted one is freed.  The register closed D-own-2 on that basis.
+
+The witness was not total.  The bracket needs a slot to name, so
+`use_analysis::protectable_ref_args` accepted only a bare `Var`; for any other argument
+spelling `covers_all` went false and the caller fell back to the conservative never-free
+answer, orphaning the store the callee minted — one record per call, both backends.  The
+axis is the ARGUMENT SPELLING, not what the borrow arm names: a vector-element borrow arm
+leaks with a literal argument, and a parameter borrow arm is clean with a variable one.
+
+The rule that closes it: **the witness names a STORE, not the argument.**
+`protect_store_frees` marks an allocation and reaches it through any `DbRef` in that store, so
+an argument only has to be DERIVED from a nameable slot by operations that stay inside one
+store.  Two families, and they need opposite cures:
+
+* **A view of a live slot** — `b.s`, `d.b.s`, `w[0]`, `vb.v`, `o ?? q`, `if c { q } else { r }`.
+  The root of a projection chain is the witness, and a join witnesses every arm.  Nothing is
+  hoisted; the slot already holds its `DbRef` when the bracket runs.
+* **A construction block**, which MINTS the store it yields — a struct or collection literal.
+  This one cannot be witnessed in place: the bracket is emitted before the arguments evaluate,
+  so the work-ref still holds its null and marking it would protect nothing while reading as
+  covered — trading the leak for a use-after-free.  It is hoisted into the enclosing statement
+  list instead, which is the spelling (`q = S { a: 7 }; pick(q, …)`) that was always clean.
+
+`null` in either spelling holds no store and needs no witness (loft#1021).
+
+**The oracle that missed this** varied the instantiating TYPE and the join SHAPE and never
+varied how the argument was SPELLED — every cell in `1019-join-owned-arm-owner.loft` binds its
+argument to a variable first, and a corpus that sweeps four axes impressively is read as
+coverage.  `tests/scripts/1029-inline-argument-borrow-source.loft` now moves that axis across
+eleven spellings, each asserting BOTH arms plus the source's own value and, for a collection,
+its length — because a cure that freed the DELIVERED store answers the same number on the
+owning arm, and only a length or a source read can witness it.  The type-variable half of the
+same gap is recorded in [interfaces.md](interfaces.md).
+
+---
+
+OPEN: ~~0~~ (2026-07-04, superseded above) — **the ownership register was at zero.**  All five D-own
 deviations are resolved: D-own-3 (typed `Deps`) CLOSED; D-own-4 RECLASSIFIED as the
 decided edge C86 (whole-value binds copy; aliasing is a last-use elision —
 `classify_vec_bind`); D-own-5 (the `&` borrow rides `deps`) CLOSED; **D-own-2

@@ -33,8 +33,22 @@ impl Parser {
             },
             _ => return None,
         };
-        let n = spec.vector_narrow_width()?;
-        let kind = crate::data::NarrowIntKind::of(n, nullable, true, spec.unsigned_wide());
+        // loft#1036 — the width comes from `byte_width`, the ONE range→width home,
+        // exactly as the READ (`get_val`) derives it.  This site asked
+        // `vector_narrow_width`, which was keyed on `forced_size` alone, so an
+        // element declared `integer limit(10, 255)` answered `None` here and the
+        // caller fell back to a wide `OpSetInt` that never applied the `- min`
+        // ENCODE the 1-byte `OpGetByte` read decodes with — every element read back
+        // exactly `lo` too high (12 stored, 22 returned), and the error vanished at
+        // `lo == 0`, which is why the common spellings looked fine.
+        //
+        // `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it
+        // picks the raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a
+        // `u16`-style alias, `ShortFull` for a range that merely fits), and the
+        // storage side (`Data::narrow_vector_content`) registers the matching Part.
+        let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
+        let n = spec.vector_narrow_width(nullable)?;
+        let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
         let pos = Value::Int(0);
         Some(if kind.takes_min() {
             let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
@@ -42,6 +56,64 @@ impl Parser {
         } else {
             self.cl(kind.set_op(), &[Value::Var(elm), pos, val.clone()])
         })
+    }
+
+    /// Refuse a vector concatenation whose two sides store their INTEGER elements
+    /// differently — a different width, or a different offset.
+    ///
+    /// `OpAppendVector` copies element BYTES: it is handed the destination's element
+    /// type and never learns the source's, so it cannot re-encode.  That is right for
+    /// every shape the type checker admits except this one: `u8` and `integer` are both
+    /// "integer" to it, so `vector<u8> + vector<integer>` type-checked and then copied
+    /// 8-byte elements into 1-byte slots — `[1,250] + [7,8]` answered `[1,250,7,0]`, and
+    /// `vector<u8> + vector<i8>` answered `[1,250,123,133]` for `[-5,5]` because the two
+    /// offsets differ.  Nothing reported it.
+    ///
+    /// Refusing rather than converting follows the scalar rule: `formal/types.md`
+    /// (I-Narrow) makes a narrowing explicit (`as`), and every mixed concat is a
+    /// narrowing in one direction or the other at the element level.  A literal append
+    /// (`v += [9]`) is unaffected — the literal is already built in the destination's
+    /// encoding — and so is any concat of two vectors of one type.
+    fn refuse_mixed_element_encoding(&mut self, dest_tp: &Type, part_tp: &Type) {
+        if self.first_pass {
+            return;
+        }
+        let (Type::Vector(dest_c, _), Type::Vector(src_c, _)) = (dest_tp.base(), part_tp.base())
+        else {
+            return;
+        };
+        let int_of = |t: &Type| match t.base() {
+            Type::Integer(spec) => Some((*spec, matches!(t, Type::Optional(_)))),
+            _ => None,
+        };
+        let (Some((d_spec, d_null)), Some((s_spec, s_null))) = (int_of(dest_c), int_of(src_c))
+        else {
+            return;
+        };
+        let (d_w, s_w) = (d_spec.byte_width(d_null), s_spec.byte_width(s_null));
+        // The offset only encodes anything at a narrow width; a wide element stores the
+        // value raw, so two 8-byte specs of different ranges share one encoding.
+        let offset_differs =
+            d_w <= 4 && d_spec.part_min(d_w, d_null) != s_spec.part_min(s_w, s_null);
+        if d_w == s_w && !offset_differs {
+            return;
+        }
+        let how = if d_w == s_w {
+            format!("both store their elements in {d_w} byte(s), but at different offsets")
+        } else {
+            format!("one stores its elements in {d_w} byte(s) and the other in {s_w}")
+        };
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "cannot concatenate `{}` with `{}` — {how}, and a concatenation copies element \
+             BYTES, so the copied values would be wrong.  Append element by element \
+             instead, which converts each value: `for x in <source> {{ <dest> += [x]; }}` \
+             — with the checked cast inside the brackets if that step narrows \
+             (`[(x as u8?) ?? 0]`)",
+            dest_tp.source_name(&self.data),
+            part_tp.source_name(&self.data),
+        );
     }
 
     pub(crate) fn parse_append_vector(
@@ -149,7 +221,8 @@ impl Parser {
             ls.push(v_set(orig_var, code.clone()));
             orig_var
         };
-        for (val, _) in parts {
+        for (val, part_tp) in parts {
+            self.refuse_mixed_element_encoding(tp, part_tp);
             ls.push(self.cl(
                 "OpAppendVector",
                 &[Value::Var(var_nr), val.clone(), Value::Int(rec_tp)],
@@ -3705,21 +3778,18 @@ impl Parser {
                 // valid.  Narrow path registers on demand so locals /
                 // params / returns don't depend on a struct field
                 // having registered the name first.
-                if let Some(n) = spec.vector_narrow_width() {
-                    match n {
-                        1 => self.database.byte(spec.min, false),
-                        2 => self.database.short_raw(spec.min, false),
-                        4 => self.database.int(spec.min, false),
-                        _ => self.database.name("integer"),
-                    }
-                } else {
-                    // Bounds heuristic fallback.
-                    match in_t.size(false) {
-                        1 if spec.min == 0 => self.database.name("byte"),
-                        1 => self.database.name(&format!("byte<{},false>", spec.min)),
-                        2 => self.database.name(&format!("short<{},false>", spec.min)),
-                        _ => self.database.name("integer"),
-                    }
+                // loft#1036 — one derivation, and it REGISTERS.  The width now comes
+                // from `byte_width` (`forced_size` first, then the range), so the
+                // `limit(lo, hi)` spelling lands in this arm too.  It used to fall to
+                // a bounds-heuristic branch that only LOOKED UP a name — and looked up
+                // `short<min,false>` (the `+1` sentinel encoding) where this arm
+                // registers `short_raw` (direct), so the two spellings of one range
+                // could not agree on a Part even when both found one.
+                match spec.vector_narrow_width(false) {
+                    Some(1) => self.database.byte(spec.min, false),
+                    Some(2) => self.database.short_raw(spec.min, false),
+                    Some(4) => self.database.int(spec.min, false),
+                    _ => self.database.name("integer"),
                 }
             }
             Type::Character => self.database.name("integer"),

@@ -523,6 +523,27 @@ impl Parser {
                 // closure record is a struct — add __closure as dep.
                 t = t.depending(self.closure_param);
             }
+        } else if qualified && source != u16::MAX && self.data.source_nr(source, &nm) != u32::MAX {
+            // loft#1039 — a library-qualified name in VALUE position resolves in the
+            // source the qualifier names, exactly as it already does in TYPE position
+            // (`f: std::Format = NotExists`) and for a qualified call (`std::abs(-5)`)
+            // or constant (`stage::LOOP`).  The branch below asks `def_nr(name)`, and
+            // for `std::Format.NotExists` `name` is the QUALIFIER `std` — a library,
+            // never a definition — so the value spelling fell through to the
+            // unknown-variable arm and reported *"Unknown variable 'std'"*, naming the
+            // library while the enum sat one token to its right.  It bites hardest
+            // under an alias-only `use lib as a;`, where a qualifier is the whole
+            // point and the bare spelling is not imported at all.
+            //
+            // `parse_constant_value` above already answered for every qualified form
+            // that resolves to a VALUE (a constant, a variant, a struct literal); what
+            // reaches here is the qualified name of a DEFINITION, and it takes its
+            // definition's type — which is what puts `.NotExists` on an enum-typed
+            // expression and routes it through the same variant access the bare
+            // `Format.NotExists` uses.
+            let dnr = self.data.source_nr(source, &nm);
+            self.data.def_used(dnr);
+            t = self.data.def(dnr).returned().clone();
         } else if self.data.def_nr(name) != u32::MAX
             && !self.at_binding_name()
             && !matches!(

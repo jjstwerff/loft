@@ -122,6 +122,29 @@ struct ResolvedPkg {
     manifest: Option<manifest::Manifest>,
 }
 
+/// loft#1040 — what a deferred `par` needs that substitution cannot supply: names and
+/// slot numbers, which a monomorph shares with its template because its variable table is
+/// a COPY of the template's.  The types are deliberately absent — they are re-read from
+/// the monomorph's own table at expansion, which is the whole point of deferring.
+#[derive(Clone)]
+struct DeferredPar {
+    /// The name the clause binds its result to (`par(r = …)`), which also names the
+    /// result variable the body was parsed against.
+    result_name: String,
+    /// The worker as the TEMPLATE resolved it — still a generic when the element type is
+    /// a type variable, which is exactly why this clause was deferred.
+    worker: u32,
+    /// The loop's number, which keys the result variable's name across passes.
+    loop_nr: u16,
+    /// The loop element's variable, whose type IS the substituted element type once the
+    /// monomorph's table has been written.
+    elem_var: u16,
+    /// The loop's COUNTER variable, or `u16::MAX` when the body needs none.  A number,
+    /// not a count — passing `0` here made the lowering initialise and increment variable
+    /// zero, which is the input vector.
+    count: u16,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -477,6 +500,24 @@ pub struct Parser {
     /// attribute snapshot, exactly like `reserve_late_return_buffers`.  By pass 2 the
     /// set is complete, so `parse_function` reproduces the promoted type.
     par_worker_defs: std::collections::HashSet<u32>,
+    /// loft#1040 — one entry per `par` clause whose ROUTE could not be decided where it
+    /// was written, because the function holding it is a TEMPLATE and the element and
+    /// return types are its type variable.
+    ///
+    /// A par lowering is more than a call target: it picks a queue variant, an element
+    /// and a return SIZE, a result accessor and a re-wrap, all from those two types.
+    /// Inside a template they are the type VARIABLE, so a route chosen there is a route
+    /// for a 12-byte reference; substitution then rewrites the types and leaves the whole
+    /// route behind.  So the template parses the BODY (which is what types it) and stops,
+    /// leaving a marker call the monomorph replaces by lowering the same clause again —
+    /// against the types it actually has.  Everything that must be substituted rides in
+    /// the marker's arguments, where the ordinary machinery reaches it; this side holds
+    /// only what substitution cannot change.
+    par_deferred: Vec<DeferredPar>,
+    /// The body of the par clause being REPLAYED, with the loop-counter variable that
+    /// belongs to it, so `build_parallel_for_ir` uses the IR the template already parsed
+    /// instead of reading tokens that are long gone.
+    par_replay_body: Option<(Value, u16)>,
     /// loft#918 — every `(function, tail variable)` whose promotion pass 1 could not
     /// decide: the tail is a bare local, the function returns `text` / `text?`, and the
     /// local's type is still `Unknown` because it was bound to a call declared lower in
@@ -982,6 +1023,8 @@ impl Parser {
             ambiguity_reported: std::collections::HashSet::new(),
             force_tret: std::collections::HashSet::new(),
             par_worker_defs: std::collections::HashSet::new(),
+            par_deferred: Vec::new(),
+            par_replay_body: None,
             late_text_tails: Vec::new(),
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
@@ -3954,6 +3997,33 @@ impl Parser {
             );
             return true;
         }
+        // loft#1028 — the target is still a TYPE VARIABLE, so which null this is has not
+        // been decided yet.  A template's `T` is an attribute-less placeholder STRUCT, so
+        // the `Reference` arm of the loop below wins and every monomorph keeps
+        // `OpNullRefSentinel`: a 12-byte DbRef written into whatever slot `T` turned out
+        // to be.  Substitution rewrites the TYPE and leaves the already-chosen OP, and
+        // nothing downstream re-asks.  The interpreter then read the sentinel's own bytes
+        // back as the answer — `65535` for an `integer`, U+FFFF for a `character`, a
+        // denormal for a `float`, the empty text for a `text` — while `--native` refused
+        // the program outright, `DbRef` having no `Display`.  A `boolean` came out right,
+        // but by coincidence: the sentinel's low byte is `0xFF`, which is also boolean
+        // null, so it is a control that does not control.
+        //
+        // Stamp the site and let `rewrite_generic_type_defaults` re-run THIS conversion
+        // once `T` is concrete, exactly as loft#1016 does for that declaration's DEFAULT
+        // and loft#1020 for its `== null`.  Re-running the same dispatch rather than
+        // answering here is what keeps one spelling of "what is `τ`'s null?" — minting a
+        // second is the defect loft#1014 was.  The wrapped sentinel keeps the template's
+        // own IR as well-formed as it was — a template is type-checked and slot-allocated
+        // even though it never runs — and the rewrite discards it.
+        if *is_type == Type::Null
+            && let Type::Reference(target, _) = should.base()
+            && self.data.is_type_var_placeholder(*target)
+        {
+            let placeholder = Value::Call(self.data.def_nr("OpNullRefSentinel"), vec![]);
+            *code = v_block(vec![placeholder], should.clone(), Self::TV_NULL_BLOCK);
+            return true;
+        }
         // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
         // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
         // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan
@@ -5210,15 +5280,6 @@ impl Parser {
     /// fn-element tuples keep their existing ABI (mirrors the deferral predicate).
     /// Does `t` mention the type variable `tv_nr` anywhere?  A type variable appears
     /// as a `Reference`/`Enum` to its def; recurses `Vector`/`Optional`/`Tuple`.
-    fn type_mentions_tv(t: &Type, tv_nr: u32) -> bool {
-        match t {
-            Type::Reference(d, _) | Type::Enum(d, _, _) => *d == tv_nr,
-            Type::Vector(inner, _) | Type::Optional(inner) => Self::type_mentions_tv(inner, tv_nr),
-            Type::Tuple(elems) => elems.iter().any(|e| Self::type_mentions_tv(e, tv_nr)),
-            _ => false,
-        }
-    }
-
     /// Does the current def's return SHAPE depend on its generic type variable
     /// (`-> T`, `-> (T, T)`, `-> vector<T>`)?  False for a non-generic context and
     /// for a generic template whose return is already CONCRETE (`-> (text, text)`).
@@ -5240,7 +5301,15 @@ impl Parser {
             return false;
         }
         let tv_nr = Self::extract_type_var(&attrs[0].typedef);
-        tv_nr != u32::MAX && Self::type_mentions_tv(t, tv_nr)
+        // `Type::contains_def` is the keystone-backed answer to "does this type mention
+        // `d_nr`?" — `any_node` over `Type::for_each_child`, so it descends every
+        // child-bearing variant and a new one extends ONE match.  The hand-rolled
+        // `type_mentions_tv` this replaces knew Vector / Optional / Tuple and answered
+        // `_ => false` for the rest, so a type variable inside an `Iterator`, a
+        // `Function`, a `RefVar` or a keyed collection read as "no type variable here".
+        // `contains_def`'s own doc records being unified from two earlier copies with
+        // exactly that drift; this was a third, two hundred lines from a call to it.
+        tv_nr != u32::MAX && t.contains_def(tv_nr)
     }
 
     fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
@@ -5358,6 +5427,14 @@ impl Parser {
     pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
     /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
     pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
+    /// loft#1028 — a `null` VALUE whose type is still a TYPE VARIABLE.
+    ///
+    /// Which sentinel `τ`'s null is written as is a function of `τ`, and inside a
+    /// template `τ` is not known yet, so [`convert`](Parser::convert) stamps the site and
+    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) re-runs
+    /// the conversion once `T` is concrete.  The block's `result` is the target type,
+    /// which substitution rewrites to the concrete one.
+    pub(crate) const TV_NULL_BLOCK: &'static str = "tvnull";
 
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
@@ -5599,7 +5676,133 @@ impl Parser {
         // could see, which is a vector over the type variable's own storage.  Substitution
         // replaces the type and leaves that row behind, so the dump walked a
         // `vector<integer>` through the wrong schema and printed `{}`.
+        self.retarget_parametric_coroutine_next(d_nr);
         self.retarget_parametric_vector_format(d_nr);
+        // loft#1040 — and lower any `par` clause the template could not: it needs the
+        // types this body now carries, so it runs after every substitution above.
+        self.expand_deferred_par(d_nr);
+    }
+
+    /// loft#1040 — lower every `par` clause the TEMPLATE deferred, now that this monomorph
+    /// has the types the route is picked from.
+    ///
+    /// The template left a marker call carrying everything substitution had to reach: the
+    /// parsed body, the input vector expression, the thread count, the pre-loop fill and
+    /// the worker's extra arguments — all already rewritten for this monomorph by the
+    /// time this runs.  What it did NOT carry is the types: they are read back here from
+    /// the monomorph's own variable table (the element) and from the worker instantiated
+    /// for that element (the return).  Re-running the ordinary lowering against them
+    /// picks the queue variant, the sizes, the accessor and the re-wrap the same way any
+    /// non-generic par site does — which is the whole point of waiting.
+    ///
+    /// Runs in the MONOMORPH's frame: the lowering creates its own index / length /
+    /// result variables, and they belong to the function the code lands in.
+    fn expand_deferred_par(&mut self, d_nr: u32) {
+        let marker = self.data.def_nr(crate::parser::collections::PAR_MARKER_FN);
+        if marker == u32::MAX || self.par_deferred.is_empty() {
+            return;
+        }
+        // Collect first — re-lowering needs `&mut self` while the walk holds the IR.
+        let mut sites: Vec<(usize, Vec<Value>)> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == marker
+                && let Some(Value::Int(id)) = args.first().map(Value::unspan)
+                && let Ok(id) = usize::try_from(*id)
+                && id < self.par_deferred.len()
+                && !sites.iter().any(|(seen, _)| *seen == id)
+            {
+                sites.push((id, args.clone()));
+            }
+        });
+        if sites.is_empty() {
+            return;
+        }
+        // Instantiate the workers BEFORE the context swap below: instantiation parses
+        // against `self.vars` / `self.context` and must see the ordinary ones, not this
+        // monomorph's (the same ordering `instantiate_nested_generics` keeps).
+        let mut plans: Vec<(usize, Vec<Value>, u32, Type, Type)> = Vec::new();
+        for (id, args) in sites {
+            let plan = self.par_deferred[id].clone();
+            // The element type IS the loop variable's type, and this table has been
+            // substituted — so `T` is whatever this monomorph bound it to.
+            let elem_tp = self.data.def(d_nr).variables.tp(plan.elem_var).clone();
+            // The worker is generic for the same reason this clause was deferred; give it
+            // the element type an ordinary call site would have given it.
+            let worker = if matches!(self.data.def_type(plan.worker), DefType::Generic) {
+                let name = self
+                    .data
+                    .def(plan.worker)
+                    .name()
+                    .strip_prefix("n_")
+                    .unwrap_or_default()
+                    .to_string();
+                let inst = self.try_generic_instantiation(&name, std::slice::from_ref(&elem_tp));
+                if inst == u32::MAX { plan.worker } else { inst }
+            } else {
+                plan.worker
+            };
+            let ret_type = self.data.def(worker).returned().clone();
+            plans.push((id, args, worker, ret_type, elem_tp));
+        }
+        // Now the monomorph's frame: the lowering creates its own index / length / result
+        // variables, and they belong to the function the code lands in.
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut built: Vec<(usize, Value)> = Vec::new();
+        for (id, args, worker, ret_type, elem_tp) in plans {
+            let plan = self.par_deferred[id].clone();
+            let return_size = self.par_return_size(&ret_type, worker);
+            let elem_size = self.par_elem_size(&elem_tp);
+            let mut it = args.into_iter().skip(1);
+            let (Some(body), Some(vec_expr), Some(threads_expr), Some(fill)) =
+                (it.next(), it.next(), it.next(), it.next())
+            else {
+                continue;
+            };
+            let extra_args: Vec<Value> = it.collect();
+            self.par_replay_body = Some((body, plan.count));
+            let mut out = Value::Null;
+            self.build_parallel_for_ir(
+                &mut out,
+                &plan.result_name,
+                worker,
+                &ret_type,
+                elem_size,
+                return_size,
+                &vec_expr,
+                threads_expr,
+                fill,
+                plan.loop_nr,
+                extra_args,
+                plan.elem_var,
+                &elem_tp,
+            );
+            self.par_replay_body = None;
+            built.push((id, out));
+        }
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == marker
+                && let Some(Value::Int(id)) = args.first().map(Value::unspan)
+                && let Ok(id) = usize::try_from(*id)
+                && let Some((_, lowered)) = built.iter().find(|(b, _)| *b == id)
+            {
+                *v = lowered.clone();
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
     }
 
     /// loft#1023 — re-derive every monomorph that was built from a template's PASS-1 body.
@@ -5942,6 +6145,10 @@ impl Parser {
     /// Extract the type variable `def_nr` from a type tree.
     /// Returns the `def_nr` of the first `Reference` that refers to the type variable,
     /// or `u32::MAX` if not found.
+    pub(crate) fn type_var_of(tp: &Type) -> u32 {
+        Self::extract_type_var(tp)
+    }
+
     fn extract_type_var(tp: &Type) -> u32 {
         match tp {
             Type::Reference(d, _) => *d,
@@ -6102,6 +6309,66 @@ impl Parser {
     /// Both op spellings appear because they are one op with two delivery targets
     /// (`__work_N` on the stack vs a heap text); `append_data` chooses between them by the
     /// accumulator's storage, long before any of this.
+    /// loft#1032 — re-decide every `OpCoroutineNext` in a monomorph from the
+    /// generator variable's now-concrete `iterator<τ>`.
+    ///
+    /// The operands pair a SIZE with a CHANNEL, and both are a function of the
+    /// yielded type, so a template that lowered `for y in inner(v)` while `T` was
+    /// still the type variable baked the DbRef channel and 12 bytes.  Substitution
+    /// then retyped the loop variable to the concrete `T` and left that pairing
+    /// behind — the same shape as loft#1016 (`x?`'s default), loft#1020
+    /// (`x == null`) and loft#1028 (a `null` literal): an operation whose choice
+    /// depends on `τ` decided before `τ` was known.  At `T = integer` the loop read
+    /// a 12-byte DbRef out of an 8-byte slot and indexed the store off its end
+    /// ("Store access out of bounds … the reference is corrupt"); at `T = text` or a
+    /// struct the DbRef channel is the right answer anyway, which is why the
+    /// existing generic corpus never saw it — the scalar axis `formal/interfaces.md`
+    /// records as this doc's missing one.
+    ///
+    /// Reads the generator VARIABLE's type rather than pattern-matching the baked
+    /// constant, so a genuinely non-parametric nested iterator in a generic body
+    /// re-derives to what it already had, and only a stale pairing moves.
+    fn retarget_parametric_coroutine_next(&mut self, d_nr: u32) {
+        let op = self.data.def_nr("OpCoroutineNext");
+        if op == u32::MAX {
+            return;
+        }
+        // Collect first — the walk borrows the IR while re-deriving needs the table.
+        let mut fixes: Vec<(u16, i32, Vec<i32>)> = Vec::new();
+        self.data.def(d_nr).code.walk(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == op
+                && args.len() >= 2
+                && let Value::Var(g) = args[0].unspan()
+                && let Type::Iterator(inner, _) = self.data.def(d_nr).variables.tp(*g).base()
+            {
+                let (value_size, kinds) = crate::coroutine_layout::next_operands(inner);
+                let stale = matches!(&args[1], Value::Int(n) if *n != value_size)
+                    || args.len() - 2 != kinds.len();
+                if stale && !fixes.iter().any(|(v_nr, _, _)| *v_nr == *g) {
+                    fixes.push((*g, value_size, kinds));
+                }
+            }
+        });
+        if fixes.is_empty() {
+            return;
+        }
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && *d == op
+                && args.len() >= 2
+                && let Value::Var(g) = args[0].unspan()
+                && let Some((_, value_size, kinds)) = fixes.iter().find(|(v_nr, _, _)| *v_nr == *g)
+            {
+                let gen_arg = args[0].clone();
+                *args = vec![gen_arg, Value::Int(*value_size)];
+                args.extend(kinds.iter().copied().map(Value::Int));
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
+    }
+
     fn retarget_parametric_vector_format(&mut self, d_nr: u32) {
         let ops: Vec<u32> = ["OpFormatDatabase", "OpFormatStackDatabase"]
             .iter()
@@ -6209,6 +6476,47 @@ impl Parser {
                 targets.push((*d, arg_tp));
             }
         });
+        // loft#1033 — a par WORKER is a generic too, and it does not ride in the IR as a
+        // `Value::Call`: the parallel ops carry their worker as a d_nr INTEGER argument
+        // (`parallel_for(input, elem_size, return_size, threads, fn_d_nr, …)`), so the walk
+        // above cannot see it and a template's worker stayed the template. The interpreter
+        // dispatches by d_nr and survived that; `--native` emits a direct call and died on
+        // `cannot find function n_idf`, because a template emits no code.
+        //
+        // Recognised by TWO facts at once rather than by argument position: the enclosing
+        // call is one of the `n_parallel_*` family, and the integer is a d_nr this parser
+        // already recorded as a par worker (`par_worker_defs`) whose def is a template.
+        // Either test alone could match an ordinary integer that happens to equal a d_nr;
+        // together they cannot, and neither hardcodes the operand index, which is the
+        // layout's own business at the build site.
+        let par_workers: Vec<(u32, Type)> = {
+            let mut found: Vec<(u32, Type)> = Vec::new();
+            self.data.def(d_nr).code.walk(&mut |v| {
+                if let Value::Call(d, args) = v
+                    && *d != u32::MAX
+                    && (*d as usize) < self.data.definitions.len()
+                    && self.data.def(*d).name().starts_with("n_parallel_")
+                {
+                    for a in args {
+                        if let Value::Int(w) = a.unspan()
+                            && let Ok(w) = u32::try_from(*w)
+                            && (w as usize) < self.data.definitions.len()
+                            && self.par_worker_defs.contains(&w)
+                            && self.data.def(w).def_type() == DefType::Generic
+                            && !found.iter().any(|(t, _)| *t == w)
+                        {
+                            // The worker's first parameter takes the loop ELEMENT, so the
+                            // type that resolves `T` is the element type of the collection
+                            // this monomorph iterates — `concrete` for the ordinary
+                            // `vector<T>` spelling, which is what every par worker here is.
+                            found.push((w, concrete.clone()));
+                        }
+                    }
+                }
+            });
+            found
+        };
+        targets.extend(par_workers);
         // Create the monomorphs FIRST, before the context swap below: instantiation
         // parses against `self.vars` / `self.context`, and it must see the ordinary
         // ones, not this monomorph's.
@@ -6266,6 +6574,28 @@ impl Parser {
         let mut code =
             std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
         Self::retarget_calls(&mut code, &remap);
+        // …and the par-worker d_nr INTEGERS, which `retarget_calls` does not reach
+        // (loft#1033). Same two-fact recognition as the collection walk above.
+        if !remap.is_empty() {
+            let par_names: std::collections::HashSet<u32> = remap.keys().copied().collect();
+            code.map_nodes(&mut |v| {
+                if let Value::Call(d, args) = v
+                    && *d != u32::MAX
+                    && (*d as usize) < self.data.definitions.len()
+                    && self.data.def(*d).name().starts_with("n_parallel_")
+                {
+                    for a in args.iter_mut() {
+                        if let Value::Int(w) = a
+                            && let Ok(w32) = u32::try_from(*w)
+                            && par_names.contains(&w32)
+                            && let Some(fresh) = remap.get(&w32)
+                        {
+                            *a = Value::Int(*fresh as i32);
+                        }
+                    }
+                }
+            });
+        }
         // A `-> text` callee was promoted to deliver through a hidden `&text` buffer
         // (`promote_monomorph_text_return`, inside the instantiation above), so the call
         // this body already carries is one argument short of the ABI it now targets —
@@ -6342,6 +6672,20 @@ impl Parser {
             // native.  Mirrors the Vector/Tuple arms above; `Type::optional` is
             // idempotent so it never double-wraps.
             Type::Optional(inner) => Type::optional(Self::substitute_type(*inner, tv_nr, concrete)),
+            // loft#1032 — substitute through an iterator so a generic returning
+            // `iterator<T>` monomorphises, the way `vector<T>`, `(T, T)` and `T?`
+            // already do.  formal/interfaces.md `(G-Mono)` requires `[T ↦ C]` to reach
+            // "attribute, RETURN, and body types", so leaving this arm out was a
+            // deviation, not a boundary: the return stayed `iterator<Reference(tv)>`,
+            // which typed the caller's generator slot as a bare `DbRef` (native:
+            // `expected DbRef, found Box<dyn LoftCoroutine>`) and left the loop
+            // variable at `T`, so a yielded value could be neither summed nor
+            // formatted at a fully concrete instantiation.  Both halves of the type
+            // are rewritten — the STATE half mentions `T` whenever the step does.
+            Type::Iterator(step, state) => Type::Iterator(
+                Box::new(Self::substitute_type(*step, tv_nr, concrete)),
+                Box::new(Self::substitute_type(*state, tv_nr, concrete)),
+            ),
             other => other,
         }
     }
@@ -6664,6 +7008,24 @@ impl Parser {
                 );
                 out
             }
+            // loft#1028 — the deferred `null`.  `bl.result` came through type
+            // substitution, so it names the CONCRETE type by now, and `null` is the same
+            // dispatch the parse site uses — the ONE place that answers "what is `τ`'s
+            // null?".  A nested generic (`concrete` still a type variable) re-stamps
+            // through that same call and stays deferred until an outer instantiation
+            // names a real type.
+            Value::Block(bl) if bl.name == Self::TV_NULL_BLOCK => {
+                let tp = bl.result.clone();
+                let mut null = Value::Null;
+                if self.convert(&mut null, &Type::Null, &tp) {
+                    null
+                } else {
+                    // The conversion the template deferred does not exist for this `T`.
+                    // Leave the site as parsed rather than dropping the value: the call
+                    // is already an error, and the same reasoning loft#1016 uses.
+                    Value::Block(bl)
+                }
+            }
             Value::Block(bl) if bl.name == Self::TV_DEFAULT_BLOCK => {
                 match self.monomorph_default(concrete) {
                     Some((v, _)) => v,
@@ -6673,61 +7035,26 @@ impl Parser {
                     None => Value::Block(bl),
                 }
             }
-            Value::Block(bl) => {
-                let bl = *bl;
-                Value::Block(Box::new(crate::data::Block {
-                    operators: self.rewrite_default_list(bl.operators, concrete),
-                    result: bl.result,
-                    name: bl.name,
-                    scope: bl.scope,
-                    var_size: bl.var_size,
-                }))
+            // Everything else just carries children.  Recursion goes through the
+            // `Value::for_each_child_mut` keystone rather than being re-enumerated here:
+            // this walk must be TOTAL, because a marker it does not reach ships to the
+            // monomorph as the placeholder, and the arms it used to list covered ten of
+            // the seventeen child-bearing variants.  A `Tuple` was among the missing
+            // seven, so `t = (a?, 1)` answered the placeholder's bytes as data — silently
+            // at `T = integer`, as a SIGSEGV in `OpFreeText` at `T = text`, and as an
+            // E0308 that would not compile on `--native`.
+            //
+            // Mutating in place also keeps every non-child field (a block's `scope`,
+            // `var_size`, `result`) by construction, where rebuilding the node restated
+            // them and a forgotten one would be silent.
+            mut other => {
+                other.for_each_child_mut(&mut |child| {
+                    let taken = std::mem::replace(child, Value::Null);
+                    *child = self.rewrite_generic_type_defaults(taken, concrete);
+                });
+                other
             }
-            Value::Loop(lp) => {
-                let lp = *lp;
-                Value::Loop(Box::new(crate::data::Block {
-                    operators: self.rewrite_default_list(lp.operators, concrete),
-                    result: lp.result,
-                    name: lp.name,
-                    scope: lp.scope,
-                    var_size: lp.var_size,
-                }))
-            }
-            Value::If(c, t, f) => Value::If(
-                Box::new(self.rewrite_generic_type_defaults(*c, concrete)),
-                Box::new(self.rewrite_generic_type_defaults(*t, concrete)),
-                Box::new(self.rewrite_generic_type_defaults(*f, concrete)),
-            ),
-            Value::Set(v, expr) => Value::Set(
-                v,
-                Box::new(self.rewrite_generic_type_defaults(*expr, concrete)),
-            ),
-            Value::Return(expr) => Value::Return(Box::new(
-                self.rewrite_generic_type_defaults(*expr, concrete),
-            )),
-            Value::Drop(expr) => Value::Drop(Box::new(
-                self.rewrite_generic_type_defaults(*expr, concrete),
-            )),
-            Value::Span(b) => {
-                let (pos, inner) = *b;
-                Value::Span(Box::new((
-                    pos,
-                    self.rewrite_generic_type_defaults(inner, concrete),
-                )))
-            }
-            Value::Call(d, args) => Value::Call(d, self.rewrite_default_list(args, concrete)),
-            Value::CallRef(v, args) => Value::CallRef(v, self.rewrite_default_list(args, concrete)),
-            Value::Insert(ops) => Value::Insert(self.rewrite_default_list(ops, concrete)),
-            other => other,
         }
-    }
-
-    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) over a
-    /// list of sub-values.
-    fn rewrite_default_list(&mut self, vals: Vec<Value>, concrete: &Type) -> Vec<Value> {
-        vals.into_iter()
-            .map(|v| self.rewrite_generic_type_defaults(v, concrete))
-            .collect()
     }
 
     /// `construct_default(concrete)` as a VALUE, for a monomorph's deferred `x?`.
@@ -7687,40 +8014,26 @@ impl Parser {
             // read it exactly as `τ` (the marker is compile-time only).
             Type::Optional(inner) => self.get_val(inner, nullable, pos, code, alias),
             Type::Integer(spec) => {
-                // Narrow-integer width selection:
-                // * `alias` is set → this is a struct-field read whose
-                //   captured alias may carry `size(N)`.  Use that, else
-                //   the bounds-heuristic `byte_width` (which works for
-                //   plain `integer` and `integer limit(...)` fields).
-                // * `alias == u32::MAX` AND spec has a forced_size → we're
-                //   likely inside a vector element read.  Use
-                //   `vector_narrow_width` to mirror Phase 2's actual
-                //   storage decision (1 and 4 bytes narrow; 2 stays wide
-                //   until the short-encoding Phase 4 round lands); fall
-                //   through to 8 when Phase 2 stored wide so reads align.
-                // * `alias == u32::MAX` AND no forced_size → bounds
-                //   heuristic (struct-field path for plain or limited
-                //   `integer`).
-                // Narrow-vec path: alias is absent AND spec carries a
-                // forced_size AND the gate is open.  This branch maps
-                // to `Parts::ShortRaw` for 2-byte (Phase 4b) and to
-                // `Parts::Byte` / `Parts::Int` for 1/4-byte (Phase 4a).
-                // When the gate is CLOSED for a given forced_size
-                // (fallback), storage stays wide (8-byte) and the
-                // read must match — use `unwrap_or(8)` so closed-gate
-                // forced_size reads dispatch to `OpGetInt`.
+                // Narrow-integer width selection — ONE derivation.  A struct-field
+                // read carries the `alias` whose `size(N)` annotation (if any) wins;
+                // everything else — a vector element above all — takes the width from
+                // `byte_width`, which honours the spec's own `forced_size` first and
+                // falls back to the value RANGE.  loft#1036: the vector-element case
+                // used to ask `vector_narrow_width`, keyed on `forced_size` alone, so
+                // it answered 8 for the bare `limit(lo, hi)` spelling of a range the
+                // alias spelling stored in one byte.
+                //
+                // `narrow_vec` does NOT pick the width: it picks the raw-vs-full
+                // ENCODING for a 2-byte element (`ShortRaw` for a `u16`-style alias,
+                // `ShortFull` for a range that merely fits), which is why it keeps the
+                // `forced_size` gate the width no longer has.
                 let narrow_vec = alias == u32::MAX
                     && spec.forced_size.is_some()
-                    && spec.vector_narrow_width().is_some();
-                let s = if alias != u32::MAX {
-                    self.data
-                        .forced_size(alias)
-                        .unwrap_or_else(|| spec.byte_width(nullable))
-                } else if spec.forced_size.is_some() {
-                    spec.vector_narrow_width().unwrap_or(8)
-                } else {
-                    spec.byte_width(nullable)
-                };
+                    && spec.vector_narrow_width(nullable).is_some();
+                let s = self
+                    .data
+                    .forced_size(alias)
+                    .unwrap_or_else(|| spec.byte_width(nullable));
                 debug_assert!(
                     matches!(s, 1 | 2 | 4 | 8),
                     "get_val: unexpected integer field width s={s} \
@@ -8340,13 +8653,14 @@ impl Parser {
                 // `OpSetShort` / `Parts::Short` `+1` encoding path.
                 let narrow_vec = alias_nr == u32::MAX
                     && spec.forced_size.is_some()
-                    && spec.vector_narrow_width().is_some();
+                    && spec
+                        .vector_narrow_width(self.data.attr_nullable(d_nr, f_nr))
+                        .is_some();
                 let s = self.data.forced_size(alias_nr).unwrap_or_else(|| {
-                    if narrow_vec {
-                        spec.vector_narrow_width().unwrap()
-                    } else {
-                        tp.size(self.data.attr_nullable(d_nr, f_nr))
-                    }
+                    // loft#1036 — `byte_width` is the one width home (`forced_size`
+                    // first, then the range), so the alias and `limit(...)` spellings
+                    // of one range write at the same width the READ decodes at.
+                    spec.byte_width(self.data.attr_nullable(d_nr, f_nr))
                 });
                 // Size-consistency gate: the size resolved from
                 // `forced_size` / limit must be one of the four
@@ -10520,28 +10834,28 @@ impl Parser {
     }
 
     /// Tier-1 lazy *catalog* fallback (`method -> package`), read once from the
-    /// cached registry `index.json`.  This is what makes `line.matches(p)` work
-    /// against a package the user has NOT declared as a dependency: the local
+    /// registry's derived trigger sidecar.  This is what makes `line.matches(p)`
+    /// work against a package the user has NOT declared as a dependency: the local
     /// `trigger_map` misses, so we look the method up across the whole catalog,
     /// get the package name, and hand it to `lib_path` — which resolves it via
     /// the same lockfile → installed → auto-install chain an explicit `use`
     /// would take.  Ambiguity is dropped by `trigger_providers` (registry
     /// submission already rejects true collisions).  Cached (empty on absent
-    /// catalog) so the file read happens at most once per parse.
+    /// catalog) so the lookup happens at most once per parse.
+    ///
+    /// Reads [`registry_index::catalog_trigger_map`](crate::registry_index::catalog_trigger_map)
+    /// rather than the index itself: the map is a few hundred bytes, the index is
+    /// the whole published catalog, and parsing the second to answer the first put
+    /// the entire registry's growth on the compile path.
     #[cfg(feature = "registry")]
     fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
         if let Some(m) = &self.auto_use_catalog_map {
             return m.clone();
         }
-        let mut map = std::collections::HashMap::new();
-        let (idx_path, _, _) = crate::registry_index::index_paths();
-        if let Ok(content) = std::fs::read_to_string(&idx_path)
-            && let Ok(index) = crate::registry_index::parse_index(&content)
-        {
-            map = crate::registry_index::trigger_providers(&index)
+        let map: std::collections::HashMap<String, String> =
+            crate::registry_index::catalog_trigger_map()
                 .into_iter()
                 .collect();
-        }
         self.auto_use_catalog_map = Some(map.clone());
         map
     }

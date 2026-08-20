@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I68 — Native Rust code generator (--native)
 
-use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, DefType, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
 use crate::ir_node::{IrBlock, IrNode};
@@ -665,6 +665,43 @@ pub(crate) fn boolean_u8_cast(tp: &Type) -> Option<&'static str> {
         Type::Optional(inner) if matches!(inner.base(), Type::Boolean) => Some("u8"),
         _ => None,
     }
+}
+
+/// The declared type of tuple element `idx` of local `var` — the ONE derivation the
+/// tuple-element sites share, so a read, a write and the `set_var` clone rule cannot
+/// disagree about what a slot holds.
+///
+/// Peels the VARIABLE's own marker, so both tuple spellings answer: a by-value
+/// `Type::Tuple` local and a `&(…)` reference-tuple parameter (`RefVar(Tuple)`).  The
+/// ELEMENT keeps its own marker — a caller asking "is this text?" peels with `.base()`.
+///
+/// loft#1038 — three sites re-derived this by hand and matched `Type::Text(_)` unpeeled,
+/// so a `text?` element was not "text" at any of them.  The read then emitted the
+/// `String` BY VALUE where a `text` element emits a borrow, which MOVED the element:
+/// `f.0 == null` followed by any later read of `f.0` was rustc E0382 and the program did
+/// not build, while `--interpret` answered it correctly.
+#[must_use]
+pub(crate) fn tuple_elem_type(
+    vars: &crate::variables::Function,
+    var: u16,
+    idx: u32,
+) -> Option<Type> {
+    let elems = match vars.tp(var).base() {
+        Type::Tuple(elems) => elems.clone(),
+        Type::RefVar(inner) => match inner.base() {
+            Type::Tuple(elems) => elems.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    elems.get(idx as usize).cloned()
+}
+
+/// True when tuple element `idx` of `var` is TEXT — nullable or not.  The predicate
+/// behind [`tuple_elem_type`]'s most-asked question; see it for why the two are one.
+#[must_use]
+pub(crate) fn tuple_elem_is_text(vars: &crate::variables::Function, var: u16, idx: u32) -> bool {
+    tuple_elem_type(vars, var, idx).is_some_and(|e| matches!(e.base(), Type::Text(_)))
 }
 
 /// Use this for the coercion a value-block's TAIL expression needs.
@@ -3825,30 +3862,43 @@ extern crate loft;"
             // element type the program never named. That MINTS a type, so every
             // runtime id from there on sat one above the compile-time id baked into
             // the emitted ops, and loft#739's guard reported the drift.
+            // The element's own nullability, read BEFORE the peel below: a nullable
+            // narrow element reserves a null code, which is both a possible WIDTH
+            // change and a different Part (`byte<min,true>` / `short`), so the name
+            // this site looks up has to carry it — `narrow_vector_content` registered
+            // it that way.
+            let elm_nullable = matches!(c.as_ref(), Type::Optional(_));
             let c: &Type = c.base();
-            // when the element `Type::Integer` carries a
-            // `forced_size` annotation that `vector_narrow_width`
-            // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
-            // content type-nr that `fill_database` already registered
-            // via `narrow_vector_content`.  Without this,
+            // when the element is a narrow `Type::Integer` — by its `size(N)`
+            // annotation OR (loft#1036) by a `limit(lo, hi)` range that fits 1/2/4
+            // bytes — look up the narrow content type-nr that `fill_database`
+            // already registered via `narrow_vector_content`.  Without this,
             // `data.type_def_nr(c)` resolves any `Type::Integer` to
             // the plain `integer` def-nr → wide `vector<integer>`.
             // The wrapper's `main_vector<T>` struct field would end up
             // with 8-byte stride even though `fill_database` narrowed
             // the actual runtime Parts, corrupting reads/writes.
             if let Type::Integer(spec) = c
-                && let Some(n) = spec.vector_narrow_width()
+                && let Some(n) = spec.vector_narrow_width(elm_nullable)
             {
+                // The NAME is the schema key, so it has to carry the same offset
+                // `narrow_vector_content` registered — `part_min`, not the declared `min`
+                // (they differ for a nullable signed narrow element).
+                let elm_min = spec.part_min(n, elm_nullable);
                 let name = match n {
                     1 => {
-                        if spec.min == 0 {
+                        if elm_min == 0 && !elm_nullable {
                             "byte".to_string()
                         } else {
-                            format!("byte<{},false>", spec.min)
+                            format!("byte<{elm_min},{elm_nullable}>")
                         }
                     }
-                    2 => format!("short_raw<{},false>", spec.min),
-                    4 => format!("int<{},false>", spec.min),
+                    // A nullable 2-byte element is the `+1` sentinel encoding
+                    // (`Parts::Short`), the non-null one direct (`ShortRaw`) —
+                    // mirroring `Data::narrow_vector_content`.
+                    2 if elm_nullable => format!("short<{elm_min},true>"),
+                    2 => format!("short_raw<{elm_min},false>"),
+                    4 => format!("int<{elm_min},{elm_nullable}>"),
                     _ => String::new(),
                 };
                 if !name.is_empty() {
@@ -3999,13 +4049,19 @@ extern crate loft;"
             }
             return Ok(());
         }
-        if let Type::Integer(IntegerSpec { min, .. }) = typedef {
+        if let Type::Integer(int_spec) = typedef {
             // Post-2c: the field's size may come from the integer alias's
             // `size(N)` annotation (captured in `Attribute.alias_d_nr` →
             // `Data::forced_size`) OR from the `Type::Integer` range.
             // Mirrors `src/typedef.rs:354-373` exactly so the runtime
             // Parts matches the interpreter's (Byte/Short/Int/base).
             let field_size = forced_size.unwrap_or_else(|| typedef.size(nullable));
+            // …including the OFFSET the Part carries: `part_min`, the same one the field's
+            // ops encode against, which a nullable signed narrow field shifts by one.
+            // Emitting the declared `min` here left the generated `init()` registering a
+            // type the compiler no longer names, which loft#739's guard reports as a
+            // schema-id divergence.
+            let min = int_spec.part_min(field_size, nullable);
             debug_assert!(
                 matches!(field_size, 1 | 2 | 4 | 8),
                 "emit_field: unexpected integer field width \
@@ -5612,7 +5668,7 @@ extern crate loft;"
             // semantics), narrow aliases keep their forced width.  (i8/i16
             // narrow vectors map to the unsigned same-width name — signedness
             // is moot, no `#native` FFI takes a narrow-int vector today.)
-            Type::Integer(s) => match s.vector_narrow_width() {
+            Type::Integer(s) => match s.vector_narrow_width(false) {
                 Some(1) => "u8",
                 Some(2) => "i16",
                 Some(4) => "i32",

@@ -131,6 +131,31 @@ property (the reachable set is closed under the call relation) with an
 independent walker, so it catches the next omitted node kind rather than this
 one.
 
+### The third lesson — a keystone protects only the walkers that adopt it
+
+A 2026-08-20 re-survey found the same missing variant set in a walker written
+*after* the two lessons above were recorded.
+`Parser::rewrite_generic_type_defaults` (`src/parser/mod.rs`) answers a generic
+template's deferred `TV_*` markers once `T` is concrete, so it must be TOTAL — a
+marker it does not reach ships to the monomorph as the placeholder. It descends ten
+`Value` variants and ends `other => other`; `Tuple`, `TuplePut`, `Parallel`,
+`ParFor`, `Iter`, `BreakWith` and `Yield` are all absent, which is nearly the #815
+list again.
+
+Two things follow for this doc:
+
+- **The work list is a snapshot, not a standing guard.** Every row here was
+  surveyed in June 2026. A walker added later is not in any row, so "all rows
+  audited" says nothing about it. New total walkers need the same conversion at the
+  time they are written.
+- **The #815 guards cannot catch it.** Both assert properties of the REACHABLE set.
+  A rewrite walk is a different traversal with the same failure mode, and no guard
+  states the general property *"a walker that must be total delegates recursion to
+  the keystone"*.
+
+Detail and the remedy: [STABILITY_REDFLAGS § Cluster F](STABILITY_REDFLAGS.md);
+ordered as row F in [STABILITY_ROADMAP](STABILITY_ROADMAP.md).
+
 ## Move log
 
 ### Wave 1 — 2026-06-11 — the keystone + the known duplicates

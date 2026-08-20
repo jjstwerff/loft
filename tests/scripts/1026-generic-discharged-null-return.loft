@@ -1,0 +1,141 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A generic whose return is a discharged `T?` was lowered by a different route than its
+// non-generic twin, and the route had two faults.  Both need `T` to be store-backed, which
+// is why every cell here is also spelled at `T = integer` and `T = P` as controls.
+//
+// **The crash.**  A template's zero-value work-ref is `Set(v, Null)` on a `Reference`.
+// Substituting `T = text` retypes the slot and leaves the null alone, so `set_var` reached
+// `OpAppendText` after a `Value::Null` that pushes nothing — the append read whatever the
+// eval stack held under it.  Silent without `LOFT_POISON`, a SIGSEGV with it.  `set_var` now
+// emits the slot's typed null there, which is what `--native` already wrote for the same IR
+// (`STRING_NULL.to_string()`), so the two backends store one value.
+//
+// **The leak.**  `parse_block` promotes a value-yielding `if`/`match` text tail per ARM into
+// an accumulator that `text_return` delivers through the caller's hidden `&text` buffer
+// (`do_if_acc`).  `promote_monomorph_text_return` replicated only the OTHER half of that
+// site (`do_tret_bind`, a call tail), so a monomorph kept an owned-by-value tail its
+// non-generic twin never has: the scope pass materialised it into a `skipfree` `__ret_N`
+// the callee hands out and nobody frees — one orphaned `String` per call.  An `a?` discharge
+// is an `If`, which is why a `-> T` generic reaches the missing half and not the bind.
+//
+// This file asserts the VALUES.  The two faults are read by the harness around it: the
+// `LOFT_POISON` sweep fails on the first, `LOFT_TEXT_TIMELINE` on the second — see
+// `tests/generic_discharged_return.rs`, which drives both plus the static signature oracle.
+
+struct P1026 { x: integer = 3 }
+
+// The filed shape: an earlier parameter typed in the same `T`, then the nullable one.
+pub fn g1026<T>(x: T, a: T?) -> T { _ = x; a? }
+
+// A `vector<T>` earlier parameter — the same shape, reached through a collection.
+pub fn gv1026<T>(v: vector<T>, a: T?) -> T { _ = len(v); a? }
+
+// The nullable return: the discharge still delivers, and `null` still reads as null.
+pub fn gq1026<T>(x: T, a: T?) -> T? { _ = x; a? }
+
+// A `match` tail rather than an `if` — the same value-yielding branch tail behind the
+// subject-binding wrapper `if_tail_yields_text` sees through.
+pub fn gm1026<T>(x: T, k: integer) -> text {
+  _ = x;
+  match k { 0 => "zero", 1 => "one", _ => "many" }
+}
+
+fn test_a_discharged_generic_return_delivers_its_value() {
+  assert(g1026("q", "z") == "z", "T = text delivers the supplied text");
+  assert(len(g1026("q", "z")) == 1, "and its LENGTH is right — a stale buffer is not");
+  assert(g1026("q", "abcd") == "abcd", "a longer text delivers whole");
+  assert(g1026(7, 9) == 9, "T = integer is the scalar control");
+  assert(g1026(P1026 { x: 1 }, P1026 { x: 2 }).x == 2, "T = P is the record control");
+}
+
+fn test_the_discharge_still_falls_back_to_the_zero() {
+  assert(g1026("q", null) == "", "an explicit null discharges to the empty text");
+  assert(g1026(7, null) == 0, "and to 0 at T = integer");
+  // BOUND, not read inline off the call.  `g1026(…, null).x` leaks the record the
+  // discharge just built — a pre-existing mixed-ownership-return leak (loft#1029) that
+  // has nothing to do with this file's subject and reproduces without a generic at all.
+  // Binding keeps the control honest without riding someone else's defect.
+  rec = g1026(P1026 { x: 1 }, null);
+  assert(rec.x == 3, "and to the record's own field default");
+}
+
+fn test_the_earlier_parameter_may_be_a_collection() {
+  assert(gv1026(["p"], "z") == "z", "a vector<T> earlier parameter delivers the same");
+  assert(len(gv1026(["p"], "z")) == 1, "with the right length");
+  assert(gv1026([1], 9) == 9, "T = integer control");
+}
+
+fn test_the_arguments_may_be_variables_rather_than_literals() {
+  // Cell U of the report: the fault was never literal-specific, and a variable argument
+  // is the shape a real caller writes.
+  p = "q";
+  q = "zz";
+  assert(g1026(p, q) == "zz", "variables deliver like literals");
+  assert(len(g1026(p, q)) == 2, "with the right length");
+}
+
+fn test_a_discarded_result_is_still_well_formed() {
+  // Cell J: the callee's work happens whether or not the caller keeps the answer, and the
+  // orphan it left was one per CALL — a loop is where that stops being 8 bytes.
+  n = 0;
+  for i in 0..8 { _ = g1026("q", "z"); n += i; }
+  assert(n == 28, "the loop ran eight times");
+  assert(g1026("q", "z") == "z", "the run after eight discarded calls still answers");
+}
+
+fn test_a_nullable_generic_return_keeps_both_answers() {
+  assert((gq1026("q", "z") ?? "NONE") == "z", "a supplied text arrives through `-> T?`");
+  assert((gq1026("q", null) ?? "NONE") == "", "and the discharge is the zero, not null");
+  assert((gq1026(7, 9) ?? -1) == 9, "T = integer control");
+}
+
+fn test_a_match_tail_on_a_monomorph_delivers_each_arm() {
+  assert(gm1026("s", 0) == "zero", "the first arm");
+  assert(gm1026("s", 1) == "one", "the second arm");
+  assert(gm1026("s", 5) == "many", "the catch-all");
+  assert(gm1026(7, 0) == "zero", "and the same at T = integer");
+}
+
+fn test_a_generic_declared_below_its_caller_lowers_the_same() {
+  // The monomorph is first built from the template's PASS-1 body and re-derived once the
+  // file is through (loft#1023), so the promotion has to survive being run twice.
+  assert(below1026("q", "z") == "z", "a template declared below its caller delivers");
+  assert(len(below1026("q", "z")) == 1, "with the right length");
+}
+
+pub fn below1026<T>(x: T, a: T?) -> T { _ = x; a? }
+
+// The discharge behind an EARLY return rather than at the tail.  Same construct, same
+// orphan, and `promote_monomorph_text_return` reaches it by the OTHER door: not the tail
+// gate but `early_text_return_orphans`, which read `classify_text_return` alone.  An
+// `if a { return a?; }` guard is `Plain` by that verdict — its arms are an argument borrow
+// and a literal — while the monomorph's return type carries no argument deps to make the
+// borrow legal, so the scope pass materialised it and nobody freed it.
+pub fn guard1026<T>(x: T, a: T?) -> T {
+  if a { return a?; }
+  x
+}
+
+// The nested guard: both arms of the inner `if` diverge, so the whole early return is a
+// branch of `return`s rather than a value.  `--native` refused to compile this shape.
+pub fn guard2_1026<T>(x: T, a: T?, c: boolean) -> T {
+  if c { if a { return a?; } else { return x; } }
+  x
+}
+
+fn test_a_discharge_behind_an_early_return_delivers_too() {
+  assert(guard1026("q", "z") == "z", "the guard arm delivers the discharge");
+  assert(len(guard1026("q", "z")) == 1, "with the right length");
+  assert(guard1026("q", null) == "q", "a null argument fails the guard and falls through to x");
+  assert(guard1026("q", "abcd") == "abcd", "a longer text delivers whole");
+  assert(guard1026(7, 9) == 9, "T = integer control");
+  assert(guard1026(P1026 { x: 1 }, P1026 { x: 2 }).x == 2, "T = P control");
+}
+
+fn test_a_nested_guard_compiles_and_delivers_on_both_backends() {
+  assert(guard2_1026("q", "z", true) == "z", "the inner then-arm");
+  assert(guard2_1026("q", null, true) == "q", "the inner else-arm returns x");
+  assert(guard2_1026("q", "z", false) == "q", "the fall-through tail returns x");
+}

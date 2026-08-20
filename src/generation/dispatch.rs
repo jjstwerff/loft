@@ -938,6 +938,18 @@ impl Output<'_> {
             } else {
                 crate::codegen_runtime::Abi::Cell
             };
+            // loft#1032 — a generator callee answers `Box<dyn LoftCoroutine>`, and every
+            // caller holds the handle as a `DbRef` from the coroutine table, so the call
+            // must be wrapped exactly as `user_fn_call_body` wraps it.  This path had the
+            // per-parameter coercions in lockstep (issue #366) but not the RETURN side, so
+            // a generator reached through it emitted a bare call into a `DbRef` local:
+            // `expected DbRef, found Box<dyn LoftCoroutine>`.  The hoist fires when an
+            // argument mutates a store, which a vector literal does — so `h([4,5,6])` on a
+            // plain `fn h(v: vector<integer>) -> iterator<integer>` did not compile either.
+            let is_generator = matches!(def_fn.returned(), Type::Iterator(_, _));
+            if is_generator {
+                write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
+            }
             write!(w, "{}(", self.fn_ident(def_fn))?;
             let mut first_arg = true;
             if matches!(abi, crate::codegen_runtime::Abi::Cell) {
@@ -961,6 +973,9 @@ impl Output<'_> {
                 }
             }
             write!(w, ")")?;
+            if is_generator {
+                write!(w, ")")?; // close alloc_coroutine(…)
+            }
             if needs_to_string {
                 write!(w, ".to_string()")?;
             }
@@ -1132,10 +1147,15 @@ impl Output<'_> {
                 let tuple_text_elem_clone = needs_to_string
                     && matches!(to_inner, Value::TupleGet(v, idx) if {
                         let vars = self.data.def(self.def_nr).variables();
+                        // loft#1038 — the SAME predicate the read arm emits from
+                        // (`tuple_elem_is_text`).  Re-deriving it here with an unpeeled
+                        // `Type::Text` match is how the two came apart: a `text?`
+                        // element was "text" at neither site, so the read moved it; had
+                        // only one been fixed, the read would borrow and this site
+                        // would still append `.to_string()` to a borrow — E0308 rather
+                        // than E0382, the same program refused for a new reason.
                         !vars.is_argument(*v)
-                            && matches!(vars.tp(*v),
-                                Type::Tuple(elems)
-                                if elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Text(_))))
+                            && crate::generation::tuple_elem_is_text(vars, *v, u32::from(*idx))
                     });
                 // P247 — destination is a tuple-typed work var (e.g.
                 // `__ref_N: (i64, String)` materialised by the
@@ -1478,7 +1498,12 @@ impl Output<'_> {
 /// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
 pub(crate) fn tuple_has_text_leaf(elems: &[Type]) -> bool {
     for e in elems {
-        match e {
+        // `.base()` peels `Optional`: a `text?` element occupies the same owned
+        // `String` slot a `text` does, so a tuple carrying one has a text leaf.
+        // Without the peel `-> (text?, integer)` was invisible here, the owned-text
+        // flag never fired for it, and `--native` refused the function with E0308 —
+        // for a plain declaration, not only a generic one.
+        match e.base() {
             Type::Text(_) => return true,
             Type::Tuple(inner) if tuple_has_text_leaf(inner) => return true,
             _ => {}

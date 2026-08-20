@@ -26,6 +26,13 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+Late in the cycle, three more: **`loft install` no longer lets a package's own manifest
+decide where on disk it lands** (a name like `../../escaped` wrote outside `~/.loft/lib`
+entirely); an **`i32` local now stays inside `i32`** when `+=` pushes it past the top, the
+way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` element, a
+defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
+compiled to the wrong thing or refused to compile at all, on one backend or both.
+
 ### Leaving out an argument that defaults to `null` gives you the type's zero
 
 ```loft
@@ -75,6 +82,180 @@ g(["q"]);             // was a crash     — now ""
 A record `T` now gets its own field defaults, where before it got an empty record of the type
 VARIABLE — a value of no type at all, which also leaked.
 
+### Returning a generic's discharged `T?` is safe, and stops growing the heap
+
+```loft
+pub fn g<T>(x: T, a: T?) -> T { a? }
+g("q", "z");          // was a crash on a poisoned arena, and leaked 8 bytes every call
+```
+
+At `T = text` this answered correctly and then handed the caller memory it had already
+written off — invisible on an ordinary run, a crash under the arena poison detector. It also
+kept the text it returned, once per call, so a loop over it grew without bound.
+
+Both came from the same place: a generic instantiated at a concrete type was compiled by a
+different route than the identical function written out by hand. It now takes the same one,
+so it returns its text through the caller's buffer like every other text-returning function.
+`T = integer` and a struct `T` were never affected.
+
+### A generic function can be a parallel worker
+
+```loft
+pub fn idf<T>(x: T) -> T { x }
+for e in [1,2,3] par(r = idf(e), 1) { … }   // was "'idf' is not a function"
+```
+
+The name resolved everywhere else in the same file; only the `par(...)` position refused
+it, because that path looked the function up and never instantiated it. Workers over
+integers, floats and booleans all work, and one generic worker can serve several element
+types in the same program.
+
+Still out of reach for now, and it says so instead of miscompiling: a generic worker
+called from inside a *generic function*.
+
+### A tuple with a nullable element can be a declared local
+
+```loft
+c: (text?, integer) = ("c0", 3);   // was refused — now works
+d: (text?, integer) = (null, 3);   // and the null element really is null
+```
+
+The same tuple type was already accepted as a function's return type, so this only ever
+affected the annotated-local spelling. A `null` element now becomes that element's own
+null, where before it quietly became the empty text and would not compile at all with
+`--native`.
+
+### A `limit(...)` range is stored the way it is declared, and reads back what you wrote
+
+```loft
+v: vector<integer limit(10,255)> = [12, 200];
+v[0];                       // was 22 — the element read back exactly `lo` too high
+"{v}";                      // was a row of huge negative numbers — now [12,200]
+```
+
+A range-annotated integer stores in the smallest width that holds its range, and a
+collection's element stride is that width — but only the `u8`-style spelling was narrowing
+the STORAGE, while both spellings narrowed the READ. So a `vector<integer limit(10,255)>`
+kept 8-byte elements that were read one byte at a time, and every element came back `lo`
+too high. It disappeared at `lo == 0`, which is why the common spellings looked fine, and a
+struct field of the identical type was always correct.
+
+The two spellings are now one layout, pinned by the golden layout test — which could only
+see the `u8` spelling before, and that is what let them drift apart.
+
+### A bound too wide to store is refused instead of quietly shrinking
+
+```loft
+c: integer limit(0,5000000000) = 4999999995;   // was 0 — now a compile error
+```
+
+`limit(0, 5000000000)` accepted the declaration and then could not hold a value inside its
+own declared range: the bound was silently truncated to 705032704, and every value above
+that became the range's low end. `0` is an ordinary value of the type, and it is also what
+a genuine out-of-range write produces, so nothing at the read could tell you which had
+happened. Bounds that fit are untouched, and the error names the widest one that does.
+
+### A null in a narrow slot prints as null
+
+```loft
+v: vector<u16?> = [300, null];
+"{v}";                      // was [300,-2147483648] — now [300,null]
+n: vector<i16?> = [-300];
+"{n}";                      // was [-301] — a PRESENT value, one too low
+```
+
+Reading one element answered `null`; rendering the whole collection printed the slot's raw
+sentinel as a plausible number. And a nullable SIGNED narrow slot sacrifices its bottom
+value to make room for that sentinel, so its present values printed one too low — as a
+field and as an element, on both backends. Both halves came from the same place: the render
+re-derived "is this null?" instead of asking, and the schema was registered with a
+different offset than the one the reads and writes use.
+
+### Concatenating two vectors that store their elements differently is refused
+
+```loft
+u: vector<u8> = [1, 250];
+w: vector<integer> = [7, 8];
+u + w;                      // was [1,250,7,0] — now a compile error naming the cure
+```
+
+A concatenation copies element BYTES, so it cannot re-encode: `u8` and `integer` are both
+"integer" to the type checker, and the copy put 8-byte values into 1-byte slots. Same-width
+mixes were wrong too — `vector<u8> + vector<i8>` turned `[-5, 5]` into `[123, 133]`, because
+the two encodings count from different places. Append element by element instead, which
+converts each value; a narrowing step takes the checked cast loft asks for everywhere else.
+
+### A qualified enum variant works as a value
+
+```loft
+f = std::Format.NotExists;  // was "Unknown variable 'std'"
+```
+
+`std::abs(-5)`, `lib::CONST`, `lib::Struct { … }` and `f: std::Format = NotExists` all
+resolved; only the VALUE spelling of a variant did not, and the error named the library
+rather than the enum. It bit hardest under `use lib as a;`, where the qualifier is the
+whole point.
+
+### A `text?` crosses into a generator, and out of a tuple, on `--native`
+
+```loft
+fn h(a: text?) -> iterator<text> { yield "x"; }   // did not compile natively
+f: (text?, integer) = (null, 3);
+f.0 == null; f.0 ?? "N";                          // did not compile natively
+```
+
+Both backends now build both. A nullable text is stored exactly like a text — the absence
+is a sentinel in the same bytes — but a dozen places in the native backend asked "is this
+text?" without looking through the `?`, so a `text?` was treated as a scalar: a generator's
+captured parameter was filled with the wrong Rust type and moved out of itself, and reading
+a tuple element CONSUMED it, so a null test followed by a read would not compile. Each
+group of sites now shares one answer.
+
+### A range you declare is enforced however you spell it
+
+```loft
+l: integer limit(0,255) = 250;  l += 10;   // was 260 — now 0, like the u8 spelling
+w.f = 5;  w.f -= 10;            // f: u32     was 4294967291 — now 0, like the local
+```
+
+`u8` and `integer limit(0,255)` name the same range, so they now bound a `+=` the same way;
+before, only the `u8` spelling did. And a `u32` or `i32` **field** wrapped around where the
+local beside it stopped at the edge — the two now agree, and so does a vector element.
+
+Four-byte ranges were the gap in both directions, so `integer limit(0,70000)` was wrong
+everywhere and is fixed too. Plain `integer` is unchanged: it declares no range and still
+counts past four bytes.
+
+### A generator can be called before it is written, and a generic can return one
+
+```loft
+fn main() { for y in count() { … } }      // was a crash — now runs
+fn count() -> iterator<integer> { yield 1; yield 2; }
+
+fn each<T>(v: vector<T>) -> iterator<T> { for e in v { yield e; } }
+for y in each([1, 2, 3]) { … }            // was a crash; y was unusable — now an integer
+```
+
+Three separate things, all reached from one report.
+
+A generator **called above its own declaration** crashed the interpreter. The call site
+records where to write the function's address once the body has been compiled, and the
+arithmetic that found that spot assumed the instruction was one byte wide. Generator calls
+use one of the wide instructions, so the address landed a byte early, on top of the frame
+size — which then read as tens of kilobytes, and the interpreter subtracted it from a much
+smaller number. Declaration order is not supposed to matter, and now it does not.
+
+A generator **given a list literal** — `each([1, 2, 3])` — did not compile with `--native`.
+Neither needed a generic to go wrong.
+
+And a **generic returning `iterator<T>`** never learned what `T` was, so its loop variable
+stayed abstract: it could not be added up or put in a message, `--native` refused the
+program, and one generic iterating another's generator corrupted the heap. `vector<T>`,
+`(T, T)` and `T?` returns already worked; `iterator<T>` now joins them.
+
+Yielding a struct or a vector from inside a generator's loop is still `--native`'s one
+remaining gap here, and says so.
+
 ### An accessor that sometimes borrows and sometimes builds is safe on `--native`
 
 ```loft
@@ -119,6 +300,7 @@ m = v[i] ?? mk();     // one leaked record per index MISS, unbounded in a loop
 A struct **literal** default was always fine, and the compiler's refusal of a struct-valued
 constant points you at the function spelling — so the leaking form was the recommended one.
 Fixed for both backends; the hit path and the literal default are unchanged.
+`character?` still has this problem and is tracked separately.
 
 ### `loft fix` can repair a text slice that stops short
 

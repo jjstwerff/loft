@@ -30,7 +30,28 @@ fn t1004_2(a: text, b: text) -> text { "{a}{b}" }
 fn t1004_3(a: text, b: text, c: text) -> text { "{a}{b}{c}" }
 
 // @FTR-030 — a tuple's text element is written where it is aimed, at every index and width
+// A NULLABLE text element is still a text element.
+//
+// `tuple_has_text_leaf` decides whether a tuple's slots are owned `String`s, and it
+// matched `Type::Text` without peeling `Optional` — so `-> (text?, integer)` was invisible
+// to it, the owned-text decision never fired, and `--native` refused the function with
+// E0308 (`&str` where `String` is wanted).  Nothing generic about it: a plain declaration
+// was enough.  Two further copies of the same predicate existed; the return path had its
+// own inline `any(Text)` that also saw neither this nor a nested tuple.
+fn opt1004_val() -> (text?, integer) { ("o0", 1) }
+fn opt1004_nul() -> (text?, integer) { (null, 2) }
+
+fn test_a_nullable_text_tuple_element_is_an_owned_slot() {
+  a = opt1004_val();
+  assert((a.0 ?? "N") == "o0", "a nullable text element carries its value, got {a.0 ?? "N"}");
+  assert(a.1 == 1, "the non-text element is untouched");
+  b = opt1004_nul();
+  assert((b.0 ?? "N") == "N", "an absent nullable text element reads as null");
+  assert(b.1 == 2, "and its sibling still arrives");
+}
+
 fn main() {
+  test_a_nullable_text_tuple_element_is_an_owned_slot();
   // FIRST element of a (text, text).  The bug wrote `.1`, giving "pX".
   a: (text, text) = ("p", "q");
   a.0 = "X";

@@ -318,6 +318,9 @@ publishing is the **loft-ship skill** (touch-gated signing). REPL: [REPL.md](doc
 
 **Process / issues / release:** [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) workflow ·
 [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) (open→Issues, closed→[PROBLEMS.md](doc/claude/PROBLEMS.md)) ·
+[BUG_REVIEW.md](doc/claude/BUG_REVIEW.md) (the monthly bug review: `make bug-review` reports which
+mechanism classes are still producing bugs + whether last cycle's keystone actually moved its
+class; the pass converts ONE rising class into ONE generalization — a report, never a gate) ·
 [.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (the monthly by-hand doc review, both
 halves: `make libraries-review` says which libraries owe a review or have moved since their
 watermark, `make features-review` does the same for the `@F` catalogue, `scripts/doc-review.sh

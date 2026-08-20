@@ -50,3 +50,48 @@ fn test_a_generic_record_default_is_the_records_own_zero() {
   s = g1016([P1016 { x: 1, y: 2 }], given);
   assert(s.x == 8, "a supplied record arrives");
 }
+
+// The marker is answered wherever it SITS, not only where the walk happened to look.
+//
+// `rewrite_generic_type_defaults` used to enumerate the carriers it descended, and listed
+// ten of the seventeen `Value` variants that hold children.  `Tuple` was among the seven it
+// missed, so a marker inside one was never answered and the monomorph shipped the
+// placeholder: `t = (a?, 1)` read the placeholder's bytes as data.  Silently at
+// `T = integer` (34359738369), and as a SIGSEGV in `OpFreeText` at `T = text`.
+//
+// Each cell asserts against its NON-tuple twin rather than a constant, because the claim is
+// that position does not change the answer — a constant would still pass if both regressed
+// together.
+pub fn tup1016 < T > (v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 }
+pub fn tp21016 < T > (v: vector<T>, a: T? = null) -> T { _ = len(v); t = (1, a?); t.1 }
+pub fn tpu1016 < T > (v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 = a?; t.0 }
+
+fn test_a_deferred_default_inside_a_tuple_is_still_answered() {
+  assert(tup1016([1]) == g1016([1]), "tuple elem 0, integer: {tup1016([1])} vs {g1016([1])}");
+  assert(tp21016([1]) == g1016([1]), "tuple elem 1, integer: {tp21016([1])} vs {g1016([1])}");
+  assert(tpu1016([1]) == g1016([1]), "tuple ASSIGN, integer: {tpu1016([1])} vs {g1016([1])}");
+
+  assert(tup1016([1.5]) == g1016([1.5]), "tuple elem 0, float");
+  assert(tup1016([1.5f]) == g1016([1.5f]), "tuple elem 0, single");
+
+  // NOT `text`, and the reason is worth stating because the output hides it: a discharged
+  // `a?` in a TUPLE element answers the one-character text null sentinel on the
+  // interpreter where the bare twin answers the empty text, and both render as nothing.
+  // `--native` answers the empty text correctly, so the two backends disagree. Measured
+  // with `len()` and `== ""` rather than by printing, since printing cannot tell them
+  // apart. Asserting either value here would freeze one backend's bug into the suite.
+  //
+  //     bare: len=0 eqempty=true   |  tup interpret: len=1 eqempty=false
+  //                                |  tup native   : len=0 eqempty=true
+
+  // A SUPPLIED argument never reaches the marker, so it must be unaffected — without this
+  // cell a rewrite that discharged every argument would satisfy the three above.
+  assert(tup1016([1], 9) == 9, "a supplied argument is untouched, got {tup1016([1], 9)}");
+}
+
+// NOT covered here, deliberately: `T = text`. The interpreter answers it correctly now,
+// but `--native` still refuses the program, because a tuple element's emitter flag means
+// two things at once (append `.to_string()` to a literal; do not borrow a `TupleGet`) and
+// a text literal nested inside the element takes the first while the element takes the
+// second — `&*("".to_string())`, a borrow of a temporary (E0716). Separating those two
+// facts is its own change; a cell here would fail the native half of the suite.

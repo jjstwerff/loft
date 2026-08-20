@@ -86,6 +86,31 @@ thirty-four packages); a single cycle watermark bounds the feature half. A quiet
 month is a five-minute pass. Fix XS drift on the spot; bump the watermark; route M+
 findings to an issue.
 
+### Monthly bug review (by hand) — one month, one generalization
+
+Also each cycle, before tagging, run the **bug review** —
+[BUG_REVIEW.md](BUG_REVIEW.md):
+
+```bash
+make bug-review                    # which mechanism classes are still producing bugs
+make bug-review ARGS="--bands 6"   # finer slicing on a busy cycle
+```
+
+Same beat and the same **report, never a blocker** status as the two documentation
+halves above, aimed at a different question. Those ask whether the docs still
+describe the code. This one asks whether the month's bugs shared a *cause* — because
+fixing a bug answers "is this case right now?" and cannot answer "will this place
+keep manufacturing bugs?", which is what decides whether next month is quieter.
+
+The pass converts **one** rising class into **one** generalization: find the
+duplicated case analysis behind it, check whether a keystone already exists that the
+site simply did not adopt, and collapse it. It also runs the payoff check on the
+previous cycle's conversion, so a keystone that did NOT move its class gets its
+premise re-opened instead of accumulating more sites. It never files the rest of the
+class — per [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)'s standing rule the
+deliverable is the collapsed structure, and the cases that matter most have no ticket
+to file.
+
 ### What forces a release — keep the list bounded
 
 *Producing* a release is cheap — CI builds every target binary automatically — but every **category of

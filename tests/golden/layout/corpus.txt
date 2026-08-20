@@ -5,6 +5,7 @@ Color	size=1	enum{Red, Green, Blue}
 IndexBag	size=4	struct{items@0:index<Item[ik]>}
 Item	size=17	struct{ik@0:integer, #left_1@8:int<0,false>, #right_1@12:int<0,false>, #color_1@16:boolean}
 Narrow	size=7	struct{a@0:int<-2147483647,false>, b@6:byte, c@4:short_raw<0,false>}
+NarrowRange	size=8	struct{a@6:byte<10,false>, b@4:short_raw<10,false>, c@7:byte<10,true>, v@0:vector<byte<10,false>>}
 NotNull	size=12	struct{i@0:integer, t@8:text}
 Nullable	size=16	struct{n@0:integer, f@8:float}
 Rect	size=24	enumvalue[2]{enum@0:byte, width@8:integer, height@16:integer}
@@ -21,6 +22,8 @@ Wide	size=2	struct{s@0:short_raw<-32768,false>}
 __tuple<integer,text>	size=12	struct{_0@0:integer, _1@8:text}
 boolean	size=1	base
 byte	size=1	byte(start=0,null=false)
+byte<10,false>	size=1	byte(start=10,null=false)
+byte<10,true>	size=1	byte(start=10,null=true)
 character	size=4	base
 float	size=8	base
 hash<Item[ik]>	size=4	hash<Item>(keys=[0],elem_size=17,placement=2)
@@ -31,12 +34,14 @@ integer	size=8	base
 ordered<Item[ik]>	size=4	ordered<Item>(keys=[(0, true)],elem_size=17)
 short_raw<-32768,false>	size=2	shortraw(start=-32768,null=false)
 short_raw<0,false>	size=2	shortraw(start=0,null=false)
+short_raw<10,false>	size=2	shortraw(start=10,null=false)
 single	size=4	base
 text	size=4	base
+vector<byte<10,false>>	size=4	vector<byte<10,false>>(elem_size=1)
 vector<byte>	size=4	vector<byte>(elem_size=1)
 vector<integer>	size=4	vector<integer>(elem_size=8)
 vector<text>	size=4	vector<text>(elem_size=4)
 vector<vector<byte>>	size=4	vector<vector<byte>>(elem_size=4)
 vector<vector<integer>>	size=4	vector<vector<integer>>(elem_size=4)
 === F9 nullability ===
-nn/1;Nullable:f,n
+nn/1;NarrowRange:c;Nullable:f,n

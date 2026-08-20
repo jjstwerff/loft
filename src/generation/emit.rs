@@ -56,13 +56,15 @@ impl Output<'_> {
             // dispatch); emit the string verbatim.
             ValueType::RawExpr => return write!(w, "{}", node.text()),
             ValueType::Text => {
-                // Debug format → a properly escaped Rust string literal.
+                // Debug format → a properly escaped Rust string literal, always a
+                // `&str`.  Converting it to an owned `String` is NOT decided here: a
+                // literal does not know whether it is the tuple element itself or some
+                // sub-expression of one, and it used to convert in both cases — so a
+                // literal nested inside an element (a generic's deferred `a?` discharge)
+                // emitted `&*("".to_string())`, a borrow of a temporary.  The position
+                // that knows the slot does the conversion; see the `Tuple` and `TuplePut`
+                // arms below.
                 write!(w, "{:?}", node.text())?;
-                if self.tuple_text_to_string {
-                    // Inside a `(String, String, …)` slot: wrap the `&str`
-                    // literal so it fits a `String`-typed tuple element.
-                    write!(w, ".to_string()")?;
-                }
                 return Ok(());
             }
             ValueType::Long => return write!(w, "{}_i64", node.int_value()),
@@ -299,10 +301,12 @@ impl Output<'_> {
                     if elem_is_bool {
                         write!(w, ") as u8)")?;
                     }
-                    // Wrap a text-returning element with `.to_string()` so it
-                    // fits a `String`-typed tuple slot (skip a Text literal — its
-                    // own arm appends `.to_string()` via the same flag).
-                    if elem_is_text && self.tuple_text_to_string && e.kind() != ValueType::Text {
+                    // Wrap a text element with `.to_string()` so it fits a
+                    // `String`-typed tuple slot.  This is the ONE place an element is
+                    // converted — a Text literal included, which is what lets the `Text`
+                    // arm stay a plain `&str` and stop converting sub-expressions that
+                    // merely pass through it.
+                    if elem_is_text && self.tuple_text_to_string {
                         write!(w, ".to_string()")?;
                     }
                 }
@@ -315,12 +319,10 @@ impl Output<'_> {
                 let idx = node.tupleget_idx();
                 let variables = self.data.def(self.def_nr).variables();
                 let name = sanitize(variables.name(var));
-                let elem_is_text = match variables.tp(var) {
-                    Type::Tuple(elems) => elems
-                        .get(idx as usize)
-                        .is_some_and(|e| matches!(e, Type::Text(_))),
-                    _ => false,
-                };
+                // loft#1038 — one derivation for what the slot holds, shared with the
+                // WRITE arm and with `set_var`'s clone rule (`tuple_elem_is_text`).
+                let elem_is_text =
+                    crate::generation::tuple_elem_is_text(variables, var, u32::from(idx));
                 let is_arg = variables.is_argument(var);
                 // P247 — a work-ref (`__ref_…`) tuple-text read must `.clone()`
                 // (returns owned String) instead of borrowing, else the borrow
@@ -352,20 +354,12 @@ impl Output<'_> {
                 // the same rule the tuple LITERAL arm below obeys through this flag.
                 // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
                 // whole program with *"expected `String`, found `&str`"* (loft#1004).
-                // Both spellings reach here: a by-value tuple local (`t.0 = …`) is
-                // `Type::Tuple`, a `&(…)` REFERENCE-tuple parameter is
-                // `Type::RefVar(Tuple)`.  Reading only the first is why the boolean cast
-                // below silently did not fire on the reference form (loft#1006).
-                let var_tp = variables.tp(var).clone();
-                let tuple_elems = match var_tp.base() {
-                    Type::Tuple(elems) => Some(elems.clone()),
-                    Type::RefVar(inner) => match inner.base() {
-                        Type::Tuple(elems) => Some(elems.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let elem_tp = tuple_elems.and_then(|e| e.get(idx as usize).cloned());
+                // Both tuple spellings reach here — a by-value local and a `&(…)`
+                // reference-tuple parameter — which is why the element type comes from
+                // the shared `tuple_elem_type` (reading only the by-value spelling is
+                // why the boolean cast below silently did not fire on the reference
+                // form, loft#1006).
+                let elem_tp = crate::generation::tuple_elem_type(variables, var, u32::from(idx));
                 let elem_is_text = elem_tp
                     .as_ref()
                     .is_some_and(|e| matches!(e.base(), Type::Text(_)));
@@ -387,6 +381,13 @@ impl Output<'_> {
                 self.tuple_text_to_string = elem_is_text;
                 let r = self.output_code_node(w, node.tupleput_inner());
                 self.tuple_text_to_string = prev;
+                // The same conversion the `Tuple` element loop applies, for the same
+                // reason: this position knows the slot is an owned `String` and the
+                // value emitted into it does not.  A `TupleGet`/`Var` source already
+                // emitted un-borrowed (the flag above), so this only adds the ownership.
+                if elem_is_text && !matches!(node.tupleput_inner().kind(), ValueType::Var) {
+                    write!(w, ".to_string()")?;
+                }
                 if let Some(cast) = bool_cast {
                     write!(w, ") as {cast}")?;
                 }
@@ -685,8 +686,11 @@ impl Output<'_> {
                     // rewrite trigger missed.  At monomorphisation time
                     // the type becomes `(String, String)` but the body
                     // is still a plain `Value::Tuple`.
+                    // The shared predicate, not a fourth spelling of it: this site had
+                    // its own inline `any(Text)`, which saw neither a nested tuple nor a
+                    // `text?` element.
                     let returns_text_tuple = matches!(returned, Type::Tuple(elems)
-                        if elems.iter().any(|e| matches!(e, Type::Text(_))));
+                        if crate::generation::dispatch::tuple_has_text_leaf(elems));
                     let prev_tuple_text = self.tuple_text_to_string;
                     if returns_text_tuple && matches!(&**val, Value::Tuple(_)) {
                         self.tuple_text_to_string = true;

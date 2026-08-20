@@ -134,14 +134,33 @@ pub(crate) fn nullable_vector_elem(
     lexer: &mut Lexer,
     struct_d: u32,
 ) -> Option<u32> {
-    if struct_d == u32::MAX
-        || !matches!(data.def_type(struct_d), DefType::Struct)
-        || data.def(struct_d).synthetic.is_some()
+    if !synth_nullable_target(data, struct_d)
         || data.def(struct_d).source == crate::data::STD_SOURCE
     {
         return None;
     }
     Some(data.nullable_enum_for(lexer, struct_d))
+}
+
+/// May a synthetic `__nullable<S>` be minted for definition `struct_d`?
+///
+/// Call this before [`Data::nullable_enum_for`] from anywhere that decides a nullable
+/// gets the ENUM representation rather than staying an `Optional`. It answers the part
+/// of that question every caller shares; a caller with a narrower rule (the vector-element
+/// path also excludes the stdlib) adds its own condition on top.
+///
+/// A type VARIABLE is the case worth naming. A template's `T` is a `DefType::Struct` from
+/// user source with no attributes, so it satisfies every other condition here and reads as
+/// a perfectly ordinary struct — but it is a placeholder, and which representation `τ?`
+/// wants is a function of `τ`. Minting for it produced `__nullable<T>` with a payload of
+/// no fields, and a `-> (T?, integer)` was then refused with *"field 'payload' has no
+/// position"* on both backends. Leaving it an `Optional` is what lets substitution answer
+/// it per monomorph, which is what a bare `-> T?` already did.
+pub(crate) fn synth_nullable_target(data: &Data, struct_d: u32) -> bool {
+    struct_d != u32::MAX
+        && matches!(data.def_type(struct_d), DefType::Struct)
+        && data.def(struct_d).synthetic.is_none()
+        && !data.is_type_var_placeholder(struct_d)
 }
 
 fn copy_unknown_fields(data: &mut Data, d: u32) {
@@ -729,9 +748,11 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
                 let Type::Reference(struct_d, _) = *inner else {
                     continue;
                 };
-                if data.def_type(struct_d) != DefType::Struct
-                    || data.def(struct_d).synthetic.is_some()
-                {
+                // The same eligibility question the vector-element path asks, read from
+                // the one home.  This site had its own spelling and was missing the
+                // type-variable case, which is how a tuple built from a template's `T?`
+                // got a `__nullable<T>` over an attribute-less placeholder.
+                if !synth_nullable_target(data, struct_d) {
                     continue;
                 }
                 let syn = data.nullable_enum_for(lexer, struct_d);
@@ -1056,12 +1077,12 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     data.check_vector(c_nr, tp, &data.def(d_nr).position.clone());
                     tp
                 }
-                Type::Integer(IntegerSpec {
-                    min: minimum,
-                    not_null,
-                    forced_size: spec_forced,
-                    ..
-                }) => {
+                Type::Integer(int_spec) => {
+                    let IntegerSpec {
+                        not_null,
+                        forced_size: spec_forced,
+                        ..
+                    } = int_spec;
                     let field_nullable = nullable && !not_null;
                     // Post-2c: if the field's alias has a forced size(N)
                     // annotation, prefer it over the limit()-based heuristic.
@@ -1083,8 +1104,14 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         .forced_size(alias)
                         .or_else(|| spec_forced.map(std::num::NonZeroU8::get))
                         .unwrap_or_else(|| a_type.size(field_nullable));
+                    // The Part carries the offset the field's READ and WRITE ops encode
+                    // against (`part_min`), which is not the declared `min` for a nullable
+                    // SIGNED narrow field: it sacrifices its bottom edge to the null
+                    // sentinel, so a present `i16?` rendered one too low through the schema
+                    // while reading the same field answered correctly.
+                    let m = int_spec.part_min(s, field_nullable);
                     if s == 1 {
-                        database.byte(minimum, field_nullable)
+                        database.byte(m, field_nullable)
                     } else if s == 2 {
                         // The schema Part MUST match the op the codegen chose via the ONE
                         // width→op home (`NarrowIntKind::of(2, nullable, narrow_vec=false)`):
@@ -1098,12 +1125,12 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         // already uses `OpGetShortFull`) was correct.  Pre-existing for
                         // `u16 not null`; F2 exposed it for plain `u16` (now non-null).
                         if field_nullable {
-                            database.short(minimum, field_nullable)
+                            database.short(m, field_nullable)
                         } else {
-                            database.short_raw(minimum, field_nullable)
+                            database.short_raw(m, field_nullable)
                         }
                     } else if s == 4 {
-                        database.int(minimum, field_nullable)
+                        database.int(m, field_nullable)
                     } else {
                         database.name("integer")
                     }

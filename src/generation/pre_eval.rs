@@ -597,7 +597,7 @@ impl Output<'_> {
             let borrowed = self.borrowed_arg_vars(args);
             for arg in args {
                 let needs_pre = self.create_stack_var(arg).is_none()
-                    && (matches!(arg, Value::Block(_) | Value::Insert(_))
+                    && (Self::is_sequence_arg(arg)
                         || self.needs_pre_eval(arg)
                         || (!borrowed.is_empty()
                             && value_refs_any(IrNode::Native(arg), &borrowed)));
@@ -632,7 +632,7 @@ impl Output<'_> {
                 let borrowed = self.borrowed_arg_vars(vals);
                 for arg in vals {
                     let needs_pre = self.create_stack_var(arg).is_none()
-                        && (matches!(arg, Value::Block(_) | Value::Insert(_))
+                        && (Self::is_sequence_arg(arg)
                             || self.needs_pre_eval(arg)
                             || (!borrowed.is_empty()
                                 && value_refs_any(IrNode::Native(arg), &borrowed)));
@@ -648,7 +648,16 @@ impl Output<'_> {
                 // Template function: pre-eval Block args (they may use stores) and,
                 // when multiple user-fn args exist, pre-eval those too to avoid
                 // double-borrow of stores.
-                let block_count = vals.iter().filter(|a| matches!(a, Value::Block(_))).count();
+                // `Insert` alongside `Block`: both are a SEQUENCE whose value is its tail,
+                // and the user-fn branch above already treats them as one. Counting only
+                // `Block` here left an `Insert` argument to fall through to the template's
+                // own `let _haN = …` binder in `generation/calls.rs`, which is not braced —
+                // so `let _ha0 = a; b; c` bound the FIRST statement (a `()` assignment) and
+                // rustc rejected the use with E0609 (`no field 'rec' on type '()'`).
+                // loft#1029 reached it by hoisting an argument's construction out of a call
+                // written inside a formatted string, but nothing about that is special: any
+                // `Insert` in an argument to a native template was mis-emitted.
+                let block_count = vals.iter().filter(|a| Self::is_sequence_arg(a)).count();
                 let user_fn_count = vals.iter().filter(|a| self.needs_pre_eval(a)).count();
                 // Also pre-eval any arg whose template placeholder appears more than once
                 // (e.g., `#rust"!@v1.is_nan() && ... @v1 ..."` expands @v1 twice, causing
@@ -688,7 +697,7 @@ impl Output<'_> {
                     || has_dup_param;
                 if needs_pre_eval_args {
                     for (arg_idx, arg) in vals.iter().enumerate() {
-                        let is_block = matches!(arg, Value::Block(_));
+                        let is_block = Self::is_sequence_arg(arg);
                         let is_multi_user_fn = user_fn_count > 1 && self.needs_pre_eval(arg);
                         let is_stores_conflict = template_uses_stores && self.needs_pre_eval(arg);
                         let is_dup = if arg_idx < def_fn.attributes().len() {
@@ -714,6 +723,25 @@ impl Output<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Is this argument a SEQUENCE — a value whose Rust rendering is more than one
+    /// statement, so it has to be lifted into a `let _pre_N = { … }` binding before the
+    /// call rather than written inside the argument list?
+    ///
+    /// `Block` and `Insert` are the two, and they are one question: both render as
+    /// `op; op; op` with the tail as the value. Left inline they either double-borrow
+    /// `stores` or — for a native template, whose own `let _haN = @v1;` binder in
+    /// `generation/calls.rs` is not braced — bind only the FIRST statement, which is an
+    /// assignment, so the use site reads a field of `()` and rustc rejects it with E0609.
+    ///
+    /// ⚠ Read through the SPAN. A span is source position, not structure, and the parser
+    /// leaves one on an argument it rewrote in place — which is exactly the shape
+    /// loft#1029's argument hoist produces. Matching the bare variant made the lift
+    /// depend on whether the value happened to carry a position, and one native template
+    /// (`OpGetInt`) then received a spanned `Insert` and mis-emitted it.
+    fn is_sequence_arg(arg: &Value) -> bool {
+        matches!(arg.unspan(), Value::Block(_) | Value::Insert(_))
     }
 
     /// Use this to register one pre-eval binding: generate the expression text with inner

@@ -50,6 +50,28 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > would not compile on `--native`) were both live tuple deviations — because the oracle it leans
 > on, `tests/oracle/17-tuples-recursion.loft`, is all-`(integer, integer)` and carries no `text`
 > at all. Before trusting a zero, read what its oracle actually covers.
+>
+> [ownership.md](ownership.md) read `OPEN: 0` for six weeks with loft#1029 live, for the same
+> reason from a different angle: its Join corpus
+> (`tests/scripts/1019-join-owned-arm-owner.loft`) moves four axes — which side owns, arm
+> count, `if` vs `match`, free function vs method — and holds the ARGUMENT SPELLING fixed at a
+> variable in every cell. The runtime witness that closes the Join only covered an argument the
+> call site could NAME, so a literal argument leaked and no cell asked. Moving that one axis
+> turned up **six more leaking spellings** — a field, a nested field, a vector element, a
+> vector-typed field, `??`, and an `if` in argument position — none of them in the issue.
+> **A corpus that varies the subject exhaustively still proves nothing about the axis it never
+> varies** — count what is held fixed, not what is swept. (Closed 2026-08-20; the axis is now
+> swept by `tests/scripts/1029-inline-argument-borrow-source.loft`.)
+>
+> **And a zero can fail a third way, with no oracle or corpus involved.**
+> [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
+> disagreeing element lists into one — while D-tup-2 was live, because the surviving list is
+> only consulted at one of the two sites that construct a `&(…)`. Single-sourcing a rule makes
+> the answers agree; it does not make anyone ASK.
+>
+> So a zero rests on three things, and each has to be checked separately: what the corpus
+> COVERS, which axes it holds FIXED, and whether every site that makes the decision actually
+> reaches the rule.
 
 ## Reading guide
 
