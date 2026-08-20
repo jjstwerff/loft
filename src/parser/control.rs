@@ -8926,6 +8926,14 @@ impl Parser {
     /// `try_generic_instantiation` BEFORE it returns `d_nr`, so the promoted
     /// signature is in place when the call site lowers its call.
     ///
+    /// `parse_block` decides this in TWO mutually exclusive branches and both are
+    /// replicated here: `do_tret_bind` for a CALL tail, and `do_if_acc`
+    /// ([`Self::monomorph_if_acc_ok`]) for a value-yielding `if`/`match` tail, whose
+    /// arms are pushed into an accumulator rather than bound as one value.  Copying
+    /// only the first is what made "identical to its non-generic twin" false for
+    /// every `-> T` generic: an `a?` discharge is an `If`, so it landed on the
+    /// missing branch and orphaned one `String` per call (loft#1026).
+    ///
     /// Closes the BOUND/discarded cases (only the monomorph needs promoting); a
     /// RETURNED monomorph result (`run() -> text { first(nums) }`) also needs the
     /// caller to promote, which the def_nr backward-ref gate blocks (monomorph
@@ -8971,6 +8979,22 @@ impl Parser {
                 self.force_tret.insert(d);
             }
         }
+    }
+
+    /// `parse_block`'s `do_if_acc` gate, asked about a MONOMORPH.
+    ///
+    /// Both halves matter and both come from the parse-time site.  The tail must be a
+    /// value-yielding `if`/`match` over text (`if_tail_yields_text` — a guard arm that
+    /// `return`s or yields `null` is excluded, so the missing-return diagnostic still
+    /// fires).  And the nullability test reads the DECLARED RETURN, not the tail
+    /// (loft#741): performing the per-arm store for a nullable tail into a non-null
+    /// return is the nullable-into-non-null store `(N-Store)` exists to report, so it
+    /// must stay unpromoted and be reported rather than silently written.
+    fn monomorph_if_acc_ok(&self, d_nr: u32, l: &[Value], block_result: &Type) -> bool {
+        let returned = self.data.def(d_nr).returned();
+        matches!(returned.base(), Type::Text(_))
+            && (matches!(returned, Type::Optional(_)) || !matches!(block_result, Type::Optional(_)))
+            && l.last().is_some_and(Self::if_tail_yields_text)
     }
 
     pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
@@ -9057,6 +9081,44 @@ impl Parser {
                     // the monomorph def and rewrites its returned type — the same
                     // call `block_result` makes for a non-generic text tail.
                     self.text_return(&[tv]);
+                }
+            } else if self.monomorph_if_acc_ok(d_nr, l, &bl.result) {
+                // The `do_if_acc` half of `parse_block`.  A value-yielding `if`/`match`
+                // text tail is not a `__tret` bind — binding the whole branch as one
+                // value is what native rejects — so each ARM writes an accumulator
+                // instead, and `text_return` promotes that accumulator to the caller's
+                // hidden `&text` buffer.  Identical rewrite, identical gate.
+                //
+                // Without it a monomorph kept the owned-by-value tail its non-generic
+                // twin never has: the scope pass materialised it into a `skipfree`
+                // `__ret_N` the callee hands out and nobody frees — one orphaned String
+                // per call (loft#1026, the loft#568 class).  An `a?` discharge is an
+                // `If`, which is why a `-> T` generic reaches this and not the bind above.
+                let acc_type = if matches!(self.data.def(d_nr).returned(), Type::Optional(_)) {
+                    Type::Optional(Box::new(Type::Text(Deps::none())))
+                } else {
+                    Type::Text(Deps::none())
+                };
+                let av = self.create_unique("__acc", &acc_type);
+                if av != u16::MAX {
+                    let last = l.len() - 1;
+                    let mut tail = std::mem::replace(&mut l[last], Value::Null);
+                    let is_ret = matches!(tail.unspan(), Value::Return(_));
+                    if let Value::Return(inner) = tail {
+                        tail = *inner;
+                    }
+                    Self::push_text_arms_into(&mut tail, av, self.data.def_nr("OpCreateStack"));
+                    l[last] = tail;
+                    // Load-bearing, exactly as at the parse-time site: the per-arm `Set`s
+                    // live INSIDE the branch, so nothing else introduces `av` here.
+                    l.insert(last, crate::data::v_set(av, Value::Text(String::new())));
+                    l.push(if is_ret {
+                        Value::Return(Box::new(Value::Var(av)))
+                    } else {
+                        Value::Var(av)
+                    });
+                    self.text_return(&[av]);
+                    bl.result = Type::Text(Deps::frame1(av));
                 }
             }
         }
@@ -9328,10 +9390,19 @@ impl Parser {
     /// `var_built_in_block` check inside `classify_text_return`.
     fn early_text_return_orphans(&self, op: &Value, block: &[Value]) -> bool {
         match op.unspan() {
-            Value::Return(inner) => matches!(
-                self.classify_text_return(inner, block),
-                TextReturn::Owned(_) | TextReturn::Borrow(BorrowVia::ForwardArg)
-            ),
+            Value::Return(inner) => {
+                matches!(
+                    self.classify_text_return(inner, block),
+                    TextReturn::Owned(_) | TextReturn::Borrow(BorrowVia::ForwardArg)
+                )
+                    // loft#1026 — `if a { return a? }` returns a value-yielding branch, the
+                    // same shape `do_if_acc` promotes in TAIL position.  Its arms are an
+                    // argument borrow and a literal, so `classify_text_return` reads `Plain`
+                    // and the two verdicts above miss it — while a monomorph's return type
+                    // carries no argument deps (the template never derived any), so the
+                    // scope pass materialised it into a `skipfree` `__ret_N` nobody frees.
+                    || Self::if_tail_yields_text(inner)
+            }
             Value::If(_, t, e) => {
                 self.early_text_return_orphans(t, block) || self.early_text_return_orphans(e, block)
             }

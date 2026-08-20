@@ -4344,9 +4344,23 @@ impl State {
         {
             return;
         }
-        #[cfg(debug_assertions)]
         let stack_before = stack.position;
         self.generate(value, stack, false);
+        // loft#1026 — a bare `Value::Null` has no `generate` arm, so it pushes NOTHING while
+        // the put-op below pops the slot's full width: `OpAppendText` then read whatever the
+        // eval stack happened to hold under it.  Give it the slot's typed null instead, the
+        // same repair `gen_dest_call_args` makes for an omitted argument and the same value
+        // `--native` already writes for this IR (`STRING_NULL.to_string()`), so the two
+        // backends store one value rather than disagreeing.  `gen_set_first_at_tos` guards
+        // the same hazard by returning early; this is the reassignment/append half.
+        //
+        // Reached by a generic monomorph: a template's zero-value work-ref is `Set(v, Null)`
+        // on a `Reference`, and substituting `T = text` retypes the slot without retyping
+        // that null.  Silent without `LOFT_POISON` (a plausible stale `Str`), a SIGSEGV with.
+        if stack.position == stack_before && matches!(value.unspan(), Value::Null) {
+            let tp = stack.function.tp(var).clone();
+            self.emit_typed_null(stack, &tp);
+        }
         #[cfg(debug_assertions)]
         {
             let var_tp = stack.function.tp(var).clone();

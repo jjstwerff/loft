@@ -142,6 +142,85 @@ path (struct, vector, value enum, text, integer, float, character, a reference-k
 generic with no null) emits a **byte-identical** `loft introspect` before and after. The
 `Parser::null` arm patched first was removed again — it was never on the path.
 
+### A generic returning a discharged `T?` was lowered by a route its non-generic twin never takes (loft#1026, 2026-08-20)
+
+`pub fn g<T>(x: T, a: T?) -> T { a? }` at `T = text` SIGSEGV'd under `LOFT_POISON` and orphaned
+one `String` per call without it. Two faults, one shape, and the second is what the issue's
+"not fixed" note meant by *"a choice in the monomorph's return lowering"*. There was no choice:
+`parse_block` already decides this, and the monomorph promoter was replicating half of it.
+
+**The crash — `set_var` emitted a put-op for a value nobody pushed.** A template's zero-value
+work-ref is `Set(v, Null)` on a `Reference`; substituting `T = text` retypes the slot and leaves
+the null alone. `generate` has no arm for a bare `Value::Null`, so it pushed nothing while the
+`OpAppendText` below it popped a full 16-byte `Str` — whatever the eval stack held under it.
+
+```
+   3[88]: InitText(var[40]) var=__ref_1[40]:text
+   6[88]: AppendText(var[40], v1: text)   <-- nothing pushed; crash pc = fn base + 6
+```
+
+The two sibling sites already guard it — `gen_set_first_at_tos` returns on a zero-width push,
+`gen_dest_call_args` repairs an omitted argument with `emit_typed_null` — and `--native` emits
+`STRING_NULL.to_string()` for this very IR. `set_var` now makes the same repair, so the two
+backends store one value instead of disagreeing. Silent without `LOFT_POISON`: a plausible
+stale `Str`, which is exactly the blind spot that gate exists for.
+
+**The leak — the monomorph promoter replicated `do_tret_bind` and not `do_if_acc`.**
+`parse_block` has two text-return promotions and they are mutually exclusive: a CALL tail binds
+`__tret`, and a value-yielding `if`/`match` tail pushes each ARM into an accumulator that
+`text_return` delivers through the caller's hidden `&text` buffer. `promote_monomorph_text_
+return` — whose own doc-comment claims the monomorph is lowered *"identical to its non-generic
+twin"* — implemented only the first. An `a?` discharge is an `If`, so a `-> T` generic lands on
+the missing half every time:
+
+```
+n_g       (non-generic)  fn n_g(x, a, ___acc_1:&text) -> text["___acc_1"]      0 leaks
+t_4text_g (monomorph)    fn t_4text_g(x, a) -> text   __ret_1 skipfree          1 leak/call
+```
+
+The scope pass materialises the tail into a `skipfree` `__ret_N` the callee hands out and
+nobody frees. `LOFT_TEXT_TIMELINE` reads it as `1 text buffer(s) LEAKED "z"` and a nine-call
+loop leaks nine. The @PLN104 post-pass promoter does not cover it either: `return_ownership`
+reads the pre-scope `If` as `Own::Join{base: a}` with `a` an argument, so
+`text_return_orphan_risk` answers `None` — true of the IR it reads, false of what the scope pass
+then emits.
+
+With the `do_if_acc` half added, the monomorph's IR is its twin's, on both backends
+(`&mut String` in, `Str` out, where it used to return an owned `String`).
+
+**⚠ The issue's own boundary table was five-tenths vacuous and its cause was refuted twice** —
+both recorded on the issue by the session that filed it. `protectable_ref_args` / `Type::Text`
+not being in `heap_dep()` is NOT this bug (instrumented: never called for the generic), and
+`substitute_type` dropping the template's deps is not the site either (the template's return
+deps are already empty). The residual that "position matters" was a broken probe matching the
+word `ok` inside an echoed source line.
+
+**The same leak behind an EARLY return.** `fn gd<T>(x: T, a: T?) -> T { if a { return a?; } x }`
+reaches the promoter by the other door — `early_text_return_orphans`, which asked
+`classify_text_return` alone. That verdict is `Plain` for this guard (an argument borrow and a
+literal), and the two verdicts it accepted missed it, so the same orphan appeared one statement
+earlier. It now also accepts the `if_tail_yields_text` shape, which is the identical question
+the tail gate asks. Measured: the leak closes, and the nested-guard spelling
+(`if c { if a { return a?; } else { return x; } }`) stops failing `--native` with E0308.
+The blast radius is monomorphs only — `early_text_return_orphans` has one caller.
+
+**What this fix EXPOSED, filed as loft#1028.** With the `Set(v, Null)` crash gone, a `-> T?`
+generic whose body writes `null` answers the empty text on the interpreter and will not compile
+on `--native`: `Parser::null()` maps `Type::Reference` to `OpNullRefSentinel`, a type variable
+IS a `Type::Reference`, and substitution retypes the slot without re-choosing the op. Same class
+as loft#1016 and loft#1020, same cure (mark in the template, answer in the monomorph) — but
+`null()` is the parser's ONE null producer, so re-pointing it reaches every template's every
+null. Pre-existing (identical on a pre-#1026 binary), and not a regression from this change: the
+shape used to SIGSEGV on the fault above instead.
+
+**And what the new corpus caught on its way in, filed as loft#1029.** Its `T = <a struct>`
+control tripped `loft_suite`'s store-leak gate: a returned join leaks its FRESH arm when the
+borrow arm names a PARAMETER. loft#1019 fixed that classification, but its guard holds the
+borrow SOURCE fixed at a vector element in all nine cells including the escaping-join one, and
+the parameter spelling — which needs no generic at all — still leaks one record per call on
+both backends. Not from this change (identical with the `set_var` repair disabled, and on a
+branch with none of this work). The corpus binds that cell rather than reading it inline, with
+a comment saying why, so it tests its own subject instead of riding someone else's defect.
 
 ### The `--native` copy-or-adopt guard was gated on a NAME, so a METHOD never got it (loft#1017, 2026-08-20)
 

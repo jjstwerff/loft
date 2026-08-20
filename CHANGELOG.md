@@ -82,6 +82,22 @@ g(["q"]);             // was a crash     — now ""
 A record `T` now gets its own field defaults, where before it got an empty record of the type
 VARIABLE — a value of no type at all, which also leaked.
 
+### Returning a generic's discharged `T?` is safe, and stops growing the heap
+
+```loft
+pub fn g<T>(x: T, a: T?) -> T { a? }
+g("q", "z");          // was a crash on a poisoned arena, and leaked 8 bytes every call
+```
+
+At `T = text` this answered correctly and then handed the caller memory it had already
+written off — invisible on an ordinary run, a crash under the arena poison detector. It also
+kept the text it returned, once per call, so a loop over it grew without bound.
+
+Both came from the same place: a generic instantiated at a concrete type was compiled by a
+different route than the identical function written out by hand. It now takes the same one,
+so it returns its text through the caller's buffer like every other text-returning function.
+`T = integer` and a struct `T` were never affected.
+
 ### An accessor that sometimes borrows and sometimes builds is safe on `--native`
 
 ```loft
