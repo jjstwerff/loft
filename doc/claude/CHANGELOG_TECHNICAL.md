@@ -9,6 +9,58 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A package's manifest chose where the package landed on disk (2026-08-20)
+
+`loft install <dir>` files a package under `~/.loft/lib/<name>`, and since the name became
+the MANIFEST's rather than the checkout directory's, nothing checked it before the join. A
+manifest is data — on a fetched package, data somebody else wrote — so `name = "../../escaped"`
+wrote the whole package tree to `$HOME/escaped/`, outside `~/.loft/lib` entirely. Verified
+against the pre-fix binary, which is what makes the regression guard non-vacuous.
+
+The rule already existed and was never asked here: `loft new` has enforced "lowercase ascii +
+digits + underscore" since it was written, stated inline at the site where a package is
+CREATED. It now lives in `libscan::is_valid_package_name` and three sites read it — `loft new`,
+the install path, and the prebuilt-cdylib path, which takes `[library] native` from a manifest
+that came off the network and uses it as a filename. Measured first: every package name and
+every `native` stem in this tree passes, so no existing package is refused.
+
+### An `i32` local kept a value an `i32` cannot hold (2026-08-20)
+
+`guard_narrow_alias_local` clamps a compound assignment to a narrow-alias local's own range and
+names five aliases it covers. It reached four. `is_signed32_template()` reads like a test for
+the plain `integer` type, but `integer` carries no `forced_size` and has already left by that
+line — so the only spec whose range IS the signed-32 range is the `i32` alias, and the clause
+could only ever exclude the one thing the comment above it promised to include. `l: i32 =
+2147483647; l += 1` kept 2147483648 on both backends where the same write to a `u8` clamped.
+Now clamps to `-2147483647` (an `i32`'s minimum; `i32::MIN` is the null sentinel).
+
+An `i32` FIELD still answers `null` where the narrower four answer their minimum — both say the
+write did not fit, and making them identical means reclaiming `i32::MIN`, which the roadmap
+already carries as deferred.
+
+### Generics: five collapses in the deferred-marker and tuple paths (2026-08-20)
+
+A template stamps a marker where a decision needs `T` and cannot have it yet, and
+`rewrite_generic_type_defaults` answers those markers once `T` is concrete. That walk must be
+TOTAL; it enumerated its own carriers and listed ten of the seventeen `Value` variants that
+hold children. `Tuple` was among the seven missing, so `t = (a?, 1)` read the placeholder's
+bytes as data — silently at `T = integer`, as a SIGSEGV in `OpFreeText` at `T = text`, and as an
+E0308 that would not compile on `--native`. Recursion now delegates to
+`Value::for_each_child_mut`.
+
+Four more of the same shape landed with it: `type_mentions_tv` folded onto
+`Type::contains_def` (which already answers it through the `Type::for_each_child` keystone, two
+hundred lines from a call to it); the synthetic `__nullable<S>` is no longer minted for a
+template's `T`, an attribute-less placeholder struct that satisfied every eligibility condition
+and refused `-> (T?, integer)` on both backends; the tuple emitter's owned-text decision is
+split from the literal that merely passes through it; and `tuple_has_text_leaf` peels
+`Optional`, with the return path's inline copy of it now reading the shared predicate. That last
+one was never a generic problem — a PLAIN `fn ret() -> (text?, integer)` would not compile on
+`--native` before it.
+
+Each proven under both gates: byte-identical IR and native Rust for the paths not being changed
+(six reference corpora), and twin-compared matrices for the ones that were.
+
 ### The registry index's download cap truncated instead of refusing, and every compile parsed the whole catalog (2026-08-20)
 
 `http_get_bytes` bounded a response with `.take(50 MB)`, so a body past the ceiling came back

@@ -148,7 +148,7 @@ the NEXT cycle's step 5, which is what keeps the claim honest.
 
 | Cycle | Bands reviewed | Class named | Disposition | Payoff (filled next cycle) |
 |---|---|---|---|---|
-| `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | Collapse + Make exhaustive ([Cluster F](STABILITY_REDFLAGS.md)) | — |
+| `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | **Collapse ×5, landed** ([Cluster F](STABILITY_REDFLAGS.md)): the deferred-marker walk onto `Value::for_each_child_mut`, `type_mentions_tv` onto `Type::contains_def`, the `__nullable<S>` eligibility onto one predicate, the tuple emitter's owned-text split, and `tuple_has_text_leaf` peeling `Optional`. One residual, characterised and unfixed. | — |
 
 Retrospective entries, measured when the protocol was written rather than by a pass:
 

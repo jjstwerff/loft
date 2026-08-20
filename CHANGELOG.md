@@ -26,6 +26,13 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+Late in the cycle, three more: **`loft install` no longer lets a package's own manifest
+decide where on disk it lands** (a name like `../../escaped` wrote outside `~/.loft/lib`
+entirely); an **`i32` local now stays inside `i32`** when `+=` pushes it past the top, the
+way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` element, a
+defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
+compiled to the wrong thing or refused to compile at all, on one backend or both.
+
 ### Leaving out an argument that defaults to `null` gives you the type's zero
 
 ```loft
