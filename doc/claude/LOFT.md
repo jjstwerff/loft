@@ -635,6 +635,14 @@ Four things to know:
   ships no module of that name.
 - **Its qualifier is the alias.** `<package>::<module>` is not a typeable path, so write
   `use self::catalogue as cat;` (or `use catalogue as cat;`) to get `cat::part_list()`.
+  ⚠ The short name gives NO qualifier: after `use self::catalogue;`, `catalogue::f()` is
+  refused — the flat `catalogue::` slot is shared by the whole dependency graph, and
+  staying out of it is what `self::` is for, so it is withheld rather than missing. Since
+  loft#1043 the compiler says exactly that at the call site instead of *"Unknown
+  library"*, which read as *the module is gone* and took a tree-wide rewrite to diagnose.
+  ⚠⚠ **And an alias DOES take that shared slot**, so `as cat` re-enters the namespace
+  `self::` kept you out of — pick a name no other package would plausibly use
+  (`hexmesh_surfaces`), never the module's own name.
 - **Two modules are not merged.** If both packages' modules declare the same public name
   and you call it bare with both in scope, that is an error naming both — pick one with an
   alias or a selective import. Silently taking one was the old behaviour and the reason

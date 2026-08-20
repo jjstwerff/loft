@@ -198,7 +198,26 @@ impl Parser {
             && self.data.def_nr(name) == u32::MAX
             && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         {
-            diagnostic!(self.lexer, Level::Error, "Unknown library '{name}'");
+            // loft#1043 — before calling it unknown, ask whether it is one of THIS
+            // package's own modules.  `use self::<m>;` registers the module under
+            // `<pkg>::<m>` and deliberately does NOT take the flat `<m>::` qualifier
+            // slot: that slot is shared by the whole dependency graph, and not
+            // sharing it is the whole point of the `self::` spelling (loft#976).  So
+            // the module is bound and reachable BARE, and only the qualifier is
+            // missing — which "Unknown library" states as the opposite, sending the
+            // reader to look for a file that is right there.
+            let own_module = self
+                .own_package_name()
+                .filter(|pkg| self.data.use_exists(&format!("{pkg}::{name}")));
+            if let Some(pkg) = own_module {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{name}` is this package's own module, bound by `use self::{name};` — it has no `{name}::` qualifier.\n  The short qualifier is ONE slot shared by every package in the graph, and staying out of it is what `use self::` is for — so it is withheld on purpose, not missing.\n  fix: drop the qualifier (`use self::{name};` already imports its names bare), or bind one with `use self::{name} as <alias>;` and write `<alias>::`.\n  note: an alias DOES take the shared slot, so choose a name no other package would — `{pkg}_{name}` rather than `{name}`."
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown library '{name}'");
+            }
             // Consume a trailing call so the parser does not also choke on the
             // arguments and emit a second, less-helpful error.
             if self.lexer.has_token("(") && !self.lexer.has_token(")") {

@@ -1080,3 +1080,104 @@ fn captured_module_run(tag: &str, con_catalogue: &str, con_main: &str) -> String
     let _ = std::fs::remove_dir_all(&root);
     all
 }
+
+/// loft#1043 — qualifying a `self::`-bound module by its SHORT name is refused, and
+/// the refusal has to say why rather than calling the module unknown.
+///
+/// `use self::<m>;` registers the module under `<pkg>::<m>` and deliberately does not
+/// take the flat `<m>::` qualifier slot — that slot is shared by the whole dependency
+/// graph, and staying out of it is exactly what the `self::` spelling is for
+/// (loft#976). So the module is bound and reachable BARE, and only the qualifier is
+/// absent. Reporting `Unknown library 'm'` states the opposite, and the cascading
+/// `Unknown variable` errors on the lines after it read as *that module is missing*.
+#[test]
+fn qualifying_a_self_bound_module_explains_itself() {
+    let root = std::env::temp_dir().join(format!("loft_1043_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("qpkg");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir src");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"qpkg\"\nversion = \"0.1.0\"\n\n\
+         [library]\nentry = \"src/qpkg.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/surfaces.loft"),
+        "pub fn count() -> integer { 7 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/qpkg.loft"),
+        "use self::surfaces;\npub fn n() -> integer { surfaces::count() }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("src/qpkg.loft").to_string_lossy(), false);
+    let lines = p.diagnostics.lines().to_vec();
+    let _ = std::fs::remove_dir_all(&root);
+    let all = lines.join("\n");
+
+    assert!(
+        all.contains("this package's own module"),
+        "the refusal must recognise it as this package's own module: {lines:?}"
+    );
+    assert!(
+        all.contains("withheld on purpose"),
+        "…and say the qualifier is withheld rather than missing: {lines:?}"
+    );
+    assert!(
+        all.contains("as <alias>"),
+        "…and name the spelling that does give a qualifier: {lines:?}"
+    );
+    // ⚠ The alias re-enters the shared slot, so advising it without that caveat would
+    // hand back the capture `self::` exists to prevent.
+    assert!(
+        all.contains("shared slot"),
+        "…including that an alias takes the shared slot: {lines:?}"
+    );
+    assert!(
+        !all.contains("Unknown library"),
+        "and it must NOT call a module that is right there unknown: {lines:?}"
+    );
+}
+
+/// THE CONTROL: a qualifier that names nothing at all must still report the plain
+/// unknown-library error. If this ever produced the own-module message, the new
+/// diagnostic would have stopped distinguishing the two.
+#[test]
+fn a_genuinely_unknown_library_still_says_unknown() {
+    let root = std::env::temp_dir().join(format!("loft_1043c_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg = root.join("qpkg");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir src");
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"qpkg\"\nversion = \"0.1.0\"\n\n\
+         [library]\nentry = \"src/qpkg.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("src/qpkg.loft"),
+        "pub fn n() -> integer { nosuchlib::count() }\n",
+    )
+    .unwrap();
+
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&pkg.join("src/qpkg.loft").to_string_lossy(), false);
+    let lines = p.diagnostics.lines().to_vec();
+    let _ = std::fs::remove_dir_all(&root);
+    let all = lines.join("\n");
+
+    assert!(
+        all.contains("Unknown library 'nosuchlib'"),
+        "a name that is no module and no library is still unknown: {lines:?}"
+    );
+    assert!(
+        !all.contains("own module"),
+        "and must not be dressed up as this package's own: {lines:?}"
+    );
+}

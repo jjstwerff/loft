@@ -321,6 +321,25 @@ is in exactly that position: every caller is a test. That is not a reason to del
 dogfood loop deliberately builds the library first — but it IS a reason to say which functions
 have never been used in anger, so a consumer knows which parts of the surface are a proposal.
 
+## 2a2. `use self::<m>` and a `m::` qualifier are mutually exclusive
+
+loft#976's cure is `use self::<module>;` for a module your own package ships, and the
+compiler suggests it. ⚠ **It cannot be applied to a file that QUALIFIES that module.**
+`use self::x;` binds `x`'s names bare and gives no `x::` qualifier — deliberately, since
+that slot is shared by the whole dependency graph — so a file writing `x::f()` must either
+drop the qualifier or bind one with `use self::x as <alias>;`.
+
+Measured (moros, 2026-08-20): a tree-wide rewrite of **129 `use` lines across 39 files and
+7 packages** broke exactly the two files that qualified their own module, and the failure
+arrived as `Unknown library 'surfaces'` plus cascading `Unknown variable` errors — which
+reads as *that module is missing* rather than *bound under a name you cannot qualify*.
+loft#1043 fixed the diagnostic; the planning point stands: **budget for the qualifying
+files before starting the sweep**, because nothing marks them until they fail.
+
+⚠⚠ An alias re-enters the shared slot, so choose one no other package would take
+(`<pkg>_<module>`), not the module's own name — otherwise the sweep hands back the
+capture it was performed to prevent.
+
 ## 2b. Never leave a capability in the fixture only
 
 `tests/fixtures/libs/` snapshots each chunk repo at a pinned tag. A fixture that is **behind**
