@@ -9,6 +9,39 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A keyed collection argument was neither protected nor countable, so its callee's record was orphaned (2026-08-20)
+
+Found while closing loft#1029, in the one argument kind its widened witness still refused:
+
+```loft
+fn take(h: hash<KS[k]>, n: integer) -> KS { h[n] ?? mk() }
+take(v, 99)      // one record leaked per call, both backends — hash, sorted and index alike
+```
+
+The @P290 bracket arms the source-free only when it covers EVERY argument that carries a store,
+and `protectable_ref_args`'s emit filter was `Reference | Vector | Enum` — so a keyed collection
+left the set incomplete, the caller kept the conservative never-free answer, and the record the
+`??` fallback minted had no owner.
+
+⚠ **This is loft#981's hole from the other side, and the direction is the whole point.** There
+the keyed argument was neither protected NOR counted: the set read complete while protecting
+nothing, and the free it licensed took a hash parameter's element out from under the caller
+(`tests/scripts/882-…` red under poison with `rec=0xDEADBEEF`). Making it INCOMPLETE was the
+right cure for the use-after-free and left the leak behind. Protecting it closes both, and the
+emit could always do it: `protect_store_frees` marks `allocations[r.store_nr]` and reaches it
+through the argument's own `DbRef`, which a keyed collection variable holds like any other. The
+filter is now one predicate, `is_protectable_store_type`, whose doc says which way each error
+costs — a store-carrying type missing from it leaks, a non-store type added to it is the #981
+use-after-free.
+
+Guard: `tests/scripts/keyed-argument-witness.loft`, whose BORROW cells are the load-bearing
+half — a cure that widened the COUNT without widening the BRACKET passes every leak assert and
+fails these, because the container is read after the call by length and by value on both keys.
+The loop cell leaks 32 records on a pre-fix binary. `tests/keyed_element_borrow.rs`,
+`store_lifetime_890_889`, `store_lifetime_953` and the leak suites are green, and the adversarial
+probes run clean under `LOFT_POISON=1 LOFT_STRICT_STORES=1` on both backends.
+
+
 ### A package's manifest chose where the package landed on disk (2026-08-20)
 ### A call site could not NAME an argument built inline, so the store its callee minted was orphaned (loft#1029, 2026-08-20)
 ### An argument the call site could not NAME left the Join witness incomplete (loft#1029, 2026-08-20)

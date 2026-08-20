@@ -2239,20 +2239,17 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
         if tp.heap_dep().is_none() && tp.base().heap_dep().is_none() {
             continue;
         }
-        // The bracket protects only what its emit accepts.  A KEYED COLLECTION argument
-        // (`hash` / `sorted` / `index` / `radix` / `trie`) is a borrow source the emit
-        // does not cover, so it leaves the witness set incomplete — the narrower list
-        // read as complete is what freed a hash parameter's element out from under the
-        // caller (`fn take(h) -> R { h[k] ?? R{…} }`, tests/scripts/882-…). Deliberately
-        // NOT `unspan()` either: the emit matches a bare `Var`, and a spanned one it
-        // cannot name must read as UNCOVERED here, never as covered.
+        // Every argument whose type CARRIES A STORE is protectable, because the bracket
+        // marks that store through the argument's own `DbRef` and every one of these
+        // holds one.  loft#981 is why this must stay in step with `heap_dep` above: a
+        // KEYED COLLECTION was outside the older filter, so it was neither protected nor
+        // counted as uncovered — the set read complete while protecting nothing, and the
+        // free it licensed took a hash parameter's element out from under the caller
+        // (`fn take(h) -> R { h[k] ?? R{…} }`, tests/scripts/882-…).  The cure then was to
+        // make it INCOMPLETE, which was right but left the leak; the cure now is to
+        // protect it, which is what the emit could do all along.
         match arg {
-            Value::Var(av)
-                if matches!(
-                    tp,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) =>
-            {
+            Value::Var(av) if is_protectable_store_type(tp) => {
                 protectable.push(*av);
             }
             // A `null` argument holds NO STORE, so nothing the callee returns can be a
@@ -2287,22 +2284,41 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
             // bracket cannot emit must leave the set INCOMPLETE, never vanish from it
             // (loft#981 — the narrower list read as complete freed a hash parameter's
             // element out from under the caller).
-            _ if matches!(
-                tp,
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-            ) =>
-            {
-                match view_root_slots(data, arg) {
-                    Some(roots) => protectable.extend(roots),
-                    None => covers_all = false,
-                }
-            }
+            _ if is_protectable_store_type(tp) => match view_root_slots(data, arg) {
+                Some(roots) => protectable.extend(roots),
+                None => covers_all = false,
+            },
             _ => covers_all = false,
         }
     }
     protectable.sort_unstable();
     protectable.dedup();
     (protectable, covers_all)
+}
+
+/// Can the @P290 bracket mark the store behind an argument of this type?
+///
+/// True for every type whose value IS a `DbRef` into a store the caller can still reach —
+/// a reference, a vector, a struct-enum, and each keyed collection.  `protect_store_frees`
+/// marks `allocations[r.store_nr]`, so all it needs is that `DbRef`.
+///
+/// Keep this in step with the `heap_dep` question the caller asks first: a type that
+/// carries a store and is NOT here leaves the witness set incomplete and the caller keeps
+/// the conservative never-free answer — correct, but it leaks one record per call.  A type
+/// that is here without carrying a store would be worse: the set would read complete while
+/// protecting nothing, which is the loft#981 use-after-free.
+fn is_protectable_store_type(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Hash(_, _, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+    )
 }
 
 /// loft#1029 — the variable slots whose STORES an argument's value can lie in, or
