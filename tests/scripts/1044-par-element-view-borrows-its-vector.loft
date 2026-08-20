@@ -1,0 +1,99 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1044 — a `par` element is a VIEW into the caller's vector, so binding it as a
+// whole value must not make the loop free the caller's record.
+//
+// ⚠ THIS SCRIPT PASSES ON VALUE ALONE WHETHER OR NOT THE DEFECT IS PRESENT.  The free
+// happens either way; without `LOFT_POISON=1` the freed bytes read back intact until
+// something reuses the arena, so every assertion below is green over a live
+// use-after-free.  `tests/par_element_borrow.rs` is what runs it under poison, on both
+// backends — this file alone is not the guard.
+//
+// The shape, measured when the issue was filed: it needs a `par`, a STRUCT element, and
+// a WHOLE-VALUE bind of the element in the body.  `_ = e;` is the idiom that silences the
+// unused-variable warning, which is why the shape is easy to write and was easy to miss.
+// Reading a FIELD (`e.v`) never tripped it, and a non-`par` loop with the identical body
+// never tripped it — both are kept below as in-file controls.
+
+struct Cell { v: integer }
+
+fn one_c(x: Cell) -> integer { 1 }
+fn same_c(x: Cell) -> Cell { x }
+fn same_i(x: integer) -> integer { x }
+
+fn cells(n: integer) -> vector<Cell> {
+  out: vector<Cell> = [];
+  for i in 0..n { out += [Cell { v: 41 + i }]; }
+  out
+}
+
+fn check(label: text, got: integer, want: integer) {
+  assert(got == want, "{label}: got {got}, want {want}");
+}
+
+// THE CELL THE ISSUE WAS FILED ON: a scalar-returning worker, and the body binds the
+// element as a whole value.
+fn test_a_whole_value_bind_leaves_the_source_intact() {
+  s = cells(1);
+  t = 0;
+  for e in s par(r = one_c(e), 1) { t += r; _ = e; }
+  check("discard-bind, source still readable", s[0].v ?? -1, 41);
+  check("and the worker still ran", t, 1);
+}
+
+// The same bind under a NAME rather than the discard — measured to behave identically,
+// so the trigger is the whole-value bind and not the `_` slot.
+fn test_a_named_whole_value_bind_leaves_the_source_intact() {
+  s = cells(1);
+  t = 0;
+  for e in s par(r = one_c(e), 1) { t += r; keep = e; _ = keep; }
+  check("named bind, source still readable", s[0].v ?? -1, 41);
+}
+
+// A pass-through worker — the element travels out as the result as well as in.
+fn test_a_pass_through_worker_leaves_the_source_intact() {
+  s = cells(1);
+  n = 0;
+  for e in s par(r = same_c(e), 1) { n += 1; _ = e; _ = r; }
+  check("pass-through, source still readable", s[0].v ?? -1, 41);
+  check("one row", n, 1);
+}
+
+// More than one element, and more than one par over the same vector.
+fn test_several_elements_and_several_pars() {
+  s = cells(3);
+  t = 0;
+  for e in s par(r = one_c(e), 1) { t += r; _ = e; }
+  for e in s par(r = one_c(e), 1) { t += r; _ = e; }
+  check("first element after two pars", s[0].v ?? -1, 41);
+  check("last element after two pars", s[2].v ?? -1, 43);
+  check("both pars ran every row", t, 6);
+}
+
+// ── In-file controls: the neighbouring shapes that never tripped it ─────────────────
+
+// A FIELD read of the element rather than a whole-value bind.
+fn test_control_a_field_read_is_unaffected() {
+  s = cells(1);
+  t = 0;
+  for e in s par(r = one_c(e), 1) { t += r; _ = e.v; }
+  check("field read, source still readable", s[0].v ?? -1, 41);
+}
+
+// The identical body WITHOUT `par`.
+fn test_control_a_plain_loop_is_unaffected() {
+  s = cells(1);
+  n = 0;
+  for e in s { n += 1; _ = e; }
+  check("plain loop, source still readable", s[0].v ?? -1, 41);
+  check("plain loop ran", n, 1);
+}
+
+// A SCALAR element type, which has no record to free.
+fn test_control_a_scalar_element_is_unaffected() {
+  s: vector<integer> = [41];
+  t = 0;
+  for e in s par(r = same_i(e), 1) { t += r; _ = e; }
+  check("scalar element, source still readable", s[0] ?? -1, 41);
+}
