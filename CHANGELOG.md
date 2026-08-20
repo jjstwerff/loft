@@ -33,6 +33,30 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Arithmetic on a function declared further down the file
+
+A function may be used above where it is written — that is what the two-pass parser
+is for.  But mixing one with a plain number did not work:
+
+```loft
+fn run() -> float {
+  a = f() - 1;        // was: Variable 'a' cannot change type from integer to float
+  a
+}
+fn f() -> float { 4.5 }
+```
+
+The first pass saw `unknown - 1`, decided from the `1` that this was integer
+arithmetic, and wrote that down.  The second pass found out `f()` returns a float,
+and the assignment was refused.  Moving `f` above `run` fixed it, which is the tell:
+declaration order was deciding a type.  Writing the type down yourself did not help
+either — `a: float = f() - 1` was refused too, with the message reversed.
+
+Now the type comes from the operand that is really there, whichever side it is on
+and whichever operator you use.  A genuine mismatch is still reported, and still
+names the real type: `f() < true` says *"No matching operator '<' on 'float' and
+'boolean'"*.
+
 ### Leaving out an argument that defaults to `null` gives you the type's zero
 
 ```loft

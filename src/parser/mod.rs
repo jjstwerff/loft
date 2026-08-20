@@ -9200,21 +9200,27 @@ impl Parser {
         // pass 2 then re-resolves `x` to its real (e.g. float) type and the assignment
         // errors "cannot change type from integer to float".  Return Unknown so pass 2
         // refines it cleanly — the same re-typeable escape the generic-type-variable
-        // arm below takes on the first pass.  Scoped to a single unknown operand (a
-        // unary `-`/`~`/`!`): binary ops keep erroring so a genuine "No matching
-        // operator '<' on 'unknown' and 'boolean'" still fires.  A truly-unresolvable
-        // unary operand re-errors on pass 2 (this guard is first-pass only).
-        // (@PLN102 transitive cross-package inference.)
+        // arm below takes on the first pass.  A truly-unresolvable operand re-errors on
+        // pass 2 (this guard is first-pass only).  (@PLN102 transitive cross-package
+        // inference.)
         //
-        // The same applies when EVERY operand is unresolved — `f() - g()` with both
-        // callees defined lower in the file.  The `possible` loop matches the first
-        // candidate (`OpMinInt`) and locks the result to integer; pass 2 re-resolves
-        // to the real float return and the assignment errors "cannot change type from
-        // integer to float" at a line that looks correct.  Requiring ALL operands to be
-        // unknown is what keeps the diagnostic above intact: it has one KNOWN operand
-        // (`boolean`), so it still reaches the error path.  One known operand is enough
-        // to steer resolution, so only the no-information case defers to pass 2.
-        if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
+        // ANY unresolved operand defers, not only an all-unresolved set.  A KNOWN operand
+        // beside an unknown one does not steer resolution, it OVERRIDES it: in `f() - 1`
+        // the loop matches `OpMinInt` off the literal and locks the local to integer, and
+        // pass 2's real `float` return then errors at a line the reader never chose.  Even
+        // a written-down `a: float = f() - 1` was refused this way, with the message
+        // reversed.  Declaration order must not decide a type — the two-pass parser exists
+        // precisely so a callee may be defined below its caller.
+        //
+        // This guard was once restricted to the all-unknown case to keep a genuine
+        // mismatch ("No matching operator '<' on 'float' and 'boolean'") reportable, on
+        // the theory that only a known operand could carry it to the error path.  loft#918
+        // retired that reason: it added a SECOND deferral at the reject site, after the
+        // operator search comes up empty, so pass 2 reports the mismatch there — naming
+        // the type the operand really has rather than the `unknown` pass 1 saw.  Both
+        // behaviours are guarded (`pln102_*` in tests/issues.rs); widen this predicate and
+        // that pair is what tells you whether the diagnostic path still works.
+        if self.first_pass && !types.is_empty() && types.iter().any(Type::is_unknown) {
             return Type::Unknown(0);
         }
         // Comparing two tuples is decided element by element, BEFORE the `possible` loop —

@@ -2341,10 +2341,12 @@ session-of-the-week background bite.
 
 ### Tier 1 — closes whole classes of bugs
 
-> **⛔ HISTORICAL — both items have SHIPPED (checked 2026-07-10).**  B7 closed with the B2–B7 audit
-> (2026-05-21, both backends); C54 (`integer` → i64) landed 2026-04-21 via @PLAN01 / @PLN88.  Kept as
-> a worked example of the "closes a whole class" selection criterion, which still applies — today it
-> selects **Cluster C / H10** ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)).
+> **⛔ HISTORICAL — all three items have SHIPPED (items 1–2 checked 2026-07-10; item 3 closed
+> 2026-08-20).**  B7 closed with the B2–B7 audit (2026-05-21, both backends); C54 (`integer` → i64)
+> landed 2026-04-21 via @PLAN01 / @PLN88; the ignored-test baseline reached zero known gaps
+> 2026-08-20.  Kept as a worked example of the "closes a whole class" selection criterion, which
+> still applies — today it selects **Cluster C / H10**
+> ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)).
 
 1. **B7 lifecycle for native-returned struct-enum temporaries.** ✅ CLOSED 2026-05-21.
    Unblocks 5 P54 ignored tests in one fix.  Scope analysis pattern,
@@ -2354,10 +2356,40 @@ session-of-the-week background bite.
    that has spawned three documented gotchas.  Multi-session,
    sub-tickets land independently (see § C54).
 
-3. **Drive `#[ignore]`'d tests to zero.**  Baseline tracked in
-   `tests/ignored_tests.baseline` (currently 5 entries, down from 9
-   via p122 → file_content_nonexistent_trace 2026-04-14).
-   Sustainable cadence: 1–3 per session.
+3. **Drive `#[ignore]`'d tests to zero.**  ✅ **CLOSED 2026-08-20 — no known gap is
+   parked behind an `#[ignore]` any more.**  `tests/ignored_tests.baseline` is down to
+   ONE entry, `regen_fill_rs`, which regenerates `src/fill.rs` from `default/*.loft` and
+   is maintenance rather than a gap: it is meant to be run by hand when the stdlib
+   changes, and running it in CI would test the generator against its own output.  The
+   `#[ignore]`s left elsewhere in `tests/` are deliberate opt-in harnesses in the same
+   spirit — the differential oracle (a rustc invocation per corpus program) and one
+   `host_call` measurement that is explicitly "a measurement, not a gate".
+
+   The last real gap was **`pln102_one_known_operand_forward_float_still_mistyped`**
+   (closed 2026-08-20, below).  Worth keeping the shape of that close: the test's own doc
+   comment predicted the fix needed "the operator search to defer on the RESULT type
+   rather than on operand knownness — a larger change than the guard widening", and that
+   prediction had gone stale.  It was written when the all-unknown restriction really was
+   load-bearing; loft#918 then added a second deferral at the reject site and quietly took
+   over the job the restriction existed to do.  Nobody re-measured, so the note kept
+   sending readers away from a one-word fix (`all` → `any`) for months.  **A parked test's
+   stated reason is a claim with a date on it, not a standing fact** — re-measure it before
+   budgeting for the redesign it predicts.
+
+   Sustainable cadence when new ones appear: 1–3 per session.
+
+   **Closed 2026-08-20:** `pln102_one_known_operand_forward_float_still_mistyped` — a
+   binary op with ONE unresolved operand (`f() - 1`, `f`'s type declared lower in the
+   file) was refused, not mis-valued: pass 1 matched `OpSubInt` off the literal and locked
+   the local to `integer`, and pass 2's real `float` return then raised *"Variable 'a'
+   cannot change type from integer to float"* — a correct line about a decision the reader
+   never made.  Writing the type down (`a: float = f() - 1`) was refused too, with the
+   message reversed.  The first-pass deferral in `call_op` now fires when ANY operand is
+   unresolved rather than only when all are.  Guarded both ways: four `pln102_*` tests in
+   `tests/issues.rs` (each verified to FAIL with the predicate reverted, and only those
+   four), the pre-existing
+   `pln102_one_known_operand_keeps_the_mismatch_diagnostic` for the diagnostic path, and
+   `tests/scripts/forward-operand-arithmetic.loft` for both backends.
 
    **Closed 2026-04-14:** `file_content_nonexistent_trace` — the
    un-ignored test now exercises the regular `execute` path's

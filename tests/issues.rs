@@ -9486,20 +9486,75 @@ fn f() -> float { 1.0 }"
     );
 }
 
-/// @PLN102 — KNOWN GAP, not a passing guard.  The fix above covers the case where
-/// every operand is unresolved (`f() - g()`); the mixed form `f() - 1`, with one
-/// literal operand, still mis-types exactly as the original report described.  The
-/// all-unknown restriction is what keeps
-/// `pln102_one_known_operand_keeps_the_mismatch_diagnostic` working, so closing this
-/// needs the operator search to defer on the RESULT type rather than on operand
-/// knownness — a larger change than the guard widening.  Recorded here so the
-/// remaining half is not rediscovered from scratch.
+/// @PLN102 — CLOSED 2026-08-20.  The mixed form `f() - 1`, one forward-resolved operand
+/// and one literal, is typed from the operand that is really there.
+///
+/// It used to be REFUSED, not mis-valued: pass 1 saw `unknown - integer`, matched
+/// `OpSubInt`, and locked the local to `integer`; pass 2 resolved `f()` to `float` and the
+/// assignment reported *"Variable 'a' cannot change type from integer to float"* — at a
+/// line that is correct, about a decision the reader never made.  Declaration order is not
+/// supposed to matter; the two-pass parser exists so a function may be used before it is
+/// written.
+///
+/// The deferral now fires when ANY operand is unresolved rather than only when ALL are.
+/// The `all` restriction existed to protect
+/// `pln102_one_known_operand_keeps_the_mismatch_diagnostic` — one known operand was
+/// thought to be the only thing keeping a genuine mismatch reportable — and loft#918
+/// retired that reason when it added the SECOND deferral at the reject site: a mismatch is
+/// now reported there on pass 2, naming the type the operand really has.  So the guard and
+/// this case coexist, and the predicted "defer on the RESULT type" redesign was not needed.
 #[test]
-#[ignore = "@PLN102 open: one-known-operand forward reference still mis-types (see doc comment)"]
-fn pln102_one_known_operand_forward_float_still_mistyped() {
+fn pln102_one_known_operand_forward_float_is_typed_from_the_real_operand() {
     code!(
         "fn run() -> float {
     a = f() - 1;
+    a
+}
+fn f() -> float { 4.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(3.5));
+}
+
+/// @PLN102 — the same shape with the LITERAL first.  Operand order is not what decides
+/// this, and a fix that reads the first operand only would pass the test above and leave
+/// this one refused.
+#[test]
+fn pln102_forward_operand_second_is_typed_from_the_real_operand() {
+    code!(
+        "fn run() -> float {
+    a = 1 - f();
+    a
+}
+fn f() -> float { 4.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(-3.5));
+}
+
+/// @PLN102 — and with a different operator, since the deferral is in the shared operator
+/// search rather than in `-`.
+#[test]
+fn pln102_forward_operand_addition_is_typed_from_the_real_operand() {
+    code!(
+        "fn run() -> float {
+    a = f() + 1;
+    a
+}
+fn f() -> float { 4.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(5.5));
+}
+
+/// @PLN102 — the shape that reads worst: the author WROTE the type down and was still
+/// refused, with the message reversed (`from float to integer`), because pass 1 had
+/// already typed the expression from the literal.
+#[test]
+fn pln102_forward_operand_with_a_declared_type_is_not_refused() {
+    code!(
+        "fn run() -> float {
+    a: float = f() - 1;
     a
 }
 fn f() -> float { 4.5 }"
