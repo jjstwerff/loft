@@ -104,7 +104,46 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **0** (2026-07-04) — **the ownership register is at zero.**  All five D-own
+OPEN: **1** (2026-08-20) — **D-own-6 is open** (an argument the call site cannot NAME
+leaves the Join witness incomplete, loft#1029).  The five original D-own deviations remain
+resolved; the paragraph below is their record and its `OPEN: 0` claim is superseded by this
+line.
+
+### D-own-6 — OPEN (2026-08-20, loft#1029): the runtime Join witness only covers a NAMEABLE argument
+
+`(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a
+parameter is completed per-path by the @P290 bracket — `protect_store_frees` marks each ref
+argument's store, and a returned store that is marked is refused the source-free while a
+callee-minted one is freed.  The register closed D-own-2 on that basis.
+
+The witness is not total.  The bracket needs a SLOT to name, so
+`use_analysis::protectable_ref_args` accepts only a bare `Var`; for any other argument
+spelling `covers_all` goes false and the caller falls back to the conservative never-free
+answer, orphaning the store the callee minted — one record per call, both backends.  The
+axis is the ARGUMENT SPELLING, not what the borrow arm names: a vector-element borrow arm
+leaks with a literal argument, and a parameter borrow arm is clean with a variable one.
+
+Two spellings are closed (commit `5fa0f785`): an inline STRUCT literal, cured at the call
+site by hoisting its construction so the argument becomes the `Var` the bracket can name;
+and a `null` literal, which reaches the test as `OpNullRefSentinel()` and holds no store
+(loft#1021's reasoning, one lowering later).
+
+Three remain, each a different site: a VECTOR literal argument (its block yields a view
+opened at the block's own scope, so hoisting would carry a declaration out of the scope that
+registered it); a result read INLINE and discarded rather than bound (the
+discarded-owned-temp lift); and an inline literal inside a LOOP.  Guard:
+`tests/scripts/1029-inline-argument-borrow-source.loft`, whose header names the three it
+omits and why.
+
+**The oracle that missed this** varies the instantiating TYPE and the join SHAPE and never
+varies where the borrowed value comes FROM, nor how the argument is SPELLED — every cell in
+`1019-join-owned-arm-owner.loft` binds its argument to a variable first.  Both axes belong
+in the next sweep; the type-variable half of the same gap is recorded in
+[interfaces.md](interfaces.md).
+
+---
+
+OPEN: ~~0~~ (2026-07-04, superseded above) — **the ownership register was at zero.**  All five D-own
 deviations are resolved: D-own-3 (typed `Deps`) CLOSED; D-own-4 RECLASSIFIED as the
 decided edge C86 (whole-value binds copy; aliasing is a last-use elision —
 `classify_vec_bind`); D-own-5 (the `&` borrow rides `deps`) CLOSED; **D-own-2

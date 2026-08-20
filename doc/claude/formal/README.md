@@ -51,12 +51,24 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > on, `tests/oracle/17-tuples-recursion.loft`, is all-`(integer, integer)` and carries no `text`
 > at all. Before trusting a zero, read what its oracle actually covers.
 >
-> **And a zero can fail a second way, with no oracle involved.** The same doc read `OPEN: 0`
-> on the day it closed D-tup-1 by collapsing three disagreeing element lists into one — while
-> D-tup-2 was live, because the surviving list is only consulted at one of the two sites that
-> construct a `&(…)`. Single-sourcing a rule makes the answers agree; it does not make anyone
-> ASK. So a zero rests on two things and both need checking: what the corpus covers, and
-> whether every site that makes the decision actually reaches the rule.
+> [ownership.md](ownership.md) read `OPEN: 0` for six weeks with loft#1029 live, for the same
+> reason from a different angle: its Join corpus
+> (`tests/scripts/1019-join-owned-arm-owner.loft`) moves four axes — which side owns, arm
+> count, `if` vs `match`, free function vs method — and holds the ARGUMENT SPELLING fixed at a
+> variable in every cell. The runtime witness that closes the Join only covers an argument the
+> call site can NAME, so a literal argument leaks and no cell asked. **A corpus that varies the
+> subject exhaustively still proves nothing about the axis it never varies** — count what is
+> held fixed, not what is swept.
+>
+> **And a zero can fail a third way, with no oracle or corpus involved.**
+> [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
+> disagreeing element lists into one — while D-tup-2 was live, because the surviving list is
+> only consulted at one of the two sites that construct a `&(…)`. Single-sourcing a rule makes
+> the answers agree; it does not make anyone ASK.
+>
+> So a zero rests on three things, and each has to be checked separately: what the corpus
+> COVERS, which axes it holds FIXED, and whether every site that makes the decision actually
+> reaches the rule.
 
 ## Reading guide
 
