@@ -14,7 +14,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — arcs `B` and `C` COMPLETE (`text2d` 0.4.0, `tween` 0.1.0, `stage` 0.16.0), `D0b` answered; `D1` and `D2` remain (`D0` is moros's clock).** These are the libraries a game author writes against
+**Open — arcs `B` and `C` COMPLETE (`text2d` 0.4.0, `tween` 0.1.0, `stage` 0.17.0), `D0b` answered, `D1` 3-of-4; the `D1` extraction is held on a fork decision and `D2` remains (`D0` is moros's clock).** These are the libraries a game author writes against
 *above* the stage. Each has its own gate family — a metrics seam, a headless font, an event
 replay — which is why they are not @PLN144's phases.
 
@@ -43,7 +43,7 @@ cut, not when it is implemented.
 | **C2** — bind to node properties | **`stage`** (0.16.0) | ✅ **Shipped** — and `advance` settled the placement: `stage.advance(dt_us)` already walks every node once a frame, so a bound tween **rides it** and one call steps the sequences and the property tweens together. That keeps `tween` dependency-free and decides the unit too — **microseconds**, because that is what `advance` takes. THE GATE is a parallel run (`draw_list.loft`'s A2 shape): eight frames of a tweened `x` compared **pixel for pixel** against a hand-moved node, with numbers picked so the hand side needs **no library call** (64 px / 800 000 µs sampled every 100 000 µs is exactly 8 px a frame). ⚠ The switch is gated **cell by cell** — each of nine properties must move its own field and no other. ⚠⚠ **At most one tween per (node, property)**; a second replaces it, and a finished one releases the property. 9 tests, suite 144 on both backends, three controls fire | ✅ **Shipped** |
 | **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
 | **D0b** — does `input` fit a consumer that already exists? | probe only | ✅ **Answered** ([`probe-d0b.loft`](probe-d0b.loft), both backends identical) — **adopt it, and do not expect it to resolve modifiers.** dryopea's 33-row action set expresses through `Bindings` and replays through `input_tick_from_state` exactly as `D1` needs; edge detection is correct headless. ⚠ But a **modifier is not expressible**, and it is structural: `ActionBinding` is a name + key list, `AxisBinding` is two key *codes*, and neither has a slot for *"suppressed while Ctrl is held"*. Measured: `input` answers **identically** for plain `S` and `Ctrl+S` (`pan_south=true, save=true` both times), so all five of dryopea's Ctrl-combos are indistinguishable from their plain twins — and an axis cannot carry the rule either, which is why dryopea's `bnd_axes` is **empty** and its four pan keys are four actions. ⚠⚠ **The premise was wrong**: dryopea ADOPTED `input`, so the widgets would be its *second* consumer, not the fourth — [PRIOR_ART](../144-2d-stage/PRIOR_ART.md) corrected | ✅ **Answered** |
-| **D1** — Button + Panel over stage routing | `ui` | ⚠ `D0b` cleared `input_tick_from_state` for the replay harness — reuse it. a replayed `gl_next_event` sequence drives the exact state sequence; press-then-leave-then-release does **not** fire. **And `panel_hit_test` answers the same `UiHit` it answers today**, which is what makes this an extraction rather than a rewrite wearing its name. **On touch there is no `over` state** — the kit has four, so a widget whose affordance lives in hover is invisible on a phone; the gate replays a touch stream, not only a mouse one | Open |
+| **D1** — Button + Panel over stage routing | **`stage`** (0.17.0) for the states; the extraction is ⛔ **held** | 🟡 **3 of 4 clauses shipped.** ✅ a replayed stream drives the exact state sequence (8 events, both buttons, hand-computed); ✅ press-then-leave-then-release does **not** fire, while press-then-drift-a-pixel does; ✅ touch never shows `Over` — **one** recorded stream replayed both ways fires identically, so the pointer kind changes only what is *shown*. ⚠⚠ **The invariant is that a node reads `Down` exactly when a release would FIRE it** — one predicate serves the picture and the click, so a control that breaks the capture check does not even redden the down-means-fires gate: the class is unrepresentable, not caught. ⛔ **Clause 4 — `panel_hit_test` answering the same `UiHit`** — is held: see the note below | 🟡 **Partly shipped** |
 | **D2** — focus, tab order, text field | `ui` | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today. ⚠⚠ **`D0b`'s limit lands squarely here**: a text field needs `Ctrl+C`/`Ctrl+V` and `Shift`+arrow, and `input` cannot express a modifier — so this phase must carry a ctrl rule of its own (dryopea's `ea_ctrl` column is the worked example) or `input` must grow one first. Decide which **before** the phase is cut | Open |
 ## Effort per phase
 
@@ -57,7 +57,7 @@ cut, not when it is implemented.
 | **C2** | XS ✅ | *Done, and the enum-plus-switch prediction held exactly.* What the note did not see is that the switch is also the first public way to **move** a node — `stage` could place one and never shift it, so a consumer had to write `st_nodes[i].nd_x` directly. So `set_prop` ships beside `tween_prop`, through the same switch. ⚠ Filed on the way: [loft#1039](https://github.com/loft-lang/loft/issues/1039) — `lib::Enum.Variant` does not parse, though `lib::Struct{}`, `lib::CONST`, `std::abs()` and `lib::Enum` *as a type* all do. |
 | **D0** | — | A request, not an effort: `lavition_ui` is unpublished and lives in a tree this stream reads and never writes. Costs a conversation and their release cycle. |
 | **D0b** | XS ✅ | *Done.* One probe program, and it did the job a probe is for — it did **not** retire the dependency, it retired the *reason to doubt it* and replaced it with a named limit `D1` and `D2` can plan around. ⚠ The phase's own framing was the thing that broke: two of the three "wrote their own" consumers were miscounted, one of them because a file was judged by its NAME (`framekey.loft` is a frame-reuse digest, not a keyboard file). |
-| **D1** | S | Four visual states over A4's routing-with-capture, on top of an **extracted** `Button`/`Panel`/`ListBox`/`VerbBar`/`Theme` rather than a written one. The effort is the replay harness, and it constrains A4: the input path must be injectable. `input_tick_from_state` in the `input` package already exists for exactly this — reuse it rather than inventing a second seam. |
+| **D1** | S 🟡 | *States done; extraction held.* The predicted effort — *"the effort is the replay harness"* — was **wrong in a good way**: A4's path was already injectable (every entry point takes coordinates and reads no device), so the harness cost nothing and no second seam was invented. The real effort was deciding what `Down` MEANS, and the answer made a bug class unrepresentable. ⚠ The extraction is the part that stalled, on a question the plan did not ask — see below. |
 | **D2** | M | The half the kit does not have. Focus ring and tab order are small; the **text field** is the phase. Caret placement needs B2's measurement, selection needs hit-test to a character index, insertion/backspace/IME arrive via `gl_event_text`, and multi-byte indexing returns for a third time. |
 
 ## Targets
@@ -94,6 +94,37 @@ Nothing is red today only because `loft-libs-graphics`'s `library-ci.yml` still 
 package dirs** by `scripts/deploy-library-ci.sh`, so the next refresh adds `stage` and the
 gate goes red. `text2d` (35 tests) and `tween` (20) both pass it today. The `:931 self` case
 is not a rename away: a method's receiver has to be spelled `self`.
+
+### ⛔ D1 clause 4 — the extraction is held on a question this plan never asked
+
+`D1`'s fourth clause is *"`panel_hit_test` answers the same `UiHit` it answers today"*, which
+presumes we build a `ui` package by extracting moros's `lavition_ui`. Three facts found while
+doing `D1` say that presumption needs a decision before any code:
+
+1. **`lavition_ui` is moros's to promote, and `D0` is that promotion.** @PLN147 § says
+   *"`lavition_ui` (@PLN145 `D`) is what the editor's panels are made of"* — so arc D is
+   *about that package*, not about a rival. Their rule is that a library is promoted once
+   battle-tested **there**; a copy of it published from here is the shape that rule rejects.
+2. **Its name was chosen deliberately.** moros's `EDITOR_UI.md` records `lavition_ui` over a
+   generic `ui` precisely because a generic name is *"generic enough to collide in a shared
+   registry"*. Publishing `ui` ourselves would mint the collision they avoided.
+3. ⚠⚠ **The new half cannot live there anyway.** `lavition_ui`'s `loft.toml` states an empty
+   dependency list as **its claim** — *"nothing here needs a world, a lattice, a window or a
+   GL context"*. The four states need `stage`'s routing, so putting them in `lavition_ui`
+   would break the one property that package advertises. That is why `D1`'s states shipped in
+   `stage` instead, where the press/release/capture they extend already live.
+
+**So the three behavioural clauses are shipped and the extraction is a fork decision**, which
+is the user's rather than this stream's. The options, with what each costs:
+
+| | what it means | cost |
+|---|---|---|
+| **A — don't fork** | `lavition_ui` stays moros's; consumers use it *with* `stage`'s states. `ui` never exists | nothing; clause 4 is struck as based on a false premise |
+| **B — fork as `ui`** | copy `Button`/`Panel`/`ListBox`/`VerbBar`/`Theme` (~800 lines) into `loft-libs-graphics` | a rival to a deliberately-named package, and two derivations to keep in step — the exact shape that cost this branch a 75-commit rebase |
+| **C — ask moros to publish** | that IS `D0`, already Blocked-on-moros | their clock; a conversation, not an effort |
+
+⚠ Recorded because it is cheap to state now and expensive to discover after a fork: nothing in
+`stage` 0.17.0 depends on the answer.
 
 ## The sandbox boundary
 
