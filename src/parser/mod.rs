@@ -10520,28 +10520,28 @@ impl Parser {
     }
 
     /// Tier-1 lazy *catalog* fallback (`method -> package`), read once from the
-    /// cached registry `index.json`.  This is what makes `line.matches(p)` work
-    /// against a package the user has NOT declared as a dependency: the local
+    /// registry's derived trigger sidecar.  This is what makes `line.matches(p)`
+    /// work against a package the user has NOT declared as a dependency: the local
     /// `trigger_map` misses, so we look the method up across the whole catalog,
     /// get the package name, and hand it to `lib_path` — which resolves it via
     /// the same lockfile → installed → auto-install chain an explicit `use`
     /// would take.  Ambiguity is dropped by `trigger_providers` (registry
     /// submission already rejects true collisions).  Cached (empty on absent
-    /// catalog) so the file read happens at most once per parse.
+    /// catalog) so the lookup happens at most once per parse.
+    ///
+    /// Reads [`registry_index::catalog_trigger_map`](crate::registry_index::catalog_trigger_map)
+    /// rather than the index itself: the map is a few hundred bytes, the index is
+    /// the whole published catalog, and parsing the second to answer the first put
+    /// the entire registry's growth on the compile path.
     #[cfg(feature = "registry")]
     fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
         if let Some(m) = &self.auto_use_catalog_map {
             return m.clone();
         }
-        let mut map = std::collections::HashMap::new();
-        let (idx_path, _, _) = crate::registry_index::index_paths();
-        if let Ok(content) = std::fs::read_to_string(&idx_path)
-            && let Ok(index) = crate::registry_index::parse_index(&content)
-        {
-            map = crate::registry_index::trigger_providers(&index)
+        let map: std::collections::HashMap<String, String> =
+            crate::registry_index::catalog_trigger_map()
                 .into_iter()
                 .collect();
-        }
         self.auto_use_catalog_map = Some(map.clone());
         map
     }

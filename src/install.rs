@@ -434,6 +434,10 @@ fn load_index_inner(
     let text = std::str::from_utf8(&content_bytes)
         .map_err(|e| format!("index is not valid UTF-8: {e}"))?;
     let index = registry_index::parse_index(text)?;
+    // The compiler asks for the trigger map mid-parse and must not pay an index
+    // parse for it; a command that already holds the parsed index is the cheapest
+    // place to keep its sidecar current.
+    registry_index::refresh_trigger_sidecar(&index, content_bytes.len() as u64);
     Ok(LoadedIndex {
         index,
         stale_fallback,

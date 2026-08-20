@@ -258,10 +258,31 @@ binary.
 
 ### Index size estimate
 
-100 packages × 5 versions × ~400 bytes per version row = ~200 kB.
-Fits comfortably in a single fetch.  At 10,000 packages × 20
-versions, ~80 MB — still fine for a daily-refresh client cache.
-The format scales fine for the lifetime of an MVP.
+A version row without `api` is ~384 bytes (measured over the live
+index), so the original sizing held: 100 packages × 5 versions ≈
+200 kB, and 10,000 × 20 ≈ 77 MB.
+
+**The `api` field changed that by an order of magnitude.**  It carries
+one `{sig, doc}` per `pub` item *per version*, and on the live index it
+is **91 % of the document** (494,993 of 544,552 compact bytes across
+2,344 entries).  Re-measured with it: the 10,000 × 20 projection is
+**825 MB**, not 80 MB — and loading it costs ~11 s at 3.7 GB RSS,
+because the parsed form runs ~4.5× the file size.
+
+Growth so far — 10 kB (May) → 37 kB (Jun) → 303 kB (Jul) → 693 kB
+(Aug, 36 packages / 128 versions).  At ~5.4 kB per version row the
+document reaches 50 MiB at roughly **10,000 package-versions**: 500
+packages with 20 releases each, or 2,700 at today's 3.6.  Version rows
+are never removed, so that number only moves one way.
+
+**What this means for the format.**  Nothing needs doing at today's
+size, and the client no longer breaks at a fixed ceiling (see § Download
+ceiling).  But the shape that keeps scaling is to split *resolution*
+data from *description* data: the thin index above (`url`, `sha256`,
+`size`, `loft`, `deps`, `yanked`) stays a single fetch to ~200,000
+versions, while `api` + docs move to per-package files fetched on
+demand — cargo's sparse-index shape, which needs no server and keeps
+every URL static, so § The invariant still holds.
 
 ---
 
@@ -363,8 +384,44 @@ consumer's machine.  Layout:
   package is missing from the cached index.
 - Conditional GET via the cached `index.json.etag` — if the
   registry hasn't changed, the response is 304 and no bytes
-  transfer.
+  transfer.  **Designed, not implemented**: `fetch_index` sends no
+  `If-None-Match`, and the `index.json.fetched_at` path that
+  `index_paths()` returns is read by nothing.  Every refresh
+  transfers the whole document (gzipped by the transport — ureq
+  carries `flate2`, so ~6.3× smaller on the wire).
 - Signature verified on every load, even cache-hit paths.
+
+**Download ceiling.**  A single HTTP response is capped at 512 MiB
+(`DEFAULT_MAX_DOWNLOAD`), overridable with `LOFT_MAX_DOWNLOAD=<size>`
+(`1G`, `512M`, `0` = no ceiling); a typo keeps the default and says so.
+Exceeding it is a **refusal naming the ceiling**, never a truncation.
+
+The ceiling was 50 MB and truncated silently, which made it a trap
+rather than a guard: a 70 MB index came back cut to exactly 52,428,800
+bytes and failed as `JSON parse error: unterminated string` at a byte
+offset inside an unrelated package.  Worse, the number is compiled into
+every released binary — an index growing past it would have taken the
+registry down for every client already in the wild, and no server-side
+change could have lifted it.  A ceiling that is reachable has to
+announce itself.
+
+**Derived trigger sidecar** — `~/.loft/registry/triggers.json`.  The
+parser consults the catalog's `method -> package` map whenever a bare
+`line.matches(p)` names no declared dependency, i.e. *while compiling*.
+That map is a few hundred bytes; reading it out of the index meant
+parsing the whole published catalog on the compile path — at 100×
+today's index, `loft --check` on a four-line program cost **1.05 s and
+344 MB RSS**, all of it `api` rows the compiler never looks at.
+
+The sidecar holds just the map, stamped with the index's byte length +
+mtime.  A missing or mismatched stamp rebuilds it from the index and
+writes it back, so the parse lands once per index rather than once per
+compile; the registry commands that fetch an index refresh it from the
+copy they already hold (`install::load_index_inner`).  Same program,
+same 100× index, with the sidecar: **0.04 s and 11.7 MB** — the cost of
+having no catalog at all.  It is derived data: any doubt rebuilds it,
+nothing trusts it, and a read-only cache directory costs the fast path
+and nothing else.
 
 **Cache lifecycle — no automatic cleanup, conservative by design**:
 
