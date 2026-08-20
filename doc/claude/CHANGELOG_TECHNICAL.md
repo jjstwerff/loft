@@ -11,6 +11,7 @@ All notable changes to the loft language and interpreter.
 
 ### A package's manifest chose where the package landed on disk (2026-08-20)
 ### A call site could not NAME an argument built inline, so the store its callee minted was orphaned (loft#1029, 2026-08-20)
+### An argument the call site could not NAME left the Join witness incomplete (loft#1029, 2026-08-20)
 
 A callee whose return may be a BORROW of an argument cannot be classified statically — it
 hands back either the argument's store or one it minted. loft#981/#982 settled that with a
@@ -50,12 +51,64 @@ when its argument is a literal, and a parameter borrow arm is clean when its arg
 variable. #1019's guard is not narrow in the way I filed — it binds every argument to a
 variable first, which is what its cells hold fixed.
 
-**Three shapes stay open under #1029**, each measured to be a different site: a VECTOR literal
-argument (its block yields a view opened at the block's own scope, so hoisting would carry a
-declaration out of the scope that registered it — the gate declines on exactly that test); a
-result read INLINE and discarded rather than bound (the discarded-owned-temp lift, which leaks
-for a plain variable argument too); and an inline literal inside a LOOP (A/B-built with this fix
-disabled, the leak is identical either way).
+**And the axis had more on it than the two shapes above.** Moving the argument spelling across
+a 42-cell matrix found six more leaking spellings, none of them in the issue and all ordinary to
+write — a field (`pick(b.s, …)`), a nested field, a vector ELEMENT (`pick(w[0], …)`), a
+vector-typed field, a `??`, and an `if` in argument position. Each leaked one record per call on
+BOTH backends.
+
+**The witness names a STORE, not the argument.** `protect_store_frees` marks an allocation
+(`allocations[r.store_nr].set_free_protected()`) and reaches it through any `DbRef` in that
+store, so an argument only has to be DERIVED from a nameable slot by operations that stay inside
+one store. `b.s` is `OpGetField(Var(b), …)` — `b`'s store at another `pos`; `w[0]` is
+`OpGetVector(Var(w), …)`, whose out-of-range sentinel preserves `store_nr` too. So the ROOT of a
+projection chain is not an approximation of the borrow source, it IS it. A JOIN argument
+witnesses both arms, which is safe in the direction that matters: an extra marked store can only
+refuse a free, never license one. `Parser::projection_root_mut` already owned the two-op list
+for the mirror question ("which inline container needs a NAME"), so `is_projection_op` is now
+that one list and both read it — a native op's def carries no return dep (measured `deps=[]`),
+so the `-> reference[v1]` in the declaration cannot be read there.
+
+The CONSTRUCTION-block family stays on the hoist, and three wrappers each hid the hoisted value
+from a pass that matches a bare variant:
+
+* The hoist's own scope test was EQUALITY. The parser allocates a literal's work-ref at FUNCTION
+  scope, so `p = pick(S { a: 7 }, false)` written one `if` or one `for` deeper compared 1 against
+  the block's scope and declined. It is now membership in `self.stack`, the chain of open scopes
+  — a numeric `<=` would not do, because scope numbers are allocated in encounter order and an
+  earlier SIBLING compares less while enclosing nothing.
+* `generation/pre_eval.rs` counted only `Value::Block` when deciding which argument to lift into
+  a `let _pre_N = { … }` binding for a NATIVE template — the user-fn branch already counted both.
+  An `Insert` then fell through to the template's own `let _haN = @v1;` binder, which is not
+  braced, so it bound the FIRST statement (an assignment, type `()`) and rustc rejected the use
+  with **E0609**. Nothing about #1029 is special there: any `Insert` argument to a native
+  template was mis-emitted. All four sites now read one predicate.
+* The lift that gives a call's result an OWNER matches a `Call`, and a hoisted argument leaves a
+  SEQUENCE in its place — @P297's `Span` pitfall exactly one wrapper later, whose comment already
+  says *"unspan before matching this branch or the lift never fires and the call-result temporary
+  leaks."* Same cure: read through to the value.
+
+A VECTOR literal is the one block that does not yield the slot it filled — it fills `__vdb_N` at
+the enclosing scope and yields `_vec_N`, a view it opened at its OWN scope. Hoisting is still
+ownership-neutral (the owner is not moving); what moves is the view's DECLARATION, out of a block
+that then ceases to exist, so the block's scope is ABSORBED into the one the ops land in.
+Otherwise `var_scope` points those vars at a scope no emitted code opens and slot assignment
+places them against a sibling's zone.
+
+⚠ **The E0609 is why a targeted probe is not a gate here.** Every cell was green on
+`--interpret` while `--native` refused to compile one of them; only running both backends per
+cell showed it. That is the same failure the first half of this issue hit
+(875-json-absent-text-field) from the opposite direction — there the hoist fired where it should
+not, here it fired where it should and the emitter could not render it.
+
+Guard: `tests/scripts/1029-inline-argument-borrow-source.loft`, 18 cells, each asserting BOTH
+arms plus the source's own value and, for a collection, its length — a cure that freed the
+DELIVERED store answers the same number on the owning arm, and only a length or a source read can
+witness it. It hard-fails on the pre-fix tree (`wrap.rs`: 25 leaked records). 42 probes run clean
+under `LOFT_STRICT_STORES=1` on both backends, and four further axes the corpus had pinned were
+moved as probes and are clean: a GENERIC (`g<X>(x: X, a: X?) -> X { a? }`, the spelling that
+surfaced this issue), a struct carrying TEXT, a struct carrying a VECTOR, and a METHOD receiver.
+`formal/ownership.md`'s D-own-6 is closed with it.
 
 ### A generic returning a discharged `T?` was lowered by a route its non-generic twin never takes (loft#1026, 2026-08-20)
 

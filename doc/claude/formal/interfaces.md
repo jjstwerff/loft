@@ -143,14 +143,16 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
   stays 0 only as long as the tests keep one.
 
   The corpus is thin on a **second** axis, and loft#1029 is how that surfaced: it varies the
-  instantiating TYPE and never varies where a borrowed value comes FROM. Every borrow in both
-  scripts is a vector ELEMENT; a PARAMETER is the more ordinary spelling and was never asked, and
-  a fresh-arm/borrow-arm join over one leaks a record on both backends. That defect is NOT a
-  monomorphization deviation — it reproduces with no generic in the program at all, so it is
-  `ownership.md`'s to own — but it was a generic corpus that made it visible, and the same
-  omission would hide a monomorph-only variant of it here. `(G-Mono)`'s promise is that a
-  specialised copy behaves as the hand-written concrete one would; an oracle that fixes the
-  borrow source cannot see the cases where it would not.
+  instantiating TYPE and never varies how the ARGUMENT is spelled. Every call in both scripts
+  binds its argument to a variable first, and a fresh-arm/borrow-arm join reached with anything
+  else — a literal, a field, an element, a `??` — leaked a record on both backends until
+  2026-08-20. That defect was NOT a monomorphization deviation — it reproduces with no generic in
+  the program at all, so it is `ownership.md`'s to own (D-own-6, now closed) — but it was a
+  generic corpus that made it visible, and the same omission would hide a monomorph-only variant
+  of it here. `(G-Mono)`'s promise is that a specialised copy behaves as the hand-written
+  concrete one would; an oracle that fixes the argument spelling cannot see the cases where it
+  would not. The generic spelling itself is now a probe under
+  `tests/scripts/1029-inline-argument-borrow-source.loft`'s finding and measured clean.
 - **Test-hygiene note (resolved 2026-08-09):** `86-interfaces.loft::test_bounded_for_loop_struct`
   — a bounded `<T: Validatable>` for-loop over a struct vector calling a method per element — was
   commented out under a stale "crashes with P136 (use-after-free)" note. That bug is FIXED and the

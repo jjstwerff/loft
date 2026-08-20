@@ -55,10 +55,13 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > reason from a different angle: its Join corpus
 > (`tests/scripts/1019-join-owned-arm-owner.loft`) moves four axes — which side owns, arm
 > count, `if` vs `match`, free function vs method — and holds the ARGUMENT SPELLING fixed at a
-> variable in every cell. The runtime witness that closes the Join only covers an argument the
-> call site can NAME, so a literal argument leaks and no cell asked. **A corpus that varies the
-> subject exhaustively still proves nothing about the axis it never varies** — count what is
-> held fixed, not what is swept.
+> variable in every cell. The runtime witness that closes the Join only covered an argument the
+> call site could NAME, so a literal argument leaked and no cell asked. Moving that one axis
+> turned up **six more leaking spellings** — a field, a nested field, a vector element, a
+> vector-typed field, `??`, and an `if` in argument position — none of them in the issue.
+> **A corpus that varies the subject exhaustively still proves nothing about the axis it never
+> varies** — count what is held fixed, not what is swept. (Closed 2026-08-20; the axis is now
+> swept by `tests/scripts/1029-inline-argument-borrow-source.loft`.)
 >
 > **And a zero can fail a third way, with no oracle or corpus involved.**
 > [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
