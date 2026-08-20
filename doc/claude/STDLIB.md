@@ -198,6 +198,7 @@ routes between the two views.
 
 | Function | Description |
 |----------|-------------|
+| `char_slice(self: text, from: integer, to: integer) -> text` | The characters `[from, to)` — a slice that counts CHARACTERS where `self[a..b]` counts BYTES. ⚠ **The cure for the commonest text bug in this stack**: a count computed from `len` and applied as a byte range fits FEWER characters than it measured, and loft snaps the cut outward, so the text comes back SHORT rather than corrupt — silently, and only when it is not ASCII. `"héllo"[0..4]` is `"hél"`; `"héllo".char_slice(0, 4)` is `"héll"`. Use it wherever a character count becomes a cut (fitting a label, wrapping, a caret or selection, truncating); use `self[a..b]` only when the numbers came from `find` / `size` / `byte_at`. Negative bounds count from the end as a byte slice's do; both ends clamp; a reversed range is `""`. |
 | `byte_at(self: text, i: integer) -> integer` | The raw BYTE at byte offset `i` as 0–255, `0` out of bounds. A pure O(1) read — unlike `text[i]`, no UTF-8 decode — for ASCII-heavy scanning (tokenisers, regex-like loops), ~5–10× faster there. |
 | `text_from_bytes(bytes: vector<u8>) -> text` | Build a text from raw UTF-8 bytes — the inverse of `byte_at`. For binary decoders that assemble a buffer and need text back. Bytes that are not valid UTF-8 yield `""` (never a crash), so validate first if you must tell "empty input" from "invalid bytes". Carries an embedded NUL. |
 | `chr(cp: integer) -> text` | Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that iteration gives. `chr(65)` → `"A"`, `chr(20013)` → `"中"`, `chr(128512)` → `"😀"`. For decoding an escape (`\u{…}`, an HTML entity) or reassembling text a code point at a time. |
@@ -208,6 +209,15 @@ surrogate (`D800`–`DFFF`), anything past `U+10FFFF`, a negative number — and
 because `character` uses 0 as its null and text ITERATION STOPS at a NUL, so a
 NUL built by `chr` could not be read back by the loop it is the inverse of. The
 byte route still carries one: `text_from_bytes([0])` is one byte long.
+
+⚠ **`char_slice` was missing for longer than that, and three trees paid for it.**
+`text2d` hand-rolled `take_chars` only after `fit_text` had shipped cutting a
+character count as a byte range; `stage`'s text field needed the same walk twice;
+and moros's `lavition_ui/src/font.loft` still carries it across **seven** call
+sites — every button label, every hotkey, every list entry, the status line, the
+subject line and both verb slots, green the whole time because every one of its
+tests is ASCII. Two independent hand-rolls is this project's admission test for a
+primitive belonging one level down; three is late.
 
 > `text_from_bytes` and `byte_at` existed for two releases and were reported
 > missing (loft#748) because the generated reference filed them under Environment
