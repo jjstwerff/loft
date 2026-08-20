@@ -134,14 +134,33 @@ pub(crate) fn nullable_vector_elem(
     lexer: &mut Lexer,
     struct_d: u32,
 ) -> Option<u32> {
-    if struct_d == u32::MAX
-        || !matches!(data.def_type(struct_d), DefType::Struct)
-        || data.def(struct_d).synthetic.is_some()
+    if !synth_nullable_target(data, struct_d)
         || data.def(struct_d).source == crate::data::STD_SOURCE
     {
         return None;
     }
     Some(data.nullable_enum_for(lexer, struct_d))
+}
+
+/// May a synthetic `__nullable<S>` be minted for definition `struct_d`?
+///
+/// Call this before [`Data::nullable_enum_for`] from anywhere that decides a nullable
+/// gets the ENUM representation rather than staying an `Optional`. It answers the part
+/// of that question every caller shares; a caller with a narrower rule (the vector-element
+/// path also excludes the stdlib) adds its own condition on top.
+///
+/// A type VARIABLE is the case worth naming. A template's `T` is a `DefType::Struct` from
+/// user source with no attributes, so it satisfies every other condition here and reads as
+/// a perfectly ordinary struct — but it is a placeholder, and which representation `τ?`
+/// wants is a function of `τ`. Minting for it produced `__nullable<T>` with a payload of
+/// no fields, and a `-> (T?, integer)` was then refused with *"field 'payload' has no
+/// position"* on both backends. Leaving it an `Optional` is what lets substitution answer
+/// it per monomorph, which is what a bare `-> T?` already did.
+pub(crate) fn synth_nullable_target(data: &Data, struct_d: u32) -> bool {
+    struct_d != u32::MAX
+        && matches!(data.def_type(struct_d), DefType::Struct)
+        && data.def(struct_d).synthetic.is_none()
+        && !data.is_type_var_placeholder(struct_d)
 }
 
 fn copy_unknown_fields(data: &mut Data, d: u32) {
@@ -729,9 +748,11 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
                 let Type::Reference(struct_d, _) = *inner else {
                     continue;
                 };
-                if data.def_type(struct_d) != DefType::Struct
-                    || data.def(struct_d).synthetic.is_some()
-                {
+                // The same eligibility question the vector-element path asks, read from
+                // the one home.  This site had its own spelling and was missing the
+                // type-variable case, which is how a tuple built from a template's `T?`
+                // got a `__nullable<T>` over an attribute-less placeholder.
+                if !synth_nullable_target(data, struct_d) {
                     continue;
                 }
                 let syn = data.nullable_enum_for(lexer, struct_d);

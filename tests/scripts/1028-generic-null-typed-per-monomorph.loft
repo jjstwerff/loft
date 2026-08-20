@@ -97,7 +97,59 @@ fn test_two_monomorphs_of_one_template_each_get_their_own_null() {
   assert((nl1028("sss", false) ?? "NNN") == "NNN", "text monomorph beside it");
 }
 
+// A `T?` inside a TUPLE is the same nullable as a bare `T?`.
+//
+// The synthetic `__nullable<S>` enum backs a nullable whose payload is a real struct.
+// Nothing stopped it being minted for a template's `T`, which is a `DefType::Struct` from
+// user source with no attributes — so it satisfied every eligibility condition and read as
+// an ordinary struct.  The result was `__nullable<T>` over an attribute-less placeholder,
+// and `-> (T?, integer)` was refused on BOTH backends with "field 'payload' has no
+// position".  A bare `-> T?` was always fine, because it never reached the synth path at
+// all: it stayed an `Optional` and substitution answered it per monomorph.
+//
+// Every cell pairs the tuple with its BARE twin rather than a constant — the claim is that
+// position does not change which nullable you get.  `struct` is the load-bearing cell: it
+// is the one type that SHOULD still get a synth enum once `T` is concrete, so a fix that
+// simply stopped minting would fail here.
+struct T1028 { a: integer }
+pub fn tupn1028 < T > (x: T, c: boolean) -> (T?, integer) { if c { return (x, 1); } (null, 2) }
+
+fn test_a_nullable_type_variable_in_a_tuple_is_the_concrete_types_nullable() {
+  hit = tupn1028(7, true);
+  miss = tupn1028(7, false);
+  assert((hit.0 ?? -42) == (nl1028(7, true) ?? -42), "integer value matches the bare twin");
+  assert((miss.0 ?? -42) == (nl1028(7, false) ?? -42), "integer null matches the bare twin");
+  assert(hit.1 == 1 && miss.1 == 2, "the non-nullable element is untouched");
+
+  fhit = tupn1028(1.5, true);
+  fmiss = tupn1028(1.5, false);
+  assert((fhit.0 ?? -2.25) == 1.5, "float value");
+  assert((fmiss.0 ?? -2.25) == -2.25, "float null");
+
+  // The cell that keeps the fix honest: a real struct still gets a real nullable.
+  p = T1028 { a: 7 };
+  q = T1028 { a: -42 };
+  shit = tupn1028(p, true);
+  smiss = tupn1028(p, false);
+  assert((shit.0 ?? q).a == (nl1028(p, true) ?? q).a, "struct value matches the bare twin");
+  assert((smiss.0 ?? q).a == (nl1028(p, false) ?? q).a, "struct null matches the bare twin");
+
+  v = [7, 8];
+  w = [-42];
+  vhit = tupn1028(v, true);
+  vmiss = tupn1028(v, false);
+  assert((vhit.0 ?? w)[0] == 7, "vector value");
+  assert((vmiss.0 ?? w)[0] == -42, "vector null");
+}
+
+// NOT covered: `T = text`.  Correct on the interpreter now, still refused by `--native`
+// because a tuple element's emitter flag means two things at once (append `.to_string()`
+// to a literal; do not borrow a `TupleGet`) — `return (var_x, 1_i64)` types `&str` where
+// `String` is wanted.  Separating those two facts is its own change; a cell here would
+// fail the native half of the suite.
+
 fn main() {
+  test_a_nullable_type_variable_in_a_tuple_is_the_concrete_types_nullable();
   test_generic_null_is_the_concrete_types_null();
   test_generic_null_still_answers_the_sentinel_for_a_reference();
   test_the_deferred_null_survives_every_spelling();
