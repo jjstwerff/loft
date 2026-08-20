@@ -9,6 +9,53 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A declared local may name a tuple with a nullable element (loft#1034, 2026-08-20)
+
+```loft
+c: (text?, integer) = ("c0", 3);   // error: cannot change type from (text?, integer)
+                                   //        to (text, integer)
+fn mk() -> (text?, integer) { ("c0", 3) }   // ...but the RETURN position accepted it
+```
+
+Two positions disagreeing about one type — `formal/tuples.md` D-tup-1's shape, and the same
+cause: two specified halves whose COMPOSITION was not. @PLN25 `(N-Decl)` says storing a
+non-null `τ` into a `τ?` slot is not a type change, and it peeled ONE `Optional`, at the
+top, so it never saw a `τ?` sitting at a tuple POSITION.
+
+Two halves, and neither subsumes the other — measured, by disabling each and watching a
+different cell go red:
+
+- **Typing** — `Variables::decl_accepts` asks `(N-Decl)` element-wise (and recursively, for
+  a tuple inside a tuple), so the declaration is legal. It answers on pass 1, before any
+  lowering; without it the declaration is refused outright.
+- **Lowering** — a tuple target now reaches `convert`. `scalar_target` listed the types
+  whose annotation drives a conversion and a tuple was not among them, so the literal was
+  never converted against what the annotation asked for. Without this half the declaration
+  compiles and a `null` ELEMENT stays a bare null instead of the element type's sentinel:
+  `(null, 3)` stored the empty text (`h.0 == null` answered FALSE) and `--native` emitted
+  `()` and would not compile.
+
+⚠ **The `null`-element cell is what separates a fix from a silently-wrong one.** A test
+carrying only non-null elements passes on the typing half alone, which is exactly the
+half that makes the language answer wrongly. It is in the guard for that reason.
+
+The RETURN position always converted — `convert`'s own Tuple arm walks the elements — which
+is why it accepted the type all along. Routing the local through the SAME function is the
+point: the alternative was teaching this site a second opinion about tuples, which is the
+three-lists shape D-tup-1 collapsed.
+
+Deliberately asymmetric: `decl_accepts` widens `τ → τ?` and never the reverse, so
+`(text, integer) ← (text?, integer)` is still the `(N-Store)` violation it was. Verified
+alongside a wrong element type and a wrong arity, both still refused.
+
+Guard: `tests/scripts/1034-declared-nullable-tuple-element.loft`.
+
+One defect surfaced and NOT folded in: on `--native`, `== null` on a `text?` tuple element
+MOVES it, so a later read of that element does not compile (loft#1038). Pre-existing and
+independent — it reproduces from a tuple RETURN, which this change never touched. The guard
+binds such an element once, which is that issue's verified workaround, so it tests this
+issue and not that one.
+
 ### A compound assignment is bounded by the range it DECLARES, not by how the range is spelled (loft#1030 + loft#1031, 2026-08-20)
 
 The two residuals 447564a1 recorded and deliberately did not fold in. They are one guard

@@ -1817,6 +1817,43 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // @PLN25 (N-Decl) composed with a TUPLE — element-wise (loft#1034).
+        //
+        // The rule above says storing a non-null `τ` into a `τ?` slot is not a type change.
+        // It peels ONE `Optional`, at the top, so it never saw `(text?, integer) ← (text,
+        // integer)`: the variable's type is a `Tuple`, and `is_equal` compares the elements
+        // exactly, where `text?` and `text` differ.  `(text?, integer)` was therefore
+        // refused as a declared LOCAL while the identical type was accepted as a RETURN —
+        // two sites disagreeing about one type, which is the shape `formal/tuples.md`
+        // D-tup-1 collapsed once already.
+        //
+        // This is the TYPING half only — "is the declaration legal".  Making the VALUE
+        // match is a separate step and lives at the assignment site, where a tuple target
+        // now reaches `convert` so a `null` element becomes the element type's sentinel.
+        // Both are needed and neither subsumes the other: this answers on pass 1, before
+        // any lowering has happened, and refusing here stops the declaration outright.
+        //
+        // Sound on the same premise the scalar rule rests on: `Optional(τ)` shares `τ`'s
+        // sentinel storage, and `variables::size` peels `Optional` before measuring, so a
+        // `text?` element occupies exactly what a `text` element does and the tuple's
+        // layout is unchanged.  The declared type is KEPT, never narrowed to the literal's
+        // — the slot stays able to hold null, which is what the annotation asked for.
+        //
+        // One direction only.  `(text, integer) ← (text?, integer)` is the `(N-Store)`
+        // violation and still rejects, because `decl_accepts` widens `τ → τ?` and never
+        // the reverse.
+        if let (Type::Tuple(want), Type::Tuple(got)) = (var_tp, type_def)
+            && want.len() == got.len()
+            && want
+                .iter()
+                .zip(got.iter())
+                .all(|(w, g)| Self::decl_accepts(w, g))
+        {
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
         // non-null INLINE scalar `τ`, widens to `Null ⊔ τ = τ?` instead of erroring — the
         // ergonomic escape valve for `a = null; a = 5` (a now `integer?`, so a later
@@ -1957,6 +1994,35 @@ impl Function {
         self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();
         true
+    }
+
+    /// May a value of type `got` be stored into a slot DECLARED `want` without that
+    /// counting as a type change?
+    ///
+    /// This is @PLN25 `(N-Decl)` — "`Optional(τ)` and `τ` share sentinel storage, so
+    /// storing a non-null `τ` into a nullable `τ?` slot is NOT a type change" — written so
+    /// it can be asked about a nested position instead of only the top one.  A tuple is
+    /// checked element by element, so `(text?, integer)` admits `(text, integer)` for the
+    /// same reason `text?` admits `text` (loft#1034), and recursively for a tuple inside a
+    /// tuple.
+    ///
+    /// Deliberately asymmetric: it widens `τ → τ?` and never the reverse, so the
+    /// `(N-Store)` direction — a non-null slot fed something nullable — keeps rejecting.
+    fn decl_accepts(want: &Type, got: &Type) -> bool {
+        if want.is_equal(got) {
+            return true;
+        }
+        match (want, got) {
+            (Type::Tuple(w), Type::Tuple(g)) => {
+                w.len() == g.len()
+                    && w.iter()
+                        .zip(g.iter())
+                        .all(|(a, b)| Self::decl_accepts(a, b))
+            }
+            // The scalar rule, unchanged: a `τ?` slot takes a non-null `τ` or a bare null.
+            (Type::Optional(inner), _) => inner.is_equal(got.base()) || matches!(got, Type::Null),
+            _ => false,
+        }
     }
 
     /// Report a rejected re-type of `var_nr`, choosing the advice by WHICH property

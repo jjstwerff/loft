@@ -3402,6 +3402,40 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
+        // loft#1034 — a TUPLE target reaches `convert` too.
+        //
+        // `scalar_target` above lists the types whose annotation drives a conversion, and
+        // a tuple is not one of them, so `c: (text?, integer) = ("c0", 3)` never converted
+        // the literal against what the annotation asked for.  That had two consequences,
+        // one loud and one silent:
+        //
+        //   * `change_var_type` then compared the declared `(text?, integer)` against the
+        //     literal's own inferred `(text, integer)` and refused the declaration —
+        //     "cannot change type from (text?, integer) to (text, integer)" — for a
+        //     widening that is legal in every other position;
+        //   * a `null` ELEMENT stayed a bare null instead of becoming the element type's
+        //     sentinel, so `(null, 3)` stored the empty text (`h.0 == null` answered
+        //     false) and would not compile at all on `--native`, which emitted `()`.
+        //
+        // The RETURN position always converted — `convert`'s own Tuple arm walks the
+        // elements and applies each one's coercion — which is exactly why the identical
+        // type was accepted there and the issue read as a local-only refusal.  Routing the
+        // local through the same function is what makes the two positions agree, rather
+        // than teaching this site a second opinion about tuples.
+        //
+        // Adopting `f_type` on success is what lets the rest of this function, and
+        // `change_var_type` after it, see the declared type rather than the literal's.
+        let s_type = if op == "="
+            && !self.first_pass
+            && matches!(f_type, Type::Tuple(_))
+            && matches!(s_type, Type::Tuple(_))
+            && !f_type.is_equal(&s_type)
+            && self.convert(code, &s_type, f_type)
+        {
+            f_type.clone()
+        } else {
+            s_type
+        };
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.

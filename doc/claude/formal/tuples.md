@@ -143,6 +143,27 @@ OPEN: **1**, and bounded by the oracle note below.
 > `RefVar(Tuple)` is formed, rather than adding a second call beside the first — a second call
 > site would be the same shape as the three lists D-tup-1 collapsed.
 
+> **D-tup-3 — CLOSED (2026-08-20) — a nullable element at a tuple POSITION.** This doc
+> specified construction, projection, destructuring and returns, and `types.md` @PLN25
+> `(N-Decl)` specified that a non-null `τ` stored into a `τ?` slot is not a type change.
+> Their composition was not specified, and `(N-Decl)` peeled one `Optional` at the TOP, so
+> a `τ?` sitting at a tuple position was never seen: `c: (text?, integer) = ("c0", 3)` was
+> refused as a declared LOCAL while the identical type was accepted as a RETURN (loft#1034).
+>
+> That is D-tup-1's shape a second time — two specified halves, an unspecified composition,
+> two sites answering differently with nothing to catch them. `(N-Decl)` now reads
+> element-wise (`Variables::decl_accepts`, recursive through nested tuples), and the
+> assignment path routes a tuple target through the SAME `convert` the return position
+> always used, rather than growing a second opinion beside it.
+>
+> ⚠ **The refusal was the loud half.** The silent half was that a `null` ELEMENT was never
+> converted to the element type's sentinel — it stored the empty text and answered `false`
+> to `== null`. A fix that only widened the typing check would have turned a compile error
+> into a wrong answer, which is why the guard's null-element cell is load-bearing.
+>
+> Direction preserved: the widening is `τ → τ?` only, so `(text, integer) ← (text?, integer)`
+> remains the `(N-Store)` violation.
+
 - **Conformance is differential** — tuples are enforced across the two backends by the @PLN89
   oracle (D-op-1): `17-tuples-recursion` carries construction, projection, destructuring, and
   tuple returns, precisely because the native layout (a synthetic `__tuple<…>` struct, inline

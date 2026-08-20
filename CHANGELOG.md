@@ -98,6 +98,18 @@ different route than the identical function written out by hand. It now takes th
 so it returns its text through the caller's buffer like every other text-returning function.
 `T = integer` and a struct `T` were never affected.
 
+### A tuple with a nullable element can be a declared local
+
+```loft
+c: (text?, integer) = ("c0", 3);   // was refused — now works
+d: (text?, integer) = (null, 3);   // and the null element really is null
+```
+
+The same tuple type was already accepted as a function's return type, so this only ever
+affected the annotated-local spelling. A `null` element now becomes that element's own
+null, where before it quietly became the empty text and would not compile at all with
+`--native`.
+
 ### A range you declare is enforced however you spell it
 
 ```loft
