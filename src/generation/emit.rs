@@ -319,12 +319,10 @@ impl Output<'_> {
                 let idx = node.tupleget_idx();
                 let variables = self.data.def(self.def_nr).variables();
                 let name = sanitize(variables.name(var));
-                let elem_is_text = match variables.tp(var) {
-                    Type::Tuple(elems) => elems
-                        .get(idx as usize)
-                        .is_some_and(|e| matches!(e, Type::Text(_))),
-                    _ => false,
-                };
+                // loft#1038 — one derivation for what the slot holds, shared with the
+                // WRITE arm and with `set_var`'s clone rule (`tuple_elem_is_text`).
+                let elem_is_text =
+                    crate::generation::tuple_elem_is_text(variables, var, u32::from(idx));
                 let is_arg = variables.is_argument(var);
                 // P247 — a work-ref (`__ref_…`) tuple-text read must `.clone()`
                 // (returns owned String) instead of borrowing, else the borrow
@@ -356,20 +354,12 @@ impl Output<'_> {
                 // the same rule the tuple LITERAL arm below obeys through this flag.
                 // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
                 // whole program with *"expected `String`, found `&str`"* (loft#1004).
-                // Both spellings reach here: a by-value tuple local (`t.0 = …`) is
-                // `Type::Tuple`, a `&(…)` REFERENCE-tuple parameter is
-                // `Type::RefVar(Tuple)`.  Reading only the first is why the boolean cast
-                // below silently did not fire on the reference form (loft#1006).
-                let var_tp = variables.tp(var).clone();
-                let tuple_elems = match var_tp.base() {
-                    Type::Tuple(elems) => Some(elems.clone()),
-                    Type::RefVar(inner) => match inner.base() {
-                        Type::Tuple(elems) => Some(elems.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let elem_tp = tuple_elems.and_then(|e| e.get(idx as usize).cloned());
+                // Both tuple spellings reach here — a by-value local and a `&(…)`
+                // reference-tuple parameter — which is why the element type comes from
+                // the shared `tuple_elem_type` (reading only the by-value spelling is
+                // why the boolean cast below silently did not fire on the reference
+                // form, loft#1006).
+                let elem_tp = crate::generation::tuple_elem_type(variables, var, u32::from(idx));
                 let elem_is_text = elem_tp
                     .as_ref()
                     .is_some_and(|e| matches!(e.base(), Type::Text(_)));

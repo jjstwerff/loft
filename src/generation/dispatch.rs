@@ -1147,10 +1147,15 @@ impl Output<'_> {
                 let tuple_text_elem_clone = needs_to_string
                     && matches!(to_inner, Value::TupleGet(v, idx) if {
                         let vars = self.data.def(self.def_nr).variables();
+                        // loft#1038 — the SAME predicate the read arm emits from
+                        // (`tuple_elem_is_text`).  Re-deriving it here with an unpeeled
+                        // `Type::Text` match is how the two came apart: a `text?`
+                        // element was "text" at neither site, so the read moved it; had
+                        // only one been fixed, the read would borrow and this site
+                        // would still append `.to_string()` to a borrow — E0308 rather
+                        // than E0382, the same program refused for a new reason.
                         !vars.is_argument(*v)
-                            && matches!(vars.tp(*v),
-                                Type::Tuple(elems)
-                                if elems.get(*idx as usize).is_some_and(|e| matches!(e, Type::Text(_))))
+                            && crate::generation::tuple_elem_is_text(vars, *v, u32::from(*idx))
                     });
                 // P247 — destination is a tuple-typed work var (e.g.
                 // `__ref_N: (i64, String)` materialised by the

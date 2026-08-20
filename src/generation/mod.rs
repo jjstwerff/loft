@@ -667,6 +667,43 @@ pub(crate) fn boolean_u8_cast(tp: &Type) -> Option<&'static str> {
     }
 }
 
+/// The declared type of tuple element `idx` of local `var` — the ONE derivation the
+/// tuple-element sites share, so a read, a write and the `set_var` clone rule cannot
+/// disagree about what a slot holds.
+///
+/// Peels the VARIABLE's own marker, so both tuple spellings answer: a by-value
+/// `Type::Tuple` local and a `&(…)` reference-tuple parameter (`RefVar(Tuple)`).  The
+/// ELEMENT keeps its own marker — a caller asking "is this text?" peels with `.base()`.
+///
+/// loft#1038 — three sites re-derived this by hand and matched `Type::Text(_)` unpeeled,
+/// so a `text?` element was not "text" at any of them.  The read then emitted the
+/// `String` BY VALUE where a `text` element emits a borrow, which MOVED the element:
+/// `f.0 == null` followed by any later read of `f.0` was rustc E0382 and the program did
+/// not build, while `--interpret` answered it correctly.
+#[must_use]
+pub(crate) fn tuple_elem_type(
+    vars: &crate::variables::Function,
+    var: u16,
+    idx: u32,
+) -> Option<Type> {
+    let elems = match vars.tp(var).base() {
+        Type::Tuple(elems) => elems.clone(),
+        Type::RefVar(inner) => match inner.base() {
+            Type::Tuple(elems) => elems.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    elems.get(idx as usize).cloned()
+}
+
+/// True when tuple element `idx` of `var` is TEXT — nullable or not.  The predicate
+/// behind [`tuple_elem_type`]'s most-asked question; see it for why the two are one.
+#[must_use]
+pub(crate) fn tuple_elem_is_text(vars: &crate::variables::Function, var: u16, idx: u32) -> bool {
+    tuple_elem_type(vars, var, idx).is_some_and(|e| matches!(e.base(), Type::Text(_)))
+}
+
 /// Use this for the coercion a value-block's TAIL expression needs.
 ///
 /// Integers follow one expression ABI: `i64` everywhere except a function's
