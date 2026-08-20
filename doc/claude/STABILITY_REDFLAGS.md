@@ -147,16 +147,29 @@ Share of bugs in each issue-number band:
 
 | class | #100–400 | #400–700 | #700–900 | #900–1030 | |
 |---|---|---|---|---|---|
-| **narrow-int / width** | 8.7 % | 7.7 % | 7.4 % | **2.0 %** | ↓ after `IntegerSpec::range_to_width` (Cluster D) |
-| **keyed collections** | 0 % | 4.6 % | 14.0 % | **7.8 %** | ↓ after `for_each_owned_child` (Cluster C, folded July) |
+| **narrow-int / width** | 8.7 % | 7.7 % | 7.4 % | **2.0 %** | ↓ after `IntegerSpec::range_to_width` (Cluster D) — a real before-population, so this one is measurable |
+| **keyed collections** | 0 % | 4.6 % | 14.0 % | **7.8 %** | appeared only AFTER `for_each_owned_child`; no before-population, so no payoff can be claimed |
 | **tuple** | 0 % | 0 % | 9.9 % | **9.8 %** | ↑ no keystone |
 | **generic / monomorph** | 0 % | 0 % | 1.7 % | **4.9 %** | ↑ no keystone |
 | **null / sentinel** | 13.0 % | 6.2 % | 5.0 % | **17.6 %** | ↑ |
 | ownership / free | 8.7 % | 12.3 % | 14.9 % | 13.7 % | flat (Cluster A substrate, still open) |
 
-Two clusters landed a fact this cycle, and those two are the two whose bug share
-FELL — narrow-int by roughly two thirds, keyed collections halved in the band right
-after the fold. The classes rising instead are tuple, generic and null, which is
+**One of these is a measured payoff and one is not, and the difference matters.**
+`narrow-int/width` had a real bug population BEFORE `IntegerSpec::range_to_width`
+landed (9.6 % across the earlier bands) and 2.0 % after — a fall with something to
+fall from. `keyed collections` shows 0 % before `for_each_owned_child` and ~10 %
+after, so the class only came into existence once those collections were exercised:
+the fold cannot be credited with a reduction there, and `scripts/bug-review.py`
+deliberately ABSTAINS on it rather than printing a verdict the data does not carry.
+An earlier draft of this section claimed both as payoffs; that was reading a
+within-period dip as causation.
+
+So the honest form of the claim is narrower and still worth having: **where a class
+had a bug population and then got a single-fact home, the population fell by roughly
+two thirds.** One instance is not a law, and the protocol in
+[BUG_REVIEW.md](BUG_REVIEW.md) exists to accumulate more of them.
+
+The classes rising instead are tuple, generic and null, which is
 [Cluster F](#cluster-f--is-this-type-still-a-type-variable-new-2026-08-20) arrived at
 from the other direction. Nothing here was tuned to produce that agreement: the
 clusters came from reading `match` blocks, the shares from reading issue titles.
