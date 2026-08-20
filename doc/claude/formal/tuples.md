@@ -98,7 +98,7 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-OPEN: **0**, bounded by the oracle note below.
+OPEN: **1**, and bounded by the oracle note below.
 
 > **D-tup-1 — CLOSED (2026-08-20) — the reference tuple has a rule.** This doc specified
 > construction, projection, destructuring and returns and said nothing about `&(τ₁, …, τₙ)` —
@@ -116,6 +116,32 @@ OPEN: **0**, bounded by the oracle note below.
 > arms, so the rule and the implementation cannot drift apart again. Measured on both backends
 > across all five admitted element types plus the four refused ones. Tracked against binding.md's
 > D-bind-11, which carries the measurement.
+>
+> ⚠ **The last sentence was too strong, and D-tup-2 below is why.** One list is necessary and was
+> not sufficient: a list is only consulted where somebody calls it, and only one of the two sites
+> that build a `RefVar(Tuple)` does.
+
+> **D-tup-2 — OPEN (2026-08-20) — the admitted-element rule is not asked at every construction
+> site.** `T-Ref-El` names which element types a `&(…)` admits, and `data::ref_tuple_element_ok`
+> is the single list that answers it. The *signature* path consults it
+> (`parser/definitions.rs`), so a `&(text, text)` PARAMETER is refused with the rule's message.
+> A `&`-annotated **local** is built at a second site (`parser/expressions.rs`) that never asks:
+>
+> ```
+> a = ("p", "q");
+> b: &(text, text) = a;
+> b.0 = "x";
+> ```
+>
+> reaches codegen and dies as an internal compiler error on BOTH backends
+> (`RefTuplePut: unsupported element type Text`, `state/codegen.rs`). With a struct element it
+> reads *"Store access out of bounds … the reference is corrupt"*, and even the ADMITTED
+> `&(integer, integer)` reaches an index-out-of-bounds in `database/allocation.rs` — so this is
+> not one bad element type, it is the whole `T-Ref` rule going unenforced on the local path.
+>
+> The fix the rule asks for is to move the check to the **type-construction chokepoint** where a
+> `RefVar(Tuple)` is formed, rather than adding a second call beside the first — a second call
+> site would be the same shape as the three lists D-tup-1 collapsed.
 
 - **Conformance is differential** — tuples are enforced across the two backends by the @PLN89
   oracle (D-op-1): `17-tuples-recursion` carries construction, projection, destructuring, and

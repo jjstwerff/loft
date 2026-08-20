@@ -539,6 +539,23 @@ ends `other => other`. `IrNode::for_each_child` names seventeen child-bearing on
 so a marker sitting inside `Tuple`, `TuplePut`, `Parallel`, `ParFor`, `Iter`,
 `BreakWith` or `Yield` is never rewritten, and the monomorph ships the placeholder.
 
+**Measured, and it is SILENT.** The deferred `x?` default of loft#1016, placed inside a tuple,
+is never rewritten, and the monomorph reads the placeholder's bytes as data:
+
+```
+pub fn ctl1016<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); a? }
+pub fn tup1016<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 }
+
+control (no tuple): 0                 <- correct: the instantiation's zero
+probe   (in tuple): 34359738369       <- the placeholder, read as an integer
+Warning: 1 stores not freed at program exit: kt=9 __typevar_T x1
+```
+
+No diagnostic, no refusal, exit 0. That makes this half of Cluster F **`silent-wrong`** — the
+freeze axis ([.github/LABELS.md](../../.github/LABELS.md)) — rather than the mere refusal the
+`(T?, integer)` matrix above shows. A refusal can be frozen into the contract; an answer that is
+quietly wrong cannot.
+
 That missing set is very nearly loft#815's
 ([STABILITY_PASS2.md § The `IrNode` keystone](STABILITY_PASS2.md), which lists
 `Tuple`, `Parallel`, `BreakWith`, `TuplePut`, `ParFor`) — the same variants absent
@@ -566,6 +583,27 @@ delegates recursion to the keystone and keeps only EXTRACTION arms of its own.
 
 Both are the PASS2 keystone method applied to code that POST-DATES PASS2 — these
 walkers are newer than that doc's work list, which is why they are absent from it.
+
+### Three instruments, independently, land on the same shape
+
+This cluster was reached three different ways, and none knew about the others:
+
+| instrument | what it saw |
+|---|---|
+| reading `match` blocks | `Tuple` in the forgotten tail of 115 partial walkers |
+| the tracker (§ The evidence) | `tuple` the top RISING class, 0 % → 10.7 %, no keystone |
+| a differential review of this branch's diff | **5 of its 15 findings** in the tuple / ref-tuple family |
+
+The review's five were the marker walk above, a call-argument helper whose sibling gained a
+`TupleGet` arm *in the same PR* while the mirror did not, and three sites of the ref-tuple
+admitted-element set. That last re-opened a formal deviation the same branch had closed that
+day — [formal/tuples.md](formal/tuples.md) D-tup-2: the element rule has ONE list, and only one
+of the two sites that construct a `&(…)` asks it.
+
+Agreement across three instruments is worth more than any one of them, because their failure
+modes do not overlap: a code read finds shapes nobody has hit, the tracker finds what users
+actually hit, and a diff review finds what was added last week. When all three name the same
+shape, the shape is not an artefact of how you looked.
 
 ---
 

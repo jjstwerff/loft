@@ -50,6 +50,13 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > would not compile on `--native`) were both live tuple deviations — because the oracle it leans
 > on, `tests/oracle/17-tuples-recursion.loft`, is all-`(integer, integer)` and carries no `text`
 > at all. Before trusting a zero, read what its oracle actually covers.
+>
+> **And a zero can fail a second way, with no oracle involved.** The same doc read `OPEN: 0`
+> on the day it closed D-tup-1 by collapsing three disagreeing element lists into one — while
+> D-tup-2 was live, because the surviving list is only consulted at one of the two sites that
+> construct a `&(…)`. Single-sourcing a rule makes the answers agree; it does not make anyone
+> ASK. So a zero rests on two things and both need checking: what the corpus covers, and
+> whether every site that makes the decision actually reaches the rule.
 
 ## Reading guide
 
