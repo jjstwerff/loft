@@ -291,6 +291,36 @@ load.**
 
 See [SANDBOX.md](SANDBOX.md).
 
+## 2a1. A surface proven only by its own tests is a surface nobody has agreed to
+
+Before a `pub fn` is published, ask whether anything **outside the package's own test suite**
+calls it. Not *"is it tested?"* — *"is it used?"*
+
+⚠ **These are different questions and only one of them is usually asked.** A library grown
+beside its own tests accumulates `pub` for reachability: a helper is made public so a test can
+get at it, and it stays public for ever afterwards. The `pub` list then describes the **test
+suite's** needs rather than a consumer's, and nothing in a green run says so.
+
+**Measured, 2026-08-20, in `lavition_ui`** (moros's, and their agent's own count while
+answering @PLN145's `D0` request): **15 of 31 public functions had no production caller.**
+`panel_hit_test` — the one function @PLN145 asked to depend on — was *"built, tested green and
+invoked by nothing"*, in that tree's own words.
+
+So a promotion check of the form *"its own tests pass unchanged after the move"* verifies the
+**move** and says nothing about whether the surface was ever **honoured**. Both are needed:
+
+> **The bar:** every public function a consumer will depend on has at least one **production**
+> caller in the tree that owns it, or is explicitly documented as a surface built *for*
+> consumers with none yet.
+
+The second clause is not a loophole — it is the honest label for a package published ahead of
+its first consumer, and writing it down is what stops *"tested"* being read as *"agreed"*.
+
+⚠ **This cuts our own trees too.** A library built in `loft-libs-*` before any game consumes it
+is in exactly that position: every caller is a test. That is not a reason to delay it — the
+dogfood loop deliberately builds the library first — but it IS a reason to say which functions
+have never been used in anger, so a consumer knows which parts of the surface are a proposal.
+
 ## 2b. Never leave a capability in the fixture only
 
 `tests/fixtures/libs/` snapshots each chunk repo at a pinned tag. A fixture that is **behind**
