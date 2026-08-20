@@ -6149,7 +6149,9 @@ impl Scopes {
                 self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
-            } else if let Some(w) = self.inline_built_borrow_source(&scanned, outer_call, data) {
+            } else if let Some((w, absorb)) =
+                self.inline_built_borrow_source(&scanned, outer_call, data)
+            {
                 // loft#1029 — an argument BUILT INLINE (`pick(S { a: 7 }, …)`) that the
                 // callee's return may BORROW.  The @P290 bracket that decides borrow-vs-
                 // owned at runtime can only name a bare `Var` slot, so an argument still
@@ -6177,6 +6179,19 @@ impl Scopes {
                 let Value::Block(bl) = scanned else {
                     unreachable!("inline_built_borrow_source matched a non-Block")
                 };
+                // The block's own scope disappears with the block, so every var it
+                // declared is now declared in the statement list we hoisted into. Move
+                // their `var_scope` entries with them: an entry left pointing at a scope
+                // no emitted code opens would have slot assignment place it against a
+                // sibling scope's zone. Only the VECTOR-literal shape reaches this — a
+                // struct literal's tail is the function-scope work-ref itself.
+                if let Some(block_scope) = absorb {
+                    for sc in self.var_scope.values_mut() {
+                        if *sc == block_scope {
+                            *sc = self.scope;
+                        }
+                    }
+                }
                 let mut ops = bl.operators;
                 ops.pop();
                 preamble.extend(ops);
@@ -6200,7 +6215,12 @@ impl Scopes {
     /// Gated on `returns_borrowed_view` on purpose. Every other call is already correct as
     /// it stands, and hoisting an argument reorders it relative to its left-hand siblings —
     /// a cost worth paying only where the alternative is a leak.
-    fn inline_built_borrow_source(&self, arg: &Value, outer_call: u32, data: &Data) -> Option<u16> {
+    fn inline_built_borrow_source(
+        &self,
+        arg: &Value,
+        outer_call: u32,
+        data: &Data,
+    ) -> Option<(u16, Option<u16>)> {
         // `scan_args` runs for argument lists with no enclosing DEF as well (the
         // `u32::MAX` no-call sentinel), and `Data::def` asserts on it. Nothing to decide
         // there: with no callee there is no return that could borrow the argument.
@@ -6234,36 +6254,47 @@ impl Scopes {
         let Value::Var(w) = bl.operators.last()?.unspan() else {
             return None;
         };
-        // The block must YIELD A VIEW OF THE SLOT IT JUST FILLED — its result dep is
-        // exactly `[w]` and its tail is `Var(w)`. That is the structural signature of
-        // "constructed into `w`", and it is what makes hoisting ownership-neutral: the
-        // ops move earlier in the same statement list, nothing changes who owns `w`.
-        //
-        // Not `is_work_ref`: that set is the return-delivery materialiser's own register
-        // and does not contain the parser's object work-ref (measured — it answers false
-        // for the `__ref_1` this very shape builds into). A second list of the same fact
-        // drifts; the dep the block already carries is the fact itself.
-        if bl.result.depend() != vec![*w] {
+        // The block must MINT ITS STORE INTO A SLOT THAT OUTLIVES THE HOIST. Its result dep
+        // names that slot — the owner — and the dep the block already carries is the fact
+        // itself, so nothing here keeps a second list of it. (Not `is_work_ref`: that set
+        // is the return-delivery materialiser's own register and does not contain the
+        // parser's object work-ref — measured, it answers false for the `__ref_1` this very
+        // shape builds into.)
+        let [owner] = bl.result.depend()[..] else {
+            return None;
+        };
+        // The owner's declaration must ENCLOSE the statement list we are hoisting into, so
+        // the moved ops land inside its lifetime and nothing changes about who frees the
+        // store. `self.stack` is the chain of scopes currently open, so this asks the real
+        // question — a numeric `<=` would not, because scope numbers are allocated in
+        // encounter order and an earlier SIBLING also compares less while enclosing nothing.
+        if !self.scope_encloses(owner) {
             return None;
         }
-        // And `w`'s declaration must ENCLOSE the statement list we are hoisting into, so
-        // the moved ops land inside its lifetime. A tail naming a var the block itself
-        // opened (a vector literal yields `_vec_N` at the block's own scope, a view of the
-        // `__vdb_N` one level up) would have its declaration carried out of the scope that
-        // registered it. Declining there keeps the scope table honest; loft#1029 records
-        // that one as the half still open.
-        //
-        // ⚠ The test is ENCLOSURE, not equality. `self.stack` is the chain of scopes
-        // currently open, so this asks the real question. The first cut asked
-        // `var_scope[w] == self.scope`, which is only true in a function's own top
-        // statement list — the parser allocates the literal's work-ref at FUNCTION scope,
-        // so the same `p = pick(S { a: 7 }, false)` written one `if` or one `for` deeper
-        // compared 1 against the block's scope and declined, and the leak stayed for the
-        // two most ordinary places to write it. A numeric `<=` would not do either: scope
-        // numbers are allocated in encounter order, so an earlier SIBLING scope also
-        // compares less and does not enclose anything.
-        let w_scope = *self.var_scope.get(w)?;
-        (w_scope == self.scope || self.stack.contains(&w_scope)).then_some(*w)
+        // The tail names either that same owner — `S { … }`, whose block fills `__ref_N`
+        // and yields it — or a VIEW the block opened at its own scope: a vector literal
+        // fills `__vdb_N` one level up and yields `_vec_N`, a view of it. The second is
+        // still ownership-neutral, because the store's owner is `__vdb_N` and that is not
+        // moving; what moves is the view's DECLARATION, out of a block that ceases to
+        // exist. So the block's scope has to be absorbed into the one we hoist into, or
+        // `var_scope` would keep pointing those vars at a scope no emitted code opens and
+        // slot assignment would place them against a sibling's zone.
+        if self.scope_encloses(*w) {
+            Some((*w, None))
+        } else if self.var_scope.get(w) == Some(&bl.scope) {
+            Some((*w, Some(bl.scope)))
+        } else {
+            None
+        }
+    }
+
+    /// Is `v` declared in a scope that is still OPEN — the one being scanned or one
+    /// enclosing it?  That is the condition for moving code into the current statement
+    /// list and still being inside `v`'s lifetime.
+    fn scope_encloses(&self, v: u16) -> bool {
+        self.var_scope
+            .get(&v)
+            .is_some_and(|sc| *sc == self.scope || self.stack.contains(sc))
     }
 
     /// The A5.6 hoistable preamble: `Insert([Set(v, Null), value])` whose `v` OWNS a

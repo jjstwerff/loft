@@ -19,17 +19,28 @@
 // into `OpNullRefSentinel()`, so loft#1021's `Value::Null` arm no longer matched it and the
 // site read as uncovered. A sentinel holds no store, exactly like the `Null` it came from.
 //
-// ⚠ THREE SHAPES OF loft#1029 ARE STILL OPEN and are deliberately NOT cells here — a leaking
-// cell would redden the suite's store gate for a defect this file is not about:
-//   * a VECTOR literal argument (`pick([S { a: 7 }], 5)`). Its block yields `_vec_N`, a view
-//     opened at the BLOCK's own scope, so hoisting would carry a declaration out of the
-//     scope that registered it. The gate declines on exactly that test.
-//   * a result read INLINE and discarded (`assert(pick(q, …).x == 3, …)`) rather than bound.
-//     That is a different chokepoint — the discarded-owned-temp lift, not argument naming —
-//     and it leaks for a non-generic with a plain variable argument too.
-//   * an inline literal argument inside a LOOP. The single call is cured; the loop is not,
-//     and A/B-building with this fix disabled shows the same leak either way, so it is a
-//     third site rather than a hole in this one.
+// The witness does not have to BE the argument. `protect_store_frees` marks an ALLOCATION and
+// reaches it through any `DbRef` in that store, so the ROOT of a projection chain names
+// exactly the store a return might borrow: `b.s` is `OpGetField(Var(b), …)` at another `pos`,
+// `w[0]` is `OpGetVector(Var(w), …)` in the vector's own store. A JOIN argument (`??`, `if`)
+// witnesses BOTH arms, since either store can come back. Six ordinary spellings leaked on
+// that alone, and none of them was in the issue.
+//
+// A construction BLOCK is the other family and cannot be witnessed that way — the bracket is
+// emitted before the arguments evaluate, so a literal's work-ref still holds its null and
+// marking it would protect nothing while reading as covered, trading the leak for a
+// use-after-free. Those are hoisted instead, and three wrappers each hid the value from a
+// pass that matches a bare variant: the hoist's own scope test (equality, so it reached only
+// a function's top statement list), `pre_eval`'s lift for a native template argument (which
+// counted `Block` and not `Insert`, and native then rejected the program with E0609), and the
+// lift that gives a call's result an OWNER (which matches a `Call`, and a hoisted argument
+// leaves a sequence in its place — @P297's `Span` pitfall exactly one wrapper later).
+//
+// A VECTOR literal is the one shape whose block yields a view it opened at its OWN scope
+// (`_vec_N`, of a `__vdb_N` one level up). Hoisting carries that declaration out of a block
+// that then ceases to exist, so the block's scope is absorbed into the one the ops land in —
+// otherwise `var_scope` points those vars at a scope no emitted code opens and slot
+// assignment places them against a sibling's zone.
 //
 // The harness's store-leak gate is what this file asserts; the values are here so a fix that
 // silenced the leak by freeing the DELIVERED store would fail too, which is the over-free
@@ -99,9 +110,8 @@ fn test_a_method_owning_arm_is_freed_too() {
 
 fn test_it_does_not_scale_with_the_iteration_count() {
   // One leak per call is what makes this matter: a loop is where a record becomes a session.
-  // The argument is a VARIABLE here — the inline-literal spelling of this same loop still
-  // leaks and is the third shape loft#1029 keeps open (measured identical with this fix
-  // disabled, so it is neither caused nor cured by it).
+  // The argument is a VARIABLE here; the inline-literal spelling of the same loop is
+  // `test_an_inline_literal_inside_a_loop` below.
   total = 0;
   for i in 0..16 {
     q = S1029 { a: i };
@@ -109,4 +119,121 @@ fn test_it_does_not_scale_with_the_iteration_count() {
     total += p.a;
   }
   assert(total == -16, "sixteen calls each answered -1, got {total}");
+}
+
+struct Box1029 { s: S1029 }
+struct Deep1029 { b: Box1029 }
+struct VBox1029 { v: vector<S1029> }
+
+// The same join over a VECTOR, so the borrow arm names an ELEMENT and not a parameter.
+fn pickv1029(v: vector<S1029>, n: integer) -> S1029 { if n < len(v) { v[n] } else { mk1029() } }
+
+// TWO borrow sources in one call: whichever one comes back, the other must be untouched.
+fn two1029(a: S1029, b: S1029, c: boolean) -> S1029 { if c { a } else { b } }
+
+fn test_a_field_argument_names_the_store_of_the_record_holding_it() {
+  // `b.s` lowers to `OpGetField(Var(b), …)`, whose DbRef is `b`'s store at another `pos`.
+  // The bracket marks an ALLOCATION, so `b` is a witness for it.
+  b = Box1029 { s: S1029 { a: 7 } };
+  p = pick1029(b.s, false);
+  assert(p.a == -1, "the owning arm answers the fresh record, got {p.a}");
+  q = pick1029(b.s, true);
+  assert(q.a == 7, "the borrow arm answers the field, got {q.a}");
+  assert(b.s.a == 7, "and the field itself is untouched, got {b.s.a}");
+}
+
+fn test_a_nested_field_argument_walks_to_its_root() {
+  d = Deep1029 { b: Box1029 { s: S1029 { a: 7 } } };
+  p = pick1029(d.b.s, false);
+  assert(p.a == -1, "a two-step projection still adopts the fresh record, got {p.a}");
+  q = pick1029(d.b.s, true);
+  assert(q.a == 7, "and its borrow arm still reads the leaf, got {q.a}");
+  assert(d.b.s.a == 7, "which is untouched, got {d.b.s.a}");
+}
+
+fn test_a_vector_element_argument() {
+  // `w[0]` is `OpGetVector(Var(w), …)` — the element lives in the vector's own store, so
+  // `w` names it.  The length assert is here because a cure that freed the DELIVERED store
+  // would take the element with it and only a length or value read can witness that.
+  w = [S1029 { a: 7 }];
+  p = pick1029(w[0], false);
+  assert(p.a == -1, "the owning arm answers fresh, got {p.a}");
+  q = pick1029(w[0], true);
+  assert(q.a == 7, "the borrow arm answers the element, got {q.a}");
+  assert(len(w) == 1, "the vector still holds its one element, got {len(w)}");
+  assert(w[0].a == 7, "which reads unchanged, got {w[0].a}");
+}
+
+fn test_a_vector_typed_field_argument() {
+  vb = VBox1029 { v: [S1029 { a: 7 }] };
+  p = pickv1029(vb.v, 5);
+  assert(p.a == -1, "past the end, the owning arm answers fresh, got {p.a}");
+  q = pickv1029(vb.v, 0);
+  assert(q.a == 7, "in range, the borrow arm answers the element, got {q.a}");
+  assert(len(vb.v) == 1, "the field's vector is untouched, got {len(vb.v)}");
+}
+
+fn test_a_join_argument_witnesses_both_arms() {
+  // Either arm's store can be the one that comes back, so both are protected.
+  q = S1029 { a: 7 };
+  r = S1029 { a: 8 };
+  p = pick1029(if true { q } else { r }, false);
+  assert(p.a == -1, "the owning arm answers fresh through an if-argument, got {p.a}");
+  s = pick1029(if false { q } else { r }, true);
+  assert(s.a == 8, "the borrow arm answers the arm the if chose, got {s.a}");
+  assert(q.a == 7, "the untaken arm's source is untouched, got {q.a}");
+  assert(r.a == 8, "and so is the taken one, got {r.a}");
+}
+
+fn test_a_null_coalescing_argument() {
+  q = S1029 { a: 7 };
+  o: S1029? = null;
+  p = pick1029(o ?? q, false);
+  assert(p.a == -1, "the owning arm answers fresh, got {p.a}");
+  s = pick1029(o ?? q, true);
+  assert(s.a == 7, "the borrow arm answers the default side, got {s.a}");
+  assert(q.a == 7, "which is untouched, got {q.a}");
+}
+
+fn test_an_inline_literal_one_scope_deeper() {
+  // The parser allocates the literal's work-ref at FUNCTION scope, so a hoist gated on
+  // scope EQUALITY declined everywhere but a function's own top statement list.
+  if true {
+    p = pick1029(S1029 { a: 7 }, false);
+    assert(p.a == -1, "one scope deeper still adopts the fresh record, got {p.a}");
+  }
+}
+
+fn test_an_inline_literal_inside_a_loop() {
+  // A loop is where one leaked record per call becomes a session.
+  total = 0;
+  for i in 0..16 {
+    p = pick1029(S1029 { a: i }, false);
+    total += p.a;
+  }
+  assert(total == -16, "sixteen inline-literal calls each answered -1, got {total}");
+}
+
+fn test_an_inline_literal_read_without_binding() {
+  // No `Set` to own the result — and the hoisted argument leaves a SEQUENCE where the lift
+  // that mints an owner was matching a `Call`.
+  assert(pick1029(S1029 { a: 7 }, false).a == -1, "read inline, the owning arm answers fresh");
+  assert(pick1029(S1029 { a: 7 }, true).a == 7, "and the borrow arm reads the literal");
+}
+
+fn test_a_vector_literal_argument() {
+  // The block yields `_vec_N`, a VIEW it opened at its OWN scope, of a `__vdb_N` one level
+  // up.  Hoisting carries that declaration out of a block that then ceases to exist, so the
+  // block's scope is absorbed into the one the ops land in.
+  p = pickv1029([S1029 { a: 7 }], 5);
+  assert(p.a == -1, "past the end, the owning arm answers fresh, got {p.a}");
+  q = pickv1029([S1029 { a: 7 }, S1029 { a: 8 }, S1029 { a: 9 }], 2);
+  assert(q.a == 9, "in range, the borrow arm answers the third element, got {q.a}");
+}
+
+fn test_two_literal_arguments_in_one_call() {
+  p = two1029(S1029 { a: 7 }, S1029 { a: 8 }, true);
+  assert(p.a == 7, "the first literal comes back, got {p.a}");
+  q = two1029(S1029 { a: 7 }, S1029 { a: 8 }, false);
+  assert(q.a == 8, "and so does the second, got {q.a}");
 }
