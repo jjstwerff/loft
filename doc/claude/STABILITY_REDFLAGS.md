@@ -115,6 +115,107 @@ re-cut around that. The instrument that found **F** — group every `match` bloc
 the enum it dispatches on, then rank enums by how many independent blocks re-match
 their arm set — is worth re-running on any enum that grows a variant.
 
+---
+
+## The evidence — what the tracker says (2026-08-20)
+
+Everything above this section is argued from reading code. This section is the
+independent check: the same question asked of the 334 closed `bug` issues, which
+know nothing about the clusters. It is here because a map of "brittle places" is a
+claim about where bugs COME FROM, and that claim is measurable.
+
+### Method (re-runnable)
+
+```bash
+gh issue list --state all --limit 1200 --json number,title,labels,state,closedAt
+```
+
+Keep the `bug`-labelled issues, classify each by keyword against its TITLE (these
+titles state mechanisms, which is what makes this work), and bucket by ISSUE NUMBER,
+not close date. The tracker opened around #134 in June 2026 and 282 of 513 closes
+land in August, so calendar recency cannot separate "still firing" from "closed
+during the August push" — issue number can.
+
+**Bounds on the claim, so it is not over-read:** the classes are keyword-matched and
+OVERLAP (one issue can count in several); issue number is a proxy for time; and a
+rising share can reflect where dogfooding went rather than where the code is weak.
+That last confound matters and is picked up under *Exposure* below.
+
+### Result 1 — the classes that got a single-fact home are the classes that stopped
+
+Share of bugs in each issue-number band:
+
+| class | #100–400 | #400–700 | #700–900 | #900–1030 | |
+|---|---|---|---|---|---|
+| **narrow-int / width** | 8.7 % | 7.7 % | 7.4 % | **2.0 %** | ↓ after `IntegerSpec::range_to_width` (Cluster D) |
+| **keyed collections** | 0 % | 4.6 % | 14.0 % | **7.8 %** | ↓ after `for_each_owned_child` (Cluster C, folded July) |
+| **tuple** | 0 % | 0 % | 9.9 % | **9.8 %** | ↑ no keystone |
+| **generic / monomorph** | 0 % | 0 % | 1.7 % | **4.9 %** | ↑ no keystone |
+| **null / sentinel** | 13.0 % | 6.2 % | 5.0 % | **17.6 %** | ↑ |
+| ownership / free | 8.7 % | 12.3 % | 14.9 % | 13.7 % | flat (Cluster A substrate, still open) |
+
+Two clusters landed a fact this cycle, and those two are the two whose bug share
+FELL — narrow-int by roughly two thirds, keyed collections halved in the band right
+after the fold. The classes rising instead are tuple, generic and null, which is
+[Cluster F](#cluster-f--is-this-type-still-a-type-variable-new-2026-08-20) arrived at
+from the other direction. Nothing here was tuned to produce that agreement: the
+clusters came from reading `match` blocks, the shares from reading issue titles.
+
+This is the argument for the whole approach, stated as a measurement rather than a
+principle: **collapsing a duplicated case analysis moves the bug rate, and patching
+arms does not.**
+
+### Result 2 — a hypothesis this data KILLED
+
+The obvious reading of 22 tuple bugs is *"`Tuple` is the variant enumerations
+forget."* It is wrong, and being wrong is the useful part. Omission rate of each
+child-bearing variant across the 115 partial (wildcard, non-delegating) recursive
+`Value` walkers:
+
+```
+Block   9.6 %   Insert 14.8 %   Call 23.5 %   If 26.1 %   Return 27.8 %
+──────────────────────────── cliff ────────────────────────────
+Iter   65.2 %   CallRef 67.8 %   BreakWith 68.7 %   Yield  71.3 %
+Tuple  72.2 %   Parallel 74.8 %  TuplePut  79.1 %   ParFor 87.0 %
+```
+
+`Tuple` is not special. It is ORDINARY for the tail. Coverage falls off a cliff
+after the five shapes an author holds in mind while writing a walker, and everything
+past that cliff is omitted at roughly the same rate. So the defect is not a variant
+anyone dislikes — it is that a hand-written enumeration reproduces its author's
+attention, and attention has a short tail.
+
+### Result 3 — exposure, and the prediction it makes
+
+If omission rate were the whole story, `ParFor` (87 % omitted) would carry more bugs
+than `Tuple` (72 %). It carries almost none:
+
+| variant | omitted | bugs filed |
+|---|---|---|
+| `Tuple` | 72 % | **22** |
+| `Yield` (coroutines) | 71 % | 9 |
+| `Parallel` / `ParFor` | 75–87 % | 6 |
+| `TuplePut` | 79 % | 4 |
+
+**Exposure = omission rate × usage.** The tail is not safe; it is unexercised.
+`par` appears in 12 `tests/scripts/` files against tuple's 51, and the tuple bug
+share was itself 0 % before issue #700 — tuples did not become fragile, they became
+USED. This is also where the dogfooding confound from the Method note lands, and it
+does not weaken the reading: exposure IS the mechanism.
+
+The falsifiable prediction: **`Parallel`, `ParFor`, `Yield` and `TuplePut` are the
+next `Tuple`.** When a consumer leans on `par` or coroutines the way one leaned on
+tuples, expect a bug wave of the same shape and roughly the same size. If that wave
+does not arrive after real `par` dogfooding, this model is wrong and should be
+rewritten.
+
+It also settles how to respond. Adding a `Tuple` arm to N walkers treats one point
+of a distribution and leaves the rest of the tail loaded. The cure is the one the
+tree already has: a walker that must be total delegates recursion to the keystone,
+so the tail is never enumerated by hand at all.
+
+---
+
 ## Cluster A — the return/bind transfer-vs-borrow fact (cluster-II root)
 
 **The fact:** every heap value's binding should read one carried answer — *does this
@@ -376,15 +477,36 @@ fn f<T>(x: T) -> (T?, integer) { (x, 1) }
 error: type layout: __nullable<T>::Some: field 'payload' has no position (u16::MAX)
 ```
 
-Boundary matrix — the axis varied is what HOLDS the `T?`; only the tuple breaks:
+Boundary matrix, both backends agreeing on every cell. Two axes are swept: what
+HOLDS the `T?` (rows 1–5), and then, once the tuple was implicated, everything about
+the tuple that could plausibly matter (rows 6–11).
 
 | shape | `--interpret` / `--native` |
 |---|---|
 | `-> T?` | ok |
 | `-> vector<T?>` | ok |
-| `-> (T, integer)` | ok |
+| `-> (T, integer)` — no `?` | ok |
+| `-> (text?, integer)` — concrete nullable, still from a generic | ok |
 | `-> (T?, integer)` | **refused** |
 | `fn f<T>(x: (T?, integer))` — parameter position | **refused** |
+| `-> (integer, T?)` — element position 1 | **refused** |
+| `-> (T?, T?)` — two mentions | **refused** |
+| `-> (integer, integer, T?)` — arity 3 | **refused** |
+| `T` ∈ {text, integer, float, character, boolean, struct, vector} | **refused, all 7** |
+
+**Boundary: `Tuple` containing `Optional(<type variable>)`** — any element position,
+any arity, any `T`. Both halves are load-bearing, and rows 3 and 4 are the controls
+that prove it: drop the `?` and it passes, make the nullable CONCRETE and it passes.
+The type axis is inert because the refusal happens at LAYOUT time, before `T` is
+substituted at all.
+
+*What this matrix still holds FIXED* (per CLAUDE.md § Debugging policy — count the
+axes you pinned, not the ones you swept; `tuples.md`'s `OPEN: 0` and
+`ownership.md`'s D-own-6 are both worked instances of a corpus reading clean because
+of an axis nobody moved): the generic has exactly ONE type parameter, the tuple is
+never nested inside another tuple, and the first sweep of rows 1–5 used `T = text`
+in every cell — rows 10 fixed that particular hole afterwards, and it turned out
+inert, but it was a hole when the first four rows were written.
 
 `substitute_type` has both a `Tuple` arm and an `Optional` arm (each retrofitted
 after its own bug — read their comments), so the gap is the COMPOSITION, not either
