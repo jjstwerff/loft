@@ -6099,22 +6099,41 @@ impl Parser {
     /// (`fn f<T>(t: T) { f(t) }`) finds itself in the `existing` check and stops, rather
     /// than instantiating forever.
     fn instantiate_nested_generics(&mut self, d_nr: u32, concrete: &Type) {
-        let mut targets: Vec<u32> = Vec::new();
+        // The nested call's own FIRST ARGUMENT type, not the outer binding.
+        //
+        // This used to instantiate every nested generic at `concrete` — the type the OUTER
+        // monomorph bound its variable to.  That is right only when the nested generic's
+        // first parameter is a bare `T`; with `vector<T>` — the ordinary spelling — the
+        // callee was handed `integer` where its parameter reads `vector<T>`, resolution
+        // answered `Unknown`, and the program was refused with *"Cannot resolve generic
+        // type parameter from argument type"*.  A generic calling a generic is the whole
+        // point of the feature, so the shape is not exotic.
+        //
+        // The argument's type comes from the monomorph's own variable table, which
+        // `fill_monomorph_body` has already substituted, so it is the CONCRETE type the
+        // call really passes.  Anything that is not a plain variable falls back to
+        // `concrete`, which is what every caller got before.
+        let mut targets: Vec<(u32, Type)> = Vec::new();
+        let mono_vars = self.data.def(d_nr).variables.clone();
         self.data.def(d_nr).code.walk(&mut |v| {
-            if let Value::Call(d, _) = v
+            if let Value::Call(d, args) = v
                 && *d != u32::MAX
                 && (*d as usize) < self.data.definitions.len()
                 && self.data.def(*d).def_type() == DefType::Generic
-                && !targets.contains(d)
+                && !targets.iter().any(|(t, _)| t == d)
             {
-                targets.push(*d);
+                let arg_tp = match args.first().map(Value::unspan) {
+                    Some(Value::Var(a)) if *a < mono_vars.count() => mono_vars.tp(*a).clone(),
+                    _ => concrete.clone(),
+                };
+                targets.push((*d, arg_tp));
             }
         });
         // Create the monomorphs FIRST, before the context swap below: instantiation
         // parses against `self.vars` / `self.context`, and it must see the ordinary
         // ones, not this monomorph's.
         let mut remap: HashMap<u32, u32> = HashMap::new();
-        for t in targets {
+        for (t, arg_tp) in targets {
             let Some(name) = self
                 .data
                 .def(t)
@@ -6124,7 +6143,7 @@ impl Parser {
             else {
                 continue;
             };
-            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(concrete));
+            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(&arg_tp));
             if inst != u32::MAX && inst != t {
                 remap.insert(t, inst);
             }
