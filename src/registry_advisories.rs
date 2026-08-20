@@ -436,14 +436,30 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
         if !cache_path.exists() {
             return Ok(None);
         }
-        std::fs::read(&cache_path).map_err(|e| format!("read cached advisories: {e}"))?
+        // Verify here too.  This was the one branch of the four that read the cached
+        // feed and trusted it unchecked, which put the whole signature gate behind a
+        // single flag: `--offline` and the bytes are whatever is on disk (loft#1048).
+        read_cached_feed_verified(&cache_path, &sig_path, *opts)?
     } else if opts.refresh || cache_stale(&cache_path) {
         // Refresh.  404 → feature not hosted yet; treat as absent.
         match registry_index::fetch_index(&url) {
             Ok(fetched) => {
-                // Atomically, and as a pair: another process reading this cache
-                // mid-refresh must not get a half feed or the new feed beside the
-                // old signature (loft#1045).
+                // Verify BEFORE caching, as the index path does.  Writing first and
+                // checking after leaves a REFUSED feed on disk, where it outlives the
+                // run that fetched it: every later command reads those bytes against
+                // the previous, still-valid signature and fails the same way, and no
+                // retry can clear it (loft#1048, the shape `install.rs` already went
+                // through).  An ABSENT signature falls back to the cached one — the
+                // offline/bundle path — but the verdict still comes first.
+                let sig_bytes = if fetched.signature.is_empty() {
+                    std::fs::read(&sig_path).unwrap_or_default()
+                } else {
+                    fetched.signature.clone()
+                };
+                verify_feed(&fetched.content, &sig_bytes, *opts)?;
+                // Verified: now it is safe to keep.  Atomically, and as a pair —
+                // another process reading this cache mid-refresh must not get a half
+                // feed or the new feed beside the old signature (loft#1045).
                 registry_index::write_signed_pair(
                     &cache_path,
                     &sig_path,
@@ -451,12 +467,6 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
                     &fetched.signature,
                 )
                 .map_err(|e| format!("cache advisories: {e}"))?;
-                let sig_bytes = if fetched.signature.is_empty() {
-                    std::fs::read(&sig_path).unwrap_or_default()
-                } else {
-                    fetched.signature.clone()
-                };
-                verify_feed(&fetched.content, &sig_bytes, *opts)?;
                 fetched.content
             }
             Err(_) if !cache_path.exists() => {
@@ -468,24 +478,41 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
             Err(_) => {
                 // Network failed but cache exists — fall through
                 // to using the cached copy.
-                let content = std::fs::read(&cache_path)
-                    .map_err(|e| format!("read cached advisories: {e}"))?;
-                let sig = std::fs::read(&sig_path).unwrap_or_default();
-                verify_feed(&content, &sig, *opts)?;
-                content
+                read_cached_feed_verified(&cache_path, &sig_path, *opts)?
             }
         }
     } else {
-        let content =
-            std::fs::read(&cache_path).map_err(|e| format!("read cached advisories: {e}"))?;
-        let sig = std::fs::read(&sig_path).unwrap_or_default();
-        verify_feed(&content, &sig, *opts)?;
-        content
+        read_cached_feed_verified(&cache_path, &sig_path, *opts)?
     };
 
     let text = std::str::from_utf8(&content_bytes)
         .map_err(|e| format!("advisories.json is not valid UTF-8: {e}"))?;
     Ok(Some(parse_advisories(text)?))
+}
+
+/// Read the cached feed against the cached signature, through one door.
+///
+/// Every branch that serves cached bytes goes through here, so "verified on every
+/// load, even cache-hit paths" is a property of the code rather than of remembering
+/// to call `verify_feed` at four sites — one of which did not (loft#1048).
+///
+/// It also inherits the torn-pair handling the index got in loft#1045: the feed and
+/// its signature are two files and cannot be swapped in one step, so a reader
+/// crossing a refresh can pick up one of each.  `read_signed_pair_settling` re-reads
+/// before believing a rejection, with the signature itself as the oracle.
+fn read_cached_feed_verified(
+    cache_path: &std::path::Path,
+    sig_path: &std::path::Path,
+    opts: LoadOptions,
+) -> Result<Vec<u8>, String> {
+    let settled = registry_index::read_signed_pair_settling(cache_path, sig_path, &mut |c, s| {
+        verify_feed(c, s, opts).is_ok()
+    })
+    .map_err(|e| format!("read cached advisories: {e}"))?;
+    if !settled.accepted {
+        verify_feed(&settled.content, &settled.signature, opts)?;
+    }
+    Ok(settled.content)
 }
 
 fn verify_feed(content: &[u8], sig: &[u8], opts: LoadOptions) -> Result<(), String> {

@@ -389,7 +389,13 @@ consumer's machine.  Layout:
   `index_paths()` returns is read by nothing.  Every refresh
   transfers the whole document (gzipped by the transport — ureq
   carries `flate2`, so ~6.3× smaller on the wire).
-- Signature verified on every load, even cache-hit paths.
+- Signature verified on every load, even cache-hit paths.  **The advisory feed
+  (`advisories.json`) is held to the same sentence**, through one verified
+  reader rather than four call sites — one of which used not to verify at all,
+  so `--offline` served whatever was on disk (loft#1048).  It is also cached
+  only AFTER its signature is checked: writing first and checking after leaves
+  a refused feed on disk, where the next run reads it against the previous
+  still-valid signature and fails the same way, with no retry able to clear it.
 - **Atomic refresh, and a reader that waits one out.**  Each of
   `index.json` and its `.sig` is written beside itself and renamed into
   place, so a concurrent reader gets the whole old file or the whole new
