@@ -11,6 +11,7 @@ All notable changes to the loft language and interpreter.
 
 ### A keyed collection argument was neither protected nor countable, so its callee's record was orphaned (2026-08-20)
 
+
 Found while closing loft#1029, in the one argument kind its widened witness still refused:
 
 ```loft
@@ -41,10 +42,8 @@ The loop cell leaks 32 records on a pre-fix binary. `tests/keyed_element_borrow.
 `store_lifetime_890_889`, `store_lifetime_953` and the leak suites are green, and the adversarial
 probes run clean under `LOFT_POISON=1 LOFT_STRICT_STORES=1` on both backends.
 
-
-### A package's manifest chose where the package landed on disk (2026-08-20)
-### A call site could not NAME an argument built inline, so the store its callee minted was orphaned (loft#1029, 2026-08-20)
 ### An argument the call site could not NAME left the Join witness incomplete (loft#1029, 2026-08-20)
+
 
 A callee whose return may be a BORROW of an argument cannot be classified statically — it
 hands back either the argument's store or one it minted. loft#981/#982 settled that with a
@@ -145,138 +144,6 @@ surfaced this issue), a struct carrying TEXT, a struct carrying a VECTOR, and a 
 
 ### A generic returning a discharged `T?` was lowered by a route its non-generic twin never takes (loft#1026, 2026-08-20)
 
-`loft install <dir>` files a package under `~/.loft/lib/<name>`, and since the name became
-the MANIFEST's rather than the checkout directory's, nothing checked it before the join. A
-manifest is data — on a fetched package, data somebody else wrote — so `name = "../../escaped"`
-wrote the whole package tree to `$HOME/escaped/`, outside `~/.loft/lib` entirely. Verified
-against the pre-fix binary, which is what makes the regression guard non-vacuous.
-
-The rule already existed and was never asked here: `loft new` has enforced "lowercase ascii +
-digits + underscore" since it was written, stated inline at the site where a package is
-CREATED. It now lives in `libscan::is_valid_package_name` and three sites read it — `loft new`,
-the install path, and the prebuilt-cdylib path, which takes `[library] native` from a manifest
-that came off the network and uses it as a filename. Measured first: every package name and
-every `native` stem in this tree passes, so no existing package is refused.
-
-### An `i32` local kept a value an `i32` cannot hold (2026-08-20)
-
-`guard_narrow_alias_local` clamps a compound assignment to a narrow-alias local's own range and
-names five aliases it covers. It reached four. `is_signed32_template()` reads like a test for
-the plain `integer` type, but `integer` carries no `forced_size` and has already left by that
-line — so the only spec whose range IS the signed-32 range is the `i32` alias, and the clause
-could only ever exclude the one thing the comment above it promised to include. `l: i32 =
-2147483647; l += 1` kept 2147483648 on both backends where the same write to a `u8` clamped.
-Now clamps to `-2147483647` (an `i32`'s minimum; `i32::MIN` is the null sentinel).
-
-An `i32` FIELD still answers `null` where the narrower four answer their minimum — both say the
-write did not fit, and making them identical means reclaiming `i32::MIN`, which the roadmap
-already carries as deferred.
-
-### Generics: five collapses in the deferred-marker and tuple paths (2026-08-20)
-
-A template stamps a marker where a decision needs `T` and cannot have it yet, and
-`rewrite_generic_type_defaults` answers those markers once `T` is concrete. That walk must be
-TOTAL; it enumerated its own carriers and listed ten of the seventeen `Value` variants that
-hold children. `Tuple` was among the seven missing, so `t = (a?, 1)` read the placeholder's
-bytes as data — silently at `T = integer`, as a SIGSEGV in `OpFreeText` at `T = text`, and as an
-E0308 that would not compile on `--native`. Recursion now delegates to
-`Value::for_each_child_mut`.
-
-Four more of the same shape landed with it: `type_mentions_tv` folded onto
-`Type::contains_def` (which already answers it through the `Type::for_each_child` keystone, two
-hundred lines from a call to it); the synthetic `__nullable<S>` is no longer minted for a
-template's `T`, an attribute-less placeholder struct that satisfied every eligibility condition
-and refused `-> (T?, integer)` on both backends; the tuple emitter's owned-text decision is
-split from the literal that merely passes through it; and `tuple_has_text_leaf` peels
-`Optional`, with the return path's inline copy of it now reading the shared predicate. That last
-one was never a generic problem — a PLAIN `fn ret() -> (text?, integer)` would not compile on
-`--native` before it.
-
-Each proven under both gates: byte-identical IR and native Rust for the paths not being changed
-(six reference corpora), and twin-compared matrices for the ones that were.
-
-### The registry index's download cap truncated instead of refusing, and every compile parsed the whole catalog (2026-08-20)
-
-`http_get_bytes` bounded a response with `.take(50 MB)`, so a body past the ceiling came back
-SHORT and passed for a complete document. A 70 MB index cut to exactly 52,428,800 bytes failed
-as `JSON parse error: unterminated string` at a byte offset inside an unrelated package. That
-number is compiled into every released binary, so an index growing past it would have taken the
-registry down for every client already in the wild, with nothing the registry could do about it.
-The ceiling is now 512 MiB, overridable with `LOFT_MAX_DOWNLOAD`, and exceeding it is a refusal
-that names the ceiling.
-
-Separately, the parser's Tier-1 trigger fallback parsed the ENTIRE index to read the `triggers`
-field — ~300 bytes of a 693 kB document, on the compile path. The map now lives in a derived
-sidecar (`~/.loft/registry/triggers.json`) stamped with the index's length + mtime. `loft --check`
-on a four-line program, against a catalog 100× today's size: **1.13 s / 344 MB RSS → 0.02 s /
-12.3 MB** — what the same program costs with no catalog installed at all. The stamp is the
-caller's, taken before the map's source is read, so a concurrent refresh can only cost an extra
-rebuild, never mark stale triggers as current.
-
-`PKG_REGISTRY.md`'s sizing predated the per-version `api` field, which is 91 % of the live index:
-its "10,000 packages × 20 versions, ~80 MB" is **825 MB** measured. Corrected there, with the
-shape that keeps scaling (a thin resolution index, `api` per package on demand).
-
-### `registry_validate.sh` validated whatever was cached locally and reported OK about it (loft#1027, 2026-08-20)
-
-Run straight after publishing `hex_way 0.1.1`, it validated 0.1.0 and printed a bare `OK`. Two
-steps compounded: `loft install <pkg>` resolved against an un-refreshed index that still ended at
-0.1.0 (so the install was a no-op), and the next step picked the highest version DIRECTORY under
-`~/.loft/registry` — which also made the verdict depend on what that machine had downloaded
-before. The version is now resolved from the index with a forced refresh and installed as an
-explicit `<pkg>@<version>` pin, `<pkg>@<version>` is accepted on the command line, the verdict
-names the version, and a non-newest version says so on its own line. The cache root honours
-`LOFT_HOME`, which the hardcoded `$HOME` did not.
-
-### A `null` written inside a generic was the TYPE VARIABLE's null, not the concrete type's (loft#1028, 2026-08-20)
-
-`Parser::convert` lowers a `null` literal to its target's typed null. A template's `T` is an
-attribute-less placeholder STRUCT, so `Type::Reference` won and the site became
-`OpNullRefSentinel` — a 12-byte DbRef. Monomorphisation then substituted the TYPE and left the
-already-chosen OP, so `t_4text_nl` wrote that sentinel into a `&text` slot:
-
-```
-n_nl        (non-generic)   ___tret_1(0):&text = OpConvTextFromNull();
-t_4text_nl  (monomorph)     ___tret_1(0):&text = OpNullRefSentinel();     <-- the defect
-```
-
-The interpreter read the sentinel's own bytes back as the answer and said nothing; `--native`
-refused the program (`DbRef` has no `Display`). `(G-Mono)` in `formal/interfaces.md` requires
-`[T ↦ C]` "applied throughout … body types", and it also promises the two backends cannot drift
-on a monomorph — this broke both halves.
-
-**The filed scope was too narrow in two ways, and both matter.** The issue named `Parser::null`
-as the site: patching it changes nothing, because `null()` is never called with a reference type
-for this shape (18 calls in the reproducer, none of them a `Reference`), and
-`cl("OpNullRefSentinel")` is never called at all. A backtrace on every resolution of that op
-names `Parser::convert`. The issue also reported `T = integer` as clean; it answers **65535**.
-Measured across a type sweep, generic against the non-generic twin as control:
-
-| `T` | before | why |
-|---|---|---|
-| `text` | the empty text | sentinel bytes read as a string |
-| `integer` | `65535` | the sentinel's low 16 bits |
-| `character` | U+FFFF | same bits, char domain |
-| `float` | a denormal | same bits, float domain |
-| `boolean` | *correct* | **coincidence** — the sentinel's low byte is `0xFF`, which is also boolean null |
-| `struct`, `vector` | correct | for a reference the sentinel IS the answer |
-
-`boolean` is a control that does not control: a sweep starting there reads "generics are fine".
-
-The cure is the one loft#1016 (`x?`'s default) and loft#1020 (`x == null`) already use — the
-template MARKS the site, `rewrite_generic_type_defaults` answers it once `T` is concrete. Here
-the answer is to re-run `convert` itself rather than to pick a null, so there is still exactly
-one spelling of *"what is `τ`'s null?"* (minting a second is what loft#1014 was). A nested
-generic re-stamps through that same call and stays deferred until an outer instantiation names a
-real type. Two further symptoms went with it: `x == null` answered **false** for a null returned
-from a generic, and one program instantiating a template at two types got neither answer right.
-
-Blast radius, measured rather than argued: a corpus with one function per null→type conversion
-path (struct, vector, value enum, text, integer, float, character, a reference-kind generic, a
-generic with no null) emits a **byte-identical** `loft introspect` before and after. The
-`Parser::null` arm patched first was removed again — it was never on the path.
-
-### A generic returning a discharged `T?` was lowered by a route its non-generic twin never takes (loft#1026, 2026-08-20)
 
 `pub fn g<T>(x: T, a: T?) -> T { a? }` at `T = text` SIGSEGV'd under `LOFT_POISON` and orphaned
 one `String` per call without it. Two faults, one shape, and the second is what the issue's
@@ -356,7 +223,92 @@ both backends. Not from this change (identical with the `set_var` repair disable
 branch with none of this work). The corpus binds that cell rather than reading it inline, with
 a comment saying why, so it tests its own subject instead of riding someone else's defect.
 
+### The registry index's download cap truncated instead of refusing, and every compile parsed the whole catalog (2026-08-20)
+
+
+`http_get_bytes` bounded a response with `.take(50 MB)`, so a body past the ceiling came back
+SHORT and passed for a complete document. A 70 MB index cut to exactly 52,428,800 bytes failed
+as `JSON parse error: unterminated string` at a byte offset inside an unrelated package. That
+number is compiled into every released binary, so an index growing past it would have taken the
+registry down for every client already in the wild, with nothing the registry could do about it.
+The ceiling is now 512 MiB, overridable with `LOFT_MAX_DOWNLOAD`, and exceeding it is a refusal
+that names the ceiling.
+
+Separately, the parser's Tier-1 trigger fallback parsed the ENTIRE index to read the `triggers`
+field — ~300 bytes of a 693 kB document, on the compile path. The map now lives in a derived
+sidecar (`~/.loft/registry/triggers.json`) stamped with the index's length + mtime. `loft --check`
+on a four-line program, against a catalog 100× today's size: **1.13 s / 344 MB RSS → 0.02 s /
+12.3 MB** — what the same program costs with no catalog installed at all. The stamp is the
+caller's, taken before the map's source is read, so a concurrent refresh can only cost an extra
+rebuild, never mark stale triggers as current.
+
+`PKG_REGISTRY.md`'s sizing predated the per-version `api` field, which is 91 % of the live index:
+its "10,000 packages × 20 versions, ~80 MB" is **825 MB** measured. Corrected there, with the
+shape that keeps scaling (a thin resolution index, `api` per package on demand).
+
+### `registry_validate.sh` validated whatever was cached locally and reported OK about it (loft#1027, 2026-08-20)
+
+
+Run straight after publishing `hex_way 0.1.1`, it validated 0.1.0 and printed a bare `OK`. Two
+steps compounded: `loft install <pkg>` resolved against an un-refreshed index that still ended at
+0.1.0 (so the install was a no-op), and the next step picked the highest version DIRECTORY under
+`~/.loft/registry` — which also made the verdict depend on what that machine had downloaded
+before. The version is now resolved from the index with a forced refresh and installed as an
+explicit `<pkg>@<version>` pin, `<pkg>@<version>` is accepted on the command line, the verdict
+names the version, and a non-newest version says so on its own line. The cache root honours
+`LOFT_HOME`, which the hardcoded `$HOME` did not.
+
+### A `null` written inside a generic was the TYPE VARIABLE's null, not the concrete type's (loft#1028, 2026-08-20)
+
+
+`Parser::convert` lowers a `null` literal to its target's typed null. A template's `T` is an
+attribute-less placeholder STRUCT, so `Type::Reference` won and the site became
+`OpNullRefSentinel` — a 12-byte DbRef. Monomorphisation then substituted the TYPE and left the
+already-chosen OP, so `t_4text_nl` wrote that sentinel into a `&text` slot:
+
+```
+n_nl        (non-generic)   ___tret_1(0):&text = OpConvTextFromNull();
+t_4text_nl  (monomorph)     ___tret_1(0):&text = OpNullRefSentinel();     <-- the defect
+```
+
+The interpreter read the sentinel's own bytes back as the answer and said nothing; `--native`
+refused the program (`DbRef` has no `Display`). `(G-Mono)` in `formal/interfaces.md` requires
+`[T ↦ C]` "applied throughout … body types", and it also promises the two backends cannot drift
+on a monomorph — this broke both halves.
+
+**The filed scope was too narrow in two ways, and both matter.** The issue named `Parser::null`
+as the site: patching it changes nothing, because `null()` is never called with a reference type
+for this shape (18 calls in the reproducer, none of them a `Reference`), and
+`cl("OpNullRefSentinel")` is never called at all. A backtrace on every resolution of that op
+names `Parser::convert`. The issue also reported `T = integer` as clean; it answers **65535**.
+Measured across a type sweep, generic against the non-generic twin as control:
+
+| `T` | before | why |
+|---|---|---|
+| `text` | the empty text | sentinel bytes read as a string |
+| `integer` | `65535` | the sentinel's low 16 bits |
+| `character` | U+FFFF | same bits, char domain |
+| `float` | a denormal | same bits, float domain |
+| `boolean` | *correct* | **coincidence** — the sentinel's low byte is `0xFF`, which is also boolean null |
+| `struct`, `vector` | correct | for a reference the sentinel IS the answer |
+
+`boolean` is a control that does not control: a sweep starting there reads "generics are fine".
+
+The cure is the one loft#1016 (`x?`'s default) and loft#1020 (`x == null`) already use — the
+template MARKS the site, `rewrite_generic_type_defaults` answers it once `T` is concrete. Here
+the answer is to re-run `convert` itself rather than to pick a null, so there is still exactly
+one spelling of *"what is `τ`'s null?"* (minting a second is what loft#1014 was). A nested
+generic re-stamps through that same call and stays deferred until an outer instantiation names a
+real type. Two further symptoms went with it: `x == null` answered **false** for a null returned
+from a generic, and one program instantiating a template at two types got neither answer right.
+
+Blast radius, measured rather than argued: a corpus with one function per null→type conversion
+path (struct, vector, value enum, text, integer, float, character, a reference-kind generic, a
+generic with no null) emits a **byte-identical** `loft introspect` before and after. The
+`Parser::null` arm patched first was removed again — it was never on the path.
+
 ### The `--native` copy-or-adopt guard was gated on a NAME, so a METHOD never got it (loft#1017, 2026-08-20)
+
 
 A callee whose return may be a BORROW of an argument cannot have its result aliased into a
 caller local: the local's own `OpFreeRef` then whole-store-frees the caller's RECEIVER. The heap
@@ -399,8 +351,8 @@ the missing axis, and the report's "the shape alone is not sufficient" was measu
 The regression test carries all six cells including the two that a too-eager fix would break —
 the free-function spelling, and the borrow arm alone. It fails 6/6 on the pre-fix binary.
 
-
 ### A `null` argument read as an incomplete witness set, so the caller never freed (loft#1021, 2026-08-20)
+
 
 `fn f(a: P? = null) -> P { a? }` called as `f()` leaked the record the null path built, once per
 call, on both backends. The value was right; only the ownership was wrong.
@@ -430,8 +382,8 @@ leaks and SCALES — `fn pick(bx: Box, take: boolean) -> P { if take { bx.p } el
 called five times leaks four records plus one unknown-typed store. A displaced owner rather than
 a coverage gap, and the closest interpreter-side shape to loft#1017's `--native` corruption.
 
-
 ### `sum`'s identity got a default, so the one `#superseded` fix loft ships can be applied (loft#1003, 2026-08-20)
+
 
 `superseded-call` is the only ADVICE-level fix carrying a machine `edit`, and it was **always
 rejected**: the edit is a bare rename, `sum_of` is the only `#superseded` symbol in the stdlib,
@@ -454,8 +406,8 @@ This closes the "always rejected" half of loft#1003. The larger half — 20 fixe
 MECHANICAL in DIAGNOSTICS.md that carry no `edit`, and no gate asserting they must — is
 untouched.
 
-
 ### `character`'s null had four spellings and the backends picked different ones (loft#1014, 2026-08-20)
+
 
 `types.md` pins one: `Char`'s in-band sentinel is CODEPOINT 0 — the same `'\0'` that
 `construct_default(Character)` answers, that `op_conv_bool_from_character` tests for, and that
@@ -487,8 +439,8 @@ because that codepoint IS the reserved sentinel — so `'\0' as integer` answers
 backends. The issue read that cell as a discharge failure; a literal `'\0'` behaves identically,
 so it is the documented in-band collision, not this bug.
 
-
 ### `x?` on a generic parameter discharged with the type VARIABLE's default (loft#1016, 2026-08-20)
+
 
 `x?` is `x ?? construct_default(T)` (`types.md` `(N-Default)`) and `construct_default` is a
 function of the CONCRETE type. Inside a template `T` is an attribute-less placeholder STRUCT,
@@ -522,8 +474,8 @@ reference arm of the `== null` dispatch wins) and the monomorph keeps it — a 1
 out of an 8-byte integer slot. Same root class, but curing it means extracting the five-branch
 null-test dispatch so a monomorph can re-run it, which is its own change.
 
-
 ### A `??` default that CALLS a function leaked its record, once per index miss (loft#1013, 2026-08-20)
+
 
 `x = v[i] ?? mk()` types its result from the SUBJECT, which names the vector (`ref(S)["v"]`), so
 the consumer reads `x` as a borrow and frees nothing. On the miss path the value is a store
@@ -557,8 +509,8 @@ names the shape (`m  Join(base=v)`), and it is the leak face of the corruption l
 reports. Curing the class means giving the OWNING arm of any such join a frame owner, which is a
 change to the ownership merge itself.
 
-
 ### An omitted `τ? = null` argument arrived as the wrong kind of null (loft#1015, 2026-08-19)
+
 
 `fn f(a: integer? = null) -> integer { a? }` called as `f()` answered **65535** on the
 interpreter, and `float?` answered a denormal — silent wrong NUMBERS. On `--native` the same
@@ -594,8 +546,8 @@ null — including that a supplied `false` is not, which is the whole point of a
 `character? = null` is NOT fixed here and is filed as loft#1014: it needs a width-correct
 sentinel of its own, and `--native` additionally fails to compile one of its two forms.
 
-
 ### A reference tuple read its elements at the wrong layout's offsets (loft#1006, 2026-08-19)
+
 
 `TupleGet`/`TuplePut` derived the element offset from TWO layouts for one datum: the
 `RefVar(Tuple)` branch used `stored_tuple_field_offset` — the synthetic `__tuple<…>` RECORD
@@ -624,6 +576,7 @@ immune. Closing loft#1006 needs a representation decision — recorded as `D-bin
 
 ### `loft fix` can take the rest of a text slice (loft#1003, 2026-08-19)
 
+
 `text-slice-char-bound` is the fifth mechanical fix `loft fix` can apply, and the last row in
 `EDIT_BLOCKED` that claimed it should carry an edit.
 
@@ -639,8 +592,8 @@ slice, both taken at the one point that brackets the whole bound. Verified on bo
 applying it and running the result: `s[0..len(s)]` over `"héllo"` printed `héll` before and
 `héllo` after.
 
-
 ### A `both` method named where a value is wanted says so (loft#1008, 2026-08-19)
+
 
 The `self` half of loft#1008 already reported *"`f` is a method on `P`, and a method is not a
 function VALUE"* from every position measured. The `both` spelling did not: `x = f` bound
@@ -667,8 +620,8 @@ spellings and both free spellings (10/10/15/15), the lambda wrapper the message 
 and the stdlib's own `both` functions (`len`, `abs`, `round`). Pinned as
 `tests/error_messages/cases/57_both_method_is_not_a_fn_ref.loft`; no other baseline moved.
 
-
 ### `verify-self` no longer exits 0 when it verified nothing (loft#1012, 2026-08-19)
+
 
 `loft verify-self` on a source-built install reported *"not a release bundle — nothing to
 check against"* and exited **0**. The message was honest; the exit code is what gets read, so
@@ -687,8 +640,8 @@ move. Pinned in `tests/exit_codes.rs`, which runs the real binary and can theref
 exit code; the test asserts the precondition (the output really is the unverifiable case)
 before the code, so it cannot pass vacuously against a bundle that genuinely verified.
 
-
 ### `filter` freed the source's records, so a later loop over it answered nothing (2026-08-19)
+
 
 Found while verifying loft#1000's table cell by cell. On BOTH backends, a `filter` over a
 `vector<vector<T>>` left the source unreadable: `len(nv)` still answered 2 and `nv[0]` still
@@ -711,6 +664,7 @@ only shape where the slot aliases rather than owns.
 
 ### The open spatial slices walk OUTWARD from the point (loft#1002, 2026-08-19)
 
+
 `xs[(x,y)..]` and `xs[(x,y)..:n]` were the Z-order TAIL: only records whose Morton code is
 `>=` the query's. Half the neighbourhood was structurally unreachable, so the answer depended
 on where the query sat in the curve — an entity at the far end of the map asking for the three
@@ -731,6 +685,7 @@ expectation beside the euclidean distances it follows from.
 
 ### A tuple variable carrying text reaches a tuple parameter on `--native` (loft#1005, 2026-08-19)
 
+
 The generated parameter was `(i64, &str)` while the caller's local was `(i64, String)`, so
 `--native` refused the whole program. A tuple LITERAL argument is emitted in place and already
 spelled `&str`, which is what made this narrow and what pointed at the seam.
@@ -743,6 +698,7 @@ the call stays allocation-free. The matrix found a second cell: a NESTED tuple p
 reaches its inner tuple as a tuple-get, which loft#840's whole-parameter rule did not see.
 
 ### `loft --tests` runs the functions a file NAMES as tests (loft#1010, 2026-08-19)
+
 
 Every zero-parameter function ran: a `setup` helper (whose `assert` could fail the suite), and
 a `main` alongside the tests with whatever it prints or writes. Arity was the whole rule, so a
@@ -759,6 +715,7 @@ whether `main` is among the functions the run means to call.
 
 ### Four mechanical fixes carry an edit, and `loft fix` can act on a warning (loft#1003, 2026-08-19)
 
+
 `loft fix` could act on no WARNING-level fix at all. `needless-reference-parameter`,
 `needless-const-parameter`, `empty-braces-not-collection` and `not-null-deprecated` now carry
 an edit. The missing fact was the modifier's OWN position, taken at the declaration with
@@ -773,8 +730,8 @@ deleted the four characters after the replacement and ate the enclosing `}` — 
 user asked to have fixed. The notice is pass-2 only now, and overlap is settled in
 `apply_fixes`, the only place that knows the candidates share a buffer.
 
-
 ### A vector builtin ends on LENGTH, not on the element's null (loft#1000, 2026-08-19)
+
 
 `map`, `filter`, `reduce`, `all`, `count_if` and the vector comprehension NEVER TERMINATED
 over a `value struct` element; `any` terminated only by stopping on a phantom element read
@@ -818,6 +775,7 @@ hangs on the first cell.
 
 ### `loop_nr` answers "not found", so `x#break` on a non-loop local is a diagnostic (loft#998, 2026-08-19)
 
+
 Naming a declared local that is not a loop variable in `x#break` / `x#continue` was an
 INTERNAL COMPILER ERROR on both backends — *"index out of bounds: the len is 1 but the
 index is 18446744073709551615"*, a `usize` underflow.
@@ -855,6 +813,7 @@ message has to say something else.
 
 ### A package's own NAME is not one of its module names (loft#976 follow-up, 2026-08-19)
 
+
 loft#976 made a bare `use <id>` inside a package bind that package's OWN `<id>.loft`, so a
 stranger's same-named module can no longer amputate a library's public surface. The rule
 had no stop at the package's own name, and `own_module_path` finds a same-named file
@@ -891,6 +850,7 @@ named after its package in a directory that is not `src/`. loft#976's own sixtee
 use module names distinct from the package name, which is why none of them covered this.
 
 ### `OpIndex` reaches the composite subscript, and the slice says what to write (loft#996, 2026-08-19)
+
 
 @F114 says a type defining `OpIndex` "is subscripted like a built-in collection" and names
 A MATRIX as the motivating case — and `m[r, c]` answered `error: Expect token ]` at the
@@ -931,6 +891,7 @@ and index EXPRESSIONS including a nested subscript, so "two" is not mistaken for
 and two `parse_errors` cells pinning the slice refusal and the demangled arity message.
 
 ### A void native with no lowering is a hard error, not an empty body (loft#993, 2026-08-19)
+
 
 `output_function` escalates an unimplemented native to `compile_error!` when reachable and
 `todo!()` when not — P269's "fail at startup, not runtime". Both legs gated that on
@@ -983,6 +944,7 @@ cell that `yield_frame` still runs on both backends.
 
 ### `FieldInfo.nullable` follows the declaration for every field kind (loft#995, 2026-08-19)
 
+
 Documented as *"was the field DECLARED nullable"* and named as the fact a generated
 `CREATE TABLE` needs for `NOT NULL` (@F107); correct for the seven scalar kinds, a
 constant `true` for enum / record / vector / keyed. A generic serialiser emitted all four
@@ -1029,6 +991,7 @@ above-cells read the truth out of the RUN (`x.f == null` per field) rather than 
 a cell that agreed with a table but not with the language would still fail.
 
 ### A paged source validates the store signature (loft#994, 2026-08-19)
+
 
 A lazy binding reported every failure to OBTAIN bytes and none to INTERPRET them. Missing
 file / HTTP 404 / connection refused each set `store_lazy_faults` and `store_lazy_error`;
@@ -1097,6 +1060,7 @@ another's image (the first version of the file did exactly that).
 
 ### A `never` block places its frees like a `Void` one (loft#992, 2026-08-19)
 
+
 A `match` in a function's TAIL position with a `return` in ANY arm freed that function's
 locals BEFORE the arms ran. The arm that does not return then read a released variable:
 `null(oob)` on `--native` against a correct interpreter answer, an EMPTY text on both, and
@@ -1136,6 +1100,7 @@ both.
 
 ### A lock-less project is not governed by the invoking directory (loft#991, 2026-08-19)
 
+
 Already fixed on this branch by @PLN143 arc C2, which deleted the cwd `loft.lock` leg from
 the resolution chain; what lands here is the GUARD for the row the arc's own cells left
 open. `probe_project_lockfile` finds the project root, finds no lock in it, and returns —
@@ -1156,6 +1121,7 @@ difference the cell measures is exactly the filed one: `probepkg-0.1.0` against 
 defect, no version at all with the leg gone.
 
 ### A backtick block dedents from its first content line, holes included (loft#990, 2026-08-19)
+
 
 A backtick block was dedented unless it contained a `{…}`, in which case it was not
 dedented at all and kept its trailing whitespace-only line. One hole anywhere in the
@@ -1219,6 +1185,7 @@ it never compiled; doubled, it compiles AND dedents.
 
 ### A `{` that opens a hole nothing closes says so (loft#989, 2026-08-19)
 
+
 The two ways of getting a literal brace wrong got very different answers. `}` reached
 `Lexer::unescaped_brace` — one home for four scanners, a code, and a `Mechanical` fix
 naming `}}`. `{` had no equivalent: the scanner opened a hole and returned, and the failure
@@ -1252,6 +1219,7 @@ output, so the single-error shape is pinned too) and the `e1_code_set` registry 
 existing error golden moved.
 
 ### The par discard route has a native lowering (loft#987, 2026-08-19)
+
 
 `for x in v par(r = f(x), N) { }` — a body that never names the result — lowers to
 `n_parallel_discard`. Every other live par route has a bespoke native emitter; this one had
@@ -1298,6 +1266,7 @@ deliberate no-op on this target (`n_yield_frame`). Nothing checks that, and it i
 this bug for its whole life.
 
 ### A par worker declared below its loop keeps its return type (loft#988, 2026-08-19)
+
 
 `b_type` in `build_parallel_for_ir` asked two questions in the wrong order:
 
@@ -1346,6 +1315,7 @@ demands a `;`. That is a separate defect with a separate fix, already landed on 
 consumer stream's branch; keeping the loop last means this file measures the TYPE alone.
 
 ### A struct-enum field access checks the tag (loft#980, 2026-08-18)
+
 
 `c.field` resolved at COMPILE time to the first variant declaring the name and read that
 offset whatever the tag said:
@@ -1412,6 +1382,7 @@ diagnostic.
 
 ### The post-scope lints run under `loft test` too (loft#985, 2026-08-19)
 
+
 Five lints share one precondition — they read the ownership verdicts and the materialised
 copies that exist only after `scopes::check` — so they sat in one block on `main.rs`'s
 PROGRAM path. `loft test` / `--tests`, which is the path a LIBRARY's CI takes, ran none of
@@ -1444,6 +1415,7 @@ tests, and `never-read` still reaches the test path (the control for the split t
 
 ### An empty struct literal parses before its declaration (loft#986, 2026-08-19)
 
+
 `T { }` was a parse error when `T` was declared BELOW the use, while `T { port: 0 }` in the
 same position was fine and `T { }` was fine with `T` declared above — `error: Expect token ;`
 pointing at the line rather than the type, so it read as a syntax mistake in code that has
@@ -1470,6 +1442,7 @@ literal below its declaration, with a declared field default, nested, as an argu
 return, plus the control-flow controls.
 
 ### Float `/0` is IEEE in every destination (loft#983, 2026-08-19)
+
 
 `1.0 / 0.0` was `inf` inline and `null` once bound, returned, or stored — one operator, two
 ops, and the DESTINATION picked between them: `OpDivFloat` forced `f64::NAN` on a zero
@@ -1509,6 +1482,7 @@ f4f float+single (renamed `…_reports_and_continues`, still exit 0, still warni
 an `inf` cell and a `0.0/0.0` null cell), and one golden baseline.
 
 ### A limited field stores its default when a value does not fit (loft#984, 2026-08-19)
+
 
 `integer limit(lo, hi)` stored three different wrong things and reported none: `x.b = 256`
 on `limit(0,255)` ALIASED to `0` (`set_byte` admitted `min + 256`, storing `256 as u8` = 0,
@@ -1570,6 +1544,7 @@ storing `min` where a nullable field owes `null`).
 
 ### A split-ownership return is decided per run (loft#981, loft#982, 2026-08-18)
 
+
 A heap return carries ONE static answer to *may the caller free this?*, read off the return
 deps — a dep naming a visible parameter means BORROW (never free), an empty one means OWNED.
 A return that is a view of a parameter on one path and a freshly minted store on the other
@@ -1625,6 +1600,7 @@ pre-fix binary it orphans 161 + 41 records on both backends while every value ce
 exclusion its comment recorded was this leak.
 
 ### A package's own module wins its own `use` (loft#976, 2026-08-18)
+
 
 Two packages, neither depending on the other, each shipping `src/skin.loft` with DISJOINT
 names inside, and each saying a bare `use skin;`. A consumer that pulls both:
@@ -1689,6 +1665,7 @@ own docs.
 
 ### A struct-enum field access never checked the discriminant (loft#980, 2026-08-18)
 
+
 ```loft
 enum Node { Named { label: text, n: integer }, Anon { k: integer } }
 a: Node = Anon { k: 7 };
@@ -1733,6 +1710,7 @@ does not have needs an lvalue notion the parser does not have — a guarded read
 place, and the assignment path takes the parsed access as one.
 
 ### A branch whose arms disagree about ownership froze the wrong one (loft#978, 2026-08-18)
+
 
 ```loft
 fn read(b: Bag, fresh: boolean) -> integer {
@@ -1792,6 +1770,7 @@ leaks identically on the released binary.
 
 ### Writing a collection field of a struct-enum panicked in the store layer (loft#977, 2026-08-18)
 
+
 ```loft
 enum Shape { Circle { limbs: vector<float> }, Square { s: float } }
 c: Shape = Circle { limbs: [] };
@@ -1846,6 +1825,7 @@ identity cases, and the guard's message, which no loft program can reach any mor
 
 ### An accessor's returned record borrows its container (loft#974, 2026-08-18)
 
+
 `fn get(b: Bag, k: text) -> Item? { b.items[k] }` declared
 `optional(reference(Item, deps {}))` — no dep — so the caller typed the result OWNED and
 emitted `OpFreeRef(it)` at scope exit, freeing a store the CALLER's `b` still owned. The
@@ -1888,8 +1868,8 @@ behavioural: both backends, strict-stores, native leak check; plus a harness con
 every read in one scope and passed against the bug, and a `churn()` helper made native
 pass while the interpreter still failed.
 
-
 ### Manifest-less resolution: one scope function, no lockfile written by running (@PLN143, 2026-08-18)
+
 
 `lib_path`'s registry legs were three probes that each re-derived their own lockfile
 path — beside the script, at the project root, and in the **cwd** — and a disagreement
@@ -1940,8 +1920,8 @@ Arc A (2026-08-18) preceded all of it: `probe_auto_install` no longer passes
 the point — waiving is defensible for a verb a person typed, not for the path a bare
 `use` takes on its own.
 
-
 ### Every store access is bounded, on every target (loft#950, 2026-08-17)
+
 
 `Store::addr` and `addr_mut` bounded their offset with a `debug_assert!`, and loft's
 library build compiles those out (`[profile.dev.package.loft]`). So the only bound left
@@ -1971,6 +1951,7 @@ This is the report half of loft#950. The corruption that produced the reference 
 separate fault and is still open.
 
 ### `map` answers `vector<U>` for a callback `fn(T) -> U` (loft#945, 2026-08-17)
+
 
 STDLIB.md has documented `map(v: vector<T>, f: fn(T) -> U) -> vector<U>` all along, and the
 lowering already built the result from the callback's return type. Every `U != T` was refused
@@ -2027,6 +2008,7 @@ capturing lambda, a chained `.filter(…).map(…)` and the comprehension as con
 
 ### A nullable collection return can have a return buffer — four of five gaps closed (loft#938, 2026-08-17)
 
+
 Still behind `LOFT_NULLABLE_RETBUF=1` and still off by default, but the switch now carries every
 shape in `tests/probes/938-nullable-collection-return-buffer.loft` correctly and leak-free on
 both backends. `Optional(Vector)` was blind at three more gates than the first pass at this
@@ -2061,6 +2043,7 @@ at all" (a gate upstream of the classifier) and "a `Skip*` verdict" (the classif
 different bugs that the IR does not tell apart.
 
 ### The module-shadow advice reaches the run it explains (loft#948, 2026-08-17)
+
 
 `Advice[module-name-shadowed]` (loft#912) fired where the collision was HARMLESS and stayed
 silent where it broke the build — the one case a reader cannot diagnose from the output.
@@ -2098,8 +2081,8 @@ loaded because building the package reads every file under `src/`, which is both
 collision happens and why it has to be tested at the `loft test` surface where the output was
 dropped.
 
-
 ### A nullable collection return can have a return buffer — opt-in (loft#938, 2026-08-17)
+
 
 **`LOFT_NULLABLE_RETBUF=1`, OFF by default.** Built and validated far enough to be a basis,
 not far enough to default on. With the switch off every consulting site is byte-identical to
@@ -2153,8 +2136,8 @@ where the storage under it is.
 **How to finish it:** get those two green, then flip the default and delete
 `default_path_is_unchanged`. `make ci` 4144/4144 with the switch off.
 
-
 ### A `?` on a collection field means what it says (loft#917, 2026-08-16)
+
 
 A collection field is a 4-byte RECORD ID where `0` already means the EMPTY collection, so
 `xs: null` and `xs: []` lowered to the identical `OpSetInt4(h, 8, 0)` and `xs == null` could
@@ -2201,8 +2184,8 @@ the warning can go". This is that change; the assertions are inverted.
 **Not loft#938.** That is the ownership half — who frees a returned `vector<T>?` — and is
 untouched: absence says nothing about who owns the collection that IS there.
 
-
 ### A null test on a collection FIELD does not free the record it read (loft#920, 2026-08-16)
+
 
 `vector == null` tests the null sentinel through `OpVectorIsNull`, which reads only the
 sentinel and discards the vector — so a heap-owning TEMP consumed by the test would be
@@ -2249,6 +2232,7 @@ sort` and Rust's `PathBuf` sort disagree, and an off-by-one there briefly indict
 neighbouring script.
 
 ### A forward reference inside a tuple resolves like one anywhere else (loft#944, 2026-08-16)
+
 
 An in-file forward reference resolves by ADOPTION: the name becomes a `DefType::Unknown`
 stub and the declaration upgrades it in place. Nothing rewrites the `Type::Unknown(stub)`
@@ -2309,6 +2293,7 @@ pre-existing, unrelated to declaration order.
 
 ### A coroutine's yielded record is borrowed, not owned (loft#920 partial, 2026-08-16)
 
+
 `collect_iterator_subject` materialises a `match <iterator<T>>` subject by pulling the
 coroutine into a buffer.  The pulled value lands in `stream_x`, typed with the ELEMENT type.
 For a **struct-enum** element that makes it a record ref — and the ref points into the
@@ -2360,6 +2345,7 @@ not reproduce under `LOFT_STRICT_STORES=1` (strict mode changes free/reuse and m
 
 ### A tuple's record shape does not depend on how its type was reached (loft#943, 2026-08-16)
 
+
 Two defects, one report, because a vector literal of tuples needs both fixed.
 
 **1. An inferred tuple element type registered no `__tuple<…>` struct.**  A tuple is stored as
@@ -2405,6 +2391,7 @@ registration.
 
 ### A tuple vector element is not offered the element slot (loft#942, 2026-08-16)
 
+
 `parse_item` seeds the element expression with `Value::Var(elm)` — the slot `OpNewRecord`
 carved out of the container — so a struct element builds straight into it; `parse_object`
 takes that in-place path whenever it is handed a `Var` that owns a store.  A TUPLE element is
@@ -2445,6 +2432,7 @@ tuple shape including ones with no struct at all, on the released binary too).
 
 ### A destructured tuple element is a value the binding owns (loft#941, 2026-08-16)
 
+
 A tuple return wider than 8B lands in a synthetic `__tuple<…>` record held by a work-ref
 belonging to the CALL SITE, so one site reuses one buffer.  Destructuring read each element
 straight out of it — `OpGetField(tmp, offset, …)` answers a DbRef sharing `tmp`'s `store_nr`
@@ -2483,6 +2471,7 @@ writes through the binding itself, and the native backend renders a first bindin
 `let mut var_v = <init>`, which rustc rejects when `var_v` appears inside it.
 
 ### `loft test` shares one library parse across the files that `use` it (loft#925, 2026-08-16)
+
 
 `run_tests` builds one `Parser` per test file, deliberately — a shared one would let one
 file's definitions leak into the next.  Each of those parsers loaded the `use`d library from
@@ -2540,6 +2529,7 @@ time — which makes a run's output undiffable, and this change is verified by d
 
 ### `sizeof` and `type_name` answered null for an undeclared name (loft#933, 2026-08-15)
 
+
 Both intrinsics read their argument the same way: take the identifier, look it up, and — when
 the def exists but is still `DefType::Unknown` after pass 2 — mark the argument *found* and
 return.  `*val` keeps its `Null` initialiser, so `sizeof(NoSuchType)` answered `null` and
@@ -2558,8 +2548,8 @@ sibling site (`Unknown variable 'x' — did you mean 'y'?`).  Half of loft#934; 
 an undefined comparison operand whose ONLY report is `missing argument for parameter 'v1' of
 `OpLtInt`` — is pinned in `36-parse-errors.loft` and left open.
 
-
 ### `--lib` is part of the program-cache key (loft#930, 2026-08-15)
+
 
 `program_cache_paths` hashed the entry script's path and nothing else, so one script run
 against two library trees shared a cache slot and the second run silently reused the first
@@ -2583,8 +2573,8 @@ two trees now keep two.
 reproduces on an installed `loft` and needs `LOFT_PROGRAM_CACHE=1` to show up in a dev
 build — worth knowing before concluding a cache defect is fixed.
 
-
 ### 56 of 167 `@EXPECT_ERROR` annotations never fired, and the suite reported nothing (loft#929, 2026-08-15)
+
 
 `check_diagnostics` failed a file on *unexpected* errors and on unmatched `// #warn`
 patterns.  It collected unmatched `@EXPECT_ERROR` and `@EXPECT_WARNING` substrings and then
@@ -2635,6 +2625,7 @@ unresolved comparison operand cascading into `missing argument for parameter 'v1
 
 ### A struct that contains itself says so, even when the program uses it (loft#929, 2026-08-15)
 
+
 `Data::has_value_cycle` skipped recursing into a child struct that `def_referenced` marked.
 That flag records that a struct has been CONSTRUCTED somewhere (`build_object_ops` and the
 object literals set it) — it says nothing about whether the FIELD is a reference.  So the cycle
@@ -2652,8 +2643,8 @@ Verified across the shapes the rule separates: `reference<Self>`, mutual A/B, mu
 `reference`, plain nesting, `vector<Self>`, and a cyclic type never constructed.  The
 `@EXPECT_ERROR: contains itself` fixture that should have caught this had itself gone inert.
 
-
 ### A `for` loop binds its own variable, so two loops may reuse a name (loft#915, 2026-08-15)
+
 
 A loop variable was an ordinary function-scoped local: `add_variable` resolved it by name, so
 a second `for` over the same name was handed the FIRST loop's slot — old var, old type, old
@@ -2697,8 +2688,8 @@ backends, covering the filed shape, the after-loop read, `#index` / `#count` / `
 `#break`, loft#690's two-struct shape, three loops under one name, text loops, comprehensions,
 `_`, nesting, and per-function independence.
 
-
 ### A loop that writes no store reads its vectors through one derived header (loft#885, 2026-08-15)
+
 
 `v[i]` re-derives three facts per element on `--native`: which store holds the vector, which
 record its elements live in, and how long it is. All three are loop-invariant in a loop that
@@ -2738,6 +2729,7 @@ every hoisted read (re-derives the header, panics on a mismatch) and `LOFT_NO_VE
 emits the pre-885 form. Guards: `tests/hoist_gate.rs`, `tests/scripts/885-vector-hoist.loft`.
 
 ### A `τ?` struct field is representable as absent (loft#896, 2026-08-14)
+
 
 A field declared `maybe: Inner?` was stored as a dense `Inner`, byte-identical to a
 non-nullable one. `OpGetField` therefore handed back a `DbRef` into the PARENT record, whose
@@ -2781,6 +2773,7 @@ passed by encoding the inversion, and now declares `item: Row?` with a dense sib
 
 ### A partial struct literal names the field it left out (loft#914, 2026-08-14)
 
+
 New `advice[omitted-field-zero]`, default on, `LOFT_NO_OMITTED_FIELD` opts out. A literal that
 names SOME fields and leaves another out gives the omitted one its type's zero, and nothing
 distinguished that from an author writing the zero deliberately. It bites where zero is a
@@ -2807,6 +2800,7 @@ field whose absence is already the declaration's promise. Swept before it spoke:
 
 ### `loft test` no longer reports a green for a file it did not run (loft#916, 2026-08-14)
 
+
 `loft test <a> <b>` silently discarded everything after the first target. It ran `<a>`, printed
 `test result: ok. 1 passed; 1 file`, and exited **0** — even when `<b>` held a failing test. The
 file count was the only place it showed, and that reads as correct unless you already knew how many
@@ -2824,6 +2818,7 @@ code is what a CI job reads, and it was the half that made this dangerous rather
 confusing.
 
 ### A module shadowed by a dependency's same-named file now says so (loft#912, 2026-08-14)
+
 
 A module's basename is global across a consumer's whole dependency graph. Only the first file to
 claim a name is loaded, so adding `src/catalogue.loft` to a package whose dependency already had
@@ -2857,6 +2852,7 @@ existing dep-shadowing guard already resolves).
 
 ### `loft doc <library>` documented nothing, into the directory you were standing in (loft#911, 2026-08-14)
 
+
 `loft doc` reads as — and is used as — `loft doc <library>`, but its argument was a PATH only. A
 library name is not a directory, so `loft doc graphics` took the empty-manifest branch: it created
 `./graphics/doc/` wherever the user happened to stand, found no `src/` to read, and reported
@@ -2872,6 +2868,7 @@ absolute. `loft doc graphics` now reports 1 guide and 19 API sections. Guards:
 `tests/doc_command.rs`.
 
 ### A non-empty collection literal on a nullable field aborted the compiler (loft#909, 2026-08-14)
+
 
 `struct S { m: vector<integer>?, t: integer }` with `S { m: [5], t: 3 }` aborted with
 `Incorrect var _vec_1[65535]`, on both backends and on the published release. Whether a field
@@ -2895,6 +2892,7 @@ unpeeled type: those ARE about nullability. Guard:
 `tests/scripts/909-nullable-collection-field-literal.loft`.
 
 ### A bare `if` statement swallowed the `[` of the line below it (loft#910, 2026-08-14)
+
 
 `[` postfix-indexes a value, and a `Void` expression produced none. `if` is an expression in loft,
 so a bare `if c { … }` STATEMENT reached the postfix chain that handles `.`, `[…]` and `(…)` — and
@@ -2921,6 +2919,7 @@ binding is braced if it is a statement sequence, which no producer can drift awa
 `tests/scripts/910-statement-if-does-not-index-the-next-line.loft`, asserted on both backends.
 
 ### `loft test` refused the path it prints (loft#913, 2026-08-14)
+
 
 `loft test` reports its files as `tests/<name>.loft` and rejected that exact string: the argument
 was joined onto `tests/` unconditionally, so pasting a failing line back asked for
@@ -2949,6 +2948,7 @@ legitimate zero. (A brace list with SOME matches still runs those and reports th
 completely unmatched selector fails.)
 
 ### An empty-text assignment pushed a value nothing consumed (loft#908, 2026-08-14)
+
 
 Reported as "a function that reads a MISSING file and returns a struct double-frees and SIGABRTs
 the interpreter" — `free(): invalid pointer`, `last op: OpFreeText`, on `--interpret` only, which is
@@ -2981,6 +2981,7 @@ every row asserting a VALUE — `--native` was always correct, so a row that mer
 a pass there. Verified to abort on the pre-fix build before shipping.
 
 ### `--native` linked a `#native` symbol by NAME, not by what implements it (loft#907, 2026-08-14)
+
 
 `#native "sym"` is an API id, not the name of the Rust fn behind it. A library registers its
 implementations by loft symbol — `loft_register_bridges! { "sym" => other__loft_bridge }` — and
@@ -3017,6 +3018,7 @@ link, and the answer names which resolution path was taken;
 `native_scalar_pkg` is the clean-binding control.
 
 ### Removing one entry of a linked collection group had no owner (loft#900, 2026-08-14)
+
 
 loft#898 gave the CLEAR an owner for a linked group's shared records; removal never got
 one, and was wrong in both directions. Through a VIEW it freed the record the primary
@@ -3071,6 +3073,7 @@ sibling, and over an `array<T>` removes two elements — no group involved).
 
 ### A `sorted` emptied by removal published the wrong slot on the next append (2026-08-14)
 
+
 `sorted_new` hands the constructor a scratch slot and `sorted_finish` / `ordered_finish`
 read the new record back out of it — at `length + 1`, except at length 0 where they take
 the "first record needs no reordering" path and read slot 0. `sorted_new`'s existing-record
@@ -3089,6 +3092,7 @@ Pre-existing on the published 2026.8.0, both backends, `sorted` and `ordered` on
 guard row b3 of `tests/scripts/900-linked-group-remove.loft`.
 
 ### A linked collection group's second route was silently under-populated (loft#901, 2026-08-14)
+
 
 Filling one member of a linked group fills every member (loft#843). For three pair shapes
 the second route never got the elements, with no diagnostic: `hash` + `index` kept ONE
@@ -3138,6 +3142,7 @@ orders, and a clear after the fill. Gate: 3974/3974 curated + 57/57 on the four 
 binaries a schema change can reach, fmt + clippy clean.
 
 ### A linked collection group had no owner for its records (loft#898, 2026-08-14)
+
 
 Two or more keyed collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843). Nothing said which
@@ -3207,6 +3212,7 @@ above is vacuous.
 
 ### A field store had no type check, and two of them corrupted the heap (loft#893, 2026-08-13)
 
+
 A field store is the one assignment form with no variable to re-type, so
 `change_var_type`'s rejection — the one that refuses `v = make()` for a local — never saw
 it. The checks that DID cover fields are further down `parse_assign_op`, behind an early
@@ -3250,6 +3256,7 @@ it to a local first.
 
 ### A write through a returned struct is now reported (loft#894, 2026-08-13)
 
+
 `hurt(first(s), 10.0)` writes into a temporary discarded one instruction later, while
 `hurt(s.es[0] ?? E {}, 10.0)` writes through — same types, no diagnostic on either. This
 is the shape `lost-write` exists to catch and it was silent, so the analysis now covers
@@ -3283,6 +3290,7 @@ Deliberately an under-approximation, per the two-tier rule: binding the result t
 first stays silent, because that copy is still readable and belongs to `warn_copies`.
 
 ### `=` to a keyed collection appended, because only the EMPTY literal cleared (loft#895, 2026-08-13)
+
 
 A collection literal lowers to element-construction ops that APPEND, so the assignment has
 to put a clear in front of them. `parse_assign_op`'s vector-field arm does. The keyed arm
@@ -3319,6 +3327,7 @@ would restore the silent no-op @P307 fixed, so the change is strictly additive.
 
 ### A field-store RHS temp was typed as the destination, so it never owned anything (loft#897, 2026-08-13)
 
+
 `s.v = <expr>` lowers to `Set(tmp, expr); Clear(s.v); Append(s.v, tmp)`. `tmp` was built
 with `f_type` — the destination FIELD's type, deps included. scopes.rs frees a var only
 when its deps are EMPTY (*"`dep` empty → the variable owns the value → emit `OpFreeRef`"*),
@@ -3344,6 +3353,7 @@ type-registration side effect looks like. Fixing the leak on a path whose value 
 would have been polishing, so this fix stops at the field store.
 
 ### An unbound `f#read(n) as vector<T>` failed three ways, from two causes (loft#899, 2026-08-13)
+
 
 The order-sensitivity was the tell, and it named the first cause. `gen_set_first_vector_null`
 resolves its store type by NAME — `data.name_type("main_vector<single>")` — and the read's
@@ -3392,6 +3402,7 @@ main guard carries the remaining seven shapes plus a `vector<P>` row.
 
 ### The last local-gate flake: a well-known port on a shared machine (2026-08-13)
 
+
 `engine_host_udp::probe_server_poses_ride_the_fastest_path_per_client` connected to a
 hardcoded **18084**, because the fixture it drives —
 `tools/audience-demo-50/probe_server_kernel.loft` — binds that constant. Its own comment
@@ -3438,6 +3449,7 @@ path for four callers, and a well-known port. Local gate: **4079 passed, 0 faile
 
 ### A test helper's temp file was keyed on the pid, so its four callers shared one path (2026-08-13)
 
+
 `tests/introspect.rs::resolution` wrote its program to
 `temp_dir()/loft_res_<pid>.loft`, ran `loft introspect` on it, and deleted it. The pid
 is the same for every test in the binary, so all **four** call sites shared one path —
@@ -3460,6 +3472,7 @@ resource plus parallel tests**, the same family as the hardcoded ports in
 `{port}`), and a pid-only name is only safe where exactly one caller exists.
 
 ### The `#native` stub set was a process-global that every compile overwrote (2026-08-13)
+
 
 `compile::byte_code` recorded which `#native` symbols it registered a panic stub for —
 the set `wire_native_fns` consults to know which stubs it may replace with an
@@ -3512,6 +3525,7 @@ the old code instead of depending on thread scheduling.
 
 ### A buffer-bound vector fn delivered only its TAIL when the tail borrowed an argument (2026-08-13)
 
+
 `dispatch_vector_delivery` is the one place that decides how a vector-returning function's
 result reaches the caller's `__retbuf`. `Delivery::Rename` routes through `ref_return`, which
 delivers the tail AND rewrites every mid-body `return <fresh local>` into the buffer.
@@ -3560,6 +3574,7 @@ twins and nothing compares them (PERFORMANCE.md § Design: P8).
 
 ### Two nightly gates that measured the environment, not the diff (loft#888, 2026-08-13)
 
+
 **The leak gate went red on our own fix.** loft#876 gave a field's declared default a home on
 the schema `Field`, and a TEXT default has to intern its spelling: `Content::Str` is a raw
 `{ptr, len}` with no owning variant, so `fold_declared_default` reaches for the same
@@ -3605,6 +3620,7 @@ The third leg needed no change: the `LOFT_POISON` gate was red on
 the poison sweep now runs **1870/1870** on this branch.
 
 ### Two stores freed at the wrong time (loft#889, loft#890, 2026-08-13)
+
 
 **loft#890 — a lift freed what its consuming op had already released.** `br = mk_hash(n)`
 lowers to `__lift_1 = mk_hash(n); OpReplaceKeyed(__lift_1, br, tp | 0x8000)`. The bit means
@@ -3665,6 +3681,7 @@ taken at different sites differ by that constant and say nothing about the round
 
 ### A sorted collection dropped every insert once an index existed elsewhere (2026-08-13)
 
+
 `s[k] = v` on a `sorted<T[k]>` local inserted nothing — `len(s)` answered 0 and every lookup
 its fallback — whenever ANY struct in the program declared an `index<T[…]>` field over the
 same element type. The struct is never constructed; declaring it is the whole input. Both
@@ -3689,6 +3706,7 @@ than of the bug under investigation. Guarded by
 the previous commit.
 
 ### A keyed element read never said it borrows its container (loft#882, 2026-08-13)
+
 
 `v[i]` on a vector types its result with a dep naming the container, and that dep is the
 whole reason the vector shape is safe: `return_views_local` sees a borrow from a local and
@@ -3724,6 +3742,7 @@ still intact — the ordinary suite was green over this.
 
 ### A registered native with no bridge was only found by calling it (loft#886, 2026-08-13)
 
+
 A cdylib can export a `#native` symbol and register no marshal bridge for it. The symbol
 resolves, wiring succeeds, and `native_auto_dispatch` panics — but only when something
 calls it, so a library can ship, pass its own suite, and carry a function that is dead for
@@ -3745,6 +3764,7 @@ strips an optional `pub ` and never looks at it again.
 
 ### A repeat literal walked off the store on a negative count, and lost its text (2026-08-13)
 
+
 Two further defects in `[x; n]`, found while reading the bulk-fill path before routing a
 constant comprehension into it (loft#884).
 
@@ -3765,6 +3785,7 @@ backing record and both ends of the copy live inside it — `--native` re-read i
 destination only, the interpreter not at all.
 
 ### `[x; n]` built n+1 elements, and n=0 corrupted the heap (2026-08-12)
+
 
 `OpAppendCopy` receives the TOTAL a repeat literal asks for, and the template element is
 already appended by the time it runs — so it needs `n - 1` more. It added `n`:
@@ -3790,6 +3811,7 @@ including a RUNTIME count and a runtime zero — the rows no const-fold can reac
 `float` element so a stride error shows as a wrong sum rather than a wrong length.
 
 ### A declared field default now reaches a cast, when it is a constant (2026-08-12)
+
 
 `height: float = 1.5` was honoured by a struct literal and ignored by `text as Struct`,
 which wrote the type's zero — the same field with two absent values depending on how the
@@ -3840,6 +3862,7 @@ answers, a literal override) pass on both. Guarded in
 
 ### An optional return was a shape the lift never recognised (2026-08-12)
 
+
 `inline_struct_return` (`src/scopes.rs`) is the one predicate that answers "does this
 call hand back a store the caller must own?", and every arm matched the callee's
 return type UNPEELED. `Optional(τ)` is a compile-time wrapper over τ's own runtime
@@ -3875,6 +3898,7 @@ on both, so the matrix is not green by having stopped checking. Guarded in
 
 ### One call emitter re-derived the Rust fn identifier (2026-08-12)
 
+
 Emitted Rust is one flat namespace, so two same-named fns from different files get a
 file-hash suffix on the DEFINITION (`disambiguated_fn_ident`, #305). `Output::fn_ident`
 is the chokepoint, and its doc says every site writing a definition OR a call must go
@@ -3895,6 +3919,7 @@ Swept the siblings: `dispatch.rs:665` delegates to `output_code_inner`, and the 
 loft#878.
 
 ### A work-ref mint landed on the return-buffer ARGUMENT (2026-08-12)
+
 
 `ref_return` promotes a body work-ref to the function's hidden return-buffer argument on
 pass 1, and the variable tables persist across passes BY NAME while the counter restarts —
@@ -3921,6 +3946,7 @@ a defect to catch. loft#872.
 
 ### A container in `ls` was renamed onto a RECORD return buffer (2026-08-12)
 
+
 `classify_reference_delivery`'s fallback renames the return's dep candidates onto
 `__retbuf`. A tail that indexes a call — `make(n)[0] ?? d` — leaves the indexed CONTAINER
 in `ls`, and that container has no further deps of its own, so `return_views_local` reads
@@ -3937,6 +3963,7 @@ call was MATERIALISED — and materialising a null-valued record fabricates an e
 
 ### `ShowDb::write_hash` walked a layout that had moved (2026-08-12)
 
+
 Formatting a struct with a `hash<…>` field SIGSEGV'd the interpreter in `OpFormatDatabase`
 and exited 1 with no output on native; `to_json()` on the same record shared the walker and
 so shared the crash. `write_hash` carried a bucket loop of its own that read each slot as a
@@ -3951,6 +3978,7 @@ module that owns the layout — which also gives the render a stated order (key 
 relies on came along with it. loft#873.
 
 ### A not-found key field was used as an attribute INDEX (2026-08-12)
+
 
 `Data::attr` answers `usize::MAX` for a name it cannot find, and `set_mutable` /
 `set_mutable_directed` (`src/typedef.rs`) handed that straight to
@@ -3978,8 +4006,8 @@ the element's fields, except when the element is not a struct at all (`hash<inte
 At>` puts the key in the element slot) — there it says so, because listing what
 `integer` answers to would offer its METHODS as candidate keys. loft#874.
 
-
 ### A struct field's absent value is the FIELD's question, not the type's (2026-08-12)
+
 
 `integer`(0), `long`(1), `single`(2) and `float`(3) spell absence with a SENTINEL and
 share one content type between their `T` and `T?` spellings, so
@@ -4029,6 +4057,7 @@ JSON-castable struct, or give the walker an evaluator. loft#870.
 
 ### The `text` half: what an absent text field costs (2026-08-12)
 
+
 `text` was left out of the fix above because a text handle of 0 IS null (`Store::get_str`),
 so its empty value has to be INTERNED — and `set_default_value`'s struct arm runs per
 record on the allocation path. Interning there measured +78 % wall and +91 % peak heap over
@@ -4057,6 +4086,7 @@ it never could. loft#875.
 
 ### A narrow vector element got the wide store op from the comprehension (2026-08-12)
 
+
 `narrow_elm_set` (`src/parser/vectors.rs`) picks the store op for an element's own width,
 and its contract is that every site BUILDING a vector routes through it — its own doc
 names the failure mode: "a site that misses it emits the wide 8-byte `OpSetInt` into a
@@ -4079,6 +4109,7 @@ clobbers its neighbours leaves the count right and the values wrong, so the guar
 hand-computed sum. loft#869.
 
 ### A text→heap cast was typed as a view of its source (2026-08-12)
+
 
 `OpCastVectorFromText` (`State::db_from_text`) interns text into a store of its OWN, but
 the `as` handler (`src/parser/operators.rs`) grafted the source's deps onto the result.
@@ -4123,6 +4154,7 @@ rename is reached from a site neither covers. loft#866, loft#867.
 
 ### A member access recovered only over an identifier (2026-08-12)
 
+
 `Parser::field`'s Unknown/Never recovery skips the member token so parsing can continue
 past a receiver with no type yet. It consumed an IDENTIFIER only, so a numeric tuple
 index stayed in the stream and the statement parser tripped on it as `Expect token ;` —
@@ -4141,6 +4173,7 @@ Indexing a `Never`-poisoned receiver is now silent too, matching the @P376 recov
 named a second correct line. loft#868.
 
 ### The op-sets are a property of the program, not of each question (2026-08-12)
+
 
 `use_analysis` consults four op-number sets — `projection_ops`, `value_reader_ops`, the
 arg-0 writers (`is_first_arg_write_name`) and the collection `len` methods
@@ -4195,6 +4228,7 @@ Two unrelated reds cleared alongside:
 
 ### The heap ledger is per-linkage-unit, and a store outlives the one that made it (loft#862) (2026-08-12)
 
+
 `make ci` aborted at `exit_codes::moros_glb_cli_end_to_end` with `store_budget.rs:219:
 attempt to add with overflow` — an *add* overflowing a `u64`, which can only happen if
 `TOTAL` is already near `u64::MAX`, which can only happen if a `fetch_sub` already went
@@ -4230,6 +4264,7 @@ than aborting. Both were true of `main` as well — verified on a clean worktree
 
 ### A refusal that returned `u32::MAX` became a syntax error (loft#863) (2026-08-12)
 
+
 `fn sum(v: vector<integer>) -> integer { … }` collides with the stdlib's
 `pub fn sum <T: Addable>` and is correctly refused — but it answered with a bare
 `Cannot redefine 'sum'` and then `Syntax error: unexpected '->'` against a signature that
@@ -4245,6 +4280,7 @@ stands alone, and the winner keeps the real name. The position is printed too, w
 what says `sum` is the stdlib's rather than a duplicate of the reader's own.
 
 ### A tuple element read was a cursor typed as an owner (loft#857, loft#858) (2026-08-12)
+
 
 Two issues, one line. `v[i]` on a `vector<(…)>` unboxes the element through a work-ref
 that holds a DbRef into the vector's store, and `unbox_tuple_from_dbref` minted it with
@@ -4290,6 +4326,7 @@ a cursor left pointing at a moved allocation shows up as wrong values rather tha
 
 ### `τ` → `τ?` was refused with advice that could not work (loft#859) (2026-08-12)
 
+
 Storing `x / g` back into a non-null `g` is refused correctly — a variable divisor can be
 zero, so the quotient is `τ?` (C80). But the message offered `as` and a new variable name,
 and on this shape **both fail**: the cast checker refuses `as τ` for the very reason the
@@ -4308,6 +4345,7 @@ it — it did not run on either backend. It discharges at the division now and r
 
 ### The runtime rebuild retried against the state that motivated it (loft#855) (2026-08-12)
 
+
 `--native`'s post-compile heal rebuilds loft's runtime rlib and retries the compile with
 the SAME `Command` — whose `--extern loft=` / `-L dependency=` args were chosen from the
 rlib that was on disk when the command was built. With no rlib at all they were never
@@ -4324,6 +4362,7 @@ the leak gate did not, so it now does — a gate that reds on its own toolchain 
 readers to ignore it.
 
 ### The ownership oracle is asked once per function, not once per question (loft#854) (2026-08-12)
+
 
 `use_analysis::ownership_of` is documented as *"the ONE fact every own-vs-borrow
 chokepoint READS instead of re-deriving"*. It re-derived it on every read:
@@ -4373,6 +4412,7 @@ per-FUNCTION, not per-literal. Splitting across functions is what helped.
 
 ### A method lookup asks the type's OWN source only to replace a foreign candidate (loft#850 follow-up) (2026-08-11)
 
+
 loft#850 taught `find_fn` that the mangled key `t_<len><Name>_<fn>` spells a type's NAME,
 not a type: two packages may each declare a `Thing`, both register `t_5Thing_go`, and the
 caller's name table holds whichever import landed first. The fix checks each candidate
@@ -4409,6 +4449,7 @@ functions and text methods still resolve from the same scope — a fix that reac
 function by losing the methods would satisfy the subject and break the language.
 
 ### A binding position mints a local, whatever else carries that name (loft#852, loft#756) (2026-08-11)
+
 
 A library's public function occupied the CONSUMER's variable namespace: with
 `use engine_host;` in scope, `turn = 0` was a compile error anywhere in the consuming
@@ -4454,6 +4495,7 @@ resolution change needing a pre-freeze migration (`use lib;` → `use lib::*;`),
 owner-timed rather than folded in here — and C112 is forward-compatible with it.
 
 ### `--html` binds a filesystem, over raw `loft_io` imports (loft#851) (2026-08-11)
+
 
 `--html` bound no filesystem. The loft-side file calls compiled anyway — the
 wasm-bindgen feature that routes them to a JS host is off for this target, so each
@@ -4514,6 +4556,7 @@ linked the previous rlib.
 
 ### `store_release` — a working-set hint, and the per-record shape it replaces is measured dead (@PLN126) (2026-08-11)
 
+
 @PLN126 opened on a measurement rather than an API: *does ordered insertion leave a
 finished record contiguous?* `src/database/spans.rs` answers it by painting every word
 of a built arena with the record that owns it, through `for_each_owned_child` — the same
@@ -4572,6 +4615,7 @@ way), `database::spans::one_tile_footprint_is_the_blocks_it_owns`, and the two `
 measurements. Full workings: `doc/claude/plans/126-record-frontier.md`.
 
 ### A hash's entries move into a chunked arena, and the lookup win it was built for does not exist (@PLN135 arc H, #809) (2026-08-10)
+
 
 `hash<T[k]>` stops claiming one store record per entry. Entries are slots at a fixed
 stride in a chunked arena (`src/arena.rs`) whose bookkeeping lives in the bucket table,
@@ -4649,6 +4693,7 @@ and no longer push the store buffer past its bound size.
 
 ### Three answers that were derived from a proxy instead of the fact (#829, #830, #831) (2026-08-09)
 
+
 Three consumer-filed defects with one shape: a decision read a stand-in for the
 fact it needed, and the stand-in was true when the fact was not.
 
@@ -4709,7 +4754,9 @@ fact it needed, and the stand-in was true when the fact was not.
   `native::a_lazy_read_gives_one_answer_down_rust_and_down_loft`. The sweep now
   takes only the `loft_auto_<pkg>_` family it built; guard
   `::a_foreign_library_in_native_auto_survives_pruning`.
+
 ### The block-tail `expected` push learns a third shape: the interpolation target (#837) (2026-08-10)
+
 
 @PLN124's target is read off the one `⇐` channel, and `parse_block` pushed the block's
 result type into that channel only when the result was an **enum** (@PLN22 phase 1) or a
@@ -4737,6 +4784,7 @@ call SEQUENCE (`lit(t)>int>lit(u)`) rather than the result — a target that onl
 the final string could not tell the hook from ordinary formatting. Both backends.
 
 ### A tuple match arm that consumes nothing is a parse that never ends (#832) (2026-08-10)
+
 
 `parse_tuple_match`'s arm loop could iterate without consuming a token, and then it
 never stopped. `(first, ..)` reached the element loop's literal branch, where
@@ -4793,6 +4841,7 @@ every tuple pattern would satisfy the first alone). Both backends.
 
 ### One SQL boundary closes: a table loft made and a table loft found are the same value (@PLN133) (2026-08-08)
 
+
 @PLN133's gate passes, on **four database backends and both loft backends, with
 byte-identical output in all eight cells**. Write a struct graph through the derived
 `INSERT`, bind a collection lazily to the SAME connection string, traverse it, and
@@ -4842,6 +4891,7 @@ answers the type's empty value. Silent on `--interpret`, a `todo!()` panic on
 `--native`, a SIGSEGV with two generic hops.
 
 ### A buffer that is already a reference is handed over, not wrapped (loft#806) (2026-08-08)
+
 
 `return t.m(i) ?? "x"` SIGSEGV'd the interpreter while `--native` answered correctly.
 
@@ -4894,6 +4944,7 @@ crash" is not the bar — plus the forwarded-buffer control that says the fix di
 simply delete the wrap everywhere.
 
 ### A method's return was adopted by one half of the compiler and freed by the other (loft#810) (2026-08-08)
+
 
 Filed as a SIGSEGV needing a library, a `vector` local, a foreign package's record type
 and a loop-body local — six ingredients, drop any one and it ran. None of them is the
@@ -4959,6 +5010,7 @@ read one cached key.
 
 ### A persisted trie is laid out so it can be paged (@PLN134) (2026-08-08)
 
+
 `trie<T[k]>` ships whole-image only: a prefix query over `routing`'s 220 032-word
 vocabulary is 5.9 MB gzipped, downloaded once. @PLN134 asked whether a paged reader could
 answer it in a few range reads instead, and opened on the measurement that decides it —
@@ -5010,6 +5062,7 @@ Paging a trie is still unwired: `store_bind_lazy` refuses one, and `store_load_k
 reads a `hash`. The layout is the prerequisite that made those worth building.
 
 ### sqlite down the loft path, measured against the Rust one (@PLN133 S9, 2026-08-08)
+
 
 Core drives sqlite in Rust (913 lines across `sql_source.rs` and `sql_query.rs`)
 and the loft library drives four backends behind one `SqlDb` interface. The step
@@ -5067,6 +5120,7 @@ boundary; the driver takes the passing cell (a fresh `derive` per fetch).
 
 ### A lazy driver serves ONE element type (@PLN133 S9 prerequisite, 2026-08-08)
 
+
 S8 let a program declare one `lazy_fetch`, which reads as a limit on how many
 collections may be lazily bound. It was not only that: **nothing checked that the
 driver a miss reached was declared for THAT collection.** S8's shape check was
@@ -5123,6 +5177,7 @@ driver that happened to answer nothing.
 
 ### One connection string, four C libraries (@PLN133 S7, 2026-08-08)
 
+
 Requirement 1 is *one configuration string switches every SQL consumer in the
 process*. S5 delivered the parser; this is the half that hands back a connection,
 and it had no obvious spelling because **loft interfaces are static dispatch** —
@@ -5161,6 +5216,7 @@ output compared.
 
 ### `τ?` is one type however it was handed back (2026-08-08)
 
+
 `Type::is_same` compared `Optional(τ)` with derived `==`, which reaches the inner
 `Deps`. Every dep-ignoring rule below that comparison — a text's deps, an
 integer's range, a vector's element buffer — was therefore unreachable for a
@@ -5179,6 +5235,7 @@ check, both of which wanted the dep-insensitive answer all along. Guarded by
 `tests/scripts/pln133-optional-unify.loft`.
 
 ### A returned text is owned by the return, not borrowed from a buffer (2026-08-08)
+
 
 A branch in tail position delivers each arm into the return accumulator. An arm
 whose text is not a bare variable is first built into a work buffer and handed
@@ -5208,6 +5265,7 @@ already-borrowed variable in `OpCreateStack`, building a reference to a referenc
 Workaround: one intermediate local.
 
 ### `#c` on a wasm target, and under the sandbox (@PLN24 arcs E–F, 2026-08-08)
+
 
 Closes @PLN24. Both remaining arcs plus the plan's last open design question.
 
@@ -5271,6 +5329,7 @@ granted cap rejects, `native_ffi = true` admits and calls, `allow_libs` admits).
 
 ### A module may name the entry's type in an EXPRESSION (loft#801) (2026-08-07)
 
+
 Companion to loft#797, which fixed the LAYOUT half of the same load-order story. This is
 the resolution half.
 
@@ -5326,6 +5385,7 @@ ABSENCE of the invented second error.
 
 ### A field whose type another module declares gets a slot (loft#797) (2026-08-07)
 
+
 A package entry that `use`s a module before declaring the types that module names
 suspends itself at the `use`. The module was then parsed to completion — layout
 included — while every such type was still a `DefType::Unknown` stub. `fill_database`
@@ -5371,6 +5431,7 @@ with, so reading a field back cannot by itself prove the field has storage.
 a trigger no longer exists, so both its tests now assert the ANSWER.
 
 ### Lazy stores — the fault is the collection's MISS path, and a SQL source drives it (2026-08-06)
+
 
 `store_bind_lazy(c, source)` binds a collection to a store image or to
 `sqlite:<path>`; a lookup that misses consults the source, materialises the record
@@ -5423,6 +5484,7 @@ its neighbour's sqlite declaration.
 
 ### The IR store holds a block BY REFERENCE — `Node` shrinks 48 → 28 bytes (2026-08-04)
 
+
 `NdBlock` / `NdLoop` inlined a whole `Block`, and `NdParFor` a whole
 `ParForBody`, so a `Node` record was as wide as its largest variant: 48 bytes,
 paid by every node in the image including a 12-byte `NdVar`. They hold a
@@ -5452,6 +5514,7 @@ conversation with a failing assertion rather than a hunt for silent corruption.
 
 ### `ir_schema_gen.rs` regenerates byte-identically again (2026-08-04)
 
+
 The IR store-schema generator had been unusable, so schema edits were HAND-ADDED
 to the generated file — which is how it drifted out of sync with `ir.loft`
 without anyone seeing. Two independent defects and one wrong declaration:
@@ -5480,6 +5543,7 @@ previous one registration for registration. What changed is that it is
 reproducible, so the next schema edit is a regen rather than a hand-edit.
 
 ### @PLN127 arc D: reflection reports field nullability (2026-08-04)
+
 
 `FieldInfo.nullable` — and the line it draws is the contract decision the plan
 asked for: **reflection reports what a VALUE can be, not what CODE may do to it.**
@@ -5532,6 +5596,7 @@ detailed, it makes it accept rows the loft type would refuse.
 
 ### @PLN127 arcs C + E: `type_named`, and the consumer that used the API as a gate (2026-08-04)
 
+
 `type_named(name) -> TypeInfo?` is reflection with no value in hand — the shape an
 ORM needs when the type name arrives from a config file or a catalogue. No parser
 intercept, because the name is a RUNTIME value; it works on `--native` because the
@@ -5562,6 +5627,7 @@ CARRIES but does not RENDER leaves the @PLN97 layout identity untouched. The
 carrying is cheap; the depositing is the decision.
 
 ### @PLN127 arc B: `type_of(x)` — the declared shape of a type, as data (2026-08-04)
+
 
 loft had VALUE reflection (`{x:j}`, `Type.parse`) and FRAME reflection
 (`stack_trace`) reachable from loft code, and a SCHEMA level only Rust and a
@@ -5610,6 +5676,7 @@ the `TypeInfo` itself serialising.
 
 ### @PLN127 arc A: the JSON form is the only field enumeration loft has, and two shapes broke it (loft#768, loft#769) (2026-08-04)
 
+
 `{x:j}` + `json_parse` is what a generic serialiser, an ORM or a schema walk
 reaches for, and both defects were WHOLE-DOCUMENT failures rather than a wrong
 field — a struct holding either shape could not be read back at all.
@@ -5642,6 +5709,7 @@ an enum inside a vector, the bare form unchanged, null-text as JSON null, and
 absent-versus-empty surviving as themselves.
 
 ### @PLN124 H6/H7: an interpolation hole may be a value of a NAMED type (2026-08-04)
+
 
 `format_hole` read a hole's kind off the value's type and accepted six scalars; a
 struct or enum was a compile error. It now derives the kind from the type's own
@@ -5692,6 +5760,7 @@ process-side registry for sqlite/duckdb). Two findings from that build:
 
 ### `chr(cp)` names the code-point constructor that already worked (loft#748) (2026-08-03)
 
+
 `cp as character` already produced the right character and interpolating it
 produced the right text, so what was missing was the ENTRY POINT, not the
 capability — the same shape as this issue's byte half, where `text_from_bytes`
@@ -5716,6 +5785,7 @@ was live in the agent-facing doc as well as the generated one.
 
 ### A tail expression that is a place read no longer reaches the Return as null (loft#754) (2026-08-03)
 
+
 A function body ending in `w.items[i].bytes` returned an EMPTY vector under
 `--native` and the right one under `--interpret`; putting `return` in front of
 the identical expression fixed it.
@@ -5739,6 +5809,7 @@ over-froze the caller's store.
 
 ### A vector's element WIDTH is part of its type at a call (loft#751) (2026-08-03)
 
+
 `Type::is_equal`'s vector arm compared elements with the scalar-integer rule —
 kind only, ignoring width — so a `vector<integer>` was accepted wherever a
 `vector<u8>` was declared and its 8-byte elements were re-read as bytes. Silent:
@@ -5755,6 +5826,7 @@ the call, the assignment, the field init and the return — all four went throug
 
 ### Compilation is reproducible again (loft#750) (2026-08-03)
 
+
 `store_confinement` answered a `HashMap`, and its caller relocates each confined
 `__vdb`'s null-init; a relocation that cannot reach its block puts the init back
 at body position 0, so visiting several confined stores in Rust's per-process
@@ -5770,6 +5842,7 @@ change did nothing" from "the hash seed moved".
 
 ### The whole File surface works through a `&File` parameter (loft#753) (2026-08-03)
 
+
 `&File` was accepted and then nothing you can do with a `File` worked through it:
 `f#read` reported "Unknown loop attribute '#f'", `f += v` reported "No matching
 operator 'Add' on '&File' and '&File'". A `&File` is `RefVar(Reference(File))` and
@@ -5780,6 +5853,7 @@ THAT code saw. Codegen had always dereferenced such a slot (`OpVarRef` +
 loft#740 shape, two guards deciding one question with one of them peeling.
 
 ### Releasing a bound store hands its file tail back (loft#752) (2026-08-03)
+
 
 loft#710 decided a persisted store's size must follow its content and fixed the
 IMAGE-write path. A store bound with `store_persist_bind` FIRST never goes through
@@ -5798,11 +5872,13 @@ incomplete walk, and a durable `.dmeta` sidecar.
 
 ### A bytecode dump survives a partial schema (2026-08-03)
 
+
 `introspect` aborted mid-dump on a file that failed to compile: a position still
 carried a type id the (partial) schema did not have, and the dump indexed the
 type table raw. It prints the bare id now — a dump must never panic.
 
 ### @PLN124: a format expression hands its parts to the type being built (2026-08-03)
+
 
 `parse_string` gains a target: when the type a format string is assigned to
 defines `lit`, the string lowers to `lit` / `hole_<kind>` method calls on an
@@ -5846,6 +5922,7 @@ before/after is byte-identical.
 
 ### Format hook: a boolean cannot carry a count of hidden work buffers (2026-08-03)
 
+
 `to_text(self, spec)` with a conditional early `return` was an internal compiler
 error — *"Too few parameters on t_5Money_to_text (got 3, need 4)"* — on both
 backends, for every interpolation of the type, and on the released binary.
@@ -5866,6 +5943,7 @@ defined answer where a short call is a crash. Guard:
 `tests/scripts/format-hook-early-return.loft`.
 
 ### `LOFT_UAF_GEN`: a stamp keyed by offset cannot say which store it is about (2026-08-01)
+
 
 Detector (c) reported a use-after-free on 25 of the 548 corpus scripts, all of them
 clean. Any loop calling a struct-returning function drew one — an ordinary shape, so
@@ -5901,6 +5979,7 @@ in a FRAME slot.
 
 ### #722 / #723: an ownership proxy and the carried fact disagreed at the pre-Set free (2026-08-01)
 
+
 `x = f().items[0] ?? Fallback {}` bound a dangling reference into the temporary `f()`
 returned — correct on the first read, zeroes once the store was reused. The `??` is the
 whole difference: it lowers to a value-producing BLOCK, and the temp holding `f()`'s
@@ -5932,6 +6011,7 @@ Interpreter-only: the generated Rust is byte-identical, and `--native` derives t
 borrow correctly in `generation/dispatch.rs`.
 
 ### #687: a mutated text capture's STORAGE is decided per binding, not per function (2026-07-30)
+
 
 #685 fixed mutated scalar PARAMETER captures for every type but one and refused the
 remainder by name: a `text` parameter inside a function that itself returns `text`. Plan-22
@@ -5987,6 +6067,7 @@ the refusal, which was always a placeholder for this issue.
 
 ### #686: a capture of a FORWARD-declared type was mis-typed, then mis-positioned (2026-07-30)
 
+
 A lambda capturing a local whose type came from a struct declared LATER in the file read
 that capture as `text` — `Unknown field text.cells`, on a program with no `text` in it.
 Two faults composed, and the first hid the second.
@@ -6041,6 +6122,7 @@ type is right and the POSITION is still 65535. A value test alone cannot see tha
 positionless field only crashes when the bytes at offset 65535 happen to be fatal.
 
 ### #685: a mutated scalar capture sourced from a PARAMETER corrupted the frame (2026-07-30)
+
 
 Two producers of one fact disagreed. `box_captured_names_for_outer_scalars` gave the
 closure record a 12-byte `__cell_<T>` `DbRef` field for a mutated scalar capture, while
@@ -6112,6 +6194,7 @@ unchanged), `issue_685_text_param_in_text_returning_fn_is_refused`, and
 
 ### #682: the closure-record cascade freed captures the record never owned (2026-07-30)
 
+
 A reference / collection capture is stored in `__closure_N` as a 12-byte `DbRef`
 (P260), and `free_named`'s cascade freed every one of them when the record died.
 That is correct for a store the defining frame OWNED and handed over — `get_free_vars`
@@ -6175,6 +6258,7 @@ the second tick on.
 
 ### #654: jump displacements were 16-bit — a body past 32 KB jumped somewhere arbitrary (2026-07-28)
 
+
 `OpGotoWord` / `OpGotoFalseWord` carried a `const i16` displacement, computed with an
 unchecked `as i16` at every emission site. Past ~32 KB of emitted body the value wrapped
 and the jump landed at an arbitrary address; for a `while true` that meant the body ran
@@ -6215,8 +6299,8 @@ the failure mode was silent fall-through, which a runs-to-completion check would
 called a pass. Verified non-vacuous against the installed pre-change 2026.7.2 binary: all
 five cases produce NO output there (execution falls past the asserts) and pass here.
 
-
 ### @PLN108 "Share read-only parent stores across par workers" — interpreter core (2026-07-17)
+
 
 - A par worker whose captured parent state is read-only (@PLN102 C93) now **BORROWS** the parent
   stores read-only instead of `clone_for_worker`'s per-worker byte-copy, for `run_parallel_discard`
@@ -6231,6 +6315,7 @@ five cases produce NO output there (execution falls past the asserts) and pass h
 
 ### `loft fmt` — parser-driven formatter, written in loft
 
+
 - New `loft fmt [--check|--write] <file…>` (`-` = stdin): a canonical formatter (`tools/fmt/whole.loft`)
   driven through the new host-call API. Default prints; `--write` rewrites in place; `--check` is a
   CI gate (non-zero if unformatted). One canonical style — struct/enum/interface defs + fn bodies
@@ -6239,12 +6324,14 @@ five cases produce NO output there (execution falls past the asserts) and pass h
 
 ### `loft::host` — Rust→loft call API
 
+
 - `Program::from_source(src)` → `prog.call("fn", &[Value::…])` → `Result<Value, LoftError>`: call any
   loft `pub fn` by name with typed args, typed return, errors as a `Result`. Routes through the
   interpreter's stack ABI (`State::execute_host`). Phase 1 supports text / integer / single / boolean
   / void; struct/vector returns are a clean `Unsupported`. Consumed by `loft fmt`.
 
 ### @PLN28 "Better error messages" — closeout (2026-07-07)
+
 
 Phases 5, 6, 1, and 7 landed, completing the plan (0/2/3/4 shipped earlier).
 Commits `a77afaec` (P5+P6), `6e9b6c5f` (P1 resolution), `<this>` (P7).
@@ -6277,6 +6364,7 @@ renderer.
 
 ### #497: reassignment-path adopt-vs-copy — a borrowed call return freed the lender's store (2026-07-04)
 
+
 A struct-returning call REASSIGNED into an owned Reference local took the
 plain-adopt path whenever the callee had no visible Reference/struct-Enum
 param — the old `has_ref_params`-style proxy missed a callee borrowing from a
@@ -6305,6 +6393,7 @@ correct).
 
 ### Nightly registry validation — published packages vs loft@main (2026-07-04)
 
+
 New `registry-validation.yml` workflow (04:30 UTC + `workflow_dispatch`): one
 matrix leg per non-yanked registry package, each installed from the LIVE
 registry exactly as a user gets it and validated against loft built from main
@@ -6318,6 +6407,7 @@ the published `native/Cargo.toml`). See PKG_REGISTRY.md § Nightly toolchain
 validation.
 
 ### `#native` boundary: nullable scalars marshal, C-ABI externs are i64 (2026-07-04)
+
 
 Found via loft-libs-core#14 (`random.rand` declaring the honest `-> integer?`
 contract under the @PLN25 null/dense model). Two related fixes, one invariant:
@@ -6347,6 +6437,7 @@ sentinel layout — every judgment classifies the peeled type* (`Type::base()`).
   (emit-shape); fixture patterns 10/11 (`ext_maybe`, `ext_echo`).
 
 ### @PLN22 — enum-scoped variants, prelude shadowing, `use … as …` aliasing (2026-06-14)
+
 
 All four phases of the namespaces initiative (`loft-lang/plans#22`), built
 chokepoint-first and verified on both backends.
@@ -6385,6 +6476,7 @@ grouped + flat-list-rejected). Resolves INC#34.
 
 ### engine_host: `run_local` — the standalone windowed host (#343) (2026-06-12)
 
+
 A windowed program with no server could not run on the @PLN18 kernel: `run`
 (listener) never returns and has no frame yield; `run_client` bails without a
 connection.  `run_local(tick_interval_us, on_event, on_tick)` is the connector
@@ -6406,6 +6498,7 @@ Driven by the crawler consumer (#343); design note: plan-18 ENGINE_HOST.md
 § Update 2026-06-12.
 
 ### engine_host: `post`, listener `stop()`, listener frame yield (the crawler K2 trio) (2026-06-12)
+
 
 The three flow-back asks from the crawler consumer's K2 (observer slice):
 
@@ -6429,6 +6522,7 @@ Regression (both roles × both backends):
 
 ### rpc debugger: `verified` flag on setBreakpoints + string-form tracepoint log (#342) (2026-06-12)
 
+
 Two silent-failure footguns in `loft debug --rpc`, found while verifying the
 loft-debug skill against the implementation:
 
@@ -6451,6 +6545,7 @@ evaluates null and a condition on it silently never matches.  Regressions:
 
 ### Multiple materialised par loops no longer corrupt each other (#282) (2026-06-06)
 
+
 Several **materialised** par loops (range / `iterator<T>` / text inputs) in one
 function, with **different element types**, silently corrupted an earlier loop:
 its materialised input (`__par_mat`) was read at the wrong stride (e.g. an
@@ -6472,6 +6567,7 @@ collision and no counter advance. Verified on both backends
 (`tests/scripts/22e-par-many-materialise.loft`).
 
 ### `for … par(…)` accepts every iterable source; hash skips its sort (#270) (2026-06-06)
+
 
 The parallel for-clause now runs over **any iterable**, not just a flat vector.
 
@@ -6564,6 +6660,7 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
+
 Relative file paths now resolve against the **program's own directory** (source
 dir under `--interpret`, exe dir under `--native`, host cwd under wasm) instead of
 the launch cwd — so bundled assets (fonts, images) load regardless of where the
@@ -6576,6 +6673,7 @@ both backends + a 13-file corpus migration; the wasip2 print path stays gated on
 #268.  (PR #269.)
 
 ### Coroutine native yield codec — per-shape spray → one layout-driven flatten-walk (@PLAN16) (2026-06-04)
+
 
 The `--native` coroutine value channel had a per-shape codec: a hand-written
 producer+consumer template per yield shape, gated on a runtime tag.  New composite
@@ -6592,6 +6690,7 @@ excluded cell (a text element's `&str` repr needs a store intern).  @PLAN16 clos
 into [Design Protocol 1](DESIGN_PROTOCOL.md).  (PR #269.)
 
 ### @PLN11 G2 Track 1 — program cache default-on + binary-mtime invalidation (2026-06-04)
+
 
 `src/cache.rs`.  `cache::program_cache_enabled()` now returns **true by
 default** for real (non-Cargo) invocations — the whole-program startup cache
@@ -6615,6 +6714,7 @@ Full design + E1/E2/E3 arc: `doc/claude/plans/11-data-as-store/README.md`.
 Benchmark detail: `doc/claude/PERFORMANCE.md § Startup cache`.  Commit `77da481`.
 
 ### @PLN11 G2 — `read_data` breakdown: allocation-bound, E2 is the only lever (2026-06-04)
+
 
 `src/ir_read.rs`.  `bench_read_data_breakdown` (`#[ignore]`; run with
 `cargo test --release --lib bench_read_data_breakdown -- --ignored --nocapture`)
@@ -6642,6 +6742,7 @@ count).  Commit `41835b2`.
 
 ### @PLN11 G2 M1 — `Definition` read-accessor seam completed codebase-wide (2026-06-04)
 
+
 `src/data.rs`, `src/state/`, `src/generation/`, `src/parser/`, `src/compile.rs`.
 All immutable `Definition` field reads across the four subsystems now go through
 accessor methods (`name()`, `native()`, `source()`, `position()`, `attributes()`,
@@ -6662,6 +6763,7 @@ precondition for swapping the `Definition` backing representation to
 store-based reads per subsystem (E2 arc in @PLN11).
 
 ### Nested-vector layout — four corruption/crash clusters fixed (plan-58) (2026-06-03)
+
 
 Closed the `vector<vector<…>>` stability class across depth × element-type ×
 context (plan-58, now `finished/`).  `vector<vector<…>>` is load-bearing (map
@@ -6702,6 +6804,7 @@ corruption/leak) — accepted; a future stride guard (sanitizer) is noted.
 
 ### `loft-libs-core` first all-green chunk under strict CI (2026-05-30)
 
+
 Landed `loft-lang/loft-libs-core` PR #2 (omnibus): canonical
 `library-ci.yml` refresh, `cargo build --release --lib --bin loft`
 infra fix (closes the `mmap_storage` blocker that broke every
@@ -6723,6 +6826,7 @@ genuine override).  Remaining chunks: `loft-libs-net`,
 `loft-libs-graphics`, plus the registry `pr-validate.yml`.
 
 ### @P321c native dimension closed + 8 harvested fixes (2026-05-26)
+
 
 Dogfood pass against the `../personal/training` Loft port surfaced and fixed a
 batch of native-codegen, interpreter, tooling, and library bugs.
@@ -6785,6 +6889,7 @@ diagnosis recorded, P214-class).
 
 ### Open-bug design pass — 4 fixes + 5 grounded designs (2026-05-26)
 
+
 A focused pass over the remaining open P-issues: each was carried to a
 code-grounded fix design, then implemented + verified where the dev
 environment allowed.
@@ -6827,6 +6932,7 @@ the 53-cdylib gate — not blind-patched).
 
 ### @P349 — browser WASM playground: refresh bundle + JSON + file I/O (2026-05-26)
 
+
 Refreshing the `doc/pkg` browser bundle (stale since 2026-05-18) against the
 `../personal/training` port's `.field()` routine syntax surfaced a chain of
 three gaps that left the gallery/playground unable to run file-reading or JSON
@@ -6861,6 +6967,7 @@ program bails before drawing and never reaches the render path.  See the @P337
 correction below and @P351.)
 
 ### @P337 — Brick Buster browser bundle: corrected diagnosis + pipeline hardening (2026-05-26)
+
 
 @P337 ("Brick Buster broken on the site / page times out") had been recorded as
 a `vector<float>` length divergence on wasm32 (`panic_bounds_check` in
@@ -6915,6 +7022,7 @@ coverage gap that let this ship + be misdiagnosed).
 
 ### Native codegen — eliminated the `output_call_inner` match (2026-05-22)
 
+
 `src/generation/dispatch.rs::output_call_inner` no longer contains a monolithic
 `match` of per-Op emission arms — it is now just a registry-first guard
 (`emit_op`) plus the template/user-fn fallback.  The 14 remaining arms were
@@ -6928,6 +7036,7 @@ native emission matches the deleted arms byte-for-byte.  The
 `"Op…" =>` match arm is ever re-introduced.
 
 ### @P321 native library gate — 16/17 packages green (2026-05-23)
+
 
 Seven native-codegen root causes (@P321a–g) that blocked `tests/native.rs::native_library_suite` from reaching
 full green.  Splits were fixed and un-skipped independently; the gate now covers 16/17 packages.  Only `imaging`
@@ -6991,6 +7100,7 @@ Full diagnosis in PROBLEMS.md @P321c.  `imaging` stays in `LIB_PKGS_NATIVE_SKIP`
 
 ### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
 
+
 Two coordinated codegen + parser fixes for native-only crashes
 that surfaced when @PLN42 viewer added the
 `render_md_table_row` / `parse_md_row` / `find_table_headers`
@@ -7031,6 +7141,7 @@ and `tests/wrap.rs`).  `make view` reverted to `--interpret`
 default in 5dae80cc, restored to `--native` once @P274 closed.
 
 ### Plan-35 (branch-review viewer) closed 2026-05-14
+
 
 Plan-35 ran 2026-05-13 → 2026-05-14.  Goal: a browser-accessible
 doc + code review surface for the current loft branch, served by a
@@ -7110,6 +7221,7 @@ loft-script binary against the host loft binary as a frozen pair.
 
 ### Plan-37 phase 04b — viewer per-doc sidebar shipped 2026-05-14
 
+
 `tools/viewer/src/main.loft` gains two sections at the
 bottom of every `/file/<path>` page:
 
@@ -7150,6 +7262,7 @@ native" symptom.
 ---
 
 ### Plan-37 phase 09 follow-up — broken-link cleanup shipped 2026-05-14
+
 
 The 61 broken markdown links surfaced by phase 09's
 `broken_links` bucket are all cleaned up.  CI gate enabled
@@ -7204,6 +7317,7 @@ mark this closed.
 
 ### Plan-37 phase 06 — retroactive `@`-tagging shipped 2026-05-14
 
+
 `tools/indexer/migrate.py` rewrites bare-name tracker
 references to `@`-prefixed form across `doc/claude/**/*.md`:
 
@@ -7249,6 +7363,7 @@ closeout" — the closeout half is DEFERRED to after phases
 ---
 
 ### Plan-37 phase 09 — backlinks (links bucket) shipped 2026-05-14
+
 
 Indexer now extracts every `[text](path.md)` markdown link <!--noindex-->
 across the repo, resolves the target relative to the source
@@ -7304,6 +7419,7 @@ bucket is detection-only for now.
 ---
 
 ### Plan-22 (mutable closures) closed 2026-05-13
+
 
 Plan-22 ran 2026-05-10 → 2026-05-13.  Goal: make closures whose
 bodies mutate captures work intuitively without user-visible
@@ -7371,6 +7487,7 @@ Plan moved to `plans/finished/22-mutable-closures/`.
 
 ### Plan-15 (closure validation matrix) closed 2026-05-12
 
+
 Plan-15 ran in one session 2026-05-12 — promoted to current,
 shipped all 6 phases, and closed.  Final matrix: 22 cells in
 `tests/closure_matrix.rs` across 6 capture shapes (C0
@@ -7412,6 +7529,7 @@ and @P227 (2026-05-05 — text-returning fn-ref calls).
 Active plans now: 2 (07-error-messages + 22-mutable-closures).
 
 ### Plan-14 (tuple validation matrix) closed 2026-05-11
+
 
 Plan-14 ran 2026-04-30 → 2026-05-11.  Final matrix: 40 cells
 across 5 element types (E1 scalars, E1n integer-not-null, E2
@@ -7468,6 +7586,7 @@ goals + Deferred work updated).  Plan moved to
 `finished/14-tuple-validation/`.
 
 ### Plan-06 (typed-par redesign) closed 2026-05-09
+
 
 Plan-06 ARC ran from 2026-04-30 to 2026-05-09.  All 11 sub-steps
 shipped or formally deferred with rationale.
@@ -7541,6 +7660,7 @@ change).
 
 ### @PLAN09 phase 07: close @P205 — bounded-generic text return scratch routing
 
+
 Closes @P205 (1 of 4 native sub-failures retired).  The bug:
 bounded-generic dispatch `fn f<T: Trait>(x: T) -> text` produced
 native code that emitted `Str::new(&local_String)` whose pointer
@@ -7610,6 +7730,7 @@ Regression tests in `tests/codegen_emitter.rs`:
 Commit `6151231`.
 
 ### @PLAN09 phase 06: close @P202 — n_parallel_queue family in native
+
 
 Closes @P202 (3 of 6 native sub-failures retired: 19_threading,
 22_threading, 40_par_ref_return).  Native compilation of
@@ -7683,6 +7804,7 @@ Commit `8cf0676`.
 
 ### @PLAN09 phase 00a: introspection findings + downstream updates
 
+
 Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
 introspection retroactively covers the simplification cluster.
 
@@ -7750,6 +7872,7 @@ Memory entries saved (durable beyond @PLAN09):
 
 ### @PLAN09 CI cleanup: fmt + clippy + no-default-features green
 
+
 Pre-existing breakage that accumulated across phases 00-04:
 
 - `cargo fmt --check` rejected the hand-aligned `RuntimeFn` table
@@ -7777,6 +7900,7 @@ baselines preserved (codegen_emitter 10/10, threading 43/43,
 threading_chars 35/35, issues 540/540).
 
 ### @PLAN09 phase 09: parallel runtime consolidation
+
 
 `src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
 fns (scalar / text / heap-ref) collapsed to thin wrappers around a
@@ -7811,6 +7935,7 @@ threading 43/43, threading_chars 35/35, issues 540/540, native
 19_threading / 20_binary / 22_threading / 40_par_ref_return).
 
 ### ARC.md A2: unbounded per-thread slot dispenser (8d.3 cap retired)
+
 
 Replaces the spine-8d.3 fixed `SLOTS_PER_THREAD = 16` per-worker
 reservation with a shared `Arc<AtomicU16>` dispenser.  Workers that
@@ -7875,6 +8000,7 @@ ARC.md A2 status flipped to DONE.
 
 ### P196: tuple-of-fn-ref native codegen — `(u32, DbRef) as i32`
 
+
 Fixes E0605 (`non-primitive cast`) + E0308 in native codegen when a
 struct field of type `(fn(...) -> ..., int)` is assigned from a Var
 or function-call source rather than a literal `(name, n)` tuple.
@@ -7918,6 +8044,7 @@ P196 — closes independently of the 4d.C closure-storage redesign.
 
 ### P195: chained tuple-index lex (`n.v.0.0`)
 
+
 Fixes the lexer's greedy `<digit>.<digit>` → float read when the
 previous emitted token was `.` (field access).  Before: `n.v.0.0`
 lexed as `n`, `.`, `v`, `.`, `Float(0.0)` — the parser then saw a
@@ -7951,6 +8078,7 @@ expression-position float, mixed expression, range — using a new
 `cont()` and would not catch context-aware lexing).
 
 ### `--show-types --trace` per-expression type tape
+
 
 Adds a per-expression tape to the `--show-types` introspection
 section.  Where the existing variable-level table catches dep loss
@@ -7996,6 +8124,7 @@ Tests: `introspect_show_types_trace_renders_per_expression` in
 
 ### Native-codegen source map + introspection `--diff`
 
+
 Two developer-velocity wins, both targeting the long tail of
 debugging time:
 
@@ -8016,6 +8145,7 @@ Tests: `native_emit_includes_loft_source_map`,
 
 ### P194 — tuple-typed struct field reassignment
 
+
 `p.v = (1, 2)` (where `v` is a tuple-typed struct field) used to
 fail with `Tuple destructuring requires plain variable names`.
 Root cause: `get_val::Type::Tuple` returns `Value::Tuple([reads])`
@@ -8035,6 +8165,7 @@ Tests: `p194_tuple_field_reassign`,
 `p194_tuple_field_reassign_twice` in `tests/issues.rs`.
 
 ### P197 — returning `text` from tuple struct field corrupts memory
+
 
 Surfaced while regression-testing P194.  Returning a `text` element
 extracted from a tuple struct field returned garbage characters
@@ -8064,6 +8195,7 @@ Tests: `p197_text_returned_from_tuple_field`,
 
 ### Plan-06 phase 4d.C step 2 — `Parts::DbRef` storage shape + new opcodes
 
+
 Foundation pieces for closure storage in fn-ref struct fields and
 tuple elements.  No user-visible behaviour change yet — the
 parser still emits the truncated 4-byte `OpSetInt4` path, which
@@ -8091,6 +8223,7 @@ phase 4d.C step 4 will replace with the new opcodes.
   `cargo test regen_fill_rs -- --ignored`.
 
 ### Slot allocator & frame layout (plans 04 + 05)
+
 
 Two companion plans closed together; user-visible only as the
 absence of a recurring heap-corruption class (P178 / P185).
@@ -8137,6 +8270,7 @@ absence of a recurring heap-corruption class (P178 / P185).
 
 ### Integer → i64 migration (Phase 2c)
 
+
 `integer` is now 8 bytes end-to-end — on the stack, in struct
 fields, in runtime arithmetic — across the interpreter, native
 codegen, and WASM backends.  Arithmetic that used to silently
@@ -8181,6 +8315,7 @@ the `Op*Long` family dedup (34 opcodes reclaimed across rounds
 
 ### JSON support
 
+
 Loft now has built-in JSON parsing and generation.
 
 **Parsing** — `json_parse(text)` turns a JSON string into a typed
@@ -8213,6 +8348,7 @@ a struct from a JsonValue. Type mismatches are reported via
 
 ### Plan-06 phases 4c + 4d.A — typed parallel-for dispatch
 
+
 Two coupled phases of @PLAN06 ("simple typed `par`: everything is a
 store") landed.  User-visible only as one extra par canary closing
 (`tests/threading_chars.rs::par_tuple_input_int_int`); structurally
@@ -8240,6 +8376,7 @@ the sentinel-encoded `primitive_first_arg_slot_size` channel.
 
 ### Local-var keyed collection iteration (P190)
 
+
 `for x in <local sorted/hash/index>` used to panic at
 `src/state/codegen.rs:1689` with "Too few parameters on
 OpIterate (got 2, need 6)".  P188 enabled local-var keyed
@@ -8261,6 +8398,7 @@ Note: this unblocked the iteration codepath; @PLAN06 phase
 the next entry).
 
 ### Plan-06 phase 4d.B sorted — par-over-keyed-collection materialise
+
 
 `for s in sorted_items par(...)` now compiles end-to-end and
 closes the `par_sorted_input_t4` canary (1 more canary
@@ -8299,6 +8437,7 @@ Regression test:
 
 ### P191 — `index<T[key]>` bookkeeping field size mismatch
 
+
 `database.index` appended `#left_N` / `#right_N` bookkeeping
 fields declared as 8-byte `integer`, but `tree::add` writes
 those tree pointers via `set_i32_raw` at hardcoded offsets
@@ -8327,6 +8466,7 @@ Regression test:
 
 ### P192 — `len()` for `hash<T[key]>` and `index<T[key]>`
 
+
 Only `vector` and `sorted` had `len()` overloads.  Added
 two new runtime helpers — `hash::count` (walks the bucket
 array, O(room)) and `tree::count` (walks via `first` +
@@ -8339,6 +8479,7 @@ Regression tests:
 `p192_len_index_struct_field`.
 
 ### P188 follow-up — `field += elem` for keyed-collection fields
+
 
 Two distinct bugs broke `db.x += Foo{...}` for hash / sorted /
 index / spacial fields and local-vars; vector-literal init
@@ -8385,6 +8526,7 @@ iteration sum).
 
 ### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, clean diagnostic emitted
 
+
 A 2026-04-27 spike landed two contained changes that flip the
 canary's failure mode from "infinite-loop in parser, requires
 `pkill`" to "fast clean diagnostic, 0.02 s test failure".
@@ -8421,6 +8563,7 @@ real storage support for `vector<fn-ref>`, which is its own
 the full design (Steps A–E).
 
 ### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, runtime cascade exposed
+
 
 A 2026-04-27 spike landed three contained changes that flip the
 canary's failure mode from "infinite-loop in parser, requires
@@ -8481,6 +8624,7 @@ the new failure mode (SIGSEGV instead of hang).
 
 ### Plan-06 phase 4d.A.2 — investigation: vec-of-fn-refs is bigger than estimated
 
+
 A 2026-04-27 spike attempted to close `par_vec_of_fns_input_t4`
 by un-ignoring the canary and observing the failure.  Result:
 **the worker infinite-loops** rather than failing cleanly.
@@ -8525,6 +8669,7 @@ terminate."
 
 ### Plan-06 phase 3b.1 — extract shared `merge_batches` helper
 
+
 Five sites across `src/parallel.rs` and `src/codegen_runtime.rs`
 inlined the same 5-line loop after every `parallel_workers`
 call: pre-fill a `Vec<R>` with a default value, then walk each
@@ -8546,6 +8691,7 @@ its `i64::MIN` null sentinel and the text variant can document
 the empty-String seed explicitly.
 
 ### Plan-06 phase 3b.1 — extract shared par result store helpers
+
 
 Three native par fns (`n_parallel_for_native`,
 `n_parallel_for_text_native`, `n_parallel_for_ref_native`)
@@ -8572,6 +8718,7 @@ trait).
 
 ### Plan-06 phase 1 — clippy gate restored on threading build
 
+
 `cargo clippy --release --all-targets` was failing on the
 default (threading) build with two `not_unsafe_ptr_arg_deref`
 errors:
@@ -8597,6 +8744,7 @@ errors:
 `make ci`'s clippy step is green again on the default build.
 
 ### P189b / P189d — `vector<(T1, T2, …)>` access closed end-to-end
+
 
 Two follow-ups to P189 / P189c that closed the remaining
 read-side gaps for tuple-element vectors.
@@ -8673,6 +8821,7 @@ half).
 
 ### P193 — eager init for `local: keyed_collection<T> = []`
 
+
 `gen_set_first_keyed_null` (P188's local-var alloc) fired
 lazily on first WRITE.  When that first write was inside a
 `for` loop body, the OpInitRef + OpDatabase init bytecode
@@ -8705,6 +8854,7 @@ hash) and read-before-write.
 
 ### Plan-06 phase 4d.B hash + index — closed by P191/P192/P188
 
+
 `par_hash_input_t4` and `par_index_input_t4` un-`#[ignore]`d
 and pass once the underlying P191/P188 fixes landed: the same
 4d.B materialise-then-route desugar that closed
@@ -8715,6 +8865,7 @@ phase 4 work: 4a (typed-arity declaration), 4b (5-arg form
 retirement), 4e (caller-supplied destination via ref_return).
 
 ### Vector-of-tuple support (P189 / P189c)
+
 
 `vector<(T1, T2, …)>` now parses, constructs, and serves its
 elements correctly via the par worker path.  Previously the type
@@ -8743,6 +8894,7 @@ garbage — three layers fixed jointly:
 
 ### Local-var keyed collections (P188)
 
+
 `sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`, and
 `spacial<T[key]>` now work as locals; previously they were only
 usable as struct fields.  Patterns like
@@ -8766,6 +8918,7 @@ collection in place via `record_new`'s
 
 ### Crash fixes
 
+
 Three crashes that affected programs using `match` on complex types
 are now fixed:
 
@@ -8783,6 +8936,7 @@ are now fixed:
 
 ### New CLI flag: `--dump`
 
+
 `loft --dump file.loft` compiles your program and prints the
 internal bytecode to stderr — without running it. Useful for
 debugging compiler issues. Combine with `LOFT_LOG` for extra
@@ -8794,6 +8948,7 @@ LOFT_LOG=variables loft --dump file.loft   # include variable table
 
 ### WASM / browser improvements
 
+
 - The `--html` export now correctly compiles programs that call
   text-returning methods (like `kind()`, `to_json()`, `as_text()`).
   Previously this produced a type error during WASM compilation.
@@ -8802,12 +8957,14 @@ LOFT_LOG=variables loft --dump file.loft   # include variable table
 
 ### Brick Buster game
 
+
 The built-in arcade game got a polish pass: heart-shaped lives,
 hand-designed levels 1-5, three original chiptune music tracks,
 balloon powerups, screen shake effects, fire-ball trails, high
 score persistence, and faster ball/paddle speed.
 
 ### Other improvements
+
 
 - **Crash reporter** — when the interpreter hits a fatal error, it
   now prints which function and instruction caused the crash before
@@ -8822,6 +8979,7 @@ score persistence, and faster ball/paddle speed.
   `--wait` for the summary. Stale caches are cleaned automatically.
 
 ### Native Moros editor
+
 
 A native OpenGL editor for the Moros hex RPG now ships as a standalone
 application, independent of the browser shell:
@@ -8846,6 +9004,7 @@ items (FPS counter, resize handling, avatar, hex-pick highlight) roll into
 follow-up work and are not blockers.
 
 ### Brick Buster 0.8.4 polish pass
+
 
 Gameplay feel:
 
@@ -8922,6 +9081,7 @@ Infrastructure:
 
 ### WebGL graphics gallery
 
+
 - **GL6.1** — Graphics library .loft files embedded in WASM binary; `use graphics;`
   resolves under WASM without a native cdylib.
 - **GL6.2–GL6.3** — WebGL2 bridge (`wasm_gl.rs`): 43 native gl_* functions read
@@ -8934,6 +9094,7 @@ Infrastructure:
 
 ### Playground improvements
 
+
 - Assert results rendered with checkmarks/crosses and pass/fail summary.
 - Examples split into categorized groups (Getting Started, Basics, Collections,
   Types & Patterns, Advanced, System, Performance) with `<optgroup>`.
@@ -8945,11 +9106,13 @@ Infrastructure:
 
 ### Game protocol (Sprint 17)
 
+
 - **SRV.P** — `game_protocol` package: `MsgType` enum, `WsMessage`,
   `GameEnvelope` structs, and message constructors (`msg_ping`, `msg_pong`,
   `msg_chat`, `msg_input`, `msg_state`, `msg_error`).
 
 ### Parallel threading
+
 
 - **A15** — `parallel {}` now uses real OS threads via `std::thread::scope`.
   Each arm runs in its own thread with a cloned `WorkerStores` snapshot.
@@ -8957,12 +9120,14 @@ Infrastructure:
 
 ### HTTP server (Sprint 16)
 
+
 - **SRV.1** — Blocking HTTP server with polling model. Loft controls the
   request loop via I13 iterator protocol (`for req in srv`). Native cdylib
   handles TCP accept/parse/respond using `std::net` only — no tokio/hyper.
   Functions: `listen`, `next` (iterator), `respond`, `close`.
 
 ### Graphics native (Sprint 15)
+
 
 - **GL5.1** — Window creation + event loop via `glutin` + `winit` with
   `pump_app_events` polling model. Thread-local state via `RefCell`.
@@ -8975,6 +9140,7 @@ Infrastructure:
   in the interpreter.
 
 ### HTTP client (Sprints 13–14)
+
 
 - **H4.1** — `HttpResponse` struct with `status: integer`, `body: text`, and
   `ok()` method in the `web` package (`lib/web/`).
@@ -8990,6 +9156,7 @@ Infrastructure:
 
 ### Native codegen for packages (Sprint 11)
 
+
 - **PKG.4** — Native codegen `--extern`: packages with `[native.functions]` in
   `loft.toml` now emit direct Rust calls in `--native` mode.  The build pipeline
   passes `--extern` flags for pre-compiled native rlibs.
@@ -8997,6 +9164,7 @@ Infrastructure:
   from `prebuilt/wasm32-wasip2/` or `native/target/wasm32-wasip2/release/`.
 
 ### Language ergonomics (Sprint 10)
+
 
 - **C55** — Type aliases: `type Handler = fn(Request) -> Response` — compile-time
   substitution for function and tuple types in `type` declarations.
@@ -9010,6 +9178,7 @@ Infrastructure:
   used in a `for x in val` loop. Null return from `next` terminates the loop.
 
 ### Graphics library (pure-loft package)
+
 
 - **GL0** — Package scaffolding: `lib/graphics/` with `loft.toml` manifest.
 - **GL1** — `Canvas` struct with `canvas()`, `get_pixel()`, `set_pixel()`, `clear()`,
@@ -9043,6 +9212,7 @@ Infrastructure:
 
 ### Bug fixes
 
+
 - **C54** — `**` exponentiation operator now works, mapped to `pow()`.
 - **P104** — Test runner no longer picks up library functions as tests;
   only functions defined in the test file are executed.
@@ -9050,6 +9220,7 @@ Infrastructure:
   of crashing in codegen with a confusing type mismatch.
 
 ### Package registry (Sprint 9)
+
 
 - **REG.1** — `src/registry.rs`: registry file parser with version resolution,
   package classification (yanked/deprecated/outdated/current/unknown), and
@@ -9065,6 +9236,7 @@ Infrastructure:
 
 ### Package infrastructure
 
+
 - **PKG.1** — Native stub registration: `#native` annotations generate stubs replaced
   at load time by real shared-library implementations.
 - **PKG.2** — `loft install` command for local package installation to `~/.loft/lib/`.
@@ -9077,6 +9249,61 @@ Infrastructure:
 - Manifest parser: `name`, `version`, `loft` version constraint, `native` stem fields.
 
 ---
+
+### A package's manifest chose where the package landed on disk (2026-08-20)
+
+
+`loft install <dir>` files a package under `~/.loft/lib/<name>`, and since the name became
+the MANIFEST's rather than the checkout directory's, nothing checked it before the join. A
+manifest is data — on a fetched package, data somebody else wrote — so `name = "../../escaped"`
+wrote the whole package tree to `$HOME/escaped/`, outside `~/.loft/lib` entirely. Verified
+against the pre-fix binary, which is what makes the regression guard non-vacuous.
+
+The rule already existed and was never asked here: `loft new` has enforced "lowercase ascii +
+digits + underscore" since it was written, stated inline at the site where a package is
+CREATED. It now lives in `libscan::is_valid_package_name` and three sites read it — `loft new`,
+the install path, and the prebuilt-cdylib path, which takes `[library] native` from a manifest
+that came off the network and uses it as a filename. Measured first: every package name and
+every `native` stem in this tree passes, so no existing package is refused.
+
+### An `i32` local kept a value an `i32` cannot hold (2026-08-20)
+
+
+`guard_narrow_alias_local` clamps a compound assignment to a narrow-alias local's own range and
+names five aliases it covers. It reached four. `is_signed32_template()` reads like a test for
+the plain `integer` type, but `integer` carries no `forced_size` and has already left by that
+line — so the only spec whose range IS the signed-32 range is the `i32` alias, and the clause
+could only ever exclude the one thing the comment above it promised to include. `l: i32 =
+2147483647; l += 1` kept 2147483648 on both backends where the same write to a `u8` clamped.
+Now clamps to `-2147483647` (an `i32`'s minimum; `i32::MIN` is the null sentinel).
+
+An `i32` FIELD still answers `null` where the narrower four answer their minimum — both say the
+write did not fit, and making them identical means reclaiming `i32::MIN`, which the roadmap
+already carries as deferred.
+
+### Generics: five collapses in the deferred-marker and tuple paths (2026-08-20)
+
+
+A template stamps a marker where a decision needs `T` and cannot have it yet, and
+`rewrite_generic_type_defaults` answers those markers once `T` is concrete. That walk must be
+TOTAL; it enumerated its own carriers and listed ten of the seventeen `Value` variants that
+hold children. `Tuple` was among the seven missing, so `t = (a?, 1)` read the placeholder's
+bytes as data — silently at `T = integer`, as a SIGSEGV in `OpFreeText` at `T = text`, and as an
+E0308 that would not compile on `--native`. Recursion now delegates to
+`Value::for_each_child_mut`.
+
+Four more of the same shape landed with it: `type_mentions_tv` folded onto
+`Type::contains_def` (which already answers it through the `Type::for_each_child` keystone, two
+hundred lines from a call to it); the synthetic `__nullable<S>` is no longer minted for a
+template's `T`, an attribute-less placeholder struct that satisfied every eligibility condition
+and refused `-> (T?, integer)` on both backends; the tuple emitter's owned-text decision is
+split from the literal that merely passes through it; and `tuple_has_text_leaf` peels
+`Optional`, with the return path's inline copy of it now reading the shared predicate. That last
+one was never a generic problem — a PLAIN `fn ret() -> (text?, integer)` would not compile on
+`--native` before it.
+
+Each proven under both gates: byte-identical IR and native Rust for the paths not being changed
+(six reference corpora), and twin-compared matrices for the ones that were.
 
 ## [0.8.3] — 2026-04-03
 
