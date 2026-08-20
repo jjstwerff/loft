@@ -456,17 +456,30 @@ depth, and none of them recurses through the keystone that already exists —
 that knows which `Type` variants carry child types … exhaustive on purpose — a new
 variant forces a decision here and every walker inherits it."*
 
-| Spelling | loft2 location | Depth it sees | Sites |
+| Spelling | loft2 location | Depth it sees | Verdict when measured |
 |---|---|---|---|
-| `is_type_var_placeholder(d_nr)` | `src/data.rs:6309` | none — takes a def-nr, walks no type | 9 raw, each composing its own peel |
-| `is_type_var_operand(tp)` | `src/parser/operators.rs:511` | `tp.base()` — peels `Optional`, stops | 2 |
-| `type_mentions_tv(t, tv_nr)` | `src/parser/mod.rs:5240` | recursive, but ends `_ => false` | 3 |
+| `is_type_var_placeholder(d_nr)` | `src/data.rs:6309` | none — takes a def-nr, walks no type | the ATOM the other two are built from; correct |
+| `is_type_var_operand(tp)` | `src/parser/operators.rs:511` | `tp.base()` — peels `Optional`, stops | **correct by design, not a drift** |
+| `type_mentions_tv(t, tv_nr)` | `src/parser/mod.rs:5240` | recursive, ended `_ => false` | **the real duplicate — COLLAPSED** |
 
-The deepest of the three still misses four child-bearing variants the keystone
-names: `Iterator`, `Function`, `RefVar`, `Rewritten`. The middle one additionally
-misses `Tuple` and `Vector`. So a type that plainly mentions `T` can answer *"not a
-type variable"*, and the decision keyed on that answer is then made against the
-placeholder.
+⚠ **This table first called all three drifted spellings of one question. Two of those
+calls were wrong, and measuring is what showed it.** The correction is kept visible
+rather than quietly rewritten, because the mistake is the instructive part: *three
+predicates that look alike are not automatically three copies of one fact.* Deciding
+by reading them was not enough; each had to be run.
+
+- `type_mentions_tv` WAS a duplicate. `Type::contains_def` already answers the same
+  question through `any_node` over the `Type::for_each_child` keystone, and sat two
+  hundred lines from a call to it. The hand-rolled version knew Vector, Optional and
+  Tuple and answered `_ => false` for `Iterator`, `Function`, `RefVar`, `Rewritten`
+  and the keyed collections. Now folded onto `contains_def`, with an eight-shape
+  generic-return corpus byte-identical before and after.
+- `is_type_var_operand` is **not** one. It asks whether the OPERAND ITSELF is a type
+  variable, and a container of `T` is a container whatever `T` turns out to be —
+  measured on both backends, `vector<T> == null`, `vector<T>? == null` and
+  `T? == null` all answer correctly inside a template today. Deepening it would defer
+  decisions that are already decidable. The `Optional` peel is exactly the right depth.
+- `is_type_var_placeholder` is the atom the other two are built from, not a walk.
 
 **Why this manufactures bugs.** A template's `T` is an attribute-less placeholder
 STRUCT. Any parse-time decision keyed on `τ` — which null sentinel to write, which
@@ -523,8 +536,13 @@ inert, but it was a hole when the first four rows were written.
 
 `substitute_type` has both a `Tuple` arm and an `Optional` arm (each retrofitted
 after its own bug — read their comments), so the gap is the COMPOSITION, not either
-arm. Confirmed on `tuxedo-post-973`; `type_mentions_tv` and `is_type_var_operand`
-are byte-identical on `origin/main`, so the structure is not branch-local.
+arm.
+
+⚠ **This doc previously said the predicate collapse would fix this. It does not** —
+measured identical before and after the collapse. The refusal is the `__nullable<T>`
+SYNTHETIC DEF never being re-minted for a tuple ELEMENT: the same-shaped defect one
+layer down (a fact re-derived per position) through a different mechanism, and still
+open.
 
 **Deliberately not filed.** It is here as the probe that proves the duplicate is
 load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
