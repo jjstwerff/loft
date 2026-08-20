@@ -3079,16 +3079,22 @@ impl Parser {
                 // bound that is simply too wide.  `i32::MIN` itself is reserved as the
                 // null sentinel, so the lowest bound a declaration may name is
                 // `i32::MIN + 1`.
+                // Pass 2 only: a pass-1 diagnostic aborts before the second pass runs, so
+                // reporting there would hide every other error in the file behind this
+                // one.  The bound is read (and truncated) on both passes either way, and
+                // pass 2 is where the program stops.
                 let sign = if min_neg { "-" } else { "" };
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "lower bound {sign}{nr} is outside the range `limit(...)` can carry \
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "lower bound {sign}{nr} is outside the range `limit(...)` can carry \
                      ({} to {}); declare it plain `integer`, which holds the full 64-bit \
                      range, and check the bound in code",
-                    i32::MIN + 1,
-                    i32::MAX
-                );
+                        i32::MIN + 1,
+                        i32::MAX
+                    );
+                }
             }
             self.lexer.token(",");
             // C54.A incremental 2a — accept both Integer and Long literals.
@@ -3099,7 +3105,7 @@ impl Parser {
             } else if let Some(nr) = self.lexer.has_long() {
                 if let Ok(fits) = u32::try_from(nr) {
                     *max = fits;
-                } else {
+                } else if !self.first_pass {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
