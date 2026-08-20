@@ -343,3 +343,49 @@ fn a_c_binding_is_gated_by_native_ffi_not_by_a_capability_grant() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// loft#1042 — a designation naming a profile that has no `[profile.<name>]`
+/// section is reported as UNDEFINED, not as a profile whose grants happen to be
+/// empty.
+///
+/// The two ask for opposite next moves: an empty grant list says *add grants*,
+/// and adding them where the docs implied (`[sandbox]`) produces the identical
+/// message a second time, because `allow_libs` is only read under a profile
+/// section. That second round is what this diagnostic exists to prevent.
+#[test]
+fn an_undefined_profile_is_named_as_undefined() {
+    // `ui` is designated and never defined — the shape SANDBOX.md's example
+    // invited before it carried its `[profile.…]` half.
+    let policy = "[sandbox]\nui = [\"fn:scripted\"]\n";
+    let prog = "fn scripted() -> integer { mtime(\"x\") }\nfn main() -> integer { scripted() }\n";
+    let (ok, err) = run("undef_profile", prog, policy, false);
+    assert!(!ok, "a violating sandboxed program must still be rejected");
+    assert!(
+        err.contains("never DEFINED") && err.contains("[profile.ui]"),
+        "the refusal must name the profile as undefined and say where to define it: {err}"
+    );
+    assert!(
+        err.contains("ignored"),
+        "…and that grants under `[sandbox]` are ignored, which is the second-round trap: {err}"
+    );
+}
+
+/// THE CONTROL for the test above: a profile that IS defined and grants nothing
+/// is a deliberate deny-all, and still reports its (empty) grant lists. If this
+/// ever reported "never DEFINED" the diagnostic would have stopped distinguishing
+/// the two cases — which is the whole point of it.
+#[test]
+fn a_defined_but_empty_profile_still_reports_its_grants() {
+    let policy = "[sandbox]\nui = [\"fn:scripted\"]\n[profile.ui]\n";
+    let prog = "fn scripted() -> integer { mtime(\"x\") }\nfn main() -> integer { scripted() }\n";
+    let (ok, err) = run("empty_profile", prog, policy, false);
+    assert!(!ok, "a violating sandboxed program must still be rejected");
+    assert!(
+        !err.contains("never DEFINED"),
+        "a section that EXISTS is a deny-all, not a typo: {err}"
+    );
+    assert!(
+        err.contains("allowed capabilities: []"),
+        "and it reports the empty grant list it really has: {err}"
+    );
+}

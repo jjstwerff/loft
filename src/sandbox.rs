@@ -749,14 +749,45 @@ pub fn describe_violation(
     let libhint = lib.as_deref().unwrap_or("<unknown>");
     let pos =
         reference_position(data, from, symbol).unwrap_or_else(|| data.def(from).position().clone());
-    let profile = sandboxed.get(&from).and_then(|n| config.profiles.get(n));
+    let profile_name = sandboxed.get(&from);
+    let profile = profile_name.and_then(|n| config.profiles.get(n));
     let allowed_libs = profile.map(|p| p.allow_libs.join(", ")).unwrap_or_default();
     let allowed_caps = profile.map(|p| p.allow.join(", ")).unwrap_or_default();
+    // loft#1042 — a designation may name a profile that has no `[profile.<name>]`
+    // section at all.  Reporting its grants then prints `[]`, which says *nothing is
+    // granted here* when the truth is *that profile does not exist* — and the two ask
+    // for opposite next moves.  The parser already tells them apart: it pre-registers
+    // an empty profile whenever the SECTION is present, so a deliberate deny-all is
+    // `Some(empty)` and a typo is `None`.
+    let undefined_profile = match (profile_name, profile) {
+        (Some(name), None) => Some(name.as_str()),
+        _ => None,
+    };
+    // What a refusal says about the policy's reach: either which grants exist, or that
+    // the profile holding them does not.
+    let grants = |with_libs: bool| -> String {
+        match undefined_profile {
+            Some(name) => format!(
+                "profile `{name}` is designated but never DEFINED — the grant lists are \
+                 empty because the section is missing, not because it grants nothing.\n  \
+                 fix: add a `[profile.{name}]` section and put `allow_libs` / `allow` \
+                 there — under `[sandbox]` they are ignored, since it reads every key as \
+                 `<profile> = [selectors]`."
+            ),
+            None if with_libs => {
+                format!(
+                    "allowed libraries: [{allowed_libs}]; allowed capabilities: [{allowed_caps}]"
+                )
+            }
+            None => format!("allowed capabilities: [{allowed_caps}]"),
+        }
+    };
     match v {
         CapViolation::UngrantedCap { group, .. } => format!(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, which needs capability \
              `{group}` — not granted.\n  fix: add `{group}` to `allow`, or add its \
-             library `{libhint}` to `allow_libs`.\n  allowed capabilities: [{allowed_caps}]"
+             library `{libhint}` to `allow_libs`.\n  {}",
+            grants(false)
         ),
         // The fix ORDER matters here (#631).  When the unreachable symbol is the
         // sandboxed code's OWN private helper, leading with `allow_libs` teaches the
@@ -781,8 +812,8 @@ pub fn describe_violation(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}` (library `{libhint}`), which \
              is neither an allowed library nor a granted capability.\n  fix: add `{libhint}` \
              to `allow_libs` to include the whole library, or tag `{sym_name}` with a `#cap` \
-             group and grant it.\n  allowed libraries: [{allowed_libs}]; allowed \
-             capabilities: [{allowed_caps}]"
+             group and grant it.\n  {}",
+            grants(true)
         ),
         CapViolation::ExternalFfi { crate_name, .. } => format!(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, a native FFI bridge from \
