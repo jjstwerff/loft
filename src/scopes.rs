@@ -6011,6 +6011,16 @@ impl Scopes {
                 ls.push(Value::Var(tmp));
                 continue;
             }
+            // A `Span` is source position, not structure. `parse_call` wraps a call
+            // argument in one, so an argument this pass rewrote into a preamble-plus-value
+            // sequence arrives as `Span(Insert(…))` and the bare-variant match below sees
+            // nothing to split — which is how loft#1029's hoisted argument reached the
+            // emitters still wrapped, with the lift that owns its result never firing.
+            // Peel it for the Insert case only, so every other argument keeps its position.
+            let scanned = match scanned {
+                Value::Span(b) if matches!(b.1, Value::Insert(_)) => b.1,
+                other => other,
+            };
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
                 let is_a56_hoisted = Self::is_null_init_preamble(&ops, function);
@@ -6095,6 +6105,31 @@ impl Scopes {
                     } else {
                         ls.push(final_val);
                     }
+                } else if let Some(tp) = ops
+                    .last()
+                    .and_then(|last| self.inline_struct_return(last, data, outer_call, function))
+                {
+                    // loft#1029 — an `Insert` whose TAIL is a heap-returning call, which is
+                    // what the argument hoist below produces one level down: the ops that
+                    // build the inner call's argument, then the call.  The lift that gives
+                    // such a result an OWNER matches a `Call`, so the wrapper hid it and the
+                    // callee's store was orphaned — `print("{pick(S { a: 7 }, false).a}")`
+                    // leaked one record per evaluation on both backends while the same call
+                    // BOUND to a local was clean.
+                    //
+                    // That is @P297's pitfall exactly one wrapper later ("the argument
+                    // reaching here is `Span(Call(…))`; unspan before matching or the lift
+                    // never fires"), so the cure is the same shape: read through to the
+                    // value.  The preamble ops move into the enclosing statement list, where
+                    // they already ran, and only the call is lifted — the three recognisers
+                    // above split the same way for their own shapes.
+                    let mut it = ops.into_iter();
+                    let call = it.next_back().expect("checked non-empty by `last`");
+                    preamble.extend(it);
+                    let tmp = self.new_lift_var(function, &tp);
+                    self.mark_lift_handoff(tmp, arg_idx, transfer_copy, moved_arg);
+                    preamble.push(v_set(tmp, call));
+                    ls.push(Value::Var(tmp));
                 } else {
                     ls.push(Value::Insert(ops));
                 }
@@ -6211,12 +6246,24 @@ impl Scopes {
         if bl.result.depend() != vec![*w] {
             return None;
         }
-        // And `w` must already live at the scope we are hoisting INTO. A tail naming a
-        // var the block itself opened (a vector literal yields `_vec_N` at the block's own
-        // scope, a view of the `__vdb_N` one level up) would have its declaration carried
-        // out of the scope that registered it. Declining there costs this shape the fix and
-        // keeps the scope table honest; loft#1029 records it as the half still open.
-        (self.var_scope.get(w) == Some(&self.scope)).then_some(*w)
+        // And `w`'s declaration must ENCLOSE the statement list we are hoisting into, so
+        // the moved ops land inside its lifetime. A tail naming a var the block itself
+        // opened (a vector literal yields `_vec_N` at the block's own scope, a view of the
+        // `__vdb_N` one level up) would have its declaration carried out of the scope that
+        // registered it. Declining there keeps the scope table honest; loft#1029 records
+        // that one as the half still open.
+        //
+        // ⚠ The test is ENCLOSURE, not equality. `self.stack` is the chain of scopes
+        // currently open, so this asks the real question. The first cut asked
+        // `var_scope[w] == self.scope`, which is only true in a function's own top
+        // statement list — the parser allocates the literal's work-ref at FUNCTION scope,
+        // so the same `p = pick(S { a: 7 }, false)` written one `if` or one `for` deeper
+        // compared 1 against the block's scope and declined, and the leak stayed for the
+        // two most ordinary places to write it. A numeric `<=` would not do either: scope
+        // numbers are allocated in encounter order, so an earlier SIBLING scope also
+        // compares less and does not enclose anything.
+        let w_scope = *self.var_scope.get(w)?;
+        (w_scope == self.scope || self.stack.contains(&w_scope)).then_some(*w)
     }
 
     /// The A5.6 hoistable preamble: `Insert([Set(v, Null), value])` whose `v` OWNS a
