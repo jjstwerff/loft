@@ -573,137 +573,36 @@ printing cannot tell them apart — it took `len()` and `== ""` to see it, and a
 read of this matrix looked clean because of that. The backends disagree, which by
 [CODEGEN_METHOD](CODEGEN_METHOD.md)'s rule is itself the bug.
 
-### The residual, investigated but NOT fixed
+### The residual — CLOSED 2026-08-20, from the other side
 
-Recorded rather than filed, per the roadmap's standing rule. The point of writing it down
-is that four plausible readings are already **falsified** — that is the expensive part, and
-repeating it is pure waste.
+It is fixed, and how says something about the method rather than the bug.
 
-Minimal repro, `--interpret` only:
+The symptom was a discharged `a?` in a TEXT tuple answering the one-character text null
+sentinel on the interpreter where the bare twin answers the empty text — invisible to
+printing, since both render as nothing, and only separable with `len()` / `== ""`.
 
-```
-pub fn g_tup<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 }
-g_tup(["q"])   ->  len=1, == "" is false   (the "\0" text null sentinel)
-                   the bare twin answers len=0, == "" is true
-```
+Four readings were falsified by measurement before stopping: the tuple element aliasing
+its source, the `?` discharge itself, `ref_return` promotion (`LOFT_TRACE_RETPROMO`
+showed neither function reaching the classifier), and the `text["a"]` element dep. What
+survived a three-way IR comparison was *"no block-result dep + a `__ref_1` retbuf + an
+element that is not a place"*, with the note that `__ref_1` comes from the `__retbuf`
+machinery — Cluster A's territory.
 
-**What the boundary needs — all four, together.** Drop any one and it is correct:
+**That was the right machinery.** loft#1026 closed it from the return-lowering side, and
+its account matches the surviving reading almost word for word: *"`parse_block` has two
+mutually exclusive text-return promotions … the monomorph promoter was replicating half
+of it."* Verified here afterwards on all four carriers (`t.0`, element 1, `TuplePut`,
+and the bare twin) on both backends.
 
-| axis | correct | broken |
-|---|---|---|
-| generic | a non-generic `?` discharge in a tuple | a monomorph's |
-| an intermediate local | `(a?, 1).0` inline | `t = (a?, 1); t.0` |
-| the element is a non-place expr | `x: T = a?; t = (x, 1)` | `t = (a?, 1)` |
-| element extraction | `-> (T, integer)`, whole tuple | `-> T`, via `t.0` |
+Two things worth keeping from it:
 
-**Falsified — do not re-run these:**
-
-1. *The tuple element aliases its source.* No: a plain `if c { a } else { "ZZZ" }` element is
-   correct on both backends.
-2. *The `?` discharge in a tuple is broken.* No: the NON-generic discharge is correct in
-   both positions on both backends.
-3. *`ref_return` / return promotion drops it.* No: `LOFT_TRACE_RETPROMO` shows neither the
-   working nor the broken function ever reaching the classifier.
-4. *The `text["a"]` element dep is the discriminator.* No: both working non-generic forms
-   carry the **same** dep and answer correctly.
-
-**What is left, from a three-way IR comparison** (working non-generic, working
-bind-then-tuple monomorph, broken monomorph):
-
-| | block-result dep | `__ref_1` buffer | element source | |
-|---|---|---|---|---|
-| `n_nopt` | `["t"]` | no | inline `if` | ✓ |
-| `viabind` | none | yes | a bound local | ✓ |
-| `g_tup` | none | yes | inline `if` | ✗ |
-
-Neither the missing block dep nor the buffer discriminates alone; it is the pair, plus an
-element that is not a place. The `__ref_1` comes from the return-buffer machinery
-(`parser/control.rs`, the `__retbuf` region), which is Cluster A's territory — the
-return/bind ownership dep this map calls the highest-leverage un-landed migration. Which
-pass should carry the fact is exactly what is not yet established, and patching a generator
-without knowing that is what [CODEGEN_METHOD](CODEGEN_METHOD.md) names as the way codegen
-work regresses the suite.
-
-**Deliberately not filed.** It is here as the probe that proves the duplicate is
-load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
-its own. Filing it would re-pay the derivation later and would fix one cell of a
-matrix whose other cells nobody has run yet — the whole reason this cluster is worth
-collapsing is the cases still undiscovered behind the other two spellings.
-
-**The second half — the marker dispatcher is itself a partial walk.**
-`rewrite_generic_type_defaults` (`src/parser/mod.rs:6676`) has to be TOTAL: its job
-is to reach every stamped marker in a body. It descends ten `Value` variants and
-ends `other => other`. `IrNode::for_each_child` names seventeen child-bearing ones,
-so a marker sitting inside `Tuple`, `TuplePut`, `Parallel`, `ParFor`, `Iter`,
-`BreakWith` or `Yield` is never rewritten, and the monomorph ships the placeholder.
-
-**Measured, and it is SILENT.** The deferred `x?` default of loft#1016, placed inside a tuple,
-is never rewritten, and the monomorph reads the placeholder's bytes as data:
-
-```
-pub fn ctl1016<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); a? }
-pub fn tup1016<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 }
-
-control (no tuple): 0                 <- correct: the instantiation's zero
-probe   (in tuple): 34359738369       <- the placeholder, read as an integer
-Warning: 1 stores not freed at program exit: kt=9 __typevar_T x1
-```
-
-No diagnostic, no refusal, exit 0. That makes this half of Cluster F **`silent-wrong`** — the
-freeze axis ([.github/LABELS.md](../../.github/LABELS.md)) — rather than the mere refusal the
-`(T?, integer)` matrix above shows. A refusal can be frozen into the contract; an answer that is
-quietly wrong cannot.
-
-That missing set is very nearly loft#815's
-([STABILITY_PASS2.md § The `IrNode` keystone](STABILITY_PASS2.md), which lists
-`Tuple`, `Parallel`, `BreakWith`, `TuplePut`, `ParFor`) — the same variants absent
-from a new total walker written after that lesson was recorded and guarded. The #815
-guard asserts closure of the REACHABLE set, so it cannot see a rewrite walk. The
-lesson generalises: **a keystone protects only the walkers that adopt it, so new
-total walkers need the same audit as old ones.**
-
-**Scale of the surrounding habit.** Counting recursive `Value` walkers with four or
-more arms: **153** in `src/`, of which 19 delegate to `Value::for_each_child`, 19
-are exhaustive with no wildcard, and 115 end in a wildcard. That 115 is *not* 115
-defects — most are intentionally partial, and rightly so (`arm_is_null()` should
-answer `false` for everything else). The red flag is that intentional and accidental
-are spelled identically, so neither review nor the compiler can separate them. The
-cheap discipline is the one PASS2 already prescribes: a walker that must be TOTAL
-delegates recursion to the keystone and keeps only EXTRACTION arms of its own.
-
-**Would-one-fact-collapse-it?** Yes, in two small steps:
-
-1. Add `Type::mentions_type_var(&self, data) -> bool`, recursion delegated to
-   `Type::for_each_child`, and collapse all three spellings onto it. A new `Type`
-   variant then extends one exhaustive match instead of drifting three predicates.
-2. Convert `rewrite_generic_type_defaults` to the extraction/recursion split: the
-   `TV_*` arms extract, everything else delegates to the keystone.
-
-Both are the PASS2 keystone method applied to code that POST-DATES PASS2 — these
-walkers are newer than that doc's work list, which is why they are absent from it.
-
-### Three instruments, independently, land on the same shape
-
-This cluster was reached three different ways, and none knew about the others:
-
-| instrument | what it saw |
-|---|---|
-| reading `match` blocks | `Tuple` in the forgotten tail of 115 partial walkers |
-| the tracker (§ The evidence) | `tuple` the top RISING class, 0 % → 10.7 %, no keystone |
-| a differential review of this branch's diff | **5 of its 15 findings** in the tuple / ref-tuple family |
-
-The review's five were the marker walk above, a call-argument helper whose sibling gained a
-`TupleGet` arm *in the same PR* while the mirror did not, and three sites of the ref-tuple
-admitted-element set. That last re-opened a formal deviation the same branch had closed that
-day — [formal/tuples.md](formal/tuples.md) D-tup-2: the element rule has ONE list, and only one
-of the two sites that construct a `&(…)` asks it.
-
-Agreement across three instruments is worth more than any one of them, because their failure
-modes do not overlap: a code read finds shapes nobody has hit, the tracker finds what users
-actually hit, and a diff review finds what was added last week. When all three name the same
-shape, the shape is not an artefact of how you looked.
-
----
+- **Stopping without a fix still moved the work forward.** The investigation did not
+  produce a patch; it produced a boundary and four dead ends, and the fix that landed
+  came from a session working the same machinery from the opposite direction. Recording
+  a falsified hypothesis is cheaper than re-falsifying it.
+- **A residual is a claim to re-measure, like an `OPEN: 0`.** This one was closed by
+  somebody else's commit while the doc still called it open, and only re-running the
+  repro before filing an issue caught that.
 
 ## Landing order (leverage-first — the stable-future roadmap)
 

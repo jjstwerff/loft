@@ -158,50 +158,33 @@ against a uniform run — whole-program `--native`, or `--interpret` with
 
 ---
 
-## Surfaced 2026-08-20 while fixing something else — real, unscheduled
+## Surfaced 2026-08-20 while fixing something else — filed
 
-Each of these was met while working a neighbouring defect, verified against the
-pre-fix binary as PRE-EXISTING, and deliberately left rather than folded into an
-unrelated change. None is filed — the roadmap's standing rule is that stability work
-fixes rather than files — so this is their record until someone picks one up.
+Each was met while working a neighbouring defect and verified against the pre-fix
+binary as PRE-EXISTING, then deliberately left rather than folded into an unrelated
+change. All five are now tracked; the repro, the measured workaround and the
+both-backends result live on the issue.
 
-Ordered by how likely you are to hit one.
+| | issue | shape |
+|---|---|---|
+| `integer limit(lo,hi)` is not bounded on `+=` — the `u8` spelling of the same range is; the local keeps `260` | [#1030](https://github.com/loft-lang/loft/issues/1030) | `silent-wrong` |
+| a `u32` local clamps to `0` where the `u32` FIELD wraps to `4294967291`, same write; and `u32 = 4294967295` is refused inside its own range | [#1031](https://github.com/loft-lang/loft/issues/1031) | `silent-wrong` |
+| a generic returning `iterator<T>` panics the interpreter and will not compile on `--native`; its element type does not monomorphise | [#1032](https://github.com/loft-lang/loft/issues/1032) | `sev:high` |
+| a generic function is not callable inside a `par` worker | [#1033](https://github.com/loft-lang/loft/issues/1033) | `sev:low` |
+| a declared `(text?, integer)` local is refused, though the same tuple type is accepted as a return | [#1034](https://github.com/loft-lang/loft/issues/1034) | `sev:low` |
 
-- **`integer limit(lo, hi)` is not clamped on a compound assignment.** `l: integer
-  limit(0,255) = 250; l += 10` keeps `260`, where the `u8` spelling of the same range
-  clamps to `0`. The narrow-alias guard covers width types (`u8`/`i8`/`u16`/`i16`/`i32`)
-  and returns early for the `limit(...)` spelling, which reaches no guard of its own on
-  this path. Both backends agree, so it is consistent — just wrong.
+**Two entries that were here are gone because they are FIXED**, both confirmed by
+re-running their repros on both backends before filing anything — which is the reason
+to re-verify a caveat rather than file it from a note:
 
-- **`u32` disagrees with itself.** `b: u32 = 5; b -= 10` clamps the LOCAL to `0` but
-  wraps the same write to a FIELD to `4294967291`; and `u32 = 4294967295` is refused at
-  the declaration ("cannot implicitly narrow integer to i32") for a value inside `u32`'s
-  own declared range. loft has no unsigned 4-byte representation — `u32` is the `i32`
-  slot — and these are the seams of that.
-
-- **A tuple's text element cannot be assigned from its sibling on `--native`.**
-  `k = ("a", "b"); k.1 = k.0` fails to compile with E0382 (`var_k.0` moved, then
-  borrowed). The interpreter is fine. The element is moved where it should be cloned.
-
-- **A generic returning `iterator<T>` breaks both backends.** The interpreter aborts
-  with a subtract-with-overflow inside `state/mod.rs`; `--native` will not compile,
-  typing the coroutine as a `DbRef`. Separately, a generic's `iterator<T>` element type
-  does not monomorphise — `for y in g([1])` leaves `y` as `T`, so it cannot be summed or
-  formatted.
-
-- **A generic is not callable inside a `par` worker.** `for e in v par(r = g(a), 1)`
-  reports "`g` is not a function".
-
-- **A `(text?, integer)` DECLARED annotation is refused.** `c: (text?, integer) =
-  ("c0", 3)` reports *"cannot change type from `(text?, integer)` to `(text, integer)`"*.
-  The same shape as a RETURN type works.
-
-- **A discharged `T?` default inside a tuple answers the text null sentinel on the
-  interpreter.** `t = (a?, 1); t.0` at `T = text` gives the one-character sentinel where
-  the bare twin gives the empty text; `--native` is correct, so the backends disagree.
-  Both render as nothing, so only `len()` or `== ""` sees it. Fully characterised, with
-  four explanations already falsified, in
-  [STABILITY_REDFLAGS.md § Cluster F](STABILITY_REDFLAGS.md) — read that before probing.
+- a tuple's text element assigned from its sibling (`k = ("a","b"); k.1 = k.0`) no
+  longer fails `--native` with E0382;
+- the Cluster F residual — a discharged `a?` in a TEXT tuple answering the null
+  sentinel on the interpreter — is correct on all four carriers on both backends.
+  Closed by loft#1026, whose own account (*"`parse_block` has two mutually exclusive
+  text-return promotions … the monomorph promoter was replicating half of it"*) is the
+  machinery [STABILITY_REDFLAGS](STABILITY_REDFLAGS.md)'s investigation had isolated
+  from the other side.
 
 ---
 
