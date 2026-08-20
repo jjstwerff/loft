@@ -150,7 +150,7 @@ belongs to [COMPATIBILITY.md](COMPATIBILITY.md)'s process, not to a fix pass.
 
 | Item | Section | Status |
 |---|---|---|
-| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; `plans/finished/21-retire-scratch/` shipped the scratch side |
+| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | **SHIPPED; row was stale — re-measured 2026-08-20.**  The inference is in `parser/definitions.rs` (a native `;`-terminated fn with a `self` parameter returning the SAME struct-enum gets `dep=[0]`), and the bite it was written for is gone: 1200+ constructor calls and 1000 accessor-chain calls in loops leave the ledger balanced (1213 allocs / 1211 frees, peak 9 live) on both backends.  Guarded by `tests/scripts/json-value-chain-ownership.loft`.  See the caveat under § Active design — Dep-inference: the inference no longer changes any behaviour I could measure |
 
 ### Compiler-blocker cluster
 
@@ -1640,7 +1640,27 @@ return should declare `dep=[]`.  Today both are declared
 `dep=[]` because native function declarations never run through
 `ref_return` (which only fires for fns with bodies).
 
-**Decision: implicit dep inference for native fn returns.**
+**Status 2026-08-20 — shipped, and no longer observably load-bearing.**  The inference is
+implemented (`src/parser/definitions.rs`, the `;`-terminated native-fn arm) and the bite
+above is fixed: `json_null().kind()`, `v.field("a").item(1).kind()` and the rest neither
+leak nor read freed memory, in loops, on `--interpret` and `--native`.
+
+What could NOT be shown is that the inference is what fixes it.  Disabled (`if false &&`)
+and rebuilt, every measurement is unchanged: the same values, the same store ledger
+(1213 allocs / 1211 frees, peak 8 vs 9 live), clean under `LOFT_POISON=1` and
+`LOFT_STORE_GUARD=1`, on both backends — and `loft_suite` still passes, so no existing
+test covers its absence either.  The store-lifetime work that landed after this design was
+written (@PLN85 and the `inline_struct_return` gates around it) appears to keep these
+shapes in order on its own.
+
+That is a measurement, not a verdict: "no shape I constructed distinguishes it" is weaker
+than "it does nothing", and the probes were JsonValue-shaped because that is where the
+surface is.  A native `self`-taking method on some OTHER struct-enum is the case most
+likely to still need it.  Two things follow, and neither is a fix: the inference should not
+be deleted on this evidence alone, and anyone who touches it should know the suite will not
+tell them if they break it.
+
+**Decision (2026-04-14): implicit dep inference for native fn returns.**
 
 When a native function declaration `pub fn name(self: T, ...)
 -> R;` is parsed and the return type R structurally matches the
