@@ -10159,9 +10159,11 @@ fn sum_vals(items: &vector<Item>) -> integer {
 }
 fn test() { }"
     )
+    // 2:20 is the `&` (loft#1003).  The error shares the reference check's position with
+    // the `needless-reference-parameter` warning, so it moved off the body with it.
     .error(
         "Parameter 'items' has & but is never modified; remove the & \
-at enhancement_ref_vector_readonly_loop_still_flags:2:47",
+at enhancement_ref_vector_readonly_loop_still_flags:2:20",
     );
 }
 

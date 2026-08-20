@@ -10,7 +10,7 @@ use std::io::Write;
 
 use super::calls::contains_op_database;
 use super::{
-    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+    Output, block_needs_i64_widen, default_native_value_in, narrow_int_cast, rust_type, sanitize,
 };
 
 impl Output<'_> {
@@ -510,10 +510,21 @@ impl Output<'_> {
         // view (`fn pick(t: vector<M>) -> M { t[i] }`: no Reference param, yet
         // the return aliases `t`, so freeing the bound local freed the caller's
         // vector).
+        //
+        // loft#1017 — the callee test is `is_loft_defined()`, the FACT, not a name.
+        // It read `name().starts_with("n_")`, so a `t_` METHOD (or a generic monomorph)
+        // with a byte-identical body and the same `return_adopts_fresh_store()` verdict
+        // fell straight through to a plain ALIAS: no deep copy, and no @P290 bracket
+        // either.  The unconditional `OpFreeRef` on the bound temp then whole-store-freed
+        // the RECEIVER, and the next allocation recycled that slot — `stage`'s `view_at`
+        // read canvas pixels as a record number several calls later.  `scopes.rs`'s own
+        // lift gate already says the two "have to name the SAME set of callees, which is
+        // why the predicate lives in one place (loft#810)"; this end had drifted off it.
+        // Measured: the identical body written as a FREE function was correct on
+        // `--native` and as a METHOD answered zeros from the second call on.
         if let (Some(d_nr), Value::Call(fn_nr, args)) =
             (variables.tp(var).heap_def_nr(), to_unspanned)
-            && self.data.def(*fn_nr).name().starts_with("n_")
-            && *self.data.def(*fn_nr).code() != Value::Null
+            && self.data.def(*fn_nr).is_loft_defined()
             && !self.data.def(*fn_nr).return_adopts_fresh_store()
         {
             let tp_nr = self.data.def(d_nr).known_type();
@@ -1002,8 +1013,9 @@ impl Output<'_> {
             let lv = format!("var_{name}");
             self.emit_null_dbref(w, var, &name, &lv, first_assign)?;
         } else if to == &Value::Null {
-            // Emit the null sentinel for the variable's type, not bare `()`.
-            let null_val = default_native_value(variables.tp(var));
+            // Emit the null sentinel for the variable's type, not bare `()` — in the
+            // VARIABLE context, which is the one the declaration above was written in.
+            let null_val = default_native_value_in(variables.tp(var), &Context::Variable);
             write!(w, "{null_val}")?;
         } else {
             // @PLN17: a boolean variable's storage form is u8.  The RHS may be a
@@ -1150,24 +1162,45 @@ impl Output<'_> {
                 // owned/borrowed split, runs it.  Every failing shape funnels through
                 // here: a match temp, `local = t`, a struct field, and the synthetic
                 // return work var all reach `set_var` with this exact pair.
+                //
+                // loft#1005 — and the same pair one level in.  A NESTED tuple parameter
+                // (`p: ((integer, text), text)`) reaches its inner tuple as `TupleGet(p, 0)`,
+                // not as a bare `Var`, so the whole-parameter rule above did not see it and
+                // `let mut var___ref_1: (i64, String) = var_p.0;` was the identical E0308.
+                // Both are one fact — a tuple crossing from a BORROWED parameter into an
+                // OWNED slot — so they share the re-spelling and differ only in the place
+                // they name.
                 let tuple_arg_owned_elems = match variables.tp(var) {
-                    Type::Tuple(elems) if tuple_has_text_leaf(elems) => matches!(
-                        to_inner, Value::Var(v) if {
-                            let vars = self.data.def(self.def_nr).variables();
-                            vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
-                        }
-                    )
-                    .then(|| elems.clone()),
+                    Type::Tuple(elems) if tuple_has_text_leaf(elems) => {
+                        let from_param = match to_inner {
+                            Value::Var(v) => {
+                                let vars = self.data.def(self.def_nr).variables();
+                                vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
+                            }
+                            Value::TupleGet(v, _) => {
+                                let vars = self.data.def(self.def_nr).variables();
+                                vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Tuple(_))
+                            }
+                            _ => false,
+                        };
+                        from_param.then(|| elems.clone())
+                    }
                     _ => None,
                 };
                 if let Some(elems) = tuple_arg_owned_elems {
-                    if let Value::Var(v) = to_inner {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
-                        write!(
-                            w,
-                            "{}",
-                            owned_tuple_from_arg(&format!("var_{src_name}"), &elems)
-                        )?;
+                    let place = match to_inner {
+                        Value::Var(v) => Some(format!(
+                            "var_{}",
+                            sanitize(self.data.def(self.def_nr).variables().name(*v))
+                        )),
+                        Value::TupleGet(v, idx) => Some(format!(
+                            "var_{}.{idx}",
+                            sanitize(self.data.def(self.def_nr).variables().name(*v))
+                        )),
+                        _ => None,
+                    };
+                    if let Some(place) = place {
+                        write!(w, "{}", owned_tuple_from_arg(&place, &elems))?;
                     }
                 } else if text_local_clone {
                     if let Value::Var(v) = to.unspan() {
@@ -1443,7 +1476,7 @@ impl Output<'_> {
 /// `tuple_text_to_string` activation in `output_set` so a tuple
 /// destination like `((i64, String), (i64, String))` triggers the
 /// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
-fn tuple_has_text_leaf(elems: &[Type]) -> bool {
+pub(crate) fn tuple_has_text_leaf(elems: &[Type]) -> bool {
     for e in elems {
         match e {
             Type::Text(_) => return true,
@@ -1476,6 +1509,38 @@ fn owned_tuple_from_arg(expr: &str, elems: &[Type]) -> String {
             match e.base() {
                 Type::Text(_) => format!("{field}.to_string()"),
                 Type::Tuple(inner) => owned_tuple_from_arg(&field, inner),
+                _ => field,
+            }
+        })
+        .collect();
+    format!("({})", parts.join(", "))
+}
+
+/// Re-spell a tuple ARGUMENT element-wise so it fits a BORROWED tuple parameter.
+///
+/// The mirror of [`owned_tuple_from_arg`], for the direction a call takes. `text` is
+/// `String` in [`Context::Variable`] and `&str` in [`Context::Argument`] (`rust_type`), so a
+/// tuple LOCAL is `(i64, String)` while the parameter it is passed to is `(i64, &str)`, and
+/// rustc rejects the call. A tuple LITERAL argument is emitted in place and already spells
+/// `&str`, which is why the literal form compiled and only the variable form did not
+/// (loft#1005).
+///
+/// `expr` is the Rust place holding the owned tuple; each text leaf becomes `&*place`, which
+/// derefs `String`, `Str` and `&str` alike — so this is also correct when the argument is
+/// itself a parameter and already borrowed. Every other leaf passes through untouched.
+///
+/// Borrowing rather than cloning: the callee reads through the parameter, and a by-value
+/// tuple parameter is a COPY in loft, so nothing the callee does to its own binding is
+/// visible here. That keeps the call free of an allocation the language never asked for.
+pub(crate) fn borrowed_tuple_from_owned(expr: &str, elems: &[Type]) -> String {
+    let parts: Vec<String> = elems
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let field = format!("{expr}.{i}");
+            match e.base() {
+                Type::Text(_) => format!("&*{field}"),
+                Type::Tuple(inner) => borrowed_tuple_from_owned(&field, inner),
                 _ => field,
             }
         })

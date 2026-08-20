@@ -1178,3 +1178,40 @@ fn issue_333_div_zero_null_continues() {
     }
     let _ = std::fs::remove_file(&script);
 }
+
+/// loft#1012 — `verify-self` must NOT exit 0 when it verified nothing.
+///
+/// The message was always honest ("not a release bundle — nothing to check against"); the
+/// exit code is what gets read, and `loft verify-self && deploy` was green on an install the
+/// command could not examine. *Verified intact* and *could not verify anything* are the two
+/// answers a caller most needs to tell apart, and they were the same answer.
+///
+/// A test-run binary lives in `target/release/`, whose bundle root has no `SHA256SUMS` — so
+/// this is exactly the unverifiable case, and it is the one the CLI can reach without
+/// building a release bundle. The verified (0) and mismatched (1) paths need a real bundle
+/// and are covered where one exists (`verify_self`'s own tests over `local_checks`).
+#[test]
+fn verify_self_exits_two_when_it_verified_nothing() {
+    let out = Command::new(loft_bin())
+        .arg("verify-self")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The precondition: this really is the "nothing to check" case, not a passing verify.
+    assert!(
+        stdout.contains("not a release bundle"),
+        "expected the unverifiable case for a dev-tree binary; got {stdout:?}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "`verify-self` that checked nothing must not report success (loft#1012); got {:?}, \
+         stdout={stdout:?}",
+        out.status.code()
+    );
+    assert!(
+        !out.status.success(),
+        "`loft verify-self && deploy` must not proceed on an install it could not examine"
+    );
+}

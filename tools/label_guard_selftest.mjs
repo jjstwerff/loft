@@ -55,6 +55,10 @@ Bind the concat to a local first: w = v + [9]; w.len()
 
 wa:partial — a workaround exists but it's awkward / loses the intended behaviour
 
+### Who hit it?
+
+hit-by:loft — loft's own instruments: a gate, a sanitizer, a sweep, a follow-on
+
 ### Severity
 
 sev:medium — wrong result / hang / miscompile in a real shape, but no corruption
@@ -67,19 +71,30 @@ sev:medium — wrong result / hang / miscompile in a real shape, but no corrupti
 `;
 
 check("form: every answer becomes its label", FORM, [
-  "sev:medium", "wa:partial", "area:codegen", "area:native",
+  "sev:medium", "wa:partial", "area:codegen", "area:native", "hit-by:loft",
 ]);
+
+// `hit-by:` is REQUIRED and was enforced by nothing until 2026-08-19 — not the form
+// (which had no field) and not the guard.  A blank is not neutral: a consumer filters
+// `hit-by:<their project>`, so an unlabelled issue reads as "not established", never
+// "nobody".  Both halves are pinned: the answer becomes the label, and leaving it
+// unanswered leaves the category unset for the guard to ask about.
+check(
+  "form: an unanswered hit-by leaves the category unset",
+  FORM.replace(/### Who hit it\?\n\nhit-by:loft[^\n]*\n/, "### Who hit it?\n\nNot sure\n"),
+  ["sev:medium", "wa:partial", "area:codegen", "area:native"],
+);
 
 check(
   "form: an unchecked area box contributes nothing",
   FORM.replace("- [x] `area:native`", "- [ ] `area:native`"),
-  ["sev:medium", "wa:partial", "area:codegen"],
+  ["sev:medium", "wa:partial", "area:codegen", "hit-by:loft"],
 );
 
 check(
   "form: an unanswered dropdown leaves its category unset",
   FORM.replace(/### Severity\n\nsev:medium[^\n]*\n/, "### Severity\n\nNot sure\n"),
-  ["wa:partial", "area:codegen", "area:native"],
+  ["wa:partial", "area:codegen", "area:native", "hit-by:loft"],
 );
 
 // ---- freeform (`gh issue create` / the API, which ignores templates) ---------

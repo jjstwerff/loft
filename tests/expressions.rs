@@ -375,9 +375,11 @@ fn ref_tuple_param_swap() {
 #[test]
 fn ref_tuple_unused_mutation_error() {
     // &(integer, integer) parameter that is never mutated — should produce a warning.
+    // Column 20 is the `&` itself (loft#1003).  This pinned 1:53 — a position inside the
+    // BODY — because the check ran after the body and fell back to the variable's source.
     code!("fn read_only(pair: &(integer, integer)) -> integer { pair.0 + pair.1 }")
         .expr("p = (3, 7); read_only(p)")
-        .warning("Parameter 'pair' does not need to be a reference at ref_tuple_unused_mutation_error:1:53")
+        .warning("Parameter 'pair' does not need to be a reference at ref_tuple_unused_mutation_error:1:20")
         .result(Value::Int(10));
 }
 

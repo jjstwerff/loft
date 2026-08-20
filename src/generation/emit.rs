@@ -11,8 +11,8 @@ use std::io::Write;
 
 use super::text::count_format_ops;
 use super::{
-    Output, block_needs_i64_widen, block_tail_cast, default_native_value, narrow_int_cast,
-    rust_type, sanitize,
+    Output, block_needs_i64_widen, block_tail_cast, default_native_value, default_native_value_in,
+    narrow_int_cast, rust_type, sanitize,
 };
 
 impl Output<'_> {
@@ -352,17 +352,44 @@ impl Output<'_> {
                 // the same rule the tuple LITERAL arm below obeys through this flag.
                 // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
                 // whole program with *"expected `String`, found `&str`"* (loft#1004).
-                let elem_is_text = match variables.tp(var).base() {
-                    Type::Tuple(elems) => elems
-                        .get(idx as usize)
-                        .is_some_and(|e| matches!(e.base(), Type::Text(_))),
-                    _ => false,
+                // Both spellings reach here: a by-value tuple local (`t.0 = …`) is
+                // `Type::Tuple`, a `&(…)` REFERENCE-tuple parameter is
+                // `Type::RefVar(Tuple)`.  Reading only the first is why the boolean cast
+                // below silently did not fire on the reference form (loft#1006).
+                let var_tp = variables.tp(var).clone();
+                let tuple_elems = match var_tp.base() {
+                    Type::Tuple(elems) => Some(elems.clone()),
+                    Type::RefVar(inner) => match inner.base() {
+                        Type::Tuple(elems) => Some(elems.clone()),
+                        _ => None,
+                    },
+                    _ => None,
                 };
+                let elem_tp = tuple_elems.and_then(|e| e.get(idx as usize).cloned());
+                let elem_is_text = elem_tp
+                    .as_ref()
+                    .is_some_and(|e| matches!(e.base(), Type::Text(_)));
+                // A boolean element's SLOT is `u8` (0/1/255) while a transient expression
+                // is `bool`, so a tuple-element write is one of the store positions
+                // `boolean_u8_cast` exists for — and was the one missing from that list.
+                // `var_p.1 = true;` on a `&(integer, boolean)` was rustc E0308 *"expected
+                // `u8`, found `bool`"*, while `&(boolean, boolean)` compiled because both
+                // sides of its swap were already `u8` (loft#1006).  The wrap is idempotent
+                // for `u8`, so it is right for both.
+                let bool_cast = elem_tp
+                    .as_ref()
+                    .and_then(|e| crate::generation::boolean_u8_cast(e));
                 write!(w, "var_{name}.{idx} = ")?;
+                if bool_cast.is_some() {
+                    write!(w, "(")?;
+                }
                 let prev = self.tuple_text_to_string;
                 self.tuple_text_to_string = elem_is_text;
                 let r = self.output_code_node(w, node.tupleput_inner());
                 self.tuple_text_to_string = prev;
+                if let Some(cast) = bool_cast {
+                    write!(w, ") as {cast}")?;
+                }
                 return r;
             }
             _ => {}
@@ -1224,13 +1251,43 @@ impl Output<'_> {
 
     /// Emit a typed null sentinel for the given type.
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
+        Self::write_typed_null_in(w, tp, false)
+    }
+
+    /// The typed null, in the representation the destination actually holds.
+    ///
+    /// `storage` picks the same split [`rust_type`](crate::generation::rust_type) makes for
+    /// `boolean`: a null-capable POSITION (a parameter, a local, a return) holds the @PLN17
+    /// tri-state as a raw `u8` (0/1/255), while a transient expression result is a 2-state
+    /// `bool`. Everything else spells the same either way, so this is the only arm that reads
+    /// the flag.
+    ///
+    /// The two `if`-branch callers pass `false`: they emit a null to unify with the OTHER
+    /// branch, which is an expression. The call-argument site passes `true` — its destination
+    /// is a parameter slot, and emitting `false` there put a `bool` where the generated
+    /// signature declares `u8`, so an omitted `boolean? = null` argument failed to compile at
+    /// all (rustc E0308, loft#1015).
+    pub(super) fn write_typed_null_in(
+        w: &mut dyn Write,
+        tp: &Type,
+        storage: bool,
+    ) -> std::io::Result<()> {
         match tp {
             // @PLN25 slice (b): `Optional(τ)`'s null is its base's sentinel (same storage).
-            Type::Optional(inner) => Self::write_typed_null(w, inner),
-            Type::Character => write!(w, "i32::MIN"),
+            Type::Optional(inner) => Self::write_typed_null_in(w, inner, storage),
+            // types.md pins `Char`'s in-band sentinel at CODEPOINT 0 — the same
+            // `'\0'` that `op_conv_bool_from_character` tests for and that the
+            // interpreter's `OpConvCharacterFromNull` pushes.  `i32::MIN` was a
+            // fourth spelling nothing else recognised, so `a == null` on an
+            // omitted `character? = null` answered FALSE here and `true` on the
+            // interpreter; worse, `ops::to_char` reaches it via
+            // `from_u32_unchecked`, for which `0x8000_0000` is undefined
+            // behaviour (loft#1014).
+            Type::Character => write!(w, "0"),
             Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
+            Type::Boolean if storage => write!(w, "255_u8"),
             Type::Boolean => write!(w, "false"),
             Type::Text(_) => write!(w, "loft::state::STRING_NULL"),
             Type::Enum(_, false, _) => write!(w, "255_u8"),
@@ -1496,7 +1553,7 @@ impl Output<'_> {
             if f_vars.contains(&v) && !self.declared.contains(&v) {
                 let name = sanitize(variables.name(v));
                 let tp_str = rust_type(variables.tp(v), &Context::Variable);
-                let default = default_native_value(variables.tp(v));
+                let default = default_native_value_in(variables.tp(v), &Context::Variable);
                 writeln!(w, "let mut var_{name}: {tp_str} = {default};")?;
                 self.indent(w)?;
                 self.declared.insert(v);

@@ -180,6 +180,20 @@ src/main.rs            CLI; loads default/ then user file
 read the failing test's dump (`tests/dumps/*.txt` — IR+bytecode+trace), narrow with
 `LOFT_LOG=minimal`/`crash_tail:50`, read the 3–5 relevant files, `git show <commit>` for regressions.
 
+**READ THE FORMAL SPEC FIRST when the fix has a choice in it** — `doc/claude/formal/` is the
+STRICT definition (rules + a numbered deviation list driven to zero), and its doctrine is *"the
+rules do not change to match the code; the code changes to match the rules."* So a rule already
+written there SETTLES a question an issue may present as open. Reach for it before you deliberate
+— when an issue says **"a design call"** or **"two ways to close it"**, before shipping a
+**REFUSAL** (*"X is not supported"* — a rule may say it must work, making the refusal a deviation),
+before changing a shipped surface's observable semantics, and whenever the **two backends
+disagree**. Measured: loft#1002 was filed as *"the choice is a design call"* while
+`formal/collections.md` already carried `(Slice-Open) xs[(x,y)..] open outward walk from a point`
+— the tail was the deviation, so only one of the two "ways" was ever admissible. Both directions
+apply: an edge the rules CANNOT express means the RULE wants extending. And an **"OPEN: 0" line is
+a claim to re-measure**, only as strong as the oracle under it — `tuples.md` read 0 while
+loft#1004/#1005 were live, because its oracle is all-`(integer, integer)` and carries no `text`.
+
 **Matrix-first for any non-trivial bug (esp. crash / silent corruption) — the urge to fix is the
 signal you haven't earned it:**
 1. Don't fix on the first read — a clean one-line story is a hypothesis.
@@ -192,13 +206,16 @@ signal you haven't earned it:**
 4. Map pass/fail → find the REAL boundary (filed scope is usually wrong). Resisting a read twice →
    instrument with one env-gated `eprintln`, don't theorize.
 5. Fix at the chokepoint enforcing exactly the violated invariant — no narrower, no wider.
+   The invariant is often already NAMED in `doc/claude/formal/` — cite the rule rather than
+   re-deriving it, and close its deviation entry if it had one.
 6. Verify the full matrix on **BOTH backends**; graduate guarantee probes to `tests/scripts/`.
 7. **Propose 3+ cases to check → write them ALL down BEFORE working the first.** Detail decays
    while you work: the headline of case three survives, its specifics (which axis, which shape,
    why suspected) do not. Writing the list first also makes it reviewable while it's cheap.
 8. **A new case found = a new probe, always** — the suite is the only thing that remembers.
 
-Full flow: [DEBUG.md](doc/claude/DEBUG.md), [plans/_INVESTIGATION_TEMPLATE.md](doc/claude/plans/_INVESTIGATION_TEMPLATE.md).
+Full flow: [DEBUG.md](doc/claude/DEBUG.md), [plans/_INVESTIGATION_TEMPLATE.md](doc/claude/plans/_INVESTIGATION_TEMPLATE.md),
+the rules: [formal/README.md](doc/claude/formal/README.md) § When to reach for this doc.
 
 ## Bug-filing policy — MANDATORY
 
@@ -209,7 +226,19 @@ in the same session with a regression test. Record scope + root cause, never ori
 **File only when NOT fixing now:** it blocks the current task (bookmark + workaround), or it's
 genuinely M+/needs-design (route to its canonical home). When you file: a **GitHub Issue**
 (`gh issue create`, `bug_report` template) — NOT a PROBLEMS.md row (that's the closed archive) —
-with a minimal both-backend repro, `sev:`/`area:` + a VERIFIED `wa:*` label, and `Fixes #NNN`.
+with a minimal both-backend repro, `sev:`/`area:` + a VERIFIED `wa:*` label, **a `hit-by:*`
+label**, and `Fixes #NNN`. **Add `silent-wrong` whenever the program answers WRONG and nothing
+says so** (no diagnostic, no refusal, no crash), or a type-system promise does not hold. It is
+the FREEZE axis and outranks both `sev:` and `wa:`: a clean workaround only helps someone who
+learns they need one, and a `sev:low` edge that answers quietly wrong still can't be frozen into
+the contract, while a `sev:high` crash can — a crash tells you. Not for a crash, a refusal, an
+ICE, a wrong error message, or a leak ([.github/LABELS.md § silent-wrong](.github/LABELS.md)). `hit-by:` names the project that RAN INTO it, one per issue, **at
+filing time** — loft is one of those projects, so a find of your own is `hit-by:loft`, NEVER a
+blank (a consumer filters `hit-by:<their project>`, and an unlabelled issue reads as "not
+established", not "nobody"). It says who hit it and nothing more: a follow-on you file while
+fixing something else is still `hit-by:loft` even when a consumer's report sent you into that
+subsystem. Lineage is separate and goes in the BODY as `Found-via: #N`
+([.github/LABELS.md § hit-by](.github/LABELS.md)).
 
 **Fixing an existing issue not yet on `main`:** push the fix, write `Fixes #NNN`, keep the issue open
 (the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Inside a

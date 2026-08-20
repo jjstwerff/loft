@@ -1697,11 +1697,21 @@ pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
   result
 }
 #pure
-// Sum of vector elements with caller-supplied identity.  Works on any Addable type.
+// Sum of vector elements.  Works on any Addable type.  `init` is the identity to start
+// from; leave it out and the element type's own zero is used (0, 0.0, "").
 // Example: sum([10, 20, 12], 0) == 42
+// Example: sum([10, 20, 12]) == 42
 // Example: @STD-005
-pub fn sum < T: Addable > (v: vector<T>, init: T) -> T {
-  result = init;
+//
+// @PLN102 arc C — `init` gained its default so `sum_of(v)` can be REWRITTEN to `sum(v)`:
+// `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the
+// result, so while `init` was required the only `#superseded` symbol loft ships had its fix
+// rejected on every program (loft#1003).  A literal default is not spellable here (`init: T = 0`
+// is "expected T, got integer"), so it is the nullable-with-discharge form, which needs
+// loft#1016's per-monomorph `construct_default(T)`.  Additive: every existing `sum(v, init)`
+// call is unchanged.
+pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T {
+  result = init?;
   for i in 0..v.len() { result = result + v[i] };
   result
 }

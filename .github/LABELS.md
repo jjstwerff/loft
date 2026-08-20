@@ -63,6 +63,43 @@ A wrong workaround is worse than `wa:none`.
 | `wa:partial` | a workaround exists but is awkward / loses the intended behaviour (verified) |
 | `wa:none` | nothing works — this **blocks** whoever hits it (the most urgent triage axis, often above `sev:`) |
 
+## `silent-wrong` — the freeze-blocking axis
+
+**Set it whenever the program answers WRONG and nothing says so**: no diagnostic, no
+refusal, no crash — or a promise of the type system does not hold for some value that
+reaches it.  A `u8` that reaches 260, a tuple element read one slot high, an accessor
+whose second call answers zeros, a `count_if` whose loop was never emitted and left the
+destination at its old value, a `verify-self` that exits 0 for a check it could not run.
+
+It is a SEPARATE axis from `sev:` and `wa:`, and for the language freeze it OUTRANKS
+both.
+
+- **Above `wa:`** — a clean workaround only helps someone who learns they need one.
+  Nobody route-arounds a bug they never find out about, so `wa:clean` + `silent-wrong` is
+  not a mild combination; it is the worst one to leave open, because the workaround is
+  never reached.
+- **Above `sev:`** — `sev:` says how bad it is the day you hit it.  This says whether we
+  can freeze the contract at all.  Anything we ship as a promise while it is open, we are
+  promising falsely: programs already depend on the wrong answer, and correcting it later
+  is a breaking change no consumer can detect they need.  A `sev:low` edge that answers
+  quietly wrong is a freeze blocker; a `sev:high` crash is not — a crash tells you.
+
+So it is not a severity, it is a **contract** question: *if we froze today, would this be
+in the contract?*  Every open `silent-wrong` is one item on the pre-freeze list.
+
+`sev:high`'s own text mentions "a soundness hole" — that stays, because a soundness hole
+IS severe on the day you hit it.  This label is what makes the class QUERYABLE across
+every severity, which is what the freeze needs:
+
+```console
+gh issue list --state open --label silent-wrong
+```
+
+Not `silent-wrong`: a crash, a SIGSEGV, a refusal to compile, an internal compiler error,
+a wrong ERROR MESSAGE, or a leak.  All of those announce themselves.  A leak that
+eventually OOMs is still not silent-wrong — the answers it gives are right until it dies,
+and the death is loud.
+
 ## `area:` — which part of loft (plain-English, with orienting files — NOT required reading)
 
 loft is a tree-walking interpreter **and** a native code generator for a

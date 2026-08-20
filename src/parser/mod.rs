@@ -694,6 +694,20 @@ pub struct Parser {
     /// context — parsing it standalone leaks).  `build_null_coalesce_default` swaps the
     /// lexer to this source at its own parse site, so `x?` matches `x ?? []` exactly.
     pub(crate) pending_default_src: Option<String>,
+    /// loft#1003 — where the `??` default ENDED, for the `redundant-coalesce` deletion
+    /// span.  Set as the default is parsed and consumed by `handle_null_coalesce`, because
+    /// the notice fires before the default exists and the caller's cursor has moved past
+    /// the statement terminator by the time it returns.
+    pub(crate) ncc_default_end: Option<(u32, u32)>,
+    /// loft#1023 — definitions whose BODY has been parsed in the current second pass.
+    ///
+    /// A generic instantiated before its own template appears in this set was built from
+    /// the pass-1 body; [`Parser::rebuild_stale_monomorphs`] redoes those at the end of
+    /// the pass, when every template body exists.
+    pub(crate) pass2_bodies: std::collections::HashSet<u32>,
+    /// loft#1023 — `(monomorph, template, bindings, concrete)` for each monomorph built
+    /// from a template whose pass-2 body had not been parsed yet.
+    pub(crate) stale_monomorphs: Vec<(u32, u32, Vec<(u32, Type)>, Type)>,
     /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
     /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
     /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
@@ -1034,6 +1048,9 @@ impl Parser {
             in_explicit_cast: false,
             pending_default_rhs: None,
             pending_default_src: None,
+            ncc_default_end: None,
+            pass2_bodies: std::collections::HashSet::new(),
+            stale_monomorphs: Vec::new(),
             conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
@@ -2431,6 +2448,10 @@ impl Parser {
     /// Stubs that remain unresolved after this reconciliation surface as
     /// the original "Undefined type" error at the stored `Position`.
     fn resolve_deferred_unknowns(&mut self) {
+        // loft#1023 — every template body now exists for this pass, so any monomorph
+        // derived from a PASS-1 body can be derived again from the real one.  Empty (and
+        // so a no-op) on the first pass, which records nothing.
+        self.rebuild_stale_monomorphs();
         // Step 1: re-apply all previously-applied imports with overwrite
         // semantics.  This replaces any target-source `Unknown` stub with
         // the now-registered real def in the library source.
@@ -5323,6 +5344,21 @@ impl Parser {
         }
     }
 
+    /// The `Block` name [`build_default`](Parser::build_default) stamps on an `x?`
+    /// default it could not decide — the operand's type is a type VARIABLE, so the
+    /// answer belongs to the monomorph.  [`rewrite_generic_type_defaults`] finds it by
+    /// this name once `T` is concrete (loft#1016).
+    pub(crate) const TV_DEFAULT_BLOCK: &'static str = "tvdefault";
+    /// loft#1020 — an `x == null` / `x != null` whose operand is still a TYPE VARIABLE.
+    ///
+    /// Which null test `τ` wants is a function of `τ`, and inside a template `τ` is not
+    /// known yet, so the site is stamped and [`rewrite_generic_type_defaults`] answers it
+    /// per monomorph.  The block holds the OPERAND and its `result` is the operand's
+    /// type, which substitution rewrites to the concrete one.
+    pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
+    /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
+    pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
+
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
@@ -5393,11 +5429,25 @@ impl Parser {
             // → one `_`), so the LEN prefix that `original_name` /
             // `find_method_receivers` parse back stays correct.  Plain names
             // (user structs, `vector`) contain none of these and are unchanged.
-            let safe = self
-                .data
-                .def(type_nr)
-                .name()
-                .replace(['<', '>', ',', ' '], "_");
+            //
+            // loft#1024 — key on the CONCRETE type's own name for a collection.  A
+            // collection's type DEF is the bare `vector` / `hash` / … , which erases the
+            // element: `T = vector<integer>` and `T = vector<text>` both mangled to
+            // `t_6vector_idl`, and that name is the spelling of a METHOD ON `vector`.  So
+            // the first collection instantiation captured every later call whose argument
+            // was any vector at all — including the call that wanted `T = integer`, which
+            // was then refused against the monomorph's `vector<vector<integer>>` parameter
+            // and never reached generic resolution.  Order-dependent, and the message
+            // named the innocent second call site.
+            //
+            // Non-collection concretes are unchanged: a struct's, an integer's and a
+            // text's type-def name IS their own name.
+            let base = if Self::is_collection_type(concrete.base()) {
+                concrete.name(&self.data)
+            } else {
+                self.data.def(type_nr).name().to_string()
+            };
+            let safe = base.replace(['<', '>', ',', ' '], "_");
             format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.
@@ -5423,6 +5473,10 @@ impl Parser {
                 typedef: Self::substitute_all(a.typedef.clone(), &bindings),
                 default: a.value.clone(),
                 constant: false,
+                // A generic instantiation copies the template's parameters; the modifier
+                // position belongs to the template's own source, not this synthetic copy.
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
             })
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
@@ -5471,9 +5525,42 @@ impl Parser {
             concrete,
             new_returned,
         );
+        self.fill_monomorph_body(d_nr, new_code, &tmpl_vars, &bindings, &concrete);
+        // loft#1023 — a template declared BELOW its caller has not had its pass-2 body
+        // parsed yet when the call instantiates, so the monomorph above was built from the
+        // PASS-1 body.  Record it and re-derive once the whole file is through.
+        if !self.first_pass && !self.pass2_bodies.contains(&g_nr) {
+            self.stale_monomorphs
+                .push((d_nr, g_nr, bindings.clone(), concrete.clone()));
+        }
+        self.instantiate_nested_generics(d_nr, &concrete);
+        // I6: verify the concrete type satisfies every declared bound.
+        // Emit a diagnostic and return u32::MAX if any required method is missing.
+        if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
+            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
+            // "Unknown function" error — the satisfaction error is sufficient.
+            // The function won't execute because parsing will halt on errors.
+        }
+        d_nr
+    }
+
+    /// Substitute a template's body + variable table into the monomorph `d_nr`.
+    ///
+    /// Split out of [`Self::try_generic_instantiation`] so loft#1023's re-derivation can
+    /// run exactly the same steps once the template's own pass-2 body exists.  The
+    /// SIGNATURE is not re-derived: attributes and the return type come from the
+    /// template's declaration, which pass 1 already has — only the body was ever stale.
+    fn fill_monomorph_body(
+        &mut self,
+        d_nr: u32,
+        code: Value,
+        tmpl_vars: &Function,
+        bindings: &[(u32, Type)],
+        concrete: &Type,
+    ) {
         // Copy the variable table with substituted types.
-        let mut vars = Function::copy(&tmpl_vars);
-        for (holder, bound_to) in &bindings {
+        let mut vars = Function::copy(tmpl_vars);
+        for (holder, bound_to) in bindings {
             vars.substitute_type(*holder, bound_to);
         }
         // P241 fix (2026-05-11): post-substitution rewrite of the
@@ -5483,14 +5570,25 @@ impl Parser {
         // to override `vars`' substituted-to-primitive elm var type
         // back to `Reference(...)` (it holds a DbRef, not the
         // primitive value).  See `rewrite_generic_vector_writes`.
-        let new_code = Self::rewrite_generic_vector_writes(
-            new_code,
-            &concrete,
+        let code = Self::rewrite_generic_vector_writes(
+            code,
+            concrete,
             &mut vars,
             &self.data,
             &mut self.database,
         );
-        self.data.definitions[d_nr as usize].code = new_code;
+        // loft#1016 — fill in every `x?` whose default the TEMPLATE could not decide.
+        // Runs in the MONOMORPH's frame (the `self.vars` / `self.context` swap the
+        // drop-cascade builder uses), because a record default parses `S {}` and its
+        // work-ref belongs to the function the code lands in, not to whoever happens to
+        // be calling.
+        let outer_vars = std::mem::replace(&mut self.vars, vars);
+        let outer_context = self.context;
+        self.context = d_nr;
+        let code = self.rewrite_generic_type_defaults(code, concrete);
+        let vars = std::mem::replace(&mut self.vars, outer_vars);
+        self.context = outer_context;
+        self.data.definitions[d_nr as usize].code = code;
         self.data.definitions[d_nr as usize].variables = vars;
         // @PLN85 category A — engage the text-return promotion the parse-time
         // path skips for IR-substituted monomorphs, so a `-> text` monomorph
@@ -5502,15 +5600,47 @@ impl Parser {
         // replaces the type and leaves that row behind, so the dump walked a
         // `vector<integer>` through the wrong schema and printed `{}`.
         self.retarget_parametric_vector_format(d_nr);
-        self.instantiate_nested_generics(d_nr, &concrete);
-        // I6: verify the concrete type satisfies every declared bound.
-        // Emit a diagnostic and return u32::MAX if any required method is missing.
-        if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
-            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
-            // "Unknown function" error — the satisfaction error is sufficient.
-            // The function won't execute because parsing will halt on errors.
+    }
+
+    /// loft#1023 — re-derive every monomorph that was built from a template's PASS-1 body.
+    ///
+    /// The second pass re-parses the file in source order, so a call instantiates a generic
+    /// declared BELOW it before that template's own pass-2 body has been produced.  The
+    /// monomorph then keeps whatever pass 1 left, and anything a construct emits only on
+    /// the second pass is missing from it.  Declaration order is not supposed to matter —
+    /// the two-pass parser exists so a function may be used before it is written — so this
+    /// runs where every template body finally exists and derives the bodies again.
+    ///
+    /// Re-deriving reaches further generics (a template body that calls another one), and
+    /// those are stale for the same reason, so it drains to a fixpoint.  Bounded because a
+    /// re-derived monomorph is never recorded again.
+    fn rebuild_stale_monomorphs(&mut self) {
+        let mut rounds = 0;
+        while !self.stale_monomorphs.is_empty() && rounds < 16 {
+            rounds += 1;
+            for (d_nr, g_nr, bindings, concrete) in std::mem::take(&mut self.stale_monomorphs) {
+                let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
+                if tmpl_code == Value::Null {
+                    continue;
+                }
+                let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
+                let mut code = tmpl_code;
+                for (holder, bound_to) in &bindings {
+                    let iter_stride = i32::from(self.vector_elem_iter_stride(bound_to));
+                    code = Self::substitute_type_in_value(
+                        code,
+                        *holder,
+                        bound_to,
+                        iter_stride,
+                        &self.data,
+                    );
+                }
+                self.fill_monomorph_body(d_nr, code, &tmpl_vars, &bindings, &concrete);
+                // The body is fresh, so every call it makes to ANOTHER generic has to be
+                // retargeted at that one's monomorph again.
+                self.instantiate_nested_generics(d_nr, &concrete);
+            }
         }
-        d_nr
     }
 
     /// @PLN125 A2c — what each associated type of `g_nr`'s bounds binds to, for the
@@ -6049,22 +6179,41 @@ impl Parser {
     /// (`fn f<T>(t: T) { f(t) }`) finds itself in the `existing` check and stops, rather
     /// than instantiating forever.
     fn instantiate_nested_generics(&mut self, d_nr: u32, concrete: &Type) {
-        let mut targets: Vec<u32> = Vec::new();
+        // The nested call's own FIRST ARGUMENT type, not the outer binding.
+        //
+        // This used to instantiate every nested generic at `concrete` — the type the OUTER
+        // monomorph bound its variable to.  That is right only when the nested generic's
+        // first parameter is a bare `T`; with `vector<T>` — the ordinary spelling — the
+        // callee was handed `integer` where its parameter reads `vector<T>`, resolution
+        // answered `Unknown`, and the program was refused with *"Cannot resolve generic
+        // type parameter from argument type"*.  A generic calling a generic is the whole
+        // point of the feature, so the shape is not exotic.
+        //
+        // The argument's type comes from the monomorph's own variable table, which
+        // `fill_monomorph_body` has already substituted, so it is the CONCRETE type the
+        // call really passes.  Anything that is not a plain variable falls back to
+        // `concrete`, which is what every caller got before.
+        let mut targets: Vec<(u32, Type)> = Vec::new();
+        let mono_vars = self.data.def(d_nr).variables.clone();
         self.data.def(d_nr).code.walk(&mut |v| {
-            if let Value::Call(d, _) = v
+            if let Value::Call(d, args) = v
                 && *d != u32::MAX
                 && (*d as usize) < self.data.definitions.len()
                 && self.data.def(*d).def_type() == DefType::Generic
-                && !targets.contains(d)
+                && !targets.iter().any(|(t, _)| t == d)
             {
-                targets.push(*d);
+                let arg_tp = match args.first().map(Value::unspan) {
+                    Some(Value::Var(a)) if *a < mono_vars.count() => mono_vars.tp(*a).clone(),
+                    _ => concrete.clone(),
+                };
+                targets.push((*d, arg_tp));
             }
         });
         // Create the monomorphs FIRST, before the context swap below: instantiation
         // parses against `self.vars` / `self.context`, and it must see the ordinary
         // ones, not this monomorph's.
         let mut remap: HashMap<u32, u32> = HashMap::new();
-        for t in targets {
+        for (t, arg_tp) in targets {
             let Some(name) = self
                 .data
                 .def(t)
@@ -6074,7 +6223,7 @@ impl Parser {
             else {
                 continue;
             };
-            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(concrete));
+            let inst = self.try_generic_instantiation(&name, std::slice::from_ref(&arg_tp));
             if inst != u32::MAX && inst != t {
                 remap.insert(t, inst);
             }
@@ -6475,6 +6624,132 @@ impl Parser {
             ),
             other => other,
         }
+    }
+
+    /// loft#1016 — replace every deferred `x?` default with the one the CONCRETE
+    /// type has.
+    ///
+    /// `x?` is `x ?? construct_default(T)` (types.md `(N-Default)`), and
+    /// `construct_default` is a function of `T`.  In a template `T` is a type
+    /// VARIABLE, so the answer does not exist yet; [`Parser::build_default`] stamps
+    /// those sites [`TV_DEFAULT_BLOCK`](Parser::TV_DEFAULT_BLOCK) and this pass answers
+    /// them here, where the monomorph knows what `T` became.
+    ///
+    /// Runs AFTER type substitution, so a nested generic (`concrete` still a type
+    /// variable — `fn outer<S>(s: S?) { inner(s?) }`) re-marks the site and stays
+    /// deferred until the outer instantiation names a real type.
+    fn rewrite_generic_type_defaults(&mut self, val: Value, concrete: &Type) -> Value {
+        match val {
+            // loft#1020 — the deferred `== null` / `!= null`.  `bl.result` came through
+            // type substitution, so it is the CONCRETE operand type by now, and
+            // `null_test` is the same dispatch the parse site uses.  `None` is the
+            // ordinary path (an integer, a text): compare against the typed null, which
+            // is what the concrete spelling of this declaration already emits.
+            Value::Block(bl)
+                if bl.name == Self::TV_NULLTEST_EQ || bl.name == Self::TV_NULLTEST_NE =>
+            {
+                let negate = bl.name == Self::TV_NULLTEST_NE;
+                let mut bl = *bl;
+                let operand = self.rewrite_generic_type_defaults(bl.operators.remove(0), concrete);
+                let tp = bl.result.clone();
+                if let Some(test) = self.null_test(operand.clone(), &tp, negate) {
+                    return test;
+                }
+                let mut out = operand.clone();
+                self.call_op(
+                    &mut out,
+                    if negate { "!=" } else { "==" },
+                    &[operand, Value::Null],
+                    &[tp, Type::Null],
+                );
+                out
+            }
+            Value::Block(bl) if bl.name == Self::TV_DEFAULT_BLOCK => {
+                match self.monomorph_default(concrete) {
+                    Some((v, _)) => v,
+                    // No default for this `T` — `has_default` refuses a bare reference,
+                    // and the template could not have known.  Leave the site as parsed
+                    // rather than dropping the value: the call is already an error.
+                    None => Value::Block(bl),
+                }
+            }
+            Value::Block(bl) => {
+                let bl = *bl;
+                Value::Block(Box::new(crate::data::Block {
+                    operators: self.rewrite_default_list(bl.operators, concrete),
+                    result: bl.result,
+                    name: bl.name,
+                    scope: bl.scope,
+                    var_size: bl.var_size,
+                }))
+            }
+            Value::Loop(lp) => {
+                let lp = *lp;
+                Value::Loop(Box::new(crate::data::Block {
+                    operators: self.rewrite_default_list(lp.operators, concrete),
+                    result: lp.result,
+                    name: lp.name,
+                    scope: lp.scope,
+                    var_size: lp.var_size,
+                }))
+            }
+            Value::If(c, t, f) => Value::If(
+                Box::new(self.rewrite_generic_type_defaults(*c, concrete)),
+                Box::new(self.rewrite_generic_type_defaults(*t, concrete)),
+                Box::new(self.rewrite_generic_type_defaults(*f, concrete)),
+            ),
+            Value::Set(v, expr) => Value::Set(
+                v,
+                Box::new(self.rewrite_generic_type_defaults(*expr, concrete)),
+            ),
+            Value::Return(expr) => Value::Return(Box::new(
+                self.rewrite_generic_type_defaults(*expr, concrete),
+            )),
+            Value::Drop(expr) => Value::Drop(Box::new(
+                self.rewrite_generic_type_defaults(*expr, concrete),
+            )),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                Value::Span(Box::new((
+                    pos,
+                    self.rewrite_generic_type_defaults(inner, concrete),
+                )))
+            }
+            Value::Call(d, args) => Value::Call(d, self.rewrite_default_list(args, concrete)),
+            Value::CallRef(v, args) => Value::CallRef(v, self.rewrite_default_list(args, concrete)),
+            Value::Insert(ops) => Value::Insert(self.rewrite_default_list(ops, concrete)),
+            other => other,
+        }
+    }
+
+    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) over a
+    /// list of sub-values.
+    fn rewrite_default_list(&mut self, vals: Vec<Value>, concrete: &Type) -> Vec<Value> {
+        vals.into_iter()
+            .map(|v| self.rewrite_generic_type_defaults(v, concrete))
+            .collect()
+    }
+
+    /// `construct_default(concrete)` as a VALUE, for a monomorph's deferred `x?`.
+    ///
+    /// [`build_default`](Parser::build_default) answers every type except the
+    /// collections, which it leaves to the caller because a collection default is a real
+    /// empty collection whose construction has to be parsed in the position it lands in
+    /// (a standalone `[]` leaks).  Here that position IS this parse, so the same
+    /// sub-parse route serves both.
+    fn monomorph_default(&mut self, concrete: &Type) -> Option<(Value, Type)> {
+        if matches!(
+            concrete,
+            Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        ) {
+            return Some(self.subparse_default("[]", concrete));
+        }
+        self.build_default(concrete)
     }
 
     /// P241 fix (2026-05-11) — slice 2: integer-only.  POST-PASS that
@@ -9153,9 +9428,10 @@ impl Parser {
                     // sites do the same for the spellings that reach them.
                     //
                     // Reaches the `self` spelling, which arrives as a placeholder VARIABLE. A
-                    // `both` one arrives as a bare `Value::Null` with no name attached, so the
-                    // name cannot be recovered here and that spelling still gets the generic
-                    // message; loft#1008 records it as the remaining half.
+                    // `both` one arrives as a bare `Value::Null` with no name attached, so it
+                    // cannot be named HERE — it is reported at the bare-name site in
+                    // `objects.rs` instead, where the name is still in hand, and both
+                    // receivers now give the same message.
                     let method_arg = if matches!(tp, Type::Function(_, _, _))
                         && matches!(actual_type, Type::Null | Type::Unknown(_))
                         && let Value::Var(v) = actual_code.unspan()
@@ -12884,7 +13160,15 @@ impl Parser {
                 && !a.constant
                 && !written.contains(&(a_nr as u16))
             {
-                let src = self.vars.var_source(a_nr as u16);
+                // loft#1003 — point at the `&` itself when the declaration captured it.
+                // The fallback is the variable's source, which for a parameter is a position
+                // inside the BODY: the caret landed on an unrelated construct and there was
+                // no span to delete, so the fix could only be prose.
+                let src = if a.ref_pos == (0, 0) {
+                    self.vars.var_source(a_nr as u16)
+                } else {
+                    a.ref_pos
+                };
                 self.lexer.to(src);
                 // T1.6: RefVar(Tuple) — downgrade to warning since elements are stack values;
                 // other RefVar types are an error (the & serves no purpose and misleads).
@@ -12897,11 +13181,19 @@ impl Parser {
                         "Parameter '{}' does not need to be a reference",
                         a.name
                     );
+                    // The cure is deleting one token, so the edit is that token's span with
+                    // empty replacement text — applicable exactly when the position is real.
+                    let edit = (a.ref_pos != (0, 0)).then(|| crate::diagnostics::Edit {
+                        line: a.ref_pos.0,
+                        col: a.ref_pos.1,
+                        len: 1,
+                        text: String::new(),
+                    });
                     self.lexer.fix_last(crate::diagnostics::Fix {
                         kind: crate::diagnostics::FixKind::Mechanical,
                         title: "drop the `&`".to_string(),
                         condition: None,
-                        edit: None,
+                        edit,
                         concept: "reference",
                         concept_ref: "@F21",
                     });
@@ -12930,7 +13222,12 @@ impl Parser {
                     Type::Integer(_) | Type::Float | Type::Single | Type::Boolean | Type::Character
                 )
             {
-                let src = self.vars.var_source(a_nr as u16);
+                // loft#1003 — the `const` token's own position, as for the `&` above.
+                let src = if a.const_pos == (0, 0) {
+                    self.vars.var_source(a_nr as u16)
+                } else {
+                    a.const_pos
+                };
                 self.lexer.to(src);
                 diagnostic!(
                     self.lexer,
@@ -12940,11 +13237,20 @@ impl Parser {
                      'const' has no effect on an unmodified primitive parameter",
                     a.name
                 );
+                // `const` plus the one space that separates it from the type: deleting the
+                // keyword alone would leave `a:  integer`, which is legal but is not what a
+                // hand-applied fix looks like.
+                let edit = (a.const_pos != (0, 0)).then(|| crate::diagnostics::Edit {
+                    line: a.const_pos.0,
+                    col: a.const_pos.1,
+                    len: 6,
+                    text: String::new(),
+                });
                 self.lexer.fix_last(crate::diagnostics::Fix {
                     kind: crate::diagnostics::FixKind::Mechanical,
                     title: "drop the `const`".to_string(),
                     condition: None,
-                    edit: None,
+                    edit,
                     concept: "const parameters",
                     concept_ref: "@F18",
                 });

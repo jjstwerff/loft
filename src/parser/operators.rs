@@ -407,6 +407,214 @@ impl Parser {
         }
     }
 
+    /// Give an OWNING call a home in THIS frame, so a join can VIEW it.
+    ///
+    /// [`formal/ownership.md`](../../doc/claude/formal/ownership.md) settles the shape:
+    /// a join whose arms disagree about ownership is classified conservatively as a
+    /// view, and that is correct *"because the OWNED arm is materialised into the
+    /// return buffer whose own lifetime frees it"*.  The materialisation was the half
+    /// that did not exist — for `??` (loft#1013) and then for a plain `if`, an
+    /// `else if` chain and every `match` form (loft#1019).  Without it the fresh store
+    /// the owning arm allocated is owned by no frame at all, while the consumer reads
+    /// the join as a borrow and frees nothing: one leaked record per evaluation,
+    /// unbounded in a loop.
+    ///
+    /// The buffer to bind is the one the call ALREADY carries — a heap-returning
+    /// callee is handed a hidden `__ref_N` destination the caller mints and frees
+    /// (`add_defaults`), and all that is missing is capturing what the call answered
+    /// into it.  Reusing that buffer keeps ONE owner and ONE free; a freshly minted
+    /// second work-ref would double-free the callee that DOES deliver through its
+    /// buffer, which `is_struct_returning_call` already excludes.
+    ///
+    /// Answers the rewritten value, or `None` when this value is not an owning call
+    /// that needs a home.
+    pub(crate) fn materialise_owned_call(&mut self, val: &Value, tp: &Type) -> Option<Value> {
+        if self.first_pass {
+            return None;
+        }
+        // A struct LITERAL is already clean for the opposite reason: `parse_object`
+        // allocates it into a work-ref this frame frees unconditionally.
+        let Value::Call(d_nr, args) = val.unspan() else {
+            return None;
+        };
+        let def = self.data.def(*d_nr);
+        // `is_loft_defined`, not `is_struct_returning_call`'s `n_` test: a METHOD is
+        // stored as `t_<LEN><Type>_<method>` and allocates exactly as a free function
+        // does, so a name-shaped gate would leave `bx.make()` leaking while `mk()` was
+        // cured — the same NAME-vs-SHAPE mistake loft#1017 was.
+        if !def.is_loft_defined()
+            // A callee answering a borrowed VIEW of its arguments allocated nothing,
+            // and this frame may free none of what it points at.
+            || def.returns_borrowed_view()
+            // A callee that DELIVERS through the buffer has already claimed it; binding
+            // it again here would free the one store twice.
+            || self.answers_caller_buffer(*d_nr, args)
+        {
+            return None;
+        }
+        let buf = args.iter().find_map(|a| match a.unspan() {
+            Value::Var(w) if self.vars.is_caller_hidden_buf(*w) => Some(*w),
+            _ => None,
+        })?;
+        Some(v_block(
+            vec![v_set(buf, val.clone()), Value::Var(buf)],
+            tp.clone(),
+            "join-arm-owner",
+        ))
+    }
+
+    /// Materialise every owning CALL arm of a join whose merged type is a VIEW
+    /// (loft#1019).
+    ///
+    /// `if`, an `else if` chain and all five `match` forms lower to the same tree of
+    /// [`Value::If`], so one walk covers them — which is why this is a post-pass over
+    /// the assembled value rather than a rewrite repeated at each of the six join
+    /// sites.
+    ///
+    /// Gated on the MERGED type being a view: when every arm is owned the join is
+    /// owned too, the consumer's own free claims the store, and a buffer here would
+    /// free it a second time.
+    pub(crate) fn own_joined_call_arms(&mut self, code: &mut Value, result_tp: &Type) {
+        if self.first_pass
+            || !matches!(result_tp.base(), Type::Reference(_, _))
+            || result_tp.depend().is_empty()
+        {
+            return;
+        }
+        self.own_join_arm(code, result_tp);
+    }
+
+    /// One arm of [`Self::own_joined_call_arms`]: descend to the value the arm
+    /// actually yields — through nested `if`s and to a block's TAIL — and rewrite it
+    /// when it is an owning call.
+    fn own_join_arm(&mut self, arm: &mut Value, tp: &Type) {
+        match arm.unspan_mut() {
+            Value::If(_, t, e) => {
+                self.own_join_arm(t, tp);
+                self.own_join_arm(e, tp);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.own_join_arm(last, tp);
+                }
+            }
+            other => {
+                if let Some(owned) = self.materialise_owned_call(other, tp) {
+                    *other = owned;
+                }
+            }
+        }
+    }
+
+    /// Is this operand's type still a TYPE VARIABLE — a template's `T` / `T?`, whose
+    /// placeholder is an attribute-less struct rather than a real type (loft#1020)?
+    fn is_type_var_operand(&self, tp: &Type) -> bool {
+        matches!(tp.base(), Type::Reference(d, _) if self.data.is_type_var_placeholder(*d))
+    }
+
+    /// The lowering of `x == null` / `x != null` for an operand of CONCRETE type `tp`
+    /// — the ONE place that answers *"what is `τ`'s null?"* for a comparison.
+    ///
+    /// Four types answer it with a dedicated test rather than an equality, each for its
+    /// own reason:
+    ///
+    /// - a **collection** null is the store_nr sentinel, which `OpVectorIsNull` reads;
+    ///   `eq_ref`'s `rec == 0` would also match an empty `[]` (loft#917 covers every
+    ///   keyed kind, not just `vector`).
+    /// - a **float/single** null is the NaN sentinel, and NaN compares unequal to
+    ///   everything including itself, so equality can only ever answer false.  Test
+    ///   VALIDITY instead — `convert(float, bool)` is `!is_nan` — and read it the right
+    ///   way round.
+    /// - an **enum** null is discriminant 0 for an inline `__nullable<S>` or a value
+    ///   enum, and the store_nr sentinel for a struct-enum reference.
+    /// - a nullable **struct reference** holds the store_nr sentinel, which
+    ///   `OpRefIsNull` reads; the generic path compared `rec != 0` against the bool
+    ///   sentinel and answered false for every input (@PLN99 A5).
+    ///
+    /// Anything else — an integer, a text, a boolean — answers `None`, and the caller
+    /// falls through to the ordinary `==` dispatch against the typed null.
+    ///
+    /// It is a function of the type ALONE so a generic body can defer it: inside a
+    /// template `T?` is `Optional(Reference(<type var>))`, whose placeholder is a
+    /// STRUCT, so the reference branch used to win and the monomorph kept `OpRefIsNull`
+    /// over an `integer` slot (loft#1020).  [`Parser::rewrite_generic_type_defaults`]
+    /// re-asks it once `T` is real.  Answering it anywhere else would mint a sixth
+    /// spelling of `τ`'s null, which is the defect loft#1014 was.
+    pub(crate) fn null_test(&mut self, operand: Value, tp: &Type, negate: bool) -> Option<Value> {
+        let is_null = if Self::is_collection_type(tp.base()) {
+            // A heap-owning collection TEMP (a call result) consumed by the null test
+            // would be orphaned — `OpVectorIsNull` reads the sentinel and discards the
+            // store — so capture it in a work-ref for scopes.rs to free.  A `Var` already
+            // owns its store, and an operand whose type declares a BORROW (a field read,
+            // `optional(vector(…, deps { items: [0] }))`) is not ours to free at all:
+            // freeing it took the holder's storage with it and the next read of the same
+            // field dereferenced poison (loft#920).
+            let borrows = !tp.depend().is_empty();
+            let w = if matches!(operand.unspan(), Value::Var(_)) || borrows {
+                u16::MAX
+            } else {
+                self.vars.work_refs(tp, &mut self.lexer)
+            };
+            if w == u16::MAX {
+                self.cl("OpVectorIsNull", &[operand])
+            } else {
+                self.vars.mark_inline_ref(w);
+                crate::data::v_block(
+                    vec![
+                        crate::data::v_set(w, operand),
+                        self.cl("OpVectorIsNull", &[Value::Var(w)]),
+                    ],
+                    Type::Boolean,
+                    "vec-null-workref",
+                )
+            }
+        } else if matches!(tp.base(), Type::Float | Type::Single) {
+            // `valid` is is-NON-null, so the two answers are the other way round here.
+            let mut valid = operand;
+            self.convert(&mut valid, tp, &Type::Boolean);
+            return Some(if negate {
+                valid
+            } else {
+                self.cl("OpNot", &[valid])
+            });
+        } else if let Type::Enum(e_def, _, _) = tp {
+            let e_def = *e_def;
+            // A synthetic `__nullable<S>` enum backs an INLINE struct field / vector
+            // element (no DbRef slot), so null is discriminant 0 — read it directly,
+            // NEVER `OpRefIsNull`, whose store_nr test would deref the absent record.
+            let inline = e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+            // A VALUE enum (`Color`, no payload variants) is a disc byte whose null is
+            // discriminant 0.  Read the shape from the enum DEFINITION's `returned`
+            // type: the ACCESS type is polluted — a field read of a simple enum comes
+            // back `Enum(_, true, _)` even though the enum itself is a value enum.
+            let value_enum = e_def != u32::MAX
+                && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
+            if inline {
+                let get_enum = self.cl("OpGetEnum", &[operand, Value::Int(0)]);
+                let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                self.cl("OpEqInt", &[disc, Value::Int(0)])
+            } else if value_enum {
+                let disc = self.cl("OpConvIntFromEnum", &[operand]);
+                self.cl("OpEqInt", &[disc, Value::Int(0)])
+            } else {
+                // A struct-enum reference: null IS the store_nr sentinel, NOT
+                // `OpEqRef`'s `rec == 0` (a present enum is inline on native).
+                self.cl("OpRefIsNull", &[operand])
+            }
+        } else if matches!(tp, Type::Optional(_)) && matches!(tp.base(), Type::Reference(_, _)) {
+            // Gate on `Optional`, NOT bare `Reference`: a collection LOOKUP result is a
+            // bare `Reference` whose miss is `rec == 0`, and `OpRefIsNull` misreads it.
+            self.cl("OpRefIsNull", &[operand])
+        } else {
+            return None;
+        };
+        Some(if negate {
+            self.cl("OpNot", &[is_null])
+        } else {
+            is_null
+        })
+    }
+
     /// loft#953 — does this call hand back a buffer the CALLER already owns?
     ///
     /// A heap-returning callee is given a hidden destination argument: the caller mints
@@ -1712,6 +1920,7 @@ impl Parser {
         parent_tp: &mut Type,
         precedence: usize,
         ctp: &mut Type,
+        op_pos: &Position,
     ) {
         // Redundant-coalesce warning — fire ONLY when the LHS type is genuinely
         // non-null.  `expr_not_null` tracks the last-read name's not-null-ness but
@@ -1723,6 +1932,9 @@ impl Parser {
         // Grandfather (case-B flip): a call to a fn DECLARED `-> τ?` whose result the
         // domain lattice just narrowed to non-null (`sqrt(a*a+b*b) ?? d`) is a real
         // defense, not redundant — never warn on a declared-nullable-returning call.
+        // loft#1003 — `(diagnostic index, line, column)` of a `redundant-coalesce` notice
+        // whose deletion span is still open, or `None` when none fired.
+        let mut redundant_at: Option<(usize, u32, u32)> = None;
         if self.expr_not_null
             && !self.first_pass
             && !matches!(ctp, Type::Optional(_))
@@ -1739,10 +1951,23 @@ impl Parser {
                 kind: crate::diagnostics::FixKind::Mechanical,
                 title: "delete the `?? <default>`".to_string(),
                 condition: None,
+                // Spelled below, once the default has been parsed and the span has an end
+                // (loft#1003).  The notice has to fire HERE — it is about the `??` — but
+                // the deletion runs through a default that does not exist yet.
                 edit: None,
                 concept: "null coalescing",
                 concept_ref: "@F2",
             });
+            // `op_pos` is the `??`'s own position — the lexer's cursor is no help here,
+            // it has already scanned past the default (loft#1003).
+            // `op_pos` is the cursor just PAST the `??`, so the token itself starts two
+            // columns back.  The lexer's own cursor is no help — it has already scanned
+            // beyond the default (loft#1003).
+            redundant_at = self
+                .lexer
+                .last_diagnostic_index()
+                .filter(|_| op_pos.pos >= 3)
+                .map(|i| (i, op_pos.line, op_pos.pos - 2));
         }
         self.expr_not_null = false;
         // Plan-07 phase 4h — if the `??` LHS is the just-emitted
@@ -1778,6 +2003,32 @@ impl Parser {
         } else {
             self.build_null_coalesce_default(var_tp, code, parent_tp, precedence, ctp, &lhs_type);
         }
+        // loft#1003 — the default is parsed, so the deletion now has an end.  Spelling it
+        // here is what lets `loft fix` see this fix at all: it reports only fixes carrying
+        // an `edit`, which is why it could act on no warning-level fix in the whole index.
+        //
+        // Only when the whole `?? <default>` sits on ONE line — an `Edit` is a single-line
+        // span, and a fix that cannot be placed must not be spelled (the same rule the
+        // checked-cast edit above follows).
+        if let Some((idx, line, start_col)) = redundant_at
+            && let Some((end_line, end_col)) = self.ncc_default_end.take()
+            && end_line == line
+            && end_col > start_col
+        {
+            {
+                self.lexer.set_fix_edit(
+                    idx,
+                    0,
+                    crate::diagnostics::Edit {
+                        line,
+                        col: start_col,
+                        len: end_col - start_col,
+                        text: String::new(),
+                    },
+                );
+            }
+        }
+        self.ncc_default_end = None;
     }
 
     /// `lhs ?? return ret_expr` — emit the block that returns early when `lhs`
@@ -1868,6 +2119,17 @@ impl Parser {
         } else {
             self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1)
         };
+        // loft#1003 — the default's END, for the `redundant-coalesce` deletion span.
+        // Taken HERE and not at the caller's tail: by then the cursor has moved past the
+        // statement terminator, and a span that swallows the `;` is a rewrite that
+        // introduces a syntax error — which the fix verifier duly REJECTED.
+        // `peek_pos()`, not `at()`: positions here are the cursor AFTER a token and the
+        // lexer peeks one ahead, so `at()` is already past the statement terminator.  The
+        // START of the following token is the default's exclusive end.
+        self.ncc_default_end = Some({
+            let p = self.lexer.peek_pos();
+            (p.line, p.pos)
+        });
         self.known_var_or_type(&rhs, &rhs_pos);
 
         // @PLN102 gate-2 `?? null` soundness — `a ?? b` yields `a` when non-null else `b`, so it
@@ -2084,6 +2346,23 @@ impl Parser {
                 nc
             }
         };
+        // loft#1013 — a CALL default needs an owner when the RESULT is a BORROW.
+        //
+        // `x = v[i] ?? mk()` types the result from the SUBJECT, which names the vector
+        // (`ref(S)["v"]`), so the consumer reads `x` as a borrow and frees nothing while
+        // the MISS path hands back a store `mk()` freshly allocated.  A struct LITERAL
+        // default was always clean for the opposite reason — `parse_object` allocates it
+        // into a work-ref this frame already frees — and the compiler's refusal of a
+        // struct-valued constant PRESCRIBES the call spelling, so the leaking form is the
+        // one it tells you to write.  [`Self::materialise_owned_call`] has the model; the
+        // same join shape written as an `if` or a `match` is loft#1019.
+        if !self.first_pass
+            && matches!(result_type.base(), Type::Reference(_, _))
+            && !result_type.depend().is_empty()
+            && let Some(owned) = self.materialise_owned_call(&rhs, &result_type)
+        {
+            rhs = owned;
+        }
         if let Value::Var(_) = code {
             // Simple variable: reading twice is side-effect-free.
             let mut lhs = code.clone();
@@ -2367,6 +2646,25 @@ impl Parser {
                 let t = self.emit_variant_value(*enum_nr, &first, &mut v);
                 Some((v, t))
             }
+            // A TYPE VARIABLE has no default of its own.  `construct_default` is a
+            // function of the CONCRETE type (types.md `(D-Scalar)` … `(D-Rec)`), and
+            // inside a template `T` is an attribute-less placeholder STRUCT — which the
+            // record arm below defaults, perfectly happily, to an empty record of the
+            // placeholder's own store type.  That is what shipped: `g<T>(v, a: T? = null)
+            // { a? }` allocated a `__typevar_T` record, leaked it, and read it back as
+            // whatever the instantiation's type is — `34359738369` for `integer`, a
+            // denormal for `float`, a SIGSEGV for `text`.
+            //
+            // So mark the site instead and leave it to the monomorph, where `T` is
+            // concrete and `has_default` is decidable
+            // ([`Parser::rewrite_generic_type_defaults`]).  The placeholder record is
+            // still built underneath, because a template's IR is type-checked and
+            // slot-allocated even though it never runs (loft#1016).
+            Type::Reference(d_nr, _) if self.data.is_type_var_placeholder(*d_nr) => {
+                let name = self.data.def(*d_nr).name().to_string();
+                let (v, t) = self.subparse_default(&format!("{name} {{}}"), tp);
+                Some((v_block(vec![v], t.clone(), Self::TV_DEFAULT_BLOCK), t))
+            }
             // A record defaults to `S{}` — every field defaulted, exactly the value a
             // bare `S{}` literal builds (`has_default` has already verified each field
             // has a default).  Parsed from the synthetic `S {}` source so it reuses
@@ -2389,7 +2687,7 @@ impl Parser {
     /// reuses `parse_object`'s construction AND its work-ref ownership / freeing.
     /// The parse runs in the SAME function context (only the lexer is swapped), so
     /// its work-refs, types and pass state are all correct; `hint` types the parse.
-    fn subparse_default(&mut self, src: &str, hint: &Type) -> (Value, Type) {
+    pub(crate) fn subparse_default(&mut self, src: &str, hint: &Type) -> (Value, Type) {
         let saved = std::mem::take(&mut self.lexer);
         self.lexer.parse_string(&format!("{src}\n"), "<x?-default>");
         let mut rhs = Value::Null;
@@ -2514,7 +2812,7 @@ impl Parser {
         }
         // @F2 — ?? null-coalescing operator (incl. `?? return`)
         if operator == "??" {
-            self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
+            self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp, op_pos);
         // @F5 — type conversions: explicit `as` cast (+ implicit / format-only OpConv*)
         } else if operator == "as" {
             self.expr_not_null = false;
@@ -2999,152 +3297,58 @@ impl Parser {
                      if that is really what you mean)"
                 );
             }
-            if vec_null {
-                // @PLN25: `vector == null` / `vector != null` tests the null
-                // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
-                // whose rec==0 null test would also match an empty `[]`.
-                if !self.first_pass {
-                    let (vec_code, vec_tp) = if Self::is_collection_type(ctp.base()) {
-                        (code.clone(), ctp.clone())
+            // loft#1020 — the operand is still a TYPE VARIABLE, so which null test it
+            // wants is not decidable here.  Inside a template `T?` is
+            // `Optional(Reference(<type var>))` and the placeholder is a STRUCT, so
+            // `ref_null` below would win and the monomorph would keep `OpRefIsNull` over
+            // whatever `T` became — a 12-byte DbRef read out of an 8-byte `integer` slot
+            // (interpreter panic, `--native` E0610 on `.store_nr` of an `i64`).
+            //
+            // Stamp the site instead and let `rewrite_generic_type_defaults` re-ask
+            // `null_test` once `T` is real, exactly as loft#1016 does for the DEFAULT of
+            // the same declaration.  The block's `result` is the operand's type, which
+            // substitution rewrites to the concrete one; a nested generic re-marks and
+            // stays deferred.
+            let tv_null = (operator == "==" || operator == "!=")
+                && ((self.is_type_var_operand(ctp) && second_type == Type::Null)
+                    || (*ctp == Type::Null && self.is_type_var_operand(&second_type)));
+            if tv_null {
+                // Marked on BOTH passes, unlike every branch below — they emit ops, which
+                // is what needs a resolved second pass, while this only WRAPS the operand.
+                //
+                // loft#1023: the second pass re-parses in source order, so a call
+                // instantiates a generic declared BELOW it before that template's own
+                // pass-2 body exists, and the monomorph keeps whatever pass 1 left.  A
+                // marker emitted on pass 2 alone was therefore absent from exactly those
+                // monomorphs, and the body handed back the raw operand where a boolean
+                // belonged: `--native` refused the program and the interpreter read the
+                // slot as whatever it held.  Marking on pass 1 too makes the template's
+                // body carry the site whichever pass a monomorph is derived from.
+                let (n_code, n_tp) = if *ctp == Type::Null {
+                    (second_code, second_type.clone())
+                } else {
+                    (code.clone(), ctp.clone())
+                };
+                *code = v_block(
+                    vec![n_code],
+                    n_tp,
+                    if operator == "==" {
+                        Self::TV_NULLTEST_EQ
                     } else {
-                        (second_code, second_type.clone())
-                    };
-                    // A heap-owning vector TEMP (a call result / non-var) consumed by the
-                    // null test would be orphaned: OpVectorIsNull reads only the sentinel and
-                    // discards the vector store. Capture it in a work-ref so scopes.rs emits
-                    // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
-                    // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
-                    // store, so it needs no work-ref.
-                    //
-                    // Neither does an operand whose type declares a BORROW.  "Non-`Var`" was
-                    // standing in for "a temp that owns its store", and a FIELD READ is
-                    // non-`Var` too: `h.vec == null` captured `OpGetField(h, …)` — a DbRef
-                    // into `h`'s record — and freed it, taking the holder's storage with it.
-                    // The next read of the same field then returned poisoned bytes, which
-                    // `len()` dereferenced: SIGSEGV under `LOFT_POISON=1`, and the nightly
-                    // UB gate's failure (loft#920).  The type already answers this — the
-                    // field read is typed `optional(vector(…, deps { items: [0] }))` — so ask
-                    // it rather than inferring ownership from the value's shape.
-                    //
-                    // Strictly narrowing: only an operand that POSITIVELY declares a borrow
-                    // loses its work-ref.  A call result still gets one, so this does not
-                    // touch loft#938, whose difficulty is the opposite case — an owning and a
-                    // borrowing nullable-collection RETURN are both spelled with EMPTY deps
-                    // and cannot be told apart here at all.
-                    let borrows = !vec_tp.depend().is_empty();
-                    let w = if matches!(vec_code.unspan(), Value::Var(_)) || borrows {
-                        u16::MAX
-                    } else {
-                        self.vars.work_refs(&vec_tp, &mut self.lexer)
-                    };
-                    let is_null = if w == u16::MAX {
-                        self.cl("OpVectorIsNull", &[vec_code])
-                    } else {
-                        self.vars.mark_inline_ref(w);
-                        crate::data::v_block(
-                            vec![
-                                crate::data::v_set(w, vec_code),
-                                self.cl("OpVectorIsNull", &[Value::Var(w)]),
-                            ],
-                            Type::Boolean,
-                            "vec-null-workref",
-                        )
-                    };
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
-                }
+                        Self::TV_NULLTEST_NE
+                    },
+                );
                 *ctp = Type::Boolean;
-            } else if float_null {
+            } else if vec_null || float_null || enum_null || ref_null {
                 if !self.first_pass {
-                    let (f_code, f_tp) = if *ctp == Type::Null {
+                    let (n_code, n_tp) = if *ctp == Type::Null {
                         (second_code, second_type.clone())
                     } else {
                         (code.clone(), ctp.clone())
                     };
-                    // convert(float, boolean) = !is_nan = "is non-null".
-                    let mut valid = f_code;
-                    self.convert(&mut valid, &f_tp, &Type::Boolean);
-                    *code = if operator == "==" {
-                        self.cl("OpNot", &[valid])
-                    } else {
-                        valid
-                    };
-                }
-                *ctp = Type::Boolean;
-            } else if enum_null {
-                if !self.first_pass {
-                    let (e_code, e_def) = if *ctp == Type::Null {
-                        let d = match &second_type {
-                            Type::Enum(d, _, _) => *d,
-                            _ => u32::MAX,
-                        };
-                        (second_code, d)
-                    } else {
-                        let d = match &*ctp {
-                            Type::Enum(d, _, _) => *d,
-                            _ => u32::MAX,
-                        };
-                        (code.clone(), d)
-                    };
-                    // @PLN25 E2a.4 — a synthetic `__nullable<S>` enum backs an INLINE
-                    // struct field / vector element (no DbRef slot), so null is
-                    // discriminant 0 — read it directly (OpGetEnum @ offset 0), NEVER
-                    // OpRefIsNull, whose store_nr sentinel test would deref the absent
-                    // record and OOB-crash.  A user enum VARIABLE is a DbRef whose null
-                    // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
-                    let inline =
-                        e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
-                    // A VALUE enum (`Color`, no payload variants) is a disc byte whose
-                    // null is discriminant 0 — test `OpConvIntFromEnum(v) == 0`, NOT
-                    // OpRefIsNull (its store_nr sentinel test on a u8 field-read →
-                    // native E0610 `.store_nr` on a primitive).  Read the value/reference
-                    // shape from the enum DEFINITION's `returned` type: the ACCESS type
-                    // is polluted — a field read of a simple enum comes back
-                    // `Enum(_, true, _)` even though the enum itself is a value enum.
-                    // Only a genuine struct-enum (`returned` = `Enum(_, true, _)`) is a
-                    // DbRef and keeps OpRefIsNull.
-                    let value_enum = e_def != u32::MAX
-                        && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
-                    let is_null = if inline {
-                        let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
-                        let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
-                        self.cl("OpEqInt", &[disc, Value::Int(0)])
-                    } else if value_enum {
-                        // `e_code` is the disc byte already (a field read / a value var);
-                        // disc 0 is the absent variant.
-                        let disc = self.cl("OpConvIntFromEnum", &[e_code]);
-                        self.cl("OpEqInt", &[disc, Value::Int(0)])
-                    } else {
-                        // A struct-enum reference: null IS the store_nr sentinel
-                        // (OpRefIsNull), NOT OpEqRef's rec==0 (a present enum is
-                        // inline-represented on native and carries rec==0).
-                        self.cl("OpRefIsNull", &[e_code])
-                    };
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
-                }
-                *ctp = Type::Boolean;
-            } else if ref_null {
-                if !self.first_pass {
-                    let r_code = if *ctp == Type::Null {
-                        second_code
-                    } else {
-                        code.clone()
-                    };
-                    // A struct reference variable is a DbRef whose null IS the store_nr
-                    // sentinel (OpRefIsNull), NOT rec==0 (a present record can carry rec==0).
-                    let is_null = self.cl("OpRefIsNull", &[r_code]);
-                    *code = if operator == "==" {
-                        is_null
-                    } else {
-                        self.cl("OpNot", &[is_null])
-                    };
+                    if let Some(test) = self.null_test(n_code, &n_tp, operator == "!=") {
+                        *code = test;
+                    }
                 }
                 *ctp = Type::Boolean;
             } else if operator == ">" {

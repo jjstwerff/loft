@@ -57,6 +57,10 @@ fn test_sum_takes_an_identity() {
   assert(sum(floats, 0.0) == 4.0, "float sum starts from 0.0");
   none: vector<integer> = [];
   assert(sum(none, 0) == 0, "empty sum is the identity");
+  // Leaving `init` out uses the element type's OWN zero, so the two spellings agree.
+  assert(sum(ints) == 42, "an omitted identity is the element type's zero");
+  assert(sum(floats) == 4.0, "and for float that zero is 0.0");
+  assert(sum(none) == 0, "an empty vector with no identity is still 0");
 }
 
 // A struct for the JSON round-trip example below.  Reflection reads its

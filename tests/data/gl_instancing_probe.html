@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>loft-gl instancing bridge probe</title>
+<body style="margin:0;background:#000">
+<canvas id="gl" width="256" height="256"></canvas>
+<pre id="out" style="color:#0f0"></pre>
+<script src="/doc/loft-gl-wasm.js"></script>
+<script>
+// @PLN144 A3 prerequisite — the four instancing primitives, gated on PIXELS.
+//
+// A0 found them absent: the page BUILT, each returned its zero value, and the
+// stage drew nothing.  Bridging them makes the build-time surface check pass,
+// which is precisely the signal that has been wrong three times today
+// (loft#737 text, E1 audio, and this).  So the assertion is coverage read back
+// from the framebuffer, and the load-bearing one is that coverage GROWS with the
+// instance count: if `vertexAttribDivisor` were missing every instance would
+// land on top of the first, and drawing 64 would paint exactly what 1 paints.
+const ctrl = { ac: null, assets: {} };
+const fail = [];
+function ck(name, cond, extra) {
+  if (!cond) fail.push(name + (extra === undefined ? '' : ' (' + extra + ')'));
+}
+const mem = new WebAssembly.Memory({ initial: 4 });
+let heap = 1024;
+const putF32 = (arr) => {
+  heap = (heap + 3) & ~3;                 // a Float32Array view must be 4-byte aligned
+  const p = heap; new Float32Array(mem.buffer, p, arr.length).set(arr);
+  heap += arr.length * 4 + 16; return [p, arr.length];
+};
+const putStr = (s) => {
+  const b = new TextEncoder().encode(s); new Uint8Array(mem.buffer).set(b, heap);
+  const r = [heap, b.length]; heap += b.length + 8; return r;
+};
+
+const VERT = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 iOff;
+void main(){ gl_Position = vec4(aPos*0.04 + iOff, 1.0); }`;
+const FRAG = `#version 300 es
+precision mediump float;
+out vec4 o;
+void main(){ o = vec4(1.0,0.0,0.0,1.0); }`;
+
+function litPixels(g, gl2) {
+  const px = new Uint8Array(256*256*4);
+  gl2.readPixels(0,0,256,256, gl2.RGBA, gl2.UNSIGNED_BYTE, px);
+  let lit = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i] > 128) lit++;
+  return lit;
+}
+
+try {
+  const canvas = document.getElementById('gl');
+  const g = buildLoftImports(canvas, document.getElementById('out'), () => mem, ctrl).loft_gl;
+  const gl2 = canvas.getContext('webgl2');
+
+  const [vp, vl] = putStr(VERT), [fp, fl] = putStr(FRAG);
+  const prog = g.loft_gl_create_shader(vp, vl, fp, fl);
+  ck('shader compiles', prog > 0, prog);
+
+  const [qp, qn] = putF32([-1,-1,0,  1,-1,0,  1,1,0,  -1,-1,0,  1,1,0,  -1,1,0]);
+  const vao = g.loft_gl_upload_vertices(qp, qn, 3);
+  ck('vao handle', vao > 0, vao);
+
+  // 64 instances on an 8x8 lattice — distinct positions, so a working divisor
+  // spreads them and a missing one stacks them.
+  const offs = [];
+  for (let i = 0; i < 64; i++) offs.push((i % 8) / 4 - 0.875, ((i / 8) | 0) / 4 - 0.875, 0);
+  const [op, on] = putF32(offs);
+  const ivbo = g.loft_gl_upload_instance_buffer(op, on);
+  ck('instance buffer handle', ivbo > 0, ivbo);
+  ck('instance buffer is not the vao', ivbo !== vao, ivbo + '/' + vao);
+
+  g.loft_gl_instance_attrib(vao, ivbo, 1, 3, 3, 0);
+  g.loft_gl_use_shader(prog);
+
+  g.loft_gl_clear(0);
+  g.loft_gl_draw_instanced(vao, 6, 1);
+  const one = litPixels(g, gl2);
+  ck('one instance paints', one > 0, one);
+
+  g.loft_gl_clear(0);
+  g.loft_gl_draw_instanced(vao, 6, 64);
+  const many = litPixels(g, gl2);
+  // The divisor test.  Without vertexAttribDivisor every instance reads offset[0]
+  // and 64 instances paint exactly what 1 paints.
+  ck('64 instances paint more than 1', many > one * 8, one + ' -> ' + many);
+
+  // update_buffer must actually re-upload: move every instance off-screen and the
+  // coverage must collapse.
+  const [up] = putF32(offs.map((v, i) => (i % 3 === 0 ? v + 4.0 : v)));
+  g.loft_gl_update_buffer(ivbo, up, on);
+  g.loft_gl_clear(0);
+  g.loft_gl_draw_instanced(vao, 6, 64);
+  const moved = litPixels(g, gl2);
+  ck('update_buffer re-uploads', moved < many / 4, many + ' -> ' + moved);
+
+  const out = document.getElementById('out');
+  if (fail.length) { console.error('GL-INSTANCING FAIL: ' + fail.join(' | ')); out.textContent = 'FAIL'; }
+  else out.textContent = 'instancing ok: 1->' + one + ' 64->' + many + ' moved->' + moved;
+} catch (e) {
+  console.error('GL-INSTANCING THREW: ' + (e && e.stack || e));
+}
+</script>

@@ -9,6 +9,424 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The `--native` copy-or-adopt guard was gated on a NAME, so a METHOD never got it (loft#1017, 2026-08-20)
+
+A callee whose return may be a BORROW of an argument cannot have its result aliased into a
+caller local: the local's own `OpFreeRef` then whole-store-frees the caller's RECEIVER. The heap
+first-bind in `dispatch.rs` handles that — the @P290 protect bracket around the call, and a
+copy-or-adopt guard after it (`_src` aliases the receiver → deep copy; callee-minted → adopt).
+The gate read `name().starts_with("n_")`, so a `t_` METHOD, or a generic monomorph, with a
+byte-identical body and the same `return_adopts_fresh_store()` verdict fell straight through to
+a plain alias — no bracket, no copy — followed by the same unconditional free.
+
+`scopes.rs`'s own lift gate already says the two *"have to name the SAME set of callees, which
+is why the predicate lives in one place (loft#810)"* and uses `is_loft_defined()`. This end had
+drifted off it, and the comment directly above it records an earlier correction from a "coarse
+proxy" to the canonical `return_adopts_fresh_store()` fact — which the name prefix survived
+untouched. The interpreter was never affected: `gen_set_first_ref_call_copy` reads the fact.
+
+**The 10-line reduction the issue says it could not find**, and why two attempts missed it:
+
+```loft
+fn view_at(self: const St, i: integer) -> V {
+  if i < 0 or i >= len(self.vs) { return V { x: 0.0, … }; }   // FRESH
+  self.vs[i] ?? V { x: 0.0, … }                                // BORROW
+}
+for i in 0..6 { println("x={view_at(s, i % 3).x}"); }
+```
+
+```
+interp:  1.5  3.5  0  1.5  3.5  0
+native:  1.5  3.5  0  0    0    0     <-- everything after the FRESH arm ran
+```
+
+The borrow arm reads CORRECTLY and then frees its store; the fresh arm's next allocation
+recycles that slot over the receiver's records. In `stage` the recycled slot was a canvas, which
+is why the corrupt `rec` read back as `0xFF000000`.
+
+Both axes have to move together. The identical body as a FREE function is correct, and so is a
+single call instead of a loop — so a reduction "with a plain `vector<V>`", written as a free
+function and called once, is two controls at the same time and passes. The METHOD spelling was
+the missing axis, and the report's "the shape alone is not sufficient" was measuring cell B.
+
+The regression test carries all six cells including the two that a too-eager fix would break —
+the free-function spelling, and the borrow arm alone. It fails 6/6 on the pre-fix binary.
+
+
+### A `null` argument read as an incomplete witness set, so the caller never freed (loft#1021, 2026-08-20)
+
+`fn f(a: P? = null) -> P { a? }` called as `f()` leaked the record the null path built, once per
+call, on both backends. The value was right; only the ownership was wrong.
+
+loft#981/#982 already built what this needs, and `protectable_ref_args`' own comment states it:
+a callee whose return dep names a visible parameter may hand back that parameter's store (the
+caller must not free it) or one it minted itself (the caller must), *"no static bit can carry
+that split, so the decision is made at RUNTIME by the bracket."* The bracket needs a SLOT to
+name, so a non-`Var` argument leaves the witness set incomplete and the caller keeps the
+conservative never-free answer.
+
+An OMITTED `τ? = null` parameter is filled with a bare `Value::Null`, which is not a `Var` — so
+every such call read as uncovered. But a `null` argument holds NO STORE: nothing the callee
+returns can be a borrow of it, so it neither needs protecting nor can it break coverage. One
+arm, at the predicate both ends of the emitted sequence already read.
+
+**The measurement that localised it.** `q: P? = null; b = f(q)` — a bare VAR holding null — was
+always CLEAN, while `b = f()` leaked, over a byte-identical callee and a caller IR differing only
+by that variable. Two readings of `protectable_ref_args` predicted both should leak. One
+env-gated `eprintln` on `call_return_frees_source` settled it in a single run: for `f()` it
+answers `covers_all=false -> false`; for `f(q)` it is **not consulted at all**, because that
+caller takes a different lowering. The predicate was right and the model of who asks it was not
+— which no amount of re-reading the predicate would have shown.
+
+**Still open, found while measuring this:** the BORROW arm of the same mixed-ownership return
+leaks and SCALES — `fn pick(bx: Box, take: boolean) -> P { if take { bx.p } else { P{…} } }`
+called five times leaks four records plus one unknown-typed store. A displaced owner rather than
+a coverage gap, and the closest interpreter-side shape to loft#1017's `--native` corruption.
+
+
+### `sum`'s identity got a default, so the one `#superseded` fix loft ships can be applied (loft#1003, 2026-08-20)
+
+`superseded-call` is the only ADVICE-level fix carrying a machine `edit`, and it was **always
+rejected**: the edit is a bare rename, `sum_of` is the only `#superseded` symbol in the stdlib,
+and `sum<T: Addable>(v, init: T)` had no default for `init` — so the verified rewrite `sum(v)`
+was *"missing argument for parameter 'init'"* on every program that triggered it.
+
+```console
+$ loft fix s.loft
+  s.loft:1  call `sum` instead  [REJECTED (the rewrite introduces an error)]     # before
+  s.loft:1  call `sum` instead  [verified]                                       # after
+```
+
+`init: T? = null` with `result = init?`. A literal default is not spellable (`init: T = 0` is
+*"expected T, got integer on default value"*), so the nullable-with-discharge form is the only
+one available — and it is exactly the declaration loft#1016 had to fix first, which is why the
+two land together. Additive per COMPATIBILITY.md: adding a default keeps every existing
+`sum(v, init)` caller working.
+
+This closes the "always rejected" half of loft#1003. The larger half — 20 fixes advertised
+MECHANICAL in DIAGNOSTICS.md that carry no `edit`, and no gate asserting they must — is
+untouched.
+
+
+### `character`'s null had four spellings and the backends picked different ones (loft#1014, 2026-08-20)
+
+`types.md` pins one: `Char`'s in-band sentinel is CODEPOINT 0 — the same `'\0'` that
+`construct_default(Character)` answers, that `op_conv_bool_from_character` tests for, and that
+the parser's `null()` emits as `OpConvCharacterFromNull`. Two of the five sites disagreed, in
+different directions, so the same program answered differently per backend.
+
+- **Interpreter** — `emit_typed_null` grouped `Character` with `Integer` and pushed EIGHT bytes
+  of `i64::MIN` into a FOUR-byte slot. It read as null only because the low word of `i64::MIN`
+  is zero on a little-endian box: right by accident, at the wrong width. Now
+  `OpConvCharacterFromNull`, the spelling the parser already uses.
+- **`--native`** — `write_typed_null_in` wrote `i32::MIN`, which is not codepoint 0 at all, so
+  `a == null` on an omitted `character? = null` answered FALSE while the interpreter said true.
+  Worse, `ops::to_char` reaches that value through `from_u32_unchecked`, for which `0x8000_0000`
+  is undefined behaviour — the release optimiser is entitled to fold the sentinel test away.
+  Now `0`.
+
+**And a `character?` DISCHARGE would not compile on `--native` in any form.** The `ops::to_char`
+wrap that converts the i32 storage form to the `char` an op template wants was chosen by IR NODE
+KIND — four arms (`Var`, `TupleGet`, `Call`, `Block`), each added when a new shape turned up.
+The `?` discharge lowers to an `If`, which was on none of them, so the template compared an
+`i32` against `char::from(0)` and rustc rejected the whole build. It is a TYPE test now: an
+operand of a character-typed parameter arrives as the i32 storage form whatever produced it, and
+only the bare integer literal (which constructs a `char` directly) is excluded. An allow-list
+here costs correctness, not an optimisation — the opposite of the hoist gate's allow-list, and
+the reason this one had to go.
+
+Not changed, and asserted so it stays visible: a `character` holding `'\0'` reads as null,
+because that codepoint IS the reserved sentinel — so `'\0' as integer` answers `null` on both
+backends. The issue read that cell as a discharge failure; a literal `'\0'` behaves identically,
+so it is the documented in-band collision, not this bug.
+
+
+### `x?` on a generic parameter discharged with the type VARIABLE's default (loft#1016, 2026-08-20)
+
+`x?` is `x ?? construct_default(T)` (`types.md` `(N-Default)`) and `construct_default` is a
+function of the CONCRETE type. Inside a template `T` is an attribute-less placeholder STRUCT,
+and `build_default`'s record arm defaulted it perfectly happily — to an empty record of the
+placeholder's own store type. Substitution then retyped the slot and left the allocation, so the
+monomorph read a `__typevar_T` record back as whatever `T` became:
+
+| `T` | answered |
+|---|---|
+| `integer` | `34359738369` (a zero-filled DbRef read as a number) |
+| `float` | a denormal |
+| a record `P` | `4294967198`, **plus a leaked `__typevar_T` record** |
+| `text` | SIGSEGV |
+
+The rule was simply not applied where it is decidable. `build_default` now MARKS such a site
+(a block named `TV_DEFAULT_BLOCK`) and `rewrite_generic_type_defaults` answers it per monomorph
+— in the MONOMORPH's own frame, via the `self.vars` / `self.context` swap the drop-cascade
+builder uses, because a record default parses `S {}` and its work-ref belongs to the function
+the code lands in. A nested generic (`concrete` still a type variable) re-marks and stays
+deferred until the outer instantiation names a real type.
+
+⚠ **A second defect sat behind it, reachable only once `T = text` stopped crashing.** The
+declaration sites paired `rust_type(tp, &Context::Variable)` with the context-free
+`default_native_value`, which answers the `Str` form — `let mut var_x: String =
+Str::new(STRING_NULL)`, rustc E0308. The tuple arm had already patched exactly this by hand for
+its elements. `default_native_value_in` asks the question once now, and the tuple arm calls it.
+
+**Still open, found while measuring this and filed rather than fixed:** `a == null` on a generic
+`T?` picks `OpRefIsNull` at TEMPLATE time (the operand is `Optional(Reference(tv))`, so the
+reference arm of the `== null` dispatch wins) and the monomorph keeps it — a 12-byte DbRef read
+out of an 8-byte integer slot. Same root class, but curing it means extracting the five-branch
+null-test dispatch so a monomorph can re-run it, which is its own change.
+
+
+### A `??` default that CALLS a function leaked its record, once per index miss (loft#1013, 2026-08-20)
+
+`x = v[i] ?? mk()` types its result from the SUBJECT, which names the vector (`ref(S)["v"]`), so
+the consumer reads `x` as a borrow and frees nothing. On the miss path the value is a store
+`mk()` freshly allocated and handed back — owned by no one. One record per MISS, unbounded in a
+loop, identical on both backends.
+
+The boundary says it is not `??` in general and not calls in general: a struct LITERAL default
+is clean, and the same call bound plainly is clean. The literal is clean for the opposite
+reason — `parse_object` allocates it into a work-ref this frame already frees — which is exactly
+the model `build_null_coalesce_default`'s own comments state ("the default arm keeps its own
+owner, freed independently"). A call default simply had none. And the compiler's refusal of a
+struct-valued constant prescribes the call spelling, so the leaking form is the one it tells you
+to write.
+
+The buffer to bind is the one the call ALREADY carries: a heap-returning callee is given a
+hidden `__ref_N` destination the caller mints and frees (`add_defaults`), and the only thing
+missing was capturing what the call answered into it. Reusing that buffer keeps ONE owner and
+ONE free — a freshly minted second work-ref would double-free the callee that DOES deliver
+through its buffer. Guarded on a BORROWING result (an owned subject makes the result owned and
+the consumer's own free claims the store) and on a callee that does not return a borrowed view.
+
+⚠ **That exposed a second half in `scopes.rs`.** `paired_witness` made the buffer its OWN
+witness for `__ref_N = f(__ref_N)`, so the scope-exit `OpFreeRefIfDistinct(__ref_1, __ref_1)`
+compared the store with itself and never fired — the leak survived the parser fix unchanged. The
+pairing exists to skip the buffer's free when ANOTHER variable adopted its store; a buffer is
+never its own witness.
+
+**Still open, found while measuring this:** the same mixed-ownership merge written as a plain
+`if` — `m = if i < len(v) { v[i] } else { mk() }` — leaks identically. The ownership inspector
+names the shape (`m  Join(base=v)`), and it is the leak face of the corruption loft#1017
+reports. Curing the class means giving the OWNING arm of any such join a frame owner, which is a
+change to the ownership merge itself.
+
+
+### An omitted `τ? = null` argument arrived as the wrong kind of null (loft#1015, 2026-08-19)
+
+`fn f(a: integer? = null) -> integer { a? }` called as `f()` answered **65535** on the
+interpreter, and `float?` answered a denormal — silent wrong NUMBERS. On `--native` the same
+shape with `boolean?` did not compile at all. Against `types.md`'s
+`(N-Default)` / `(D-Scalar) construct_default(Integer[r]) = 0`.
+
+Two independent halves, one per backend, which is why neither alone showed it:
+
+- **Interpreter** — `emit_typed_null` matched the UNPEELED type, so every `τ?` missed the scalar
+  arms and fell to the catch-all "push a zero-filled DbRef as a generic null". An `integer?`
+  parameter received a REFERENCE sentinel and `a?` read it as a number. The parser's own `null()`
+  already peels for this exact reason (@PLN25 slice (b)) — one fact in two places, one of which
+  peeled.
+- **`--native`** — `write_typed_null` peels correctly but wrote `false` for `boolean`, while
+  `rust_type` declares a null-capable boolean slot as the @PLN17 tri-state `u8`. `bool` into `u8`
+  is rustc E0308.
+
+⚠ **A third defect was hiding behind the first, and fixing the peel exposed it.** The
+interpreter's `Boolean` arm said `i64::MIN` — a value the tri-state byte cannot hold — and had
+never been reached, because the missing peel routed `boolean?` to the catch-all whose ref
+sentinel happened to read as null. With the peel in, `a == null` on an omitted `boolean? = null`
+began answering FALSE. The sentinel is 255, which is what `--native` writes into the same slot;
+the two backends now agree by construction rather than by coincidence.
+
+`write_typed_null_in` takes the storage-vs-expression split `rust_type` already makes for
+`boolean`: the call-argument site asks for the storage form, the two `if`-branch callers keep the
+2-state `false` they unify against.
+
+The regression test asserts three things, because the obvious one is not sufficient: the
+discharge, that a supplied argument is still delivered, and that the omitted argument really IS
+null — including that a supplied `false` is not, which is the whole point of a tri-state.
+
+`character? = null` is NOT fixed here and is filed as loft#1014: it needs a width-correct
+sentinel of its own, and `--native` additionally fails to compile one of its two forms.
+
+
+### A reference tuple read its elements at the wrong layout's offsets (loft#1006, 2026-08-19)
+
+`TupleGet`/`TuplePut` derived the element offset from TWO layouts for one datum: the
+`RefVar(Tuple)` branch used `stored_tuple_field_offset` — the synthetic `__tuple<…>` RECORD
+field positions — while the plain branch beside it used `element_stack_offsets`. A reference
+tuple points into the caller's STACK FRAME (`OpCreateStack`, whose own contract says the DbRef
+targets the frame and is "NOT a valid data store"), so the stack layout is the one the data has.
+
+Measured: `(integer, integer)` is `[0, 8]` under both derivations, `(text, text)` is `[0, 4]` as
+a record against `[0, 16]` on the stack. So a reference read of element 1 of a text pair landed
+12 bytes early, inside element 0. Scalars coinciding is what hid it — the shape that reads as
+proof and is not. `ref_tuple_field_offset` now answers the stack layout and the two branches
+agree.
+
+No shipped program changes: scalars coincide, and a heap element is still refused at the
+signature. What it removes is a hazard that would have made any future heap-element work wrong
+in a way every scalar test passes.
+
+⚠ **It is not, on its own, enough to lift the refusal** — measured, not assumed. With the offset
+corrected, adding the `text` arms still SIGSEGVs, because the two element paths speak different
+op families: the plain tuple writes with `OpPut*` at a position in the CURRENT frame (16-byte
+inline stack form), while a reference writes with `OpSet*` through a DbRef (4-byte record
+handle). A callee must reach the CALLER's frame, so only the DbRef family can get there, and
+that family speaks the record form. `i64` is 8 bytes either way, which is why scalars are
+immune. Closing loft#1006 needs a representation decision — recorded as `D-bind-11` /
+`D-tup-1` in `doc/claude/formal/`.
+
+### `loft fix` can take the rest of a text slice (loft#1003, 2026-08-19)
+
+`text-slice-char-bound` is the fifth mechanical fix `loft fix` can apply, and the last row in
+`EDIT_BLOCKED` that claimed it should carry an edit.
+
+`len(t)` -> `size(t)` is NOT the one that could carry it: both spellings warn — `s[i..len(s)]`
+and `s[i..s.len()]` — and they put the `len` token in different places, so a rename at the
+bound's start would turn `s.len()` into `sizelen()`. That needs the `len` TOKEN's position,
+which the emit site does not have.
+
+The fix's SIBLING does not care which spelling it is. Deleting the bound turns `s[i..<anything>]`
+into `s[i..]`, which takes the rest — the cure the fix already named and the one the docs
+recommend for this shape. The span is the start of the end expression to the `]` that closes the
+slice, both taken at the one point that brackets the whole bound. Verified on both spellings by
+applying it and running the result: `s[0..len(s)]` over `"héllo"` printed `héll` before and
+`héllo` after.
+
+
+### A `both` method named where a value is wanted says so (loft#1008, 2026-08-19)
+
+The `self` half of loft#1008 already reported *"`f` is a method on `P`, and a method is not a
+function VALUE"* from every position measured. The `both` spelling did not: `x = f` bound
+**null with no diagnostic at all**, and the error surfaced later as whatever used it ("Cannot
+format type null"); as a fn-ref argument it reached the call check as a bare `Value::Null` and
+came out as *"expected fn(P) -> integer, got null"* — a value the author wrote nowhere.
+
+**The two receivers register identically** (`t_<len><Type>_<name>` — checked, the def tables
+match), so registration was not the axis and the earlier note that the name "cannot be
+recovered" was right about the ARGUMENT site and wrong about the cause. Instrumenting the
+bare-name path found it: a `both` receiver also leaves a `Dynamic` def under the PLAIN name —
+which is what makes the free-call spelling `f(x)` work — so unlike a `self` method the name
+is FOUND, skips every unknown-name branch, and falls through a final `else` to a silent
+`Type::Null`. The name is still in hand there, which is exactly what the argument site lacked.
+
+⚠ **Reporting alone left a cascade.** The first version emitted the right error and then two
+more — the generic "got null" and a "missing argument for parameter 'f'" — because `Null` is a
+real value downstream. The `self` path poisons with `Type::Never` for that reason; this one now
+does too, but only when it actually reported, so every other def kind that lands here keeps the
+null it always produced. One error for one mistake, matching the `self` case byte for byte.
+
+Controls unmoved on both backends: a plain fn-ref (20), `map` with a plain fn, both method
+spellings and both free spellings (10/10/15/15), the lambda wrapper the message recommends,
+and the stdlib's own `both` functions (`len`, `abs`, `round`). Pinned as
+`tests/error_messages/cases/57_both_method_is_not_a_fn_ref.loft`; no other baseline moved.
+
+
+### `verify-self` no longer exits 0 when it verified nothing (loft#1012, 2026-08-19)
+
+`loft verify-self` on a source-built install reported *"not a release bundle — nothing to
+check against"* and exited **0**. The message was honest; the exit code is what gets read, so
+`loft verify-self && deploy` was green on an install the command could not examine. *Verified
+intact* and *could not verify anything* are the two answers a caller most needs to tell apart,
+and they were the same answer — the same shape the command exists to prevent, one level up: a
+CHECK that silently did not run.
+
+Three exits now, following `loft audit`'s precedent (`0` clean, `1` low, `2` high,
+`3` security_critical): `0` verified and intact, `1` verified and something does not match,
+`2` could not verify. Both `return 0` sites for the nothing-to-check case became `2`; the pass
+and fail paths are untouched.
+
+Nothing in the tree read the exit code — checked before changing it — so no caller had to
+move. Pinned in `tests/exit_codes.rs`, which runs the real binary and can therefore see an OS
+exit code; the test asserts the precondition (the output really is the unverifiable case)
+before the code, so it cannot pass vacuously against a bundle that genuinely verified.
+
+
+### `filter` freed the source's records, so a later loop over it answered nothing (2026-08-19)
+
+Found while verifying loft#1000's table cell by cell. On BOTH backends, a `filter` over a
+`vector<vector<T>>` left the source unreadable: `len(nv)` still answered 2 and `nv[0]` still
+read its contents, while a fresh loop over the same collection yielded 0. Not a crash, not an
+obviously wrong length — a loop that silently does not run.
+
+The comprehension's per-iteration yield slot is created with the bare element type, which
+carries no deps, so scope handling reads it as an OWNER and frees it each iteration. For `map`
+that is right: the body is a call and the slot owns its result. `filter`'s body IS the loop
+element (the identity yield that makes it a filter rather than a map), so the slot was an
+ALIAS of a borrow of the source, and freeing it destroyed a record the source still pointed at.
+
+`LOFT_VAR_TABLE` is what named it — `_comp_1 … OWNS` beside `_filter_elm_1 … deps=[_filter_vec_1]`,
+a borrow classified as an owner, which is @PLN130's shape. INVISIBLE ON A SCALAR ELEMENT,
+whose copy is the value itself, which is why it stood so long.
+
+A variable bound to a borrow is a borrow: the slot now carries the body variable's deps when
+the body is a bare variable that has any. Narrowed to a bare `Var` deliberately — that is the
+only shape where the slot aliases rather than owns.
+
+### The open spatial slices walk OUTWARD from the point (loft#1002, 2026-08-19)
+
+`xs[(x,y)..]` and `xs[(x,y)..:n]` were the Z-order TAIL: only records whose Morton code is
+`>=` the query's. Half the neighbourhood was structurally unreachable, so the answer depended
+on where the query sat in the curve — an entity at the far end of the map asking for the three
+things nearest it got NOTHING, and `..:n` answered 3, 3, 3, 2, 1, 0 over five records as the
+query moved along, with nothing to separate "only two things are near me" from "I am near the
+end of the curve". Four docs and the catalogue entry all described an outward walk.
+
+`radix_db::near_range` is the n-axis form of `spatial::near`, which was correct, unit-tested,
+and reachable from no loft program. Two cursors seeded either side of the query, each step
+yielding whichever is closer. The distance is computed word by word with a borrow: one axis is
+64 bits, so two axes are 128 and three are 192, and truncating to a `u64` would make every pair
+of points sharing a high word look equidistant — most of a map.
+
+APPROXIMATE, and now said so in every doc: ordered by Morton distance, which jumps at quadrant
+boundaries, so a truly-near point can arrive a little late. `xs[lo..hi]` stays the exact form.
+`tests/scripts/48b-spatial-slice.loft` pinned the tail and is rewritten to pin the walk, each
+expectation beside the euclidean distances it follows from.
+
+### A tuple variable carrying text reaches a tuple parameter on `--native` (loft#1005, 2026-08-19)
+
+The generated parameter was `(i64, &str)` while the caller's local was `(i64, String)`, so
+`--native` refused the whole program. A tuple LITERAL argument is emitted in place and already
+spelled `&str`, which is what made this narrow and what pointed at the seam.
+
+Closed by BORROWING at the call site. The issue expected this to need a lifetime on the
+generated signature; it does not — Rust elides it. Only the argument had to be re-spelled,
+element-wise, with `&*place` on each text leaf, which derefs `String`, `Str` and `&str` alike.
+A by-value tuple parameter is a COPY in loft, so the callee cannot write back through it and
+the call stays allocation-free. The matrix found a second cell: a NESTED tuple parameter
+reaches its inner tuple as a tuple-get, which loft#840's whole-parameter rule did not see.
+
+### `loft --tests` runs the functions a file NAMES as tests (loft#1010, 2026-08-19)
+
+Every zero-parameter function ran: a `setup` helper (whose `assert` could fail the suite), and
+a `main` alongside the tests with whatever it prints or writes. Arity was the whole rule, so a
+parameter was the only way to say "not a test". A file declaring any `test_*` now runs exactly
+those; one declaring none keeps arity, which is the demonstration shape and the only reason
+`--tests` can be pointed at a plain program. Measured first: 1785 files in this corpus name no
+`test_*` against 216 that do.
+
+⚠ **The `--native` half was worse than what was filed.** `has_main` was true whenever `n_main`
+merely EXISTED, so the generated binary ran `main` and nothing else, exited 0, and the harness
+reported every `test_*` as PASSED without running one — a test asserting `1 == 2` beside a
+`main` was green on `--native` and red on the interpreter. The entry point is now decided by
+whether `main` is among the functions the run means to call.
+
+### Four mechanical fixes carry an edit, and `loft fix` can act on a warning (loft#1003, 2026-08-19)
+
+`loft fix` could act on no WARNING-level fix at all. `needless-reference-parameter`,
+`needless-const-parameter`, `empty-braces-not-collection` and `not-null-deprecated` now carry
+an edit. The missing fact was the modifier's OWN position, taken at the declaration with
+`peek_pos`; the CARET was wrong for the same reason and one capture fixed both — the
+`needless-*` checks run after the body and fell back to the variable's source, a position
+INSIDE the body.
+
+⚠ **The attached edits surfaced a latent hazard.** `apply_fixes` claimed its candidates' spans
+were disjoint instead of enforcing it, and each is verified against the ORIGINAL source.
+`empty-braces-not-collection` fired on BOTH parser passes, so `{  }` -> `[]` applied twice
+deleted the four characters after the replacement and ate the enclosing `}` — in a file the
+user asked to have fixed. The notice is pass-2 only now, and overlap is settled in
+`apply_fixes`, the only place that knows the candidates share a buffer.
+
+
 ### A vector builtin ends on LENGTH, not on the element's null (loft#1000, 2026-08-19)
 
 `map`, `filter`, `reduce`, `all`, `count_if` and the vector comprehension NEVER TERMINATED

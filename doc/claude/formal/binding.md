@@ -284,9 +284,70 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **0**. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+OPEN: **1** (D-bind-11). B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
+> B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
+> binding — *scalar OR heap* — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
+> exactly like a `τ` one, with **no operation special-cased**. A reference TUPLE obeys neither
+> once an element is not a scalar:
+>
+> ```loft
+> fn sw(p: &(text, text)) { t = p.0; p.0 = p.1; p.1 = t; }   // refused at the signature
+> fn sw(p: &(integer, integer)) { … }                        // fine, both backends
+> ```
+>
+> Until 2026-08-19 this was an **internal compiler error** at codegen (`RefTupleGet:
+> unsupported element type Text`, loft#1006); it is now a refusal naming the element type,
+> which is better for the user and still a deviation — the rule says it must work.
+>
+> **The cause is that `&(…)` is STACK-backed while the operations it must support are
+> RECORD-based.** Both backends keep the tuple on the stack — there is no store record on either
+> side. `--native` emits `&mut (i64, i64)`, a Rust stack tuple written in place
+> (`var_p.0 = var_p.1`); the interpreter emits `n_sw(OpCreateStack(s))`, whose own contract says
+> the resulting DbRef points into the *stack frame* and is "NOT a valid data store"
+> (`default/01_code.loft:1405-1417`). Its scalar field ops survive only because the interpreter
+> represents the frame as store 0 (`stack_store_at_zero` / `Stores::is_stack_store`), so
+> `OpGetInt(offset)` resolves and reads raw frame bytes.
+>
+> `B-Ref-Uniform`'s "every operation goes through the link via the EXISTING mutation code" is
+> what this fails: that code addresses a store record, and a reference tuple has none. A scalar
+> element hides it (its value sits inline in the frame); a `text` element's does not.
+> (Adding only the `OpGetText` / `OpSetText` arms — the fix loft#1006 predicts — is NOT
+> sufficient: measured, it SIGSEGVs the interpreter and leaves `--native` failing to compile,
+> because the addressing, not the opcode, is what is missing.)
+>
+> ⚠ **A second defect sat underneath, and the first reading of this entry missed it — now
+> FIXED (2026-08-19).** The two `TupleGet`/`TuplePut` branches derived the element offset from
+> DIFFERENT layouts: `RefVar(Tuple)` used `stored_tuple_field_offset` — the synthetic
+> `__tuple<…>` RECORD layout — while the plain branch beside it used `element_stack_offsets`,
+> the STACK layout. One datum, two derivations, agreeing only where the layouts coincide.
+> Measured: `(integer, integer)` is `[0, 8]` under both, `(text, text)` is `[0, 4]` as a record
+> against `[0, 16]` on the stack — so a reference read of element 1 landed 12 bytes early,
+> inside element 0. `ref_tuple_field_offset` now answers the stack layout, which is the one the
+> data has, and the two branches agree. No shipped program changes (scalars coincide and heap
+> elements are refused); it removes the hazard that would have made any future heap-element work
+> wrong in a way that reads as correct on every scalar test.
+>
+> **The remaining half is a REPRESENTATION choice, and the ops are what force it.** With the
+> offset corrected, adding the `text` arms still SIGSEGVs — measured — because the two element
+> paths speak different op families:
+>
+> | | addresses | representation of a `text` element |
+> |---|---|---|
+> | plain tuple (`OpPut*` + frame position) | a slot in the CURRENT frame | 16-byte inline stack form |
+> | reference tuple (`OpSet*`/`OpGet*` + DbRef + offset) | any frame, via the link | 4-byte record handle |
+>
+> A callee must write the CALLER's frame, so only the DbRef family can reach it — and that
+> family speaks the record form. Scalars are immune because an `i64` is 8 bytes in both. Closing
+> this needs either an op family that writes the STACK form through a DbRef, or backing a
+> `&(…)` carrying heap elements with a real record. That is the decision `D-tup-1` records as
+> missing, and it is why the refusal stands meanwhile.
+>
+> `tuples.md` states no rule for `&(…)` at all, which is how a composition of two specified
+> features went unspecified; see its Deviations note.
 
 > **D-bind-10 — CLOSED (2026-08-09) — the ⚑ VITAL rule was enforced for HALF of each
 > expression.** The rule named `x + &y` as a parse error and grammar.md's D-gram-4

@@ -1911,11 +1911,14 @@ separate subscripts (`xs[3, 6]`), where the range forms below parenthesise
 them.  Proximity queries use range-slice
 syntax instead of new keywords or methods: `xs[(x1,y1)..(x2,y2)]` is the
 bounding box and gives exactly what is inside it (loft#800), while
-`xs[(x,y)..]` and `xs[(x,y)..:n]` walk ONWARD along the collection's Morton
-order from that point — a tail, not a circle, so a record just behind the
-query is not returned however close it is, and `..:n` answers fewer than `n`
-near the end of the curve (loft#1002).  Reach for a symmetric box,
-`xs[(x-r, y-r)..(x+r, y+r)]`, when the answer must cover every direction.
+`xs[(x,y)..]` and `xs[(x,y)..:n]` walk OUTWARD from that point, nearest
+first — two cursors seeded either side of the query, so `..:n` answers `n`
+records from any origin and a query past every record still answers its
+neighbours.  They used to be the Morton TAIL, where a record just behind the
+query was never returned however close it was (loft#1002).  The walk is
+APPROXIMATE: it orders by Morton distance, which jumps at quadrant
+boundaries, so a truly-near point can arrive a little late.  Reach for a
+symmetric box, `xs[(x-r, y-r)..(x+r, y+r)]`, when the answer must be exact.
 See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
 for the full syntax table.
 

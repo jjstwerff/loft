@@ -138,10 +138,14 @@ fn superseded_steer_carries_a_structured_suggestion_on_the_call_name() {
 /// condition, which is the thing a reader affirms.
 #[test]
 fn a_fix_without_an_edit_still_reaches_the_editor() {
-    // A `??` on a non-null field — `redundant-coalesce`, whose one fix names the rewrite
-    // ("delete the `?? <default>`") and cannot place it, so no quick-fix can carry it.
-    let src = "struct S { a: integer }\n\
-               fn main() { s = S { a: 1 }; println(\"{s.a ?? 0}\"); }\n";
+    // An upper-case local — `upper-case-local`, whose one fix names the rewrite ("rename it
+    // to lower_case") and cannot place it: the rename touches every reference, not the
+    // declaration alone, so no quick-fix can carry it.
+    //
+    // This was `redundant-coalesce` until loft#1003 gave that one an edit, which is exactly
+    // the change the assertion below is written to catch.  `EDIT_BLOCKED` in
+    // `tests/e1_code_set.rs` is the list to pick the next fixture from.
+    let src = "fn main() { MAX_SIZE = 10; println(\"{MAX_SIZE}\"); }\n";
     let mut p = Parser::new();
     p.parse_dir("default", true, false).expect("load stdlib");
     p.parse_source(src, "buf.loft", false);
@@ -149,8 +153,8 @@ fn a_fix_without_an_edit_still_reaches_the_editor() {
         .diagnostics
         .entries()
         .iter()
-        .find(|e| e.code == Some("redundant-coalesce"))
-        .expect("the redundant-coalesce lint must fire");
+        .find(|e| e.code == Some("upper-case-local"))
+        .expect("the upper-case-local lint must fire");
     assert!(
         !entry.fixes.is_empty(),
         "the diagnostic must carry fixes for the editor to show"

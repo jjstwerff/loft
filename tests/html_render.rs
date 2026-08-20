@@ -257,6 +257,93 @@ fn brick_buster_browser_renders_without_console_errors() {
     );
 }
 
+/// The `--html` target allocates its canvas at the display's real resolution,
+/// so a page is crisp on a high-density display instead of upscaled by the
+/// browser (loft#1018).
+///
+/// **This is invisible to the gate above.** An upscaled canvas logs no console
+/// error and has just as many distinct colours — it is merely soft. So the
+/// browser is forced to a device ratio of 2 and the page is asked about the one
+/// relationship that has to hold:
+///
+/// ```text
+/// canvas.width == round(cssBoxWidth * devicePixelRatio)
+/// ```
+///
+/// That single expression covers **both** halves of the fix, which is why it is
+/// the one asserted. Drop the backing-store scaling and `canvas.width` stays at
+/// the CSS width, so it fails. Drop the explicit CSS size and the box grows to
+/// the attribute size, the ratio collapses to 1, and it fails again — and that
+/// second half is the one that matters for input, because the pointer is scaled
+/// by exactly `canvas.width / rect.width`. A crisp picture whose clicks land at
+/// `1/ratio` of where the user pointed passes every other check in this file.
+///
+/// The ratio itself is asserted first: if the flag were ever ignored the page
+/// would run at 1, where the relationship holds trivially and the gate would
+/// pass without measuring anything.
+#[test]
+fn html_canvas_is_allocated_at_the_display_resolution() {
+    let Some(_chrome) = any_of(&["google-chrome", "chromium", "chromium-browser", "chrome"]) else {
+        eprintln!("SKIP: no chrome binary in PATH");
+        return;
+    };
+    let Some(_node) = which("node") else {
+        eprintln!("SKIP: node not installed");
+        return;
+    };
+    let root = repo_root();
+    let harness = root.join("tools/html_render_check.mjs");
+    if !harness.exists() {
+        eprintln!("SKIP: tools/html_render_check.mjs missing");
+        return;
+    }
+    let Some(_html_path) = locate_fresh_brick_buster(&root) else {
+        return;
+    };
+    let Some(port) = pick_free_port() else {
+        eprintln!("SKIP: could not pick a free TCP port");
+        return;
+    };
+    let Some(mut server) = spawn_doc_server(&root, port) else {
+        eprintln!("SKIP: failed to start python http.server");
+        return;
+    };
+    let _server_guard = ServerGuard(&mut server);
+
+    let cdp_port = port.wrapping_add(1);
+    let url = format!("http://127.0.0.1:{port}/brick-buster.html");
+    let assertion = "(() => { \
+        const c = document.querySelector('#c'); \
+        const r = c.getBoundingClientRect(); \
+        return window.devicePixelRatio === 2 \
+            && c.width  === Math.round(r.width  * window.devicePixelRatio) \
+            && c.height === Math.round(r.height * window.devicePixelRatio); \
+    })()";
+
+    let out = Command::new("node")
+        .arg(&harness)
+        .arg(&url)
+        .args(["--wait-ms", "6000"])
+        .args(["--port", &cdp_port.to_string()])
+        .args(["--device-scale-factor", "2"])
+        .args(["--assert", assertion])
+        .output()
+        .expect("invoke node harness");
+
+    if out.status.code() == Some(2) {
+        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+        return;
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the canvas is not allocated at the display resolution (loft#1018).\n\
+         URL: {url}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
 struct ServerGuard<'a>(&'a mut Child);
 impl Drop for ServerGuard<'_> {
     fn drop(&mut self) {

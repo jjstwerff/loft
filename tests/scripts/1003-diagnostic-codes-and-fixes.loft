@@ -25,12 +25,13 @@
 //   * `--explain` prints a fix line under `--errors=pretty` only.  The harness pins COMPACT,
 //     where `--explain` and `LOFT_EXPLAIN=1` add nothing, so no `.loft` file can guard a fix
 //     line.  All six codes below DO render one under `--explain`.
-//   * `loft fix` can act on none of them.  It reports a fix only when the fix carries a
-//     machine edit, and 8 of 76 `Fix` constructions in `src/` do — seven on ERROR codes, and
-//     the eighth (`superseded-call`) is rejected on the only `#superseded` symbol the stdlib
-//     ships.  So of the 25 codes DIAGNOSTICS.md marks mechanical, `loft fix` reaches 5
-//     (loft#1003).  `redundant-coalesce` below is the catalogue entry's own worked `loft fix`
-//     example and prints nothing.
+//   * `loft fix` reports a fix only when the fix carries a machine EDIT, so what it reaches
+//     is not what `--explain` renders.  `redundant-coalesce` below — the @F110 catalogue's own
+//     worked `loft fix` example, which printed nothing at all — carries one since loft#1003
+//     and is the first WARNING-level fix `loft fix` can name, verify and apply.  The others
+//     here still carry none; `EDIT_BLOCKED` in `tests/e1_code_set.rs` holds the reason for
+//     each, and that file also owns the behavioural guard, since a `.loft` file cannot see a
+//     fix line at all (above).
 //
 // @EXPECT_WARNING: Advice[not-null-deprecated]
 // @EXPECT_WARNING: Warning[unreachable-code]

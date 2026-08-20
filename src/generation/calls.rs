@@ -279,7 +279,7 @@ impl Output<'_> {
             // instead — the same repair the interpreter call paths apply
             // via `emit_typed_null`.  Fn-ref params keep the generic path
             // (their two-part (d_nr, closure) form is handled below).
-            Self::write_typed_null(w, &def_fn.attributes()[idx].typedef)?;
+            Self::write_typed_null_in(w, &def_fn.attributes()[idx].typedef, true)?;
         } else {
             // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
             let param_is_fnref = idx < def_fn.attributes().len()
@@ -388,13 +388,54 @@ impl Output<'_> {
                 // is idempotent for a u8 arg, 0/1 for a bool.
                 let param_is_boolean = idx < def_fn.attributes().len()
                     && matches!(def_fn.attributes()[idx].typedef.base(), Type::Boolean);
+                // loft#1005 — a tuple ARGUMENT carrying text has to be re-spelled to reach a
+                // tuple PARAMETER.  `text` is `String` in a variable slot and `&str` in a
+                // parameter (`rust_type`), so a tuple local is `(i64, String)` against a
+                // parameter of `(i64, &str)` and rustc refused the whole program.  A tuple
+                // LITERAL argument is emitted in place and already spells `&str`, which is
+                // why only the variable form failed.
+                //
+                // Applied to a PLACE (a variable), not to an arbitrary expression: the
+                // re-spelling names `expr.0` / `expr.1`, so it must be something that can be
+                // projected more than once without re-evaluating it.  A literal needs no
+                // conversion anyway, and a call result is materialised into a local before
+                // it gets here.
+                let tuple_arg_place = match (v_unspanned, idx < def_fn.attributes().len()) {
+                    (Value::Var(var), true) => {
+                        match (
+                            &def_fn.attributes()[idx].typedef,
+                            self.data.def(self.def_nr).variables().tp(*var),
+                        ) {
+                            (Type::Tuple(param_elems), Type::Tuple(_))
+                                if crate::generation::dispatch::tuple_has_text_leaf(
+                                    param_elems,
+                                ) =>
+                            {
+                                let name = self
+                                    .data
+                                    .def(self.def_nr)
+                                    .variables()
+                                    .name(*var)
+                                    .to_string();
+                                Some(crate::generation::dispatch::borrowed_tuple_from_owned(
+                                    &format!("var_{name}"),
+                                    param_elems,
+                                ))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
                 if needs_deref {
                     write!(w, "&*(")?;
                 }
                 if param_is_boolean {
                     write!(w, "((")?;
                 }
-                if param_is_narrow {
+                if let Some(respelled) = tuple_arg_place {
+                    write!(w, "{respelled}")?;
+                } else if param_is_narrow {
                     self.emit_i32_slot(w, v)?;
                 } else {
                     self.output_code_inner(w, v)?;
@@ -621,72 +662,26 @@ impl Output<'_> {
                     res = replace_placeholder(&res, &name, &format!("({with})"));
                     continue;
                 }
-                // For character-typed parameters, a variable holding an i32 char needs
-                // ops::to_char() because the template expects a `char`, not `i32`.
-                if matches!(a.typedef, Type::Character)
-                    && let Value::Var(n) = vals[a_nr]
-                    // @PLN25 — `.base()` so a `character?` local (`Optional(Character)`,
-                    // e.g. `cif = if c { 'a' } else { null }; cif == null`) also wraps.
-                    && matches!(
-                        self.data.def(self.def_nr).variables().tp(n).base(),
-                        Type::Character
-                    )
-                {
-                    let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    let inner = hoisted(a_nr, inner, &mut prelude);
-                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
-                    continue;
-                }
-                // P207 — same wrap applies to a `Value::TupleGet` whose element
-                // type is `Type::Character`.  The tuple's stored layout uses
-                // `i32` for the character slot (per `rust_type` Variable
-                // context); reading it back gives `i32`, but the template
-                // expects `char`.  Without this wrap the OpConvIntFromCharacter
-                // template emits `if _v_v1 == char::from(0)` where `_v_v1` is
-                // `i32` (from `var_t.0`) and rustc rejects with E0308.
-                if matches!(a.typedef, Type::Character)
-                    && let Value::TupleGet(v, idx) = vals[a_nr].unspan()
-                    && let Type::Tuple(elems) = self.data.def(self.def_nr).variables().tp(*v)
-                    && elems
-                        .get(*idx as usize)
-                        // @PLN25 — `.base()` so an `Optional(Character)` tuple element wraps too.
-                        .is_some_and(|e| matches!(e.base(), Type::Character))
-                {
-                    let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    let inner = hoisted(a_nr, inner, &mut prelude);
-                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
-                    continue;
-                }
-                // For character-typed parameters, a call returning character yields `i32`
-                // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
-                // @PLN25 — `.base()` so a `character?`-returning call (`Optional(Character)`,
-                // e.g. `pick_char(..) == null`) also gets the wrap; without it the
-                // `OpConvIntFromCharacter` template compares `i32 == char::from(0)` → E0308.
+                // A character-typed parameter wants a `char`; every operand
+                // except the integer literal above arrives as the `i32`
+                // STORAGE form — `rust_type` gives `character` an `i32` slot,
+                // and a character-returning template is coerced `as u32 as i32`
+                // at its own production site.  So the conversion is decided by
+                // the operand's TYPE, not by which IR node produced it.
+                //
+                // It used to be decided by the node kind: four arms (`Var`,
+                // `TupleGet`, `Call`, `Block`) each added when a new shape
+                // turned up, and every shape outside the list emitted a bare
+                // `i32` against a template that says `char::from(0)` — rustc
+                // E0308, so the whole `--native` build failed.  The shape that
+                // exposed it is the `?` discharge, which lowers to an `If`:
+                // `fn f(a: character? = null) { (a?) == '\0' }` did not compile
+                // at all (loft#1014).  An allow-list here costs correctness, not
+                // just an optimisation, which is why it is a type test now.
                 if matches!(a.typedef.base(), Type::Character)
-                    && let Value::Call(d, _) = vals[a_nr].unspan()
-                    && matches!(self.data.def(*d).returned().base(), Type::Character)
-                {
-                    let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    let inner = hoisted(a_nr, inner, &mut prelude);
-                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
-                    continue;
-                }
-                // @P276 — same wrap for `Value::Block` whose result type is
-                // `Type::Character`.  Pre-eval lifts the block into a
-                // `let _pre_N = { … }` binding; the block body's last
-                // expression yields `i32` because the inner `_ncc_*: i32`
-                // var holds the character that way (see
-                // `Variable` context in `rust_type`).  Without this wrap
-                // the OpConvIntFromCharacter template emits
-                // `_v_v1 == char::from(0)` against an `i32` `_v_v1` and
-                // rustc rejects with E0308.  Reproducer: `(s[i] ?? '<c>')
-                // == '<c>'` lowers to `OpConvIntFromCharacter` over an
-                // `Block` (`#ncc(N):character`), and the block's emit
-                // produces `i32` even though loft types it `Character`.
-                if matches!(a.typedef, Type::Character)
-                    && let Value::Block(b) = vals[a_nr].unspan()
-                    // @PLN25 — `.base()` so a block whose result is `Optional(Character)` wraps too.
-                    && matches!(b.result.base(), Type::Character)
+                    && self
+                        .infer_type(IrNode::Native(&vals[a_nr]))
+                        .is_some_and(|t| matches!(t.base(), Type::Character))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     let inner = hoisted(a_nr, inner, &mut prelude);

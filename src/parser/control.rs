@@ -3170,6 +3170,9 @@ impl Parser {
             }
         }
         *code = v_if(test, true_code, false_code);
+        // loft#1019 — an arm that OWNS what it yields needs a home in this frame when
+        // the merged type is a view (`Parser::own_joined_call_arms`).
+        self.own_joined_call_arms(code, &result_tp);
         result_tp
     }
 
@@ -4145,6 +4148,9 @@ impl Parser {
         } else {
             chain
         };
+        // loft#1019 — an arm that OWNS what it yields needs a home in this frame when
+        // the merged type is a view (`Parser::own_joined_call_arms`).
+        self.own_joined_call_arms(code, &result_type);
         result_type
     }
 
@@ -6943,6 +6949,9 @@ impl Parser {
             result_type.clone(),
             "scalar_match",
         );
+        // loft#1019 — an arm that OWNS what it yields needs a home in this frame when
+        // the merged type is a view (`Parser::own_joined_call_arms`).
+        self.own_joined_call_arms(code, &result_type);
         result_type
     }
 
@@ -7974,6 +7983,9 @@ impl Parser {
         block_ops.append(&mut prechain);
         block_ops.push(chain);
         *code = v_block(block_ops, result_type.clone(), "vector_match");
+        // loft#1019 — an arm that OWNS what it yields needs a home in this frame when
+        // the merged type is a view (`Parser::own_joined_call_arms`).
+        self.own_joined_call_arms(code, &result_type);
         result_type
     }
 
@@ -8267,6 +8279,9 @@ impl Parser {
             result_type.clone(),
             "tuple_match",
         );
+        // loft#1019 — an arm that OWNS what it yields needs a home in this frame when
+        // the merged type is a view (`Parser::own_joined_call_arms`).
+        self.own_joined_call_arms(code, &result_type);
         result_type
     }
 

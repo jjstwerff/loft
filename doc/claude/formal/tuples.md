@@ -70,17 +70,66 @@ tuple-returning call: `(x, y) = pair()` unpacks the returned tuple directly (ver
 integer)`), pass one, and unpack it at the caller. Returning a tuple is the idiomatic
 "return two things," and the result is independent like any return (calls.md).
 
+### Reference tuples — `&(…)` writes the caller's elements in place
+
+```
+  (T-Ref)     a parameter may be declared `&(τ₁, …, τₙ)`.  It denotes the CALLER's tuple: a
+              projection `p.i` reads the caller's element and an assignment `p.i = e` writes it,
+              both through the tuple's stored reference at the element's own offset — the same
+              `(ref, offset)` pair an ordinary struct FIELD uses (binding.md B-Ref).
+  (T-Ref-El)  every τᵢ must be one of `integer` (any width), `float`, `single`, `character`,
+              `boolean` — the types laid out for that pair.  Any other element type is a STATIC
+              error naming the offending type; it is never a runtime fault and never an ICE.
+```
+
+**In words.** `fn sw(p: &(integer, integer)) { t = p.0; p.0 = p.1; p.1 = t }` swaps the caller's
+tuple in place — that is what a reference tuple is for. The admitted element types are exactly
+the scalars the element opcodes are laid out for, and the boundary is enforced at the SIGNATURE,
+so a program either compiles and behaves identically on both backends or is refused where it is
+written.
+
+A `text`, collection, struct or function-reference element is refused. This is a layout
+limitation, not a missing opcode: `OpGetText` / `OpSetText` exist and take the same
+`(ref, offset)`, but a reference tuple's storage is not a record with a text slot the way a
+struct is. Use a **struct** instead — its fields of any type write through a `&` parameter —
+or take the tuple by value and return a new one. The refusal message says both.
+
 ---
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **0**, bounded by the oracle note below.
+
+> **D-tup-1 — CLOSED (2026-08-20) — the reference tuple has a rule.** This doc specified
+> construction, projection, destructuring and returns and said nothing about `&(τ₁, …, τₙ)` —
+> the composition of `&` ([binding.md](binding.md)) with a tuple. Both halves were specified and
+> their composition was not, which is how the two backends came to represent it differently with
+> nothing to catch them (`--native`: a Rust stack tuple by `&mut`; interpreter: a record through
+> a DbRef), and how loft#1006 reached codegen as an internal compiler error.
+>
+> `T-Ref` / `T-Ref-El` above now state what a `&(…)` denotes and which element types it admits.
+> Extending the rule is what the [README](README.md) doctrine asks for at an edge the rules
+> cannot express, and writing it down is what showed the admitted set had been **three lists that
+> disagreed**: the signature guard admitted `single` and a function reference that codegen then
+> died on, and refused `boolean`, which every layer could always have handled. There is one list
+> now (`data::ref_tuple_element_ok`), read by the guard and by both `RefTupleGet` / `RefTuplePut`
+> arms, so the rule and the implementation cannot drift apart again. Measured on both backends
+> across all five admitted element types plus the four refused ones. Tracked against binding.md's
+> D-bind-11, which carries the measurement.
 
 - **Conformance is differential** — tuples are enforced across the two backends by the @PLN89
   oracle (D-op-1): `17-tuples-recursion` carries construction, projection, destructuring, and
   tuple returns, precisely because the native layout (a synthetic `__tuple<…>` struct, inline
   bytes) differs from the interpreter's. A divergence in element order, value, or type is caught
   there.
+- ⚠ **…but the oracle's elements are all `(integer, integer)`.** It carries no `text`, and that
+  gap is measured, not theoretical: this doc read `OPEN: 0` through **two** live tuple deviations
+  that the differential it leans on could not see — loft#1004 (a tuple's `text` element written
+  one index too high: silent wrong element, silent lost write, SIGSEGV) and loft#1005 (a tuple
+  `text` parameter that would not compile on `--native` at all). A `text` element is the first
+  place the native layout stops being inline bytes, so it is exactly where a layout differential
+  earns its keep. Widening `17-tuples-recursion` to a heap element type is the fix; until then
+  the zero above is bounded by what the oracle covers.
 
 ---
 
@@ -90,6 +139,14 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
 - **Destructure (`T-Destr`)** — `(a, b) = (5, 9)` binds `a=5, b=9`.
 - **Tuple return + unpack (`T-Ret` + `T-Destr`)** — `fn pair() -> (integer,integer) { (2,3) }`,
   `(x, y) = pair()` binds `x=2, y=3`.
+- **Reference tuple (`T-Ref`)** — `fn sw(p: &(integer, integer)) { t = p.0; p.0 = p.1; p.1 = t }`
+  swaps the CALLER's tuple: `(1,2)` reads back `2,1`. Verified on both backends for every
+  admitted element type — `integer`, `float`, `single`, `character`, `boolean` — uniform and
+  mixed (`&(integer, boolean, character)`), and at width 3 so the last element is reached
+  (`tests/scripts/1006-reference-tuple-element-types.loft`).
+- **Refused element types (`T-Ref-El`)** — `&(text, …)`, `&(fn() -> τ, …)` and a struct element
+  are STATIC errors naming the element type, never an ICE
+  (`tests/scripts/102-expected-errors.loft`).
 - **Static index (`T-Proj`)** — `t.5` on a 2-tuple is a compile error, not a runtime null.
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on a

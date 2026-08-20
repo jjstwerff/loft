@@ -324,6 +324,33 @@ impl Diagnostics {
         }
     }
 
+    /// The index of the entry [`Self::fix_last`] would attach to, for a fix whose EDIT is
+    /// only spellable later (loft#1003).
+    ///
+    /// `redundant-coalesce` is the shape: the notice fires when the `??` is recognised,
+    /// but the span to delete runs to the end of a default that has not been parsed yet.
+    /// Holding the index lets the edit be attached once the end is known, without
+    /// reordering the diagnostic — `fix_last` cannot, because whatever the default's own
+    /// parse reported would be the last entry by then.
+    #[must_use]
+    pub fn last_index(&self) -> Option<usize> {
+        self.entries.len().checked_sub(1)
+    }
+
+    /// Give the fix at `(entry, fix_at)` the edit its emit site could not yet spell.
+    ///
+    /// A no-op when the index no longer names that fix — a diagnostic dropped between the
+    /// notice and the edit costs the edit, never a wrong one written at a stale span.
+    pub fn set_fix_edit(&mut self, entry: usize, fix_at: usize, edit: Edit) {
+        if let Some(f) = self
+            .entries
+            .get_mut(entry)
+            .and_then(|e| e.fixes.get_mut(fix_at))
+        {
+            f.edit = Some(edit);
+        }
+    }
+
     pub fn fill(&mut self, other: &Diagnostics) {
         for e in &other.entries {
             self.entries.push(e.clone());

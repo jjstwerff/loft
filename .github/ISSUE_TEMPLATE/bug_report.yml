@@ -118,6 +118,27 @@ body:
       required: false
 
   - type: dropdown
+    id: hit_by
+    attributes:
+      label: Who hit it?
+      description: >-
+        Sets the `hit-by:*` label — a direct pointer to the project that RAN INTO this.  loft is
+        one of those projects, so a find of loft's own (a nightly gate, a sanitizer, a sweep, a
+        follow-on while fixing something else) is `hit-by:loft`, not a blank.  It says who hit
+        it and nothing more: if a consumer's report is what sent us looking but WE hit this one,
+        it is still `hit-by:loft` — the chain goes in `Found-via:` above.
+      options:
+        - "hit-by:loft — loft's own instruments: a gate, a sanitizer, a sweep, a follow-on"
+        - "hit-by:moros — the moros (RPG) dogfood consumer"
+        - "hit-by:routing — the routing (bicycle/pedestrian route-matcher) consumer"
+        - "hit-by:dryopea — the dryopea (tower-defence) consumer"
+        - "hit-by:crawler — the crawler (hex roguelike) consumer"
+        - "hit-by:zerotrust — the zero-trust-shared-files consumer"
+        - "hit-by:planets — the Moros Economy planet-generator consumer"
+    validations:
+      required: true
+
+  - type: dropdown
     id: severity
     attributes:
       label: Severity

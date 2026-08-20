@@ -103,6 +103,14 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   // host_js` or the page's own CSS); `document.fonts.check` then finds it and it is
   // used exactly. Otherwise the base name picks a generic family, so text still draws.
   let fonts = [], textCv = null, textCx = null;
+  // Audio state.  The context is shared with `audio_play_raw` through the same
+  // global it already used, which is also how a test can put an OfflineAudioContext
+  // between the bridge and the speakers.
+  let audioClips = [], audioSinks = [];
+  function audioCtx() {
+    if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
+    return window._loftAudioCtx;
+  }
   function text2d() {
     if (!textCx) {
       textCv = document.createElement('canvas');
@@ -166,7 +174,32 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return hold(textures, t);
   }
-  function glCap(c) { return [0, gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE][c] || c; }
+  // ── One space: PHYSICAL pixels ───────────────────────────────────────────
+  //
+  // The canvas backing store is allocated at logical x devicePixelRatio, so the
+  // GPU rasterises at the display's real resolution instead of the browser
+  // upscaling a smaller buffer.  Everything a program sees stays in that ONE
+  // space: `gl_window_width/height` report it, the pointer answers in it, and
+  // `gl_viewport` / `gl_scissor` take it.
+  //
+  // ⚠ THAT IS THE DOCUMENTED CONTRACT, not a choice made here — `gl_window_width`
+  // is *"current window inner size in PHYSICAL pixels ... so projection / 2D ortho
+  // / overlays use the real resolution rather than a windowed hint"*.  A program
+  // that follows that advice is crisp at any ratio for free.  One that stores the
+  // size it ASKED for and reuses it as a viewport renders into part of the
+  // surface — the same defect the doc already warns about for fullscreen, now
+  // reachable on an ordinary high-density display.
+  //
+  // Keeping one space is also why the bridge rescales nothing: `gl_viewport` and
+  // `gl_scissor` are aimed at an offscreen target as often as at the window
+  // (a 1024x1024 shadow map, a thumbnail), and a bridge that scaled them would
+  // render those into a fraction of their own texture.
+  let dpr = 1;
+  const toDevice = v => Math.round(v * dpr);
+
+  function glCap(c) {
+    return [0, gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE, gl.SCISSOR_TEST][c] || c;
+  }
   function glBF(f) { return [gl.ZERO, gl.ONE, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.DST_ALPHA, gl.ONE_MINUS_DST_ALPHA][f] || f; }
   function glMode(m) { return [gl.TRIANGLES, gl.LINES, gl.POINTS][m] || gl.TRIANGLES; }
 
@@ -174,8 +207,16 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   canvas.addEventListener('keydown', e => { keys.add(mapKey(e.code)); e.preventDefault(); });
   canvas.addEventListener('keyup', e => keys.delete(mapKey(e.code)));
   canvas.addEventListener('mousemove', e => {
+    // ⚠ MAPPED FROM CSS PIXELS INTO THE FRAMEBUFFER'S SPACE.  Browser events are
+    // in CSS pixels; everything the program works in is physical.  Scaling the
+    // backing store WITHOUT this gives a crisp picture where every click lands at
+    // 1/ratio of where the user pointed.  Derived from the canvas's actual box
+    // rather than from the ratio, so a page whose stylesheet sizes the canvas
+    // (`width: 100%`) is right too.
     const r = canvas.getBoundingClientRect();
-    mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
+    const sx = r.width > 0 ? canvas.width / r.width : 1;
+    const sy = r.height > 0 ? canvas.height / r.height : 1;
+    mouseX = (e.clientX - r.left) * sx; mouseY = (e.clientY - r.top) * sy;
   });
   canvas.addEventListener('mousedown', e => { mouseBtn |= (1 << e.button); });
   canvas.addEventListener('mouseup', e => { mouseBtn &= ~(1 << e.button); });
@@ -348,10 +389,15 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     }),
     loft_gl: coerceArgs({
       loft_gl_create_window(w, h, tp, tl) {
-        canvas.width = w; canvas.height = h;
+        dpr = window.devicePixelRatio || 1;
+        canvas.width = toDevice(w); canvas.height = toDevice(h);
+        // ⚠ THE CSS SIZE IS MANDATORY, not cosmetic.  Without it the canvas lays
+        // out at its ATTRIBUTE size, so a 2x backing store draws a window twice
+        // as wide on screen and every pointer coordinate is off by the ratio.
+        canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
         canvas.style.display = 'block';
         output.style.display = 'none';
-        gl.viewport(0, 0, w, h);
+        gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
         shouldClose = false;
         return 1;
@@ -370,7 +416,8 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       },
       loft_gl_destroy_window() {
         for (const p of programs) if (p) gl.deleteProgram(p);
-        for (const v of vaos) if (v) gl.deleteVertexArray(v.vao);
+        for (const v of vaos) if (v) { if (v.vao) gl.deleteVertexArray(v.vao);
+                                       if (v.vbo) gl.deleteBuffer(v.vbo); }
         for (const t of textures) if (t) gl.deleteTexture(t);
         for (const f of fbos) if (f) gl.deleteFramebuffer(f);
         programs = []; vaos = []; textures = []; fbos = [];
@@ -411,6 +458,61 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (stride >= 10) { gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, bpv, 24); }
         gl.bindVertexArray(null);
         return hold(vaos, { vao, vbo, n: count / stride });
+      },
+      // ── Instancing (@PLN144 A0 found these four absent) ───────────────────
+      //
+      // A0 built its batching probe with `--html` and the page reported all four
+      // of these unimplemented: it BUILT, each returned its zero value, and the
+      // stage drew nothing — the third time this shape has appeared (loft#737's
+      // text stubs, E1's audio stubs).  A3's whole design is one instanced call
+      // instead of N draws, so without these the browser half of the 2-D stack is
+      // dead on arrival.
+      //
+      // An instance buffer is held in the SAME table as a VAO, as `{vao: null,
+      // vbo, n}`.  That is not tidiness: `gl_update_buffer` documents its argument
+      // as "a handle returned by gl_upload_vertices OR gl_upload_instance_buffer",
+      // and two index spaces would make handle 1 ambiguous between them.
+      loft_gl_upload_instance_buffer(ptr, count) {
+        const data = new Float32Array(getMem().buffer, ptr, count);
+        const vbo = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        return hold(vaos, { vao: null, vbo, n: count });
+      },
+      loft_gl_instance_attrib(vaoIdx, ivboIdx, location, components, strideFloats, offsetFloats) {
+        const v = slot(vaos, vaoIdx), b = slot(vaos, ivboIdx);
+        if (!v || !v.vao || !b) return;
+        gl.bindVertexArray(v.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b.vbo);
+        gl.vertexAttribPointer(location, components, gl.FLOAT, false,
+                               strideFloats * 4, offsetFloats * 4);
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribDivisor(location, 1);   // the line that makes it per-INSTANCE
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindVertexArray(null);
+      },
+      // Block until every GL command has completed — the call that makes a
+      // read-back trustworthy.  WebGL has no glFinish that is meaningfully
+      // synchronous, so `finish()` is the honest best effort here and a page that
+      // needs a hard guarantee reads through a fence instead.
+      loft_gl_finish() { gl.finish(); },
+      loft_gl_draw_instanced(vaoIdx, vertexCount, instanceCount) {
+        const o = slot(vaos, vaoIdx);
+        if (!o || !o.vao) return;
+        gl.bindVertexArray(o.vao);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, vertexCount, instanceCount);
+        gl.bindVertexArray(null);
+      },
+      // Orphan + re-upload, matching the native contract's DYNAMIC_DRAW: a
+      // per-frame update must not stall on the buffer still being read.
+      loft_gl_update_buffer(h, ptr, count) {
+        const o = slot(vaos, h);
+        if (!o || !o.vbo) return;
+        const data = new Float32Array(getMem().buffer, ptr, count);
+        gl.bindBuffer(gl.ARRAY_BUFFER, o.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
       },
       loft_gl_draw(vaoIdx, n) {
         const o = slot(vaos, vaoIdx); if (o) { gl.bindVertexArray(o.vao); gl.drawArrays(gl.TRIANGLES, 0, n); gl.bindVertexArray(null); }
@@ -457,6 +559,11 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_gl_cull_face(f) { gl.cullFace(f === 1 ? gl.FRONT : gl.BACK); },
       loft_gl_depth_mask(w) { gl.depthMask(!!w); },
       loft_gl_viewport(x, y, w, h) { gl.viewport(x, y, w, h); },
+      // ⚠ Scissor was never bridged AT ALL.  An absent import is a dead page
+      // (loft#668), so every `--html` program that clipped anything — every
+      // `stage` scene using A6's clip, P6's viewports or L2's composite — failed
+      // to instantiate rather than rendering without the clip.
+      loft_gl_scissor(x, y, w, h) { gl.scissor(x, y, w, h); },
       loft_gl_line_width(w) { gl.lineWidth(w); },
       loft_gl_point_size(_s) { /* use gl_PointSize in shader */ },
       loft_gl_create_framebuffer() { return hold(fbos, gl.createFramebuffer()); },
@@ -633,17 +740,57 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         if (hp) out[hp >> 2] = r.h;
         return alphaTexture(i => r.px[i * 4 + 3], r.w, r.h);
       },
-      // G5: Audio via Web Audio API
+      // G5: Audio via Web Audio API (@PLN146 E1).
+      //
+      // ⚠ `audio_load` is SYNCHRONOUS and `decodeAudioData` is not.  The handle is
+      // therefore returned NOW and the samples land LATER, which is the same
+      // plan-then-use shape the asset store runs on: a play before the decode
+      // DROPS rather than queueing, because a queue here would fire a sound at a
+      // moment the game has moved past.  A load that fails leaves the slot with no
+      // buffer for good, so `audio_play` refuses it — the file's absence is
+      // reported by refusing to play it, never by the load call, which cannot know.
       loft_audio_load(pp, pl) {
-        return -2147483648; // i32::MIN — file-based audio not yet supported in WASM
+        const path = readStr(pp, pl);
+        if (!path) return -2147483648;               // i32::MIN — the null sentinel
+        const slot = { buf: null, dead: false };
+        audioClips.push(slot);
+        const id = audioClips.length - 1;
+        fetch(path)
+          .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status))))
+          .then(ab => audioCtx().decodeAudioData(ab))
+          .then(b => { slot.buf = b; })
+          .catch(() => { slot.dead = true; });
+        return id;
       },
-      loft_audio_play(clip, volume) { return -1; },
-      loft_audio_stop(sink) {},
-      loft_audio_set_volume(sink, volume) {},
+      loft_audio_play(clip, volume) {
+        const c = audioClips[clip];
+        if (!c || !c.buf) return -1;                 // absent, failed, or still decoding
+        try {
+          const ctx = audioCtx();
+          const src = ctx.createBufferSource();
+          src.buffer = c.buf;
+          const gain = ctx.createGain();
+          gain.gain.value = volume;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+          src.start();
+          audioSinks.push({ src: src, gain: gain });
+          return audioSinks.length - 1;             // ids are never reused: a stopped
+        } catch (e) { return -1; }                  // sink must not name a live one
+      },
+      loft_audio_stop(sink) {
+        const s = audioSinks[sink];
+        if (!s) return;
+        try { s.src.stop(); } catch (e) { /* already ended — stopping twice is not an error */ }
+        audioSinks[sink] = null;
+      },
+      loft_audio_set_volume(sink, volume) {
+        const s = audioSinks[sink];
+        if (s) s.gain.gain.value = volume;
+      },
       loft_audio_play_raw(ptr, count, sample_rate, volume) {
         try {
-          if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
-          const ctx = window._loftAudioCtx;
+          const ctx = audioCtx();
           const f32 = new Float32Array(getMem().buffer, ptr, count);
           const buf = ctx.createBuffer(1, count, sample_rate);
           buf.getChannelData(0).set(f32);

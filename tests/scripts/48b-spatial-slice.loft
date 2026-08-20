@@ -5,12 +5,19 @@
 //
 // The cells below the 3D ones say WHICH records each form answers, not just how many.
 // The count-only cells above them cannot see what the walk actually is: they all start
-// at or below the lowest point, where the tail and an outward walk agree, and a `break`
+// at or below the lowest point, where a tail and an outward walk agree, and a `break`
 // after 2 is satisfied by any 2 records.  Sweeping the ORIGIN along the curve is what
-// separates the two, and it reads 3, 3, 3, 2, 1, 0 for a cap of 3 over five records —
-// the open forms are the Morton TAIL, so a record one code behind the query is never
-// returned however close it is, and a query past every record answers nothing
-// (loft#1002).  A symmetric box is the form that covers every direction.
+// separates the two.
+//
+// The open forms are an OUTWARD walk from the point (loft#1002): two cursors seeded
+// either side of the query, each step yielding whichever is closer.  So a cap of 3
+// answers 3 from every origin, including one past every record — where the old
+// one-directional walk answered 3, 3, 3, 2, 1, 0 and gave no way to tell "there are
+// only two things near me" from "I am near the end of the curve".
+//
+// The order is by MORTON distance, which tracks spatial distance closely but jumps at
+// quadrant boundaries, so each expectation below is written beside the euclidean
+// distances it was hand-computed from.  A symmetric box is the EXACT form.
 struct SLMob {
   x: integer,
   y: integer,
@@ -111,35 +118,50 @@ fn which_records_each_slice_form_answers() {
   // The collection's own order is the yardstick every open-form cell is read against.
   assert(seq(s) == "A B C D E ", "Morton order = '{seq(s)}', want 'A B C D E '");
 
-  // The OPEN forms answer the SUFFIX of that order beginning at the query, so the same
-  // cap answers a different number from each origin.  Written out per origin because the
-  // shortfall is the point; a loop over origins would hide which one fell short.
+  // The OPEN forms walk OUTWARD from the query, so the same cap answers three records
+  // from every origin.  Written out per origin because independence-of-origin is the
+  // whole property; a loop over origins would hide which one fell short.
+  //
+  // A(0,0) B(5,5) C(10,10) D(12,11) E(20,20).
+
+  // from A: A 0, B 7.1, C 14.1, D 16.3, E 28.3
   a = ""; for m in s[(0, 0)..: 3] { a += "{m.name} "; }
   assert(a == "A B C ", "(0,0)..:3 = '{a}', want 'A B C '");
 
+  // from B: B 0, A 7.1, C 7.1, D 9.2, E 21.2 — A and C tie, Morton order breaks it
+  b2 = ""; for m in s[(5, 5)..: 3] { b2 += "{m.name} "; }
+  assert(b2 == "B A C ", "(5,5)..:3 = '{b2}', want 'B A C '");
+
+  // from C: C 0, D 2.2, B 7.1, E 14.1 — B is BEHIND C on the curve and still answered
   b = ""; for m in s[(10, 10)..: 3] { b += "{m.name} "; }
-  assert(b == "C D E ", "(10,10)..:3 = '{b}', want 'C D E '");
+  assert(b == "C D B ", "(10,10)..:3 = '{b}', want 'C D B '");
 
   // From (12,11) the nearest other record is C, at distance ~2.2 and ONE CODE BEHIND.
-  // It is not answered; E, at distance ~12, is.  This is the cell the count-only tests
-  // above cannot express.
+  // The one-directional walk could never answer it and returned E, at ~12, instead.
+  // from D: D 0, C 2.2, B 9.2, E 12.0
   c = ""; for m in s[(12, 11)..: 3] { c += "{m.name} "; }
-  assert(c == "D E ", "(12,11)..:3 = '{c}', want 'D E ' — C is behind the query");
+  assert(c == "D C B ", "(12,11)..:3 = '{c}', want 'D C B ' — C is behind the query");
 
-  // At the top of the curve a cap of 3 answers one record, and past every record it
-  // answers none.  Both are silent: nothing distinguishes them from an empty
-  // neighbourhood.
+  // At the top of the curve the cap is still filled: everything near is behind.
+  // from E: E 0, D 12.0, C 14.1, B 21.2, A 28.3
   d = ""; for m in s[(20, 20)..: 3] { d += "{m.name} "; }
-  assert(d == "E ", "(20,20)..:3 = '{d}', want 'E '");
+  assert(d == "E D C ", "(20,20)..:3 = '{d}', want 'E D C '");
 
+  // Past EVERY record — the cell that used to answer nothing at all.
+  // from (99,99): E 111.7, D 122.0, C 125.9
   e = ""; for m in s[(99, 99)..: 3] { e += "{m.name} "; }
-  assert(e == "", "(99,99)..:3 = '{e}', want '' — a query past every record");
+  assert(e == "E D C ", "(99,99)..:3 = '{e}', want 'E D C ' — a query past every record");
 
-  // The open form with a `break`, which is the spelling the docs recommend, has the same
-  // shape: the loop ends early rather than turning round.
+  // The open form with a `break`, which is the spelling the docs recommend, turns round
+  // at the end of the curve instead of stopping.
   f = ""; n = 0;
   for m in s[(20, 20)..] { f += "{m.name} "; n += 1; if n == 3 { break; } }
-  assert(f == "E ", "(20,20).. with break-at-3 = '{f}', want 'E '");
+  assert(f == "E D C ", "(20,20).. with break-at-3 = '{f}', want 'E D C '");
+
+  // The open form eventually yields EVERY record, each once, from any origin — the
+  // property that makes the cap meaningful rather than a silent shortfall.
+  k = 0; for m in s[(99, 99)..] { k += 1; }
+  assert(k == 5, "the open walk from past the end still reaches all 5, got {k}");
 
   // The BOX is exact and symmetric, and is therefore the form that covers every
   // direction (loft#800).  Same query point, same radius as the distance to C.

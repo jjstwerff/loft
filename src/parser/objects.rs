@@ -635,7 +635,47 @@ impl Parser {
                     t = Type::Never;
                 }
             } else {
-                t = Type::Null;
+                // loft#1008 — the OTHER half. A `both` receiver registers a dispatch entry
+                // under the PLAIN name (which is what makes the free-call spelling `f(x)`
+                // work), so unlike a `self` method the bare name is FOUND here — as a
+                // `Dynamic` def — and fell through to a silent null. `x = f` bound null with
+                // no diagnostic at all, and the error surfaced later as whatever used it
+                // ("Cannot format type null"); in a fn-ref argument it reached the call check
+                // as a bare `Value::Null` with no name attached, reported as *"expected
+                // fn(P) -> integer, got null"* — a value the author wrote nowhere.
+                //
+                // The name IS available here, which is what the argument site lacked. Same
+                // message as the `self` spelling gets, so the two receivers finally answer
+                // alike. Pass 2 only, and only when the name really is a method — every other
+                // def kind that lands here keeps the null it always produced.
+                let mut reported_method = false;
+                if !self.first_pass {
+                    let receivers = self.method_receivers_named(name);
+                    if !receivers.is_empty() {
+                        reported_method = true;
+                        let on = receivers.join("`, `");
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "`{name}` is a method on `{on}`, and a method is not a function \
+                             VALUE — there is nothing to bind here. Wrap it: `|x| {{ x.{name}(…) \
+                             }}`, or declare the function with a plain first-parameter name \
+                             (not `self` / `both`), which makes it a free function and a usable \
+                             fn-ref"
+                        );
+                    }
+                }
+                // Poison once the root error is out, exactly as the `self` path does: a
+                // `Null` here is a real value downstream, so the call check reported the
+                // generic *"got null"* on top and the arity check then counted the argument
+                // as missing — three errors for one mistake. `Never` is what both of those
+                // read as "already reported".
+                t = if reported_method {
+                    Type::Never
+                } else {
+                    Type::Null
+                };
             }
         } else if matches!(self.data.def_type(self.context), DefType::Struct)
             && self.data.attr(self.context, name) != usize::MAX
@@ -3102,6 +3142,8 @@ impl Parser {
             // use-after-free).  Accept it as the already-primed empty collection
             // (the `OpSetInt4(.., 0)` above zeroed the header) but steer toward
             // the canonical `[]`.
+            // Filled by the brace scan below when `{}` is what stands here.
+            let mut braces_span: Option<(u32, u32, u32)> = None;
             let empty_braces = matches!(
                 td_base,
                 Type::Vector(_, _)
@@ -3112,27 +3154,50 @@ impl Parser {
                     | Type::Index(_, _, _)
             ) && {
                 let link = self.lexer.link();
-                let empty = self.lexer.has_token("{") && self.lexer.has_token("}");
+                // loft#1003 — each brace's own position, taken before it is consumed, so the
+                // fix can spell `{}` -> `[]` as an edit.  Both are needed: `{ }` is the same
+                // construct with a gap, and a length assumed from the opener would leave the
+                // `}` behind.
+                let open = self.lexer.peek_pos().clone();
+                let empty = self.lexer.has_token("{") && {
+                    let close = self.lexer.peek_pos().clone();
+                    self.lexer.has_token("}") && {
+                        braces_span = (open.line == close.line && close.pos >= open.pos)
+                            .then(|| (open.line, open.pos, close.pos + 1 - open.pos));
+                        true
+                    }
+                };
                 if !empty {
                     self.lexer.revert(link);
                 }
                 empty
             };
             let exp_tp = if empty_braces {
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    code = "empty-braces-not-collection",
-                    "empty `{{}}` is not a collection literal"
-                );
-                self.lexer.fix_last(crate::diagnostics::Fix {
-                    kind: crate::diagnostics::FixKind::Mechanical,
-                    title: "write `[]` for an empty collection".to_string(),
-                    condition: None,
-                    edit: None,
-                    concept: "vector",
-                    concept_ref: "@F6",
-                });
+                // Pass 2 only: the field is parsed in both passes, so an ungated notice is
+                // reported twice at one position — which reads as two findings and, now that
+                // the fix spells an edit, offered the same rewrite twice.  Every other
+                // deprecation-style notice gates the same way.
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        code = "empty-braces-not-collection",
+                        "empty `{{}}` is not a collection literal"
+                    );
+                    self.lexer.fix_last(crate::diagnostics::Fix {
+                        kind: crate::diagnostics::FixKind::Mechanical,
+                        title: "write `[]` for an empty collection".to_string(),
+                        condition: None,
+                        edit: braces_span.map(|(line, col, len)| crate::diagnostics::Edit {
+                            line,
+                            col,
+                            len,
+                            text: "[]".to_string(),
+                        }),
+                        concept: "vector",
+                        concept_ref: "@F6",
+                    });
+                }
 
                 td.clone()
             } else {

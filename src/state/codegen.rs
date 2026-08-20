@@ -46,6 +46,26 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
     crate::data::element_stack_offsets(elems)[idx] as u16
 }
 
+/// The byte offset of element `idx` in a `&(…)` REFERENCE tuple.
+///
+/// A reference tuple points into the caller's STACK FRAME — the caller passes
+/// `OpCreateStack(t)`, whose DbRef targets the frame rather than a data store (see
+/// `OpCreateStack` in `default/01_code.loft`). So the element sits at its STACK offset, and
+/// this is deliberately NOT [`stored_tuple_field_offset`], which answers the synthetic
+/// `__tuple<…>` struct's RECORD field positions.
+///
+/// The two agree for scalars and disagree for anything wider on the stack than in a record,
+/// which is what hid the bug: `(integer, integer)` is `[0, 8]` under both, while
+/// `(text, text)` is `[0, 4]` as a record and `[0, 16]` on the stack. Reading element 1 of a
+/// text pair at the record offset lands 12 bytes early, inside element 0 — an out-of-bounds
+/// dereference, not a wrong value (loft#1006).
+///
+/// One datum must have one derivation; the plain (non-reference) `TupleGet`/`TuplePut`
+/// branches already read `element_stack_offsets`, and these now agree with them.
+fn ref_tuple_field_offset(elems: &[Type], idx: usize) -> u16 {
+    u16::try_from(crate::data::element_stack_offsets(elems)[idx]).unwrap_or(u16::MAX)
+}
+
 /// Text-returning natives that accept a destination buffer instead of allocating one.
 pub(crate) fn is_text_dest_native(name: &str) -> bool {
     matches!(
@@ -661,8 +681,7 @@ impl State {
                     // `element_offsets` calculation for shapes whose
                     // synthetic struct hasn't been registered (defensive —
                     // tuple_def is normally called eagerly during parse).
-                    let elem_offset =
-                        stored_tuple_field_offset(stack.data, &self.database, elems, idx);
+                    let elem_offset = ref_tuple_field_offset(elems, idx);
                     let var_pos = stack.var_pos(var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
@@ -674,6 +693,11 @@ impl State {
                         Type::Float => stack.add_op("OpGetFloat", self),
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
+                        Type::Boolean => stack.add_op("OpGetBoolean", self),
+                        // Unreachable: `ref_tuple_element_ok` refuses anything this
+                        // match cannot emit, at the signature, with a message naming the
+                        // element type.  The two lists are one list on purpose —
+                        // loft#1006 was them disagreeing.
                         _ => panic!("RefTupleGet: unsupported element type {elem_tp:?}"),
                     }
                     self.code_add(elem_offset);
@@ -769,8 +793,7 @@ impl State {
                 {
                     let idx = elem_idx as usize;
                     let elem_tp = elems[idx].clone();
-                    let elem_offset =
-                        stored_tuple_field_offset(stack.data, &self.database, elems, idx);
+                    let elem_offset = ref_tuple_field_offset(elems, idx);
                     let var_pos = stack.var_pos(var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -780,7 +803,10 @@ impl State {
                             stack.add_op("OpSetInt", self);
                         }
                         Type::Float => stack.add_op("OpSetFloat", self),
+                        Type::Single => stack.add_op("OpSetSingle", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
+                        Type::Boolean => stack.add_op("OpSetBoolean", self),
+                        // Unreachable — see the RefTupleGet arm above.
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
                     }
                     self.code_add(elem_offset);
@@ -1724,7 +1750,17 @@ impl State {
     /// Emit a null sentinel for the given type onto the stack.
     /// Used when Value::Null appears in a typed context (e.g. function argument).
     fn emit_typed_null(&mut self, stack: &mut Stack, tp: &Type) {
-        match tp {
+        // @PLN25 slice (b) — an `Optional(τ)`'s null IS `τ`'s typed null (the same sentinel),
+        // so peel before dispatching. The parser's own `null()` (`definitions.rs`) already
+        // peels for this reason; matching the unpeeled type here sent every `τ?` to the
+        // catch-all below and pushed a zero-filled DbRef where a scalar was expected.
+        //
+        // Reached whenever a caller OMITS a parameter declared `= null`: the parser fills a
+        // bare `Value::Null`, and this is what gives it the parameter's width and sentinel.
+        // An `integer? = null` then arrived as a REF sentinel and `a?` discharged it to
+        // 65535 instead of 0 — a silent wrong number, against types.md's
+        // `(D-Scalar) construct_default(Integer[r]) = 0` (loft#1015).
+        match tp.base() {
             Type::Text(_) => {
                 stack.add_op("OpConvTextFromNull", self);
             }
@@ -1745,9 +1781,19 @@ impl State {
             Type::Reference(_, _) | Type::Enum(_, true, _) => {
                 self.emit_push_sentinel(stack);
             }
-            Type::Integer(_) | Type::Character => {
+            Type::Integer(_) => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
+            }
+            // types.md — `Char`'s in-band sentinel is CODEPOINT 0, and it is a
+            // 4-byte slot, so the integer arm was wrong on both counts: it pushed
+            // eight bytes of `i64::MIN` where four are read.  It happened to read
+            // as null only because the low word of `i64::MIN` is zero on a
+            // little-endian box.  `OpConvCharacterFromNull` is the same `'\0'` the
+            // parser's own `null()` emits for a `character` — one fact, one
+            // spelling, and the width the slot actually holds (loft#1014).
+            Type::Character => {
+                stack.add_op("OpConvCharacterFromNull", self);
             }
             Type::Float => {
                 stack.add_op("OpConstFloat", self);
@@ -1757,9 +1803,16 @@ impl State {
                 stack.add_op("OpConstSingle", self);
                 self.code_add(f32::NAN.to_bits());
             }
+            // @PLN17 — a null-capable `boolean` is the TRI-STATE byte (0/1/255), so its null
+            // is 255, not the integer sentinel. This arm was unreachable for `boolean?` until
+            // the `.base()` peel above (every `τ?` fell to the catch-all), and it was wrong:
+            // `i64::MIN` is not a value the tri-state can hold, so `a == null` on an omitted
+            // `boolean? = null` answered FALSE. 255 matches what `--native` writes for the
+            // same slot (`write_typed_null_in`'s `255_u8`), which is what makes the two
+            // backends agree (loft#1015).
             Type::Boolean => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i64::MIN);
+                self.code_add(255i64);
             }
             _ => {
                 // For other types, push a zero-filled DbRef as a generic null.

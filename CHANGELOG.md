@@ -26,6 +26,197 @@ Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
 that survives being piped somewhere, and `u32` finally holding every `u32`.
 
+### Leaving out an argument that defaults to `null` gives you the type's zero
+
+```loft
+fn f(a: integer? = null) -> integer { a? }
+f();                  // was 65535 on the interpreter — now 0
+```
+
+`float?` was similarly wrong (a denormal), and a `boolean?` parameter of this shape stopped
+`--native` compiling the program at all. Passing the argument explicitly, and the same thing
+written as a local, were always correct — it was only the omitted-default path.
+
+`character?` had two problems of its own, now fixed with it — see below.
+
+### An omitted `character?` argument, and a `character?` discharge on `--native`
+
+`character`'s null is codepoint 0 — the same `'\0'` its default is. Three places in loft agreed
+on that and two did not, so `a == null` on an omitted `character? = null` answered `true` on the
+interpreter and `false` on `--native`:
+
+```loft
+fn f(a: character? = null) -> boolean { a == null }
+f();                  // was false on --native — now true on both
+```
+
+Separately, discharging one with `?` would not compile on `--native` at all — in any form,
+including inside a comparison:
+
+```loft
+fn g(a: character? = null) -> boolean { (a?) == '\0' }
+```
+
+Note the one thing that has NOT changed: a `character` holding `'\0'` reads as null, because
+that codepoint IS the reserved sentinel. `'\0' as integer` therefore answers `null` rather than
+`0`, on both backends — the documented cost of storing the null inside the value.
+
+### A generic `T? = null` parameter you leave out gives you `T`'s zero
+
+The same shape as the first entry, once the type is a type variable:
+
+```loft
+pub fn g<T>(v: vector<T>, a: T? = null) -> T { a? }
+g([1]);               // was 34359738369 — now 0
+g([1.5]);             // was a denormal  — now 0.0
+g(["q"]);             // was a crash     — now ""
+```
+
+A record `T` now gets its own field defaults, where before it got an empty record of the type
+VARIABLE — a value of no type at all, which also leaked.
+
+### An accessor that sometimes borrows and sometimes builds is safe on `--native`
+
+```loft
+fn view_at(self: const Stage, i: integer) -> View {
+    if i < 0 or i >= len(self.views) { return View { … }; }   // builds one
+    self.views[i] ?? View { … }                                // hands one back
+}
+```
+
+Written as a METHOD and called in a loop, every read after the first out-of-range one answered
+zeros on `--native` — the receiver's records had been freed and the slot reused. Writing the
+same body as a plain function was always correct, which is what hid it. Both spellings agree now.
+
+### Leaving out a nullable record argument no longer grows the heap
+
+```loft
+fn f(a: P? = null) -> P { a? }
+for i in 0..1000 { b = f(); … }     // leaked one record per call
+```
+
+Passing the argument, and passing a variable that happens to be null, were both always fine — it
+was only the omitted spelling.
+
+### `sum(v)` — the identity is optional now
+
+```loft
+sum([10, 20, 12])      // 42   — the element type's own zero starts it
+sum([10, 20, 12], 0)   // 42   — unchanged
+sum([1.5, 2.5])        // 4.0  — and for float that zero is 0.0
+```
+
+This is also what makes `loft fix` able to apply the one rewrite it offers on `sum_of`:
+`sum_of(v)` becomes `sum(v)`, and the fix now verifies instead of being rejected for a missing
+argument. Every existing `sum(v, init)` call is unchanged.
+
+### A `??` default that calls a function no longer leaks
+
+```loft
+m = v[i] ?? mk();     // one leaked record per index MISS, unbounded in a loop
+```
+
+A struct **literal** default was always fine, and the compiler's refusal of a struct-valued
+constant points you at the function spelling — so the leaking form was the recommended one.
+Fixed for both backends; the hit path and the literal default are unchanged.
+
+### `loft fix` can repair a text slice that stops short
+
+`s[i..len(s)]` looks like "to the end" and is not — `len` counts characters while a slice bound
+is a byte offset, so it truncates any text with an accented character. loft warned about it;
+now `loft fix` can also repair it, by taking the bound off entirely:
+
+```loft
+t = s[0..len(s)];     // "héllo" -> "héll"
+t = s[0..];           // what loft fix writes -> "héllo"
+```
+
+Works for `s.len()` as well as `len(s)`.
+
+### Naming a `both` method where a value goes now tells you what is wrong
+
+Handing a method to `map`, `filter` or a `fn(...)` parameter does not work — a method is not a
+function value — and loft says so. It said so only for `self` methods. A `both` one was silent:
+
+```loft
+fn tripled(both: P) -> integer { both.n * 3 }
+x = tripled;                      // was: bound null, no message at all
+apply(tripled, p);                // was: "expected fn(P) -> integer, got null"
+```
+
+Both spellings now give the same message, naming the receiver type and the two cures (wrap it
+in a lambda, or declare it with a plain first-parameter name).
+
+### `loft verify-self` tells you when it could not check anything
+
+On an install built from source there is no release manifest to compare against. The command
+said so — and exited **0**, which is the same answer it gives when everything verified. Anyone
+who wired it into a script (`loft verify-self && deploy`) got a green light from a check that
+never ran.
+
+It now exits `2` for "could not verify", keeping `0` for verified-and-intact and `1` for
+verified-and-wrong.
+
+### Proximity queries on a `spatial` collection cover every direction
+
+`xs[(x,y)..]` and `xs[(x,y)..:n]` are documented as walking **outward** from a point. They
+walked *onward* instead — along the collection's internal order — so half the neighbourhood
+was unreachable, and what you got depended on where your query happened to sit:
+
+```loft
+for m in s[(20, 20)..:3] { … }    // asked for 3, got 1
+for m in s[(99, 99)..:3] { … }    // asked for 3, got nothing at all
+```
+
+Worse, the nearest thing could be invisible: from `(12, 11)` a mob two steps away was never
+returned while one twelve steps away was. Both forms now walk outward, so `..:n` answers `n`
+records from any query point and the nearest ones come first. The walk is approximate — it
+orders by the collection's space-filling curve, so a very close point can occasionally arrive
+a place late; `xs[(x1,y1)..(x2,y2)]` is still the exact form when you need a guarantee.
+
+### `filter` no longer breaks the collection it read
+
+Filtering a vector whose elements are themselves vectors quietly damaged the source. It kept
+its length and its contents still read back, but any later loop over it ran zero times:
+
+```loft
+nv = [[1], [2]];
+f = filter(nv, |x| { true });
+c = [for x in nv { 1 }];          // was: 0 elements, not 2
+```
+
+### `loft test` runs your tests, not every function in the file
+
+A file that names any `test_*` function now runs exactly those. A `setup` helper no longer
+runs (and can no longer fail your suite from an `assert` inside it), and a `main` no longer
+executes during a test run with whatever it prints or writes. A file with no `test_*` at all
+is unchanged — every zero-argument function still runs, which is what makes `--tests` usable
+on a plain script.
+
+If you had given a function an unused parameter just to keep it out of the run, you can drop
+that now.
+
+**And on `--native`, tests in a file with a `main` were being reported as passing without
+being run** — a failing test could show green there and red on the interpreter. They run.
+
+### `loft fix` can act on warnings, not just errors
+
+`loft fix` only ever applied fixes attached to errors. Four more now carry a real edit it can
+apply and verify: dropping a needless `&` or `const` on a parameter, replacing an empty `{}`
+with `[]`, and deleting a deprecated `not null`. The `&` and `const` notices also point at the
+token itself now, instead of at a spot inside the function body.
+
+### Passing a tuple containing text now compiles with `--native`
+
+```loft
+fn take(p: (integer, text)) -> integer { p.0 }
+a: (integer, text) = (3, "three");
+take(a);                          // was: --native refused the whole program
+```
+
+The same tuple written directly at the call site always worked, which made this an easy one to
+trip over. Nested tuples (`((integer, text), text)`) are fixed too.
+
 ### `map`, `filter` and friends work on a `value struct` vector
 
 Every vector builtin that walks to the end — `map`, `filter`, `reduce`, `all`, `count_if`,

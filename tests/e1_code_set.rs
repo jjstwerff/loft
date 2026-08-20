@@ -370,6 +370,12 @@ const FIX_BLOCKED: &[(&str, &str)] = &[];
 /// rather than a silence: the same argument `FIX_BLOCKED` makes one level up — a mechanical
 /// fix with no edit looks exactly like one that can be applied.  Removing a row is how a code
 /// graduates; adding one is a decision, and the reason is what the next reader checks.
+///
+/// `redundant-coalesce` graduated first (loft#1003), and its old blocker is worth reading
+/// because several rows below still give it: *"the diagnostic fires BEFORE the default is
+/// parsed, so its end is not yet known at the emit site"*.  That is a reason to spell the edit
+/// LATER, not a reason to have none — the notice keeps its own position and
+/// `Diagnostics::set_fix_edit` attaches the span once the default has an end.
 const EDIT_BLOCKED: &[(&str, &str)] = &[
     (
         "avoidable-copy",
@@ -378,10 +384,6 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
     (
         "c-binding-not-interpretable",
         "the fix is C the compiler cannot write — an ANSI-C shim taking at most 32 parameters",
-    ),
-    (
-        "redundant-coalesce",
-        "the deletion spans `?? <default>`, and the diagnostic fires BEFORE the default is parsed, so its end is not yet known at the emit site",
     ),
     (
         "redundant-default-fallback",
@@ -408,10 +410,6 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
         "deleting the block removes a statement, so the span includes its terminator",
     ),
     (
-        "text-slice-char-bound",
-        "`len(t)` -> `size(t)` is a span edit and SHOULD carry one; unblocked as soon as the call's span is threaded to the emit site",
-    ),
-    (
         "text-index-char-bound",
         "the cure is a different loop form (`for c in t`), not a substitution",
     ),
@@ -420,28 +418,12 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
         "adding a default touches the declaration's parameter list, and which default is the author's choice",
     ),
     (
-        "needless-reference-parameter",
-        "dropping the `&` is a one-token deletion and SHOULD carry an edit; unblocked as soon as the `&`'s own position is captured",
-    ),
-    (
-        "needless-const-parameter",
-        "same one-token deletion as `needless-reference-parameter`",
-    ),
-    (
-        "not-null-deprecated",
-        "deleting `not null` is a span edit and SHOULD carry one; the annotation's span is not captured at the emit site",
-    ),
-    (
         "module-name-shadowed",
         "the cure renames a FILE, which is not an edit to any source span",
     ),
     (
         "undeclared-dependency",
         "the cure is running `loft install <pkg>`, which edits the manifest rather than the source",
-    ),
-    (
-        "empty-braces-not-collection",
-        "`{}` -> `[]` is a span edit and SHOULD carry one",
     ),
     (
         "read-size-not-element-multiple",
@@ -616,6 +598,82 @@ fn every_mechanical_fix_is_applicable_or_listed() {
         stale.is_empty(),
         "these codes are listed in EDIT_BLOCKED but `loft fix` now reports them — drop their \
          rows: {stale:?}"
+    );
+}
+
+/// loft#1003 — `loft fix` can name, VERIFY and APPLY a warning-level fix.
+///
+/// The issue's headline was that it could not: seven of the eight fixes carrying a machine
+/// edit sat on ERROR codes and the eighth was advice, so `loft fix` reached no warning at
+/// all — including `redundant-coalesce`, which is the worked `loft fix` transcript in the
+/// @F110 catalogue entry and printed nothing.
+///
+/// Three claims, because reporting is not applying and one instance is not two:
+///   * the fix is REPORTED and `[verified]` — the rewrite really does clear the diagnostic;
+///   * applying it leaves a program that still compiles and computes the same answer;
+///   * TWO instances both apply.  They used to block each other — verification asked whether
+///     ANY diagnostic with this code remained, so whichever fix was applied, the other still
+///     answered yes. A file with one redundant `??` is the demo; a file with two is what
+///     real code looks like.
+#[test]
+fn loft_fix_reaches_a_warning_level_fix() {
+    const ONE: &str = "struct T1003f { name: text }\n\
+fn main() { t = T1003f { name: \"g\" }; s = t.name ?? \"none\"; println(\"{s}\"); }\n";
+    let reported = fix_output(ONE);
+    assert!(
+        reported.contains("delete the `?? <default>`"),
+        "`loft fix` must name the redundant-coalesce fix, said:\n{reported}"
+    );
+    assert!(
+        reported.contains("[verified]"),
+        "the fix must verify — a reported fix that cannot be applied is the half loft#1003 \
+         already had, said:\n{reported}"
+    );
+
+    // Two instances, applied for real, then run: the rewrite is only a fix if the program
+    // still says `xy`.
+    const TWO: &str = "struct T1003g { a: text, b: text }\n\
+fn main() {\n\
+\x20 t = T1003g { a: \"x\", b: \"y\" };\n\
+\x20 p = t.a ?? \"p\";\n\
+\x20 q = t.b ?? \"q\";\n\
+\x20 println(\"{p}{q}\");\n\
+}\n";
+    let path = std::env::temp_dir().join(format!("loft_e1_fix1003_{}.loft", std::process::id()));
+    std::fs::write(&path, TWO).unwrap();
+    let out = Command::new(loft_bin())
+        .arg("fix")
+        .arg("--apply")
+        .arg(&path)
+        .env("LOFT_TIMEOUT", "60")
+        .output()
+        .expect("failed to invoke loft binary");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        report.matches("[applied]").count(),
+        2,
+        "both instances must apply — they used to mask each other, said:\n{report}"
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !rewritten.contains("??"),
+        "both defaults must be gone, got:\n{rewritten}"
+    );
+    let run = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .env("LOFT_TIMEOUT", "60")
+        .output()
+        .expect("failed to invoke loft binary");
+    let ran = String::from_utf8_lossy(&run.stdout).into_owned();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        ran.contains("xy"),
+        "the rewritten program must still answer `xy`, said:\n{ran}"
     );
 }
 
