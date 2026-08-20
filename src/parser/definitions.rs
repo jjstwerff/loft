@@ -372,9 +372,30 @@ impl Parser {
                 );
             }
             let v_nr = if self.first_pass {
-                let v = self
-                    .data
-                    .add_def(&value_name, self.lexer.pos(), DefType::EnumValue);
+                // A forward reference may already have left a stub under this name:
+                // `Circle{ r: 2 }` written ABOVE `enum Shape { Circle { r: integer } }`
+                // registers `Circle` speculatively (`objects.rs`, the `Name { … }` branch).
+                // ADOPT that stub in place, exactly as `parse_struct` and the typedef path
+                // do for a type name — adding a SECOND def under the same name leaves the
+                // construction site still pointing at the stub, which pass 2 then reports
+                // as `unknown type 'Circle'` even though the declaration is right there
+                // (loft#1046).  A plain `struct` forward reference already worked for this
+                // reason; the enum VARIANT was the one declaration kind that did not adopt.
+                let existing = self.data.def_nr(&value_name);
+                let v = if existing != u32::MAX
+                    && self.data.def_type(existing) == DefType::Unknown
+                    && matches!(
+                        self.data.definitions[existing as usize].returned,
+                        Type::Unknown(_)
+                    ) {
+                    self.data.definitions[existing as usize].position = self.lexer.pos().clone();
+                    self.data.definitions[existing as usize].def_type = DefType::EnumValue;
+                    self.data.note_stub_adopted(existing);
+                    existing
+                } else {
+                    self.data
+                        .add_def(&value_name, self.lexer.pos(), DefType::EnumValue)
+                };
                 self.data.definitions[v as usize].parent = d_nr;
                 v
             } else {

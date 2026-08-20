@@ -906,9 +906,21 @@ impl Parser {
                     // variable away from every misspelled constant, which is what the
                     // `upper-case-local` advice and "Unknown variable 'N'" are written
                     // against.  A type name carries a lowercase letter.
-                    let looks_like_a_type = name.starts_with(char::is_uppercase)
+                    //
+                    // A QUALIFIER settles it without the spelling test.  `D.N` is a name
+                    // qualifying a value, which a misspelled constant never is — the
+                    // `upper-case-local` case this guard protects is a BARE `N`.  So an
+                    // uppercase name followed by `.` takes the type-stub path too, which is
+                    // what lets a one-letter `enum D` declared BELOW its use resolve: the
+                    // spelling test rejects `D` (no lowercase letter), the `else` branch
+                    // leaves a placeholder VARIABLE, and — per the note above — that
+                    // placeholder survives into pass 2 and shadows the type the declaration
+                    // meanwhile produced, so the name still read as an unknown variable
+                    // (loft#1047).  Same fault as loft#801, reached by a different spelling.
+                    let looks_like_a_type = (name.starts_with(char::is_uppercase)
                         && name.contains(char::is_lowercase)
-                        && !name.contains('_');
+                        && !name.contains('_'))
+                        || (name.starts_with(char::is_uppercase) && self.lexer.peek_token("."));
                     if looks_like_a_type {
                         if self.data.def_nr(name) == u32::MAX {
                             self.speculative_type_refs.insert(self.data.add_def(

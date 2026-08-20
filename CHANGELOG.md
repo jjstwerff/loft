@@ -33,6 +33,36 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Enums and their variants work before they are declared
+
+`loft` files are meant to read in whatever order suits them — that is what the two-pass
+parser is for. Enums did not cooperate. All three of these were refused, and all three
+work now:
+
+```loft
+fn main() {
+  p = Priority.High;
+  r = match p { High => 10, Low => 20 };   // "cannot change type from void to integer"
+
+  s = Circle { r: 2 };                     // "unknown type 'Circle'"
+
+  d = D.N;                                 // "Unknown variable 'D'"
+}
+enum Priority { High, Low }
+enum Shape { Circle { r: integer }, Square { w: integer } }
+enum D { N, S }
+```
+
+Each had a different cause and the same shape: the first pass had to guess something the
+second pass already knew. `match` gave up and called the result `void`. A variant literal
+left a placeholder that the enum declaration never claimed, though a plain `struct` in the
+same position always worked. And a one-letter name was assumed to be a mistyped constant,
+because the rule that keeps `N` reporting as an unknown *variable* looks for a lowercase
+letter in the name — so `enum D` had none, while `enum Dx` was fine.
+
+Naming an enum `T` still does not work, and that one is not about order: `T` is the name
+the standard library uses for a generic type parameter. Pick another name.
+
 ### Arithmetic on a function declared further down the file
 
 A function may be used above where it is written — that is what the two-pass parser

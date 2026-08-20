@@ -379,6 +379,49 @@ at d2_signed_narrowing_i8_to_u8_needs_cast:3:15",
     );
 }
 
+/// loft#1047 — the NEGATIVE half of the one-character-type fix.
+///
+/// The forward-reference path decides "is this name a type?" from its SPELLING, and the
+/// rule deliberately rejects a name with no lowercase letter: loft gives constants
+/// `UPPER_CASE`, so `N` and `FOO` are read as constants and keep a placeholder VARIABLE,
+/// which is what makes a misspelled one report as an unknown variable instead of an
+/// unknown type.  The fix widened that test to accept an uppercase name followed by a
+/// QUALIFIER (`D.N`), which a bare constant reference never is.  These two guard the
+/// half that must NOT move — widen the predicate further and they are what tells you.
+#[test]
+fn order_bare_uppercase_name_is_still_an_unknown_variable() {
+    code!(
+        "fn test() {
+    x = N + 1;
+    assert(x == 1, \"x\");
+}"
+    )
+    .advice(
+        "Variable 'N' is UPPER_CASE — that style is reserved for constants at \
+order_bare_uppercase_name_is_still_an_unknown_variable:2:12",
+    )
+    .error("Unknown variable 'N' at order_bare_uppercase_name_is_still_an_unknown_variable:2:9");
+}
+
+#[test]
+fn order_misspelled_upper_case_constant_is_still_an_unknown_variable() {
+    code!(
+        "const MAX_SIZE: integer = 10;
+fn test() {
+    x = MAX_SIZ + 1;
+    assert(x == 11, \"x\");
+}"
+    )
+    .advice(
+        "Variable 'MAX_SIZ' is UPPER_CASE — that style is reserved for constants at \
+order_misspelled_upper_case_constant_is_still_an_unknown_variable:3:18",
+    )
+    .error(
+        "Unknown variable 'MAX_SIZ' at \
+order_misspelled_upper_case_constant_is_still_an_unknown_variable:3:9",
+    );
+}
+
 // (grammar D-gram-3) `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512,
 // matching maths / most languages (it was left-associative = 64 before). Precedence vs the
 // other operators is unchanged: `**` binds tighter than `*`. See formal/grammar.md.

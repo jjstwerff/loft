@@ -695,6 +695,62 @@ Each is a *single fact computed once*, validated on **both backends** per
 CODEGEN_METHOD — not a patch. The win is structural: a new collection kind / return
 shape / narrow width then arrives *with its fact*, not as the next special case.
 
+### Result 5 — a rising class the mechanism buckets cannot see (2026-08-20)
+
+`make bug-review` classifies by SUBSYSTEM — `generic/monomorph`, `null/sentinel`, `tuple`,
+`keyed collections`. That is the right cut for finding which machinery keeps producing
+bugs, and Results 1–4 lean on it. But it cannot see a class defined by the INVARIANT it
+violates, because each instance files under whichever subsystem it landed in, and no
+single bucket rises far enough to flag.
+
+One such class is measurable and rising: **declaration order changes what a program
+means.** LOFT.md § File structure states the contract — *"A loft file may contain (in any
+order)"* its declarations — and the two-pass parser exists to make it true.
+
+| tracker band | order-dependent bugs | share |
+|---|---|---|
+| #246–445 | 0 | 0.0 % |
+| #445–644 | 0 | 0.0 % |
+| #644–843 | 4 | 3.3 % |
+| #843–1046 | 8 | 5.3 % |
+
+Monotonic, and the same profile as `generic/monomorph`, the steepest riser `bug-review`
+names. The members are spread across SIX subsystems — enum (#803), tuple (#944, #960),
+struct (#986), par (#988), closures (#686), packages (#788), generics (#1023, #1024) —
+which is exactly why no bucket flags it. Prior instances were closed one at a time as
+subsystem bugs (#374, #803), and the class kept producing.
+
+**The remedy the model asks for is an instrument, not an arm.** The backend axis has one
+(`tests/differential_oracle.rs`: same program, two backends, same answer). The order axis
+had nothing, so an **order-permutation oracle** was written to the same shape: permute a
+file's top-level declarations and the program must behave identically. Run against the
+`tests/scripts/` corpus it immediately produced three live defects on `main`:
+
+| defect | status |
+|---|---|
+| `match` on an enum declared BELOW its use returned `Void` on pass 1, so a bound local locked to void and pass 2 was refused | **fixed** — `parse_match`'s `!valid_enum` exit now defers |
+| a struct-enum VARIANT literal above its enum — the pass-1 stub was never adopted by the variant registration | **fixed** (loft#1046) — variant registration adopts the stub, as `parse_struct` already did |
+| a ONE-CHARACTER type name (`enum D`) — the forward-reference path guesses "is this a type?" from the SPELLING, and a name with no lowercase letter kept a placeholder VARIABLE that shadowed the later declaration | **fixed** (loft#1047) — a qualifier (`D.N`) settles it without the spelling test |
+
+All three are the same fault under the thesis: **a fact decided on pass 1 from a guess,
+where pass 2 holds the answer.** That is the "one fact, N homes" thesis on its other axis
+— not one fact spelled in several places, but one fact decided at the wrong TIME. Cluster
+F (*"is this type still a type variable?"*) is the same question asked about a different
+fact, which is why loft#1047's cure lands next door to it.
+
+**Falsifiable.** If the next order-dependence bug is NOT a pass-1 decision that pass 2
+could have made, this reading is wrong. And the oracle itself is not yet a gate: its
+top-level splitter is line-based, so it skips what it cannot split safely and its diffs
+still need triage by hand. Promoting it to CI needs a real parser-backed split — worth
+doing, since the three defects above came from its first two hundred files.
+
+One residual, deliberately not fixed: `enum T` declared below its use still fails, because
+`T` collides with the type-variable placeholder the stdlib registers for `min_of<T>`. That
+is a name collision, not an order fault, and it wants a clear diagnostic rather than the
+current `Expect token ;`.
+
+---
+
 ## What is NEW vs already-tracked
 
 - **NEW (file a forward home / H-row when picked up):** **Cluster F** — the
