@@ -14,7 +14,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — arcs `B` and `C` COMPLETE (`text2d` 0.4.0, `tween` 0.1.0, `stage` 0.17.0), `D0b` answered, `D1` SHIPPED. Only `D2` remains; `D0` is moros's clock and no `ui` package will be built — see § The `ui` package that is not ours.** These are the libraries a game author writes against
+**Effectively COMPLETE — every phase this stream owns has shipped.** `text2d` 0.4.0 (arc B), `tween` 0.1.0 (`C1`), `stage` 0.18.0 (`C2` + `D1` + `D2`), `D0b` answered. **Only `D0` remains and it is not ours** — publishing `lavition_ui` is moros's decision on moros's clock — and no `ui` package will be built (§ The `ui` package that is not ours). These are the libraries a game author writes against
 *above* the stage. Each has its own gate family — a metrics seam, a headless font, an event
 replay — which is why they are not @PLN144's phases.
 
@@ -46,7 +46,7 @@ cut, not when it is implemented.
 | **D0** — publish `lavition_ui` | upstream | the package resolves from the registry and its own tests pass unchanged after the move. **Not our work and not our clock** — moros promotes a library once it is battle-tested *there*, by rule | Blocked on moros |
 | **D0b** — does `input` fit a consumer that already exists? | probe only | ✅ **Answered** ([`probe-d0b.loft`](probe-d0b.loft), both backends identical) — **adopt it, and do not expect it to resolve modifiers.** dryopea's 33-row action set expresses through `Bindings` and replays through `input_tick_from_state` exactly as `D1` needs; edge detection is correct headless. ⚠ But a **modifier is not expressible**, and it is structural: `ActionBinding` is a name + key list, `AxisBinding` is two key *codes*, and neither has a slot for *"suppressed while Ctrl is held"*. Measured: `input` answers **identically** for plain `S` and `Ctrl+S` (`pan_south=true, save=true` both times), so all five of dryopea's Ctrl-combos are indistinguishable from their plain twins — and an axis cannot carry the rule either, which is why dryopea's `bnd_axes` is **empty** and its four pan keys are four actions. ⚠⚠ **The premise was wrong**: dryopea ADOPTED `input`, so the widgets would be its *second* consumer, not the fourth — [PRIOR_ART](../144-2d-stage/PRIOR_ART.md) corrected | ✅ **Answered** |
 | **D1** — widget states over stage routing | **`stage`** (0.17.0) | ✅ **Shipped** — a replayed stream drives the exact state sequence (8 events, both buttons, every state hand-computed first); press-then-leave-then-release does **not** fire while press-then-drift-a-pixel does; touch never shows `Over`, and **one** recorded stream replayed as mouse and as touch fires identically, so the pointer kind changes only what is *shown*. ⚠⚠ **The invariant: a node reads `Down` exactly when a release would FIRE it** — one predicate serves the picture and the click, so a control that breaks the capture check does not even redden the down-means-fires gate: that class is **unrepresentable**, not caught. ⚠ **The fourth clause was struck**, not met — it rested on a premise that did not survive contact; see § The `ui` package that is not ours. 7 tests, suite 151 both backends, three controls fire | ✅ **Shipped** |
-| **D2** — focus, tab order, text field | **`stage`** (interaction); rendering is `lavition_ui`'s | replayed keystrokes incl. IME text produce the exact buffer; tab order matches the declared order. **The genuinely new half** — the kit has neither today. ⚠⚠ **`D0b`'s limit lands squarely here**: a text field needs `Ctrl+C`/`Ctrl+V` and `Shift`+arrow, and `input` cannot express a modifier — so this phase must carry a ctrl rule of its own (dryopea's `ea_ctrl` column is the worked example) or `input` must grow one first. Decide which **before** the phase is cut | Open |
+| **D2** — focus, tab order, text field | **`stage`** (0.18.0) | ✅ **Shipped** — replayed keystrokes (incl. multi-character IME commits) produce the exact buffer; tab order is the declared order and wraps both ways. ⚠⚠ **Every index is a CHARACTER index and no byte index ever enters** — a caret *is* a count, and the control proves it: byte-slicing the one edit primitive leaves `"héllo"` **unchanged** after a backspace over the `é`, while all ten ASCII tests still pass. ⚠ **One `splice` does every edit** (insert / backspace / delete / replace-selection / paste). ⚠⚠ **The modifier dilemma was a false dichotomy** — neither answer was needed: `graphics`'s event queue already delivers `gl_event_mods()` per event, and a text field wants *this keystroke with these modifiers*, not an action. 11 tests, suite 162 both backends, three controls fire | ✅ **Shipped** |
 ## Effort per phase
 
 | Phase | E | What the effort actually is |
@@ -60,7 +60,7 @@ cut, not when it is implemented.
 | **D0** | — | A request, not an effort: `lavition_ui` is unpublished and lives in a tree this stream reads and never writes. Costs a conversation and their release cycle. |
 | **D0b** | XS ✅ | *Done.* One probe program, and it did the job a probe is for — it did **not** retire the dependency, it retired the *reason to doubt it* and replaced it with a named limit `D1` and `D2` can plan around. ⚠ The phase's own framing was the thing that broke: two of the three "wrote their own" consumers were miscounted, one of them because a file was judged by its NAME (`framekey.loft` is a frame-reuse digest, not a keyboard file). |
 | **D1** | S ✅ | *Done.* The predicted effort — *"the effort is the replay harness"* — was **wrong in a good way**: A4's path was already injectable (every entry point takes coordinates and reads no device), so the harness cost nothing and no second seam was invented. The real effort was deciding what `Down` MEANS, and that answer made a bug class unrepresentable rather than tested. The **extraction** half turned out not to be ours to do at all. |
-| **D2** | M | The half the kit does not have. Focus ring and tab order are small; the **text field** is the phase. Caret placement needs B2's measurement, selection needs hit-test to a character index, insertion/backspace/IME arrive via `gl_event_text`, and multi-byte indexing returns for a third time. |
+| **D2** | M ✅ | *Done, and the effort note called it: the text field WAS the phase.* ⚠ It also predicted *"multi-byte indexing returns for a third time"* — it did, and the cure was to refuse it entry: the model counts characters everywhere and pixels never appear, so caret↔x stays with whoever draws (`text2d`). ⚠ A gap found on the way, **recorded not fixed**: the **stdlib has no character slicing** — `len` (chars), `size` (bytes), `byte_at`, byte-range `s[a..b]`, nothing between. `text2d` hand-rolled `take_chars` for `B2` and this phase needed the same walk again; **two libraries independently** is the admission test for a primitive belonging one level down. |
 
 ## Targets
 
@@ -82,11 +82,18 @@ its hit-test — and `D0` on moros.
 `C1`/`C2` and `D0b` are all unblocked and independent of each other; only `D0` is still
 someone else's clock, and `D0b` is the phase that must run before `D1` commits to `input`.
 
-**Arc `C` is complete and only arc `D` is left.** `C1` shipped `tween` 0.1.0 and `C2` bound it
-to the stage in `stage` 0.16.0; `D0b` cleared `input` for `D1`'s replay harness with one named
-limit (no modifiers) that `D2` has to plan around. `D1` is the next phase that depends on
-nothing — `D0` (publishing `lavition_ui`) is moros's clock and does not gate it, since `D1`'s
-extraction can be prepared against the shape `lavition_ui` already has.
+**Everything this stream owns has shipped; only `D0` is left and it is another tree's.**
+`C1` shipped `tween` 0.1.0, `C2` bound it to the stage, `D0b` measured `input`, and `D1` + `D2`
+put the interaction model in `stage` 0.18.0.
+
+⚠⚠ **Three of arc D's premises did not survive contact, and that is the arc's real lesson.**
+`D0b` was scoped on *"three consumers wrote their own input layer"* (the true count was one);
+`D1` on *"extract `lavition_ui` into a `ui` package"* (it is moros's, and its zero-dependency
+claim forbids the state machine anyway); `D2` on *"this phase must carry a ctrl rule or `input`
+must grow one"* (neither — the event queue already carries per-event modifiers). All three read
+as sensible when written and all three were settled by **measuring rather than reasoning**, each
+for the cost of a probe. A phase's stated dilemma is a hypothesis about the world, and arc D
+went 0 for 3.
 
 ⚠ **A finding from `C1`'s CI check, and it belongs to @PLN144: `stage` does not pass the
 repo's gate.** `LOFT_DENY_WARNINGS=1 loft test` reddens all 16 of its files on four
