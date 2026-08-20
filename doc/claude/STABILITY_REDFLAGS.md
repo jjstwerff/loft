@@ -33,6 +33,35 @@ place / N times*. The test for every entry below is the method's own:
 > If yes → the fact belongs on the type, and every re-derivation site is a sibling
 > of one bug class.
 
+**The goal this doc serves is generalization, not tidiness.** Every duplicated case
+analysis is a place a situation can be missed, and the misses are not distributed
+evenly: they land on the case the newest duplicate forgot. So the unit of work is
+never "patch the arm that was wrong" — it is "make this the only place the cases are
+enumerated, and make the enumeration exhaustive so the compiler names the next
+missing case instead of a user finding it." Two shapes recur:
+
+- **one fact, N spellings** — the same question answered by several predicates at
+  different depths (Cluster F), or the same per-kind table re-encoded per consumer
+  (Clusters C, D);
+- **a total walk written as a partial one** — a traversal that must reach every
+  node, spelled with a wildcard, so the nodes it forgets fail silently
+  (Cluster F's second half, loft#815).
+
+The counter-test matters as much as the rule: a walker that is *deliberately*
+partial is correct and must stay. What is wrong is that deliberate and accidental
+are spelled the same way, so nothing can tell them apart.
+
+**The deliverable is the collapsed structure, not a list of the bugs it was
+hiding.** A repro in this doc is evidence that a duplicate is load-bearing — it is
+not a ticket, and enumerating the remaining symptoms is not progress. This follows
+the [STABILITY_ROADMAP](STABILITY_ROADMAP.md) standing rule (*in stability work,
+bugs get FIXED, not filed*) and states its reason: the bugs that matter most here
+are the ones nobody has hit yet, and those have no ticket to file. Collapsing the
+duplicate retires the discovered and the undiscovered cases together, which is
+precisely what patching the arm that was wrong does not do. So the measure of
+progress is **how many places can still miss a case**, not how many issues are
+open.
+
 The rigor failure modes ([engineering-rigor skill](../../.claude/skills/engineering-rigor/SKILL.md)):
 **under-reach** (N mechanisms for one family — a spray), **over-reach** (one
 mechanism forced over N families — a false invariant), **wrong-signal** (a decision
@@ -44,9 +73,14 @@ keyed on a type where the authority is a runtime delta), and
 in **this** tree (loft2, `tuxedo-work2`) where confirmed, else cited by function.
 The *patterns* are durable; re-confirm exact lines before acting.
 
+**Re-survey 2026-08-20** (loft2, `tuxedo-post-973`): clusters A–E re-measured by
+counting their re-derivation sites, and one new cluster added (**F**). What each
+count is and how to re-run it is in [§ Re-survey](#re-survey-2026-08-20--what-moved)
+below.
+
 ---
 
-## The map — five clusters, ~3 missing facts
+## The map — six clusters, ~4 missing facts
 
 | Cluster | Missing fact | Re-derivation sites | Failure mode | Tracking |
 |---|---|---|---|---|
@@ -55,13 +89,31 @@ The *patterns* are durable; re-confirm exact lines before acting.
 | **C** Container taxonomy | a `for_each_owned_child` traversal keystone + per-kind descriptor | ~27 + ~20 | under-reach (per-kind spray) | **NEW** (H7-sibling on the heap-cascade side) |
 | **D** Null-sentinel codec | the `sentinel(tp)` encode/decode table (H6) | ~3 sites × 3 | under-reach (one fact, drifting copies) | H6 (consumers unconverged) |
 | **E** Manifestation guards | — (downstream of A) | 4 | defensive-at-manifestation | #405 / @P290 / @P317 / @P377 |
+| **F** Type-variable fact | *does this type still mention a type variable?* — one recursive question over `Type` | 3 spellings / 14 sites | under-reach + divergence | **NEW** (the loft#1014/#1016/#1020/#1023/#1025/#1028 family) |
 
 Clusters **B/E are mostly *consequences*** of A and C: a missing ownership fact is
 why the stack and the free-path get guarded at the symptom. Landing **A** (return
 ownership) and **C** (the traversal keystone) is what retires the bulk — D and E
 largely dissolve behind them.
 
----
+### Re-survey 2026-08-20 — what moved
+
+Each row is a count anyone can re-run, not a judgement. The commands are the ones
+that produced the numbers.
+
+| Cluster | 2026-06-21 | 2026-08-20 | Evidence |
+|---|---|---|---|
+| **A** Return/bind ownership | ~10 sites; `has_ref_params` at 11 | **largely landed** — `has_ref_params` at **2** | `grep -rc has_ref_params src` |
+| **B** Stack-balance signal | 2 open siblings | **unchanged — deliberately deferred**, no RED probe fires | `state/codegen.rs` arm-join + `stack.rs` `size_code` (below) |
+| **C** Container taxonomy | ~27 + ~20, no keystone | **keystone landed**, 24 references; one holdout | `grep -rn for_each_owned_child src` |
+| **D** Null-sentinel codec | 3 consumers × 3 widths | **largely landed** — `is_null_field` gone, width fact now `IntegerSpec::range_to_width` | `grep -rn range_to_width src/data.rs` |
+| **E** Manifestation guards | 4 | not re-measured (gated on A) | — |
+| **F** Type-variable fact | — | **new, 3 spellings / 14 sites** | § Cluster F |
+
+Two clusters therefore came off the critical path, and the landing order below is
+re-cut around that. The instrument that found **F** — group every `match` block by
+the enum it dispatches on, then rank enums by how many independent blocks re-match
+their arm set — is worth re-running on any enum that grows a variant.
 
 ## Cluster A — the return/bind transfer-vs-borrow fact (cluster-II root)
 
@@ -153,13 +205,16 @@ but stack-neutral tail op like `OpAppendVector` pushes nothing).
 
 - ✅ **Fixed precedent:** `gen_if`'s `null_else` gate now reads `true_stack !=
   stack_pos` (the #405 fix). It is the template for the rest.
-- 🔴 **`gen_if` B5 rebalance** — `src/state/codegen.rs:841`: uses
+- 🔴 **`gen_if` B5 rebalance** — `src/state/codegen.rs:1072` (re-confirmed
+  2026-08-20, unchanged): uses
   `size(def(self).returned())` (the *function's* return type) as the bytes-to-
   preserve, not `size(tp)` (the if-**expression's** result type). Wrong whenever a
   non-tail value-`if`/`match` with eval-stack-divergent arms has result type ≠ the
   function return. **Masked** today because its only natural trigger is recursive
   functions where `tp == returned()`; latent, not dead.
-- 🟡 **`size_code` If/divergent arm** — `src/stack.rs` (`size_code`): an `if`'s
+- 🟡 **`size_code` If/divergent arm** — `src/stack.rs:113` (`size_code`,
+  re-confirmed 2026-08-20, unchanged — the arm reads `self.size_code(node.if_then())`
+  and the function ends `_ => 0`): an `if`'s
   drop-size is read from the then-arm's static type; a divergent then-arm falls to
   `0` while the else-arm pushed a value. Same wrong-signal family; uncommon shape.
 
@@ -190,6 +245,33 @@ copy/free/validate/construct as thin visitors over it. This is the `for_each_chi
 keystone **H7** already names for *codecs* — here on the heap-*cascade* side, and
 **not yet a tracked H-row** (H3's pass-2 explicitly scoped itself to `scopes.rs`
 free-*placement*, away from this traversal cascade). **Highest-leverage NEW finding.**
+
+**LANDED (re-survey 2026-08-20).** `Stores::for_each_owned_child`
+(`src/database/allocation.rs:254`) exists and carries the walk, with 24 references
+across `allocation.rs` and `database/spans.rs`. `copy_claims` and its per-kind
+bodies, `remove_claims_mode`, and the span walk are visitors over it. Its own
+history already shows the keystone earning its keep: `allocation.rs:6364` records a
+real fault from it having had no `Trie` arm — one arm, one place, instead of the
+same omission repeated per consumer.
+
+**The holdout — `validate_claims`.** `allocation.rs:2116` still hand-rolls its own
+ladder: six `Parts` arms (`Base` at `tp == 5`, `Struct`/`EnumValue`, `Vector`/
+`Sorted`, `ChildRec`, `Enum`, `Hash`) and then `_ => {}`. `copy_claims` knows
+thirteen kinds, so the validator silently walks past **`Array`, `Index`, `Ordered`,
+`Radix`, `Trie`**.
+
+Its *divergence* from the keystone is deliberate, documented at `allocation.rs:96`,
+and already SETTLED: a 2026-06-22 design probe falsified the wider fold and the
+decision is recorded in
+[STABILITY_ROADMAP § Red-flag remediation](STABILITY_ROADMAP.md) row C —
+`validate_claims` runs on suspected-corrupt heaps and must bounds-check before
+following a pointer, where the keystone trusts it. That reasoning holds, it is not
+the red flag, and this section does not re-open it. The `_ => {}` is: a validator that answers "no
+problems" for a container kind it never looked at cannot tell a clean heap from an
+unwalked one, and `store_verify` (`allocation.rs:4640`) is one of its callers. The
+fix is not to make it a visitor — it is to make the arm set exhaustive, so a new
+`Parts` kind forces a decision here the way it already does in the keystone. An arm
+that deliberately does nothing is fine when it says so.
 
 ---
 
@@ -251,24 +333,139 @@ bad value. They are correct stopgaps; the stable future **retires** them when A 
 
 ---
 
+## Cluster F — "is this type still a type variable?" (NEW, 2026-08-20)
+
+**The fact:** *does this type still mention a type variable?* is ONE recursive
+question over `Type`. Three predicates answer it today, each seeing a different
+depth, and none of them recurses through the keystone that already exists —
+`Type::for_each_child` (`src/data.rs:1783`), whose own doc calls it *"the ONE place
+that knows which `Type` variants carry child types … exhaustive on purpose — a new
+variant forces a decision here and every walker inherits it."*
+
+| Spelling | loft2 location | Depth it sees | Sites |
+|---|---|---|---|
+| `is_type_var_placeholder(d_nr)` | `src/data.rs:6309` | none — takes a def-nr, walks no type | 9 raw, each composing its own peel |
+| `is_type_var_operand(tp)` | `src/parser/operators.rs:511` | `tp.base()` — peels `Optional`, stops | 2 |
+| `type_mentions_tv(t, tv_nr)` | `src/parser/mod.rs:5240` | recursive, but ends `_ => false` | 3 |
+
+The deepest of the three still misses four child-bearing variants the keystone
+names: `Iterator`, `Function`, `RefVar`, `Rewritten`. The middle one additionally
+misses `Tuple` and `Vector`. So a type that plainly mentions `T` can answer *"not a
+type variable"*, and the decision keyed on that answer is then made against the
+placeholder.
+
+**Why this manufactures bugs.** A template's `T` is an attribute-less placeholder
+STRUCT. Any parse-time decision keyed on `τ` — which null sentinel to write, which
+null test to emit, which default to construct — picks the REFERENCE answer for it
+and the monomorph keeps that already-chosen op after substitution rewrites only the
+type. loft#1014, #1016, #1020, #1023, #1025 and #1028 are all that one shape.
+
+The cure applied so far is per-site and correct as far as it goes: the template
+stamps a marker (`TV_DEFAULT_BLOCK`, `TV_NULLTEST_EQ`/`_NE`, `TV_NULL_BLOCK`) and
+`rewrite_generic_type_defaults` re-asks once `T` is concrete, so there stays exactly
+one spelling of *"what is `τ`'s null?"*. But it is one marker per DECISION. The
+markers arrived one per issue (`TV_DEFAULT_BLOCK` with #1016, the null-test pair
+with #1020, `TV_NULL_BLOCK` with #1028), which is the signature of a fact being
+retrofitted rather than carried.
+
+**Reproducing, both backends, refused identically:**
+
+```
+fn f<T>(x: T) -> (T?, integer) { (x, 1) }
+
+error: type layout: __nullable<T>::Some: field 'payload' has no position (u16::MAX)
+```
+
+Boundary matrix — the axis varied is what HOLDS the `T?`; only the tuple breaks:
+
+| shape | `--interpret` / `--native` |
+|---|---|
+| `-> T?` | ok |
+| `-> vector<T?>` | ok |
+| `-> (T, integer)` | ok |
+| `-> (T?, integer)` | **refused** |
+| `fn f<T>(x: (T?, integer))` — parameter position | **refused** |
+
+`substitute_type` has both a `Tuple` arm and an `Optional` arm (each retrofitted
+after its own bug — read their comments), so the gap is the COMPOSITION, not either
+arm. Confirmed on `tuxedo-post-973`; `type_mentions_tv` and `is_type_var_operand`
+are byte-identical on `origin/main`, so the structure is not branch-local.
+
+**Deliberately not filed.** It is here as the probe that proves the duplicate is
+load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
+its own. Filing it would re-pay the derivation later and would fix one cell of a
+matrix whose other cells nobody has run yet — the whole reason this cluster is worth
+collapsing is the cases still undiscovered behind the other two spellings.
+
+**The second half — the marker dispatcher is itself a partial walk.**
+`rewrite_generic_type_defaults` (`src/parser/mod.rs:6676`) has to be TOTAL: its job
+is to reach every stamped marker in a body. It descends ten `Value` variants and
+ends `other => other`. `IrNode::for_each_child` names seventeen child-bearing ones,
+so a marker sitting inside `Tuple`, `TuplePut`, `Parallel`, `ParFor`, `Iter`,
+`BreakWith` or `Yield` is never rewritten, and the monomorph ships the placeholder.
+
+That missing set is very nearly loft#815's
+([STABILITY_PASS2.md § The `IrNode` keystone](STABILITY_PASS2.md), which lists
+`Tuple`, `Parallel`, `BreakWith`, `TuplePut`, `ParFor`) — the same variants absent
+from a new total walker written after that lesson was recorded and guarded. The #815
+guard asserts closure of the REACHABLE set, so it cannot see a rewrite walk. The
+lesson generalises: **a keystone protects only the walkers that adopt it, so new
+total walkers need the same audit as old ones.**
+
+**Scale of the surrounding habit.** Counting recursive `Value` walkers with four or
+more arms: **153** in `src/`, of which 19 delegate to `Value::for_each_child`, 19
+are exhaustive with no wildcard, and 115 end in a wildcard. That 115 is *not* 115
+defects — most are intentionally partial, and rightly so (`arm_is_null()` should
+answer `false` for everything else). The red flag is that intentional and accidental
+are spelled identically, so neither review nor the compiler can separate them. The
+cheap discipline is the one PASS2 already prescribes: a walker that must be TOTAL
+delegates recursion to the keystone and keeps only EXTRACTION arms of its own.
+
+**Would-one-fact-collapse-it?** Yes, in two small steps:
+
+1. Add `Type::mentions_type_var(&self, data) -> bool`, recursion delegated to
+   `Type::for_each_child`, and collapse all three spellings onto it. A new `Type`
+   variant then extends one exhaustive match instead of drifting three predicates.
+2. Convert `rewrite_generic_type_defaults` to the extraction/recursion split: the
+   `TV_*` arms extract, everything else delegates to the keystone.
+
+Both are the PASS2 keystone method applied to code that POST-DATES PASS2 — these
+walkers are newer than that doc's work list, which is why they are absent from it.
+
+---
+
 ## Landing order (leverage-first — the stable-future roadmap)
 
 > **Site-level steps + per-step verification gates for each cluster below:**
 > [STABILITY_REDFLAG_REMEDIATION.md](STABILITY_REDFLAG_REMEDIATION.md) — the
 > actionable *how* to this map's *what*.
 
-1. **Cluster A — carried return/bind ownership dep** (OWNERSHIP_MODEL 99/102/104).
-   Collapses ~10 forests, deletes the runtime witnesses, and **dissolves Cluster E**
-   and the `is_borrowed_view` divergence. The most-reused decision; do first.
+Re-cut 2026-08-20, after A and D largely landed and C's keystone shipped.
+
+1. **Cluster F — `Type::mentions_type_var` on the `Type::for_each_child`
+   keystone**, with all three spellings collapsed onto it. Now the most-reused
+   under-generalized decision in the tree, and the only cluster with a live
+   both-backend repro and a six-issue history behind it. Small: one predicate plus
+   its call sites. Step 2 (the `rewrite_generic_type_defaults` extraction/recursion
+   split) is independent and equally small.
+2. **Cluster A — carried return/bind ownership dep** (OWNERSHIP_MODEL 99/102/104).
+   Still the deepest fact, and `has_ref_params` is down from 11 sites to 2, so the
+   remaining work is the carried dep itself rather than the forest around it.
+   **Dissolves Cluster E** and the `is_borrowed_view` divergence.
    *Prereq already laid:* typed `Deps` (H2 / DEPS_INVENTORY.md).
-2. **Cluster C — the `for_each_owned_child` traversal keystone.** The densest bug
-   history and entirely NEW; one keystone fixes copy/remove/validate +
-   construction + the null-init family together. Independent of A — can proceed in
-   parallel.
-3. **Cluster B — apply the `true_stack`-delta template to `gen_if` B5 + `size_code`.**
-   Small, bounded; the #405 fix is the worked precedent.
-4. **Cluster D — converge the remaining H6 `sentinel(tp)` consumers.** S-sized;
-   any gap.
+3. **Cluster C's holdout — make `validate_claims`'s arm set exhaustive.** XS, and
+   it closes a diagnostic that currently reports clean on five container kinds it
+   never walks. Keep its deliberate divergence from the keystone; delete only the
+   silent `_ => {}`.
+4. **Cluster B — apply the `true_stack`-delta template to the `gen_if` arm-join +
+   `size_code`.** Small, bounded, unchanged since the first survey; the #405 fix is
+   the worked precedent. Both sites are re-confirmed present, but the ROADMAP row
+   deferred this cluster deliberately ("unverifiable, no RED probe fires; latent —
+   pick up only on a real trigger"), and the re-survey found no such trigger. Listed
+   here so the sites stay findable, not to re-open the decision.
+5. **Cluster D — converge the remaining per-width consumers** onto
+   `IntegerSpec::range_to_width`, now that the width fact has a home. S-sized; any
+   gap.
 
 Each is a *single fact computed once*, validated on **both backends** per
 CODEGEN_METHOD — not a patch. The win is structural: a new collection kind / return
@@ -276,10 +473,14 @@ shape / narrow width then arrives *with its fact*, not as the next special case.
 
 ## What is NEW vs already-tracked
 
-- **NEW (file a forward home / H-row when picked up):** the Cluster-C
-  `for_each_owned_child` keystone (the copy/remove/validate cascade + construction
-  triad + keyed re-dispatch), and the Cluster-B `gen_if:841` / `size_code`
-  wrong-signal siblings.
+- **NEW (file a forward home / H-row when picked up):** **Cluster F** — the
+  type-variable fact and the partial marker-rewrite walk (2026-08-20 re-survey),
+  carrying the one reproducing defect in this doc (`-> (T?, integer)`); and the
+  Cluster-B arm-join / `size_code` wrong-signal siblings, still open.
+- **LANDED since the first survey:** the Cluster-C `for_each_owned_child` keystone
+  (shipped, 24 references — `validate_claims` is the one holdout), Cluster A's
+  `has_ref_params` forest (11 sites → 2), and Cluster D's width fact
+  (`IntegerSpec::range_to_width`; `is_null_field` gone).
 - **Already tracked (this doc is the cross-cut, not a new filing):** Cluster A →
   OWNERSHIP_MODEL holes 99/102/103/104 + H3; the `is_borrowed_view` divergence → H4
   + DEPS_INVENTORY H2; Cluster D → H6; Cluster E → #405/@P290/@P317/@P377.
