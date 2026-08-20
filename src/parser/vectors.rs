@@ -58,6 +58,64 @@ impl Parser {
         })
     }
 
+    /// Refuse a vector concatenation whose two sides store their INTEGER elements
+    /// differently — a different width, or a different offset.
+    ///
+    /// `OpAppendVector` copies element BYTES: it is handed the destination's element
+    /// type and never learns the source's, so it cannot re-encode.  That is right for
+    /// every shape the type checker admits except this one: `u8` and `integer` are both
+    /// "integer" to it, so `vector<u8> + vector<integer>` type-checked and then copied
+    /// 8-byte elements into 1-byte slots — `[1,250] + [7,8]` answered `[1,250,7,0]`, and
+    /// `vector<u8> + vector<i8>` answered `[1,250,123,133]` for `[-5,5]` because the two
+    /// offsets differ.  Nothing reported it.
+    ///
+    /// Refusing rather than converting follows the scalar rule: `formal/types.md`
+    /// (I-Narrow) makes a narrowing explicit (`as`), and every mixed concat is a
+    /// narrowing in one direction or the other at the element level.  A literal append
+    /// (`v += [9]`) is unaffected — the literal is already built in the destination's
+    /// encoding — and so is any concat of two vectors of one type.
+    fn refuse_mixed_element_encoding(&mut self, dest_tp: &Type, part_tp: &Type) {
+        if self.first_pass {
+            return;
+        }
+        let (Type::Vector(dest_c, _), Type::Vector(src_c, _)) = (dest_tp.base(), part_tp.base())
+        else {
+            return;
+        };
+        let int_of = |t: &Type| match t.base() {
+            Type::Integer(spec) => Some((*spec, matches!(t, Type::Optional(_)))),
+            _ => None,
+        };
+        let (Some((d_spec, d_null)), Some((s_spec, s_null))) = (int_of(dest_c), int_of(src_c))
+        else {
+            return;
+        };
+        let (d_w, s_w) = (d_spec.byte_width(d_null), s_spec.byte_width(s_null));
+        // The offset only encodes anything at a narrow width; a wide element stores the
+        // value raw, so two 8-byte specs of different ranges share one encoding.
+        let offset_differs =
+            d_w <= 4 && d_spec.part_min(d_w, d_null) != s_spec.part_min(s_w, s_null);
+        if d_w == s_w && !offset_differs {
+            return;
+        }
+        let how = if d_w == s_w {
+            format!("both store their elements in {d_w} byte(s), but at different offsets")
+        } else {
+            format!("one stores its elements in {d_w} byte(s) and the other in {s_w}")
+        };
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "cannot concatenate `{}` with `{}` — {how}, and a concatenation copies element \
+             BYTES, so the copied values would be wrong.  Append element by element \
+             instead, which converts each value: `for x in <source> {{ <dest> += [x]; }}` \
+             — with the checked cast inside the brackets if that step narrows \
+             (`[(x as u8?) ?? 0]`)",
+            dest_tp.source_name(&self.data),
+            part_tp.source_name(&self.data),
+        );
+    }
+
     pub(crate) fn parse_append_vector(
         &mut self,
         code: &mut Value,
@@ -163,7 +221,8 @@ impl Parser {
             ls.push(v_set(orig_var, code.clone()));
             orig_var
         };
-        for (val, _) in parts {
+        for (val, part_tp) in parts {
+            self.refuse_mixed_element_encoding(tp, part_tp);
             ls.push(self.cl(
                 "OpAppendVector",
                 &[Value::Var(var_nr), val.clone(), Value::Int(rec_tp)],

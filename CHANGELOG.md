@@ -125,6 +125,92 @@ affected the annotated-local spelling. A `null` element now becomes that element
 null, where before it quietly became the empty text and would not compile at all with
 `--native`.
 
+### A `limit(...)` range is stored the way it is declared, and reads back what you wrote
+
+```loft
+v: vector<integer limit(10,255)> = [12, 200];
+v[0];                       // was 22 — the element read back exactly `lo` too high
+"{v}";                      // was a row of huge negative numbers — now [12,200]
+```
+
+A range-annotated integer stores in the smallest width that holds its range, and a
+collection's element stride is that width — but only the `u8`-style spelling was narrowing
+the STORAGE, while both spellings narrowed the READ. So a `vector<integer limit(10,255)>`
+kept 8-byte elements that were read one byte at a time, and every element came back `lo`
+too high. It disappeared at `lo == 0`, which is why the common spellings looked fine, and a
+struct field of the identical type was always correct.
+
+The two spellings are now one layout, pinned by the golden layout test — which could only
+see the `u8` spelling before, and that is what let them drift apart.
+
+### A bound too wide to store is refused instead of quietly shrinking
+
+```loft
+c: integer limit(0,5000000000) = 4999999995;   // was 0 — now a compile error
+```
+
+`limit(0, 5000000000)` accepted the declaration and then could not hold a value inside its
+own declared range: the bound was silently truncated to 705032704, and every value above
+that became the range's low end. `0` is an ordinary value of the type, and it is also what
+a genuine out-of-range write produces, so nothing at the read could tell you which had
+happened. Bounds that fit are untouched, and the error names the widest one that does.
+
+### A null in a narrow slot prints as null
+
+```loft
+v: vector<u16?> = [300, null];
+"{v}";                      // was [300,-2147483648] — now [300,null]
+n: vector<i16?> = [-300];
+"{n}";                      // was [-301] — a PRESENT value, one too low
+```
+
+Reading one element answered `null`; rendering the whole collection printed the slot's raw
+sentinel as a plausible number. And a nullable SIGNED narrow slot sacrifices its bottom
+value to make room for that sentinel, so its present values printed one too low — as a
+field and as an element, on both backends. Both halves came from the same place: the render
+re-derived "is this null?" instead of asking, and the schema was registered with a
+different offset than the one the reads and writes use.
+
+### Concatenating two vectors that store their elements differently is refused
+
+```loft
+u: vector<u8> = [1, 250];
+w: vector<integer> = [7, 8];
+u + w;                      // was [1,250,7,0] — now a compile error naming the cure
+```
+
+A concatenation copies element BYTES, so it cannot re-encode: `u8` and `integer` are both
+"integer" to the type checker, and the copy put 8-byte values into 1-byte slots. Same-width
+mixes were wrong too — `vector<u8> + vector<i8>` turned `[-5, 5]` into `[123, 133]`, because
+the two encodings count from different places. Append element by element instead, which
+converts each value; a narrowing step takes the checked cast loft asks for everywhere else.
+
+### A qualified enum variant works as a value
+
+```loft
+f = std::Format.NotExists;  // was "Unknown variable 'std'"
+```
+
+`std::abs(-5)`, `lib::CONST`, `lib::Struct { … }` and `f: std::Format = NotExists` all
+resolved; only the VALUE spelling of a variant did not, and the error named the library
+rather than the enum. It bit hardest under `use lib as a;`, where the qualifier is the
+whole point.
+
+### A `text?` crosses into a generator, and out of a tuple, on `--native`
+
+```loft
+fn h(a: text?) -> iterator<text> { yield "x"; }   // did not compile natively
+f: (text?, integer) = (null, 3);
+f.0 == null; f.0 ?? "N";                          // did not compile natively
+```
+
+Both backends now build both. A nullable text is stored exactly like a text — the absence
+is a sentinel in the same bytes — but a dozen places in the native backend asked "is this
+text?" without looking through the `?`, so a `text?` was treated as a scalar: a generator's
+captured parameter was filled with the wrong Rust type and moved out of itself, and reading
+a tuple element CONSUMED it, so a null test followed by a read would not compile. Each
+group of sites now shares one answer.
+
 ### A range you declare is enforced however you spell it
 
 ```loft
