@@ -2213,10 +2213,13 @@ pub enum HeapDelivery {
 /// `do_copy_record` / `OpCopyRecord`, and a callee-minted one is not protected and
 /// so is freed.
 ///
-/// The bracket needs a SLOT to name, so only a bare `Var` argument can be protected.
-/// When some ref argument is not one, the witness set is incomplete and the caller
-/// keeps the old, conservative "never free" answer — the leak stays for that shape
-/// rather than risking a free of a store the caller still reaches.
+/// The bracket needs a SLOT to name. A bare `Var` is one; so is any argument that
+/// only DERIVES a view of one — `b.s`, `w[0]`, `vb.v`, `o ?? q` — because the store
+/// it names is the root variable's store and that variable already holds its `DbRef`
+/// before the call ([`view_root_slots`]). When an argument is neither, the witness
+/// set is incomplete and the caller keeps the old, conservative "never free" answer
+/// — the leak stays for that shape rather than risking a free of a store the caller
+/// still reaches.
 #[must_use]
 pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
     let Value::Call(fn_nr, args) = call.unspan() else {
@@ -2271,10 +2274,108 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
             // returns can be a borrow of it: it neither needs protecting nor blocks.
             Value::Call(d, cargs)
                 if cargs.is_empty() && data.def(*d).name() == "OpNullRefSentinel" => {}
+            // loft#1029 — an argument that merely DERIVES a view of a variable. The
+            // bracket marks a STORE, not a slot, so the slot it names does not have to
+            // be the argument itself: `pick(b.s, …)` lowers to `OpGetField(Var(b), …)`,
+            // whose `DbRef` lies in `b`'s store, so protecting `b` protects exactly the
+            // store the callee's return might borrow. Without this the site read as
+            // uncovered and every one of these ordinary spellings leaked one record per
+            // call on BOTH backends — a field, a nested field, a vector ELEMENT, a
+            // vector-typed field, `??`, and an `if` in argument position.
+            //
+            // Asked through the same emit filter as the `Var` arm above: a witness the
+            // bracket cannot emit must leave the set INCOMPLETE, never vanish from it
+            // (loft#981 — the narrower list read as complete freed a hash parameter's
+            // element out from under the caller).
+            _ if matches!(
+                tp,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) =>
+            {
+                match view_root_slots(data, arg) {
+                    Some(roots) => protectable.extend(roots),
+                    None => covers_all = false,
+                }
+            }
             _ => covers_all = false,
         }
     }
+    protectable.sort_unstable();
+    protectable.dedup();
     (protectable, covers_all)
+}
+
+/// loft#1029 — the variable slots whose STORES an argument's value can lie in, or
+/// `None` when the argument is not a view of any nameable variable.
+///
+/// The @P290 bracket protects a store, and it names that store through a variable
+/// holding a `DbRef` into it. So an argument does not have to BE a variable — it only
+/// has to be derived from one by operations that stay inside the same store:
+///
+/// * `Var(v)` — the slot itself.
+/// * a field or element PROJECTION of one ([`is_projection_op`]) — `b.s`, `d.b.s`,
+///   `w[0]`, `vb.v` — walked to the root the chain starts at. A LOFT-DEFINED call is
+///   not one: its returned store may be the argument's OR one it minted, which is the
+///   very split the bracket exists to decide, and its result reaches this list as a
+///   plain `Var` because the caller lifts it into a temp first.
+/// * a JOIN (`o ?? q`, `if c { q } else { r }`) — every arm, since either store can
+///   be the one that comes back. Over-protecting is safe in the direction that
+///   matters: an extra marked store can only REFUSE a free, never license one.
+/// * `null` in either spelling, which holds no store and so needs no witness.
+///
+/// A value that mints its own store (a struct or collection LITERAL, still wrapped in
+/// its construction block) is deliberately NOT here: the block has not run when the
+/// bracket is emitted, so its work-ref still holds null and marking it would protect
+/// nothing while reading as covered — trading this leak for a use-after-free. That
+/// shape is cured at the call site instead, by hoisting the construction
+/// (`Scopes::inline_built_borrow_source`).
+fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
+    // A SPAN is source position, not structure: the parser wraps a field access in one
+    // and leaves a bare local unwrapped, which is why `pick(q, …)` was clean while
+    // `pick(b.s, …)` leaked. Reading through it is safe because the bracket is emitted
+    // from the SLOT list this returns — neither backend matches the argument value
+    // again (`state/codegen.rs` builds its own `Var`, `generation/dispatch.rs` renders
+    // `var_<name>`), so a span can never reach the emit.
+    match arg.unspan() {
+        Value::Var(v) => Some(vec![*v]),
+        Value::Null => Some(Vec::new()),
+        Value::If(_, then_v, else_v) => {
+            let mut roots = view_root_slots(data, then_v)?;
+            roots.extend(view_root_slots(data, else_v)?);
+            Some(roots)
+        }
+        // A bare `{ v }` arm carries no ops of its own — the parser wraps an `if`'s
+        // arms this way. A block with construction ops in it is a MINT, not a view,
+        // and falls through to `None` above.
+        Value::Block(bl) if bl.operators.len() == 1 => view_root_slots(data, &bl.operators[0]),
+        Value::Call(d, cargs) => {
+            if cargs.is_empty() && data.def(*d).name() == "OpNullRefSentinel" {
+                return Some(Vec::new());
+            }
+            if !is_projection_op(data, *d) {
+                return None;
+            }
+            view_root_slots(data, cargs.first()?)
+        }
+        _ => None,
+    }
+}
+
+/// Is `d_nr` a field/element PROJECTION — an op that answers a `DbRef` derived from
+/// its first argument and living in that argument's store?
+///
+/// `OpGetField` offsets within the record (`DbRef { store_nr, rec, pos: pos + off }`)
+/// and `OpGetVector` indexes within the vector's own store (its out-of-range sentinel
+/// preserves `store_nr` too), so for both the root variable's store IS the result's
+/// store. That makes a projection chain nameable by its root, which is what lets the
+/// @P290 bracket protect `pick(b.s, …)` and `pick(w[0], …)`.
+///
+/// One list, two readers: the parser's `Parser::projection_root_mut` walks the same
+/// chain to decide which inline container needs a name, and this decides which store
+/// the bracket marks. Two lists of the same two ops would drift.
+#[must_use]
+pub fn is_projection_op(data: &Data, d_nr: u32) -> bool {
+    d_nr == data.def_nr("OpGetField") || d_nr == data.def_nr("OpGetVector")
 }
 
 /// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free
