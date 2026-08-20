@@ -573,6 +573,57 @@ printing cannot tell them apart — it took `len()` and `== ""` to see it, and a
 read of this matrix looked clean because of that. The backends disagree, which by
 [CODEGEN_METHOD](CODEGEN_METHOD.md)'s rule is itself the bug.
 
+### The residual, investigated but NOT fixed
+
+Recorded rather than filed, per the roadmap's standing rule. The point of writing it down
+is that four plausible readings are already **falsified** — that is the expensive part, and
+repeating it is pure waste.
+
+Minimal repro, `--interpret` only:
+
+```
+pub fn g_tup<T>(v: vector<T>, a: T? = null) -> T { _ = len(v); t = (a?, 1); t.0 }
+g_tup(["q"])   ->  len=1, == "" is false   (the "\0" text null sentinel)
+                   the bare twin answers len=0, == "" is true
+```
+
+**What the boundary needs — all four, together.** Drop any one and it is correct:
+
+| axis | correct | broken |
+|---|---|---|
+| generic | a non-generic `?` discharge in a tuple | a monomorph's |
+| an intermediate local | `(a?, 1).0` inline | `t = (a?, 1); t.0` |
+| the element is a non-place expr | `x: T = a?; t = (x, 1)` | `t = (a?, 1)` |
+| element extraction | `-> (T, integer)`, whole tuple | `-> T`, via `t.0` |
+
+**Falsified — do not re-run these:**
+
+1. *The tuple element aliases its source.* No: a plain `if c { a } else { "ZZZ" }` element is
+   correct on both backends.
+2. *The `?` discharge in a tuple is broken.* No: the NON-generic discharge is correct in
+   both positions on both backends.
+3. *`ref_return` / return promotion drops it.* No: `LOFT_TRACE_RETPROMO` shows neither the
+   working nor the broken function ever reaching the classifier.
+4. *The `text["a"]` element dep is the discriminator.* No: both working non-generic forms
+   carry the **same** dep and answer correctly.
+
+**What is left, from a three-way IR comparison** (working non-generic, working
+bind-then-tuple monomorph, broken monomorph):
+
+| | block-result dep | `__ref_1` buffer | element source | |
+|---|---|---|---|---|
+| `n_nopt` | `["t"]` | no | inline `if` | ✓ |
+| `viabind` | none | yes | a bound local | ✓ |
+| `g_tup` | none | yes | inline `if` | ✗ |
+
+Neither the missing block dep nor the buffer discriminates alone; it is the pair, plus an
+element that is not a place. The `__ref_1` comes from the return-buffer machinery
+(`parser/control.rs`, the `__retbuf` region), which is Cluster A's territory — the
+return/bind ownership dep this map calls the highest-leverage un-landed migration. Which
+pass should carry the fact is exactly what is not yet established, and patching a generator
+without knowing that is what [CODEGEN_METHOD](CODEGEN_METHOD.md) names as the way codegen
+work regresses the suite.
+
 **Deliberately not filed.** It is here as the probe that proves the duplicate is
 load-bearing, and it is expected to fall out of step 1 below rather than be fixed on
 its own. Filing it would re-pay the derivation later and would fix one cell of a
