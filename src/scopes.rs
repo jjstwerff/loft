@@ -4672,6 +4672,24 @@ impl Scopes {
         res
     }
 
+    /// Is `v` the hidden NRVO return buffer promoted onto an argument slot, rather
+    /// than a user parameter?
+    ///
+    /// A true parameter belongs to the caller and the callee may free none of it; the
+    /// promoted buffer is a LOCAL that `classify_ret_promotion` renamed onto the hidden
+    /// `__retbuf` attribute and `become_argument`ed, and this function mints its store.
+    /// The un-renamed `__retbuf` placeholder is left out — no local was promoted onto
+    /// it, so it holds no store of ours (loft#688).
+    fn is_promoted_ret_buffer(&self, function: &Function, data: &Data, v: u16) -> bool {
+        let n = function.name(v);
+        n != "__retbuf"
+            && data
+                .def(self.d_nr)
+                .attr_names
+                .get(n)
+                .is_some_and(|&a| data.def(self.d_nr).attributes()[a].hidden)
+    }
+
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -4817,6 +4835,67 @@ impl Scopes {
                     {
                         null_arm_record_sources.push(v);
                     }
+                }
+            }
+            // loft#1022 — the THIRD shape of the same runtime join, after the null arm
+            // above and loft#688's promoted buffer: a return whose arms disagree about
+            // OWNERSHIP.  `fn pick(bx, take) -> P { if take { bx.p } else { P { x: 9 } } }`
+            // types as `P["bx"]` — a view — while the else arm mints its own store in a
+            // work-ref.  `collect_return_sources` is the UNION of the arms, so the
+            // work-ref lands in `return_sources` and its scope-exit free is suppressed on
+            // EVERY path; on the borrowing path nothing returns it and nothing frees it.
+            // One orphan per call, unbounded in a loop, and the store the entry preamble
+            // allocated leaks even when the owning arm never runs.
+            //
+            // The suppression's own comment calls itself PATH-LOCAL, and it is — across
+            // separate `return` statements.  A single `return` whose value is a JOIN puts
+            // both arms in one set, which is the case the path-locality argument does not
+            // cover.  So route it to the same hoist + `OpFreeRefIfDistinct` leg the other
+            // two use and let the runtime decide: on the arm that delivers the store the
+            // comparison matches and the free is a no-op, on the borrowing arm the stores
+            // differ and the orphan is released.
+            //
+            // The gate needs BOTH conditions, and the loop a third.
+            //
+            // A RECORD return only.  A collection or text return carries its own mature
+            // machinery — loft#936's backing-store comparison and the B5-L3 text hoist —
+            // and its `__vdb_N` backing is a `Type::Reference` too, so a test on the
+            // SOURCE's type alone claims it and re-routes a return that was already
+            // correct (repro_p365's `nested` leaked its backing under exactly that).
+            //
+            // And a genuine BORROWING ARM, not merely a return type that carries deps.
+            // A record LITERAL whose fields alias locals (`TableDef { columns: cols,
+            // indexes: ixs }`) has deps too, and every one of its arms delivers the
+            // source — nothing can be orphaned, so hoisting it to `__ret_N` and freeing
+            // the original released the vectors the returned copy still names, and the
+            // sqldb round trip read back zero indexes.
+            //
+            // And in the loop: only a source THIS function owns.  A source that is
+            // itself a borrow carries deps naming what it views, and freeing that would
+            // release the CALLER's store — an over-free where the defect is a leak.
+            if matches!(tp.base(), Type::Reference(_, _) | Type::Enum(_, true, _))
+                && return_has_non_source_arm(expr, &sources)
+            {
+                for &v in &sources {
+                    if null_arm_record_sources.contains(&v)
+                        || !matches!(
+                            function.tp(v),
+                            Type::Reference(_, _) | Type::Enum(_, true, _)
+                        )
+                        || !function.tp(v).depend().is_empty()
+                    {
+                        continue;
+                    }
+                    // A user PARAMETER belongs to the caller and the callee frees none of
+                    // it.  The promoted NRVO buffer is the one argument that is really a
+                    // local — loft#688's leg names it the same way, by its attribute
+                    // being HIDDEN — and it reaches the borrowing arm with a store this
+                    // function minted.  That leg cannot claim it here because it excludes
+                    // anything in `sources`, and the owning arm puts it there.
+                    if function.is_argument(v) && !self.is_promoted_ret_buffer(function, data, v) {
+                        continue;
+                    }
+                    null_arm_record_sources.push(v);
                 }
             }
             sources.into_iter().collect()
@@ -7285,6 +7364,36 @@ fn last_non_free_result<'a>(ops: &'a [Value], data: &Data) -> Option<&'a Value> 
     ops.iter()
         .rev()
         .find(|op| scope_free_op_var(op, data).is_none() && !matches!(op.unspan(), Value::Line(_)))
+}
+
+/// Does this return have an arm that yields something OTHER than one of its
+/// `return_sources` — a genuine BORROWING arm (loft#1022)?
+///
+/// `collect_return_sources` is the UNION of the arms' terminal VARS, so a work-ref that
+/// only one arm delivers still lands in it and its scope-exit free is suppressed on
+/// every path.  That is right when every arm delivers a source and wrong when one arm
+/// hands back a borrow instead: `if take { bx.p } else { P { x: 9 } }` yields a field
+/// access on the first arm, which is no variable at all, and the second arm's work-ref
+/// is then owned by nobody.
+///
+/// Answers false for a return with no join in it — one path cannot orphan the value it
+/// is itself delivering — and false when every arm's terminal is a source, which is the
+/// shape a record literal aliasing locals has.
+fn return_has_non_source_arm(expr: &Value, sources: &[u16]) -> bool {
+    fn walk(e: &Value, sources: &[u16], in_join: bool) -> bool {
+        match e.unspan() {
+            Value::If(_, t, f) => walk(t, sources, true) || walk(f, sources, true),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|o| walk(o, sources, in_join)),
+            Value::Insert(ops) => ops.last().is_some_and(|o| walk(o, sources, in_join)),
+            Value::Return(inner) | Value::Drop(inner) => walk(inner, sources, in_join),
+            Value::Var(v) => in_join && !sources.contains(v),
+            _ => in_join,
+        }
+    }
+    walk(expr, sources, false)
 }
 
 /// @PLN85 A.1 part i — does this return expression have a reachable arm whose

@@ -106,11 +106,12 @@ fn test_a_join_whose_arms_all_own_still_delivers_owned() {
 
 fn test_the_join_escaping_its_frame_is_not_freed_underneath_the_caller() {
   // The owning arm is materialised into a buffer THIS frame frees, so a join returned
-  // from a function must not hand the caller a released store.  The BORROW arm of the
-  // same escaping return is loft#1022's cell, not this one's.
+  // from a function must not hand the caller a released store.
   v: vector<S1019> = [S1019 { a: 7 }];
   p = pick1019(v, 5);
   assert(p.a == -1, "the escaped miss still reads its value");
+  h = pick1019(v, 0);
+  assert(h.a == 7, "and the escaped hit still reads the element");
 }
 
 fn pick1019(v: vector<S1019>, n: integer) -> S1019 {
