@@ -1504,7 +1504,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // encoding with raw-byte copies.  Falls back to the
         // bounds-heuristic via `database.size(known_type)` otherwise.
         let elm_size_raw = if let Type::Integer(spec) = etp
-            && let Some(n) = spec.vector_narrow_width()
+            && let Some(n) = spec.vector_narrow_width(false)
         {
             i32::from(n)
         } else if let Some(elem) = self.data.vector_element_type(etp, &mut self.database) {

@@ -3825,30 +3825,39 @@ extern crate loft;"
             // element type the program never named. That MINTS a type, so every
             // runtime id from there on sat one above the compile-time id baked into
             // the emitted ops, and loft#739's guard reported the drift.
+            // The element's own nullability, read BEFORE the peel below: a nullable
+            // narrow element reserves a null code, which is both a possible WIDTH
+            // change and a different Part (`byte<min,true>` / `short`), so the name
+            // this site looks up has to carry it — `narrow_vector_content` registered
+            // it that way.
+            let elm_nullable = matches!(c.as_ref(), Type::Optional(_));
             let c: &Type = c.base();
-            // when the element `Type::Integer` carries a
-            // `forced_size` annotation that `vector_narrow_width`
-            // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
-            // content type-nr that `fill_database` already registered
-            // via `narrow_vector_content`.  Without this,
+            // when the element is a narrow `Type::Integer` — by its `size(N)`
+            // annotation OR (loft#1036) by a `limit(lo, hi)` range that fits 1/2/4
+            // bytes — look up the narrow content type-nr that `fill_database`
+            // already registered via `narrow_vector_content`.  Without this,
             // `data.type_def_nr(c)` resolves any `Type::Integer` to
             // the plain `integer` def-nr → wide `vector<integer>`.
             // The wrapper's `main_vector<T>` struct field would end up
             // with 8-byte stride even though `fill_database` narrowed
             // the actual runtime Parts, corrupting reads/writes.
             if let Type::Integer(spec) = c
-                && let Some(n) = spec.vector_narrow_width()
+                && let Some(n) = spec.vector_narrow_width(elm_nullable)
             {
                 let name = match n {
                     1 => {
-                        if spec.min == 0 {
+                        if spec.min == 0 && !elm_nullable {
                             "byte".to_string()
                         } else {
-                            format!("byte<{},false>", spec.min)
+                            format!("byte<{},{elm_nullable}>", spec.min)
                         }
                     }
+                    // A nullable 2-byte element is the `+1` sentinel encoding
+                    // (`Parts::Short`), the non-null one direct (`ShortRaw`) —
+                    // mirroring `Data::narrow_vector_content`.
+                    2 if elm_nullable => format!("short<{},true>", spec.min),
                     2 => format!("short_raw<{},false>", spec.min),
-                    4 => format!("int<{},false>", spec.min),
+                    4 => format!("int<{},{elm_nullable}>", spec.min),
                     _ => String::new(),
                 };
                 if !name.is_empty() {
@@ -5612,7 +5621,7 @@ extern crate loft;"
             // semantics), narrow aliases keep their forced width.  (i8/i16
             // narrow vectors map to the unsigned same-width name — signedness
             // is moot, no `#native` FFI takes a narrow-int vector today.)
-            Type::Integer(s) => match s.vector_narrow_width() {
+            Type::Integer(s) => match s.vector_narrow_width(false) {
                 Some(1) => "u8",
                 Some(2) => "i16",
                 Some(4) => "i32",

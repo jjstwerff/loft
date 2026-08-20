@@ -33,8 +33,22 @@ impl Parser {
             },
             _ => return None,
         };
-        let n = spec.vector_narrow_width()?;
-        let kind = crate::data::NarrowIntKind::of(n, nullable, true, spec.unsigned_wide());
+        // loft#1036 — the width comes from `byte_width`, the ONE range→width home,
+        // exactly as the READ (`get_val`) derives it.  This site asked
+        // `vector_narrow_width`, which was keyed on `forced_size` alone, so an
+        // element declared `integer limit(10, 255)` answered `None` here and the
+        // caller fell back to a wide `OpSetInt` that never applied the `- min`
+        // ENCODE the 1-byte `OpGetByte` read decodes with — every element read back
+        // exactly `lo` too high (12 stored, 22 returned), and the error vanished at
+        // `lo == 0`, which is why the common spellings looked fine.
+        //
+        // `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it
+        // picks the raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a
+        // `u16`-style alias, `ShortFull` for a range that merely fits), and the
+        // storage side (`Data::narrow_vector_content`) registers the matching Part.
+        let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
+        let n = spec.vector_narrow_width(nullable)?;
+        let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
         let pos = Value::Int(0);
         Some(if kind.takes_min() {
             let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
@@ -3705,21 +3719,18 @@ impl Parser {
                 // valid.  Narrow path registers on demand so locals /
                 // params / returns don't depend on a struct field
                 // having registered the name first.
-                if let Some(n) = spec.vector_narrow_width() {
-                    match n {
-                        1 => self.database.byte(spec.min, false),
-                        2 => self.database.short_raw(spec.min, false),
-                        4 => self.database.int(spec.min, false),
-                        _ => self.database.name("integer"),
-                    }
-                } else {
-                    // Bounds heuristic fallback.
-                    match in_t.size(false) {
-                        1 if spec.min == 0 => self.database.name("byte"),
-                        1 => self.database.name(&format!("byte<{},false>", spec.min)),
-                        2 => self.database.name(&format!("short<{},false>", spec.min)),
-                        _ => self.database.name("integer"),
-                    }
+                // loft#1036 — one derivation, and it REGISTERS.  The width now comes
+                // from `byte_width` (`forced_size` first, then the range), so the
+                // `limit(lo, hi)` spelling lands in this arm too.  It used to fall to
+                // a bounds-heuristic branch that only LOOKED UP a name — and looked up
+                // `short<min,false>` (the `+1` sentinel encoding) where this arm
+                // registers `short_raw` (direct), so the two spellings of one range
+                // could not agree on a Part even when both found one.
+                match spec.vector_narrow_width(false) {
+                    Some(1) => self.database.byte(spec.min, false),
+                    Some(2) => self.database.short_raw(spec.min, false),
+                    Some(4) => self.database.int(spec.min, false),
+                    _ => self.database.name("integer"),
                 }
             }
             Type::Character => self.database.name("integer"),

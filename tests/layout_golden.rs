@@ -39,6 +39,7 @@ struct Narrow { a: i32, b: u8, c: u16 }
 struct Wide { s: i16 }
 struct NotNull { i: integer, t: text }
 struct Nullable { n: integer?, f: float? }
+struct NarrowRange { a: integer limit(10,255), b: integer limit(10,1000), c: integer limit(10,255)?, v: vector<integer limit(10,255)> }
 struct Vec1 { v: vector<integer> }
 struct VecNest { vv: vector<vector<integer>> }
 struct VecNestNarrow { vv: vector<vector<u8>> }
@@ -61,6 +62,7 @@ const TYPES: &[&str] = &[
     "Wide",
     "NotNull",
     "Nullable",
+    "NarrowRange",
     "Vec1",
     "VecNest",
     "VecNestNarrow",
@@ -87,8 +89,16 @@ const TYPES: &[&str] = &[
 /// which is Q2's mechanism doing exactly what it was built for.  ONE line of the
 /// golden moved and no other type's row changed, because the token renders per KIND —
 /// a store of plain structs and vectors still loads, and a pre-arena store of hashes
-/// is now REFUSED instead of misread.)
-const LAYOUT_ALGO_HASH: u64 = 13_959_439_440_847_630_716;
+/// is now REFUSED instead of misread.
+/// 2026-08-20 — re-blessed for loft#1036: added `NarrowRange`, the bare `limit(lo, hi)`
+/// spelling of a narrow integer, as a FIELD (1- and 2-byte) and as a VECTOR ELEMENT.
+/// The corpus could only see the `size(N)` ALIAS spelling (`u8`/`u16`/`i32`), so it could
+/// not see that the two spellings of one range had drifted apart: `(L-Narrow)` narrows on
+/// the RANGE, but the element stride + schema were keyed on `forced_size`, leaving
+/// `vector<integer limit(10,255)>` at the wide 8-byte stride while its READ decoded 1
+/// byte + `min`.  Only the added rows move the hash — every pre-existing row is
+/// unchanged, which is the claim "the alias spelling did not move" made checkable.)
+const LAYOUT_ALGO_HASH: u64 = 7_452_756_109_479_163_234;
 
 /// @PLN135 Q2 — `keys::key_hash` for a fixed seed over a fixed key set: the function a
 /// reader must reproduce to find an entry a writer placed. Pinned by

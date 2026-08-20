@@ -7842,40 +7842,26 @@ impl Parser {
             // read it exactly as `τ` (the marker is compile-time only).
             Type::Optional(inner) => self.get_val(inner, nullable, pos, code, alias),
             Type::Integer(spec) => {
-                // Narrow-integer width selection:
-                // * `alias` is set → this is a struct-field read whose
-                //   captured alias may carry `size(N)`.  Use that, else
-                //   the bounds-heuristic `byte_width` (which works for
-                //   plain `integer` and `integer limit(...)` fields).
-                // * `alias == u32::MAX` AND spec has a forced_size → we're
-                //   likely inside a vector element read.  Use
-                //   `vector_narrow_width` to mirror Phase 2's actual
-                //   storage decision (1 and 4 bytes narrow; 2 stays wide
-                //   until the short-encoding Phase 4 round lands); fall
-                //   through to 8 when Phase 2 stored wide so reads align.
-                // * `alias == u32::MAX` AND no forced_size → bounds
-                //   heuristic (struct-field path for plain or limited
-                //   `integer`).
-                // Narrow-vec path: alias is absent AND spec carries a
-                // forced_size AND the gate is open.  This branch maps
-                // to `Parts::ShortRaw` for 2-byte (Phase 4b) and to
-                // `Parts::Byte` / `Parts::Int` for 1/4-byte (Phase 4a).
-                // When the gate is CLOSED for a given forced_size
-                // (fallback), storage stays wide (8-byte) and the
-                // read must match — use `unwrap_or(8)` so closed-gate
-                // forced_size reads dispatch to `OpGetInt`.
+                // Narrow-integer width selection — ONE derivation.  A struct-field
+                // read carries the `alias` whose `size(N)` annotation (if any) wins;
+                // everything else — a vector element above all — takes the width from
+                // `byte_width`, which honours the spec's own `forced_size` first and
+                // falls back to the value RANGE.  loft#1036: the vector-element case
+                // used to ask `vector_narrow_width`, keyed on `forced_size` alone, so
+                // it answered 8 for the bare `limit(lo, hi)` spelling of a range the
+                // alias spelling stored in one byte.
+                //
+                // `narrow_vec` does NOT pick the width: it picks the raw-vs-full
+                // ENCODING for a 2-byte element (`ShortRaw` for a `u16`-style alias,
+                // `ShortFull` for a range that merely fits), which is why it keeps the
+                // `forced_size` gate the width no longer has.
                 let narrow_vec = alias == u32::MAX
                     && spec.forced_size.is_some()
-                    && spec.vector_narrow_width().is_some();
-                let s = if alias != u32::MAX {
-                    self.data
-                        .forced_size(alias)
-                        .unwrap_or_else(|| spec.byte_width(nullable))
-                } else if spec.forced_size.is_some() {
-                    spec.vector_narrow_width().unwrap_or(8)
-                } else {
-                    spec.byte_width(nullable)
-                };
+                    && spec.vector_narrow_width(nullable).is_some();
+                let s = self
+                    .data
+                    .forced_size(alias)
+                    .unwrap_or_else(|| spec.byte_width(nullable));
                 debug_assert!(
                     matches!(s, 1 | 2 | 4 | 8),
                     "get_val: unexpected integer field width s={s} \
@@ -8495,13 +8481,14 @@ impl Parser {
                 // `OpSetShort` / `Parts::Short` `+1` encoding path.
                 let narrow_vec = alias_nr == u32::MAX
                     && spec.forced_size.is_some()
-                    && spec.vector_narrow_width().is_some();
+                    && spec
+                        .vector_narrow_width(self.data.attr_nullable(d_nr, f_nr))
+                        .is_some();
                 let s = self.data.forced_size(alias_nr).unwrap_or_else(|| {
-                    if narrow_vec {
-                        spec.vector_narrow_width().unwrap()
-                    } else {
-                        tp.size(self.data.attr_nullable(d_nr, f_nr))
-                    }
+                    // loft#1036 — `byte_width` is the one width home (`forced_size`
+                    // first, then the range), so the alias and `limit(...)` spellings
+                    // of one range write at the same width the READ decodes at.
+                    spec.byte_width(self.data.attr_nullable(d_nr, f_nr))
                 });
                 // Size-consistency gate: the size resolved from
                 // `forced_size` / limit must be one of the four

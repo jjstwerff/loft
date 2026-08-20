@@ -307,23 +307,42 @@ impl IntegerSpec {
     /// `vector_add`'s raw-byte copy path works across source literal
     /// vectors and destination fields without re-encoding.
     ///
-    /// Returns `None` for any Type without a `forced_size` annotation
-    /// (caller falls back to the default wide-integer stride) and for
-    /// `forced_size` values outside the narrow gate.  `u16` struct
-    /// fields continue to use `Parts::Short` (the legacy `+1` encoding)
-    /// via the `alias != u32::MAX` path in `get_val` / `set_field_check`.
+    /// Returns `None` when the element stores at the wide 8-byte stride, so the
+    /// caller keeps the default wide-integer path.  `u16` struct fields continue
+    /// to use `Parts::Short` (the legacy `+1` encoding) via the
+    /// `alias != u32::MAX` path in `get_val` / `set_field_check`.
     ///
     /// Callers use this at compile time to emit matching `elm_size` in
     /// `OpGetVector` / `OpSetVector`, and in `get_val` to choose the
     /// right-width scalar-read opcode.  Keeping the predicate in one
     /// place avoids the narrow-read / wide-storage skew that bit the
     /// first Phase 3 attempt.
+    ///
+    /// loft#1036 — the width comes from [`Self::byte_width`], the ONE
+    /// range→width home, NOT from `forced_size` alone.  `formal/layout.md`
+    /// settles which: `(L-Narrow)` stores a range-annotated integer in the
+    /// smallest width that holds its RANGE, and `(L-Ref)` makes a collection's
+    /// element stride exactly `width(element)` — so `integer limit(10, 255)`
+    /// is a 1-byte element whether or not it was also spelled `size(1)`.
+    /// While this asked `forced_size`, the `limit(...)` spelling answered
+    /// `None` here (element stride + schema stayed wide 8-byte) while the READ
+    /// (`get_val`) already asked `byte_width` and emitted a 1-byte `OpGetByte`
+    /// with the `- min` offset decode.  Two homes, two layouts for one type —
+    /// `(L-Total)`'s "the layout is decided by the type alone, never by which
+    /// call site reads it" — so every element read came back exactly `lo` too
+    /// high (12 stored, 22 returned) while a struct FIELD of the identical type
+    /// was correct.
+    ///
+    /// `nullable` is the element's own nullability (`vector<u8?>`): a nullable
+    /// narrow element reserves one code for the null sentinel, which can widen
+    /// the slot (`limit(0, 255)?` needs 257 codes → 2 bytes).  Passing `false`
+    /// where the caller has already peeled `Optional` is only correct when that
+    /// caller routes the nullable case elsewhere — `Data::vector_element_type`
+    /// is the one that answers for it.
     #[must_use]
-    pub fn vector_narrow_width(&self) -> Option<u8> {
-        match self.forced_size?.get() {
-            1 => Some(1),
-            2 => Some(2),
-            4 => Some(4),
+    pub fn vector_narrow_width(&self, nullable: bool) -> Option<u8> {
+        match self.byte_width(nullable) {
+            w @ (1 | 2 | 4) => Some(w),
             _ => None,
         }
     }
@@ -4269,7 +4288,7 @@ impl Data {
             _ => None,
         };
         if let Some((spec, nullable)) = narrow {
-            let n = spec.vector_narrow_width()?;
+            let n = spec.vector_narrow_width(nullable)?;
             return match n {
                 1 => Some(database.byte(spec.min, nullable)),
                 // a nullable 2-byte element uses the `+1` sentinel encoding

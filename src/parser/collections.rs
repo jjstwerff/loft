@@ -358,7 +358,7 @@ impl Parser {
         if self.database.is_linked(db_tp) {
             4
         } else if let Type::Integer(spec) = vtp
-            && let Some(n) = spec.vector_narrow_width()
+            && let Some(n) = spec.vector_narrow_width(false)
         {
             u16::from(n)
         } else if let Some(elem) = self.data.vector_element_type(vtp, &mut self.database) {
@@ -3588,13 +3588,13 @@ use #count instead"
             let elm_td = self.data.type_elm(&elem_tp);
             // Plan-06 phase 1 G2.1 — narrow-integer vector inputs
             // (vector<u8>, vector<i32>) store one element per
-            // forced_size byte slot.  IntegerSpec::vector_narrow_width()
+            // forced_size byte slot.  IntegerSpec::vector_narrow_width
             // returns 1/2/4 for u8/i16/i32 and matches the iterator
             // dispatch in collections.rs:105-113 for non-par for loops.
             // Without this, var_size() returned 8 for any Integer
             // and par read garbage at row_idx*8 instead of row_idx*4.
             if let Type::Integer(spec) = &elem_tp
-                && let Some(n) = spec.vector_narrow_width()
+                && let Some(n) = spec.vector_narrow_width(false)
             {
                 i32::from(n)
             } else if matches!(&elem_tp, Type::Function(_, _, _)) {
