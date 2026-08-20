@@ -6235,7 +6235,20 @@ impl Scopes {
         // not a statement list: the hoisted ops were rendered into the argument parens and
         // `--native` rejected the call with E0277 (`((), (), (), (), &str): AsRef<str>` in
         // 875-json-absent-text-field).
-        if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
+        if !callee.is_loft_defined() {
+            return None;
+        }
+        // A callee returning a CLOSURE is not a heap return, and `returns_borrowed_view`
+        // is documented as a heap-return ownership read: a `Type::Function` return carries
+        // `CALLEE_FRAME`-tagged deps (a closure-internal frame var, never an attr index)
+        // and its own debug assert says such a dep must not reach it.  This bracket serves
+        // heap returns alone — the shape test below names them — so the ownership question
+        // is asked only of a callee that has one.  Without the gate, `fn make_adder(b) ->
+        // fn(integer) -> integer` tripped that assert before any of its own work ran.
+        if matches!(callee.returned().base(), Type::Function(_, _, _)) {
+            return None;
+        }
+        if !callee.returns_borrowed_view() {
             return None;
         }
         let Value::Block(bl) = arg else {
@@ -7498,6 +7511,26 @@ fn returned_var_null_unified(expr: &Value, null_nr: u32) -> u16 {
 /// `returned_var` collapses to `u16::MAX` when the arms differ). These are the
 /// function's "return-source" locals — their heap store is transferred to the
 /// caller, so the callee must not free them at scope exit.
+/// Every variable ANY `return` in this body can hand back — including an EARLY return
+/// nested mid-block, which the two helpers below cannot see.
+///
+/// Both of them answer for the body's TAIL value: `returned_var_null_unified` keeps the
+/// last operator's answer and `collect_return_sources` takes a block's last non-free
+/// result.  So `if a { return a?; } x` reports only `x`, and the work var the guard arm
+/// delivers looks like a local nobody frees — which is exactly what it is NOT, because
+/// returning it transfers it to the caller.  `check_ref_leaks` asserted on that shape as a
+/// leak (a generic instantiated at a STRUCT, where the return is a heap ref).
+fn collect_all_return_vars(expr: &Value, data: &Data, out: &mut Vec<u16>) {
+    if let Value::Return(inner) = expr.unspan() {
+        collect_return_sources(inner, data, out);
+    }
+    expr.walk(&mut |v| {
+        if let Value::Return(inner) = v {
+            collect_return_sources(inner, data, out);
+        }
+    });
+}
+
 fn collect_return_sources(expr: &Value, data: &Data, out: &mut Vec<u16>) {
     match expr {
         Value::Var(v) => {
@@ -7776,6 +7809,17 @@ fn check_ref_leaks(
     // variable's store must also survive — include it in ret_deps.
     if direct_ret_var != u16::MAX {
         for d in function.tp(direct_ret_var).depend() {
+            ret_deps.insert(d);
+        }
+    }
+    // …and every variable an EARLY return hands back, which the tail-value helper above
+    // cannot see: `if a { return a?; } x` reports only `x`, so the guard arm's work var
+    // read as a local nobody freed.  Returning it IS the transfer, wherever the return sits.
+    let mut early_ret: Vec<u16> = Vec::new();
+    collect_all_return_vars(ir, data, &mut early_ret);
+    for v in early_ret {
+        ret_deps.insert(v);
+        for d in function.tp(v).depend() {
             ret_deps.insert(d);
         }
     }

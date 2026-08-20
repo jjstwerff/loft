@@ -5742,7 +5742,17 @@ impl Parser {
             } else {
                 plan.worker
             };
-            let ret_type = self.data.def(worker).returned().clone();
+            // The monomorph's signature was built with `substitute_type`, which replaces
+            // the type variable and DROPS its deps — and a worker's RETURN deps are what
+            // say "this result borrows argument 0".  Losing them makes the par result
+            // binding look owned, so the body frees it: with the identity worker a
+            // generic often is (`fn w(x: T) -> T { x }`), that frees the very element the
+            // caller handed in.  The template still declares them, and they are ATTRIBUTE
+            // indices — frame-independent — so re-attaching them is exact.
+            let mut ret_type = self.data.def(worker).returned().clone();
+            for d in self.data.def(plan.worker).returned().depend() {
+                ret_type = ret_type.depending(d);
+            }
             plans.push((id, args, worker, ret_type, elem_tp));
         }
         // Now the monomorph's frame: the lowering creates its own index / length / result
