@@ -9,16 +9,31 @@
 # behind loft-lang/loft-libs-core#14: registry random 0.2.1 was dead on the
 # 2026.6 toolchain and no CI anywhere could see it).
 #
-# Usage:  scripts/registry_validate.sh <package>
+# The version validated is resolved from the INDEX, refreshed first — never from
+# whatever happens to sit in ~/.loft/registry.  Both halves are load-bearing
+# (loft#1027): run straight after publishing 0.1.1, this script installed
+# nothing (the un-refreshed index still ended at 0.1.0), then picked the highest
+# LOCAL directory, validated 0.1.0, and printed `OK` — a green light about the
+# release it had not looked at.  Reading the local cache also made the verdict
+# depend on which versions this machine had downloaded before.
+#
+# Usage:  scripts/registry_validate.sh <package>[@<version>]
+#           hex_way          validate the index's newest stable release
+#           hex_way@0.1.1    validate exactly that release
 # Env:    LOFT               loft binary to validate against (default: loft on PATH)
 #         LOFT_REGISTRY_URL  respected by loft itself (defaults to the live index)
+#         LOFT_HOME          registry cache root (default: $HOME)
 #         LOFT_TIMEOUT       per-run watchdog seconds (default 300)
 #
 # Exit codes: 0 = package is healthy; 1 = any step failed.
 set -u
 
-PKG="${1:?usage: registry_validate.sh <package>}"
+ARG="${1:?usage: registry_validate.sh <package>[@<version>]}"
+PKG="${ARG%%@*}"
+WANT_VER="${ARG#*@}"
+[ "$WANT_VER" = "$ARG" ] && WANT_VER=""
 LOFT="${LOFT:-loft}"
+LOFT_CACHE="${LOFT_HOME:-$HOME}/.loft/registry"
 export LOFT_TIMEOUT="${LOFT_TIMEOUT:-300}"
 
 fail() { echo "registry-validate: $PKG: FAIL — $*" >&2; exit 1; }
@@ -81,19 +96,40 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 cd "$SCRATCH" || fail "cannot enter scratch dir"
 
-# 1. Install from the registry — exercises index fetch, tarball download,
-#    sha256 verification, and dependency resolution.
-note "loft install $PKG"
-"$LOFT" install "$PKG" || fail "loft install failed"
+# 1. Resolve the version to validate FROM THE INDEX, refreshed first.  Deciding
+#    this before installing is what keeps the answer about the registry rather
+#    than about this machine's download history.  `api --registry` lists one line
+#    per package — `<name> <latest stable> — <description>` — so the newest
+#    non-yanked, non-prerelease release is field 2 of the row whose field 1 is an
+#    exact name match.
+CATALOG="$("$LOFT" api --registry --refresh 2>&1)" || fail "cannot read the registry index: $CATALOG"
+INDEX_VER="$(printf '%s\n' "$CATALOG" | awk -v p="$PKG" '$1==p {print $2; exit}')"
+[ -n "$INDEX_VER" ] || fail "\`$PKG\` is not in the registry index (${LOFT_REGISTRY_URL:-the default registry})"
 
-# 2. Locate the installed artifact (highest version dir; hyphen separates the
-#    version suffix from the name — package names themselves use underscores).
-PKG_DIR="$(ls -d "$HOME/.loft/registry/$PKG"-* 2>/dev/null | sort -V | tail -1)"
-[ -n "$PKG_DIR" ] && [ -d "$PKG_DIR" ] || fail "installed package dir not found under ~/.loft/registry/"
-PKG_VER="$(basename "$PKG_DIR" | sed "s/^${PKG}-//")"
+PKG_VER="${WANT_VER:-$INDEX_VER}"
+# Which release is under test, said once and said plainly.  Validating an older
+# one on purpose is legitimate; validating it by ACCIDENT was the bug, so the two
+# cases must not read alike.
+if [ "$PKG_VER" = "$INDEX_VER" ]; then
+    note "validating $PKG_VER — the index's newest stable"
+else
+    note "validating $PKG_VER as asked — NOT the newest; the index's newest stable is $INDEX_VER"
+fi
+
+# 2. Install exactly that version — exercises index fetch, tarball download,
+#    sha256 verification, and dependency resolution.  Pinned, so no later step
+#    has to guess what was resolved.
+note "loft install $PKG@$PKG_VER"
+"$LOFT" install "$PKG@$PKG_VER" || fail "loft install $PKG@$PKG_VER failed"
+
+# 3. Locate that exact artifact.  Not "the highest directory present": a
+#    mismatch here means the install resolved something other than what was
+#    asked for, which is a finding, not a version to fall back to.
+PKG_DIR="$LOFT_CACHE/$PKG-$PKG_VER"
+[ -d "$PKG_DIR" ] || fail "install reported success but $PKG_DIR does not exist — resolved a different version?"
 note "validating $PKG_DIR (version $PKG_VER)"
 
-# 3. Build the native crate against current rustc, if the package ships one.
+# 4. Build the native crate against current rustc, if the package ships one.
 #    (loft can rebuild these on demand, but an explicit build gives the
 #    failure its own step and a readable rustc error.)
 if [ -d "$PKG_DIR/native" ]; then
@@ -101,7 +137,7 @@ if [ -d "$PKG_DIR/native" ]; then
     (cd "$PKG_DIR/native" && cargo build --release) || fail "native crate build failed"
 fi
 
-# 4. Run the package's own tests on both backends.  Functional gate only —
+# 5. Run the package's own tests on both backends.  Functional gate only —
 #    no LOFT_DENY_WARNINGS: a released artifact must WORK on the new
 #    toolchain; warning-cleanliness is the source repo CI's job.
 if [ -d "$PKG_DIR/tests" ]; then
@@ -114,4 +150,6 @@ else
     "$LOFT" --interpret smoke.loft || fail "smoke program failed to run"
 fi
 
-note "OK"
+# The verdict names the version, because a bare `OK` is what let a validation of
+# the PREVIOUS release read as a pass for the one just published (loft#1027).
+note "OK — $PKG $PKG_VER"

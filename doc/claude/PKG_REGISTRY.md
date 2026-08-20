@@ -1061,7 +1061,26 @@ source repo's job.  Run it locally the same way:
 
 ```bash
 LOFT=target/release/loft scripts/registry_validate.sh crypto
+LOFT=target/release/loft scripts/registry_validate.sh crypto@0.3.5   # a specific release
 ```
+
+**Which version gets validated** — the newest stable in the index,
+resolved from the index with a forced refresh (`loft api --registry
+--refresh`) before anything is installed, and installed as an explicit
+`<pkg>@<version>` pin.  The verdict names it: `OK — crypto 0.3.5`.
+
+Both halves of that are load-bearing, and loft#1027 is why.  Run straight
+after publishing `hex_way 0.1.1`, the script used to install against the
+UN-refreshed index (which still ended at 0.1.0, so the install was a
+no-op — *"Already cached (skipped)"*), then pick the highest version
+directory in `~/.loft/registry/`, validate **0.1.0**, and print a bare
+`OK`.  A publisher asking "is what I just shipped healthy?" got a green
+light about the release it replaced.  Reading the local cache also made
+the answer depend on which versions that machine had downloaded before —
+had something already fetched 0.1.1, the same command would have
+validated 0.1.1 while the install step still resolved 0.1.0.  Naming a
+version that is not the newest is still allowed, because validating an
+older release on purpose is legitimate; the run says so on its own line.
 
 Rot classes it catches (all three found in the first live sample,
 2026-07-04): a released package the new toolchain rejects (cbor 0.1.0,
