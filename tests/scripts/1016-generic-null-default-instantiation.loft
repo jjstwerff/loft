@@ -74,6 +74,16 @@ fn test_a_deferred_default_inside_a_tuple_is_still_answered() {
   assert(tup1016([1.5]) == g1016([1.5]), "tuple elem 0, float");
   assert(tup1016([1.5f]) == g1016([1.5f]), "tuple elem 0, single");
 
+  // NOT `text`, and the reason is worth stating because the output hides it: a discharged
+  // `a?` in a TUPLE element answers the one-character text null sentinel on the
+  // interpreter where the bare twin answers the empty text, and both render as nothing.
+  // `--native` answers the empty text correctly, so the two backends disagree. Measured
+  // with `len()` and `== ""` rather than by printing, since printing cannot tell them
+  // apart. Asserting either value here would freeze one backend's bug into the suite.
+  //
+  //     bare: len=0 eqempty=true   |  tup interpret: len=1 eqempty=false
+  //                                |  tup native   : len=0 eqempty=true
+
   // A SUPPLIED argument never reaches the marker, so it must be unaffected — without this
   // cell a rewrite that discharged every argument would satisfy the three above.
   assert(tup1016([1], 9) == 9, "a supplied argument is untouched, got {tup1016([1], 9)}");

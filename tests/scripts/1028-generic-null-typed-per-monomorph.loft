@@ -140,13 +140,16 @@ fn test_a_nullable_type_variable_in_a_tuple_is_the_concrete_types_nullable() {
   vmiss = tupn1028(v, false);
   assert((vhit.0 ?? w)[0] == 7, "vector value");
   assert((vmiss.0 ?? w)[0] == -42, "vector null");
-}
 
-// NOT covered: `T = text`.  Correct on the interpreter now, still refused by `--native`
-// because a tuple element's emitter flag means two things at once (append `.to_string()`
-// to a literal; do not borrow a `TupleGet`) — `return (var_x, 1_i64)` types `&str` where
-// `String` is wanted.  Separating those two facts is its own change; a cell here would
-// fail the native half of the suite.
+  // `text` is the cell this file could not carry until the tuple element's owned-text
+  // decision was split from its don't-borrow decision.  It is the type where a tuple slot
+  // is an owned `String` while the value reaching it is a `&str`, so it exercises the
+  // conversion the other four never need.
+  thit = tupn1028("s", true);
+  tmiss = tupn1028("s", false);
+  assert((thit.0 ?? "N") == (nl1028("s", true) ?? "N"), "text value matches the bare twin");
+  assert((tmiss.0 ?? "N") == (nl1028("s", false) ?? "N"), "text null matches the bare twin");
+}
 
 fn main() {
   test_a_nullable_type_variable_in_a_tuple_is_the_concrete_types_nullable();

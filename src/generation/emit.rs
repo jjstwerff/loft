@@ -56,13 +56,15 @@ impl Output<'_> {
             // dispatch); emit the string verbatim.
             ValueType::RawExpr => return write!(w, "{}", node.text()),
             ValueType::Text => {
-                // Debug format → a properly escaped Rust string literal.
+                // Debug format → a properly escaped Rust string literal, always a
+                // `&str`.  Converting it to an owned `String` is NOT decided here: a
+                // literal does not know whether it is the tuple element itself or some
+                // sub-expression of one, and it used to convert in both cases — so a
+                // literal nested inside an element (a generic's deferred `a?` discharge)
+                // emitted `&*("".to_string())`, a borrow of a temporary.  The position
+                // that knows the slot does the conversion; see the `Tuple` and `TuplePut`
+                // arms below.
                 write!(w, "{:?}", node.text())?;
-                if self.tuple_text_to_string {
-                    // Inside a `(String, String, …)` slot: wrap the `&str`
-                    // literal so it fits a `String`-typed tuple element.
-                    write!(w, ".to_string()")?;
-                }
                 return Ok(());
             }
             ValueType::Long => return write!(w, "{}_i64", node.int_value()),
@@ -299,10 +301,12 @@ impl Output<'_> {
                     if elem_is_bool {
                         write!(w, ") as u8)")?;
                     }
-                    // Wrap a text-returning element with `.to_string()` so it
-                    // fits a `String`-typed tuple slot (skip a Text literal — its
-                    // own arm appends `.to_string()` via the same flag).
-                    if elem_is_text && self.tuple_text_to_string && e.kind() != ValueType::Text {
+                    // Wrap a text element with `.to_string()` so it fits a
+                    // `String`-typed tuple slot.  This is the ONE place an element is
+                    // converted — a Text literal included, which is what lets the `Text`
+                    // arm stay a plain `&str` and stop converting sub-expressions that
+                    // merely pass through it.
+                    if elem_is_text && self.tuple_text_to_string {
                         write!(w, ".to_string()")?;
                     }
                 }
@@ -387,6 +391,13 @@ impl Output<'_> {
                 self.tuple_text_to_string = elem_is_text;
                 let r = self.output_code_node(w, node.tupleput_inner());
                 self.tuple_text_to_string = prev;
+                // The same conversion the `Tuple` element loop applies, for the same
+                // reason: this position knows the slot is an owned `String` and the
+                // value emitted into it does not.  A `TupleGet`/`Var` source already
+                // emitted un-borrowed (the flag above), so this only adds the ownership.
+                if elem_is_text && !matches!(node.tupleput_inner().kind(), ValueType::Var) {
+                    write!(w, ".to_string()")?;
+                }
                 if let Some(cast) = bool_cast {
                     write!(w, ") as {cast}")?;
                 }
@@ -685,8 +696,11 @@ impl Output<'_> {
                     // rewrite trigger missed.  At monomorphisation time
                     // the type becomes `(String, String)` but the body
                     // is still a plain `Value::Tuple`.
+                    // The shared predicate, not a fourth spelling of it: this site had
+                    // its own inline `any(Text)`, which saw neither a nested tuple nor a
+                    // `text?` element.
                     let returns_text_tuple = matches!(returned, Type::Tuple(elems)
-                        if elems.iter().any(|e| matches!(e, Type::Text(_))));
+                        if crate::generation::dispatch::tuple_has_text_leaf(elems));
                     let prev_tuple_text = self.tuple_text_to_string;
                     if returns_text_tuple && matches!(&**val, Value::Tuple(_)) {
                         self.tuple_text_to_string = true;

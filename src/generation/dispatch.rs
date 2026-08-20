@@ -1478,7 +1478,12 @@ impl Output<'_> {
 /// `"a".to_string()` wrap on the inner literals (plan-14 phase 02).
 pub(crate) fn tuple_has_text_leaf(elems: &[Type]) -> bool {
     for e in elems {
-        match e {
+        // `.base()` peels `Optional`: a `text?` element occupies the same owned
+        // `String` slot a `text` does, so a tuple carrying one has a text leaf.
+        // Without the peel `-> (text?, integer)` was invisible here, the owned-text
+        // flag never fired for it, and `--native` refused the function with E0308 —
+        // for a plain declaration, not only a generic one.
+        match e.base() {
             Type::Text(_) => return true,
             Type::Tuple(inner) if tuple_has_text_leaf(inner) => return true,
             _ => {}
