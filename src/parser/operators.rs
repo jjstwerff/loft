@@ -3313,22 +3313,31 @@ impl Parser {
                 && ((self.is_type_var_operand(ctp) && second_type == Type::Null)
                     || (*ctp == Type::Null && self.is_type_var_operand(&second_type)));
             if tv_null {
-                if !self.first_pass {
-                    let (n_code, n_tp) = if *ctp == Type::Null {
-                        (second_code, second_type.clone())
+                // Marked on BOTH passes, unlike every branch below — they emit ops, which
+                // is what needs a resolved second pass, while this only WRAPS the operand.
+                //
+                // loft#1023: the second pass re-parses in source order, so a call
+                // instantiates a generic declared BELOW it before that template's own
+                // pass-2 body exists, and the monomorph keeps whatever pass 1 left.  A
+                // marker emitted on pass 2 alone was therefore absent from exactly those
+                // monomorphs, and the body handed back the raw operand where a boolean
+                // belonged: `--native` refused the program and the interpreter read the
+                // slot as whatever it held.  Marking on pass 1 too makes the template's
+                // body carry the site whichever pass a monomorph is derived from.
+                let (n_code, n_tp) = if *ctp == Type::Null {
+                    (second_code, second_type.clone())
+                } else {
+                    (code.clone(), ctp.clone())
+                };
+                *code = v_block(
+                    vec![n_code],
+                    n_tp,
+                    if operator == "==" {
+                        Self::TV_NULLTEST_EQ
                     } else {
-                        (code.clone(), ctp.clone())
-                    };
-                    *code = v_block(
-                        vec![n_code],
-                        n_tp,
-                        if operator == "==" {
-                            Self::TV_NULLTEST_EQ
-                        } else {
-                            Self::TV_NULLTEST_NE
-                        },
-                    );
-                }
+                        Self::TV_NULLTEST_NE
+                    },
+                );
                 *ctp = Type::Boolean;
             } else if vec_null || float_null || enum_null || ref_null {
                 if !self.first_pass {
