@@ -363,8 +363,11 @@ impl IntegerSpec {
     /// it emitted `-> vector<integer(-2147483647, 4294967295)>`, which does not
     /// parse (#618).
     ///
-    /// Narrow aliases (`u8`/`i16`/…) carry a `forced_size` and match no template
-    /// here, so they keep a distinct name and a distinct storage width.
+    /// Narrow aliases (`u8`/`i16`/…) carry a `forced_size`, so they keep a distinct
+    /// name and a distinct storage width. Note that carrying one does not stop a
+    /// spec matching a template *predicate*: `i32`'s range is exactly the signed-32
+    /// template's, so [`IntegerSpec::is_signed32_template`] answers true for it.
+    /// Test `forced_size` to tell an alias from a template; the range alone cannot.
     #[must_use]
     pub fn source_name(&self) -> Option<&'static str> {
         if self.is_signed32_template() || self.is_wide_template() {

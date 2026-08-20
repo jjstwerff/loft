@@ -110,5 +110,36 @@ fn main() {
   j1009 += 10;
   assert(i1009.a == j1009, "field {i1009.a} and local {j1009} agree");
 
+  // `i32` was the one alias of the five the guard did not reach: the test it used to
+  // run, `is_signed32_template()`, reads like a guard against the plain `integer` type,
+  // but `integer` carries no `forced_size` and has already been let through by then — so
+  // the only spec left whose range IS the signed-32 range is the `i32` alias itself.
+  // The result was the exact shape this issue is about, four aliases later: a local
+  // holding a value its own type cannot represent.
+  k1009: i32 = 2147483647;
+  k1009 += 1;
+  assert(k1009 == -2147483647, "an i32 past 2147483647, got {k1009}");
+
+  l1009: i32 = -2147483647;
+  l1009 -= 1;
+  assert(l1009 == -2147483647, "an i32 below -2147483647, got {l1009}");
+
+  // In-range `i32` arithmetic is untouched, both directions — the guard fires on the
+  // VALUE, exactly as it does for the narrower four above.
+  n1009: i32 = 5;
+  n1009 += 3;
+  assert(n1009 == 8, "an in-range i32 += is unaffected, got {n1009}");
+
+  o1009: i32 = -5;
+  o1009 -= 3;
+  assert(o1009 == -8, "and an in-range i32 -=, got {o1009}");
+
+  // The negative control: plain `integer` is EIGHT bytes and carries no `forced_size`, so
+  // it must keep running past the 4-byte range.  Without this cell a guard that clamped
+  // every integer would pass every assertion above.
+  p1009: integer = 2147483647;
+  p1009 += 1;
+  assert(p1009 == 2147483648, "a plain integer is not clamped, got {p1009}");
+
   println("width types: bounded where they are stored");
 }

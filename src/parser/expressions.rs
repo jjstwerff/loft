@@ -4426,12 +4426,27 @@ use a separate collection or add after the loop"
         };
         // `forced_size` is what marks a narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`); the
         // `limit(lo, hi)` spelling sets none and is `guard_declared_range`'s business.
-        if spec.forced_size.is_none() || spec.is_wide_template() || spec.is_signed32_template() {
+        //
+        // There is deliberately no `is_signed32_template()` test here. It reads like a
+        // guard against the plain `integer` type, but that carries no `forced_size` and
+        // has already returned above — so by this line the only spec whose range IS the
+        // signed-32 range is the `i32` ALIAS, and testing for it excluded exactly one
+        // alias of the five. `l: i32 = 2147483647; l += 1` kept 2147483648, a value the
+        // slot cannot hold, while the same write to a `u8` clamped correctly.
+        if spec.forced_size.is_none() || spec.is_wide_template() {
             return;
         }
         let (lo, hi) = (i64::from(spec.min), i64::from(spec.max));
         // The default a narrow slot takes when a write does not fit is its MINIMUM — read
         // off the field oracle rather than chosen here, so the local and the field agree.
+        //
+        // They agree for four of the five aliases. A narrow `i32` FIELD answers `null`
+        // instead of the minimum, because a stored `i32::MIN` is the null sentinel that
+        // `OpGetInt4` decodes (which is why an `i32`'s own `min` is `i32::MIN + 1`). Both
+        // answers say the write did not fit; only the spelling differs, and a local cannot
+        // spell `null` unless it was declared nullable. Making the two identical means
+        // reclaiming `i32::MIN`, which is tracked separately — see STABILITY_ROADMAP's
+        // deferred `i32` row.
         let guarded = self.cl(
             "OpRangeDefault",
             &[
