@@ -98,6 +98,77 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
     src
 }
 
+/// The `--extern` arguments that name loft's runtime rlib to a generated crate's rustc.
+///
+/// TWO of them when the rlib carries no embedded metadata.  A rustc/cargo that builds an
+/// rlib with `-Zembed-metadata=no` — the default on nightly since 2026-08 — leaves the
+/// full metadata in a SIBLING `.rmeta` and puts only a stub in the `.rlib`, so compiling
+/// against the rlib alone fails with *"only metadata stub found for `rlib` dependency
+/// `loft`, please provide path to the corresponding .rmeta file with full metadata"* and
+/// every `--native` build stops.  Passing both is what cargo itself does for such a
+/// dependency; the sibling is only added when it EXISTS, so a toolchain that still embeds
+/// metadata (stable today) passes exactly the one argument it always did.
+///
+/// The ONE home for that decision — seven sites build this argument, and a toolchain
+/// change that reaches only some of them is a `--native` that works from one entry point
+/// and not another.
+#[must_use]
+pub fn loft_extern_args(rlib: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(rmeta) = loft_rmeta_beside(rlib) {
+        out.push("--extern".to_string());
+        out.push(format!("loft={}", rmeta.display()));
+    }
+    out.push("--extern".to_string());
+    out.push(format!("loft={}", rlib.display()));
+    out
+}
+
+/// The `.rmeta` holding the full metadata for this `libloft.rlib`, when the toolchain
+/// split them.  `None` when the rlib embeds its own metadata, which is every toolchain
+/// that has not turned `-Zembed-metadata=no` on.
+///
+/// Three places, because the artifact layout is cargo's business and it has moved: the
+/// SIBLING (`<dir>/libloft.rmeta`, the classic uplifted layout), the `deps/` copy that
+/// carries a hash suffix, and the per-crate artifact directory a 2026-08 nightly writes
+/// (`<profile>/build/loft/<hash>/out/`), where the uplifted rlib is a hard link to the
+/// stub and only this copy has the metadata beside it.  Newest wins when several match,
+/// since a stale one belongs to an older build of the same tree.
+fn loft_rmeta_beside(rlib: &std::path::Path) -> Option<std::path::PathBuf> {
+    let sibling = rlib.with_extension("rmeta");
+    if sibling.exists() {
+        return Some(sibling);
+    }
+    let dir = rlib.parent()?;
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    let mut consider = |p: std::path::PathBuf| {
+        let Ok(m) = p.metadata().and_then(|m| m.modified()) else {
+            return;
+        };
+        if best.as_ref().is_none_or(|(t, _)| m > *t) {
+            best = Some((m, p));
+        }
+    };
+    if let Ok(entries) = std::fs::read_dir(dir.join("deps")) {
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("libloft-") && name.ends_with(".rmeta") {
+                consider(e.path());
+            }
+        }
+    }
+    if let Ok(crates) = std::fs::read_dir(dir.join("build").join("loft")) {
+        for c in crates.flatten() {
+            let candidate = c.path().join("out").join("libloft.rmeta");
+            if candidate.exists() {
+                consider(candidate);
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 /// @PLN11 Arc N / N3 — mark a library's functions for native dispatch.  Of the
 /// `candidates` (a library's functions — e.g. all functions from a `use`d
 /// library's source), the **shared-store-dispatchable** subset has its
@@ -982,8 +1053,7 @@ fn loft_ffi_candidate_links(
             .arg("--emit=metadata")
             .arg("-o")
             .arg(dir.join("probe.rmeta"))
-            .arg("--extern")
-            .arg(format!("loft={}", libloft.display()))
+            .args(crate::native_lib::loft_extern_args(libloft))
             .arg("--extern")
             .arg(format!("loft_ffi={}", cand.display()))
             .arg("-L")
@@ -1214,11 +1284,9 @@ pub fn build_shared_cdylib(
         "-o".to_string(),
         tmp_so.display().to_string(),
         rs.display().to_string(),
-        "--extern".to_string(),
-        format!("loft={}", rlib.display()),
-        "-L".to_string(),
-        deps.display().to_string(),
     ];
+    args.extend(crate::native_lib::loft_extern_args(&rlib));
+    args.extend(["-L".to_string(), deps.display().to_string()]);
     // macOS records the `-o` path inside the Mach-O as its INSTALL NAME, and the
     // rename below moves the file without touching it — so this cdylib claimed to
     // live at `<stem>.building`, in an absolute build directory. Harmless only for

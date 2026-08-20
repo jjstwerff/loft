@@ -1560,8 +1560,9 @@ pub(crate) fn run_tests(
                                 cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
                             }
                             if let Some(ref ld) = lib_dir {
-                                cmd.arg("--extern")
-                                    .arg(format!("loft={}", ld.join("libloft.rlib").display()));
+                                cmd.args(loft::native_lib::loft_extern_args(
+                                    &ld.join("libloft.rlib"),
+                                ));
                                 cmd.arg("-L").arg(native_utils::deps_dir_of(ld));
                                 // Propagate `-L native=` for every build-script
                                 // `OUT_DIR` that bundles a native lib — the G2

@@ -9040,8 +9040,9 @@ fn main() {
         let wasm_deps_dir = if let Some(lib_dir) =
             native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Wasi)
         {
-            cmd.arg("--extern")
-                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+            cmd.args(loft::native_lib::loft_extern_args(
+                &lib_dir.join("libloft.rlib"),
+            ));
             let search = native_utils::dep_search_dirs(&lib_dir);
             for d in &search {
                 cmd.arg("-L").arg(format!("dependency={}", d.display()));
@@ -9213,8 +9214,9 @@ fn main() {
             .arg(&wasm_path)
             .arg(&rs_path);
         if let Some(lib_dir) = html_runtime_dir.clone() {
-            cmd.arg("--extern")
-                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+            cmd.args(loft::native_lib::loft_extern_args(
+                &lib_dir.join("libloft.rlib"),
+            ));
             for d in native_utils::dep_search_dirs(&lib_dir) {
                 cmd.arg("-L").arg(format!("dependency={}", d.display()));
             }
@@ -9366,9 +9368,9 @@ fn main() {
                 .arg(&bridge_rlib)
                 .arg(&bridge_src);
             if let Some(ref lib_dir) = loft_wasm_lib_dir {
-                build
-                    .arg("--extern")
-                    .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+                build.args(loft::native_lib::loft_extern_args(
+                    &lib_dir.join("libloft.rlib"),
+                ));
                 for d in native_utils::dep_search_dirs(lib_dir) {
                     if d.is_dir() {
                         build.arg("-L").arg(format!("dependency={}", d.display()));
@@ -10366,8 +10368,9 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             // rebuild is to change that (loft#855).
             let attach_loft_runtime = |cmd: &mut std::process::Command| {
                 let lib_dir = loft_lib_dir()?;
-                cmd.arg("--extern")
-                    .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+                cmd.args(loft::native_lib::loft_extern_args(
+                    &lib_dir.join("libloft.rlib"),
+                ));
                 // One `-L` per search dir: the classic layout yields exactly one
                 // (`<profile>/deps`), the per-unit layout cargo nightly adopted on
                 // 2026-07-29 yields one per crate.  See `dep_search_dirs`.
