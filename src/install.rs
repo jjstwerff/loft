@@ -100,6 +100,9 @@ fn fetch_prebuilt(r: &ResolvedPackage, opts: &InstallOptions) -> bool {
     // The cdylib stem is the package manifest's `[library] native` field.
     let Some(stem) = crate::manifest::read_manifest(&pkg_dir.join("loft.toml").to_string_lossy())
         .and_then(|m| m.native)
+        // The stem becomes a FILENAME below, and this manifest came off the network.
+        // Same rule, same reason as the package name: see `libscan::is_valid_package_name`.
+        .filter(|s| crate::libscan::is_valid_package_name(s))
     else {
         return false;
     };
