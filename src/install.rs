@@ -365,19 +365,17 @@ fn load_index_inner(
     let url = registry_index::registry_url();
     let (idx_path, sig_path, _) = registry_index::index_paths();
     let (content_bytes, stale_fallback): (Vec<u8>, bool) = if opts.offline {
-        let content = std::fs::read(&idx_path).map_err(|e| {
-            format!(
-                "offline mode: no cached index ({}): {e}",
-                idx_path.display()
-            )
-        })?;
         // @PLN143 — verify here too.  This was the one branch of the four that read the
         // cached index and trusted it unchecked, which put the whole signature gate
         // behind a single environment variable: `LOFT_OFFLINE=1` and the bytes are
         // whatever is on disk.  The cache is where a rejected fetch used to linger (see
         // the fetch branch below), so it is not a place trust can be assumed.
-        let sig = std::fs::read(&sig_path).unwrap_or_default();
-        verify_or_explain(&content, &sig, opts)?;
+        let content = read_cached_index_verified(&idx_path, &sig_path, opts).map_err(|e| {
+            e.message(&format!(
+                "offline mode: no cached index ({})",
+                idx_path.display()
+            ))
+        })?;
         (content, false)
     } else if opts.refresh || index_stale(&idx_path) {
         match registry_index::fetch_index(&url) {
@@ -401,37 +399,37 @@ fn load_index_inner(
                     fetched.signature.clone()
                 };
                 verify_or_explain(&fetched.content, &sig_bytes, opts)?;
-                // Verified: now it is safe to keep.
-                if let Some(parent) = idx_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::write(&idx_path, &fetched.content)
-                    .map_err(|e| format!("cache index: {e}"))?;
-                if !fetched.signature.is_empty() {
-                    let _ = std::fs::write(&sig_path, &fetched.signature);
-                }
+                // Verified: now it is safe to keep.  Both files land atomically,
+                // because a plain write truncates first and another process
+                // reading this cache mid-refresh would get a half index or the
+                // new index beside the old signature (loft#1045).
+                registry_index::write_signed_pair(
+                    &idx_path,
+                    &sig_path,
+                    &fetched.content,
+                    &fetched.signature,
+                )
+                .map_err(|e| format!("cache index: {e}"))?;
                 (fetched.content, false)
             }
             Err(fetch_err) => {
                 // The fetch failed.  Discovery commands fall back to a cached
                 // index if one exists; the install path surfaces the error.
-                let cached = fallback_on_fetch_failure
-                    .then(|| std::fs::read(&idx_path).ok())
-                    .flatten();
-                match cached {
-                    Some(content) => {
-                        let sig = std::fs::read(&sig_path).unwrap_or_default();
-                        verify_or_explain(&content, &sig, opts)?;
-                        (content, true)
-                    }
-                    None => return Err(fetch_err),
+                match fallback_on_fetch_failure
+                    .then(|| read_cached_index_verified(&idx_path, &sig_path, opts))
+                {
+                    Some(Ok(content)) => (content, true),
+                    // A cache that cannot be READ leaves the fetch failure as the
+                    // truer story; one that fails to VERIFY is its own finding and
+                    // must not be reported as a network problem.
+                    Some(Err(CachedPairError::Verify(msg))) => return Err(msg),
+                    Some(Err(CachedPairError::Io(_))) | None => return Err(fetch_err),
                 }
             }
         }
     } else {
-        let sig = std::fs::read(&sig_path).unwrap_or_default();
-        let content = std::fs::read(&idx_path).map_err(|e| format!("read cached index: {e}"))?;
-        verify_or_explain(&content, &sig, opts)?;
+        let content = read_cached_index_verified(&idx_path, &sig_path, opts)
+            .map_err(|e| e.message("read cached index"))?;
         (content, false)
     };
     let text = std::str::from_utf8(&content_bytes)
@@ -477,6 +475,63 @@ fn verify_or_explain(content: &[u8], sig: &[u8], opts: &InstallOptions) -> Resul
             }
         }
     }
+}
+
+/// Why reading the cached index+signature pair did not produce a usable index:
+/// the files could not be READ, or they read fine and the signature did not
+/// verify.  The two want different words from the caller — a missing cache is
+/// "offline mode: no cached index" on one path and the network's own error on
+/// another, while a verification verdict is already a finished sentence.
+enum CachedPairError {
+    Io(std::io::Error),
+    Verify(String),
+}
+
+impl CachedPairError {
+    /// The message for this failure, with `io_prefix` naming what the caller was
+    /// trying to read when the failure was an I/O one.
+    fn message(self, io_prefix: &str) -> String {
+        match self {
+            Self::Io(e) => format!("{io_prefix}: {e}"),
+            Self::Verify(msg) => msg,
+        }
+    }
+}
+
+/// Read the cached index against the cached signature, treating a refresh landing
+/// underneath as what it is rather than as a bad signature.
+///
+/// The pair is written as two files and cannot be swapped in one step, so a reader
+/// crossing a refresh can pick up the new index beside the old `.sig`.  That
+/// combination fails verification, and the message it produces — *the signature
+/// exists but doesn't verify against any known key* — is the one a TAMPERED index
+/// produces, deliberately un-bypassable even with `--allow-unsigned`.  A consumer
+/// hit exactly this: a suite failed hard, the identical command passed minutes
+/// later, and the diagnosis pointed at trust roots rather than at the toolchain
+/// install three minutes earlier (loft#1045).
+///
+/// So a rejection is re-read before it is believed.  The signature is an exact
+/// oracle for the question being asked: one that verifies over the content it was
+/// read with proves both came from the same generation, so a pair accepted here is
+/// matched rather than merely plausible.  A signature that genuinely does not
+/// verify never comes to agree, and is reported with its own words unchanged —
+/// the settle costs it a bounded wait, on a path that ends in an aborted command.
+fn read_cached_index_verified(
+    idx_path: &Path,
+    sig_path: &Path,
+    opts: &InstallOptions,
+) -> Result<Vec<u8>, CachedPairError> {
+    let settled = registry_index::read_signed_pair_settling(idx_path, sig_path, &mut |c, s| {
+        verify_or_explain(c, s, opts).is_ok()
+    })
+    .map_err(CachedPairError::Io)?;
+    if !settled.accepted {
+        // Not accepted means the last attempt returned Err; re-run it for the text.
+        if let Err(msg) = verify_or_explain(&settled.content, &settled.signature, opts) {
+            return Err(CachedPairError::Verify(msg));
+        }
+    }
+    Ok(settled.content)
 }
 
 fn index_stale(idx_path: &Path) -> bool {

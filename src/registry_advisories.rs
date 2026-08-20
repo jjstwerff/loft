@@ -441,14 +441,16 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
         // Refresh.  404 → feature not hosted yet; treat as absent.
         match registry_index::fetch_index(&url) {
             Ok(fetched) => {
-                if let Some(parent) = cache_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::write(&cache_path, &fetched.content)
-                    .map_err(|e| format!("cache advisories: {e}"))?;
-                if !fetched.signature.is_empty() {
-                    let _ = std::fs::write(&sig_path, &fetched.signature);
-                }
+                // Atomically, and as a pair: another process reading this cache
+                // mid-refresh must not get a half feed or the new feed beside the
+                // old signature (loft#1045).
+                registry_index::write_signed_pair(
+                    &cache_path,
+                    &sig_path,
+                    &fetched.content,
+                    &fetched.signature,
+                )
+                .map_err(|e| format!("cache advisories: {e}"))?;
                 let sig_bytes = if fetched.signature.is_empty() {
                     std::fs::read(&sig_path).unwrap_or_default()
                 } else {

@@ -390,6 +390,22 @@ consumer's machine.  Layout:
   transfers the whole document (gzipped by the transport — ureq
   carries `flate2`, so ~6.3× smaller on the wire).
 - Signature verified on every load, even cache-hit paths.
+- **Atomic refresh, and a reader that waits one out.**  Each of
+  `index.json` and its `.sig` is written beside itself and renamed into
+  place, so a concurrent reader gets the whole old file or the whole new
+  one — a plain write truncates first, and on a 692 KB index that window
+  swallowed 194 of 200 concurrent reads in the regression harness.  The
+  pair is still two renames and cannot be swapped in one step, so a
+  reader that finds the signature not matching re-reads the pair for a
+  bounded moment before believing it: that mismatch is otherwise
+  reported as *the signature exists but doesn't verify against any known
+  key*, a failure deliberately un-bypassable even with
+  `--allow-unsigned`, which sends the reader to look at trust roots when
+  the cause was a refresh landing mid-run (loft#1045).  The signature is
+  an exact oracle for this — one that verifies over the content it was
+  read with proves both came from the same generation — so a pair
+  accepted after settling is matched, and one that never agrees is
+  refused in the words it would have used anyway.
 
 **Download ceiling.**  A single HTTP response is capped at 512 MiB
 (`DEFAULT_MAX_DOWNLOAD`), overridable with `LOFT_MAX_DOWNLOAD=<size>`
