@@ -5414,11 +5414,25 @@ impl Parser {
             // → one `_`), so the LEN prefix that `original_name` /
             // `find_method_receivers` parse back stays correct.  Plain names
             // (user structs, `vector`) contain none of these and are unchanged.
-            let safe = self
-                .data
-                .def(type_nr)
-                .name()
-                .replace(['<', '>', ',', ' '], "_");
+            //
+            // loft#1024 — key on the CONCRETE type's own name for a collection.  A
+            // collection's type DEF is the bare `vector` / `hash` / … , which erases the
+            // element: `T = vector<integer>` and `T = vector<text>` both mangled to
+            // `t_6vector_idl`, and that name is the spelling of a METHOD ON `vector`.  So
+            // the first collection instantiation captured every later call whose argument
+            // was any vector at all — including the call that wanted `T = integer`, which
+            // was then refused against the monomorph's `vector<vector<integer>>` parameter
+            // and never reached generic resolution.  Order-dependent, and the message
+            // named the innocent second call site.
+            //
+            // Non-collection concretes are unchanged: a struct's, an integer's and a
+            // text's type-def name IS their own name.
+            let base = if Self::is_collection_type(concrete.base()) {
+                concrete.name(&self.data)
+            } else {
+                self.data.def(type_nr).name().to_string()
+            };
+            let safe = base.replace(['<', '>', ',', ' '], "_");
             format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.
