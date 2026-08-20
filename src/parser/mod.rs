@@ -699,6 +699,15 @@ pub struct Parser {
     /// the notice fires before the default exists and the caller's cursor has moved past
     /// the statement terminator by the time it returns.
     pub(crate) ncc_default_end: Option<(u32, u32)>,
+    /// loft#1023 — definitions whose BODY has been parsed in the current second pass.
+    ///
+    /// A generic instantiated before its own template appears in this set was built from
+    /// the pass-1 body; [`Parser::rebuild_stale_monomorphs`] redoes those at the end of
+    /// the pass, when every template body exists.
+    pub(crate) pass2_bodies: std::collections::HashSet<u32>,
+    /// loft#1023 — `(monomorph, template, bindings, concrete)` for each monomorph built
+    /// from a template whose pass-2 body had not been parsed yet.
+    pub(crate) stale_monomorphs: Vec<(u32, u32, Vec<(u32, Type)>, Type)>,
     /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
     /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
     /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
@@ -1040,6 +1049,8 @@ impl Parser {
             pending_default_rhs: None,
             pending_default_src: None,
             ncc_default_end: None,
+            pass2_bodies: std::collections::HashSet::new(),
+            stale_monomorphs: Vec::new(),
             conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
@@ -2437,6 +2448,10 @@ impl Parser {
     /// Stubs that remain unresolved after this reconciliation surface as
     /// the original "Undefined type" error at the stored `Position`.
     fn resolve_deferred_unknowns(&mut self) {
+        // loft#1023 — every template body now exists for this pass, so any monomorph
+        // derived from a PASS-1 body can be derived again from the real one.  Empty (and
+        // so a no-op) on the first pass, which records nothing.
+        self.rebuild_stale_monomorphs();
         // Step 1: re-apply all previously-applied imports with overwrite
         // semantics.  This replaces any target-source `Unknown` stub with
         // the now-registered real def in the library source.
@@ -5510,9 +5525,42 @@ impl Parser {
             concrete,
             new_returned,
         );
+        self.fill_monomorph_body(d_nr, new_code, &tmpl_vars, &bindings, &concrete);
+        // loft#1023 — a template declared BELOW its caller has not had its pass-2 body
+        // parsed yet when the call instantiates, so the monomorph above was built from the
+        // PASS-1 body.  Record it and re-derive once the whole file is through.
+        if !self.first_pass && !self.pass2_bodies.contains(&g_nr) {
+            self.stale_monomorphs
+                .push((d_nr, g_nr, bindings.clone(), concrete.clone()));
+        }
+        self.instantiate_nested_generics(d_nr, &concrete);
+        // I6: verify the concrete type satisfies every declared bound.
+        // Emit a diagnostic and return u32::MAX if any required method is missing.
+        if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
+            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
+            // "Unknown function" error — the satisfaction error is sufficient.
+            // The function won't execute because parsing will halt on errors.
+        }
+        d_nr
+    }
+
+    /// Substitute a template's body + variable table into the monomorph `d_nr`.
+    ///
+    /// Split out of [`Self::try_generic_instantiation`] so loft#1023's re-derivation can
+    /// run exactly the same steps once the template's own pass-2 body exists.  The
+    /// SIGNATURE is not re-derived: attributes and the return type come from the
+    /// template's declaration, which pass 1 already has — only the body was ever stale.
+    fn fill_monomorph_body(
+        &mut self,
+        d_nr: u32,
+        code: Value,
+        tmpl_vars: &Function,
+        bindings: &[(u32, Type)],
+        concrete: &Type,
+    ) {
         // Copy the variable table with substituted types.
-        let mut vars = Function::copy(&tmpl_vars);
-        for (holder, bound_to) in &bindings {
+        let mut vars = Function::copy(tmpl_vars);
+        for (holder, bound_to) in bindings {
             vars.substitute_type(*holder, bound_to);
         }
         // P241 fix (2026-05-11): post-substitution rewrite of the
@@ -5522,9 +5570,9 @@ impl Parser {
         // to override `vars`' substituted-to-primitive elm var type
         // back to `Reference(...)` (it holds a DbRef, not the
         // primitive value).  See `rewrite_generic_vector_writes`.
-        let new_code = Self::rewrite_generic_vector_writes(
-            new_code,
-            &concrete,
+        let code = Self::rewrite_generic_vector_writes(
+            code,
+            concrete,
             &mut vars,
             &self.data,
             &mut self.database,
@@ -5537,10 +5585,10 @@ impl Parser {
         let outer_vars = std::mem::replace(&mut self.vars, vars);
         let outer_context = self.context;
         self.context = d_nr;
-        let new_code = self.rewrite_generic_type_defaults(new_code, &concrete);
+        let code = self.rewrite_generic_type_defaults(code, concrete);
         let vars = std::mem::replace(&mut self.vars, outer_vars);
         self.context = outer_context;
-        self.data.definitions[d_nr as usize].code = new_code;
+        self.data.definitions[d_nr as usize].code = code;
         self.data.definitions[d_nr as usize].variables = vars;
         // @PLN85 category A — engage the text-return promotion the parse-time
         // path skips for IR-substituted monomorphs, so a `-> text` monomorph
@@ -5552,15 +5600,47 @@ impl Parser {
         // replaces the type and leaves that row behind, so the dump walked a
         // `vector<integer>` through the wrong schema and printed `{}`.
         self.retarget_parametric_vector_format(d_nr);
-        self.instantiate_nested_generics(d_nr, &concrete);
-        // I6: verify the concrete type satisfies every declared bound.
-        // Emit a diagnostic and return u32::MAX if any required method is missing.
-        if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
-            // Return d_nr (not u32::MAX) so `call` doesn't emit a redundant
-            // "Unknown function" error — the satisfaction error is sufficient.
-            // The function won't execute because parsing will halt on errors.
+    }
+
+    /// loft#1023 — re-derive every monomorph that was built from a template's PASS-1 body.
+    ///
+    /// The second pass re-parses the file in source order, so a call instantiates a generic
+    /// declared BELOW it before that template's own pass-2 body has been produced.  The
+    /// monomorph then keeps whatever pass 1 left, and anything a construct emits only on
+    /// the second pass is missing from it.  Declaration order is not supposed to matter —
+    /// the two-pass parser exists so a function may be used before it is written — so this
+    /// runs where every template body finally exists and derives the bodies again.
+    ///
+    /// Re-deriving reaches further generics (a template body that calls another one), and
+    /// those are stale for the same reason, so it drains to a fixpoint.  Bounded because a
+    /// re-derived monomorph is never recorded again.
+    fn rebuild_stale_monomorphs(&mut self) {
+        let mut rounds = 0;
+        while !self.stale_monomorphs.is_empty() && rounds < 16 {
+            rounds += 1;
+            for (d_nr, g_nr, bindings, concrete) in std::mem::take(&mut self.stale_monomorphs) {
+                let tmpl_code = self.data.definitions[g_nr as usize].code.clone();
+                if tmpl_code == Value::Null {
+                    continue;
+                }
+                let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
+                let mut code = tmpl_code;
+                for (holder, bound_to) in &bindings {
+                    let iter_stride = i32::from(self.vector_elem_iter_stride(bound_to));
+                    code = Self::substitute_type_in_value(
+                        code,
+                        *holder,
+                        bound_to,
+                        iter_stride,
+                        &self.data,
+                    );
+                }
+                self.fill_monomorph_body(d_nr, code, &tmpl_vars, &bindings, &concrete);
+                // The body is fresh, so every call it makes to ANOTHER generic has to be
+                // retargeted at that one's monomorph again.
+                self.instantiate_nested_generics(d_nr, &concrete);
+            }
         }
-        d_nr
     }
 
     /// @PLN125 A2c — what each associated type of `g_nr`'s bounds binds to, for the

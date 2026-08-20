@@ -775,6 +775,12 @@ impl Parser {
         // a future regression surfaces, narrow this to only-save
         // when `self.in_lambda` is true.
         if self.context != u32::MAX {
+            // loft#1023 — the body of `self.context` now exists for this pass.  A generic
+            // instantiated BEFORE this point took the pass-1 body, which is what
+            // `rebuild_stale_monomorphs` goes back for.
+            if !self.first_pass {
+                self.pass2_bodies.insert(self.context);
+            }
             self.data.definitions[self.context as usize].code = v;
         }
         result

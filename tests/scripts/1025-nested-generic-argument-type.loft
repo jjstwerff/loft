@@ -42,6 +42,14 @@ fn test_the_outer_may_pass_its_own_nullable_through() {
   assert(!opass1025([1], 5), "a supplied argument passes through as itself");
 }
 
+fn test_a_nested_generic_declared_below_its_caller() {
+  // The PASS-1 body class: the templates below are declared after every caller, so the
+  // monomorphs were built before their bodies existed.  This answered `false` on the
+  // interpreter and `null` on `--native` — wrong, silently, and differently on each.
+  assert(dnull1025([1]), "the nested omitted argument is null");
+  assert(dlen1025([1, 2]) == 2, "and a plain nested call reads its length");
+}
+
 fn test_each_instantiation_reaches_its_own_nested_monomorph() {
   // Two element types through one nesting: the nested monomorph is chosen per outer
   // instantiation, so a single shared one would answer one of these wrongly.
@@ -49,3 +57,9 @@ fn test_each_instantiation_reaches_its_own_nested_monomorph() {
   b = olen1025(["a", "b", "c"]);
   assert(a == 2 && b == 3, "each nesting reaches its own monomorph, got {a} {b}");
 }
+
+// Declared AFTER every caller on purpose — see the pass-1-body cell above.
+pub fn dinner1025 < T > (v: vector<T>, a: T? = null) -> boolean { len(v) >= 0 && a == null }
+pub fn dnull1025 < T > (v: vector<T>) -> boolean { dinner1025(v) }
+pub fn dilen1025 < T > (v: vector<T>) -> integer { len(v) }
+pub fn dlen1025 < T > (v: vector<T>) -> integer { dilen1025(v) }
