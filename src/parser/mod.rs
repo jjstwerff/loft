@@ -6726,61 +6726,26 @@ impl Parser {
                     None => Value::Block(bl),
                 }
             }
-            Value::Block(bl) => {
-                let bl = *bl;
-                Value::Block(Box::new(crate::data::Block {
-                    operators: self.rewrite_default_list(bl.operators, concrete),
-                    result: bl.result,
-                    name: bl.name,
-                    scope: bl.scope,
-                    var_size: bl.var_size,
-                }))
+            // Everything else just carries children.  Recursion goes through the
+            // `Value::for_each_child_mut` keystone rather than being re-enumerated here:
+            // this walk must be TOTAL, because a marker it does not reach ships to the
+            // monomorph as the placeholder, and the arms it used to list covered ten of
+            // the seventeen child-bearing variants.  A `Tuple` was among the missing
+            // seven, so `t = (a?, 1)` answered the placeholder's bytes as data — silently
+            // at `T = integer`, as a SIGSEGV in `OpFreeText` at `T = text`, and as an
+            // E0308 that would not compile on `--native`.
+            //
+            // Mutating in place also keeps every non-child field (a block's `scope`,
+            // `var_size`, `result`) by construction, where rebuilding the node restated
+            // them and a forgotten one would be silent.
+            mut other => {
+                other.for_each_child_mut(&mut |child| {
+                    let taken = std::mem::replace(child, Value::Null);
+                    *child = self.rewrite_generic_type_defaults(taken, concrete);
+                });
+                other
             }
-            Value::Loop(lp) => {
-                let lp = *lp;
-                Value::Loop(Box::new(crate::data::Block {
-                    operators: self.rewrite_default_list(lp.operators, concrete),
-                    result: lp.result,
-                    name: lp.name,
-                    scope: lp.scope,
-                    var_size: lp.var_size,
-                }))
-            }
-            Value::If(c, t, f) => Value::If(
-                Box::new(self.rewrite_generic_type_defaults(*c, concrete)),
-                Box::new(self.rewrite_generic_type_defaults(*t, concrete)),
-                Box::new(self.rewrite_generic_type_defaults(*f, concrete)),
-            ),
-            Value::Set(v, expr) => Value::Set(
-                v,
-                Box::new(self.rewrite_generic_type_defaults(*expr, concrete)),
-            ),
-            Value::Return(expr) => Value::Return(Box::new(
-                self.rewrite_generic_type_defaults(*expr, concrete),
-            )),
-            Value::Drop(expr) => Value::Drop(Box::new(
-                self.rewrite_generic_type_defaults(*expr, concrete),
-            )),
-            Value::Span(b) => {
-                let (pos, inner) = *b;
-                Value::Span(Box::new((
-                    pos,
-                    self.rewrite_generic_type_defaults(inner, concrete),
-                )))
-            }
-            Value::Call(d, args) => Value::Call(d, self.rewrite_default_list(args, concrete)),
-            Value::CallRef(v, args) => Value::CallRef(v, self.rewrite_default_list(args, concrete)),
-            Value::Insert(ops) => Value::Insert(self.rewrite_default_list(ops, concrete)),
-            other => other,
         }
-    }
-
-    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) over a
-    /// list of sub-values.
-    fn rewrite_default_list(&mut self, vals: Vec<Value>, concrete: &Type) -> Vec<Value> {
-        vals.into_iter()
-            .map(|v| self.rewrite_generic_type_defaults(v, concrete))
-            .collect()
     }
 
     /// `construct_default(concrete)` as a VALUE, for a monomorph's deferred `x?`.
