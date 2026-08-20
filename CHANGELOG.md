@@ -98,6 +98,21 @@ different route than the identical function written out by hand. It now takes th
 so it returns its text through the caller's buffer like every other text-returning function.
 `T = integer` and a struct `T` were never affected.
 
+### A generic function can be a parallel worker
+
+```loft
+pub fn idf<T>(x: T) -> T { x }
+for e in [1,2,3] par(r = idf(e), 1) { … }   // was "'idf' is not a function"
+```
+
+The name resolved everywhere else in the same file; only the `par(...)` position refused
+it, because that path looked the function up and never instantiated it. Workers over
+integers, floats and booleans all work, and one generic worker can serve several element
+types in the same program.
+
+Still out of reach for now, and it says so instead of miscompiling: a generic worker
+called from inside a *generic function*.
+
 ### A tuple with a nullable element can be a declared local
 
 ```loft

@@ -6304,6 +6304,47 @@ impl Parser {
                 targets.push((*d, arg_tp));
             }
         });
+        // loft#1033 — a par WORKER is a generic too, and it does not ride in the IR as a
+        // `Value::Call`: the parallel ops carry their worker as a d_nr INTEGER argument
+        // (`parallel_for(input, elem_size, return_size, threads, fn_d_nr, …)`), so the walk
+        // above cannot see it and a template's worker stayed the template. The interpreter
+        // dispatches by d_nr and survived that; `--native` emits a direct call and died on
+        // `cannot find function n_idf`, because a template emits no code.
+        //
+        // Recognised by TWO facts at once rather than by argument position: the enclosing
+        // call is one of the `n_parallel_*` family, and the integer is a d_nr this parser
+        // already recorded as a par worker (`par_worker_defs`) whose def is a template.
+        // Either test alone could match an ordinary integer that happens to equal a d_nr;
+        // together they cannot, and neither hardcodes the operand index, which is the
+        // layout's own business at the build site.
+        let par_workers: Vec<(u32, Type)> = {
+            let mut found: Vec<(u32, Type)> = Vec::new();
+            self.data.def(d_nr).code.walk(&mut |v| {
+                if let Value::Call(d, args) = v
+                    && *d != u32::MAX
+                    && (*d as usize) < self.data.definitions.len()
+                    && self.data.def(*d).name().starts_with("n_parallel_")
+                {
+                    for a in args {
+                        if let Value::Int(w) = a.unspan()
+                            && let Ok(w) = u32::try_from(*w)
+                            && (w as usize) < self.data.definitions.len()
+                            && self.par_worker_defs.contains(&w)
+                            && self.data.def(w).def_type() == DefType::Generic
+                            && !found.iter().any(|(t, _)| *t == w)
+                        {
+                            // The worker's first parameter takes the loop ELEMENT, so the
+                            // type that resolves `T` is the element type of the collection
+                            // this monomorph iterates — `concrete` for the ordinary
+                            // `vector<T>` spelling, which is what every par worker here is.
+                            found.push((w, concrete.clone()));
+                        }
+                    }
+                }
+            });
+            found
+        };
+        targets.extend(par_workers);
         // Create the monomorphs FIRST, before the context swap below: instantiation
         // parses against `self.vars` / `self.context`, and it must see the ordinary
         // ones, not this monomorph's.
@@ -6361,6 +6402,28 @@ impl Parser {
         let mut code =
             std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
         Self::retarget_calls(&mut code, &remap);
+        // …and the par-worker d_nr INTEGERS, which `retarget_calls` does not reach
+        // (loft#1033). Same two-fact recognition as the collection walk above.
+        if !remap.is_empty() {
+            let par_names: std::collections::HashSet<u32> = remap.keys().copied().collect();
+            code.map_nodes(&mut |v| {
+                if let Value::Call(d, args) = v
+                    && *d != u32::MAX
+                    && (*d as usize) < self.data.definitions.len()
+                    && self.data.def(*d).name().starts_with("n_parallel_")
+                {
+                    for a in args.iter_mut() {
+                        if let Value::Int(w) = a
+                            && let Ok(w32) = u32::try_from(*w)
+                            && par_names.contains(&w32)
+                            && let Some(fresh) = remap.get(&w32)
+                        {
+                            *a = Value::Int(*fresh as i32);
+                        }
+                    }
+                }
+            });
+        }
         // A `-> text` callee was promoted to deliver through a hidden `&text` buffer
         // (`promote_monomorph_text_return`, inside the instantiation above), so the call
         // this body already carries is one argument short of the ABI it now targets —

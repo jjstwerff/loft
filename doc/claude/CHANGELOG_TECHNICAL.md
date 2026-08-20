@@ -9,6 +9,53 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A generic function is callable as a `par` worker (loft#1033, 2026-08-20)
+
+```loft
+pub fn idf<T>(x: T) -> T { x }
+for e in [1,2,3] par(r = idf(e), 1) { … }   // error: 'idf' is not a function
+```
+
+The par path resolved the NAME to a def and then demanded `DefType::Function`; a template
+is `DefType::Generic`. Resolving a name and never INSTANTIATING is the whole defect — the
+refusal was the symptom of a missing step, not a rule being enforced. The same `idf`
+resolved everywhere else in the same file.
+
+Two halves, because a generic call site has two:
+
+- **Instantiation** — from the ELEMENT type (the first parsed argument is skipped precisely
+  because it names the element) plus the context arguments, which is the argument list an
+  ordinary call would hand the same function.
+- **The return type, on BOTH passes** — instantiation runs on pass 2 only, so pass 1 read
+  the template's `T` and pass 2 the monomorph's `integer`, and the result variable's table
+  entry carried the pass-1 answer forward: *"Variable '_discard_1' cannot change type from
+  T to integer"*. `predict_generic_return_type` is the cross-pass contract an ordinary
+  generic call site already uses for exactly this.
+
+`instantiate_nested_generics` also had to learn the worker. A par worker does not ride in
+the IR as a `Value::Call` — the parallel ops carry it as a d_nr INTEGER argument — so the
+nested-generic walk could not see it and a template's worker stayed the template
+(`--native`: `cannot find function n_idf`, since a template emits no code). It is
+recognised by TWO facts together, never by operand position: the enclosing call is one of
+the `n_parallel_*` family, and the integer is a d_nr already recorded in `par_worker_defs`
+whose def is a template. Either test alone could match an ordinary integer that happens to
+equal a d_nr; together they cannot.
+
+⚠ **A generic worker inside a generic FUNCTION is REFUSED, on both backends, on purpose.**
+`build_parallel_for_ir` picks a queue variant, an element and return size, a result
+accessor and a re-wrap from the element and return types, and inside a template those are
+the type VARIABLE; substitution rewrites the types and leaves the route behind. Measured
+before the refusal existed: `--interpret` answered correctly (it dispatches by `d_nr`)
+while `--native` failed with `non-primitive cast: DbRef as i64` — the buffer read with the
+reference accessor at stride 12 and cast to the monomorph's scalar. That divergence is what
+D-op-1 forbids, so this refuses on both rather than shipping it. Closing it means deferring
+the route and replaying it per monomorph, the same shape as #1016 / #1020 / #1028 / #1032
+but larger, since a route is a family of ops rather than one baked constant — loft#1040.
+
+Guard: `tests/scripts/1033-generic-par-worker.loft`. Its load-bearing cells USE the
+worker's result rather than discarding it — a cell that only counts iterations passes while
+`r` is still `T`.
+
 ### A declared local may name a tuple with a nullable element (loft#1034, 2026-08-20)
 
 ```loft

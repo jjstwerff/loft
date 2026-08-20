@@ -192,7 +192,7 @@ impl Parser {
         elem_tp: &Type,
     ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         // Resolve function name: try n_<name> first (user function convention).
-        let d_nr = {
+        let mut d_nr = {
             let prefixed = format!("n_{first_id}");
             let nr = self.data.def_nr(&prefixed);
             if nr == u32::MAX {
@@ -230,6 +230,53 @@ impl Parser {
             if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Unknown function '{first_id}'");
             }
+            return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
+        }
+        // loft#1033 — a GENERIC worker is INSTANTIATED here, the way an ordinary call site
+        // instantiates one.  This path resolved the NAME to a def and then demanded
+        // `DefType::Function`; a template is `DefType::Generic`, so `par(r = idf(e), 1)`
+        // was refused as "'idf' is not a function" while the same `idf` resolved
+        // everywhere else in the same file.  Resolving a name and never instantiating is
+        // the whole defect — the refusal was the symptom of a missing step, not a rule.
+        //
+        // The worker is called with the ELEMENT as its first argument: the first parsed
+        // argument is skipped precisely because it names the element.  So the type that
+        // resolves `T` is `elem_tp`, followed by the extra context arguments in order —
+        // the same argument list an ordinary call would hand to the same function.
+        if !self.first_pass && matches!(self.data.def_type(d_nr), DefType::Generic) {
+            let mut types = vec![elem_tp.clone()];
+            types.extend(extra_types.iter().cloned());
+            let inst = self.try_generic_instantiation(first_id, &types);
+            if inst != u32::MAX {
+                d_nr = inst;
+            }
+        }
+        // A generic worker inside a generic FUNCTION is refused, and deliberately so.
+        //
+        // `instantiate_nested_generics` now retargets the worker's d_nr, so the call
+        // resolves — but the par LOWERING is more than a call target: `build_parallel_for_ir`
+        // picks a queue variant, an element and return SIZE, a result accessor and a
+        // re-wrap from the element and return types, and inside a template those types are
+        // the type VARIABLE.  Substitution rewrites the types and leaves that whole route
+        // behind, so the buffer is read with the reference accessor and cast to the
+        // monomorph's scalar: `--native` fails with "non-primitive cast: DbRef as i64"
+        // while `--interpret` dispatches by d_nr and answers correctly.
+        //
+        // One backend running a program the other cannot compile is precisely what
+        // `formal/operational.md` D-op-1 forbids, so this refuses on BOTH rather than
+        // shipping the divergence.  Closing it properly means DEFERRING the route decision
+        // and replaying it per monomorph, the way loft#1016 / #1020 / #1028 / #1032 defer
+        // theirs — a real piece of work, tracked as loft#1040.
+        //
+        // The ordinary case — a generic worker called from a NON-generic function — is
+        // fully supported: `elem_tp` is concrete there, so the instantiation above gives a
+        // monomorph and the route is decided against real types.
+        if !self.first_pass && matches!(self.data.def_type(d_nr), DefType::Generic) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "parallel worker '{first_id}' is generic and this function is generic too,                  so the worker's element type is not known here — call it from a                  non-generic function, or give the worker a concrete parameter type"
+            );
             return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
         if !self.first_pass && !matches!(self.data.def_type(d_nr), DefType::Function) {
@@ -347,7 +394,30 @@ impl Parser {
             }
         }
         self.data.def_used(d_nr);
-        let ret_type = self.data.def(d_nr).returned().clone();
+        // loft#1033 — the worker's return type must be the SAME on both passes.
+        //
+        // Instantiation above runs on the second pass only, so pass 1 reads the TEMPLATE's
+        // `T` while pass 2 reads the monomorph's `integer`, and the result variable's table
+        // entry carries the pass-1 answer into pass 2: "Variable '_discard_1' cannot change
+        // type from T to integer".  `predict_generic_return_type` is the cross-pass contract
+        // an ordinary generic call site already uses for exactly this — it substitutes `T`
+        // without building a monomorph, so both passes agree.
+        //
+        // It answers `Unknown` when the argument type is itself a type VARIABLE (a template
+        // calling a template), and the template's own `T` is the right answer there, so the
+        // fallback is the unchanged read.
+        let ret_type = if matches!(self.data.def_type(d_nr), DefType::Generic) {
+            let mut types = vec![elem_tp.clone()];
+            types.extend(extra_types.iter().cloned());
+            let predicted = self.predict_generic_return_type(first_id, &types);
+            if predicted.is_unknown() {
+                self.data.def(d_nr).returned().clone()
+            } else {
+                predicted
+            }
+        } else {
+            self.data.def(d_nr).returned().clone()
+        };
         // @PLN25 E2 gap 3 — par over `vector<__nullable<S>>` whose worker takes a
         // dense `S`: the dispatcher hands the worker a ref to the element START
         // (the discriminant @0), but the worker reads dense-`S` offsets, so it
