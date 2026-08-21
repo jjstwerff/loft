@@ -76,7 +76,9 @@ impl Fold {
         let entry = self.dir.join(format!("entry_{name}_{ver}.json"));
         std::fs::write(
             &entry,
-            format!(r#""{ver}": {{"url": "u", "sha256": "s", "published": "2026-08-21T00:00:00Z"}}"#),
+            format!(
+                r#""{ver}": {{"url": "u", "sha256": "s", "published": "2026-08-21T00:00:00Z"}}"#
+            ),
         )
         .expect("write entry");
         let out = Command::new("python3")
@@ -104,7 +106,9 @@ impl Fold {
         // Deliberately crude: the index is a fixture, and pulling in a JSON dependency to
         // read one array would be more machinery than the assertion is worth.
         let key = format!("\"{name}\"");
-        let at = raw.find(&key).unwrap_or_else(|| panic!("{name} absent from the index"));
+        let at = raw
+            .find(&key)
+            .unwrap_or_else(|| panic!("{name} absent from the index"));
         let cats_at = raw[at..].find("\"categories\"").expect("categories key") + at;
         let open = raw[cats_at..].find('[').expect("open bracket") + cats_at;
         let close = raw[open..].find(']').expect("close bracket") + open;
@@ -122,13 +126,18 @@ impl Fold {
 fn a_new_package_without_categories_is_refused() {
     let fold = Fold::new("new_none");
     let (ok, out) = fold.publish("newpkg", "0.1.0", "");
-    assert!(!ok, "the fold accepted a new package with no categories:\n{out}");
+    assert!(
+        !ok,
+        "the fold accepted a new package with no categories:\n{out}"
+    );
     assert!(
         out.contains("categories"),
         "the refusal must name the field:\n{out}"
     );
     assert!(
-        !std::fs::read_to_string(&fold.index).expect("read index").contains("newpkg"),
+        !std::fs::read_to_string(&fold.index)
+            .expect("read index")
+            .contains("newpkg"),
         "a refused publish must not leave the package in the index"
     );
 }
@@ -184,8 +193,11 @@ fn malformed_categories_are_refused() {
 /// registry's, which is exactly why the gate reads them from the checkout.
 fn registry_fixture(tag: &str, validator: Option<&str>) -> PathBuf {
     let dir = work_dir(tag);
-    std::fs::write(&dir.join("index.json"), r#"{"schema_version": 1, "packages": {}}"#)
-        .expect("write index");
+    std::fs::write(
+        &dir.join("index.json"),
+        r#"{"schema_version": 1, "packages": {}}"#,
+    )
+    .expect("write index");
     if let Some(body) = validator {
         std::fs::create_dir_all(dir.join("tools")).expect("tools dir");
         std::fs::write(dir.join("tools/validate.py"), body).expect("write validator");
@@ -212,7 +224,9 @@ fn run_gate(dir: &Path) -> (i32, String) {
 fn the_schema_gate_refuses_what_the_validator_rejects() {
     let dir = registry_fixture(
         "gate_reject",
-        Some("import sys\ndef gate_schema(idx):\n    print('::error::deliberate rejection')\n    sys.exit(1)\n"),
+        Some(
+            "import sys\ndef gate_schema(idx):\n    print('::error::deliberate rejection')\n    sys.exit(1)\n",
+        ),
     );
     let (code, out) = run_gate(&dir);
     assert_ne!(code, 0, "the gate passed a rejected index:\n{out}");
