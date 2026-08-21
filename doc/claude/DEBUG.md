@@ -16,6 +16,40 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 ---
 
 ## Contents
+
+**`LOFT_AUDIT_PASS1=1` — which refusals are reachable before types are resolved.**
+Prints `[pass1-site] <file>:<line>` for every diagnostic emitted while the parser is on its
+FIRST pass. The audience is this repo, not a loft author.
+
+It exists for one recurring class: a refusal phrased as a type REQUIREMENT that fires on
+pass 1 may be refusing an *unresolved* type as a *wrong* one, which makes declaration order
+decide whether a program compiles — against LOFT.md § File structure's "in any order". Five
+sites have been found and fixed (`call_op`, `parse_match`'s `!valid_enum` exit, both
+text-index bounds, a spatial slice's limit). The fourth pair retro-broke the published
+`markdown` 0.2.0; the fifth was found by ENUMERATING refusals after a 29-probe behavioural
+sweep came back clean, because a probe sweep can only test shapes someone thinks to write.
+
+Use it as the confirming half of that enumeration:
+
+```bash
+for f in tests/scripts/*.loft; do
+  LOFT_AUDIT_PASS1=1 loft --interpret "$f" 2>&1 | grep '^\[pass1-site\]'
+done | sort -u
+```
+
+**Reading it.** A site that PRINTS is reachable on pass 1 — a fact, and the point of the
+tool. Silence is not the converse: it means no program in the run reached that site on pass
+1, which is indistinguishable from "never reached at all", so pair a silent site with a
+probe that reaches its diagnostic on pass 2 before calling it gated. And firing on pass 1
+is not itself a defect — a name collision belongs there, and `s[true]` is refused there
+too, since the deferrals cover only `unknown`. It yields a list to read, not a verdict.
+
+Measured 2026-08-21 over the 811-script corpus: 34 distinct sites fire on pass 1; of the
+134 refusals a context heuristic had called already-gated, 5 appear in that set and all 5
+survive review (two are the text-index sites refusing genuinely wrong types, two are name
+collisions that belong on pass 1, one — a struct-literal field — was probed clean with a
+reachable-path control).
+
 - [Interactive debugging (`loft debug`)](#interactive-debugging-loft-debug)
 - [Preset Guide](#preset-guide)
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)

@@ -664,7 +664,9 @@ impl Lexer {
         (self.position.line, self.position.pos)
     }
 
+    #[track_caller]
     pub fn diagnostic(&mut self, level: Level, message: &str) {
+        crate::diagnostics::audit_site(std::panic::Location::caller());
         self.diagnostics.add_at(
             level,
             message,
@@ -704,7 +706,9 @@ impl Lexer {
 
     /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
     /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
+    #[track_caller]
     pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {
+        crate::diagnostics::audit_site(std::panic::Location::caller());
         self.diagnostics.add_at_coded(
             level,
             Some(code),
@@ -715,7 +719,9 @@ impl Lexer {
         );
     }
 
+    #[track_caller]
     pub fn specific(&mut self, result: &LexResult, level: Level, message: &str) {
+        crate::diagnostics::audit_site(std::panic::Location::caller());
         self.diagnostics.add_at(
             level,
             message,
@@ -725,13 +731,16 @@ impl Lexer {
         );
     }
 
+    #[track_caller]
     pub fn pos_diagnostic(&mut self, level: Level, pos: &Position, message: &str) {
+        crate::diagnostics::audit_site(std::panic::Location::caller());
         self.diagnostics
             .add_at(level, message, &pos.file, pos.line, pos.pos);
     }
 
     /// Like [`pos_diagnostic`], but carrying a stable `code` — the explicit-position twin of
     /// [`diagnostic_coded`](Lexer::diagnostic_coded).
+    #[track_caller]
     pub fn pos_diagnostic_coded(
         &mut self,
         level: Level,
@@ -739,6 +748,7 @@ impl Lexer {
         code: &'static str,
         message: &str,
     ) {
+        crate::diagnostics::audit_site(std::panic::Location::caller());
         self.diagnostics
             .add_at_coded(level, Some(code), message, &pos.file, pos.line, pos.pos);
     }

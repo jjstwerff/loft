@@ -1785,6 +1785,7 @@ impl Parser {
         self.vars.logging = false;
         Self::load_main_file(&mut self.lexer, filename, content);
         self.first_pass = true;
+        crate::diagnostics::set_first_pass(true);
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
@@ -1868,6 +1869,7 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            crate::diagnostics::set_first_pass(false);
             self.reverse_iterator = false;
             self.iterable_context = false;
             self.applied_imports.clear();
@@ -2671,6 +2673,7 @@ impl Parser {
         self.default = default;
         self.vars.logging = false;
         self.first_pass = true;
+        crate::diagnostics::set_first_pass(true);
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
@@ -2700,6 +2703,7 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            crate::diagnostics::set_first_pass(false);
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.resolutions.clear();
@@ -2733,6 +2737,7 @@ impl Parser {
         self.default = default;
         self.vars.logging = false;
         self.first_pass = true;
+        crate::diagnostics::set_first_pass(true);
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
@@ -2757,6 +2762,7 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            crate::diagnostics::set_first_pass(false);
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.resolutions.clear();
@@ -2865,6 +2871,7 @@ impl Parser {
         // would make every later input mis-parse).  A new lexer is fully clean.
         self.lexer = Lexer::default();
         self.first_pass = true;
+        crate::diagnostics::set_first_pass(true);
         self.default = false;
         self.vars.logging = logging;
         self.lexer.parse_string(text, filename);
@@ -2907,6 +2914,7 @@ impl Parser {
         self.fn_lambdas.clear();
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
+        crate::diagnostics::set_first_pass(false);
         self.parse_file();
         self.resolve_deferred_unknowns();
         // @PLN35 PC3 — reject a left-recursive sub-rule grammar (see `check_subrule_termination`).
@@ -2941,6 +2949,7 @@ impl Parser {
     pub fn parse_snippet(&mut self, text: &str, filename: &str, source: u16) {
         self.lexer = Lexer::default();
         self.first_pass = true;
+        crate::diagnostics::set_first_pass(true);
         self.default = false;
         self.vars.logging = false;
         self.lexer.parse_string(text, filename);
@@ -2962,6 +2971,7 @@ impl Parser {
         self.fn_lambdas.clear();
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
+        crate::diagnostics::set_first_pass(false);
         self.data.source = source;
         self.parse_file();
         self.resolve_deferred_unknowns();
