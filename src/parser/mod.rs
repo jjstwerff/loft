@@ -5467,6 +5467,18 @@ impl Parser {
     pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
     /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
     pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
+    /// A `??` null CHECK whose subject is still a TYPE VARIABLE.
+    ///
+    /// Which test says *"this is not null"* is a function of `τ` — a DbRef's `rec`, a
+    /// boolean's `255`, a character's `char(0)`, a tuple's first field — and inside a
+    /// template `τ` is not known yet.  Undeferred, the site took the placeholder's own
+    /// shape (an attribute-less struct, so a reference) and substitution rewrote the
+    /// TYPE while leaving the TEST behind: `x ?? fb` looped forever at
+    /// `T = boolean`, corrupted a record at `T = character`, and would not compile on
+    /// `--native` at either.  The block holds the SUBJECT and its `result` is the
+    /// subject's type, which substitution rewrites to the concrete one; the sibling of
+    /// [`TV_NULLTEST_EQ`], for the coalesce rather than the comparison.
+    pub(crate) const TV_NULLCHECK: &'static str = "tvnullcheck";
     /// loft#1028 — a `null` VALUE whose type is still a TYPE VARIABLE.
     ///
     /// Which sentinel `τ`'s null is written as is a function of `τ`, and inside a
@@ -7058,6 +7070,18 @@ impl Parser {
                 );
                 out
             }
+            // The deferred `??` null CHECK.  `bl.result` came through type
+            // substitution, so it is the CONCRETE subject type by now, and
+            // `coalesce_not_null` is the same dispatch the parse site uses — the ONE
+            // place that answers *"is a `τ` not null?"* for a coalesce.  A nested
+            // generic (`concrete` still a type variable) re-stamps through that same
+            // call and stays deferred until an outer instantiation names a real type.
+            Value::Block(bl) if bl.name == Self::TV_NULLCHECK => {
+                let mut bl = *bl;
+                let subject = self.rewrite_generic_type_defaults(bl.operators.remove(0), concrete);
+                let tp = bl.result.clone();
+                self.coalesce_not_null(&subject, &tp)
+            }
             // loft#1028 — the deferred `null`.  `bl.result` came through type
             // substitution, so it names the CONCRETE type by now, and `null` is the same
             // dispatch the parse site uses — the ONE place that answers "what is `τ`'s
@@ -7691,13 +7715,23 @@ impl Parser {
         }
     }
 
-    /// I9-vec: wrap an `OpGetVector` result with the appropriate value-extraction op
-    /// for concrete value types (`OpGetInt`, `OpGetFloat`, etc.).  Reference types need
-    /// no wrapper — the `DbRef` IS the value.
+    /// I9-vec: wrap an `OpGetVector` result with the value-extraction op the ELEMENT
+    /// type needs (`OpGetInt`, `OpGetCharacter`, …), matching what the hand-written
+    /// concrete function emits for the same read.  A reference-shaped element needs no
+    /// wrapper — the `DbRef` IS the value.
+    ///
+    /// The match is EXHAUSTIVE on purpose.  It used to end `_ => return code`,
+    /// which reads as *"everything else is reference-shaped"* and was not: `character` and
+    /// a VALUE enum both store a raw slot that needs unpacking, and both fell through it.
+    /// A template's `v[i]` then handed back the address as if it were the value —
+    /// `v[1]` on `['a','b']` answered a garbage codepoint and on `[Col::Blue, Col::Green]`
+    /// answered `null`, on both backends, while the concrete twin was right. Nothing said
+    /// so, because a missing arm and a deliberate one looked identical. Now adding a
+    /// `Type` variant fails the build here until someone decides which it is.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
         // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
-        // extraction op as its base; without this it fell to `_ => return code` (no OpGet)
+        // extraction op as its base; without this it fell through with no OpGet
         // and the raw slot was read as a DbRef.
         let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
@@ -7706,7 +7740,36 @@ impl Parser {
             Type::Text(_) => "OpGetText",
             // @PLN17: byte-stored boolean read, preserving 0/1/255 (like enum).
             Type::Boolean => "OpGetBoolean",
-            _ => return code, // reference/struct types: no wrapper needed
+            Type::Character => "OpGetCharacter",
+            // A VALUE enum is a discriminant byte in the slot; a struct-enum below is a
+            // reference, which is why the two spellings part here.
+            Type::Enum(_, false, _) => "OpGetEnum",
+            // Reference-shaped: the slot holds a `DbRef` and the read IS the value.
+            Type::Reference(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Iterator(_, _)
+            | Type::Function(_, _, _)
+            | Type::Routine(_)
+            | Type::RefVar(_) => return code,
+            // A tuple element is read field by field by its consumer (`TupleGet`), so
+            // there is no single value to unpack here.
+            Type::Tuple(_) => return code,
+            // Not element types: `Unknown`/`Null`/`Void`/`Never` carry no storage,
+            // `Keys` describes a key list, and `Rewritten` is an append form that has
+            // already been lowered.  `Optional` cannot appear — `base()` peeled it.
+            Type::Unknown(_)
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Keys
+            | Type::Rewritten(_)
+            | Type::Optional(_) => return code,
         };
         let d = data.def_nr(op_name);
         if d == u32::MAX {
