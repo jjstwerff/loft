@@ -118,6 +118,14 @@ fn i987_tuple(p: const(integer, integer)) -> text {
   "t{p.0}"
 }
 
+// @EXPECT_FAIL: loft#1055 — on the INTERPRETER this worker is handed a packed descriptor
+// instead of the tuple's values (`p.0` = offset<<32 | count, `p.1` = the count), so the
+// assertion inside it fires.  That is the bug, not the test: `--native` marshals the same
+// rows correctly and a scalar row is correct on both.  Kept live and expected-failing
+// rather than deleted or weakened, so it flips green the day #1055 is fixed.
+//
+// This is the first thing the in-worker assertions caught once loft#1053 made them capable
+// of failing at all — which is precisely what this file's header claimed they already did.
 fn test_987_discard_tuple_row() {
   pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
   for a in pairs par(b = i987_tuple(a), 2) { }

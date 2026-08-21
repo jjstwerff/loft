@@ -70,7 +70,19 @@ impl WorkerProgram {
     }
 
     /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
-    fn new_state(&self, worker_stores: WorkerStores) -> State {
+    ///
+    /// Returns a [`WorkerState`] rather than a bare `State` so a worker's HALT cannot be
+    /// forgotten.  Every `run_parallel_*` variant builds its state here — thirteen sites —
+    /// and each previously dropped the state, and with it any `runtime_error` an `assert`
+    /// or `panic` had raised inside the worker.  Recording at the one construction point
+    /// makes coverage a property of the mechanism instead of of remembering thirteen
+    /// call sites; the block form was fixed by hand first and the other three families
+    /// stayed silent, which is the argument for doing it here.
+    fn new_state(&self, worker_stores: WorkerStores) -> WorkerState {
+        WorkerState(Some(self.new_state_inner(worker_stores)))
+    }
+
+    fn new_state_inner(&self, worker_stores: WorkerStores) -> State {
         let (bytecode, library) = self.clone_refs();
         let mut state = State::new_worker(worker_stores, bytecode, library);
         state.stack_trace_lib_nr = self.stack_trace_lib_nr;
@@ -812,7 +824,13 @@ pub fn run_parallel_text(
             let s_pos = slot_store.set_str(&s);
             slot_store.set_u32_raw(array_rec, 4 + (local_idx as u32) * 4, s_pos);
         }
-        (start, row_count, slot.store_nr, array_rec, state.database)
+        (
+            start,
+            row_count,
+            slot.store_nr,
+            array_rec,
+            state.into_database(),
+        )
     });
     let mut results = vec![String::new(); n_rows];
     for (start, count, slot_nr, array_rec, worker_db) in batches {
@@ -983,7 +1001,7 @@ pub fn run_parallel_queue_ref(
             }
             batch.push((row_idx, r));
         }
-        (batch, state.database)
+        (batch, state.into_database())
     });
     trace.report("run_parallel_queue_ref", n_rows, n_workers);
     let null_db = DbRef::NULL;
@@ -1846,6 +1864,63 @@ pub(crate) fn read_tuple_at_wide(
 static WORKER_FATAL: std::sync::Mutex<Option<Box<crate::runtime_error::RuntimeError>>> =
     std::sync::Mutex::new(None);
 
+/// Cheap gate for the dispatch loop, which asks after EVERY op.  A relaxed load costs
+/// nothing measurable; taking the mutex there would not be free, and in the overwhelming
+/// case there is nothing to take.
+pub static WORKER_FATAL_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a worker halted and the parent has not yet raised it.
+#[must_use]
+pub fn worker_fatal_pending() -> bool {
+    WORKER_FATAL_PENDING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A worker's `State`, which records its halt when it goes out of scope.
+///
+/// Deref, not inheritance: every existing `state.execute_*(…)` call site keeps working
+/// unchanged, and the only added behaviour is at drop, where the worker is finished and
+/// its `runtime_error` is either set or not.
+pub(crate) struct WorkerState(Option<State>);
+
+impl std::ops::Deref for WorkerState {
+    type Target = State;
+    fn deref(&self) -> &State {
+        self.0
+            .as_ref()
+            .expect("worker state is present until taken")
+    }
+}
+impl std::ops::DerefMut for WorkerState {
+    fn deref_mut(&mut self) -> &mut State {
+        self.0
+            .as_mut()
+            .expect("worker state is present until taken")
+    }
+}
+impl Drop for WorkerState {
+    fn drop(&mut self) {
+        if let Some(s) = &self.0 {
+            record_worker_fatal(&s.database);
+        }
+    }
+}
+
+impl WorkerState {
+    /// Hand the worker's stores back to the parent, recording any halt FIRST.
+    ///
+    /// Two `run_parallel_*` variants return `state.database` so the parent can adopt the
+    /// worker's stores.  That moves the field out from under the drop guard, which the
+    /// compiler refuses — correctly, since it is exactly the path where a halt would go
+    /// unrecorded.  Taking it explicitly keeps the recording and the hand-off in one place
+    /// instead of leaving the guard silently bypassed.
+    fn into_database(mut self) -> Stores {
+        let s = self.0.take().expect("worker state taken once");
+        record_worker_fatal(&s.database);
+        s.database
+    }
+}
+
 /// Record a worker's halt if it ended with one.  First writer wins: the message a user
 /// reads must not depend on thread scheduling, and one arm's assertion is enough to stop
 /// the program.
@@ -1855,11 +1930,16 @@ pub fn record_worker_fatal(db: &Stores) {
         && slot.is_none()
     {
         *slot = Some(err);
+        WORKER_FATAL_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
 /// Take the recorded halt, if any, for the parent to raise as its own.
 pub fn take_worker_fatal() -> Option<Box<crate::runtime_error::RuntimeError>> {
+    if !worker_fatal_pending() {
+        return None;
+    }
+    WORKER_FATAL_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
     WORKER_FATAL.lock().ok().and_then(|mut s| s.take())
 }
 
@@ -1895,7 +1975,6 @@ pub fn run_parallel_block(
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
                     state.execute_at_void_with_snapshot(pos, &snapshot);
-                    record_worker_fatal(&state.database);
                 });
             }
         });
@@ -1906,7 +1985,6 @@ pub fn run_parallel_block(
         for &pos in arm_positions {
             let mut state = program.new_state(unsafe { stores.clone_for_light_worker() });
             state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
-            record_worker_fatal(&state.database);
         }
     }
 }

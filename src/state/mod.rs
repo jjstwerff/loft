@@ -2329,13 +2329,10 @@ impl State {
             line_numbers: Arc::new(self.line_numbers.clone()),
         };
         crate::parallel::run_parallel_block(&self.database, program, &positions, &parent_snapshot);
-        // A worker's halt was raised against its own `Stores` clone and would be dropped
-        // here.  Re-raise it as the parent's so the dispatch loop's existing
-        // `runtime_error.is_some()` check stops the WHOLE program (loft#1053).
-        if let Some(err) = crate::parallel::take_worker_fatal() {
-            self.database.runtime_error = Some(err);
-            self.database.had_fatal = true;
-        }
+        // The worker's halt is re-raised by the dispatch loop's own check, which every par
+        // family passes through — this site had its own copy first, and keeping both would
+        // be two homes for one decision (and did hide, in the bite proof, that the block
+        // form was covered while the other three were not).
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {
@@ -5177,6 +5174,17 @@ impl State {
             // signal halt by short-circuiting `code_pos` here.  The
             // outer caller (main.rs) reads `database.runtime_error`
             // after `execute_argv` returns and renders it.
+            // A worker that halted raised against its own `Stores` clone, which is dropped
+            // at join; re-raise it here so the WHOLE program stops, which is the decided
+            // semantics for a failed assert.  Checked beside the parent's own halt because
+            // this is the one place every `par` family passes through — wiring it per
+            // call site left three of the four families silent (loft#1053).
+            if crate::parallel::worker_fatal_pending()
+                && let Some(err) = crate::parallel::take_worker_fatal()
+            {
+                self.database.runtime_error = Some(err);
+                self.database.had_fatal = true;
+            }
             if self.database.runtime_error.is_some() {
                 self.code_pos = u32::MAX;
             }

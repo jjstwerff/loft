@@ -1315,6 +1315,12 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
         // store alive, so nothing the script itself asserts can notice.  Snapshot the
         // process-wide counter here and compare after the run.
         let refusals_before = loft::keys::stack_free_refusals();
+        // Did ANY function abort mid-way?  The loop clears `runtime_error` before each
+        // function (below), so by the time the leak gate runs it is always `None` and the
+        // gate's own reasoning — an aborted run never reaches its scope-frees, so the
+        // residue is an abort artifact rather than a leak — silently stops applying to
+        // multi-function files.  Remembered here so it applies to them too.
+        let mut any_function_faulted = false;
         for name in &fns {
             if std::env::var("LOFT_TEST_VERBOSE").is_ok() {
                 eprintln!("  running {path}::{name}");
@@ -1380,9 +1386,11 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             match result {
                 // @P369 — a typed runtime fault fired (no Rust panic).
                 Ok((true, fault_msg)) if should_fail => {
+                    any_function_faulted = true;
                     println!("  expected fail {path}::{name} — {fault_msg}");
                 }
                 Ok((true, fault_msg)) => {
+                    any_function_faulted = true;
                     println!("  FAIL {path}::{name} — {fault_msg}");
                     failures.push(format!("{name}: {fault_msg}"));
                 }
@@ -1436,7 +1444,7 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
         // Without this gate, scripts that intentionally probe OOB / div-by-zero
         // mid-main (e.g. `assert(!v[OOB], "OOB is null")`) would always
         // false-positive on the leak gate.
-        if state.database.runtime_error.is_none() {
+        if state.database.runtime_error.is_none() && !any_function_faulted {
             state.check_store_leaks();
             let leaks = state.collect_store_leaks();
             if !leaks.is_empty() {
