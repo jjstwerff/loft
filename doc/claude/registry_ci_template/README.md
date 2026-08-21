@@ -17,15 +17,17 @@ the PR-validation + post-merge-signing workflows.
 | `SUBMITTING.md` | `SUBMITTING.md` | Author-facing submission guide.  Deploy alongside README so GitHub shows the "SUBMITTING" sidebar link on the repo overview. |
 | `../registry_sample.json` | `index.json` (initial seed) | Empty starter index — strip the `_comment` field; set `"packages": {}` if no real package is ready yet. |
 
-> ⚠⚠ **`validate.py` has drifted from the deployed copy in BOTH directions
-> ([loft#1052](https://github.com/loft-lang/loft/issues/1052)) — copying it over
-> `tools/validate.py` today REMOVES three live checks.**  The registry's copy has gate
-> 1's docs gate (non-empty `description` / `categories`, http `homepage`), the `yanked`
-> type-check, and gate 3's multi-package chunk-repo handling; this copy has a trigger
-> uniqueness gate and an `api` re-derive the registry does not run.  Until that issue is
-> resolved, treat **`loft-lang/registry:tools/validate.py` as the authority** and diff
-> before deploying anything here.  Tooling that needs the real rules should read the
-> deployed file, the way `scripts/registry_schema_gate.sh` does.
+> ⚠ **`validate.py` here and `loft-lang/registry:tools/validate.py` are ONE file with
+> two homes, and `scripts/check_doc_drift.sh validator` enforces byte-identity.**  They
+> drifted for eleven weeks in both directions with neither a superset
+> ([loft#1052](https://github.com/loft-lang/loft/issues/1052)) — the deployment had grown
+> gate 1's docs gate, the `yanked` type-check and gate 3's chunk-repo handling, while this
+> copy had grown a trigger-uniqueness gate and an `api` re-derive.  Deploying either over
+> the other removed live checks, and the producer in `registry_maintain.sh` was written
+> against the weaker rules, which is how every package published after 2026-06-19 went in
+> unmergeable.  Reconciled to the union 2026-08-21.  Change one copy and the drift check
+> fails until the other matches; tooling that needs the rules should IMPORT this file
+> rather than restate it, the way `scripts/registry_schema_gate.sh` does.
 
 `SUBMITTING.md`'s canonical source is
 `doc/claude/REGISTRY_SUBMIT.md` (relative links).  This dir

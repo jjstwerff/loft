@@ -57,6 +57,8 @@ HITS_LIBS=0
 HITS_EXAMPLES=0
 HITS_EXAMPLES_WARN=0
 HITS_EXINDEX=0
+HITS_VALIDATOR=0
+HITS_VALIDATOR_WARN=0
 
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
@@ -795,6 +797,43 @@ check_examples_index() {
   rm -f "$tmp"
 }
 
+# ---- Registry validator: the template and the deployed copy are ONE file ----
+# `doc/claude/registry_ci_template/validate.py` is the file a registry deploys at
+# `tools/validate.py`, and its own docstring says so.  The two drifted for eleven
+# weeks in BOTH directions with neither a superset (loft#1052): the deployment grew
+# a docs gate, a `yanked` type-check and chunk-repo homepages; the template grew a
+# trigger-uniqueness gate and an `api` re-derive.  Deploying the template would then
+# have REMOVED three live checks, and the producer in `registry_maintain.sh` was
+# written against the template's weaker rules — which is how every package published
+# after 2026-06-19 went in unmergeable.
+#
+# So the invariant is byte-identity, not "roughly the same": one file, two homes.
+# Validated OFFLINE against a local registry checkout and WARN-only when none is
+# present, the same convention `check_examples` uses for a cross-repo tag.
+check_validator() {
+  say "=== Registry validator template matches the deployed copy ==="
+  local tpl="doc/claude/registry_ci_template/validate.py"
+  if [ ! -f "$tpl" ]; then
+    green "  ok — no validator template in this repo"; return
+  fi
+  local reg=""
+  for cand in "${LOFT_REGISTRY_DIR:-}" ../loft-registry ../registry; do
+    [ -n "$cand" ] && [ -f "$cand/tools/validate.py" ] && { reg="$cand"; break; }
+  done
+  if [ -z "$reg" ]; then
+    yellow "  unvalidated: no local loft-lang/registry checkout (set LOFT_REGISTRY_DIR) — cannot compare"
+    HITS_VALIDATOR_WARN=1; return
+  fi
+  if cmp -s "$tpl" "$reg/tools/validate.py"; then
+    green "  ok — template is byte-identical to $reg/tools/validate.py"
+  else
+    red "  DRIFT: $tpl differs from $reg/tools/validate.py (loft#1052)"
+    red "         they are ONE file with two homes — deploying a drifted template removes live gates"
+    [ $QUIET -eq 0 ] && diff "$tpl" "$reg/tools/validate.py" | sed 's/^/      /' | head -20
+    HITS_VALIDATOR=1; DRIFT=1
+  fi
+}
+
 # ---- Rollout progress: is a library repo ready to PR? (@PLN141) ----
 # The worked-example rollout lands ONE branch per library repo, opened as a PR when
 # every package in that repo has a VERDICT — either it carries tags, or it is recorded
@@ -1213,6 +1252,7 @@ case "$CHECK" in
   examples) check_examples ;;
   examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest ;;
   examples-index) check_examples_index ;;
+  validator) check_validator ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
   features-progress) check_features_progress; exit 0 ;;   # a REVIEW AID — never in `all`, never a gate
@@ -1237,17 +1277,19 @@ case "$CHECK" in
     check_examples
     sep
     check_examples_index
+    sep
+    check_validator
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|validator|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
     exit 2
     ;;
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
-total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX))
-warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX"
+total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX + HITS_VALIDATOR))
+warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN + HITS_VALIDATOR_WARN))
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX validator=$HITS_VALIDATOR/w$HITS_VALIDATOR_WARN"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0
