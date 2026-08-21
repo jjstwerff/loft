@@ -506,6 +506,23 @@ impl Parser {
         }
     }
 
+    /// Is `tp` a VALUE enum — an enum whose variants carry no payload, so a value of it
+    /// is one discriminant BYTE rather than a reference?  True for the bare spelling and
+    /// for `τ?` alike, which is the point: a nullable field or parameter arrives as
+    /// `Optional(Enum)` and asks the same null question as the bare form.
+    ///
+    /// The shape is read from the enum DEFINITION's `returned` type, never from the
+    /// access type, which is polluted — a field read of a value enum comes back
+    /// `Enum(_, true, _)` even though the enum itself has no payload.  A synthetic
+    /// `__nullable<S>` is excluded: it is @PLN25's nullable wrapper, whose absent
+    /// discriminant is answered by its own path.
+    pub(crate) fn is_value_enum(&self, tp: &Type) -> bool {
+        matches!(tp.base(), Type::Enum(d, _, _)
+            if *d != u32::MAX
+                && matches!(self.data.def(*d).returned, Type::Enum(_, false, _))
+                && !self.data.def(*d).name.starts_with("__nullable<"))
+    }
+
     /// Is this operand's type still a TYPE VARIABLE — a template's `T` / `T?`, whose
     /// placeholder is an attribute-less struct rather than a real type (loft#1020)?
     fn is_type_var_operand(&self, tp: &Type) -> bool {
@@ -577,24 +594,30 @@ impl Parser {
             } else {
                 self.cl("OpNot", &[valid])
             });
+        } else if self.is_value_enum(tp) {
+            // A VALUE enum (`Color`, no payload variants) is a disc byte, and BOTH of
+            // its absent bytes are asked for through the one predicate the coalesce and
+            // the renderer already use.  Testing the discriminant against 0 alone read a
+            // WRITTEN null (255) as a value; testing it against the typed null alone read
+            // a zero-init one (0) as a value — and a field never set is the second kind,
+            // so `h.c == null` answered `false` for a field that renders `null`.
+            //
+            // `τ?` is peeled here on purpose: it is the spelling a nullable field or a
+            // nullable parameter arrives as, and leaving it to the generic `==` lowering
+            // is what let the two encodings disagree.  Read the shape from the enum
+            // DEFINITION's `returned` type — the ACCESS type is polluted, since a field
+            // read of a simple enum comes back `Enum(_, true, _)`.
+            let has_value = self.cl("OpConvBoolFromEnum", &[operand]);
+            self.cl("OpNot", &[has_value])
         } else if let Type::Enum(e_def, _, _) = tp {
             let e_def = *e_def;
             // A synthetic `__nullable<S>` enum backs an INLINE struct field / vector
             // element (no DbRef slot), so null is discriminant 0 — read it directly,
             // NEVER `OpRefIsNull`, whose store_nr test would deref the absent record.
             let inline = e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
-            // A VALUE enum (`Color`, no payload variants) is a disc byte whose null is
-            // discriminant 0.  Read the shape from the enum DEFINITION's `returned`
-            // type: the ACCESS type is polluted — a field read of a simple enum comes
-            // back `Enum(_, true, _)` even though the enum itself is a value enum.
-            let value_enum = e_def != u32::MAX
-                && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
             if inline {
                 let get_enum = self.cl("OpGetEnum", &[operand, Value::Int(0)]);
                 let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
-                self.cl("OpEqInt", &[disc, Value::Int(0)])
-            } else if value_enum {
-                let disc = self.cl("OpConvIntFromEnum", &[operand]);
                 self.cl("OpEqInt", &[disc, Value::Int(0)])
             } else {
                 // A struct-enum reference: null IS the store_nr sentinel, NOT
@@ -3287,9 +3310,19 @@ impl Parser {
             // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
             // must test that sentinel via OpEqRef — the default path reads the
             // discriminant (`OpGetEnum`), which derefs the absent record and OOB-crashes.
+            // `Optional(<value enum>)` is admitted beside the bare spelling: it is how a
+            // nullable enum FIELD and a nullable enum PARAMETER arrive, and leaving it to
+            // the generic `==` lowering is what let a field never set — discriminant 0,
+            // which the renderer shows as `null` — answer `false` to `== null`.  Widened
+            // only for the value enum, because `null_test` answers every shape that
+            // passes this gate and returns `None` for the others, and a `None` here
+            // leaves the operand in place while retyping it boolean.
             let enum_null = (operator == "==" || operator == "!=")
-                && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
+                && (((matches!(*ctp, Type::Enum(_, _, _)) || self.is_value_enum(ctp))
+                    && second_type == Type::Null)
+                    || (*ctp == Type::Null
+                        && (matches!(second_type, Type::Enum(_, _, _))
+                            || self.is_value_enum(&second_type))));
             // @PLN99 A5 — a nullable STRUCT-reference VARIABLE (`s: DT? = null`,
             // typed `Optional(Reference)`) holds the reference null sentinel
             // (`store_nr==u16::MAX`, from OpNullRefSentinel), like a nullable enum variable.
