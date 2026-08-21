@@ -238,6 +238,29 @@ impl State {
         self.put_stack(new_value);
     }
 
+    /// Append `src` to `dst` where `src` may be BORROWED FROM `dst` itself.
+    ///
+    /// loft#1062 — `s = s + s` and `s += s` hand the append a [`Str`](crate::keys::Str)
+    /// over the destination's own bytes.  `String::push_str` reserves first and copies
+    /// second, so the moment the reserve has to MOVE the allocation, the copy reads the
+    /// block it just freed: SIGSEGV on `--interpret` from 128 KiB up, where `--native`
+    /// answers.  Below that there is spare capacity, nothing moves, and the same program
+    /// is fine — which is why it took a size to show at all.
+    ///
+    /// The borrow checker cannot see it: `Str` carries a raw pointer, so `&mut String`
+    /// and a `&str` into it coexist happily at compile time.  The overlap test is one
+    /// address compare on the append path; the copy happens only when the two really are
+    /// one buffer.
+    fn append_possibly_aliased(dst: &mut String, src: &str) {
+        let (src_at, dst_at) = (src.as_ptr() as usize, dst.as_ptr() as usize);
+        if src_at >= dst_at && src_at < dst_at + dst.capacity() {
+            let owned = src.to_owned();
+            dst.push_str(&owned);
+        } else {
+            dst.push_str(src);
+        }
+    }
+
     #[inline]
     pub fn append_text(&mut self) {
         let text = self.string();
@@ -257,7 +280,7 @@ impl State {
             return;
         }
         let before = (v1.as_ptr() as usize, v1.capacity());
-        *v1 += text.str();
+        Self::append_possibly_aliased(v1, text.str());
         if let Some(fn_nr) = tl_fn {
             text_tl_grow(
                 fn_nr,
@@ -314,7 +337,7 @@ impl State {
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let v1 = self.string_ref_mut(pos - size_ptr() as u16);
         let before = (v1.as_ptr() as usize, v1.capacity());
-        *v1 += text.str();
+        Self::append_possibly_aliased(v1, text.str());
         if let Some(fn_nr) = tl_fn {
             text_tl_grow(
                 fn_nr,
