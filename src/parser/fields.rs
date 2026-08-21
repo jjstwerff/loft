@@ -1990,7 +1990,14 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 // @PLN110 3a / loft#749 — snapshot the END before `convert` wraps it, for
                 // the units lint below.
                 let raw_end = other.unspan().clone();
-                if !self.convert(&mut other, &ot_type, &I32) {
+                // Deferred on the first pass exactly as the START bound is, and for the
+                // same reason: operand deferral can leave a bound untyped on pass 1, and
+                // refusing it there makes declaration order decide whether a program
+                // compiles.  `s[start..start + 2]` reaches this site with BOTH bounds
+                // unresolved, which is why guarding only the start left the shape still
+                // refused — with a different message, from four lines down.
+                let end_deferred = self.first_pass && ot_type.is_unknown();
+                if !self.convert(&mut other, &ot_type, &I32) && !end_deferred {
                     diagnostic!(
                         self.lexer,
                         Level::Error,

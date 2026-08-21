@@ -136,3 +136,14 @@ fn test_text_index_with_text_is_refused() {
   k = "x";
   assert(s[k] == 'h', "unreached");
 }
+
+// The RANGE END is a second refusal site with its own message, and it needs its own
+// negative cell: guarding only the start above left `s[start..start + 2]` still
+// refused after the deferral landed, from four lines further down in the same
+// function.  Two sites, two messages, two guards.
+// @EXPECT_ERROR: Cannot end a text slice at 'text'
+fn test_text_slice_end_with_text_is_refused() {
+  s = "hello";
+  k = "x";
+  assert(s[1..k] == "e", "unreached");
+}
