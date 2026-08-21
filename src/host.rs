@@ -118,7 +118,12 @@ pub enum LoftError {
     /// The requested return conversion did not match the value produced.
     ReturnType { expected: String, got: String },
     /// The loft function raised / faulted at runtime.
-    Runtime(String),
+    ///
+    /// The WHOLE fault, not its message: a placed library relays this across the
+    /// crossing and rebuilds it on the caller's side, and a fault that arrived as
+    /// prose has already lost the position, the caret and the frames that make it
+    /// readable.
+    Runtime(Box<crate::runtime_error::RuntimeError>),
 }
 
 impl std::fmt::Display for LoftError {
@@ -146,7 +151,7 @@ impl std::fmt::Display for LoftError {
             LoftError::ReturnType { expected, got } => {
                 write!(f, "return is {got}, not {expected}")
             }
-            LoftError::Runtime(m) => write!(f, "runtime error: {m}"),
+            LoftError::Runtime(e) => write!(f, "runtime error: {}", e.message),
         }
     }
 }
@@ -415,7 +420,7 @@ impl Program {
 
         // A raise / fault populates `runtime_error`; surface it as an error, drained.
         if let Some(err) = self.state.database.runtime_error.take() {
-            return Err(LoftError::Runtime(err.message));
+            return Err(LoftError::Runtime(err));
         }
 
         Ok(marshal_return(&def_return_type(&self.data, d_nr), out))

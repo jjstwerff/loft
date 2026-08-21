@@ -67,6 +67,16 @@ pub struct RuntimeError {
     /// Rendered as `  in fn <innermost>() ← fn <next>() ← …` after
     /// the typed-error block in main.rs.
     pub call_chain: Vec<String>,
+    /// This fault fired on the far side of a library PLACEMENT boundary, so
+    /// `call_chain` holds the frames the library was in and the caller's own
+    /// frames are still to come.
+    ///
+    /// A call chain spans both processes — `main()` is in the caller and
+    /// `refuse()` is in the worker — and neither side can see the whole of it.
+    /// [`crate::state::State::note_runtime_error_halt`] is where the two halves
+    /// meet, and this is what tells it to APPEND rather than leave a chain that
+    /// is already non-empty alone.
+    pub crossed_placement: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,13 +116,21 @@ pub enum RuntimeErrorKind {
     UserPanic { message: String },
     /// `assert(test, "msg", file, line)` builtin called with `test == false`.
     AssertionFailed { message: String },
+    /// A fault raised inside a PLACED library and relayed across the crossing.
+    ///
+    /// `label` and `detail` are the ORIGINAL fault's, carried over the wire
+    /// rather than re-derived, so a relayed divide-by-zero stays a
+    /// `divide_by_zero` in a log instead of being flattened into whatever kind
+    /// the relay happened to build.  The variant exists because the kind's own
+    /// structured fields do not cross — only what renders does.
+    Relayed { label: String, detail: String },
 }
 
 impl RuntimeErrorKind {
     /// Stable, machine-readable kind label for log / test output.
     /// Mirrors the variant name verbatim in lower_snake_case.
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             RuntimeErrorKind::DivideByZero => "divide_by_zero",
             RuntimeErrorKind::IndexOutOfBounds { .. } => "index_out_of_bounds",
@@ -125,6 +143,7 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::StackOverflow => "stack_overflow",
             RuntimeErrorKind::UserPanic { .. } => "user_panic",
             RuntimeErrorKind::AssertionFailed { .. } => "assertion_failed",
+            RuntimeErrorKind::Relayed { label, .. } => label,
         }
     }
 
@@ -164,6 +183,9 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::AssertionFailed { message } => {
                 format!("assertion failed: {message}")
             }
+            // Already rendered on the far side; describing it again would
+            // prefix a second `panic:` onto one that is already there.
+            RuntimeErrorKind::Relayed { detail, .. } => detail.clone(),
         }
     }
 }
@@ -187,6 +209,7 @@ impl RuntimeError {
             op_pc: u32::MAX,
             message: detail,
             call_chain: Vec::new(),
+            crossed_placement: false,
         }
     }
 
@@ -316,6 +339,36 @@ impl RuntimeError {
         out
     }
 
+    /// Rebuild a fault that fired inside a PLACED library, on the caller's side.
+    ///
+    /// Only what RENDERS crosses the wire — the detail line, the position, and the
+    /// frames the library was in — because that is exactly what
+    /// [`Self::to_diag_entry`] and [`Self::render_call_chain`] read.  The kind's
+    /// structured fields stay behind; [`RuntimeErrorKind::Relayed`] carries its
+    /// label so a log still names what kind of fault it was.
+    ///
+    /// `position` is the LIBRARY's, not the caller's, which is the whole point: a
+    /// fault has one true site and it is on the other side of the crossing.
+    #[must_use]
+    pub fn relayed(
+        label: String,
+        detail: String,
+        position: Option<Position>,
+        call_chain: Vec<String>,
+    ) -> Self {
+        Self {
+            kind: RuntimeErrorKind::Relayed {
+                label,
+                detail: detail.clone(),
+            },
+            position,
+            op_pc: u32::MAX,
+            message: detail,
+            call_chain,
+            crossed_placement: true,
+        }
+    }
+
     /// Construct an `AssertionFailed` error at the loft surface call site.
     #[must_use]
     pub fn assertion_failed(message: String, file: String, line: u32) -> Self {
@@ -332,6 +385,7 @@ impl RuntimeError {
             op_pc: u32::MAX,
             message: detail,
             call_chain: Vec::new(),
+            crossed_placement: false,
         }
     }
 
@@ -365,6 +419,7 @@ impl RuntimeError {
             op_pc: u32::MAX,
             message: detail,
             call_chain: Vec::new(),
+            crossed_placement: false,
         }
     }
 
@@ -456,10 +511,37 @@ mod tests {
                 message: "a".into(),
             },
         ];
-        let mut labels: Vec<&'static str> = kinds.iter().map(RuntimeErrorKind::label).collect();
+        let mut labels: Vec<&str> = kinds.iter().map(RuntimeErrorKind::label).collect();
         labels.sort_unstable();
         let n = labels.len();
         labels.dedup();
         assert_eq!(labels.len(), n, "kind labels collided");
+    }
+
+    /// A fault relayed from a placed library keeps what it was, and is not
+    /// described a second time.
+    ///
+    /// Describing it again is what printed `panic: runtime error: panic: …` — the
+    /// detail arriving here has already been rendered on the far side, so the label
+    /// and the detail are carried, never rebuilt.
+    #[test]
+    fn a_relayed_fault_keeps_its_label_and_its_rendered_detail() {
+        let err = RuntimeError::relayed(
+            "divide_by_zero".into(),
+            "divide by zero".into(),
+            Some(Position {
+                file: "lib.loft".into(),
+                line: 7,
+                pos: 1,
+            }),
+            vec!["inner".into()],
+        );
+        assert_eq!(err.kind.label(), "divide_by_zero");
+        assert_eq!(err.message, "divide by zero");
+        assert_eq!(err.kind.describe(), "divide by zero");
+        assert_eq!(err.position.as_ref().expect("position").line, 7);
+        // The caller's own frames are still to come; this is what says so.
+        assert!(err.crossed_placement);
+        assert_eq!(err.call_chain, vec!["inner".to_string()]);
     }
 }

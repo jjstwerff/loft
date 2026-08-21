@@ -1613,6 +1613,7 @@ impl Stores {
             // access to call_stack; slice 2 of 4g.1 will thread
             // it through.
             call_chain: Vec::new(),
+            crossed_placement: false,
         };
         // #333 — the standalone native binary mirrors the interpreter's
         // halt-at-the-op contract: render the error and exit 1 instead of

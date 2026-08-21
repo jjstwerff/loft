@@ -675,7 +675,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
             let detail = if intact {
                 e
             } else {
-                format!("{e} — AND this program's own stores did not survive it")
+                e.with_detail(" — AND this program's own stores did not survive it")
             };
             fault(stores, detail);
             return;
@@ -692,7 +692,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     let out = match out {
         Value::Ref(_) => worker
             .reread_answer(ret_nr)
-            .ok_or_else(|| "malformed compound answer".to_string()),
+            .ok_or_else(|| super::wire::Fault::from("malformed compound answer")),
         other => Ok(other),
     };
 
@@ -759,15 +759,23 @@ fn compound_arguments_intact(stores: &Stores, compound: &[CompoundArg]) -> bool 
 
 /// Surface a failed crossing as the CALLER's runtime error.
 ///
-/// What makes a placed library's error behaviour match an in-process one: the
-/// message is the library's own, and no position is claimed because the position
-/// is the library's, not the caller's — pointing at the caller's file would name
-/// the wrong line with complete confidence.
-fn fault(stores: &mut Stores, message: String) {
-    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
-        message,
-        String::new(),
-        0,
+/// What makes a placed library's error behaviour match an in-process one — the
+/// fourth thing the module's invariant names, beside type, effect and lifetime.
+/// The fault is rebuilt from the parts that crossed rather than re-derived, so
+/// the position is the LIBRARY's own file and line and the detail is the one the
+/// library rendered.  Re-describing it here is what used to print
+/// `panic: runtime error: panic: …`, with the position, the caret and the frames
+/// all gone.
+///
+/// The call chain arriving here is only the library's half; `main()` is in THIS
+/// process. `State::note_runtime_error_halt` adds the caller's frames, which is
+/// what `crossed_placement` is for.
+fn fault(stores: &mut Stores, e: super::wire::Fault) {
+    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::relayed(
+        e.label,
+        e.message,
+        e.position,
+        e.call_chain,
     )));
     stores.had_fatal = true;
 }
@@ -817,7 +825,7 @@ fn finish_call(
     stores: &mut Stores,
     stack: &mut DbRef,
     ret: Kind,
-    out: Result<Value, String>,
+    out: Result<Value, super::wire::Fault>,
     text_dest: Option<DbRef>,
     work_buf: Option<DbRef>,
     compound_dest: Option<DbRef>,

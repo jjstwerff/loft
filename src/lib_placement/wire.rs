@@ -92,6 +92,84 @@ const TAG_REF: u32 = 5;
 /// to one would read the arena's own header as a struct.
 const TAG_NULLREF: u32 = 6;
 
+/// What a failed crossing carries back.
+///
+/// The module's invariant names ERROR BEHAVIOUR beside type, effect and
+/// lifetime, and a `String` channel cannot hold it: a fault inside a library has
+/// a POSITION, a source line, a caret and the frames it fired under, and every
+/// one of those was lost turning the fault into prose.  The placed rendering
+/// then read `panic: runtime error: panic: refusing -1` — the message doubled
+/// and nothing else — where in-process the same fault named the library's file,
+/// line and call chain.
+///
+/// A TRANSPORT failure has none of those parts and does not pretend to: a dead
+/// worker, an oversized frame or a malformed response converts from its own
+/// message and leaves the rest empty.  That is what the `From` impls are for,
+/// and why every `?` on this path still reads as it did.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Fault {
+    /// The rendered detail line, exactly as the far side rendered it.  Never
+    /// re-described on arrival: describing it again is what doubled `panic:`.
+    pub message: String,
+    /// The far side's kind label (`user_panic`, `divide_by_zero`, …), so a
+    /// relayed fault stays the kind it was in a log.  Empty for a transport
+    /// failure, which has no loft kind at all.
+    pub label: String,
+    /// Where in the LIBRARY's source it fired.
+    pub position: Option<crate::lexer::Position>,
+    /// The frames the library was in, innermost first.  The caller's own frames
+    /// are added when the two meet — see [`crate::runtime_error::RuntimeError`]'s
+    /// `crossed_placement`.
+    pub call_chain: Vec<String>,
+}
+
+impl From<String> for Fault {
+    fn from(message: String) -> Self {
+        Fault {
+            message,
+            ..Fault::default()
+        }
+    }
+}
+
+impl From<&str> for Fault {
+    fn from(message: &str) -> Self {
+        Fault::from(message.to_string())
+    }
+}
+
+impl std::fmt::Display for Fault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl Fault {
+    /// The fault as the library's own side saw it.
+    ///
+    /// A runtime fault is relayed whole; anything else the host call can answer
+    /// — an unknown function, an argument the signature does not admit — is a
+    /// failure of the CROSSING rather than of the library's code, and has no
+    /// loft position to carry.
+    pub(crate) fn from_loft_error(e: &crate::host::LoftError) -> Self {
+        match e {
+            crate::host::LoftError::Runtime(err) => Fault {
+                message: err.message.clone(),
+                label: err.kind.label().to_string(),
+                position: err.position.clone(),
+                call_chain: err.call_chain.clone(),
+            },
+            other => Fault::from(other.to_string()),
+        }
+    }
+
+    /// This fault with `extra` appended to its detail, keeping every other part.
+    pub(crate) fn with_detail(mut self, extra: &str) -> Self {
+        self.message.push_str(extra);
+        self
+    }
+}
+
 /// The shared mapping both processes address the call through.
 ///
 /// Not a [`crate::store::Store`]: arc A carries scalars, so it needs a frame
@@ -496,6 +574,53 @@ impl Frame {
         true
     }
 
+    /// Write a fault: the detail, its kind label, its position and its frames.
+    ///
+    /// Every part is what RENDERS — `RuntimeError::to_diag_entry` and
+    /// `render_call_chain` read exactly these — so a fault that survives this
+    /// round trip renders identically to the same fault in-process, which is the
+    /// gate `placement_parity` holds it to.
+    fn put_fault(&mut self, e: &Fault) -> bool {
+        let (file, line, col) = e
+            .position
+            .as_ref()
+            .map_or(("", 0u32, 0u32), |p| (p.file.as_str(), p.line, p.pos));
+        self.put_str(&e.message)
+            && self.put_str(&e.label)
+            && self.put_str(file)
+            && self.put_u32(line)
+            && self.put_u32(col)
+            && self.put_u32(e.call_chain.len() as u32)
+            && e.call_chain.iter().all(|n| self.put_str(n))
+    }
+
+    /// Read a fault back.  A frame too short to hold one is itself a fault, and
+    /// says so rather than answering a half-decoded one.
+    fn get_fault(&mut self) -> Option<Fault> {
+        let message = self.get_str()?;
+        let label = self.get_str()?;
+        let file = self.get_str()?;
+        let line = self.get_u32()?;
+        let col = self.get_u32()?;
+        let n = self.get_u32()? as usize;
+        let mut call_chain = Vec::with_capacity(n);
+        for _ in 0..n {
+            call_chain.push(self.get_str()?);
+        }
+        Some(Fault {
+            message,
+            label,
+            // An empty file is "no position known", the same reading
+            // `RuntimeError::user_panic` gives it.
+            position: (!file.is_empty()).then_some(crate::lexer::Position {
+                file,
+                line,
+                pos: col,
+            }),
+            call_chain,
+        })
+    }
+
     fn get_str(&mut self) -> Option<String> {
         let n = self.get_u32()? as usize;
         if !self.room(n) {
@@ -830,7 +955,7 @@ impl Worker {
         }
         let used = f.len();
         buf.truncate(used);
-        match self.exchange(&buf, func)? {
+        match self.exchange(&buf, func).map_err(|e| e.message)? {
             crate::host::Value::Text(s) => Ok(s),
             other => Err(format!("layout answer was {other:?}")),
         }
@@ -852,9 +977,9 @@ impl Worker {
         &mut self,
         func: &str,
         args: &[crate::host::Value],
-    ) -> Result<crate::host::Value, String> {
+    ) -> Result<crate::host::Value, Fault> {
         if func.is_empty() {
-            return Err("empty function name".to_string());
+            return Err("empty function name".into());
         }
         self.call_raw(func, args)
     }
@@ -865,7 +990,7 @@ impl Worker {
         &mut self,
         func: &str,
         args: &[crate::host::Value],
-    ) -> Result<crate::host::Value, String> {
+    ) -> Result<crate::host::Value, Fault> {
         // The arg arena's size travels ahead of the arguments: marshalling may
         // have grown the file, and the worker has to map the new length before
         // it can read a record that lives past the old end.
@@ -882,7 +1007,8 @@ impl Worker {
                 "call to '{func}' does not fit the placement wire ({} KiB) — \
                  arc B sizes the arena from the argument graph",
                 WIRE_BYTES / 1024
-            ));
+            )
+            .into());
         }
         let used = f.len();
         buf.truncate(used);
@@ -897,9 +1023,9 @@ impl Worker {
     /// mapping the other side already has, a remote one puts the arena's bytes
     /// on the socket beside the frame. Everything after that point is common,
     /// which is why the arms below are short.
-    fn exchange(&mut self, request: &[u8], func: &str) -> Result<crate::host::Value, String> {
+    fn exchange(&mut self, request: &[u8], func: &str) -> Result<crate::host::Value, Fault> {
         if self.dead.get() {
-            return Err(format!("library '{}' is gone", self.name));
+            return Err(format!("library '{}' is gone", self.name).into());
         }
         let seq = self.seq.get() + 1;
         self.seq.set(seq);
@@ -917,7 +1043,7 @@ impl Worker {
         request: &[u8],
         func: &str,
         seq: u32,
-    ) -> Result<crate::host::Value, String> {
+    ) -> Result<crate::host::Value, Fault> {
         let Link::Local { wire, .. } = &self.link else {
             unreachable!("dispatched on the link")
         };
@@ -938,7 +1064,8 @@ impl Worker {
                 "library '{}' worker died during the call to '{}'",
                 self.name,
                 if func.is_empty() { "<load>" } else { func }
-            ));
+            )
+            .into());
         }
         let mut f = Frame::new(wire.payload());
         let (ret_words, arg_words) = read_answer_header(&mut f, &self.name)?;
@@ -949,7 +1076,7 @@ impl Worker {
             .remap_if_grown(ret_words)
             .map_err(|e| format!("call arena (return) of '{}': {e}", self.name))?;
         f.get_value(u16::MAX)
-            .ok_or_else(|| format!("malformed response frame from '{}'", self.name))
+            .ok_or_else(|| Fault::from(format!("malformed response frame from '{}'", self.name)))
     }
 
     /// @PLN119 arc E — the socket crossing.
@@ -958,11 +1085,7 @@ impl Worker {
     /// and both directions are load-bearing: loft passes a compound by
     /// reference, so a callee's write to a parameter is the caller's to see, and
     /// over a socket the only way it can be seen is for the bytes to come home.
-    fn exchange_remote(
-        &mut self,
-        request: &[u8],
-        func: &str,
-    ) -> Result<crate::host::Value, String> {
+    fn exchange_remote(&mut self, request: &[u8], func: &str) -> Result<crate::host::Value, Fault> {
         let response = {
             let Link::Remote { stream, .. } = &self.link else {
                 unreachable!("dispatched on the link")
@@ -971,13 +1094,13 @@ impl Worker {
             let arg_image = self.arg.image();
             if let Err(e) = put_message(&mut *stream, &[request, arg_image]) {
                 self.dead.set(true);
-                return Err(self.gone(func, &e));
+                return Err(self.gone(func, &e).into());
             }
             match get_message(&mut *stream, 3) {
                 Ok(three) => three,
                 Err(e) => {
                     self.dead.set(true);
-                    return Err(self.gone(func, &e));
+                    return Err(self.gone(func, &e).into());
                 }
             }
         };
@@ -994,7 +1117,7 @@ impl Worker {
         let _ = read_answer_header(&mut f, &self.name)?;
         let value = f
             .get_value(u16::MAX)
-            .ok_or_else(|| format!("malformed response frame from '{}'", self.name))?;
+            .ok_or_else(|| Fault::from(format!("malformed response frame from '{}'", self.name)))?;
         if let Link::Remote { last, .. } = &self.link {
             *last.borrow_mut() = body;
         }
@@ -1045,16 +1168,18 @@ impl Worker {
 /// The sizes come back on the ERROR path too: the callee may have grown the
 /// argument arena before it faulted, and a caller that read the old size would
 /// then map short and read a hole where its own value was.
-fn read_answer_header(f: &mut Frame, name: &str) -> Result<(u32, u32), String> {
+fn read_answer_header(f: &mut Frame, name: &str) -> Result<(u32, u32), Fault> {
     let status = f.get_u32();
     let ret_words = f.get_u32().unwrap_or(0);
     let arg_words = f.get_u32().unwrap_or(0);
     match status {
         Some(RESP_OK) => Ok((ret_words, arg_words)),
         Some(RESP_ERR) => Err(f
-            .get_str()
-            .unwrap_or_else(|| "malformed error frame".to_string())),
-        _ => Err(format!("malformed response frame from '{name}'")),
+            .get_fault()
+            .unwrap_or_else(|| Fault::from("malformed error frame"))),
+        _ => Err(Fault::from(format!(
+            "malformed response frame from '{name}'"
+        ))),
     }
 }
 
@@ -1178,7 +1303,7 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
             // is how the caller reports it against the library's name.
             wire.set_store_base(0);
             let mut f = Frame::new(wire.payload());
-            let _ = f.put_u32(RESP_ERR) && f.put_str(&e.to_string());
+            let _ = f.put_u32(RESP_ERR) && f.put_fault(&Fault::from(e.to_string()));
             wire.send_response(1);
             std::process::exit(0);
         }
@@ -1196,7 +1321,7 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
             let _ = f.put_u32(RESP_ERR)
                 && f.put_u32(0)
                 && f.put_u32(0)
-                && f.put_str(&format!("cannot map the call arena: {e}"));
+                && f.put_fault(&Fault::from(format!("cannot map the call arena: {e}")));
             wire.send_response(1);
             std::process::exit(0);
         }
@@ -1231,7 +1356,9 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
                     let _ = out.put_u32(RESP_ERR)
                         && out.put_u32(ret_words)
                         && out.put_u32(arg_words)
-                        && out.put_str("return value does not fit the placement wire");
+                        && out.put_fault(&Fault::from(
+                            "return value does not fit the placement wire",
+                        ));
                 }
             }
             Err(e) => {
@@ -1239,7 +1366,7 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
                 let _ = out.put_u32(RESP_ERR)
                     && out.put_u32(ret_words)
                     && out.put_u32(arg_words)
-                    && out.put_str(&e);
+                    && out.put_fault(&e);
             }
         }
         wire.send_response(last);
@@ -1251,7 +1378,7 @@ pub fn serve(wire_path: &Path, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
 fn answer_layout(
     f: &mut Frame,
     program: Option<&mut crate::host::Program>,
-) -> Result<crate::host::Value, String> {
+) -> Result<crate::host::Value, Fault> {
     let func = f.get_str().ok_or("malformed layout request")?;
     let program = program.ok_or("library failed to load")?;
     Ok(crate::host::Value::Text(
@@ -1277,7 +1404,7 @@ fn serve_one(
     f: &mut Frame,
     program: Option<&mut crate::host::Program>,
     arenas: &mut (Arena, Arena),
-) -> Result<crate::host::Value, String> {
+) -> Result<crate::host::Value, Fault> {
     let arg_words = f.get_u32().ok_or("malformed request frame")?;
     let program = program.ok_or("library failed to load")?;
     arenas
@@ -1298,7 +1425,7 @@ fn serve_bound(
     f: &mut Frame,
     program: &mut crate::host::Program,
     arenas: &mut (Arena, Arena),
-) -> Result<crate::host::Value, String> {
+) -> Result<crate::host::Value, Fault> {
     arenas.1.reset();
     let arg_nr = arenas.0.bind(program.stores());
     let ret_nr = arenas.1.bind(program.stores());
@@ -1314,7 +1441,7 @@ fn run_bound(
     program: &mut crate::host::Program,
     ret_nr: u16,
     arg_nr: u16,
-) -> Result<crate::host::Value, String> {
+) -> Result<crate::host::Value, Fault> {
     let func = f.get_str().ok_or("malformed request frame")?;
     let n_args = f.get_u32().ok_or("malformed request frame")? as usize;
     let mut args = Vec::with_capacity(n_args);
@@ -1354,8 +1481,8 @@ fn run_bound(
         program.call_into(&func, &args, retbuf)
     })) {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return Err(e.to_string()),
-        Err(_) => return Err(format!("library panicked in '{func}'")),
+        Ok(Err(e)) => return Err(Fault::from_loft_error(&e)),
+        Err(_) => return Err(Fault::from(format!("library panicked in '{func}'"))),
     };
 
     // loft#1061 — a TEXT answer bigger than the frame travels in the return arena,
@@ -1524,7 +1651,10 @@ fn serve_connection(
                 o.put_u32(RESP_OK) && o.put_u32(ret_words) && o.put_u32(arg_words) && o.put_value(v)
             }
             Err(e) => {
-                o.put_u32(RESP_ERR) && o.put_u32(ret_words) && o.put_u32(arg_words) && o.put_str(e)
+                o.put_u32(RESP_ERR)
+                    && o.put_u32(ret_words)
+                    && o.put_u32(arg_words)
+                    && o.put_fault(e)
             }
         };
         let used = o.len();
@@ -1533,7 +1663,7 @@ fn serve_connection(
             let _ = o.put_u32(RESP_ERR)
                 && o.put_u32(0)
                 && o.put_u32(0)
-                && o.put_str("answer does not fit the placement frame");
+                && o.put_fault(&Fault::from("answer does not fit the placement frame"));
         }
         out.truncate(used.max(16));
         // Both arenas travel home: the return carries the answer, and the

@@ -4713,19 +4713,28 @@ impl State {
     /// reached it, on either backend (loft#1056).  This is the first point that holds
     /// BOTH the `State` and the error, so the frames go on here rather than at thirteen
     /// raise sites.  A chain the raiser already filled is left as it is.
+    ///
+    /// A fault relayed from a PLACED library is the one chain that is filled and still
+    /// incomplete: it holds the frames the library was in, and the frames that CALLED
+    /// the library are in this process.  Neither side can see the whole chain, so the
+    /// two halves are joined here — the library's innermost-first, then the caller's —
+    /// which is what makes a placed fault read exactly like an in-process one.
     fn note_runtime_error_halt(&mut self) {
         if self.database.runtime_error.is_none() {
             return;
         }
-        if self
+        let wants_frames = self
             .database
             .runtime_error
             .as_ref()
-            .is_some_and(|e| e.call_chain.is_empty())
-        {
+            .is_some_and(|e| e.call_chain.is_empty() || e.crossed_placement);
+        if wants_frames {
             let chain = self.current_call_chain();
             if let Some(err) = self.database.runtime_error.as_mut() {
-                err.call_chain = chain;
+                err.call_chain.extend(chain);
+                // Joined once: a later op must not append this process's frames
+                // a second time.
+                err.crossed_placement = false;
             }
         }
         self.code_pos = u32::MAX;
@@ -4827,6 +4836,7 @@ impl State {
             op_pc,
             message,
             call_chain,
+            crossed_placement: false,
         }));
         self.database.had_fatal = true;
     }

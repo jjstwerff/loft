@@ -316,7 +316,9 @@ impl Logger {
     ) {
         use crate::runtime_error::RuntimeErrorKind as Rk;
         let severity = match kind {
-            Rk::UserPanic { .. } | Rk::StackOverflow => Severity::Fatal,
+            // A relayed fault halted the library it fired in, whatever kind it
+            // started as — only halting faults cross a placement boundary.
+            Rk::UserPanic { .. } | Rk::StackOverflow | Rk::Relayed { .. } => Severity::Fatal,
             Rk::AssertionFailed { .. } => Severity::Error,
             Rk::DivideByZero
             | Rk::IndexOutOfBounds { .. }
