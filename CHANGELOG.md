@@ -33,6 +33,23 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### An enum may be called `T`
+
+```loft
+fn main() { d = T.N; print("{match d { N => 1, S => 2 }}\n"); }
+enum T { N, S }
+```
+
+This reported `Expect token ;`, pointing at a semicolon whose syntax is fine. `T` is the
+name the standard library uses for a generic type parameter, and that internal placeholder
+was sitting in the same namespace your own types live in — so the name was quietly taken.
+It is now invisible outside the library that declares it, which is what it always claimed
+to be.
+
+Your own generics are unaffected: `fn pick<T>(a: T, b: T) -> T` still works, in a file that
+also declares an `enum T` or in one that does not. Writing both in the SAME file is still
+refused, because loft has one namespace for names — `pick a different name` says so.
+
 ### Enums and their variants work before they are declared
 
 `loft` files are meant to read in whatever order suits them — that is what the two-pass
