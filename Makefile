@@ -1710,8 +1710,24 @@ ci-guard:
 	@# stale file that the next `kill -0` steps straight over.  A lock that
 	@# outlives its holder is worse than no lock — it fails runs that should
 	@# pass, and gets deleted by hand until nobody trusts it.
-	@if [ -f .ci-running ] && kill -0 "$$(cat .ci-running 2>/dev/null)" 2>/dev/null; then \
-	    echo "make ci: REFUSED — a gate is already running in this tree (make pid $$(cat .ci-running))."; \
+	@# ⚠ A claim held by one of OUR OWN ANCESTORS is not a competing run — it is the
+	@# wrapper that launched us.  `scripts/box-claim.sh make ci` writes the claim, then
+	@# `make ci` refused itself and exited 1; the failure was then invisible, because the
+	@# stale `result.txt` from an earlier run still said ALL GATES PASSED and that is what
+	@# a summary grep reads.  Measured 2026-08-21 — it produced a false green on a real
+	@# cherry-pick.  So walk the pid chain: a claim from an ancestor is ours.
+	@claim=$$(cat .ci-running 2>/dev/null); \
+	if [ -n "$$claim" ] && kill -0 "$$claim" 2>/dev/null; then \
+	    p=$$PPID; mine=0; \
+	    while [ "$$p" -gt 1 ]; do \
+	        [ "$$p" = "$$claim" ] && { mine=1; break; }; \
+	        p=$$(ps -o ppid= -p $$p 2>/dev/null | tr -d ' '); \
+	        [ -n "$$p" ] || p=1; \
+	    done; \
+	    [ "$$mine" = "1" ] && claim=""; \
+	fi; \
+	if [ -n "$$claim" ]; then \
+	    echo "make ci: REFUSED — a gate is already running in this tree (make pid $$claim)."; \
 	    echo "  Two runs share target/ and result.txt; the second deletes the rlib the first"; \
 	    echo "  links against and truncates its report, so BOTH results would be fiction."; \
 	    echo "  Wait for it to finish, or stop it first."; \

@@ -33,6 +33,34 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### ⚠ Asking `git` a question outside a repository now FAILS instead of answering nothing
+
+**This changes behaviour**, so it belongs here rather than being discovered: if you called
+`lib/git` from a directory that is not a git repository, every query used to answer *empty* —
+no commits, no changed files, no diff. It now halts with
+
+```
+git: not a git repository: /path/you/asked/about
+```
+
+The old answer was indistinguishable from a real one. "This repository has no commits" and
+"this is not a repository" arrived as the same empty vector, so a program that branched on
+*"nothing changed, nothing to do"* looked correct while asking a question that could not be
+answered at all. That is the failure the language calls **silent-wrong**, and it is the one
+kind of bug a green test run cannot see.
+
+**If you relied on the old behaviour**, check for a repository before asking, rather than
+reading an empty answer as one.
+
+⚠ An *empty repository* is unchanged and still answers empty — that is a real answer to a
+real question. Only "cannot be asked at all" became a fault.
+
+Why now: adding a fault is a **one-way door**. loft's compatibility promise lets the error
+surface only ever *shrink* after the contract freeze, so a place where loft is too permissive
+— silently accepting something dubious, or handing back a plausible-wrong value where it
+should refuse — is a last chance to add the error. Afterwards it could only be loosened, never
+tightened. See [COMPATIBILITY.md § The error surface is one-directional](doc/claude/COMPATIBILITY.md).
+
 ### A failed `assert` reads the same way whichever backend ran it
 
 ```
