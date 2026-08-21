@@ -738,6 +738,41 @@ where pass 2 holds the answer.** That is the "one fact, N homes" thesis on its o
 F (*"is this type still a type variable?"*) is the same question asked about a different
 fact, which is why loft#1047's cure lands next door to it.
 
+**How the class actually closed (2026-08-21, same day).** The three defects above were not
+the end of it. The `all` → `any` widening merged to `main` as #1050 and **retro-broke the
+published `markdown` 0.2.0** — `line[start..ln]` where `start = hlevel() + 1` now correctly
+defers on pass 1, and `parse_text_index` refused an `unknown` index outright. Two more
+sites, both in that one function, four lines apart: the START bound and the range END. Same
+cure, the same first-pass escape. Four known sites in total (`call_op`, `parse_match`'s
+`!valid_enum` exit, and those two).
+
+Three things from that are worth more than the fix:
+
+- **A green `make ci` does not clear a language-semantics change.** Nothing local compiles
+  the published registry libraries. The gate that caught it is
+  `.github/workflows/revalidate-libs.yml`, which runs on `pull_request`, on `push` to
+  `main`, and nightly — so `main` sat observably red for hours, with the failing job named
+  `markdown 0.2.0`. After landing an inference/coercion/refusal change, read
+  `gh run list --workflow=revalidate-libs.yml`; do not read a green local gate as clearance.
+- **The first regression guard for it was INERT and passed.** Every callee in the file sat
+  ABOVE `main`, so nothing deferred anywhere: it asserted in six places that it tested
+  forward declarations and tested none. It was caught only because the two deferrals were
+  disabled SEPARATELY — start-only, then end-only — and each was required to fail the guard
+  on its own. Aggregate green would have hidden it, which is the same lesson as
+  [absent warning is not a pass], reached from the test side.
+- **A sweep for a fifth site came back clean.** 29 behavioural probes — one per operation
+  kind (text/vector index, range ends, `for` range, conditions, arguments, appends, casts,
+  comprehensions, hash keys, struct fields, …), then re-run with the callee returning
+  `text`, `float`, `vector<integer>`, a struct and an enum, since an unresolved TYPE is the
+  class and rounds 1–2 had pinned it to `integer`. No additional sites. Three probe
+  failures were all probe errors, each confirmed against a literal control of the same
+  shape.
+
+**What is still open:** that sweep is behavioural, not exhaustive. 97 error diagnostics in
+`src/parser/` interpolate a type name, and enumerating which of them refuse on pass 1
+rather than deferring has not been done. Nothing is currently biting, so this is a
+lower-urgency completeness task rather than a live defect.
+
 **Falsifiable.** If the next order-dependence bug is NOT a pass-1 decision that pass 2
 could have made, this reading is wrong. And the oracle itself is not yet a gate: its
 top-level splitter is line-based, so it skips what it cannot split safely and its diffs
