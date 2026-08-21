@@ -760,18 +760,36 @@ Three things from that are worth more than the fix:
   disabled SEPARATELY — start-only, then end-only — and each was required to fail the guard
   on its own. Aggregate green would have hidden it, which is the same lesson as
   [absent warning is not a pass], reached from the test side.
-- **A sweep for a fifth site came back clean.** 29 behavioural probes — one per operation
-  kind (text/vector index, range ends, `for` range, conditions, arguments, appends, casts,
-  comprehensions, hash keys, struct fields, …), then re-run with the callee returning
-  `text`, `float`, `vector<integer>`, a struct and an enum, since an unresolved TYPE is the
-  class and rounds 1–2 had pinned it to `integer`. No additional sites. Three probe
-  failures were all probe errors, each confirmed against a literal control of the same
-  shape.
+- **A behavioural sweep for a fifth site came back clean — and was wrong.** 29 probes, one
+  per operation kind, re-run across return types after rounds 1–2 had pinned them to
+  `integer`. No additional sites found. It was careful work and it still missed one,
+  because a probe sweep can only test shapes someone thinks to write.
 
-**What is still open:** that sweep is behavioural, not exhaustive. 97 error diagnostics in
-`src/parser/` interpolate a type name, and enumerating which of them refuse on pass 1
-rather than deferring has not been done. Nothing is currently biting, so this is a
-lower-urgency completeness task rather than a live defect.
+- **The enumeration found the fifth site the sweep could not.** Instead of writing probes,
+  list every refusal in `src/parser/` phrased as a type REQUIREMENT and check which are
+  ungated on pass 1: 82 diagnostics render a type (via `.name(…)` and — the ones a first
+  regex misses — via `.show(…)`), plus 84 phrased as a requirement whether they render one
+  or not. 61 are already `!first_pass`-gated, 6 test `is_unknown`, and the residue is
+  small enough to read. Every candidate was then confirmed BEHAVIOURALLY with a negative
+  control proving the diagnostic fires at all, which is what separates "clean" from "never
+  reached": the `filter` check needed a named fn rather than a lambda before its path was
+  even entered.
+
+  The survivor was **`xs[(0, 0)..: lim()]`** — a spatial slice's count limit, refused as
+  "spatial slice limit must be an integer" when `lim` is declared lower. Fixed here, same
+  cure, guarded on both backends by `tests/scripts/forward-spatial-slice-limit.loft`.
+  Nobody writes a spatial slice when guessing at shapes, which is exactly why the sweep
+  missed it and the list did not.
+
+**Method, generalised:** for a class defined by "an invariant is violated at site X", a
+probe sweep samples the shapes you can imagine, and an enumeration of the CODE that can
+violate it does not. Run the enumeration; use probes to confirm each candidate rather than
+to find them.
+
+**What is still open:** the 61 diagnostics classified as already-gated were checked by a
+45-line context window, not read individually — a diagnostic gated by a guard further away
+is misclassified safely (more candidates to review), but one whose `first_pass` mention is
+unrelated would be missed. Reading those 61 is the remaining completeness task.
 
 **Falsifiable.** If the next order-dependence bug is NOT a pass-1 decision that pass 2
 could have made, this reading is wrong. And the oracle itself is not yet a gate: its

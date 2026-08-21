@@ -2195,7 +2195,20 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         } else if self.lexer.has_token(":") {
             let mut n = Value::Null;
             let nt = self.expression(&mut n);
-            if !self.convert(&mut n, &nt, &crate::data::I64) {
+            // A first-pass UNRESOLVED limit is not a wrong one — the same escape the
+            // start bound and the range end take a few hundred lines up, and for the
+            // same reason: operand deferral can leave `xs[(0, 0)..: lim()]` untyped on
+            // pass 1 when `lim` is declared lower in the file, and refusing it here makes
+            // declaration order decide whether the program compiles.  Pass 2 has the real
+            // type and still refuses a genuinely non-integer limit, which is the case this
+            // message is for.
+            //
+            // Fifth site of one rule, and the one a behavioural sweep missed: 29 probes
+            // over operation kinds and return types came back clean because nobody thinks
+            // to write a spatial slice.  It was found by ENUMERATING the parser's
+            // type-requirement refusals instead — see STABILITY_REDFLAGS.md § Result 5.
+            let limit_deferred = self.first_pass && nt.is_unknown();
+            if !self.convert(&mut n, &nt, &crate::data::I64) && !limit_deferred {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
