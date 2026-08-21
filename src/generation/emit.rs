@@ -201,27 +201,69 @@ impl Output<'_> {
                 return write!(w, "({d_nr}_u32, loft::keys::DbRef::NULL)");
             }
             ValueType::Parallel => {
-                // REFUSE, do not skip.  This emitted a comment and nothing else, so a
-                // `parallel { … }` block compiled to NOTHING on the default backend: the
-                // arms never ran, no diagnostic was printed, and the program exited 0
-                // having done none of the work it asked for.  LOFT.md § Concurrency
-                // documents the construct, so that is a silent contract violation, and the
-                // par family next door already fails LOUDLY on native (`todo!()`), which
-                // made the two spellings of "run this concurrently" behave oppositely.
+                // One Rust closure per arm, handed to `n_parallel_block_native`, which
+                // runs each against its own read-only clone of the parent's stores —
+                // the same isolation the interpreter's `run_parallel_block` gives them.
                 //
-                // C79's rule decides it: an error can be dropped later, a silently
-                // different semantics cannot.  A refusal names the backend to use; a
-                // no-op leaves the author believing work happened.  The interpreter carries
-                // the full semantics, so `--interpret` is a real answer rather than advice
-                // to go and implement something.
-                return write!(
-                    w,
-                    "compile_error!(\"loft --native: a `parallel {{ … }}` block is not \
-                     supported by native codegen yet — its arms would silently not run. \
-                     Run this program with --interpret, which implements the block fully, \
-                     or express the work as `for x in xs par(y = f(x), n) {{ … }}`, which \
-                     native does lower.\")"
-                );
+                // The closures capture enclosing locals by SHARED reference, which is
+                // exactly the surface the language allows: writing an enclosing local,
+                // mutating one through a reference, and capturing a parameter are all
+                // compile errors already (`170-parallel-capture-soundness.loft`), so
+                // `Fn + Send + Sync` asks for nothing the parser has not enforced.
+                //
+                // An arm's OWN locals are declared where they are first set, so they land
+                // inside the closure and stay private to their arm, as they must.
+                //
+                // Before loft#1054 this arm emitted a comment: the block compiled to
+                // NOTHING on the default backend, the arms never ran, and the program
+                // exited 0 having done none of the work it asked for.
+                let arms = node.parallel_arms();
+                // EVERY arm is a top-level expression of the block, so `sum = 0;` and the
+                // loop that reads `sum` are two DIFFERENT arms — and the second one has to
+                // compile.  The interpreter gets that for free: each arm runs against a
+                // SNAPSHOT of the parent's stack, so every arm-local has a slot in the
+                // parent's frame and each arm sees its own copy of it, at the value the
+                // frame held on entry.
+                //
+                // Reproduced here by declaring every variable the block's arms assign at
+                // the top of every closure, at its type's default.  An arm that assigns one
+                // shadows the declaration with its own; an arm that only READS one gets the
+                // entry value, which is what the snapshot would have given it.  Private per
+                // closure, so no arm can observe another's writes — the isolation the
+                // construct promises.
+                let mut arm_vars: Vec<u16> = Vec::new();
+                for arm in arms.iter() {
+                    Self::collect_assigned_vars(arm, &mut arm_vars);
+                }
+                let variables = self.data.def(self.def_nr).variables();
+                let mut preamble = String::new();
+                for &v in &arm_vars {
+                    let tp = variables.tp(v);
+                    // A `&`-link local holds a raw pointer with no meaningful default, so
+                    // there is nothing honest to pre-declare it as.  Left out: an arm that
+                    // reads a SIBLING arm's link then fails to compile, loudly, instead of
+                    // dereferencing a made-up address.
+                    if matches!(tp, Type::RefVar(_)) {
+                        continue;
+                    }
+                    let name = sanitize(variables.name(v));
+                    let ty = rust_type(tp, &Context::Variable);
+                    let init = default_native_value_in(tp, &Context::Variable);
+                    use std::fmt::Write as _;
+                    let _ = write!(preamble, "let mut var_{name}: {ty} = {init}; ");
+                }
+                write!(w, "n_parallel_block_native(cell, &[")?;
+                for arm in arms.iter() {
+                    write!(
+                        w,
+                        "&|cell: &std::cell::UnsafeCell<Stores>| {{ \
+                         let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; \
+                         let _ = &stores; {preamble}"
+                    )?;
+                    self.output_code_node(w, arm)?;
+                    write!(w, "; }},")?;
+                }
+                return write!(w, "])");
             }
             ValueType::FnRefDnr => {
                 // P215: project the d_nr from a fn-ref var's (u32, DbRef) tuple.
@@ -1584,6 +1626,22 @@ impl Output<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Every variable this subtree ASSIGNS, anywhere within it.
+    ///
+    /// The total-walk twin of [`Self::collect_set_vars`], which stops at the kinds its own
+    /// caller cares about and so misses a `Set` inside a loop.  Built on `for_each_child`,
+    /// whose match is exhaustive on purpose: a new [`ValueType`] forces a decision there
+    /// rather than silently dropping out of this answer (loft#815).
+    fn collect_assigned_vars(node: IrNode, result: &mut Vec<u16>) {
+        if node.kind() == ValueType::Set {
+            let v = node.set_var();
+            if !result.contains(&v) {
+                result.push(v);
+            }
+        }
+        node.for_each_child(&mut |child| Self::collect_assigned_vars(child, result));
     }
 
     fn collect_set_vars(node: IrNode, result: &mut Vec<u16>) {

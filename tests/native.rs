@@ -80,19 +80,6 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // a compile_error naming the alternatives (#481).  The interp half runs
     // under wrap.
     "447-coroutine-yield-borrow.loft",
-    // A `parallel { … }` block is refused by native codegen with a `compile_error!`
-    // naming `--interpret` and the `par(…)` form (same shape as 447 above).  It used to
-    // emit a COMMENT and nothing else, so these four "passed" natively while the construct
-    // they exist to test did not run at all — `80-parallel-block.loft` is named for the
-    // block and was verifying nothing on the default backend.  The interp halves run under
-    // wrap and carry the semantics.
-    "80-parallel-block.loft",
-    "81-parallel-outer-vars.loft",
-    "171-parallel-armlocal-ok.loft",
-    // NOT skipped: 170-parallel-capture-soundness.loft.  It is an `@EXPECT_ERROR` file
-    // whose errors come from the PARSER (capture soundness), so the program never reaches
-    // codegen and the refusal above is never emitted — it still passes natively, and
-    // skipping it would drop real coverage for no reason.
     // 135-vector-u8-concat.loft was here for @P316 (`vector<u8>` element read
     // with `?? <int>` mis-compiled); @P316 is fixed, so 135 now runs natively
     // and doubles as the @P316 regression guard.

@@ -11,12 +11,13 @@
 // codegen reads `n` (the call argument) from the parent's frame
 // position — this is the read that returned 0 pre-P245-fix.
 //
-// ⚠ The assertion below does NOT fail the run.  A runtime fault raised inside a
-// `parallel` arm — assert or panic — is silently discarded on both backends
-// (loft#1053): falsifying this line still exits 0.  It is kept because it states the
-// arm's contract at the place the contract applies, but it is NOT the guard.  The
-// enforceable half is `main`'s queue-route cell below, which routes the SAME read
-// through a body that names the result, so the parent can assert on what the arm saw.
+// The assertion below now DOES fail the run: a fault raised inside an arm stops the whole
+// program (loft#1053).  It went years unable to fail, which is why the queue-route cell in
+// `main` was added as the enforceable half; both are kept, because they check the read at
+// different places and only the queue route can also witness the arm COUNT.
+//
+// Neither of them witnesses whether the block ran at all — a skipped block passes both.
+// `1054-parallel-block-arms-run.loft` is the guard for that.
 fn forward(n: integer) -> integer {
   assert(n == 42, "arm received outer var unchanged: got {n}");
   n
@@ -32,11 +33,11 @@ fn main() {
   // unchanged (each arm's writes go to its own worker stack).
   assert(outer == 42, "outer var preserved across parallel block");
 
-  // The ENFORCEABLE half of the P245 guarantee.  `parallel { … }` discards its arms'
-  // results, so nothing the arm observed can reach the parent and an in-arm assertion
-  // is currently the only place to look — which loft#1053 makes silent.  The queue form
-  // names the result, so the value the worker SAW comes back and is checked here, where
-  // an assertion does fail the run.  Verified to bite: changing `== 42` fails the file.
+  // The queue-route half of the P245 guarantee.  `parallel { … }` discards its arms'
+  // results, so nothing the arm observed reaches the parent; the queue form names the
+  // result, so the value the worker SAW comes back and is checked here — and this route
+  // can also count the rows, which the block form cannot.  Verified to bite: changing
+  // `== 42` fails the file.
   rows: vector<integer> = [];
   for i in 0..2 { rows += [i]; }
   seen = 0;

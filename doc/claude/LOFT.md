@@ -1534,7 +1534,8 @@ for x in c { }    // iterates 0, 1, 2, 3, 4
 
 ### Parallel blocks (A15)
 
-`parallel { }` runs each top-level expression concurrently (currently sequential):
+`parallel { }` runs each top-level expression concurrently, and continues once every one
+of them has finished:
 
 ```
 parallel {
@@ -1545,6 +1546,19 @@ parallel {
 ```
 
 No trailing `;` is required after the closing `}`.
+
+Each expression is one ARM, and each arm runs against its own read-only view of the
+program's state.  So an arm may READ an enclosing local, and may declare and use locals of
+its own, but it may not write enclosing state — assigning an enclosing local, mutating one
+through a reference, and capturing a function parameter are all compile errors, not silent
+no-ops.  Copy a parameter into a local first if an arm needs its value.
+
+An arm's result is discarded.  When you need the answers back, use `for x in xs par(y =
+f(x), n) { … }`, which delivers each worker's value to the loop body.
+
+Both backends run the arms concurrently.  (On `--native` this needed loft#1054: the block
+used to compile to nothing there, so the arms never ran and the program exited 0 having
+done none of the work.)
 
 ### Match expressions
 

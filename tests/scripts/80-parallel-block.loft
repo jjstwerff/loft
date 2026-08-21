@@ -12,6 +12,9 @@ fn main() {
     slow_add(1, 2);
     slow_add(3, 4);
   }
-  // If we get here, both arms completed successfully
+  // Reaching here means the block returned without faulting — and NOTHING MORE.  It
+  // cannot tell a completed block from a skipped one, which is how this file passed on
+  // `--native` for as long as the construct compiled to a comment there (loft#1054).
+  // `1054-parallel-block-arms-run.loft` is the guard that can tell those apart.
   assert(true, "parallel block completed");
 }

@@ -615,6 +615,16 @@ no buffer), `run_parallel_fold` (Stitch::Reduce, scalar accumulator),
 `run_parallel_block` (`parallel { arm; arm }` — internal, not a row
 loop).
 
+`run_parallel_block`'s native twin is `codegen_runtime::n_parallel_block_native`, which
+takes one Rust closure per arm instead of one bytecode position per arm.  The generator
+emits every variable the arms assign at the top of EVERY closure, at its type's default:
+each arm is a separate top-level expression, so `sum = 0;` and the loop that reads `sum`
+are two different arms, and the interpreter gives the second one an entry-value copy
+through the parent's stack snapshot.  Private per closure, which is the isolation the
+construct promises.  A `&`-link local is left out — a raw pointer has no honest default,
+so an arm reading a sibling's link fails to compile rather than dereferencing a made-up
+address.
+
 ### When to add a new dispatcher vs extend an existing one
 
 - **Adding a return shape that fits an existing impl** (e.g. another

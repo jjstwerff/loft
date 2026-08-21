@@ -84,6 +84,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_block_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_discard_native",    abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
@@ -3872,6 +3873,42 @@ where
 // The accompanying `n_parallel_buf_get_*_native` / `_drop_*_native`
 // fns provide the per-row read + cleanup that loft's fused for-par
 // desugars into.
+
+/// `parallel { arm; arm }` runtime entry — the native half of
+/// [`crate::parallel::run_parallel_block`].
+///
+/// Each arm runs concurrently against its OWN read-only clone of the parent's stores,
+/// which is what lets an arm read enclosing state and write nothing back.  The parser
+/// enforces that half at compile time: writing an enclosing local, mutating one through a
+/// reference, or capturing a parameter is a compile error, not a silent no-op
+/// (`170-parallel-capture-soundness.loft`).  So an arm closure captures only shared
+/// references, and the `Fn + Send + Sync` bound below is a bound the language already
+/// guarantees rather than one the generator has to arrange.
+///
+/// One arm per worker, deliberately: an arm is a named unit of the program the author
+/// wrote, not a row of a collection, so there is no batching decision to make.
+///
+/// The block form had no native lowering at all until loft#1054 — it was emitted as a
+/// COMMENT, so the arms never ran and the program exited 0 having done none of the work.
+pub fn n_parallel_block_native(
+    cell: &std::cell::UnsafeCell<Stores>,
+    arms: &[&(dyn Fn(&std::cell::UnsafeCell<Stores>) + Send + Sync)],
+) {
+    if arms.is_empty() {
+        return;
+    }
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let _: Vec<()> =
+        crate::parallel::parallel_workers(stores, arms.len(), arms.len(), |start, end, mut ws| {
+            for arm in &arms[start..end] {
+                // P199 — see `run_native_workers_primitive` for the `&UnsafeCell<Stores>`
+                // cast; generated arm closures take the same ABI a worker closure does.
+                let cell: &std::cell::UnsafeCell<Stores> =
+                    unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+                arm(cell);
+            }
+        });
+}
 
 /// Plan-06 spine step 3 (native variant) — `Stitch::Discard` runtime entry.
 ///
