@@ -191,7 +191,7 @@ already knew.  Every new construct must be taught to each analysis or it
 silently misclassifies.
 
 **Evidence**: plan-57's entire tail (probe-numbered exclusions, the gated
-`LOFT_CONF_RECOVER` experiment, cluster I/III routes), #260 (the
+`LOFT_CONF_RECOVER` experiment — shipped default-ON 2026-08-21, opt-out `LOFT_NO_CONF_RECOVER`; cluster I/III routes), #260 (the
 `Set(v, Null)` position doubling as the declaration point — fixed this
 cycle by moving the fact INTO the variable table, the model for this
 hotspot), #316/#323 (five ownership homes), the dominance-twin drift

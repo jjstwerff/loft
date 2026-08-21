@@ -33,6 +33,28 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Less memory for a variable reassigned in several branches
+
+```loft
+fn classify(k: integer) -> integer {
+  total = 0;
+  z = [k, k];
+  if k == 0 { z = [1, k]; total += z[0]; }
+  else if k == 1 { z = [3, k]; total += z[0]; }
+  else { z = [k, k]; total += z[1]; }
+  total
+}
+```
+
+Each branch built its own storage, and all of it stayed alive until the function returned —
+even though only one branch ever runs. The cost grew with the number of branches you wrote,
+not with the work done: sixteen branches held twenty stores for one taken arm. Now each
+branch releases its own, and the count stays flat however many you add.
+
+Nothing about your program changes except how much memory it holds while running. A
+variable still read *after* the branches keeps the old behaviour, deliberately — releasing
+early there would hand back the wrong value on the branch that did not run.
+
 ### An enum may be called `T`
 
 ```loft

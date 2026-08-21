@@ -114,7 +114,7 @@ already computes those intervals (today only for slot validation); the fix drive
 `&`-borrow / `is_captured` / `guard_escapes` checks already in place. This is the higher-
 value mechanism — it closes canonical III *and* I-b at once.
 
-## Route 2 (shared-block variant) — IMPLEMENTED, GATED (`LOFT_CONF_RECOVER`), 2026-06
+## Route 2 (shared-block variant) — SHIPPED, default ON 2026-08-21 (was gated `LOFT_CONF_RECOVER`)
 
 The straight-line variant + I-b shipped via last-use freeing (reclaim, now default).  The
 **shared-block variant** is implemented as a gated experiment in `store_confinement`
@@ -187,10 +187,21 @@ Values under both settings are now pinned by `tests/scripts/reassign-across-sibl
 `LOFT_CONF_RECOVER=1` before changing the default). The watermark itself is not asserted:
 loft cannot read its own store peak, so the numbers live in that file's header.
 
-**Still an owner decision, unchanged.** What the re-measurement adds is that the benefit is
-real and scales (O(sites) → O(1)), the analysis still refuses the unsound shapes, and the
-suite is green with it on. What it does not change is the cost/benefit: the shape has to be
-a shared local reassigned across sibling blocks and never read after them.
+**Un-gated 2026-08-21 on this evidence.** The benefit is real and scales (O(sites) → O(1)),
+the analysis still refuses the unsound shapes, and the suite is green with it on. The
+narrowness stands — the shape has to be a shared local reassigned across sibling blocks and
+never read after them — but a narrow win that costs nothing where it does not apply does not
+need to stay behind a flag.
+
+Both branches of the new flag are verified, which is the part worth keeping: flipping a
+default makes the OLD path the untravelled one, so it was run too. Full suite **4232 passed
+with the new default** and **4232 passed under `LOFT_NO_CONF_RECOVER=1`**.
+
+One caveat for whoever reads a red run here: the first full run with the new default reported
+`loft::gl_instancing instancing_bridge_draws_every_instance` TIMED OUT at 300 s. It passes
+standalone in 3.6 s and passed on re-run — it launches a real Chrome and shells out six times,
+so it starves under full-suite contention. Wall-clock for the same suite ranged 120–431 s
+across runs on this machine. That test timing out is a load signal, not a Route 2 signal.
 
 ---
 

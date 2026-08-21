@@ -9587,9 +9587,23 @@ fn store_confinement(
     free_ref_nr: u32,
     gf_nr: u32,
 ) -> BTreeMap<u16, (u16, u16)> {
-    // Plan-57 cluster-III Route 2 (gated, experimental): recover the backer of an
-    // orphaned (overwritten) store so its per-block store can confine.
-    let recover = std::env::var("LOFT_CONF_RECOVER").is_ok();
+    // Plan-57 cluster-III Route 2: recover the backer of an orphaned (overwritten) store so
+    // its per-block store can confine.  DEFAULT ON since 2026-08-21; `LOFT_NO_CONF_RECOVER=1`
+    // emits the pre-Route-2 form and is the first bisect step for a wrong answer in a
+    // function that reassigns a local across sibling blocks.
+    //
+    // A local reassigned across sibling `if`/`else if`/`match` arms otherwise keeps EVERY
+    // arm's store to scope exit, so the store watermark grows with the number of
+    // reassignment SITES and not with how many of them run: a 16-site function measured
+    // peak 20 whichever single arm was taken, against a flat 5 with this on.
+    //
+    // What makes it safe is `store_dead_after_block`, not this flag: a local READ after the
+    // blocks does not confine, because freeing a confined block store while the local still
+    // holds it returns the wrong element on the branch that did NOT run.  That shape refuted
+    // the first gate design and is pinned by
+    // `tests/scripts/reassign-across-sibling-blocks.loft`, which asserts the same answers
+    // with the recovery on and off.
+    let recover = std::env::var("LOFT_NO_CONF_RECOVER").is_err();
     let mut out: BTreeMap<u16, (u16, u16)> = BTreeMap::new();
     for vdb in 0..vars.count() {
         if !vars.name(vdb).starts_with("__vdb") {

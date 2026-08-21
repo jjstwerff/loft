@@ -7,20 +7,21 @@
 // actually run.  Measured 2026-08-21, one call, only ever one arm taken:
 //
 //     sites          2      4      8     16
-//     peak stores    6      8     12     20        (default)
-//     peak stores    5      5      5      5        (LOFT_CONF_RECOVER=1)
+//     peak stores    6      8     12     20        (LOFT_NO_CONF_RECOVER=1)
+//     peak stores    5      5      5      5        (default since 2026-08-21)
 //
 // It is a watermark cost, not a leak — every store is freed, and the run is exit-safe.
-// `LOFT_CONF_RECOVER=1` gates the Route 2 experiment that confines each block's store to
-// its block, turning O(sites) into O(1).  It is OFF by default and un-gating it is an owner
-// decision, because the analysis is soundness-delicate: the first gate design was REFUTED
-// by the `not_taken` case below, which returned the wrong element when a confined block
-// store was freed while the local still held it.
+// Route 2 confines each block's store to its block, turning O(sites) into O(1).  It shipped
+// ON by default 2026-08-21; `LOFT_NO_CONF_RECOVER=1` emits the pre-Route-2 form.  The
+// analysis is soundness-delicate — the first gate design was REFUTED by the `not_taken` case
+// below, which returned the wrong element when a confined block store was freed while the
+// local still held it — so that shape is asserted here in both directions.
 //
 // This file is the VALUE half, and it is written to pass under BOTH settings — that is the
-// point.  Run it with the gate on before changing the default:
+// point, and it is why flipping the default was safe.  Exercise the opt-out path too, since
+// a default flip makes it the untravelled one:
 //
-//     LOFT_CONF_RECOVER=1 cargo nextest run --release --test wrap
+//     LOFT_NO_CONF_RECOVER=1 cargo nextest run --release --test wrap
 //
 // A watermark cannot be asserted from inside loft, so the numbers above are recorded here
 // rather than checked; what is checked is that confinement never changes an ANSWER.
