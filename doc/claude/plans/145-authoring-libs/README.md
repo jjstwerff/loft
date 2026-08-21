@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN145 — Text, tweens and widgets
 
 > Tracker: [loft-lang/plans#145](https://github.com/loft-lang/plans/issues/145)
-> (`subject:libs`, `status:future`). Split out of [@PLN144](../144-2d-stage/README.md), whose
+> (`subject:libs`, `status:closing`). Split out of [@PLN144](../144-2d-stage/README.md), whose
 > scene arcs share a gate family these do not.
 > **Part of the 2-D game stack** — four plans cut from one design: @PLN144 the stage ·
 > @PLN145 text/tweens/widgets · @PLN146 content + delivery · @PLN147 the editor. Set overview,
@@ -14,7 +14,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Effectively COMPLETE — every phase this stream owns has shipped.** `text2d` 0.4.0 (arc B), `tween` 0.1.0 (`C1`), `stage` 0.18.0 (`C2` + `D1` + `D2`), `D0b` answered. **Only `D0` remains and it is not ours** — moros shipped `lavition_ui` 0.1.0 on 2026-08-20 and its registry entry is now blocked behind a red gate in `loft-lang/registry` that predates the submission — and no `ui` package will be built (§ The `ui` package that is not ours). These are the libraries a game author writes against
+**Effectively COMPLETE — every phase this stream owns has shipped.** `text2d` 0.4.0 (arc B), `tween` 0.1.0 (`C1`), `stage` 0.18.0 (`C2` + `D1` + `D2`), `D0b` answered. **`D0` is done on both sides** — moros shipped `lavition_ui` 0.1.0 on 2026-08-20, and the red gate in `loft-lang/registry` that predated the submission was cleared 2026-08-21 (it was a publish-path defect of ours, not a fault in their entry) — and no `ui` package will be built (§ The `ui` package that is not ours). These are the libraries a game author writes against
 *above* the stage. Each has its own gate family — a metrics seam, a headless font, an event
 replay — which is why they are not @PLN144's phases.
 
@@ -43,7 +43,7 @@ cut, not when it is implemented.
 | **B2** — wrapping + alignment | `text2d` | ✅ **Shipped** as `text2d` 0.4.0 — the trap is **measured, not assumed**: `"héllo"[0..5]` is `"héll"`, four characters, and loft snaps a byte cut outward so it under-fills rather than corrupting. ⚠ **`fit_text` had shipped that way in `B1m`** and is fixed here. Hand-computed table on the **built-in** face (the one target measurable without a font); self-consistency gated over fixed-pitch, fractional-advance and proportional metrics. Two design calls stated: a line always takes **≥1 character** (its control HANGS rather than asserting, and the timeout names the termination test), and an overlong line starts **at** its box under every alignment. Nine controls fire | ✅ **Shipped** |
 | **C1** — tween core + easing set | `tween` | ✅ **Shipped** as `tween` 0.1.0 — the two gates turned out to be **one defect with two faces**: float seconds sum to `0.99999999999999989` at 30 Hz and `1.00000000000000133` at 60 Hz, so the animation both parts by rate AND never arrives. Integer base units make the two rates equal *to the bit*. The endpoint needed the **other spelling of a lerp**: `a+(b−a)·t` lands on `b` for 5 of 8 pairs and answers **0.0** for `(1e17, 1.0)`; `a(1−t)+bt` lands 8 of 8. Eleven curves cover 33 by reflection, with the clamp **underneath** the reflections — in front of them an in-out at its midpoint asks the raw curve for `in(1)` and answers `0.5000000000000001`. Chains carry their leftover: discarding runs **43 % long at 30 Hz**. 20 tests, both backends, three controls fire | ✅ **Shipped** |
 | **C2** — bind to node properties | **`stage`** (0.16.0) | ✅ **Shipped** — and `advance` settled the placement: `stage.advance(dt_us)` already walks every node once a frame, so a bound tween **rides it** and one call steps the sequences and the property tweens together. That keeps `tween` dependency-free and decides the unit too — **microseconds**, because that is what `advance` takes. THE GATE is a parallel run (`draw_list.loft`'s A2 shape): eight frames of a tweened `x` compared **pixel for pixel** against a hand-moved node, with numbers picked so the hand side needs **no library call** (64 px / 800 000 µs sampled every 100 000 µs is exactly 8 px a frame). ⚠ The switch is gated **cell by cell** — each of nine properties must move its own field and no other. ⚠⚠ **At most one tween per (node, property)**; a second replaces it, and a finished one releases the property. 9 tests, suite 144 on both backends, three controls fire | ✅ **Shipped** |
-| **D0** — publish `lavition_ui` | upstream | 🟡 **moros's half is DONE 2026-08-20** — `lavition_ui-v0.1.0` tagged (`2692bfd`) and released, artifact re-downloaded from the published URL and checked (38 236 bytes, sha `ea646e67…`, 15 entries, no deps), registry PR [#24](https://github.com/loft-lang/registry/pull/24) open. ⛔ **But the Verify is NOT met and cannot be met by either tree**, see below | 🟡 **Shipped upstream, blocked in the registry** |
+| **D0** — publish `lavition_ui` | upstream | 🟡 **moros's half is DONE 2026-08-20** — `lavition_ui-v0.1.0` tagged (`2692bfd`) and released, artifact re-downloaded from the published URL and checked (38 236 bytes, sha `ea646e67…`, 15 entries, no deps), registry PR [#24](https://github.com/loft-lang/registry/pull/24) open. ✅ **The registry blocker is CLEARED 2026-08-21** — it was never about this submission: gate 1 was failing on untouched `registry:main` because `zttext` and `fixstep` carried `"categories": []`, and the producer that put them there (`registry_maintain.sh` seeding a new package with `[]`) is fixed at source. Backfilled + re-signed as registry `e7a7d43`; the push validation on `main` went **failure → success** across it. See below | ✅ **Shipped upstream; registry cleared** |
 | **D0b** — does `input` fit a consumer that already exists? | probe only | ✅ **Answered** ([`probe-d0b.loft`](probe-d0b.loft), both backends identical) — **adopt it, and do not expect it to resolve modifiers.** dryopea's 33-row action set expresses through `Bindings` and replays through `input_tick_from_state` exactly as `D1` needs; edge detection is correct headless. ⚠ But a **modifier is not expressible**, and it is structural: `ActionBinding` is a name + key list, `AxisBinding` is two key *codes*, and neither has a slot for *"suppressed while Ctrl is held"*. Measured: `input` answers **identically** for plain `S` and `Ctrl+S` (`pan_south=true, save=true` both times), so all five of dryopea's Ctrl-combos are indistinguishable from their plain twins — and an axis cannot carry the rule either, which is why dryopea's `bnd_axes` is **empty** and its four pan keys are four actions. ⚠⚠ **The premise was wrong**: dryopea ADOPTED `input`, so the widgets would be its *second* consumer, not the fourth — [PRIOR_ART](../144-2d-stage/PRIOR_ART.md) corrected | ✅ **Answered** |
 | **D1** — widget states over stage routing | **`stage`** (0.17.0) | ✅ **Shipped** — a replayed stream drives the exact state sequence (8 events, both buttons, every state hand-computed first); press-then-leave-then-release does **not** fire while press-then-drift-a-pixel does; touch never shows `Over`, and **one** recorded stream replayed as mouse and as touch fires identically, so the pointer kind changes only what is *shown*. ⚠⚠ **The invariant: a node reads `Down` exactly when a release would FIRE it** — one predicate serves the picture and the click, so a control that breaks the capture check does not even redden the down-means-fires gate: that class is **unrepresentable**, not caught. ⚠ **The fourth clause was struck**, not met — it rested on a premise that did not survive contact; see § The `ui` package that is not ours. 7 tests, suite 151 both backends, three controls fire | ✅ **Shipped** |
 | **D2** — focus, tab order, text field | **`stage`** (0.18.0) | ✅ **Shipped** — replayed keystrokes (incl. multi-character IME commits) produce the exact buffer; tab order is the declared order and wraps both ways. ⚠⚠ **Every index is a CHARACTER index and no byte index ever enters** — a caret *is* a count, and the control proves it: byte-slicing the one edit primitive leaves `"héllo"` **unchanged** after a backspace over the `é`, while all ten ASCII tests still pass. ⚠ **One `splice` does every edit** (insert / backspace / delete / replace-selection / paste). ⚠⚠ **The modifier dilemma was a false dichotomy** — neither answer was needed: `graphics`'s event queue already delivers `gl_event_mods()` per event, and a text field wants *this keystroke with these modifiers*, not an action. 11 tests, suite 162 both backends, three controls fire | ✅ **Shipped** |
@@ -124,6 +124,27 @@ So **gate 1 fails on untouched `main`** and every submission PR inherits a red t
 nothing to do with the submission. Clearing it means editing `index.json` in `loft-lang/registry`
 **and re-signing it**, which needs the signing key: a maintainer action, not a loft or a moros
 one. Until then `D0` is *shipped upstream, blocked in the registry*.
+
+⚠⚠ **CLEARED 2026-08-21, and the cause was a PRODUCER rather than the data.**
+`registry_maintain.sh` seeded a package new to the index with `"categories": []`, and the
+docs gate that rejects an empty one landed 2026-06-19 — so **every package first published
+since that date went in unmergeable**, and `zttext` and `fixstep` are exactly the two that
+had been. That is why the red tick appeared on somebody else's PR: gate 1 runs over the
+WHOLE index, so the first submission after a bad publish inherits it, and clearing it needs
+the signing key.
+
+Fixed in both directions. The **door**: the own-lib fold and the `submissions/` drain read
+`[package] categories` off the manifest and refuse a package the index has never seen without
+one. The **chokepoint**: `scripts/registry_schema_gate.sh` runs gate 1 out of the checkout
+being signed and `registry-sign.sh` refuses on a rejection, so a hand edit cannot get an
+unmergeable index signed either — and it IMPORTS `tools/validate.py` rather than restating
+its rules, because a second list of one type's facts drifts — and that one already has, in
+both directions ([loft#1052](https://github.com/loft-lang/loft/issues/1052)). Loft-side `583c31da`,
+registry `e7a7d43`.
+
+Measured before and after rather than reported: the registry's own push validation on `main`
+was **failure** at `205f8398` and **success** at `e7a7d43a`, and PR #24's index with the two
+backfills passes gate 1 locally while the same index without them fails on `zttext`.
 
 ⚠ **A doc of ours sent them the wrong way, and they were right not to follow it.**
 [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md) § 4 calls staging a `submissions/` file the
