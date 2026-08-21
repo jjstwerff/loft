@@ -76,6 +76,34 @@ un-ignored and passing).  See CHANGELOG.md.
 
 Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
 
+### The library-CI gate reddens library repos for reasons they cannot cure
+
+Found 2026-08-21 opening the eight `unify-library-ci-fpm` adoption PRs. Six went green; two did
+not, **neither for anything in the PR** — both branches only add workflow files. The gate is
+versioned centrally (`loft-lang/loft@main`), so a change here reddens every library repo on its
+next PR, landing on whoever opens one.
+
+| Repo | Red because | Owner |
+|---|---|---|
+| `loft-libs-docs` #4 | `markdown/src/markdown.loft:261` — *"Cannot index text with 'unknown'"*. A **forward-referenced** `atx_heading_level` (defined :383, called :252) leaves the slice bound unresolved in pass 1. | ✅ **Already fixed** — `1133e272` + `d822dd91`, unmerged on `tuxedo-pln145`. Goes green when that reaches `main`. |
+| `loft-libs-game` #11 | `missing: examples-index.tsv — run 'make examples-index'`. The `exindex` check landed here in `7786d28c` (2026-08-18); that repo's last CI run was 2026-08-17, so its first run after the change is its first red. | ⚠ **Open — see below** |
+
+⚠⚠ **The `exindex` message prescribes a cure the repo does not have.** `make examples-index`
+maps to `bash scripts/check_doc_drift.sh write-examples-index` — a script that lives in **this**
+repo. `loft-libs-game` has **no Makefile at all**, and no library repo carries that script; CI
+checks loft out separately as `loft-src`. So the gate tells a library maintainer to run
+something they cannot run.
+
+Two ways to close it and they are not equivalent: teach the check to **generate** the index from
+the checked-out `loft-src` when the repo has no Makefile, or **scope the check to this repo** and
+stop asserting it over library trees. The first keeps the coverage; the second admits the index
+is a loft-repo artefact. Decide before the next adoption round, because a centrally-versioned
+gate makes one unfixable row everybody's red.
+
+⚠ The `loft-libs-docs` row is the sharper lesson: **a published library stopped compiling and
+nothing said so for three weeks**, because that repo's CI had not run since 2026-07-28. A gate
+that only runs on a PR cannot report a break that arrives from outside the repo.
+
 ### JSON cluster
 
 | Item | Section | Status |
