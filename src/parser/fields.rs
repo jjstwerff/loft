@@ -1942,7 +1942,16 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // @PLN110 3a — snapshot the raw index BEFORE `convert` may wrap it, so the
         // strict-index lint below can still recognise a bare loop variable.
         let raw_index = p.unspan().clone();
-        if !self.convert(p, index_t, &I32) {
+        // A first-pass UNRESOLVED index is not a wrong one — it is one whose type
+        // pass 2 has not supplied yet, and refusing it here makes declaration order
+        // decide whether a program compiles.  `heading_text = line[start..ln]` in the
+        // published `markdown` broke exactly this way once operand deferral widened:
+        // `start = hlevel + 1` correctly defers on pass 1, so the index arrives here
+        // as `unknown` and this refusal fired on a program that had been compiling
+        // for two releases.  Pass 2 sees the real type and still refuses a genuinely
+        // non-integer index, which is the case this message is for.
+        let deferred = self.first_pass && index_t.is_unknown();
+        if !self.convert(p, index_t, &I32) && !deferred {
             // Name the offending type: the bare "invalid index" this used to
             // print reads as "indexing text is unsupported" and sent a consumer
             // hunting for a missing feature instead of at their index expression.

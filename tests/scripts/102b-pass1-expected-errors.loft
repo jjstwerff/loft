@@ -123,3 +123,16 @@ fn pe_nullable_vector_append_bare_element() {
   v += 5;
   assert(len(v) == 1, "unreached");
 }
+
+// A genuinely non-integer index is still refused, and this is the half that keeps the
+// pass-1 deferral honest: `parse_text_index` now lets an UNRESOLVED index through on
+// pass 1, because operand deferral can legitimately leave one untyped there and
+// refusing it made declaration order decide whether a program compiled (it retro-broke
+// the published `markdown` 0.2.0).  A KNOWN wrong type is a different thing and must
+// still stop the program — otherwise the deferral would have widened into silence.
+// @EXPECT_ERROR: Cannot index text with 'text'
+fn test_text_index_with_text_is_refused() {
+  s = "hello";
+  k = "x";
+  assert(s[k] == 'h', "unreached");
+}

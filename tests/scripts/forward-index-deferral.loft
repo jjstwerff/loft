@@ -1,0 +1,54 @@
+// An index whose type pass 1 has not resolved yet is not a wrong index.
+//
+// Operand deferral widened so that ANY unresolved operand defers to pass 2 (a KNOWN
+// operand beside an unknown one was OVERRIDING resolution, so `f() - 1` took its type
+// from the literal and pass 2's real return then contradicted it).  That is correct,
+// and it means an expression like `start = hlevel() + 1` legitimately arrives at pass 1
+// with no type when `hlevel` is declared lower in the file.
+//
+// `parse_text_index` refused such an index outright — "Cannot index text with
+// 'unknown'".  The published `markdown` 0.2.0 stopped compiling on exactly this shape
+// (`heading_text = line[start..ln]` at markdown.loft:261), a library that had been
+// building for two releases.  Declaration order must not decide whether a program
+// compiles; the two-pass parser exists so it does not.
+//
+// The refusal itself stays — on pass 2, where the type is real.  Its negative cell is
+// an @EXPECT_ERROR script, not this file, because a compile error cannot be asserted
+// from inside the program it kills.
+
+fn above() -> integer {
+  return 3;
+}
+
+fn hlevel() -> integer {
+  return 2;
+}
+
+fn width() -> integer {
+  return 3;
+}
+
+fn main() {
+  line = "## Title ##";
+
+  // The markdown shape: a bound computed from a callee declared BELOW this function.
+  start = hlevel() + 1;
+  ln = line.size();
+  assert(start < ln, "bounds are sane");
+  assert(line[start..ln] == "Title ##", "range index from a forward-declared callee");
+
+  // A single-position index through the same route.
+  assert(line[hlevel() + 1] == 'T', "scalar index from a forward-declared callee");
+
+  // Both bounds unresolved on pass 1, not just one.
+  lo = hlevel() + 1;
+  hi = hlevel() + width() + 4;
+  assert(line[lo..hi] == "Title ", "both bounds forward-declared");
+
+  // An open range, which takes the other arm of the same function.
+  assert(line[start..] == "Title ##", "open range from a forward-declared bound");
+
+  // And the backward direction is unchanged: a callee declared ABOVE still works.
+  assert(line[above()..ln] == "Title ##", "callee declared above");
+}
+
