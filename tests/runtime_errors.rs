@@ -663,3 +663,56 @@ fn i1056_a_clean_program_renders_no_fault() {
         "a passing assert must say nothing; got: {err}"
     );
 }
+
+/// A fault inside a lazy-store DRIVER is contained on both backends, not fatal.
+///
+/// @PLN133 S8 decided that a buggy driver makes the lookup answer null and reports itself
+/// through `store_lazy_error` — it is not the program's to die of. The generated driver
+/// call runs under `catch_unwind`, so the native path has to UNWIND rather than exit, and
+/// `report_and_exit` exits. `panic` had been exiting the process from inside a driver
+/// since it started using that path, and loft#1056 moved `assert` onto it too; both now
+/// take the same `in_lazy_driver` bypass `cr_stack_overflow` already had.
+///
+/// Both statements are checked because they reach the halt by different routes, and the
+/// interpreter contained both all along — so a regression here shows up as a backend
+/// disagreement, which is what `rendering_shared_by_both_backends` reports.
+#[test]
+fn i1056_a_fault_inside_a_lazy_driver_is_contained_on_both_backends() {
+    for (name, halt, marker) in [
+        (
+            "i1056_drv_assert",
+            "assert(false, \"DRIVER FAULT\")",
+            "assertion_failed: assertion failed: DRIVER FAULT",
+        ),
+        (
+            "i1056_drv_panic",
+            "panic(\"DRIVER FAULT\")",
+            "user_panic: panic: DRIVER FAULT",
+        ),
+    ] {
+        let source = format!(
+            "struct LzP {{ const id: integer, v: integer }}\n\
+             fn lazy_fetch(coll: hash<LzP[id]>, source: text, key_int: integer, key_text: text) -> integer {{\n\
+             \x20 {halt};\n\
+             \x20 return 0;\n\
+             }}\n\
+             fn main() {{\n\
+             \x20 people: hash<LzP[id]> = [];\n\
+             \x20 if !store_bind_lazy(people, \"postgres://127.0.0.1:1/nope\") {{ println(\"bind failed\"); return }}\n\
+             \x20 r = people[7];\n\
+             \x20 println(\"null={{r == null}}\");\n\
+             \x20 println(\"why={{store_lazy_error(people)}}\");\n\
+             \x20 println(\"survived1056\");\n\
+             }}\n"
+        );
+        let (out, _err) = rendering_shared_by_both_backends(name, &source);
+        assert!(
+            out.contains("survived1056"),
+            "{name}: a driver's fault must not halt the program\nstdout: {out}"
+        );
+        assert!(
+            out.contains("null=true") && out.contains(&format!("why={marker}")),
+            "{name}: the lookup answers null and the reason reaches `store_lazy_error`\nstdout: {out}"
+        );
+    }
+}

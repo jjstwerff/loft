@@ -416,6 +416,34 @@ The rule that catches it is the one already written for `@EXPECT`, applied to ev
 channel: **the cell asserts its VALUE, and the diagnostic is an extra assertion, never
 the only one.**  `@EXPECT` plus `@EXPECT_LEAK` together, not `@EXPECT_LEAK` alone.
 
+**And a third door: a channel CAPTURED but never compared.**  The two above are about a
+check that looked at the wrong thing.  This one is about a check that collected the right
+thing and threw it away.  `tests/differential_oracle.rs` has recorded each backend's
+stderr in its `ModeRun` since the day it was built, and used it only to grep for the leak
+substring — the two backends' diagnostics were never compared to each other.  That is how
+the same failed `assert` printed a loft diagnostic on `--interpret` and a Rust panic
+naming `/tmp/loft_native_*.rs` on `--native` for as long as both existed (loft#1056),
+while a green oracle sat over it.  A field in the harness's own result struct reads like
+coverage and is not.
+
+The three doors together give one question to ask of any instrument: **for each channel
+it captures, name the assertion that compares it, and name a case where that assertion
+FIRES.**  A channel with no comparison is the third door; a comparison with no case that
+can disagree is the "exercised by nothing" trap (thirty corpus programs all exited 0, so
+an exit-code comparator that had run since the oracle was built had never once compared a
+NON-ZERO code); and a comparison scored on the wrong channel is the first two.
+
+**A filed blocker is a hypothesis, exactly like a filed root cause.**  CLAUDE.md already
+says an `OPEN: 0` line is a claim to re-measure; the same holds for the sentence in an
+issue that says why it was NOT fixed.  loft#1056 was filed with "converging the two
+renderings would lose the loft call frames, so it needs a decision about `panic`'s output
+too" — written from reading `report_and_exit` and the browser panic hook.  Measured, the
+frames did not exist to lose: `RuntimeError::call_chain` is hardcoded `Vec::new()` at both
+the `user_panic` and `assertion_failed` constructors, so neither backend printed any.  One
+`--interpret` run of a three-deep call chain says so in ten seconds, and the "design call"
+evaporates.  Before honouring a blocker written by anyone — including yourself — run the
+probe that would show it is not there.
+
 **The INSTALLED `loft` is a free before/after oracle.**  `$(which loft)` is
 whatever `make install` last put there, so during a fix it is a ready-built
 binary from before your edits — no worktree, no second build, and none of the

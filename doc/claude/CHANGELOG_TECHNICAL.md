@@ -58,6 +58,16 @@ comparator proved able to report a difference. Five regression cells in
 names, and `html_panic_names_itself_and_its_loft_frames` now pins the diagnostic as well as
 the frames, so a page that fell back to a bare Rust panic cannot pass it.
 
+**A hazard the differential matrix missed because it held one axis fixed.** All eleven
+cells ran outside a lazy-store driver. @PLN133 S8 decided a fault inside a DRIVER is
+contained — the lookup answers null and the reason reaches `store_lazy_error` — and the
+generated driver call runs under `catch_unwind`, so moving `assert` onto `report_and_exit`
+made it exit the process where the interpreter contained it. The same probe showed `panic`
+had been doing exactly that since it started using that path. Both now take the
+`in_lazy_driver` bypass `cr_stack_overflow` and the crash-report hook already carried, and
+unwind with the payload spelled the way the interpreter's contained-fetch spells it
+(`<kind label>: <message>`), so `store_lazy_error` reads identically on both.
+
 **The oracle had been collecting the evidence and discarding it.**
 `tests/differential_oracle.rs` has captured stderr since it was built and compared it only
 for the leak substring — so the channel that would have caught this the day

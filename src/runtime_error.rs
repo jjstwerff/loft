@@ -203,6 +203,24 @@ impl RuntimeError {
     /// `native.rs::n_panic`: a generated binary boots a plain `Stores` with no logger, so
     /// the log-and-continue mode is not reachable on this path.
     pub fn report_and_exit(&self) -> ! {
+        // @PLN133 S8 — a fault inside a lazy DRIVER is the driver's, not the program's.
+        // The generated driver call runs under `catch_unwind` and turns the payload into
+        // `store_lazy_error`, so this UNWINDS into it instead of exiting: a buggy driver
+        // makes the lookup answer null and the program carry on, which is what the
+        // interpreter does, and the two backends must not disagree about whether a buggy
+        // driver halts a program.  The payload is spelled the way the interpreter's
+        // contained-fetch spells it (`<kind label>: <message>`) so `store_lazy_error`
+        // reads identically on both.  Before the lock below, deliberately: taking a lock
+        // that is never released and then unwinding past it would deadlock the next
+        // genuine halt.
+        //
+        // `cr_stack_overflow` and the crash-report panic hook already carry this test;
+        // this is the third site, and the one `assert` reached when loft#1056 moved it
+        // onto this path — `panic` had been exiting the process from inside a driver
+        // since it started using `report_and_exit`.
+        if crate::codegen_runtime::in_lazy_driver() {
+            std::panic::panic_any(format!("{}: {}", self.kind.label(), self.message));
+        }
         // loft#1056 — a halting fault is the PROGRAM's halt, so it is reported ONCE
         // however many `par` workers reach it in the same instant.  Before this, six
         // items over two workers printed the same diagnostic twice on `--native` and
