@@ -154,6 +154,46 @@ The straight-line variant + I-b shipped via last-use freeing (reclaim, now defau
 > conditionally-allocated returned store at exit — the return-of-conditionally-allocated-vector
 > free is missed; exit-safe, no test exercises it, a cluster-III-family follow-up.
 
+## Re-measured 2026-08-21 — the gate still works, on 2.2× the tests
+
+The 2026-06 result above was verified against a 1923-test suite. Re-run today:
+
+| shape | sites | default | `LOFT_CONF_RECOVER=1` |
+|---|---|---|---|
+| consumed IN the block (confinable) | 2 / 4 / 8 / 16 | peak 6 / 8 / 12 / **20** | peak 5 / 5 / 5 / **5** |
+| read AFTER the block (must not confine) | any | unchanged | unchanged |
+| straight-line (shipped, last-use freeing) | 4 / 16 / 32 | peak 4 / 4 / 4 | peak 4 / 4 / 4 |
+
+So the residual is **O(reassignment SITES)**, and it is the site count that drives it, not the
+executed path: the same program with `k = 0`, `7`, `15` and `99` — one arm taken each time —
+all read peak 20 at 16 sites. The gate turns that into a flat 5, reproducing the doc's
+`8 → 5` exactly at 4 sites. Values are identical with the gate on and off, on BOTH backends.
+
+**Full suite green with `LOFT_CONF_RECOVER=1`: 4232 passed, 33 skipped** — the evidence the
+un-gate decision was parked on, refreshed against 2.2× the tests it originally had.
+
+Two things this re-measurement corrects for whoever picks it up:
+
+- **Measure the site count, not the loop count.** A sweep over loop ITERATIONS shows peak
+  flat and reads as "no residual" — each call's stores are freed at return. The pin is
+  within one scope, so the axis is how many reassignment sites that scope contains.
+- **A post-block read makes the gate look inert.** `z = …; if c { z = … } z[1]` shows
+  identical peaks with the gate on and off, which reads as bit-rot and is the soundness
+  gate declining to confine — correctly, since that is the shape whose confinement returned
+  the wrong element on the branch not taken.
+
+Values under both settings are now pinned by `tests/scripts/reassign-across-sibling-blocks.loft`
+(both backends, and written to pass with the gate either way — run the suite with
+`LOFT_CONF_RECOVER=1` before changing the default). The watermark itself is not asserted:
+loft cannot read its own store peak, so the numbers live in that file's header.
+
+**Still an owner decision, unchanged.** What the re-measurement adds is that the benefit is
+real and scales (O(sites) → O(1)), the analysis still refuses the unsound shapes, and the
+suite is green with it on. What it does not change is the cost/benefit: the shape has to be
+a shared local reassigned across sibling blocks and never read after them.
+
+---
+
 ## Fix options (Stage C) — **active next focus (2026-06)**
 
 Cluster III is the next piece, chosen because the shared-variable residual of cluster I-a
