@@ -289,3 +289,58 @@ fn pe_capturing(x: integer) -> fn(integer) -> integer {
 fn test_par_capturing_closure() {
   for i in 0..3 par(f = pe_capturing(i), 2) { print("{f(10)}"); }
 }
+
+// loft#1060 — a par worker's first argument IS the loop element: the dispatcher passes
+// each element itself, so anything else written there was parsed and thrown away.  Each
+// of these ran a program the author did not write, and said nothing.
+
+fn pe_ctx() -> integer { return 42; }
+struct PeSq { tag: integer, n: integer }
+fn pe_takes_int(v: integer) -> integer { return v * 100; }
+
+// A constant where the element belongs: the worker ran on the ELEMENT, so `w` held the
+// item (1, 2) and never 5.
+// @EXPECT_ERROR: its first argument is the loop element
+fn test_par_first_arg_constant() {
+  rows = [1, 2];
+  for a in rows par(w = pe_double(5), 2) { print("{w}"); }
+}
+
+// A different variable of the same type — the type check cannot separate this one, only
+// the identity of the argument can.
+// @EXPECT_ERROR: its first argument is the loop element
+fn test_par_first_arg_other_variable() {
+  other = 50;
+  rows = [1, 2];
+  for a in rows par(w = pe_double(other), 2) { print("{w}"); }
+}
+
+// A FIELD of the element.  This was the sharpest one: the worker was handed the whole
+// record and read its first 8 bytes as the integer, so a `PeSq{tag, n}` element answered
+// `tag * 100` and never touched `n`.
+// Two diagnostics, and both are the point: the argument is not the element, AND the worker
+// could not have taken the element anyway — which is the check that was missing when this
+// compiled and answered `tag * 100`.
+// @EXPECT_ERROR: its first argument is the loop element
+// @EXPECT_ERROR: receives the loop element, but expected integer, got PeSq
+fn test_par_first_arg_element_field() {
+  rows = [PeSq { tag: 1, n: 7 }, PeSq { tag: 2, n: 9 }];
+  for a in rows par(w = pe_takes_int(a.n), 2) { print("{w}"); }
+}
+
+// The element IS the first argument, but the worker cannot take it.  The sequential
+// `b = pe_takes_int(a)` refuses this with "expected integer, got PeSq"; the par form
+// accepted it and reinterpreted the record.  `formal/concurrency.md` (C-Det) makes the
+// two forms observably equal, so the par path has to refuse what the sequential one does.
+// @EXPECT_ERROR: receives the loop element, but expected integer, got PeSq
+fn test_par_first_param_type_mismatch() {
+  rows = [PeSq { tag: 1, n: 7 }];
+  for a in rows par(w = pe_takes_int(a), 2) { print("{w}"); }
+}
+
+// No parameter at all, so nothing can receive the element.
+// @EXPECT_ERROR: it declares no parameters
+fn test_par_worker_without_parameters() {
+  rows = [1, 2];
+  for a in rows par(w = pe_ctx(), 2) { print("{w}"); }
+}

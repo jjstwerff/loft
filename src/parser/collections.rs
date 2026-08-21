@@ -3483,7 +3483,7 @@ use #count instead"
             if let Some(d_var_nrs) = destructure_var_nrs.as_ref() {
                 self.parse_destructure_par_worker(&elem_tp, d_var_nrs)
             } else {
-                self.parse_parallel_worker(src_elem_var, &elem_tp)
+                self.parse_parallel_worker(src_elem_var, elem_var_nr, &elem_tp)
             };
         // loft#808 — the one place BOTH worker-resolution shapes converge, so it is
         // where "this def is a par worker" is recorded.  A pure-value tuple return

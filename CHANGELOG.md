@@ -60,6 +60,25 @@ error: assertion failed: n was 9
 Inside a `par` worker the frames are the worker's own, and the halt is reported once
 however many workers hit it at the same moment.
 
+### A `par` worker no longer ignores what you wrote as its first argument
+
+The first argument of a `par` worker is the loop element — the loop hands each element to
+the worker itself. Writing anything else there used to be accepted and quietly replaced:
+
+```loft
+for a in rows par(b = takes_int(a.n), 2) { println("b={b}"); }
+```
+
+That ran `takes_int(a)` — the whole record, reinterpreted as an `integer` — so a
+`Sq { tag, n }` element answered `tag * 100` and never read `n`. Move `n` to the front of
+the struct and the same program answered differently. `f(5)` and `f(other)` were replaced
+the same way.
+
+All of these are now compile errors that say what to write instead, including a worker
+whose first parameter cannot take the element at all — the check the ordinary
+`b = takes_int(a)` has always made. The documented form is unchanged: pass the element
+first, read what you need inside the worker, and pass extra context after it.
+
 ### Runaway recursion stops at the same place on both backends
 
 A program that recurses without end is stopped at 10 000 stack frames. Which frame that

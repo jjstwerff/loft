@@ -10,7 +10,12 @@
 //
 // @EXPECT_ERROR: captured argument 'cap' is a reference
 // @EXPECT_ERROR: captured argument 's' is a reference
-// @EXPECT_ERROR: first parameter 'first' is the loop element
+// The mis-ordered case reports through loft#1060's pair, which replaced the narrower kind
+// test that used to stand here.  Both are true of `misordered(c, x)` and each is separately
+// actionable: the argument written first is not the element, AND the parameter it would
+// land in cannot take one.
+// @EXPECT_ERROR: its first argument is the loop element
+// @EXPECT_ERROR: receives the loop element, but expected vector<integer>, got integer
 
 struct S {
   n: integer,

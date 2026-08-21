@@ -247,6 +247,9 @@ the threads would still have to come from the host — which is what @PLN117 alr
 | Second arg is `Type::Vector` | `parse_parallel_for` | `"second argument must be a vector"` |
 | Worker return type is primitive | `parse_parallel_for` | `"worker return type '…' must be integer, float, or boolean"` |
 | Extra arg count matches worker | `parse_parallel_for` | `"wrong number of extra arguments"` |
+| Worker's first argument IS the loop element | `parse_parallel_worker_fn` | `"its first argument is the loop element '<a>'"` |
+| Worker declares a parameter to receive it | `parse_parallel_worker_fn` | `"it declares no parameters"` |
+| Worker's first parameter accepts the element type | `parse_parallel_worker_fn` | `"receives the loop element, but expected <T>, got <U>"` |
 
 ---
 
@@ -287,6 +290,16 @@ Two worker call forms are supported:
 |---|---|---|
 | Form 1 | `func(a)` | Global/user function; `a` is the loop element |
 | Form 2 | `a.method()` | Method on the element type |
+
+**`a` is not optional and not a placeholder.** The dispatcher passes each element to the
+worker itself, so the first argument is the only thing it can be — the loop element,
+written out.  Anything else there names a value the worker never receives, and until
+loft#1060 it was accepted silently: `func(5)` and `func(other)` ran `func(a)`, and
+`func(a.n)` handed the worker the whole record to reinterpret as its parameter's type.
+All three are refused now, as is a worker declaring no parameter to receive the element,
+and a worker whose first parameter type cannot take it — the check the sequential
+`b = func(a)` always made.  Read what you need INSIDE the worker (`func(a)` then `a.n`),
+and pass anything else after the element as a context argument.
 
 Form 3 (`c.method(a)` — captured receiver) is detected but not yet implemented.
 

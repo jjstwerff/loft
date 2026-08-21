@@ -189,6 +189,8 @@ impl Parser {
     pub(crate) fn parse_parallel_worker_fn(
         &mut self,
         first_id: &str,
+        elem_var: &str,
+        elem_var_nr: u16,
         elem_tp: &Type,
     ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         // Resolve function name: try n_<name> first (user function convention).
@@ -204,10 +206,16 @@ impl Parser {
         // Parse the argument list — skip first arg (element), collect extras.
         let mut extra_vals = Vec::new();
         let mut extra_types = Vec::new();
+        let mut first_arg_is_element = true;
         if self.lexer.has_token("(") {
-            // Skip the first argument (element variable reference).
-            let mut dummy = Value::Null;
-            self.expression(&mut dummy);
+            // The first argument names the loop ELEMENT: the dispatcher passes each
+            // element to the worker itself, so whatever stands here is not evaluated.
+            // It is READ rather than discarded, because a first argument that is not the
+            // element is a program the author did not write — `w(other)` silently became
+            // `w(a)`, and `w(a.n)` handed the worker the whole record.
+            let mut first = Value::Null;
+            self.expression(&mut first);
+            first_arg_is_element = matches!(first, Value::Var(nr) if nr == elem_var_nr);
             // Collect remaining arguments as extra context args.
             while self.lexer.has_token(",") {
                 if self.lexer.peek_token(")") {
@@ -305,9 +313,8 @@ impl Parser {
         // codegen.  Disallow it cleanly (no runtime errors, ever — we do not allow what
         // cannot work rather than run it).  A captured SCALAR crosses by value; the loop
         // ELEMENT (param 0) may be a reference — the dispatcher copies each element into
-        // the worker.  Checks: (A) param 0's reference-vs-scalar kind must match the
-        // element type (catches the element passed as a non-first arg, which mis-mapped
-        // and crashed); (B) every captured (context) param must be a scalar.
+        // the worker.  Two things are checked here: the ELEMENT reaches param 0 intact
+        // (loft#1060), and every captured (context) param is a scalar.
         if !self.first_pass {
             let is_heap_ref = |tp: &Type| {
                 matches!(
@@ -329,45 +336,85 @@ impl Parser {
                         && !self.data.def(d_nr).attributes()[a].hidden
                 })
                 .collect();
-            // (A) mis-order — fire ONLY on the clear case: a PLAIN-SCALAR loop element paired
-            // with a first param that is a heap COLLECTION (a captured container passed where
-            // the element belongs, `vr(sh, x)`).  Deliberately narrow: a tuple / text / struct
-            // / nullable-wrapper element (or a `const` param that reads as a reference) is NOT a
-            // mismatch — those match by value/kind and used to false-positive.
-            let is_plain_scalar = |tp: &Type| {
-                matches!(
-                    tp,
-                    Type::Integer(..)
-                        | Type::Float
-                        | Type::Single
-                        | Type::Boolean
-                        | Type::Character
-                )
-            };
-            let is_collection = |tp: &Type| {
-                matches!(
-                    tp,
-                    Type::Vector(..)
-                        | Type::Reference(..)
-                        | Type::Hash(..)
-                        | Type::Sorted(..)
-                        | Type::Index(..)
-                        | Type::Radix(..)
-                        | Type::Trie(..)
-                )
-            };
-            if is_plain_scalar(elem_tp)
-                && let Some(&p0) = real_params.first()
-                && is_collection(&self.data.attr_type(d_nr, p0))
-            {
+            // loft#1060 — the first argument must BE the loop element, and the worker's
+            // first parameter must accept it.  Both were unchecked, and each on its own
+            // produces a wrong answer with nothing said:
+            //
+            //   par(b = dbl(other), 2)       ran dbl(a)   — the element, not `other`
+            //   par(b = takes_int(a.n), 2)   ran takes_int(a) and read the record's FIRST
+            //                                8 bytes as the integer: a `Sq{tag, n}` element
+            //                                answered `tag * 100`, never touching `n`
+            //
+            // The type half is the sharper one: `formal/concurrency.md` (C-Det) makes the
+            // par form observably equal to the sequential `for a in src { b := worker(a) }`,
+            // and the sequential form REFUSES `takes_int(a)` on a struct element —
+            // "expected integer, got Sq on argument 1".  So the par path was accepting a
+            // program the rule says must not compile, and the reinterpretation followed.
+            // `can_convert` is the predicate the ordinary call site uses, so the two now
+            // agree by construction rather than by two hand-rolled kind tests kept in step.
+            //
+            // These two replace the narrower kind test that stood here — a scalar element
+            // paired with a COLLECTION first param, the `misordered(c, x)` shape.  That
+            // condition is a strict subset of these: passing the container first fails the
+            // identity test, and a worker whose param 0 cannot take the element fails the
+            // type test.  One mistake earned three messages while all three stood, so the
+            // subset went and its shape is still refused, by the first of these two.
+            // A worker with NO parameter gets only that message: the argument complaint
+            // below would tell the author to write `f(a, …)` against a function that has
+            // nowhere to put `a`, which is advice they cannot take.
+            if real_params.is_empty() {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "par worker '{first_id}': its first parameter '{}' is the loop element, but \
-                     its type does not match the element — the element must be the FIRST \
-                     argument; pass captured value(s) after it",
-                    self.data.attr_name(d_nr, p0)
+                    "par worker '{first_id}': it declares no parameters, so it has nothing \
+                     to receive the loop element '{elem_var}' with.  A par worker's first \
+                     parameter IS the element."
                 );
+            } else if !first_arg_is_element {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "par worker '{first_id}': its first argument is the loop element \
+                     '{elem_var}' — the dispatcher passes each element itself, so anything \
+                     else written there is not evaluated.  Write '{first_id}({elem_var}, …)' \
+                     and read what you need inside the worker."
+                );
+            }
+            if let Some(&p0) = real_params.first() {
+                let p0_tp = self.data.attr_type(d_nr, p0);
+                // A TUPLE element reaches its worker in the synthetic boxed spelling the par
+                // lowering promotes it to (loft#808, `__tuple<integer,integer>`), so the two
+                // names differ while the type does not.  Built with the same `format!` every
+                // other site resolves that def by, rather than a second spelling to keep in
+                // step.
+                let boxes_the_same_tuple = |data: &crate::data::Data, t: &Type, r: &Type| {
+                    let (Type::Tuple(elems), Type::Reference(d, _)) = (t, r) else {
+                        return false;
+                    };
+                    let inner: Vec<String> = elems.iter().map(|e| e.name(data)).collect();
+                    data.def(*d).name() == format!("__tuple<{}>", inner.join(","))
+                };
+                // Either side may carry the boxed spelling: the ELEMENT does when the source
+                // is a `vector<(integer, integer)>` (the collection stores the synthetic
+                // struct), the PARAMETER does when the worker's return promoted it.
+                let boxed_tuple = boxes_the_same_tuple(&self.data, &p0_tp, elem_tp)
+                    || boxes_the_same_tuple(&self.data, elem_tp, &p0_tp);
+                // `is_equal` before `can_convert`: it compares a struct by DEFINITION, and the
+                // element's type carries the dep list of the collection it came out of while
+                // the declared parameter carries none — `can_convert`'s `!=` gate reads that
+                // as two different types and refuses `Num` against `Num`.  `can_convert` then
+                // covers the conversions an ordinary argument gets.
+                if !boxed_tuple && !elem_tp.is_equal(&p0_tp) && !self.can_convert(elem_tp, &p0_tp) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "par worker '{first_id}': its first parameter '{}' receives the loop \
+                         element, but expected {}, got {}",
+                        self.data.attr_name(d_nr, p0),
+                        p0_tp.name(&self.data),
+                        elem_tp.name(&self.data)
+                    );
+                }
             }
             // (B) captured (context) params must be scalars, not references.
             for &a in real_params.iter().skip(1) {
@@ -558,6 +605,7 @@ impl Parser {
     pub(crate) fn parse_parallel_worker(
         &mut self,
         elem_var: &str,
+        elem_var_nr: u16,
         elem_tp: &Type,
     ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         let Some(first_id) = self.lexer.has_identifier() else {
@@ -593,7 +641,7 @@ impl Parser {
             (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new())
         } else {
             // ── Form 1: func(a, extra...) ─────────────────────────────────────
-            self.parse_parallel_worker_fn(&first_id, elem_tp)
+            self.parse_parallel_worker_fn(&first_id, elem_var, elem_var_nr, elem_tp)
         }
     }
 

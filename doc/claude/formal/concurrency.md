@@ -120,6 +120,14 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
   worker store leaks.
 - **Hash walk order (`C-Order`)** — `for x in h par(…)` may differ in order from `for x in h`;
   both backends agree with each other on the par order (the unsorted bucket walk).
+- **The SEQUENTIAL loop is `C-Det`'s oracle, and the differential one cannot replace it** —
+  the check above compares the two backends, so a rule violation they SHARE is invisible to
+  it however many programs the corpus grows to. loft#1060 was exactly that: `par(b = f(a.n), N)`
+  discarded the written argument, handed the worker the whole record and reinterpreted it as the
+  parameter's type, identically on both backends — while `b = f(a.n)` in a plain `for` was
+  refused at compile time (*"expected integer, got Sq"*). `C-Det` names the sequential form as
+  the standard precisely so that "both backends agree" cannot be mistaken for "the rule holds";
+  the accept/reject sides must agree with it too, not only the values.
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on a
 `par` loop's result — for any thread count — is the definitional error this doc names (and, per

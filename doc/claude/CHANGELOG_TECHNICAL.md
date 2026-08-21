@@ -9,6 +9,42 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `par` worker read the element, whatever the call site wrote (loft#1060, 2026-08-21)
+
+```
+$ loft --interpret r.loft            # identical on --native
+b=100      <-- for a in rows par(b = takes_int(a.n), 2) — `tag * 100`, `n` never read
+c=2        <-- for a in ns   par(c = dbl(other), 2)     — the element, `other` never read
+```
+
+`parse_parallel_worker_fn` parsed the worker call's first argument into a `dummy` and
+dropped it, because the dispatcher passes the element itself. Nothing checked that the
+argument named the element, and nothing checked that the worker's first PARAMETER could
+take it — so `takes_int(a.n)` handed the worker the whole record and it read the first
+eight bytes as its `integer`. The answer depended on struct FIELD ORDER, which is how it
+stayed hidden: put `n` first and the same program is right.
+
+**The differential oracle could not have caught this.** Both backends agreed — they share
+the parser. `formal/concurrency.md` `(C-Det)` names the SEQUENTIAL loop as the standard,
+and the sequential `b = takes_int(a)` refuses this program outright (*"expected integer,
+got Sq on argument 1"*). So the accept/reject sides of the two forms had drifted, in a
+place a two-backend comparison structurally cannot see. That is now written into the doc's
+Conformance section beside the differential bullet.
+
+The `(A)` kind check already sitting at this site had been narrowed deliberately — scalar
+element paired with a collection first param — to stop false positives, which left the
+REVERSE direction open, and the reverse direction is the one that reinterprets. The fix
+takes the predicate the ordinary call site uses (`can_convert`, after an `is_equal`
+identity test, because the element's type carries the dep list of the collection it came
+out of and the declared parameter carries none) rather than adding a third hand-rolled
+kind test to keep in step with the other two. Identity is compared by VARIABLE NUMBER, so
+a loop that re-spells the element name (loft#915) is handled.
+
+Four shapes refused, all previously silent: a constant, an unrelated variable, a field of
+the element, and a worker declaring no parameter at all. Guards in
+`tests/scripts/36-parse-errors.loft`; the legitimate forms — struct element, extra context
+argument, `a.method()`, scalar element — are verified value-by-value on both backends.
+
 ### One cap, one guard — the call-stack limit stops meaning two things (loft#1058, 2026-08-21)
 
 ```
