@@ -201,7 +201,27 @@ impl Output<'_> {
                 return write!(w, "({d_nr}_u32, loft::keys::DbRef::NULL)");
             }
             ValueType::Parallel => {
-                return write!(w, "/* parallel {{}} — not supported in native codegen */");
+                // REFUSE, do not skip.  This emitted a comment and nothing else, so a
+                // `parallel { … }` block compiled to NOTHING on the default backend: the
+                // arms never ran, no diagnostic was printed, and the program exited 0
+                // having done none of the work it asked for.  LOFT.md § Concurrency
+                // documents the construct, so that is a silent contract violation, and the
+                // par family next door already fails LOUDLY on native (`todo!()`), which
+                // made the two spellings of "run this concurrently" behave oppositely.
+                //
+                // C79's rule decides it: an error can be dropped later, a silently
+                // different semantics cannot.  A refusal names the backend to use; a
+                // no-op leaves the author believing work happened.  The interpreter carries
+                // the full semantics, so `--interpret` is a real answer rather than advice
+                // to go and implement something.
+                return write!(
+                    w,
+                    "compile_error!(\"loft --native: a `parallel {{ … }}` block is not \
+                     supported by native codegen yet — its arms would silently not run. \
+                     Run this program with --interpret, which implements the block fully, \
+                     or express the work as `for x in xs par(y = f(x), n) {{ … }}`, which \
+                     native does lower.\")"
+                );
             }
             ValueType::FnRefDnr => {
                 // P215: project the d_nr from a fn-ref var's (u32, DbRef) tuple.
