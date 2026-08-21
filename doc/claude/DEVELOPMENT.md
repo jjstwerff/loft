@@ -140,6 +140,32 @@ collides, and spinning off sub-branches multiplied the surface.  The only clean 
 to cherry-pick just the genuine delta onto fresh `main` — exactly the reconciliation a
 regular rebase would have done a little at a time.  Rebase early, rebase often.
 
+**When you DO rebase onto a squash that carried your commits, two mechanical rules
+(2026-08-21).**  A peer's PR squash-merged 41 of this branch's commits under new hashes:
+
+1. **Test "already upstream" BEFORE resolving a conflict, not after.**  Git's patch-id
+   dedup silently drops the commits that survived the carry unchanged — 32 of the 41 here
+   — but any commit the carrier EDITED has a different patch, so it conflicts and then gets
+   force-applied ON TOP of the version already in `main`.  That is not a merge artefact
+   you notice: it defines `WorkerState`, `WORKER_FATAL` and `take_worker_fatal` twice and
+   the tree stops compiling (`E0428`, `E0119`).  A resolver loop that resolves first and
+   skips second feeds duplicates through commit after commit; ordering the skip test first
+   took the survivors from 9 to 4.  Build the skip list from the squash commit's own body
+   (`git show --format=%b -s <squash> | grep '^\* '`) and treat subject matching as
+   approximate — some content lands under a different subject, so a build is still the
+   verdict.
+2. **A completed rebase is not a verified rebase.**  `git rebase` printed *Successfully
+   rebased* on the tree that did not compile, and nothing in git was going to say
+   otherwise — `git status` was clean, the log looked right, `--force-with-lease` would
+   have pushed it.  Build, and re-run the change's own probes, BETWEEN the rebase and the
+   push.
+
+Resolving the conflicts themselves: where both sides touched one region, `main` was almost
+always the LATER state of the same work — the carrier had corrections on top, so a residual
+this branch still recorded as "open" was already "closed" there.  Keep `main`'s side for
+those.  Keep BOTH sides only for append-only files like `CHANGELOG.md`, where the two sides
+are independent entries rather than two versions of one.
+
 ### Sprint branch naming
 
 ```

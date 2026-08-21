@@ -187,21 +187,23 @@ impl RuntimeError {
         }
     }
 
-    /// Render a user `panic("msg")` the way the interpreter does, then halt.
+    /// Render an explicit halt — `panic("msg")` or a failed `assert` — the way the
+    /// interpreter does, then stop the program.
     ///
     /// The `--native` backend has no bytecode loop to notice `had_fatal` between
     /// statements — the generated `main` only checks it after `n_main` RETURNS — so a
-    /// native `panic` has to report and exit at the call site or it does not halt at all.
+    /// native halt has to report and exit at the call site or it does not halt at all.
     /// Before this existed the generator emitted `fn n_panic(..) {}`, an empty body: on
     /// the DEFAULT backend `panic` printed nothing, halted nothing, and exited 0, while
-    /// `--interpret` printed the error and exited 1.  (`assert` was unaffected — it is
-    /// special-cased in the generator with a real body.)
+    /// `--interpret` printed the error and exited 1.  `assert` had the opposite fault —
+    /// a real body, but a bare `panic!` naming the generated temp file — and joined this
+    /// path with loft#1056.
     ///
-    /// Shared with the interpreter's reporting path (`main.rs`) through the same
-    /// `to_diag_entry` + `render_entry_pretty` pair, so both backends emit byte-identical
-    /// text for the same panic.  There is no production-mode branch here, unlike
-    /// `native.rs::n_panic`: a generated binary boots a plain `Stores` with no logger, so
-    /// the log-and-continue mode is not reachable on this path.
+    /// Shared with the interpreter's reporting path (`main.rs`) through [`Self::render`],
+    /// so both backends emit byte-identical text for the same fault.  There is no
+    /// production-mode branch here, unlike `native.rs::n_panic`: a generated binary boots
+    /// a plain `Stores` with no logger, so the log-and-continue mode is not reachable on
+    /// this path.
     pub fn report_and_exit(&self) -> ! {
         // @PLN133 S8 — a fault inside a lazy DRIVER is the driver's, not the program's.
         // The generated driver call runs under `catch_unwind` and turns the payload into
