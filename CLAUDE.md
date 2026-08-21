@@ -493,3 +493,14 @@ but leaves the scalar element read UNFUSED, one bisect step finer, and is the mi
 showed stage 2 is worth ~3.2× on top of stage 1 (projected ~1.4×) — more than the hoist itself,
 because the second store resolution it removes costs more than the arithmetic it saves.
 PERFORMANCE.md § Design: P2, NATIVE.md.
+
+**Store confinement across sibling blocks (default-ON since 2026-08-21, both backends):** a
+local reassigned across sibling `if`/`else if`/`match` arms used to keep EVERY arm's store
+alive to scope exit, so the watermark grew with the number of reassignment SITES rather than
+with how many of them run — a 16-site function peaked at 20 stores whichever single arm was
+taken. `recover_backer` confines each block's store to its block: a flat **5** at 2, 4, 8 and
+16 sites. **`LOFT_NO_CONF_RECOVER=1`** emits the pre-confinement form and is the first bisect
+step for a wrong answer in a function that reassigns a local across sibling blocks. ⚠ The
+soundness condition is `store_dead_after_block`, NOT the flag: a local READ after the blocks
+does not confine, because freeing a confined store while the local still holds it returns the
+wrong element on the branch NOT taken. QUALITY.md § Cluster III Route 2.

@@ -1831,18 +1831,6 @@ pub(crate) fn read_tuple_at_wide(
     buf
 }
 
-/// Run N independent arms concurrently, each at a given bytecode position.
-#[allow(dead_code)]
-/// Each arm runs as a void function (no args, no return value).
-/// Uses the same store-isolation model as `par()`: each arm gets a read-only snapshot.
-/// # Panics
-/// Panics if any arm thread panics.
-// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-// (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
-#[cfg_attr(
-    any(not(feature = "threading"), feature = "wasm"),
-    allow(clippy::needless_pass_by_value)
-)]
 /// A worker's fatal halt, carried to the parent so the WHOLE program stops.
 ///
 /// `assert` and `panic` are not exceptions and nothing here propagates one: a failing
@@ -1875,6 +1863,18 @@ pub fn take_worker_fatal() -> Option<Box<crate::runtime_error::RuntimeError>> {
     WORKER_FATAL.lock().ok().and_then(|mut s| s.take())
 }
 
+/// Run N independent arms concurrently, each at a given bytecode position.
+#[allow(dead_code)]
+/// Each arm runs as a void function (no args, no return value).
+/// Uses the same store-isolation model as `par()`: each arm gets a read-only snapshot.
+/// # Panics
+/// Panics if any arm thread panics.
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+// (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
+#[cfg_attr(
+    any(not(feature = "threading"), feature = "wasm"),
+    allow(clippy::needless_pass_by_value)
+)]
 pub fn run_parallel_block(
     stores: &Stores,
     program: WorkerProgram,
