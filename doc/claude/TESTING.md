@@ -439,6 +439,29 @@ startups) failed to reproduce the original failure, so the fix rests on the
 impossible by construction, and on two clean full-suite runs. It is not a
 red→green reproduction, and saying so is part of the result.
 
+⚠ **Synthetic load is the wrong abstraction, and a second finding says why.**
+`registry_index::tests::a_pair_torn_by_a_refresh_settles_into_the_new_generation`
+failed under `make ci` and then PASSED the next `make ci` **on the same binary**;
+four reproduction rigs found nothing — isolation (0/30), 48 busy-loops on 24 cores
+(0/20), the CI `TMPDIR` with 39 562 files in it (0/25), and the whole lib suite in
+parallel (0/3). Busy loops are preemptible and the scheduler still honours a timer;
+what blew the test's budget was being scheduled beside the **rustc subprocesses**
+of the `--native` binaries. nextest schedules dynamically, so it landed at 774/4364
+in the passing run and 955/4364 in the failing one. **Ask what the failing
+environment RAN, not how busy it was** — and reach for one re-run first, because two
+runs of one binary disagreeing is the cheapest proof of a flake there is.
+
+The cure was to **delete the race, not widen the margin**: the test slept 15 ms
+against a 40 ms settle budget, and `thread::sleep` guarantees a minimum, so a bigger
+sleep only moves the failure rate. Finishing the refresh from inside the `accept`
+closure — which runs once per attempt, after both files are read — places the second
+rename in exactly the window the field report describes, on every machine. Dropping
+the thread costs no coverage because the concurrency half is
+`a_replaced_file_is_never_read_half_written`'s next door, and that one is robust for
+the reason this one was not: it exits on a **condition** under a deadline instead of
+racing a fixed sleep. ⚠ A deterministic sequencing test needs its sequencing
+asserted (`attempts == 2`) or it passes for a reader that never re-read at all.
+
 ### Backend divergence: the differential check is the instrument
 
 Interpret-vs-native disagreement is also an n=1, deterministic property — and the
