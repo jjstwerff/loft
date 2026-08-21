@@ -1843,6 +1843,38 @@ pub(crate) fn read_tuple_at_wide(
     any(not(feature = "threading"), feature = "wasm"),
     allow(clippy::needless_pass_by_value)
 )]
+/// A worker's fatal halt, carried to the parent so the WHOLE program stops.
+///
+/// `assert` and `panic` are not exceptions and nothing here propagates one: a failing
+/// assert sets `runtime_error` on the `Stores` it runs against, and the dispatch loop
+/// halts when it sees that.  A worker runs against a CLONE of `Stores`, so its halt was
+/// set on a copy that is dropped at join — the arm stopped and the program carried on,
+/// silently, on both backends (loft#1053).
+///
+/// The contract is that a failed assertion stops the whole program, not one arm of it, so
+/// the worker's already-built halt is handed back and the parent raises it through the
+/// SAME path a main-thread assert takes.  No new error channel, and nothing a loft program
+/// can observe or catch.
+static WORKER_FATAL: std::sync::Mutex<Option<Box<crate::runtime_error::RuntimeError>>> =
+    std::sync::Mutex::new(None);
+
+/// Record a worker's halt if it ended with one.  First writer wins: the message a user
+/// reads must not depend on thread scheduling, and one arm's assertion is enough to stop
+/// the program.
+pub fn record_worker_fatal(db: &Stores) {
+    if let Some(err) = db.runtime_error.clone()
+        && let Ok(mut slot) = WORKER_FATAL.lock()
+        && slot.is_none()
+    {
+        *slot = Some(err);
+    }
+}
+
+/// Take the recorded halt, if any, for the parent to raise as its own.
+pub fn take_worker_fatal() -> Option<Box<crate::runtime_error::RuntimeError>> {
+    WORKER_FATAL.lock().ok().and_then(|mut s| s.take())
+}
+
 pub fn run_parallel_block(
     stores: &Stores,
     program: WorkerProgram,
@@ -1863,6 +1895,7 @@ pub fn run_parallel_block(
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
                     state.execute_at_void_with_snapshot(pos, &snapshot);
+                    record_worker_fatal(&state.database);
                 });
             }
         });
@@ -1873,6 +1906,7 @@ pub fn run_parallel_block(
         for &pos in arm_positions {
             let mut state = program.new_state(unsafe { stores.clone_for_light_worker() });
             state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
+            record_worker_fatal(&state.database);
         }
     }
 }

@@ -124,7 +124,7 @@ fn await_prefix(ws: &TcpStream, want: &str) -> i64 {
 const BODY_A: &str = "\"A:{p}#{n}\"";
 
 fn program(body: &str, sig: &str) -> String {
-    let port = common::test_port(PORT_BASE);
+    let port = common::bind_port(PORT_BASE);
     format!(
         r#"
 use engine_host;
@@ -154,7 +154,7 @@ fn main() {{
 // @speed 4.1
 #[test]
 fn live_reload_swaps_a_running_fn() {
-    let port = common::test_port(PORT_BASE);
+    let port = common::bind_port(PORT_BASE);
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;

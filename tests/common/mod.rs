@@ -35,6 +35,181 @@ pub fn deadline_scale() -> u64 {
 /// checkouts (`loft` and `loft2`) — collide on them and flake.  `find_problems.sh` exports a
 /// distinct offset per checkout so their port ranges never overlap.  A plain `cargo test` (no
 /// offset) keeps the base ports.
+/// A port this test can actually BIND — measured, not assumed.
+///
+/// [`test_port`] computes the port a suite is SUPPOSED to use; this one guarantees the
+/// test can have it, and is what a test that spawns a server should call.  When the
+/// canonical port is taken there are two situations, and they deserve opposite answers:
+///
+///  1. **Our own leaked artifact** — reap it and keep the canonical port.  The cascade is
+///     real and was observed: nextest SIGKILLs a timed-out test, so the process-group
+///     `Guard::drop` never runs, so the server survives on its fixed port, so the NEXT run
+///     cannot bind and times out too, leaking another orphan.  Four were found live on one
+///     box, two holding ports the engine-host suite needs, one pair 14 hours old.  Our own
+///     mess is ours to clear, and keeping the canonical port keeps failures readable.
+///
+///  2. **Anyone else's process** — PIVOT to a free port and leave it alone.  Killing is
+///     the wrong default: a sibling checkout's suite, or an unrelated program, is not this
+///     test's to destroy, and a test that clears its path by killing whatever is in the way
+///     just moves the flake onto someone else.  The port offsets exist to avoid collisions;
+///     pivoting is how a test copes when one happens anyway.
+///
+/// Moving is cheap because the port is a pure parameter — the fixture is generated with it
+/// and the child is told it — so nothing else has to agree on a fixed number.
+#[allow(dead_code)]
+pub fn bind_port(base: u16) -> u16 {
+    // IDEMPOTENT per process, which nextest makes per TEST.  [`test_port`] is a pure
+    // function and callers rely on that without saying so: `engine_host_reload` asks for
+    // its port once in the test and again inside the fixture writer, and before this cache
+    // the two calls pivoted independently — the server bound one port while the client
+    // dialled another, and the test failed inside `ws_recv` with nothing about ports in the
+    // message.  Resolving a base once and remembering it keeps the drop-in substitution for
+    // `test_port` honest: same base, same answer, however many times it is asked.
+    static RESOLVED: std::sync::Mutex<Option<Vec<(u16, u16)>>> = std::sync::Mutex::new(None);
+    if let Ok(g) = RESOLVED.lock()
+        && let Some(v) = g.as_ref()
+        && let Some(&(_, p)) = v.iter().find(|(b, _)| *b == base)
+    {
+        return p;
+    }
+    let port = resolve_bindable_port(base);
+    if let Ok(mut g) = RESOLVED.lock() {
+        g.get_or_insert_with(Vec::new).push((base, port));
+    }
+    port
+}
+
+fn resolve_bindable_port(base: u16) -> u16 {
+    let canonical = test_port(base);
+    // A canonical port inside the kernel's ephemeral range is unusable however free it
+    // looks: the kernel draws outgoing-connection ports from there, so one can be taken
+    // between this check and the child's bind.  Pivot below the floor rather than trust a
+    // free-right-now answer.  `find_problems.sh` bounds its offset to keep ports out of that
+    // range, and this is the belt to that braces — a hand-set `LOFT_TEST_PORT_OFFSET` gets
+    // the same protection.
+    if canonical >= ephemeral_floor() {
+        let safe = pivot_port(base).unwrap_or(canonical);
+        eprintln!("[port] canonical {canonical} is inside the ephemeral range — using {safe}");
+        return safe;
+    }
+    if port_is_free(canonical) {
+        return canonical;
+    }
+    if let Some(pids) = holders_owned_by_this_checkout(canonical) {
+        eprintln!("[port] {canonical} held by our own leaked pid(s) {pids:?} — reaping");
+        for pid in pids {
+            // SAFETY: an ordinary kill(2) on a pid we just proved runs this checkout's
+            // own build artifact.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        // SIGKILL is asynchronous and SO_REUSEPORT lets a dying listener still accept, so
+        // poll for the port to be genuinely bindable rather than racing onto a stale world.
+        for _ in 0..40 {
+            if port_is_free(canonical) {
+                return canonical;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let pivot = pivot_port(canonical.min(ephemeral_floor() - 8000)).unwrap_or(canonical);
+    eprintln!("[port] {canonical} unavailable and not ours to kill — pivoting to {pivot}");
+    pivot
+}
+
+/// Has this process been reparented to init — i.e. did whoever spawned it die?
+///
+/// `/proc/<pid>/stat` field 4 is the ppid, but fields 1..2 are the pid and the comm, and a
+/// comm may itself contain spaces and parentheses — so parse AFTER the last `)`, which is
+/// the documented way to read this file.
+#[allow(dead_code)]
+fn is_orphan(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {
+        return false;
+    };
+    // rest = " S <ppid> ..." — state, then parent pid.
+    rest.split_whitespace()
+        .nth(1)
+        .and_then(|p| p.parse::<i32>().ok())
+        == Some(1)
+}
+
+/// Can this process bind the port right now?  Binding and dropping is the only honest
+/// test: `lsof` answers who holds a LISTENING socket, not whether a bind would succeed.
+#[allow(dead_code)]
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+/// A free port to move to, chosen BELOW the kernel's ephemeral range.
+///
+/// The obvious implementation — bind `:0` and take what the OS assigns — is wrong here,
+/// and measurably so: it hands back a port from `ip_local_port_range` (32768–60999 on this
+/// box), which is the very range the kernel draws from for OUTGOING connections. Between
+/// releasing it and the child binding it, any outbound socket on the machine can take it,
+/// including one the test itself opens. Doing that turned a passing `engine_host_reload`
+/// into a reliable failure inside `ws_recv`.
+///
+/// So scan a deterministic ladder below the ephemeral floor instead. The stride is coprime
+/// with the 100-spacing the suites' base ports use, so a pivot does not land on another
+/// test's canonical port.
+#[allow(dead_code)]
+fn pivot_port(anchor: u16) -> Option<u16> {
+    let floor = ephemeral_floor();
+    (1..=64u16).find_map(|k| {
+        let cand = anchor.checked_add(k.checked_mul(101)?)?;
+        (cand < floor && port_is_free(cand)).then_some(cand)
+    })
+}
+
+/// The lowest port the kernel may hand out for an outgoing connection.  Anything at or
+/// above this can be taken from under a test between the check and the bind.
+#[allow(dead_code)]
+fn ephemeral_floor() -> u16 {
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse().ok())
+        .unwrap_or(32768)
+}
+
+/// The pids holding `port` that are genuinely LEAKED by this checkout — the only ones
+/// safe to kill.
+///
+/// Two conditions, and the second was learned the hard way.  The holder's executable must
+/// live under this checkout (never kill a foreign process), AND it must be an ORPHAN —
+/// reparented to init because the test that spawned it is gone.
+///
+/// Ownership alone is not enough: two tests in `engine_host_reload` share one `PORT_BASE`,
+/// so the second to start found the port held by the FIRST test's live server, correctly
+/// judged it "ours", and killed it.  That turned a flake into a reliable failure — worse
+/// than the problem being fixed.  A live sibling's server has a living parent; a leaked one
+/// does not, and that is the difference between cleaning up after ourselves and shooting a
+/// test that is still running.
+#[allow(dead_code)]
+fn holders_owned_by_this_checkout(port: u16) -> Option<Vec<i32>> {
+    let out = std::process::Command::new("lsof")
+        .arg("-ti")
+        .arg(format!("tcp:{port}"))
+        .output()
+        .ok()?;
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut ours = Vec::new();
+    for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+        let pid: i32 = pid.parse().ok()?;
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        if !exe.starts_with(&root) {
+            return None; // a foreign holder — the whole port is off limits
+        }
+        if !is_orphan(pid) {
+            return None; // ours, but still parented: a LIVE sibling test's server
+        }
+        ours.push(pid);
+    }
+    (!ours.is_empty()).then_some(ours)
+}
+
 #[allow(dead_code)]
 pub fn test_port(base: u16) -> u16 {
     let offset = std::env::var("LOFT_TEST_PORT_OFFSET")

@@ -2329,6 +2329,13 @@ impl State {
             line_numbers: Arc::new(self.line_numbers.clone()),
         };
         crate::parallel::run_parallel_block(&self.database, program, &positions, &parent_snapshot);
+        // A worker's halt was raised against its own `Stores` clone and would be dropped
+        // here.  Re-raise it as the parent's so the dispatch loop's existing
+        // `runtime_error.is_some()` check stops the WHOLE program (loft#1053).
+        if let Some(err) = crate::parallel::take_worker_fatal() {
+            self.database.runtime_error = Some(err);
+            self.database.had_fatal = true;
+        }
     }
 
     pub fn get_var<T>(&mut self, pos: u16) -> &T {

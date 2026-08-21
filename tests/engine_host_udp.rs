@@ -161,7 +161,7 @@ fn unstamp(dgram: &str) -> (i64, String) {
 // @speed 6.7
 #[test]
 fn udp_sync_channel_end_to_end() {
-    let port = common::test_port(PORT_BASE);
+    let port = common::bind_port(PORT_BASE);
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;

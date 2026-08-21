@@ -453,7 +453,11 @@ fn ws_upgrade(mut stream: TcpStream, udp_cookie: &str) -> Option<TcpStream> {
     let mut byte = [0u8; 1];
     // Read header bytes until CRLFCRLF (unbuffered — no over-read).
     while !buf.ends_with(b"\r\n\r\n") {
-        match stream.read(&mut byte) {
+        match crate::net_profile::time(
+            "ws_upgrade/header_read",
+            Some(Duration::from_millis(500)),
+            || stream.read(&mut byte),
+        ) {
             Ok(1) => buf.push(byte[0]),
             _ => return None,
         }
@@ -644,7 +648,21 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
 
 #[cfg(all(not(unix), not(target_arch = "wasm32")))]
 fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
-    TcpListener::bind(("0.0.0.0", port)).ok()
+    {
+        let t0 = std::time::Instant::now();
+        let r = TcpListener::bind(("0.0.0.0", port));
+        crate::net_profile::record(
+            "listener/bind",
+            t0.elapsed(),
+            if r.is_ok() {
+                crate::net_profile::Outcome::Ok
+            } else {
+                crate::net_profile::Outcome::Failed
+            },
+            None,
+        );
+        r.ok()
+    }
 }
 
 // ── The natives (registered in native.rs; declared in lib/engine_host) ──────
