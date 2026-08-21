@@ -426,7 +426,34 @@ impl Stores {
     /// callers see one consistent format regardless of where the
     /// failure originated.
     pub fn parse(&mut self, text: &str, tp: u16, result: &DbRef) -> Option<String> {
-        self.try_parse_unified(text, tp, result).err()
+        self.record_text_parse(text, tp, result)
+    }
+
+    /// Parse `text` into `result` AND file the outcome on both error surfaces.
+    ///
+    /// A text parse is the one-stage spelling (`Type.parse(text)`), and it used to file
+    /// its diagnostics only under `#errors` (`last_parse_errors`).  `json_errors()` reads
+    /// the OTHER register, so the documented JSON pairing —
+    /// `Cfg.parse(text)` then `json_errors()` — reported nothing at all on malformed input
+    /// and on a schema mismatch: the program read a struct of zeros and was told the parse
+    /// was fine.
+    ///
+    /// Worse, nothing CLEARED the json register here, so a `json_errors()` after a
+    /// successful one-stage parse still returned the error from some earlier call: a
+    /// program that validates by checking `json_errors()` reported failure on correct
+    /// data, and a `vector<T>.parse` reported an error naming a different type entirely.
+    ///
+    /// One entry point, both registers: cleared on entry, written on failure.  The two
+    /// surfaces stay separate by design (`#errors` is text and clears on read; the suite
+    /// and `STDLIB.md` both rely on that) — what they must not do is DISAGREE about
+    /// whether the last parse succeeded.
+    fn record_text_parse(&mut self, text: &str, tp: u16, result: &DbRef) -> Option<String> {
+        self.last_json_errors.clear();
+        let err = self.try_parse_unified(text, tp, result).err();
+        if let Some(ref e) = err {
+            self.last_json_errors.push(e.clone());
+        }
+        err
     }
 
     // Used for testing, returns the interpreted data or the error path on problems.

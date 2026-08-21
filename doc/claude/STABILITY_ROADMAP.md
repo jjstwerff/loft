@@ -184,6 +184,56 @@ blocker — `area:codegen`/`parser`/`store-lifetime` carrying `wa:none` — file
 the consumers still to come online. Store-lifetime is where to expect it if it comes: it
 produced two of June's four core blockers and July's only one.
 
+**Re-read — 2026-08-20** (345 bug issues; the same two queries, re-run). August is the
+third data point the baseline said it needed, and it is the first one taken while a
+consumer wave was flowing — 224 bugs filed in the month against July's 67:
+
+| | June (n=54) | July (n=67) | August (n=219) |
+|---|---|---|---|
+| `wa:clean` | 43% | 63% | **67%** |
+| `wa:partial` | 43% | 27% | **27%** |
+| `wa:none` | 15% | 10% | **6%** |
+
+The July column differs from the 2026-07-30 baseline above (53 → 67) because issues
+created in July were still being filed and labelled after that snapshot; the shares moved
+by a point, not in direction. **The trend the baseline predicted held through a 3× rise in
+ticket rate**, which is the reading that matters: the rate rose because dogfooding rose,
+while the share that BLOCKS its finder fell by more than half.
+
+Blocking rate by area, all-time — the core stayed low while the count tripled, and the
+fringe now carries the tail almost alone:
+
+| area | bugs | `wa:none` | rate | vs 2026-07-30 |
+|---|---|---|---|---|
+| wasm | 16 | 7 | 43% | 27% → **43%** |
+| packages | 46 | 8 | 17% | 33% → **17%** |
+| runtime | 53 | 5 | 9% | 19% → **9%** |
+| store-lifetime | 107 | 8 | 7% | 15% → **7%** |
+| native | 51 | 4 | 7% | — |
+| codegen | 60 | 1 | 1% | 5% → **1%** |
+| parser | 103 | 2 | 1% | 8% → **1%** |
+| closures / stdlib | 10 / 7 | 0 | 0% | unchanged |
+
+**The core-vs-fringe read for August.** Thirteen blockers: two store-lifetime (`#727`
+bound-store growth, `#833` the ASan gate), one parser+store-lifetime (`#906`), one
+runtime (`#961`), and the remaining nine fringe — four wasm/`--html` (`#737`, `#950`,
+`#964`, `#967`), three native/toolchain (`#742`, `#815`, `#834`), one macOS cache
+invalidation (`#999`), one sanitizer gate (`#920`). Core blockers ran 5-of-8 (June) →
+1-of-7 (July) → **4-of-13 (August)**: the share ticked up from July's low but stayed
+under half, and two of the four are GATE failures rather than programs that will not run.
+`wasm` is now the one area whose rate is rising, and it is the youngest surface.
+
+**What this says about the last fixes.** None of #1035–#1040 were blockers — every one
+carried `wa:clean` or `wa:partial`, and each had a written workaround that a consumer
+could take. That is the shape the gate wants: the defects still being found in the core
+are increasingly ones you can route around while they are fixed.
+
+**Label hygiene has slipped and it matters here.** Five August bugs carry no `wa:`
+(`#757`, `#784`, `#785`, `#787`, `#970`) — the first time the metric has had a
+`wa:MISSING` population since the baseline said to keep it at zero. They are excluded from
+the shares above, which is the same incomplete-denominator hazard that inverted the sign of
+the trend once already. Label them at fix time.
+
 **Three limits on the metric, so it is not over-read.** The `wa:` labels are applied by
 whoever fixes the bug and the policy says *verified*, so there is an optimism bias no
 query can audit. Two months is two data points; a third turns this from a reading into a

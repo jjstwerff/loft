@@ -227,6 +227,60 @@ of a distribution and leaves the rest of the tail loaded. The cure is the one th
 tree already has: a walker that must be total delegates recursion to the keystone,
 so the tail is never enumerated by hand at all.
 
+### Result 4 — the fifteen fixes on `tuxedo-post-973`, read against this map
+
+The map above was written on 2026-08-20 from `main`. The branch that closes every open
+issue landed the same week, so it is the first chance to ask the map's own question of a
+batch of fixes: **did they fold facts, or patch arms?** Counts are `git show origin/main:…`
+against the branch.
+
+| fact | sites on `main` | sites on the branch |
+|---|---|---|
+| "is this slot text?" — coroutine emitter | 15 hand-rolled `Type::Text(_)` | **1 predicate**, 15 callers (`is_text_slot`) |
+| "is this tuple element text?" | 3 hand-rolled, two of them disagreeing | **1 pair** (`tuple_elem_type` / `_is_text`), 6 callers |
+| "is this narrow slot null?" — renderer | 8 hand-rolled sentinel tests | **1 home** (`Stores::is_null`), 9 callers |
+| "what offset does this narrow slot use?" | declared `min` at 4 registration sites | **1 home** (`IntegerSpec::part_min`) |
+| "how wide is this integer?" | 2 homes (`byte_width` / `forced_size`) | **1 home**; `vector_narrow_width` now derives from it |
+
+Every one is the *one fact, N spellings* shape — and in four of the five the spellings had
+already drifted far enough to produce the bug that was filed. The fifth (#1040) is the
+thesis's other half, a fact computed in the wrong PLACE: the par route was picked in the
+template, where the types it is picked from do not exist yet, so it now waits for the
+monomorph. None of the five was patched arm-by-arm.
+
+**The prediction in Result 3 is not yet tested, and this batch is not the test.** It says
+`Parallel`, `ParFor`, `Yield` and `TuplePut` are the next `Tuple` *when a consumer leans on
+them*. Three of those four variants appear in these fixes (#1040 ParFor, #1035 Yield, #1038
+TuplePut) — but every one carries `hit-by:loft`: they were surfaced by loft's own generics
+work, not by a consumer. So they are consistent with the exposure model without confirming
+it: the same mechanism (a shape gets exercised in new combinations, and the tail's omissions
+surface) driven from inside rather than from a dogfood repo. The prediction stands, still
+waiting on real `par` / coroutine dogfooding.
+
+What the batch DOES move is the exposure itself, which is the model's own remedy — the tail
+is less unexercised than it was:
+
+| variant | test files on `main` | on the branch |
+|---|---|---|
+| `par(…)` | 18 | **20** |
+| `yield` | 19 | **21** |
+| tuple declarations | 51 | **53** |
+
+Fifteen new `tests/scripts/` guards, each run on both backends. That is a 10 % lift on the
+two thinnest surfaces, which is small — but it is the direction the model says matters more
+than adding arms to walkers.
+
+**One prediction this batch does support.** Result 1 credits `IntegerSpec::range_to_width`
+with the only measured payoff (narrow-int/width fell by roughly two thirds). `make
+bug-review` re-run today still reads `PAID OFF` (9.5 % → 3.3 %) — and the four narrow-int
+bugs in this batch (#1030, #1031, #1036, #1037) are all *residual second homes of that same
+keystone*, not new mechanisms: a compound assignment, a field-vs-local disagreement, a
+vector element's stride, and a bound the spec could not carry. A keystone that pays off
+does not finish the class; it converts the class into a finite list of sites that still ask
+the question somewhere else. That is a useful refinement of the payoff claim, and it is
+falsifiable: if the next narrow-int bug is NOT a second home of `byte_width`, this reading
+is wrong.
+
 ---
 
 ## Cluster A — the return/bind transfer-vs-borrow fact (cluster-II root)
@@ -640,6 +694,77 @@ Re-cut 2026-08-20, after A and D largely landed and C's keystone shipped.
 Each is a *single fact computed once*, validated on **both backends** per
 CODEGEN_METHOD — not a patch. The win is structural: a new collection kind / return
 shape / narrow width then arrives *with its fact*, not as the next special case.
+
+### Result 5 — a rising class the mechanism buckets cannot see (2026-08-20)
+
+`make bug-review` classifies by SUBSYSTEM — `generic/monomorph`, `null/sentinel`, `tuple`,
+`keyed collections`. That is the right cut for finding which machinery keeps producing
+bugs, and Results 1–4 lean on it. But it cannot see a class defined by the INVARIANT it
+violates, because each instance files under whichever subsystem it landed in, and no
+single bucket rises far enough to flag.
+
+One such class is measurable and rising: **declaration order changes what a program
+means.** LOFT.md § File structure states the contract — *"A loft file may contain (in any
+order)"* its declarations — and the two-pass parser exists to make it true.
+
+| tracker band | order-dependent bugs | share |
+|---|---|---|
+| #246–445 | 0 | 0.0 % |
+| #445–644 | 0 | 0.0 % |
+| #644–843 | 4 | 3.3 % |
+| #843–1046 | 8 | 5.3 % |
+
+Monotonic, and the same profile as `generic/monomorph`, the steepest riser `bug-review`
+names. The members are spread across SIX subsystems — enum (#803), tuple (#944, #960),
+struct (#986), par (#988), closures (#686), packages (#788), generics (#1023, #1024) —
+which is exactly why no bucket flags it. Prior instances were closed one at a time as
+subsystem bugs (#374, #803), and the class kept producing.
+
+**The remedy the model asks for is an instrument, not an arm.** The backend axis has one
+(`tests/differential_oracle.rs`: same program, two backends, same answer). The order axis
+had nothing, so an **order-permutation oracle** was written to the same shape: permute a
+file's top-level declarations and the program must behave identically. Run against the
+`tests/scripts/` corpus it immediately produced three live defects on `main`:
+
+| defect | status |
+|---|---|
+| `match` on an enum declared BELOW its use returned `Void` on pass 1, so a bound local locked to void and pass 2 was refused | **fixed** — `parse_match`'s `!valid_enum` exit now defers |
+| a struct-enum VARIANT literal above its enum — the pass-1 stub was never adopted by the variant registration | **fixed** (loft#1046) — variant registration adopts the stub, as `parse_struct` already did |
+| a ONE-CHARACTER type name (`enum D`) — the forward-reference path guesses "is this a type?" from the SPELLING, and a name with no lowercase letter kept a placeholder VARIABLE that shadowed the later declaration | **fixed** (loft#1047) — a qualifier (`D.N`) settles it without the spelling test |
+
+All three are the same fault under the thesis: **a fact decided on pass 1 from a guess,
+where pass 2 holds the answer.** That is the "one fact, N homes" thesis on its other axis
+— not one fact spelled in several places, but one fact decided at the wrong TIME. Cluster
+F (*"is this type still a type variable?"*) is the same question asked about a different
+fact, which is why loft#1047's cure lands next door to it.
+
+**Falsifiable.** If the next order-dependence bug is NOT a pass-1 decision that pass 2
+could have made, this reading is wrong. And the oracle itself is not yet a gate: its
+top-level splitter is line-based, so it skips what it cannot split safely and its diffs
+still need triage by hand. Promoting it to CI needs a real parser-backed split — worth
+doing, since the three defects above came from its first two hundred files.
+
+The residual first left open here — `enum T`, which collides with the type-variable
+placeholder the stdlib registers for `min_of<T>` — was **fixed too** (loft#1049), and the
+way it closed is the more useful record. It was filed as a design call, "reserve the name"
+versus "let a user declaration shadow it". `formal/interfaces.md` had already settled it:
+a type variable is *"a name bound by a generic header"*, so the binding is per-header and
+reserving the spelling globally was never admissible. The rules do not change to match the
+code — and here they turned a two-way choice into a one-way fix before any deliberation.
+
+Its own lesson is about *counting the homes*. Three separate lookups had to agree (the
+known-name branch, the forward-reference stub registration, and `parse_constant_value`),
+and fixing two of them changed NOTHING observable — the symptom stayed byte-identical,
+which reads exactly like "wrong hypothesis" and is really "right hypothesis, one home
+short". The third was the one producing the misleading message, by consuming the `.` of
+`T.N` while chasing a variant that does not exist.
+
+A second lesson, this one about instruments: the `code!` harness parses its snippet AS
+source 0, so a fix gated on the current source number was **inert under the tests** while
+working through the CLI. Gating on `!self.default` fixed that. When a guard must
+distinguish "the stdlib" from "user code", the source number is not the thing to ask.
+
+---
 
 ## What is NEW vs already-tracked
 

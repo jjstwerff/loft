@@ -739,13 +739,14 @@ how both of those findings surfaced. @PLN146's gates are a byte-range log and a 
 audio handle; neither can redden the other or the stage. Phases that cannot fail together are a
 programme, not a plan.
 
-**Where to start — three phases depend on nothing:**
+**Where to start — two phases depend on nothing** (`B0` and `A0` were the other two and have
+both shipped; @PLN144 is closed and @PLN145's arcs `B` and `C1` are done):
 
 - **`E1`** (@PLN146) — ~30 lines of JS. `loft_audio_load` answers `i32::MIN` in the browser, so
   a `--html` game can only make procedural noise today.
-- **`B0`** (@PLN145) — a built-in font. Two of dryopea's UI surfaces ship **with no text at
-  all** because the text path needs a GL context *and* a native rasteriser *and* a font file.
-- **`A0`** (@PLN144) — the probe that can kill the batching design for the cost of a compile.
+- **`D0b`** (@PLN145) — one probe program, and the only phase in the set that can retire a
+  dependency before it is load-bearing: three consumers wrote their own input layer and none
+  reached for the published `input` package.
 
 **The through-lines**, which is what makes the set readable as one piece:
 

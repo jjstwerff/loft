@@ -4348,6 +4348,36 @@ impl Parser {
         }
     }
 
+    /// A generic type-variable placeholder the DEFAULT files registered, seen while parsing
+    /// something that is not a default file — where it must not resolve as a real type.
+    ///
+    /// [`Data::is_type_var_placeholder`] already states the rule: the attribute-less
+    /// self-referential `Struct` the parser registers for a `<T>` type parameter "is an
+    /// INTERNAL construct — it must never resolve as a real type outside the default files
+    /// that declare it".  Nothing enforced it, so the stdlib's own `min_of<T>` left a def
+    /// named `T` sitting in the flat key space and a user's `enum T` collided with it:
+    /// `T.N` resolved to the placeholder, which consumed the `.` looking for a variant that
+    /// does not exist, and the user got "Expect token ;" at a `;` whose syntax is fine —
+    /// while the same declaration written ABOVE its use compiled (loft#1049).
+    ///
+    /// Two facts, not one name: the placeholder must have been declared by the DEFAULT
+    /// files (`source == STD_SOURCE`) and we must not currently be parsing them
+    /// (`!self.default`).  A user file's own `fn f<Elem>(…)` registers its placeholder
+    /// outside `STD_SOURCE`, so this leaves it alone and the body still resolves `Elem`.
+    /// `self.default` rather than the current source number because a `parse_str` snippet —
+    /// the `code!` harness, the REPL — is user code parsed AS source 0, and a source
+    /// comparison silently reads that as "this is the stdlib".
+    ///
+    /// `formal/interfaces.md` is what makes this the right cut rather than reserving the
+    /// spelling: "a type variable `T` is a name bound by a generic header", so the binding
+    /// is per-header and never global.
+    pub(crate) fn stdlib_type_var_placeholder(&self, d_nr: u32) -> bool {
+        d_nr != u32::MAX
+            && !self.default
+            && self.data.def(d_nr).source == crate::data::STD_SOURCE
+            && self.data.is_type_var_placeholder(d_nr)
+    }
+
     /// Check if a type is a generic type variable (a dummy struct used as T).
     /// Returns the type variable name if it is, None otherwise.
     pub(crate) fn generic_type_name(&self, tp: &Type) -> Option<&str> {
@@ -5742,7 +5772,17 @@ impl Parser {
             } else {
                 plan.worker
             };
-            let ret_type = self.data.def(worker).returned().clone();
+            // The monomorph's signature was built with `substitute_type`, which replaces
+            // the type variable and DROPS its deps — and a worker's RETURN deps are what
+            // say "this result borrows argument 0".  Losing them makes the par result
+            // binding look owned, so the body frees it: with the identity worker a
+            // generic often is (`fn w(x: T) -> T { x }`), that frees the very element the
+            // caller handed in.  The template still declares them, and they are ATTRIBUTE
+            // indices — frame-independent — so re-attaching them is exact.
+            let mut ret_type = self.data.def(worker).returned().clone();
+            for d in self.data.def(plan.worker).returned().depend() {
+                ret_type = ret_type.depending(d);
+            }
             plans.push((id, args, worker, ret_type, elem_tp));
         }
         // Now the monomorph's frame: the lowering creates its own index / length / result
@@ -9190,21 +9230,27 @@ impl Parser {
         // pass 2 then re-resolves `x` to its real (e.g. float) type and the assignment
         // errors "cannot change type from integer to float".  Return Unknown so pass 2
         // refines it cleanly — the same re-typeable escape the generic-type-variable
-        // arm below takes on the first pass.  Scoped to a single unknown operand (a
-        // unary `-`/`~`/`!`): binary ops keep erroring so a genuine "No matching
-        // operator '<' on 'unknown' and 'boolean'" still fires.  A truly-unresolvable
-        // unary operand re-errors on pass 2 (this guard is first-pass only).
-        // (@PLN102 transitive cross-package inference.)
+        // arm below takes on the first pass.  A truly-unresolvable operand re-errors on
+        // pass 2 (this guard is first-pass only).  (@PLN102 transitive cross-package
+        // inference.)
         //
-        // The same applies when EVERY operand is unresolved — `f() - g()` with both
-        // callees defined lower in the file.  The `possible` loop matches the first
-        // candidate (`OpMinInt`) and locks the result to integer; pass 2 re-resolves
-        // to the real float return and the assignment errors "cannot change type from
-        // integer to float" at a line that looks correct.  Requiring ALL operands to be
-        // unknown is what keeps the diagnostic above intact: it has one KNOWN operand
-        // (`boolean`), so it still reaches the error path.  One known operand is enough
-        // to steer resolution, so only the no-information case defers to pass 2.
-        if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
+        // ANY unresolved operand defers, not only an all-unresolved set.  A KNOWN operand
+        // beside an unknown one does not steer resolution, it OVERRIDES it: in `f() - 1`
+        // the loop matches `OpMinInt` off the literal and locks the local to integer, and
+        // pass 2's real `float` return then errors at a line the reader never chose.  Even
+        // a written-down `a: float = f() - 1` was refused this way, with the message
+        // reversed.  Declaration order must not decide a type — the two-pass parser exists
+        // precisely so a callee may be defined below its caller.
+        //
+        // This guard was once restricted to the all-unknown case to keep a genuine
+        // mismatch ("No matching operator '<' on 'float' and 'boolean'") reportable, on
+        // the theory that only a known operand could carry it to the error path.  loft#918
+        // retired that reason: it added a SECOND deferral at the reject site, after the
+        // operator search comes up empty, so pass 2 reports the mismatch there — naming
+        // the type the operand really has rather than the `unknown` pass 1 saw.  Both
+        // behaviours are guarded (`pln102_*` in tests/issues.rs); widen this predicate and
+        // that pair is what tells you whether the diagnostic path still works.
+        if self.first_pass && !types.is_empty() && types.iter().any(Type::is_unknown) {
             return Type::Unknown(0);
         }
         // Comparing two tuples is decided element by element, BEFORE the `possible` loop —

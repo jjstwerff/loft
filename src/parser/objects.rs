@@ -198,7 +198,26 @@ impl Parser {
             && self.data.def_nr(name) == u32::MAX
             && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         {
-            diagnostic!(self.lexer, Level::Error, "Unknown library '{name}'");
+            // loft#1043 — before calling it unknown, ask whether it is one of THIS
+            // package's own modules.  `use self::<m>;` registers the module under
+            // `<pkg>::<m>` and deliberately does NOT take the flat `<m>::` qualifier
+            // slot: that slot is shared by the whole dependency graph, and not
+            // sharing it is the whole point of the `self::` spelling (loft#976).  So
+            // the module is bound and reachable BARE, and only the qualifier is
+            // missing — which "Unknown library" states as the opposite, sending the
+            // reader to look for a file that is right there.
+            let own_module = self
+                .own_package_name()
+                .filter(|pkg| self.data.use_exists(&format!("{pkg}::{name}")));
+            if let Some(pkg) = own_module {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{name}` is this package's own module, bound by `use self::{name};` — it has no `{name}::` qualifier.\n  The short qualifier is ONE slot shared by every package in the graph, and staying out of it is what `use self::` is for — so it is withheld on purpose, not missing.\n  fix: drop the qualifier (`use self::{name};` already imports its names bare), or bind one with `use self::{name} as <alias>;` and write `<alias>::`.\n  note: an alias DOES take the shared slot, so choose a name no other package would — `{pkg}_{name}` rather than `{name}`."
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown library '{name}'");
+            }
             // Consume a trailing call so the parser does not also choke on the
             // arguments and emit a second, less-helpful error.
             if self.lexer.has_token("(") && !self.lexer.has_token(")") {
@@ -546,6 +565,9 @@ impl Parser {
             t = self.data.def(dnr).returned().clone();
         } else if self.data.def_nr(name) != u32::MAX
             && !self.at_binding_name()
+            // A default-file `<T>` placeholder is invisible here (loft#1049): it is an
+            // internal construct, and letting it resolve is what blocked a user `enum T`.
+            && !self.stdlib_type_var_placeholder(self.data.def_nr(name))
             && !matches!(
                 self.data.def_type(self.data.def_nr(name)),
                 // @PLN22 Phase 1 — exclude EnumValue: a bare variant used as a
@@ -887,11 +909,27 @@ impl Parser {
                     // variable away from every misspelled constant, which is what the
                     // `upper-case-local` advice and "Unknown variable 'N'" are written
                     // against.  A type name carries a lowercase letter.
-                    let looks_like_a_type = name.starts_with(char::is_uppercase)
+                    //
+                    // A QUALIFIER settles it without the spelling test.  `D.N` is a name
+                    // qualifying a value, which a misspelled constant never is — the
+                    // `upper-case-local` case this guard protects is a BARE `N`.  So an
+                    // uppercase name followed by `.` takes the type-stub path too, which is
+                    // what lets a one-letter `enum D` declared BELOW its use resolve: the
+                    // spelling test rejects `D` (no lowercase letter), the `else` branch
+                    // leaves a placeholder VARIABLE, and — per the note above — that
+                    // placeholder survives into pass 2 and shadows the type the declaration
+                    // meanwhile produced, so the name still read as an unknown variable
+                    // (loft#1047).  Same fault as loft#801, reached by a different spelling.
+                    let looks_like_a_type = (name.starts_with(char::is_uppercase)
                         && name.contains(char::is_lowercase)
-                        && !name.contains('_');
+                        && !name.contains('_'))
+                        || (name.starts_with(char::is_uppercase) && self.lexer.peek_token("."));
                     if looks_like_a_type {
-                        if self.data.def_nr(name) == u32::MAX {
+                        // A hidden default-file `<T>` placeholder does not count as "the
+                        // name is taken" — without this the forward-reference stub is never
+                        // registered and pass 2 has nothing to adopt (loft#1049).
+                        let taken = self.data.def_nr(name);
+                        if taken == u32::MAX || self.stdlib_type_var_placeholder(taken) {
                             self.speculative_type_refs.insert(self.data.add_def(
                                 name,
                                 name_pos,
@@ -1654,6 +1692,14 @@ impl Parser {
         } else {
             self.data.source_nr(source, name)
         };
+        // loft#1049 — a default-file `<T>` placeholder is invisible from a user file, so it
+        // is not "the name is taken" here either.  Without this the qualified form `T.N`
+        // resolved against the stdlib placeholder, consumed the `.` on its way to a variant
+        // that does not exist, and left the fallback looking at `N` with the qualifier
+        // already gone — which is why the user saw `Expect token ;` at the `;`.
+        if self.stdlib_type_var_placeholder(d_nr) {
+            d_nr = u32::MAX;
+        }
         // @PLN22 Phase 1 — a qualified `Enum::Variant` resolves WITHIN the
         // qualifier enum via the variant_of chokepoint, NOT the first-wins flat
         // key (which may point at a different enum's same-named variant).

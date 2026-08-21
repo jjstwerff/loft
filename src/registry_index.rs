@@ -789,6 +789,133 @@ pub fn index_paths() -> (PathBuf, PathBuf, PathBuf) {
     )
 }
 
+/// Replace `path` with `bytes` in one step, so a concurrent reader sees either
+/// the whole old file or the whole new one.
+///
+/// `std::fs::write` truncates and then fills, which leaves the file SHORT for as
+/// long as the write takes — on the 692 KB registry index that window is wide
+/// enough for another process to read a half-file and report it as a parse
+/// error.  Writing beside the target and renaming closes it: a rename is atomic
+/// on both Unix and Windows, and replaces an existing destination on both.
+///
+/// The temporary carries the pid and a counter, so two writers — or two threads
+/// of one — never collide on the same scratch name.
+///
+/// # Errors
+/// Returns the underlying I/O error if the temporary cannot be written or the
+/// rename fails.  A failed rename removes the temporary rather than leaving it
+/// beside the real file.
+pub fn replace_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(format!(".tmp{}-{n}", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Cache an artifact and its detached signature together.
+///
+/// Each file lands atomically, so neither can be read half-written.  The pair is
+/// still two renames, so a reader can in principle catch the new content against
+/// the old signature; [`read_signed_pair_settling`] is the other half of that
+/// story and closes it.  An empty `signature` leaves the cached one alone — that
+/// is the unsigned/bundle path, where the caller has already decided the absent
+/// signature is acceptable.
+///
+/// # Errors
+/// Returns the underlying I/O error if the parent directory cannot be created or
+/// either file cannot be replaced.
+pub fn write_signed_pair(
+    content_path: &std::path::Path,
+    sig_path: &std::path::Path,
+    content: &[u8],
+    signature: &[u8],
+) -> std::io::Result<()> {
+    if let Some(parent) = content_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    replace_atomically(content_path, content)?;
+    if !signature.is_empty() {
+        replace_atomically(sig_path, signature)?;
+    }
+    Ok(())
+}
+
+/// How many times [`read_signed_pair_settling`] reads the pair before believing
+/// a rejection, and how long it waits between attempts.
+const SETTLE_ATTEMPTS: u32 = 5;
+const SETTLE_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Read an artifact and its detached signature as a MATCHED pair, waiting out a
+/// writer that is part-way through replacing them.
+///
+/// Two files cannot be swapped in one step on any platform we target, so a
+/// reader crossing a refresh can pick up the new content beside the old
+/// signature.  Verification then fails, and for the registry index that failure
+/// is deliberately un-bypassable — it is the sentence a TAMPERED index produces,
+/// which sends the reader looking at trust roots instead of at concurrency
+/// (loft#1045).
+///
+/// `accept` is the oracle, and it is an exact one: a signature that verifies over
+/// the content it was read with proves the two came from the same generation.  So
+/// a pair this function accepts is genuinely matched, never merely plausible.
+///
+/// A rejection is only believed after the whole settle budget, and deliberately
+/// NOT the moment the bytes stop changing: a writer sitting between its two
+/// renames has published the new content and not yet the new signature, so the
+/// pair is torn while both files are perfectly still.  An early-out on stillness
+/// returns the torn verdict at the first re-read, which is the bug rather than a
+/// saving.  The cost is paid only where the pair is rejected — a path that ends
+/// in an aborted command — and it is bounded by `SETTLE_ATTEMPTS`.
+///
+/// Returns the last pair read whether or not it was accepted, leaving the caller
+/// to phrase the failure; `accepted` says which happened.
+///
+/// # Errors
+/// Returns the underlying I/O error if the content file cannot be read.  A missing
+/// or unreadable SIGNATURE is not an error here — it reads as empty and becomes the
+/// caller's verdict to pass or refuse, which is where that policy already lives.
+pub fn read_signed_pair_settling(
+    content_path: &std::path::Path,
+    sig_path: &std::path::Path,
+    accept: &mut dyn FnMut(&[u8], &[u8]) -> bool,
+) -> std::io::Result<SettledPair> {
+    for attempt in 0..SETTLE_ATTEMPTS {
+        let content = std::fs::read(content_path)?;
+        let signature = std::fs::read(sig_path).unwrap_or_default();
+        if accept(&content, &signature) {
+            return Ok(SettledPair {
+                content,
+                signature,
+                accepted: true,
+            });
+        }
+        if attempt + 1 == SETTLE_ATTEMPTS {
+            return Ok(SettledPair {
+                content,
+                signature,
+                accepted: false,
+            });
+        }
+        std::thread::sleep(SETTLE_PAUSE);
+    }
+    unreachable!("the loop returns on its last attempt")
+}
+
+/// What [`read_signed_pair_settling`] saw: the pair it read last, and whether the
+/// caller's oracle accepted it.
+pub struct SettledPair {
+    pub content: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub accepted: bool,
+}
+
 /// Directory where a given `<pkg>-<version>` tarball extracts to.
 #[must_use]
 pub fn extract_dir(pkg: &str, version: &str) -> PathBuf {
@@ -2231,5 +2358,177 @@ mod tests {
             "nothing was derived, so there is nothing to cache"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── loft#1045 — the cached index and its signature must swap as one ───────────
+    //
+    // A consumer's suite failed with "registry index signature INVALID — refusing
+    // to install", a hard failure that `--allow-unsigned` cannot bypass, and the
+    // identical command passed minutes later.  Nothing was wrong with the
+    // signature: `~/.loft/registry/index.json` and its `.sig` were being replaced
+    // while the run read them.
+
+    /// The truncation half.  `std::fs::write` empties the file and then fills it,
+    /// which on a 692 KB index leaves a window wide enough for another process to
+    /// read a short file — so a replacement lands under a temporary name and is
+    /// renamed into place instead.
+    ///
+    /// Every generation is one byte repeated, so a torn read shows up as a wrong
+    /// length or as two different bytes in one copy.  The run asserts that it
+    /// actually CROSSED a replacement in both directions; without that a clean
+    /// result would only mean the reader never raced the writer.
+    #[test]
+    fn a_replaced_file_is_never_read_half_written() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        const SIZE: usize = 512 * 1024;
+        let dir = scratch_dir("1045-atomic-write");
+        let path = dir.join("index.json");
+        std::fs::write(&path, vec![b'A'; SIZE]).expect("seed");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let path = path.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut flip = false;
+                while !stop.load(Ordering::Relaxed) {
+                    let byte = if flip { b'B' } else { b'A' };
+                    replace_atomically(&path, &vec![byte; SIZE]).expect("replace");
+                    flip = !flip;
+                }
+            })
+        };
+
+        let (mut seen_a, mut seen_b, mut torn, mut reads) = (false, false, 0usize, 0usize);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !(seen_a && seen_b && reads >= 200) {
+            let got = std::fs::read(&path).expect("read");
+            reads += 1;
+            if got.len() != SIZE || got.iter().any(|&b| b != got[0]) {
+                torn += 1;
+                continue;
+            }
+            match got[0] {
+                b'A' => seen_a = true,
+                b'B' => seen_b = true,
+                other => panic!("byte {other} belongs to no generation"),
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().expect("writer");
+
+        assert_eq!(
+            torn, 0,
+            "a reader saw a partially written file in {reads} reads"
+        );
+        assert!(
+            seen_a && seen_b,
+            "the reader never crossed a replacement in both directions \
+             ({reads} reads) — a clean result here would prove nothing"
+        );
+    }
+
+    /// A matched pair is taken on the first look, so the settle costs nothing on
+    /// the path where nothing is wrong.
+    #[test]
+    fn a_matched_pair_is_accepted_on_the_first_look() {
+        let dir = scratch_dir("1045-matched");
+        let (content, sig) = (dir.join("index.json"), dir.join("index.json.sig"));
+        std::fs::write(&content, b"gen2").expect("content");
+        std::fs::write(&sig, b"gen2").expect("sig");
+
+        let started = std::time::Instant::now();
+        let settled =
+            read_signed_pair_settling(&content, &sig, &mut |c, s| c == s).expect("read pair");
+
+        assert!(settled.accepted);
+        assert_eq!(settled.content, b"gen2");
+        assert!(
+            started.elapsed() < SETTLE_PAUSE,
+            "an untorn pair waited on the settle"
+        );
+    }
+
+    /// The shape from the field: the content is already the new generation while
+    /// the signature is still the old one.  The writer finishes mid-settle, and
+    /// the reader must come back with the matched pair rather than with the torn
+    /// verdict that reads as tampering.
+    #[test]
+    fn a_pair_torn_by_a_refresh_settles_into_the_new_generation() {
+        let dir = scratch_dir("1045-torn");
+        let (content, sig) = (dir.join("index.json"), dir.join("index.json.sig"));
+        std::fs::write(&content, b"gen2").expect("content");
+        std::fs::write(&sig, b"gen1").expect("stale sig");
+
+        let finishing = {
+            let sig = sig.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(SETTLE_PAUSE + SETTLE_PAUSE / 2);
+                replace_atomically(&sig, b"gen2").expect("finish the refresh");
+            })
+        };
+        let settled =
+            read_signed_pair_settling(&content, &sig, &mut |c, s| c == s).expect("read pair");
+        finishing.join().expect("writer");
+
+        assert!(
+            settled.accepted,
+            "the settle gave up on a pair that was mid-refresh — the exact \
+             false alarm loft#1045 reports"
+        );
+        assert_eq!(settled.content, b"gen2");
+        assert_eq!(settled.signature, b"gen2");
+    }
+
+    /// A signature that genuinely does not match is still refused: the settle
+    /// waits, the bytes never come to agree, and the verdict is unchanged.  This
+    /// is the control for the test above — the fix must not turn a real rejection
+    /// into a retry that eventually passes.
+    #[test]
+    fn a_signature_that_never_matches_is_still_refused() {
+        let dir = scratch_dir("1045-refused");
+        let (content, sig) = (dir.join("index.json"), dir.join("index.json.sig"));
+        std::fs::write(&content, b"gen2").expect("content");
+        std::fs::write(&sig, b"forged").expect("sig");
+
+        let settled =
+            read_signed_pair_settling(&content, &sig, &mut |c, s| c == s).expect("read pair");
+
+        assert!(!settled.accepted);
+        assert_eq!(settled.signature, b"forged");
+    }
+
+    /// Both files of a pair are replaced, neither left behind — and an empty
+    /// signature leaves the cached one standing, which is the unsigned/bundle
+    /// path where the caller has already accepted its absence.
+    #[test]
+    fn writing_a_pair_replaces_both_and_an_empty_signature_replaces_neither() {
+        let dir = scratch_dir("1045-pair-write");
+        let (content, sig) = (dir.join("index.json"), dir.join("index.json.sig"));
+
+        write_signed_pair(&content, &sig, b"gen1", b"sig1").expect("first");
+        assert_eq!(std::fs::read(&content).expect("content"), b"gen1");
+        assert_eq!(std::fs::read(&sig).expect("sig"), b"sig1");
+
+        write_signed_pair(&content, &sig, b"gen2", b"").expect("second");
+        assert_eq!(std::fs::read(&content).expect("content"), b"gen2");
+        assert_eq!(
+            std::fs::read(&sig).expect("sig"),
+            b"sig1",
+            "an empty signature must not erase the cached one"
+        );
+
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "temporaries left beside the cache: {strays:?}"
+        );
     }
 }

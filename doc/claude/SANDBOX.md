@@ -107,7 +107,28 @@ Two selector forms, both host-controlled (a script can never designate itself):
 [sandbox]
 plug = ["fn:apply_op"]        # one function
 plug = ["src/oplog.loft"]     # every function in a file — `*`, `**`, `?` allowed
+
+[profile.plug]                # ⚠ REQUIRED — `plug` above is a PROFILE NAME, not a keyword
+allow_libs = ["code"]         # the grants live HERE; under `[sandbox]` they are ignored
 ```
+
+⚠⚠ **`plug` is a name you chose, and every key under `[sandbox]` reads as
+`<profile> = [selectors]`.** Call it `ui` or `mods` and the two lines change with
+it — what must not change is that the profile it names has a `[profile.<name>]`
+section. Without one the designation still applies, the profile simply does not
+exist, and its grants are empty because there is nothing there rather than
+because you granted nothing (loft#1042 — the refusal now says so by name).
+
+⚠ **`allow_libs` and `allow` are only read under `[profile.<name>]`.** Putting
+them under `[sandbox]` is silently a no-op: they are parsed as a profile named
+`allow_libs` with the grants as its selectors. That is the second round of the
+mistake, and it is the reason the first one is worth a diagnostic.
+
+⚠ **Any library that builds a vector needs `allow_libs = ["code"]`.** The grant
+key is the *source file* a def comes from — `default/01_code.loft` → `code`,
+`03_text.loft` → `text` — so ordinary collection and text work reaches the
+stdlib under those names. An otherwise pure library is not admissible without
+them, which surprises anyone who reads "no `#native`, no I/O" as sufficient.
 
 Prefer the **path selector** for plugin-shaped code. A module with private helpers
 needs all of them designated, and naming each one is tedious enough that the

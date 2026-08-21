@@ -3039,8 +3039,8 @@ impl Parser {
         let index_pairs =
             crate::parser::operators::collect_guard_pairs(&test, &self.data, &empty_caps);
         self.index_bounded.extend(index_pairs);
-        let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
-        let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
+        let is_aliases: Vec<(String, Option<u16>)> = std::mem::take(&mut self.is_capture_aliases);
+        let is_bindings: Vec<Value> = std::mem::take(&mut self.is_capture_bindings);
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
@@ -3276,6 +3276,14 @@ impl Parser {
         // so `match` on an `integer?` routes to the scalar handler instead of falling to the `_`
         // arm ("match requires an enum, struct, or scalar type"). Gate-OFF inert (never Optional).
         let subject_type = subject_type.base().clone();
+        // A subject whose type is not linked yet on the FIRST pass — `match p { … }` where
+        // `p` came from an enum declared LOWER in the file.  The dispatch below cannot
+        // recognise it, so the arms contribute nothing and `result_type` would stay `Void`;
+        // a local bound to the match then locks to void and pass 2's real type is REFUSED
+        // ("cannot change type from void to integer").  LOFT.md § File structure promises a
+        // file may hold its declarations "in any order", so this must stay re-typeable —
+        // the same first-pass escape `call_op` takes for an unresolved operand.
+        let subject_unresolved = self.first_pass && subject_type.is_unknown();
 
         // @PLN35 PC1 — a CURSOR subject (a struct with a `vector<T>` source field + an integer
         // `pos` field) PREFIX-consumes: route to the vector-match over its source with cursor mode
@@ -4113,6 +4121,13 @@ impl Parser {
         // When not a valid enum, just emit Null (errors were already reported).
         if !valid_enum {
             *code = Value::Null;
+            if subject_unresolved {
+                // ...except on the FIRST pass nothing was reported: the diagnostic above is
+                // `!first_pass`-gated, because the subject may simply be declared lower in the
+                // file.  `Void` here is what locks a local bound to the match, so pass 2's real
+                // type is then REFUSED ("cannot change type from void to integer").
+                return Type::Unknown(0);
+            }
             return Type::Void;
         }
 

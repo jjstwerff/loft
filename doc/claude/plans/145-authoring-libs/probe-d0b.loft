@@ -1,0 +1,157 @@
+// @PLN145 D0b — does the published `input` package fit a consumer that ALREADY EXISTS?
+//
+// RUN:  loft --interpret --lib <loft-libs-game> --lib <loft-libs-graphics> probe-d0b.loft
+//       (identical on --native; both were run)
+// Result and what it decided: README.md § Sub-arcs, row D0b.
+//
+// `D1` plans to reuse `input_tick_from_state` for the widget kit's replay
+// harness, so this asks — for the cost of a compile, before D1 commits —
+// whether the package can express a real consumer's binding set.  A0's shape,
+// applied to a package rather than a technique.
+//
+//
+// The probe expresses **dryopea's own action set** (src/bindings.loft, read
+// only) through `input`'s `Bindings` and drives it headless from a recorded
+// event list via `input_tick_from_state`.
+//
+// Every expectation below is hand-computed from dryopea's table, which carries
+// a THIRD column `input` has no room for:
+//   CTRL_IGNORED   — Ctrl is irrelevant (Tab, W, the palette keys)
+//   CTRL_REQUIRED  — the action IS the combo (Ctrl+Z undo, Ctrl+S save)
+//   CTRL_FORBIDDEN — plain key means this, Ctrl+key means something else
+//                    (S is pan-south OR save; R is rotate OR reload)
+use input;
+use graphics;
+
+const KEY_MINUS = 45;
+const KEY_N     = 110;
+const KEY_H     = 104;
+const KEY_K     = 107;
+const KEY_P     = 112;
+
+fn ab(name: text, key: integer) -> ActionBinding {
+    ab_k: vector<integer> = [key];
+    ActionBinding { ab_name: name, ab_keys: ab_k }
+}
+
+// dryopea's table, in the shape `input` wants — exactly what
+// `editor_bindings` derives, modifier column dropped because there is
+// nowhere to put it.
+fn dryopea_actions() -> vector<ActionBinding> {
+    a: vector<ActionBinding> = [];
+    a += [ab("mod_ctrl", graphics::KEY_CTRL), ab("mod_shift", graphics::KEY_SHIFT)];
+    a += [ab("toggle_mode", graphics::KEY_TAB), ab("rotate", graphics::KEY_R), ab("cycle_kind", KEY_K)];
+    a += [ab("pan_north", graphics::KEY_W), ab("pan_south", graphics::KEY_S)];
+    a += [ab("pan_east", graphics::KEY_D), ab("pan_west", graphics::KEY_A), ab("recentre", KEY_H)];
+    a += [ab("undo", graphics::KEY_Z), ab("redo", graphics::KEY_Y), ab("clear", KEY_N)];
+    a += [ab("save", graphics::KEY_S), ab("reload", graphics::KEY_R)];
+    a += [ab("drive_north", graphics::KEY_W), ab("drive_south", graphics::KEY_S)];
+    a += [ab("drive_east", graphics::KEY_D), ab("drive_west", graphics::KEY_A)];
+    a += [ab("boost", graphics::KEY_SHIFT), ab("carry", graphics::KEY_E)];
+    a += [ab("toggle_play", KEY_P)];
+    a += [ab("palette_1", graphics::KEY_1), ab("palette_2", graphics::KEY_2)];
+    a += [ab("palette_3", graphics::KEY_3), ab("palette_4", graphics::KEY_4)];
+    a += [ab("palette_5", graphics::KEY_5), ab("palette_6", graphics::KEY_6)];
+    a += [ab("palette_7", graphics::KEY_7), ab("palette_8", graphics::KEY_8)];
+    a += [ab("palette_9", graphics::KEY_9), ab("palette_10", graphics::KEY_0)];
+    a += [ab("palette_11", KEY_MINUS)];
+    a
+}
+
+fn no_keys() -> vector<boolean> {
+    k: vector<boolean> = [];
+    for _ in 0..256 { k += [false]; }
+    k
+}
+
+fn press(keys: vector<boolean>, code: integer) {
+    if code >= 0 {
+        if code < len(keys) { keys[code] = true; }
+    }
+}
+
+// ── Build the set ───────────────────────────────────────────────
+acts = dryopea_actions();
+no_axes: vector<AxisBinding> = [];
+bind = Bindings { bnd_actions: acts, bnd_axes: no_axes };
+st = input_new(bind);
+
+println("CELL 1  the action set expresses through input::Bindings");
+println("        {len(acts)} actions built, 0 axes — which is what dryopea ships");
+assert(len(acts) == 33, "dryopea's table is 33 rows (31 named + 2 modifiers), got {len(acts)}");
+
+// ── CELL 2: plain S.  The control — this is the cell that proves the
+//    harness can tell the two apart at all.
+k = no_keys();
+press(k, graphics::KEY_S);
+st.input_tick_from_state(k, 0.0, 0.0, 0, 0);
+plain_pan  = st.is_action_pressed("pan_south");
+plain_save = st.is_action_pressed("save");
+println("");
+println("CELL 2  plain S          pan_south={plain_pan}  save={plain_save}");
+println("        dryopea wants    pan_south=true   save=false");
+assert(plain_pan, "plain S must pan south");
+assert(plain_save, "…and input ALSO reports save, because S is save's key too");
+
+// ── CELL 3: Ctrl+S.  THE RED CELL.
+k2 = no_keys();
+press(k2, graphics::KEY_S);
+press(k2, graphics::KEY_CTRL);
+st.input_tick_from_state(k2, 0.0, 0.0, 0, 0);
+ctrl_pan  = st.is_action_pressed("pan_south");
+ctrl_save = st.is_action_pressed("save");
+ctrl_mod  = st.is_action_pressed("mod_ctrl");
+println("");
+println("CELL 3  Ctrl+S           pan_south={ctrl_pan}  save={ctrl_save}  mod_ctrl={ctrl_mod}");
+println("        dryopea wants    pan_south=FALSE  save=true   (CTRL_FORBIDDEN vs CTRL_REQUIRED)");
+assert(ctrl_pan, "input reports pan_south under Ctrl — the answer dryopea must override");
+assert(ctrl_save, "and save, which is right");
+assert(ctrl_mod, "the modifier is reachable, but only as another action");
+println("        ⚠ input answers the SAME for both rows: a key list cannot say");
+println("          'this action is suppressed while Ctrl is held'.");
+
+// ── CELL 4: Ctrl+R — the same collision on a second pair, so the gap
+//    is structural rather than one unlucky key.
+k3 = no_keys();
+press(k3, graphics::KEY_R);
+press(k3, graphics::KEY_CTRL);
+st.input_tick_from_state(k3, 0.0, 0.0, 0, 0);
+println("");
+println("CELL 4  Ctrl+R           rotate={st.is_action_pressed(\"rotate\")}  reload={st.is_action_pressed(\"reload\")}");
+println("        dryopea wants    rotate=FALSE     reload=true");
+assert(st.is_action_pressed("rotate"), "same shape on R/reload — not one unlucky key");
+
+// ── CELL 5: can an AXIS carry the rule instead?  dryopea ships zero
+//    axes despite having two textbook axis pairs; this is why.
+ax_acts: vector<ActionBinding> = [];
+ax_list: vector<AxisBinding> = [
+    AxisBinding { ax_name: "pan_v", ax_neg: graphics::KEY_S, ax_pos: graphics::KEY_W },
+    AxisBinding { ax_name: "pan_h", ax_neg: graphics::KEY_A, ax_pos: graphics::KEY_D },
+];
+ax_bind = Bindings { bnd_actions: ax_acts, bnd_axes: ax_list };
+ax_st = input_new(ax_bind);
+ax_st.input_tick_from_state(k2, 0.0, 0.0, 0, 0);      // Ctrl+S again
+axis_v = ax_st.get_axis("pan_v");
+println("");
+println("CELL 5  Ctrl+S as an axis  pan_v={axis_v}");
+println("        dryopea wants      pan_v=0.0 (Ctrl suppresses the south half)");
+assert(axis_v == -1.0, "the axis still reads south under Ctrl: {axis_v}");
+println("        ⚠ An AxisBinding is two key CODES.  There is no per-key");
+println("          modifier slot, so the pair cannot express it either — which");
+println("          is why dryopea's bnd_axes is empty and its four pan keys are");
+println("          four ACTIONS instead of two axes.");
+
+// ── CELL 6: edge detection works; dryopea declines it on purpose.
+e_st = input_new(bind);
+e_st.input_tick_from_state(no_keys(), 0.0, 0.0, 0, 0);
+e_st.input_tick_from_state(k, 0.0, 0.0, 0, 0);        // S goes down
+just = e_st.is_action_just_pressed("pan_south");
+held = e_st.is_action_pressed("pan_south");
+e_st.input_tick_from_state(k, 0.0, 0.0, 0, 0);        // still down
+still = e_st.is_action_just_pressed("pan_south");
+println("");
+println("CELL 6  edge detection   just_pressed={just} then {still}, level={held}");
+assert(just && !still && held, "input's edge detection is correct headless");
+println("        ⚠ Correct, and UNUSED by dryopea — deliberately: its edges live");
+println("          in the seam, and two edge detectors is drift.  A working");
+println("          feature nobody calls is still a fit question.");

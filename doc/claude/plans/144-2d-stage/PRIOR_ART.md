@@ -196,16 +196,28 @@ published packages and only one of them has ever been adopted.**
 | Package | Real consumers | What the plans do with it |
 |---|---|---|
 | `fixstep` v0.2.0 | **dryopea** (6 files) + **moros** `editor_server` | @PLN145 `C1` drives tweens off it — safe, no probe needed |
-| `input` v0.2.0 | **none** | @PLN145 `D1` reuses `input_tick_from_state` |
+| `input` v0.2.0 | **dryopea** (`src/bindings.loft` + 3 files) — ⚠ this row read **none** until @PLN145 `D0b` measured it | @PLN145 `D1` reuses `input_tick_from_state` |
 | `shapes` v0.4.1 | **none** — only loft's own `brick-buster` demo and a test fixture | @PLN146 `F7` produces proxies for it |
 
-`input` is the sharp one. Three consumers wrote their own instead — `moros/lib/hex_editor/src/keymap.loft`
-(685 lines), `dryopea/src/bindings.loft` (461), `crawler/src/framekey.loft` — and none reached
-for the package. **That is evidence, not an accident**, and adopting it without asking why would
-make @PLN145's widgets the *fourth* input layer rather than the first shared one. Hence `D0b`
-and `F7a`: an XS probe that expresses one **existing consumer's** need through the package,
-run *before* the phase commits to the dependency. If the package cannot express it, that is
-worth knowing for the cost of a compile — the same shape as `A0`.
+`input` was filed as the sharp one, on the claim that three consumers wrote their own instead
+and none reached for the package. ⚠ **`D0b` ran the probe and two thirds of that claim is
+wrong** — the corrected count is **one**:
+
+| filed as "wrote its own" | measured 2026-08-20 |
+|---|---|
+| `dryopea/src/bindings.loft` (461) | ⚠ **it ADOPTED `input`** — `use input;` since *plan 09 I1a*, and it calls `input_tick`, `input_tick_from_state`, `is_action_pressed`, `mouse_*`. The 461 lines are a **wrapper**, not a replacement |
+| `moros/lib/hex_editor/src/keymap.loft` (685) | ✓ correct — genuinely its own key→verb table, and no file in `moros` references `input` |
+| `crawler/src/framekey.loft` (59) | ⚠ **not an input layer at all** — a frame-invalidation digest for idle-frame skipping. Its "key" is a *hash* key, not a keyboard one |
+
+So the premise *"adopting it would make @PLN145's widgets the fourth input layer"* does not
+hold: they would be the **second consumer**, joining dryopea. The probe kept its value anyway,
+because measuring the adopter is what exposed the real limit — see @PLN145 § Sub-arcs row
+`D0b`, and `probe-d0b.loft` beside it.
+
+**The reusable lesson: a file was counted by its NAME.** `framekey.loft` sounds like a
+keyboard file and is not, and `bindings.loft` sounds like a replacement for a bindings package
+while being a wrapper over it. An adoption audit has to read the `use` lines, not the
+filenames. `F7a` (`shapes`) rests on the same kind of row and has not been re-measured.
 
 **Atlases: three builders already exist.** `brick-buster`'s `build_atlas()` (~190 hand-poked
 lines, in this repo), `crawler/src/gpuatlas.loft` (67 lines), and @PLN146's `F1`. `F4` already

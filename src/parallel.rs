@@ -878,6 +878,15 @@ pub fn run_parallel_queue_ref(
     // `[off, off+SLOTS_PER_THREAD)` ranges with unbounded growth.
     // Cross-worker collisions are impossible because the atomic
     // dispenses globally-unique values.
+    // Every store the parent already had before this dispatch.  A worker's result may
+    // POINT at one of them — an identity worker (`fn w(x: Cell) -> Cell { x }`) returns the
+    // element it was handed, whose record lives in the caller's own store — and such a
+    // store is not the queue's to adopt.  The boundary is the same one `take_all_owned`
+    // and `StoreRebase` already use (`parent_store_count`); the revive walk below did not
+    // have it, so it adopted the CALLER's store and `par_buf_drop_ref` freed it: the
+    // caller's vector then pointed into freed records, which read back correct bytes until
+    // something reused the arena (visible only under `LOFT_POISON=1`).
+    let parent_store_count = stores.allocations.len() as u16;
     let dispenser = stores.make_worker_slot_dispenser();
     let n_workers = n_threads.max(1).min(n_rows.max(1));
     let input_t = *input;
@@ -1009,7 +1018,15 @@ pub fn run_parallel_queue_ref(
         if r.store_nr == u16::MAX {
             continue;
         }
-        revive_record_chain(stores, r, ret_type, data, &mut visited, &mut adopted);
+        revive_record_chain(
+            stores,
+            r,
+            ret_type,
+            data,
+            &mut visited,
+            &mut adopted,
+            parent_store_count,
+        );
     }
     // Update `max` to cover any slots the workers allocated past
     // parent's pre-dispatch max.  Slots beyond `high_water` were
@@ -1039,6 +1056,7 @@ fn revive_record_chain(
     data: &crate::data::Data,
     visited: &mut std::collections::HashSet<u16>,
     adopted: &mut Vec<u16>,
+    parent_store_count: u16,
 ) {
     use crate::data::{Type, owned_elements};
 
@@ -1046,6 +1064,19 @@ fn revive_record_chain(
     if !visited.insert(store_nr) {
         return;
     }
+    // REVIVE and ADOPT are two different claims, and only the second is gated.
+    //
+    // Reviving is safe for any store the result chain reaches: a worker may have freed a
+    // slot during its own scope cleanup, and the parent needs it live again to read the
+    // result.  ADOPTING says "this store is the queue's, free it at `par_buf_drop_ref`" —
+    // which is only true of a store the WORKER made.  A store the parent already owned is
+    // reached whenever the worker returns something it was given (`fn w(x: Cell) -> Cell
+    // { x }` returns the caller's own element), and adopting that handed the drop a store
+    // the caller was still using: the caller's vector then pointed into freed records,
+    // reading back correct bytes until something reused the arena — visible only under
+    // `LOFT_POISON=1`.  The boundary is the one `take_all_owned` and `StoreRebase` already
+    // use.
+    let worker_made = store_nr >= parent_store_count;
     if (store_nr as usize) >= stores.allocations.len() {
         return;
     }
@@ -1061,7 +1092,9 @@ fn revive_record_chain(
     if wi < stores.free_bits.len() {
         stores.free_bits[wi] &= !(1u64 << bi);
     }
-    adopted.push(store_nr);
+    if worker_made {
+        adopted.push(store_nr);
+    }
 
     // For plain `Type::Reference(struct_d, _)`, `attributes` lists
     // the struct's fields — safe to walk for owned DbRef sub-fields.
@@ -1100,7 +1133,15 @@ fn revive_record_chain(
                 let cur: DbRef =
                     *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);
                 if cur.store_nr != u16::MAX && (cur.store_nr as usize) < stores.allocations.len() {
-                    revive_record_chain(stores, &cur, field_tp, data, visited, adopted);
+                    revive_record_chain(
+                        stores,
+                        &cur,
+                        field_tp,
+                        data,
+                        visited,
+                        adopted,
+                        parent_store_count,
+                    );
                 }
             }
             _ => {}

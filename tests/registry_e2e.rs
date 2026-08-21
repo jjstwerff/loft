@@ -919,3 +919,120 @@ fn a_sidecar_pin_decides_the_install_and_is_not_rewritten() {
         "a run reads the declaration and never rewrites it"
     );
 }
+
+// ── loft#1048 — the advisories feed goes through the same trust gate as the index ──
+//
+// Two holes that `install.rs` had closed for the registry index and that were never
+// carried across: the feed was written to the cache BEFORE its signature was checked,
+// so a refused feed outlived the run that fetched it; and `--offline` read the cache
+// without verifying at all, which put the whole gate behind one flag.
+
+/// A minimal well-formed feed, so a test that reaches parsing gets past it and one
+/// that must NOT reach parsing is failing for the reason it claims.
+fn advisory_feed() -> &'static str {
+    r#"{
+  "schema_version": 1,
+  "updated": "2026-08-20T12:00:00Z",
+  "retention_days": 90,
+  "advisories": []
+}"#
+}
+
+/// `--offline` verifies the cached feed like every other branch.
+///
+/// Before the fix this branch read the cache and returned it unchecked, so a feed
+/// planted in `~/.loft/registry` was trusted on the word of the flag alone.  The
+/// assertion is on the REFUSAL: with no `allow_unsigned`, an unverifiable signature
+/// must stop the load rather than produce advisories.
+#[test]
+fn offline_does_not_trust_the_cached_advisory_feed_unchecked() {
+    let home = tmpdir("1048-offline-verify");
+    let (_guard, _lock) = HomeGuard::set(&home);
+
+    let cache = home.join(".loft").join("registry");
+    fs::create_dir_all(&cache).expect("cache dir");
+    write_file(&cache.join("advisories.json"), advisory_feed());
+    // 64 bytes that are the right SHAPE for a signature and verify against nothing.
+    write_file(&cache.join("advisories.json.sig"), &"a1".repeat(32));
+
+    let outcome =
+        loft::registry_advisories::load_or_fetch(&loft::registry_advisories::LoadOptions {
+            allow_unsigned: false,
+            offline: true,
+            refresh: false,
+        });
+
+    assert!(
+        outcome.is_err(),
+        "offline returned {outcome:?} for a feed whose signature does not verify — \
+         the gate is behind the flag again"
+    );
+}
+
+/// The offline path still serves a cached feed, so the test above is measuring the
+/// signature gate and not simply a broken branch.
+///
+/// The signature is ABSENT here rather than wrong, and that distinction is the whole
+/// reason this control works: `allow_unsigned` covers a missing or malformed
+/// signature, while one that is well-formed and does not verify is `Invalid` and
+/// refused whatever the flag says — the same un-bypassable verdict the index gives,
+/// and what the test above relies on.
+#[test]
+fn offline_still_serves_the_cached_feed_when_unsigned_is_allowed() {
+    let home = tmpdir("1048-offline-allowed");
+    let (_guard, _lock) = HomeGuard::set(&home);
+
+    let cache = home.join(".loft").join("registry");
+    fs::create_dir_all(&cache).expect("cache dir");
+    write_file(&cache.join("advisories.json"), advisory_feed());
+
+    let feed = loft::registry_advisories::load_or_fetch(&loft::registry_advisories::LoadOptions {
+        allow_unsigned: true,
+        offline: true,
+        refresh: false,
+    })
+    .expect("an allowed-unsigned offline load");
+    assert!(feed.is_some(), "the cached feed did not come back");
+}
+
+/// A fetched feed that fails verification is not left in the cache.
+///
+/// Writing first and checking after is what turned a correctly refused INDEX into a
+/// persistent outage: the bytes outlived the run, and every later command read them
+/// against the still-valid old signature and failed the same way, with no retry able
+/// to clear it.  The advisories path had the same order.  The assertion is that the
+/// cache file does not exist after a refused refresh.
+#[test]
+fn a_refused_advisory_feed_is_not_left_in_the_cache() {
+    let home = tmpdir("1048-refused-not-cached");
+    let (_home_guard, _home_lock) = HomeGuard::set(&home);
+
+    // Serve the feed from a local directory: `advisories_url` swaps the trailing
+    // `index.json` for `advisories.json`, and no `.sig` beside it means the fetched
+    // signature is empty — unverifiable, which is the point.
+    let served = tmpdir("1048-served");
+    fs::create_dir_all(&served).expect("served dir");
+    write_file(&served.join("advisories.json"), advisory_feed());
+    let url = format!("file://{}/index.json", served.display());
+    let (_url_guard, _url_lock) = RegUrlGuard::set(&url);
+
+    let cache = home.join(".loft").join("registry");
+    let cached_feed = cache.join("advisories.json");
+
+    let outcome =
+        loft::registry_advisories::load_or_fetch(&loft::registry_advisories::LoadOptions {
+            allow_unsigned: false,
+            offline: false,
+            refresh: true,
+        });
+
+    assert!(
+        outcome.is_err(),
+        "the refresh returned {outcome:?} for an unverifiable feed"
+    );
+    assert!(
+        !cached_feed.exists(),
+        "a refused feed was written to {} — it will be read by the next run",
+        cached_feed.display()
+    );
+}

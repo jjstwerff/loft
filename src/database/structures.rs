@@ -1378,7 +1378,12 @@ impl Stores {
                     self.store_mut(rec).set_float(rec.rec, rec.pos, v);
                 }
                 4 => {
-                    self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, 0);
+                    // @PLN17 C73 — a boolean stores tri-state (0 / 1 / 255), and 255 IS
+                    // its null.  Writing `false` for an absent NULLABLE boolean made it
+                    // the one nullable base type whose absence read back as a VALUE; the
+                    // integer, float and text arms beside it all write their sentinel.
+                    let v = if nullable { 255 } else { 0 };
+                    self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, v);
                 }
                 5 => {
                     // A text handle of 0 reads back as `null` (`Store::get_str`), so a field
@@ -1412,8 +1417,16 @@ impl Stores {
                     .set_byte(rec.rec, rec.pos, 0, if null { 255 } else { 0 });
             }
             Parts::Short(_, null) => {
+                // The null goes in through the SETTER's own sentinel path (`i32::MIN`),
+                // not as the value `65535`.  `Parts::Short` encodes `val - min + 1` and
+                // reserves the raw code 0 for null, so 65535 does not fit the encoding at
+                // all: the setter took its out-of-range branch and stored the DEFAULT
+                // (raw 1) instead.  An absent nullable 2-byte field therefore read back as
+                // its lowest value rather than null — `u16?` answered `0` and `i16?`
+                // answered `-32767`, on both backends, with nothing reported.  Every other
+                // width already spells its null this way.
                 self.store_mut(rec)
-                    .set_short(rec.rec, rec.pos, 0, if null { 65535 } else { 0 });
+                    .set_short(rec.rec, rec.pos, 0, if null { i32::MIN } else { 0 });
             }
             Parts::ShortRaw(from, null) => {
                 self.store_mut(rec).set_i16_raw(

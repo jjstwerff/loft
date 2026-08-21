@@ -98,6 +98,170 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
     src
 }
 
+/// The `--extern` arguments that name loft's runtime rlib to a generated crate's rustc.
+///
+/// TWO of them when the rlib carries no embedded metadata.  A rustc/cargo that builds an
+/// rlib with `-Zembed-metadata=no` — the default on nightly since 2026-08 — leaves the
+/// full metadata in a SIBLING `.rmeta` and puts only a stub in the `.rlib`, so compiling
+/// against the rlib alone fails with *"only metadata stub found for `rlib` dependency
+/// `loft`, please provide path to the corresponding .rmeta file with full metadata"* and
+/// every `--native` build stops.  Passing both is what cargo itself does for such a
+/// dependency; the sibling is only added when it EXISTS, so a toolchain that still embeds
+/// metadata (stable today) passes exactly the one argument it always did.
+///
+/// The ONE home for that decision — seven sites build this argument, and a toolchain
+/// change that reaches only some of them is a `--native` that works from one entry point
+/// and not another.
+#[must_use]
+pub fn loft_extern_args(rlib: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    // Only when the rlib REALLY lacks its metadata.  Asking "does a `.rmeta` sit nearby?"
+    // instead is wrong on any tree with history: a leftover `.rmeta` from an older build
+    // is debris cargo does not own and does not clean, and naming it beside a
+    // self-contained rlib gives rustc two candidates for one crate —
+    // `error[E0464]: multiple candidates for `rlib` dependency `loft``, which names the
+    // crate and never the staleness.  That failure is asymmetric in the worst way: CI is a
+    // fresh checkout and stays green while every established working tree breaks.
+    // (Reported by a peer session hitting it on `tuxedo-pln145`; reproduced here.)
+    if rlib_metadata_is_stub(rlib)
+        && let Some(rmeta) = loft_rmeta_beside(rlib)
+    {
+        out.push("--extern".to_string());
+        out.push(format!("loft={}", rmeta.display()));
+    }
+    out.push("--extern".to_string());
+    out.push(format!("loft={}", rlib.display()));
+    out
+}
+
+/// The floor under which `lib.rmeta` inside an rlib cannot be real metadata.
+///
+/// A `-Zembed-metadata=no` stub is an ELF wrapper with an empty payload — 688 bytes for
+/// loft's own rlib — while the genuine blob is the whole crate interface (11 MB for the
+/// same rlib).  Four orders of magnitude apart, and this predicate is only ever asked of
+/// `libloft.rlib`, so the floor does not have to hold for small crates in general.
+const RMETA_STUB_FLOOR: u64 = 4096;
+
+/// True when this rlib carries only a metadata STUB, so the full metadata lives in a
+/// separate `.rmeta` that the compiler must be given as well.
+///
+/// Reads the archive rather than the file system: mtimes are the signal this codebase
+/// already rejected for staleness ([`crate::cache::loft_build_fingerprint`] is
+/// content-based precisely because a CI cache restore resets them), and a stale `.rmeta`
+/// beside a fresh rlib is exactly the case that must NOT be mistaken for a split pair.
+/// Unreadable or unparseable answers `false` — the pre-existing behaviour, one `--extern`.
+fn rlib_metadata_is_stub(rlib: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(rlib) else {
+        return false;
+    };
+    metadata_member_size(&bytes).is_some_and(|n| n < RMETA_STUB_FLOOR)
+}
+
+/// The size of an `ar` archive's `lib.rmeta` member, or `None` when there is no such
+/// member (or the file is not an archive this can read).
+///
+/// The `ar` format is a magic line then a chain of 60-byte headers, each naming a member
+/// and its size in ASCII; members are padded to an even offset.  Only the name and size
+/// fields are read, and `lib.rmeta-link` — a different member that also starts with
+/// `lib.rmeta` — is excluded by matching the name exactly.
+fn metadata_member_size(bytes: &[u8]) -> Option<u64> {
+    const MAGIC: &[u8] = b"!<arch>\n";
+    const HEADER: usize = 60;
+    if !bytes.starts_with(MAGIC) {
+        return None;
+    }
+    let mut at = MAGIC.len();
+    while at + HEADER <= bytes.len() {
+        let header = &bytes[at..at + HEADER];
+        let name = std::str::from_utf8(&header[0..16]).ok()?.trim_end();
+        // GNU `ar` terminates a short name with `/`.
+        let name = name.strip_suffix('/').unwrap_or(name);
+        let size: u64 = std::str::from_utf8(&header[48..58])
+            .ok()?
+            .trim_end()
+            .parse()
+            .ok()?;
+        if name == "lib.rmeta" {
+            return Some(size);
+        }
+        at += HEADER + usize::try_from(size).ok()?;
+        // Members start on an even offset.
+        at += at % 2;
+    }
+    None
+}
+
+/// The `.rmeta` holding the full metadata for THIS `libloft.rlib`, when the toolchain
+/// split them.  `None` when nothing can be shown to belong to it.
+///
+/// Identity, not proximity.  A stale `.rmeta` from an older build is debris cargo neither
+/// owns nor cleans, and picking "the newest one nearby" can choose it — which hands rustc
+/// two candidates for one crate (`error[E0464]`) or, worse, metadata that does not
+/// describe the rlib being linked.  The pairing is exact instead: cargo writes the pair
+/// `libloft-<hash>.rlib` + `libloft-<hash>.rmeta` in one unit and then UPLIFTS the rlib —
+/// as a hard link — so the rmeta we want is the one beside the file our rlib IS.
+///
+/// A sibling `libloft.rmeta` next to the rlib is taken first (the layout where nothing was
+/// uplifted); otherwise the search is for the file that IS ours, and only the `.rmeta`
+/// beside that.  Nothing unpaired is accepted — passing an unpaired one is how this went
+/// wrong.
+fn loft_rmeta_beside(rlib: &std::path::Path) -> Option<std::path::PathBuf> {
+    let sibling = rlib.with_extension("rmeta");
+    if sibling.exists() {
+        return Some(sibling);
+    }
+    let dir = rlib.parent()?;
+    let mut search: Vec<std::path::PathBuf> = vec![dir.join("deps")];
+    if let Ok(units) = std::fs::read_dir(dir.join("build").join("loft")) {
+        search.extend(units.flatten().map(|u| u.path().join("out")));
+    }
+    for candidate_dir in search {
+        let Ok(entries) = std::fs::read_dir(&candidate_dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "rlib") {
+                continue;
+            }
+            let is_loft = path
+                .file_stem()
+                .is_some_and(|st| st == "libloft" || st.to_string_lossy().starts_with("libloft-"));
+            if !is_loft || !same_file(&path, rlib) {
+                continue;
+            }
+            let paired = path.with_extension("rmeta");
+            if paired.exists() {
+                return Some(paired);
+            }
+        }
+    }
+    None
+}
+
+/// Are these two paths the SAME file?  Hard-link identity first (which is what an uplift
+/// produces, and is free), then content — a copy is as good as a link for this question,
+/// and answering `false` only costs the caller the metadata it was looking for.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (a.metadata(), b.metadata()) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if ma.dev() == mb.dev() && ma.ino() == mb.ino() {
+            return true;
+        }
+    }
+    if ma.len() != mb.len() {
+        return false;
+    }
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// @PLN11 Arc N / N3 — mark a library's functions for native dispatch.  Of the
 /// `candidates` (a library's functions — e.g. all functions from a `use`d
 /// library's source), the **shared-store-dispatchable** subset has its
@@ -982,8 +1146,7 @@ fn loft_ffi_candidate_links(
             .arg("--emit=metadata")
             .arg("-o")
             .arg(dir.join("probe.rmeta"))
-            .arg("--extern")
-            .arg(format!("loft={}", libloft.display()))
+            .args(crate::native_lib::loft_extern_args(libloft))
             .arg("--extern")
             .arg(format!("loft_ffi={}", cand.display()))
             .arg("-L")
@@ -1214,11 +1377,9 @@ pub fn build_shared_cdylib(
         "-o".to_string(),
         tmp_so.display().to_string(),
         rs.display().to_string(),
-        "--extern".to_string(),
-        format!("loft={}", rlib.display()),
-        "-L".to_string(),
-        deps.display().to_string(),
     ];
+    args.extend(crate::native_lib::loft_extern_args(&rlib));
+    args.extend(["-L".to_string(), deps.display().to_string()]);
     // macOS records the `-o` path inside the Mach-O as its INSTALL NAME, and the
     // rename below moves the file without touching it — so this cdylib claimed to
     // live at `<stem>.building`, in an absolute build directory. Harmless only for
@@ -2167,5 +2328,161 @@ mod rlib_search_tests {
         let dirs = rlib_search_dirs(Path::new("target/release/deps"));
         assert_eq!(dirs[0].0, PathBuf::from("target/release/deps"));
         assert_eq!(dirs[0].1, PathBuf::from("target/release/deps"));
+    }
+}
+
+#[cfg(test)]
+mod rmeta_pairing_tests {
+    use super::loft_rmeta_beside;
+
+    /// A cargo-shaped layout: the pair in `deps/`, the rlib UPLIFTED beside it as a hard
+    /// link.  That link is what makes the pairing findable without guessing.
+    fn layout(root: &std::path::Path, uplift_links_to_hash: bool) -> std::path::PathBuf {
+        let deps = root.join("deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        let hashed = deps.join("libloft-1111111111111111.rlib");
+        std::fs::write(&hashed, b"rlib-bytes").unwrap();
+        std::fs::write(
+            deps.join("libloft-1111111111111111.rmeta"),
+            b"the-paired-one",
+        )
+        .unwrap();
+        let uplifted = root.join("libloft.rlib");
+        if uplift_links_to_hash {
+            std::fs::hard_link(&hashed, &uplifted).unwrap();
+        } else {
+            std::fs::write(&uplifted, b"a-different-rlib-entirely").unwrap();
+        }
+        uplifted
+    }
+
+    #[test]
+    fn the_rmeta_paired_with_our_rlib_is_the_one_chosen() {
+        let root = std::env::temp_dir().join(format!("loft_pair_ok_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, true);
+        let found = loft_rmeta_beside(&rlib).expect("the paired rmeta");
+        assert_eq!(std::fs::read(&found).unwrap(), b"the-paired-one");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reported failure: debris from an older build, NEWER than the pair, sitting in
+    /// the same directory.  Choosing by recency picks it; choosing by identity does not.
+    #[test]
+    fn newer_unpaired_debris_is_not_chosen() {
+        let root = std::env::temp_dir().join(format!("loft_pair_debris_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, true);
+        // Debris: an rmeta with no rlib of its own, written last so it is the newest file.
+        std::fs::write(
+            root.join("deps").join("libloft-9999999999999999.rmeta"),
+            b"stale-debris",
+        )
+        .unwrap();
+        let found = loft_rmeta_beside(&rlib).expect("still the paired rmeta");
+        assert_eq!(
+            std::fs::read(&found).unwrap(),
+            b"the-paired-one",
+            "recency must not decide this"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// When nothing can be shown to belong to the rlib, answer None: one `--extern`, and
+    /// the honest "only metadata stub found" if the rlib really was split.  Passing an
+    /// unpaired rmeta instead is what produced `E0464: multiple candidates`, an error that
+    /// names the crate and never the staleness.
+    #[test]
+    fn an_unpaired_rmeta_alone_answers_none() {
+        let root = std::env::temp_dir().join(format!("loft_pair_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = layout(&root, false); // uplifted rlib is NOT our deps rlib
+        assert!(
+            loft_rmeta_beside(&rlib).is_none(),
+            "an rmeta that belongs to a different rlib must not be offered"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The layout where nothing was uplifted: the rmeta sits directly beside the rlib.
+    #[test]
+    fn a_sibling_rmeta_is_taken_directly() {
+        let root = std::env::temp_dir().join(format!("loft_pair_sib_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let rlib = root.join("libloft.rlib");
+        std::fs::write(&rlib, b"rlib").unwrap();
+        std::fs::write(root.join("libloft.rmeta"), b"sibling").unwrap();
+        let found = loft_rmeta_beside(&rlib).expect("the sibling");
+        assert_eq!(std::fs::read(&found).unwrap(), b"sibling");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod rmeta_stub_tests {
+    use super::{RMETA_STUB_FLOOR, metadata_member_size};
+
+    /// Build a minimal `ar` archive holding the named members, so the parser is tested
+    /// against the format rather than against whatever rlib happens to sit in `target/`.
+    fn archive(members: &[(&str, usize)]) -> Vec<u8> {
+        let mut out = b"!<arch>\n".to_vec();
+        for (name, size) in members {
+            let mut header = vec![b' '; 60];
+            let named = format!("{name}/");
+            header[..named.len()].copy_from_slice(named.as_bytes());
+            let s = size.to_string();
+            header[48..48 + s.len()].copy_from_slice(s.as_bytes());
+            header[58] = b'`';
+            header[59] = b'\n';
+            out.extend_from_slice(&header);
+            out.extend(std::iter::repeat_n(b'x', *size));
+            if size % 2 == 1 {
+                out.push(b'\n');
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_full_metadata_member_is_not_a_stub() {
+        let a = archive(&[("lib.rmeta", 11_220_440), ("lib.rmeta-link", 1256)]);
+        let n = metadata_member_size(&a).expect("member found");
+        assert!(n >= RMETA_STUB_FLOOR, "{n} should read as real metadata");
+    }
+
+    /// The shape a `-Zembed-metadata=no` rlib has: the member exists and is an empty ELF
+    /// wrapper.  688 bytes is what loft's own rlib measured under the nightly that
+    /// introduced it.
+    #[test]
+    fn an_empty_wrapper_reads_as_a_stub() {
+        let a = archive(&[("lib.rmeta", 688), ("lib.rmeta-link", 1256)]);
+        let n = metadata_member_size(&a).expect("member found");
+        assert!(n < RMETA_STUB_FLOOR, "{n} should read as a stub");
+    }
+
+    /// `lib.rmeta-link` starts with the same nine characters and is a DIFFERENT member;
+    /// matching on a prefix would read its size and call every rlib a stub.
+    #[test]
+    fn the_link_member_is_not_mistaken_for_the_metadata() {
+        let a = archive(&[("lib.rmeta-link", 1256), ("lib.rmeta", 11_220_440)]);
+        assert_eq!(metadata_member_size(&a), Some(11_220_440));
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_archive_answers_none() {
+        assert_eq!(metadata_member_size(b"not an archive at all"), None);
+        assert_eq!(metadata_member_size(&[]), None);
+    }
+
+    /// An odd-sized member is padded to an even offset; miss that and every member after
+    /// it is read from the wrong place.
+    #[test]
+    fn an_odd_sized_member_does_not_desync_the_walk() {
+        let a = archive(&[("first.o", 7), ("lib.rmeta", 4096)]);
+        assert_eq!(metadata_member_size(&a), Some(4096));
     }
 }

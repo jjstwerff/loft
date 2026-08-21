@@ -31,7 +31,7 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap — RE-VERIFIED 2026-07-10 on BOTH backends (identical output; a shared semantic defect, not a parity bug): the auto-wrap path parses but DROPS diagnostics.**  Probe (`struct Cfg { name: text, port: integer }`, malformed `"{ this is not json"`):
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap — CLOSED 2026-08-20 (was: RE-VERIFIED 2026-07-10 on BOTH backends — identical output, a shared semantic defect rather than a parity bug: the auto-wrap path parsed but DROPPED diagnostics).**  The probe below now reads: A reports the parse error, B is unchanged, and C is EMPTY after a successful parse.  See the Q1 row in § Open work.  Probe (`struct Cfg { name: text, port: integer }`, malformed `"{ this is not json"`):
 
 ```
 A  Cfg.parse(bad)               → json_errors() == ""        (len 0)   ← silent
@@ -81,17 +81,76 @@ Items below are "what to BUILD" derived from the design content in this document
 | Item | Section | Status |
 |---|---|---|
 | **P54** — `JsonValue` enum (active sprint) | [§ Active sprint — P54](#active-sprint--p54-jsonvalue-enum) | Multi-step transition from text-based JSON to first-class `JsonValue` enum |
-| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **S-class** — the two-stage form reports rich diagnostics; the remaining silent shape is the one-stage auto-wrap `Struct.parse(text)`, which drops parse AND schema errors and leaves stale `json_errors()` state (pinned 2026-07-02; see the P54 row's Step-6 caveat) |
+| **Q1** — JSON parse-error diagnostics | [§ Active design — Q1](#active-design--q1-json-parse-error-diagnostics) | **CLOSED 2026-08-20.**  The one-stage `Struct.parse(text)` filed its diagnostics only under `#errors`, and `json_errors()` reads the other register — so the documented JSON pairing answered `""` for malformed input AND for a schema mismatch, while the program read a struct of zeros.  Nothing cleared the json register there either, so `json_errors()` after a SUCCESSFUL one-stage parse still returned an earlier call's error (a validator reporting failure on correct data), and a `vector<T>.parse` reported an error naming a different type entirely.  One entry point now files both: cleared on entry, written on failure.  Guarded by `tests/scripts/json-one-stage-parse-reports.loft` on both backends |
 | **Q2** — free-form object iteration + kind peek | [§ Active design — Q2](#active-design--q2-free-form-object-iteration--kind-peek) | API for iterating untyped JSON + peeking at value kinds |
 | **Q3** — `to_json` serialiser | [§ Active design — Q3](#active-design--q3-to_json-serialiser--struct-serialisation) | Symmetric serialisation API to `Type.parse()` |
 | **Q4** — `JsonValue` construction in loft code | [§ Active design — Q4](#active-design--q4-jsonvalue-construction-in-loft-code) | Builder API for constructing `JsonValue` trees in loft |
 | **P54-U** — unified JSON parser | [§ Active design — P54-U](#active-design--p54-u-unified-json-parser) | Phase 3 deletes ~540 lines of legacy scanner |
 
+**Q3 correctness — narrow nullable fields serialised wrong, fixed 2026-08-20.**
+`T.to_json()` delegates to the `ShowDb` schema walker, and that walker re-derived "is this
+slot null?" per width instead of asking `Stores::is_null`. Every re-derivation compared a
+DECODED value against a RAW sentinel, so on one struct it produced three wrong values in a
+single line:
+
+```
+struct Cfg { name: text, port: u16?, gain: i16?, level: integer limit(10,255)? }
+Cfg { name: "x", port: null, gain: -300, level: null }.to_json()
+  was  {"name":"x","port":-2147483648,"gain":-301,"level":265}
+  now  {"name":"x","gain":-300}
+```
+
+`port` was an absent value serialised as a number, `level` likewise, and `gain` was a
+PRESENT value one too low — a nullable SIGNED narrow slot sacrifices its bottom value to
+the null code, so its ops encode against `min + 1` while the schema carried the declared
+`min`. All three are on the wire, so a consumer of that JSON read numbers where the value
+was absent. Fixed at the one home (`is_null` + `IntegerSpec::part_min`); guarded by
+`tests/scripts/narrow-null-render.loft` on both backends.
+
+**Q1/P54 — an ABSENT nullable field does not read back null at every width (OPEN, S).**
+The fix above stopped `to_json` from masking this, and it is worth stating precisely
+because it is the round-trip's remaining asymmetry. Parsing a JSON object that omits a
+nullable field — or gives it an explicit `null` — lands:
+
+| field type | absent field reads back |
+|---|---|
+| `u8?`, `integer limit(lo,hi)?`, `integer?`, `float?`, `text?` | `null` ✅ |
+| `u16?` | **`0`** |
+| `i16?` | **`-32767`** (the slot's usable minimum) |
+| `boolean?` | **`false`** |
+
+Identical on `--interpret` and `--native`, and identical on `main` — this is pre-existing,
+not a regression of the render fix. The suspect is the field-DEFAULT writer
+(`structures.rs`'s clear-to-default arm), which writes the 2-byte null as the *value*
+`65535` where `Parts::Short`'s encoding reserves the raw code `0`; the boolean arm writes
+`false` where @PLN17's tri-state reserves `255`. It is the same class as the render bug —
+a sentinel written by one site and read by another, with the two encodings disagreeing —
+so it belongs to Cluster D and should be fixed at `Stores::is_null`'s write-side twin, not
+per width. `silent-wrong`: a null becomes a plausible number with nothing reported.
+
+**`record#errors` is a text, and the docs said "iterate" — OPEN (design, XS-if-decided).**
+Both `STDLIB.md` and `LOFT.md` showed `for e in user#errors { log_warn(e); }`.  That
+iterates NOTHING: the accessor returns one newline-separated text, the for-loop
+re-evaluates it per iteration, and the read CLEARS it — so the first evaluation empties the
+register and the loop ends.  Bound to a variable first it iterates the message's
+CHARACTERS, which is what `for` over a text means.
+
+Measured, not inferred: `for e in a#errors` → 0 iterations; `t = a#errors; for e in t` → 14
+(the message's length).
+
+The docs now show the shape that works (read it into a variable and test it), so nobody is
+taught a no-op.  What is NOT decided is whether the accessor should BE a collection —
+`vector<text>`, one entry per error — which is what the old text promised.  That is a
+compatibility call, not a bug fix: `tests/scripts/197-struct-json-parse-errors-dest.loft`
+depends on the text shape (`len(b1#errors) > 0`, `b2#errors != empty`,
+`"[{b3#errors}]"`) and on the clear-on-read, and it says so in its own comment.  Deciding it
+belongs to [COMPATIBILITY.md](COMPATIBILITY.md)'s process, not to a fix pass.
+
 ### Native runtime cluster
 
 | Item | Section | Status |
 |---|---|---|
-| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; `plans/finished/21-retire-scratch/` shipped the scratch side |
+| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | **SHIPPED; row was stale — re-measured 2026-08-20.**  The inference is in `parser/definitions.rs` (a native `;`-terminated fn with a `self` parameter returning the SAME struct-enum gets `dep=[0]`), and the bite it was written for is gone: 1200+ constructor calls and 1000 accessor-chain calls in loops leave the ledger balanced (1213 allocs / 1211 frees, peak 9 live) on both backends.  Guarded by `tests/scripts/json-value-chain-ownership.loft`.  See the caveat under § Active design — Dep-inference: the inference no longer changes any behaviour I could measure |
 
 ### Compiler-blocker cluster
 
@@ -1581,7 +1640,27 @@ return should declare `dep=[]`.  Today both are declared
 `dep=[]` because native function declarations never run through
 `ref_return` (which only fires for fns with bodies).
 
-**Decision: implicit dep inference for native fn returns.**
+**Status 2026-08-20 — shipped, and no longer observably load-bearing.**  The inference is
+implemented (`src/parser/definitions.rs`, the `;`-terminated native-fn arm) and the bite
+above is fixed: `json_null().kind()`, `v.field("a").item(1).kind()` and the rest neither
+leak nor read freed memory, in loops, on `--interpret` and `--native`.
+
+What could NOT be shown is that the inference is what fixes it.  Disabled (`if false &&`)
+and rebuilt, every measurement is unchanged: the same values, the same store ledger
+(1213 allocs / 1211 frees, peak 8 vs 9 live), clean under `LOFT_POISON=1` and
+`LOFT_STORE_GUARD=1`, on both backends — and `loft_suite` still passes, so no existing
+test covers its absence either.  The store-lifetime work that landed after this design was
+written (@PLN85 and the `inline_struct_return` gates around it) appears to keep these
+shapes in order on its own.
+
+That is a measurement, not a verdict: "no shape I constructed distinguishes it" is weaker
+than "it does nothing", and the probes were JsonValue-shaped because that is where the
+surface is.  A native `self`-taking method on some OTHER struct-enum is the case most
+likely to still need it.  Two things follow, and neither is a fix: the inference should not
+be deleted on this evidence alone, and anyone who touches it should know the suite will not
+tell them if they break it.
+
+**Decision (2026-04-14): implicit dep inference for native fn returns.**
 
 When a native function declaration `pub fn name(self: T, ...)
 -> R;` is parsed and the return type R structurally matches the
@@ -2262,10 +2341,12 @@ session-of-the-week background bite.
 
 ### Tier 1 — closes whole classes of bugs
 
-> **⛔ HISTORICAL — both items have SHIPPED (checked 2026-07-10).**  B7 closed with the B2–B7 audit
-> (2026-05-21, both backends); C54 (`integer` → i64) landed 2026-04-21 via @PLAN01 / @PLN88.  Kept as
-> a worked example of the "closes a whole class" selection criterion, which still applies — today it
-> selects **Cluster C / H10** ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)).
+> **⛔ HISTORICAL — all three items have SHIPPED (items 1–2 checked 2026-07-10; item 3 closed
+> 2026-08-20).**  B7 closed with the B2–B7 audit (2026-05-21, both backends); C54 (`integer` → i64)
+> landed 2026-04-21 via @PLAN01 / @PLN88; the ignored-test baseline reached zero known gaps
+> 2026-08-20.  Kept as a worked example of the "closes a whole class" selection criterion, which
+> still applies — today it selects **Cluster C / H10**
+> ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)).
 
 1. **B7 lifecycle for native-returned struct-enum temporaries.** ✅ CLOSED 2026-05-21.
    Unblocks 5 P54 ignored tests in one fix.  Scope analysis pattern,
@@ -2275,10 +2356,40 @@ session-of-the-week background bite.
    that has spawned three documented gotchas.  Multi-session,
    sub-tickets land independently (see § C54).
 
-3. **Drive `#[ignore]`'d tests to zero.**  Baseline tracked in
-   `tests/ignored_tests.baseline` (currently 5 entries, down from 9
-   via p122 → file_content_nonexistent_trace 2026-04-14).
-   Sustainable cadence: 1–3 per session.
+3. **Drive `#[ignore]`'d tests to zero.**  ✅ **CLOSED 2026-08-20 — no known gap is
+   parked behind an `#[ignore]` any more.**  `tests/ignored_tests.baseline` is down to
+   ONE entry, `regen_fill_rs`, which regenerates `src/fill.rs` from `default/*.loft` and
+   is maintenance rather than a gap: it is meant to be run by hand when the stdlib
+   changes, and running it in CI would test the generator against its own output.  The
+   `#[ignore]`s left elsewhere in `tests/` are deliberate opt-in harnesses in the same
+   spirit — the differential oracle (a rustc invocation per corpus program) and one
+   `host_call` measurement that is explicitly "a measurement, not a gate".
+
+   The last real gap was **`pln102_one_known_operand_forward_float_still_mistyped`**
+   (closed 2026-08-20, below).  Worth keeping the shape of that close: the test's own doc
+   comment predicted the fix needed "the operator search to defer on the RESULT type
+   rather than on operand knownness — a larger change than the guard widening", and that
+   prediction had gone stale.  It was written when the all-unknown restriction really was
+   load-bearing; loft#918 then added a second deferral at the reject site and quietly took
+   over the job the restriction existed to do.  Nobody re-measured, so the note kept
+   sending readers away from a one-word fix (`all` → `any`) for months.  **A parked test's
+   stated reason is a claim with a date on it, not a standing fact** — re-measure it before
+   budgeting for the redesign it predicts.
+
+   Sustainable cadence when new ones appear: 1–3 per session.
+
+   **Closed 2026-08-20:** `pln102_one_known_operand_forward_float_still_mistyped` — a
+   binary op with ONE unresolved operand (`f() - 1`, `f`'s type declared lower in the
+   file) was refused, not mis-valued: pass 1 matched `OpSubInt` off the literal and locked
+   the local to `integer`, and pass 2's real `float` return then raised *"Variable 'a'
+   cannot change type from integer to float"* — a correct line about a decision the reader
+   never made.  Writing the type down (`a: float = f() - 1`) was refused too, with the
+   message reversed.  The first-pass deferral in `call_op` now fires when ANY operand is
+   unresolved rather than only when all are.  Guarded both ways: four `pln102_*` tests in
+   `tests/issues.rs` (each verified to FAIL with the predicate reverted, and only those
+   four), the pre-existing
+   `pln102_one_known_operand_keeps_the_mismatch_diagnostic` for the diagnostic path, and
+   `tests/scripts/forward-operand-arithmetic.loft` for both backends.
 
    **Closed 2026-04-14:** `file_content_nonexistent_trace` — the
    un-ignored test now exercises the regular `execute` path's

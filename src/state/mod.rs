@@ -1512,11 +1512,8 @@ impl State {
                 }
                 let mut bytes = self.coroutine_frame_mut(idx).stack_bytes.clone();
                 let code_pos = self.coroutine_frame_mut(idx).code_pos;
-                let saved_frames: Vec<_> = self
-                    .coroutine_frame_mut(idx)
-                    .call_frames
-                    .drain(..)
-                    .collect();
+                let saved_frames: Vec<_> =
+                    std::mem::take(&mut self.coroutine_frame_mut(idx).call_frames);
 
                 // S27 (debug-only): restore the generator's text_positions entries
                 // that were removed at yield.  The generator's locals are live again

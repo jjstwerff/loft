@@ -216,6 +216,23 @@ fn narrow_route_for(ret_type: &Type) -> Option<NarrowRoute> {
 /// the one `Data::def_nr` answers to (loft#1040).
 pub(crate) const PAR_MARKER_FN: &str = "n___par_template";
 
+/// Every variable the par body binds DIRECTLY from the loop element (`_ = e`, `q = e`),
+/// read BEFORE the accessor substitution rewrites those reads.  Such a binding holds a
+/// BORROWED view of the input vector, and the binding itself drops the deps that said so —
+/// which is why the body then freed the caller's record once per row.
+fn elem_borrow_bindings(block: &Value, elem_var: u16) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    block.walk(&mut |v| {
+        if let Value::Set(target, from) = v
+            && matches!(from.unspan(), Value::Var(src) if *src == elem_var)
+            && !out.contains(target)
+        {
+            out.push(*target);
+        }
+    });
+    out
+}
+
 impl Parser {
     pub(crate) fn iter_text(
         &mut self,
@@ -4434,7 +4451,22 @@ use #count instead"
                 self.get_field(elm_td, usize::MAX, a_get_vec)
             }
         };
+        // Any body variable BOUND to the element accessor holds a borrowed view of the
+        // input vector — the same thing the loop variable held before this substitution
+        // inlined it.  A binding drops the RHS's deps (`_ = e` gives its discard a bare
+        // `ref(T)`), and the body then freed that view once per ROW: with a struct
+        // element, each iteration freed one of the caller's records, and the vector read
+        // back correct bytes until something reused the arena (`LOFT_POISON=1` is what
+        // shows it).  The sequential form escapes it because its binding copies a VAR
+        // whose type still carries the dep.
+        //
+        // Marking the bound var skip-free says exactly what is true — the loop does not
+        // own what it is looking at — and leaves every other free in the body alone.
+        let borrowed_views = elem_borrow_bindings(&block, elem_var);
         replace_var_in_ir(&mut block, elem_var, &a_accessor);
+        for v in borrowed_views {
+            self.vars.set_skip_free(v);
+        }
         let idx_inc = v_set(
             idx_var,
             self.cl("OpAddInt", &[Value::Var(idx_var), Value::Int(1)]),

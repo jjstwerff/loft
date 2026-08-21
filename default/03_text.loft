@@ -25,6 +25,44 @@ pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean {
   self[pos..pos + pl] == prefix
 }
 #pure
+// The characters of `self` from `from` up to (not including) `to` — a slice that
+// counts CHARACTERS where `self[a..b]` counts BYTES.
+//
+// ⚠ **This is the cure for the commonest text bug in this stack.**  `len(text)`
+// counts characters while `self[a..b]` slices bytes, and loft snaps a byte cut
+// outward to a character boundary — so a count computed from `len` and applied as
+// a byte range fits FEWER characters than it measured.  The failure is not
+// mojibake but something quieter: the text comes back SHORT, silently, and only
+// when it is not ASCII, so every ASCII test stays green.  `"héllo"[0..4]` is
+// `"hél"`; `"héllo".char_slice(0, 4)` is `"héll"`.
+//
+// Use it wherever a character COUNT becomes a cut: fitting a label to a width,
+// wrapping a line, a caret or a selection in a text field, truncating with an
+// ellipsis.  Reach for `self[a..b]` only when the numbers came from a byte source
+// — `find`, `size`, `byte_at`.
+//
+// Negative bounds count from the end, as a byte slice's do (`char_slice(-2, n)` is
+// the last two characters); both ends clamp, and a reversed or empty range answers
+// `""` rather than failing.
+pub fn char_slice(self: text, from: integer, to: integer) -> text {
+  cs_n = len(self);
+  cs_lo = from;
+  if cs_lo < 0 { cs_lo = cs_lo + cs_n; }
+  cs_hi = to;
+  if cs_hi < 0 { cs_hi = cs_hi + cs_n; }
+  cs_lo = clamp(cs_lo, 0, cs_n);
+  cs_hi = clamp(cs_hi, 0, cs_n);
+  if cs_hi <= cs_lo { return ""; }
+  cs_out = "";
+  cs_k = 0;
+  for cs_c in self {
+    if cs_k >= cs_hi { break; }
+    if cs_k >= cs_lo { cs_out += "{cs_c}"; }
+    cs_k = cs_k + 1;
+  }
+  cs_out
+}
+#pure
 // (Path helpers `dir` / `basename` / `join` / `resolve` moved to
 // `02_files.loft` § Path helpers, so they're available before
 // `03_text.loft` loads — same call shape, same `pub fn` signatures.)

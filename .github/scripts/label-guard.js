@@ -33,16 +33,19 @@ const CATEGORIES = [
     key: "sev:",
     name: "severity — one `sev:high` / `sev:medium` / `sev:low`",
     values: ["sev:high", "sev:medium", "sev:low"],
+    single: true,
   },
   {
     key: "wa:",
     name: "workaround — one `wa:clean` / `wa:partial` / `wa:none`",
     values: ["wa:clean", "wa:partial", "wa:none"],
+    single: true,
   },
   {
     key: "area:",
     name: "area — one or more `area:*` (parser / codegen / store-lifetime / …)",
     values: [...VALID].filter((l) => l.startsWith("area:")),
+    single: false,
   },
   // `hit-by:` was documented as required in LABELS.md ("a find of our own is
   // `hit-by:loft` — not a blank") and enforced by nothing: not the template, which
@@ -55,6 +58,7 @@ const CATEGORIES = [
     key: "hit-by:",
     name: "who hit it — one `hit-by:*` (a find of loft's own is `hit-by:loft`, never blank)",
     values: [...VALID].filter((l) => l.startsWith("hit-by:")),
+    single: true,
   },
 ];
 
@@ -151,4 +155,29 @@ function chooseLabels(body) {
   return [...found];
 }
 
-module.exports = { VALID, CATEGORIES, TRIAGE_HEADING, chooseLabels };
+/// Which of `chosen` may be ADDED to an issue that already carries `current`.
+///
+/// An exact-name filter is not enough, because `sev:`, `wa:` and `hit-by:` are
+/// SINGLE-CHOICE: an issue already labelled `sev:medium` does not "have"
+/// `sev:high`, so a naive filter adds it and the issue ends up carrying two
+/// contradictory severities.  Measured on loft#1048, which was filed with
+/// `sev:medium` and came back also holding `sev:high` seven seconds later.
+///
+/// The body that caused it is worth stating, because it is the shape a GOOD issue
+/// has: its only `sev:` token sat in the heading *"Why it is not `sev:high`"*.
+/// The prose channel cannot tell an assertion from its negation, and teaching it
+/// to would be guessing — the parser's own doctrine is that ambiguity is left
+/// unset rather than resolved.  So the cure is placed where the question is not
+/// ambiguous at all: a category the filer has ALREADY answered is not open, and
+/// prose must not reopen it.  A filer's own label always wins over a mention.
+function applicable(chosen, current) {
+  const has = new Set(current);
+  return chosen.filter((label) => {
+    if (has.has(label)) return false;
+    const cat = CATEGORIES.find((c) => label.startsWith(c.key));
+    if (cat && cat.single && [...has].some((l) => l.startsWith(cat.key))) return false;
+    return true;
+  });
+}
+
+module.exports = { VALID, CATEGORIES, TRIAGE_HEADING, chooseLabels, applicable };
