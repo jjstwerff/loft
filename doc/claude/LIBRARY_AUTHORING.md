@@ -434,6 +434,18 @@ Before you ship a version:
       what the index already says and merge rather than replace; if the text
       there is already right, copy it in verbatim so a later edit cannot drop
       it.
+- [ ] `[package] categories = ["…"]` — **required for a package the registry
+      index has never seen**, and the publish REFUSES without it.  The registry's
+      own gate 1 rejects an empty `categories`, so a package that goes in without
+      one leaves an index that turns every later submission PR red on a check
+      that has nothing to do with that submission — and clearing it needs the
+      signing key.  `zttext` and `fixstep` reached `main` that way.  Reuse a tag
+      the catalogue already uses (`geometry` `graphics` `text` `net` `world`
+      `game` `time` `math` `random` `crypto` `encoding` `cli` `plugins`
+      `asset-format` `animation`) before minting a new one — a category nothing
+      else carries groups nothing.  Same refresh rule as `description`: the
+      manifest is authoritative and propagates on every publish, and a manifest
+      that declares none leaves the index's curated list alone.
 - [ ] README, doc comments on every `pub fn` / `pub struct`.
 - [ ] CHANGELOG note for the version (free-form).
 - [ ] Local re-package produces a byte-identical sha256 across

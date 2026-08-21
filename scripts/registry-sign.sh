@@ -190,6 +190,16 @@ INDEX="$REG_DIR/index.json"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$INDEX" \
     || { echo "index.json is NOT valid JSON — refusing." >&2; exit 1; }
 
+# Schema gate: refuse to SIGN an index the registry's own PR validation rejects.
+# `registry_schema_gate.sh` runs gate 1 out of the checkout being signed, so the
+# rules are the ones `pr-validate.yml` will apply rather than a second copy of
+# them.  This is the chokepoint rather than the door: an index that fails gate 1
+# reaches `main` only through a signature, and once there it reddens every later
+# submission PR on a check nobody but the key holder can clear.
+"$(dirname "$0")/registry_schema_gate.sh" "$REG_DIR" \
+    || { echo "index.json fails the registry's own schema gate (above) — refusing to sign." >&2; exit 1; }
+echo "schema   : gate 1 (tools/validate.py) passes"
+
 # Auto-pick the diff base: uncommitted edits → compare to HEAD; otherwise the
 # change you're signing is the last commit, so compare to HEAD~1.
 if [ -z "$SINCE" ]; then

@@ -226,9 +226,9 @@ only sets one explicitly once the corresponding feature ships.
 |---|---|---|
 | `schema_version` | yes | Integer.  Bump on incompatible schema changes.  Today: `1`. |
 | `updated` | yes | ISO-8601 UTC timestamp of the last index modification.  Lets clients detect stale caches. |
-| `packages.<name>.description` | no | Display string for `loft search` output. |
-| `packages.<name>.homepage` | no | URL to the package's repo / docs. |
-| `packages.<name>.categories` | no | Array of category tags for discovery.  Free-form; `loft search --category crypto` filters on them.  Inspired by Debian's `Section:` field and cargo's `categories = […]`.  Empty by default; future curation can establish a canonical set. |
+| `packages.<name>.description` | **yes** | Display string for `loft search` output, and the library's one line in the generated catalogue.  At least 10 characters — `tools/validate.py` gate 1 rejects a shorter one. |
+| `packages.<name>.homepage` | **yes** | http(s) URL to the package's repo / docs; the catalogue links to it.  Gate 1 rejects a non-http value. |
+| `packages.<name>.categories` | **yes — non-empty** | Array of category tags for discovery.  Free-form; `loft search --category crypto` filters on them.  Inspired by Debian's `Section:` field and cargo's `categories = […]`.  Declared as `[package] categories = ["graphics", "game"]` in the library's `loft.toml`; `registry_maintain.sh` reads it from there and **refuses to publish a package new to the index without one**.  In use today: `geometry` `graphics` `text` `net` `world` `game` `time` `math` `random` `crypto` `encoding` `cli` `plugins` `asset-format` `animation` — reuse a tag before minting one. |
 | `packages.<name>.yanked` | no | Array of yanked versions.  Yanked versions stay listed so `loft.lock`-pinned consumers don't break, but new installs / version resolution skip them. |
 | `packages.<name>.versions.<semver>.url` | yes | Direct download URL for the tarball.  Convention: GitHub release asset. |
 | `…sha256` | yes | Lowercase hex of the SHA-256 hash of the tarball bytes.  Verified post-download. |

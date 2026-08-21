@@ -169,11 +169,21 @@ then edit `index.json`:
    }
 ```
 
-Most fields are optional — the minimum is `url`, `sha256`,
+Most *version* fields are optional — the minimum is `url`, `sha256`,
 `size`, `loft`, `published`.  Drop the empty arrays/objects
 you don't use.  See
 [PKG_REGISTRY.md § Schema](PKG_REGISTRY.md#schema) for the
 full reference.
+
+⚠ **The three PACKAGE-level fields are not optional.**  `description`
+(≥ 10 characters), `homepage` (an http(s) URL) and `categories` (a
+**non-empty** list) are gate 1 of the registry's `tools/validate.py`, and
+`"categories": []` is the one people paste — the placeholder above is a
+placeholder.  Reuse a tag the catalogue already carries (`geometry`
+`graphics` `text` `net` `world` `game` `time` `math` `random` `crypto`
+`encoding` `cli` `plugins` `asset-format` `animation`) rather than minting
+one, so your library lands in a group somebody browses.  The same three
+fields are required in a `submissions/` file (§ 4 below).
 
 > **Two things a programmatic edit gets wrong** (learned publishing crypto
 > 0.3.3): for a **multi-package repo** (e.g. `loft-libs-core`), copy the existing
@@ -243,6 +253,7 @@ else:
   "subpath": "my-lib",
   "description": "One sentence on what the library does.",
   "homepage": "https://github.com/<owner>/<repo>",
+  "categories": ["text"],
   "entry": {
     "url": "https://github.com/<owner>/<repo>/releases/download/v0.1.0/my-lib-0.1.0.tar.gz",
     "sha256": "<hex from step 2>",
@@ -264,7 +275,8 @@ Fields:
 | `tag` | ✓ | the **release tag** from step 1 (`v0.1.0`, or `<name>-v<version>` in a multi-package repo) |
 | `subpath` | ✓ for a multi-package repo | the package **dir** inside the repo (e.g. `crypto`); defaults to `name` |
 | `entry` | ✓ | the index entry — exactly what `loft package` prints (step 2), so `url` / `sha256` / `size` / `loft`; `deps` etc. as needed. **Omit `published`** — the fold stamps it. |
-| `description`, `homepage` | optional | seed a brand-new package's index metadata (ignored if the package already exists) |
+| `description`, `homepage` | optional for an existing package | seed a brand-new package's index metadata (ignored if the package already exists) |
+| `categories` | ✓ for a brand-new package | non-empty list of catalogue tags.  The fold **refuses** a package the index has never seen without one, because gate 1 rejects an empty list and a submission folded in that way would redden every later PR.  Ignored (the curated list wins) if the package already exists. |
 
 Generating it is copy-paste from step 2: `loft package` already prints the `entry`
 body; wrap it and add `name`/`version`/`repo`/`tag`/`subpath`.
