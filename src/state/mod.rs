@@ -83,7 +83,6 @@ pub struct StepCheckpoint {
     heap: crate::database::HeapSnapshot,
     code_pos: u32,
     call_stack: Vec<CallFrame>,
-    call_depth: u32,
     stack_cur: DbRef,
     stack_high: u32,
     stack_pos: u32,
@@ -341,8 +340,6 @@ pub struct State {
     /// NOT be checked.  Diagnostic only — absent from release builds.
     #[cfg(debug_assertions)]
     pub(crate) in_call_arg: bool,
-    /// Runtime call depth counter. Panics at MAX_CALL_DEPTH.
-    pub(crate) call_depth: u32,
     /// Number of arms in the current `parallel {}` block.
     pub(crate) parallel_n_arms: u8,
     /// Bytecode offsets for each arm (relative to join point).
@@ -619,7 +616,6 @@ impl State {
             generate_depth: 0,
             #[cfg(debug_assertions)]
             in_call_arg: false,
-            call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
             const_refs: Vec::new(),
@@ -627,9 +623,13 @@ impl State {
         }
     }
 
-    /// Maximum runtime call depth before panicking.
-    /// Set below the store stack limit (~8000 bytes / ~8 bytes per frame)
-    /// so the depth check fires before a store out-of-bounds panic.
+    /// Most frames a loft call stack may hold — `main` included, since `main` is a
+    /// frame like any other and `stack_trace()` reports it as one.
+    ///
+    /// Set below the store stack limit (~8000 bytes / ~8 bytes per frame) so the depth
+    /// check fires before a store out-of-bounds panic.  Both backends enforce it against
+    /// the same quantity: `fn_call` reads `call_stack.len()`, the generated binary reads
+    /// its shadow stack in `cr_call_push` (loft#1058).
     pub const MAX_CALL_DEPTH: u32 = 10_000;
 
     pub fn static_fn(&mut self, name: &str, call: Call) {
@@ -688,16 +688,35 @@ impl State {
             .range(..=self.code_pos)
             .next_back()
             .map_or(0, |(_, &v)| v);
-        self.call_depth += 1;
         // Plan-07 phase 4f.12 — stack overflow becomes a typed
         // RuntimeError instead of an opaque Rust panic.  Detect at
-        // call entry, raise StackOverflow, decrement so the unwind
-        // doesn't re-trip on the way out.  Production logs +
+        // call entry, raise StackOverflow.  Production logs +
         // continues per C66 (host frame loop decides whether to
         // restart); dev mode halts + renders.
-        if self.call_depth > Self::MAX_CALL_DEPTH {
-            self.call_depth -= 1;
-            self.raise(crate::runtime_error::RuntimeErrorKind::StackOverflow);
+        //
+        // loft#1058 — the guard counts the FRAMES ON THE STACK, which is what
+        // `--native`'s `cr_call_push` tests and what `stack_trace()` reports on both
+        // backends.  It used to test a separate `call_depth` counter that did not
+        // count `main` and was left untouched when a coroutine truncated the stack, so
+        // one cap meant two different things: `rec(9999)` answered on `--interpret` and
+        // overflowed on `--native`.  Reading the stack removes the drift rather than
+        // correcting for it — there is no second counter left to keep in step.
+        if self.call_stack.len() >= Self::MAX_CALL_DEPTH as usize {
+            // loft#1058 — report against the declaration of the function that is
+            // RUNNING, not the call op and not the callee: it is the one thing both
+            // backends can name here.  `--native` detects the same overflow inside
+            // `cr_call_push`, at a callee entry, where the caller's current line is not
+            // in reach — and the two backends describe the same full stack from
+            // opposite ends ("about to make call N+1" here, "just entered frame N+1"
+            // there), so the innermost FRAME is common to both while the callee is not.
+            // It is also what the frame block below names first, which the call-op
+            // position did not: a mutual recursion said `--> alpha` over
+            // `in fn beta()`.
+            let position = self.running_frame_declaration();
+            self.raise_at(
+                crate::runtime_error::RuntimeErrorKind::StackOverflow,
+                position,
+            );
             return;
         }
         // Coverage: record the entry AFTER the depth check, so a call that overflows
@@ -1073,7 +1092,6 @@ impl State {
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
         self.call_stack.pop();
-        self.call_depth = self.call_depth.saturating_sub(1);
     }
 
     // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
@@ -4074,7 +4092,6 @@ impl State {
             heap: self.database.snapshot_heap()?,
             code_pos: self.code_pos,
             call_stack: self.call_stack.clone(),
-            call_depth: self.call_depth,
             stack_cur: self.stack_cur,
             stack_high: self.stack_high,
             stack_pos: self.stack_pos,
@@ -4093,7 +4110,6 @@ impl State {
         self.database.restore_heap(&cp.heap);
         self.code_pos = cp.code_pos;
         self.call_stack.clone_from(&cp.call_stack);
-        self.call_depth = cp.call_depth;
         self.stack_cur = cp.stack_cur;
         self.stack_high = cp.stack_high;
         self.stack_pos = cp.stack_pos;
@@ -4717,6 +4733,40 @@ impl State {
 
     pub fn raise(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
         let position = self.source_loc_for(self.code_pos).cloned();
+        self.raise_at(kind, position);
+    }
+
+    /// Where the innermost frame on the call stack was declared, at column 1 — the
+    /// function that is running right now.
+    ///
+    /// The one position `--native` can name for the same fault: its shadow call stack
+    /// holds that same frame, pushed with the string literals the generator read off
+    /// this `Definition`.  `None` outside a run (`data_ptr` is set for the duration of
+    /// `execute_argv`) or above the first frame, which leaves the diagnostic without a
+    /// `-->` block rather than pointing it somewhere wrong.
+    fn running_frame_declaration(&self) -> Option<Position> {
+        if self.data_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: data_ptr is set at execute_argv start and cleared at exit; valid for
+        // the lifetime of this call.
+        let data = unsafe { &*self.data_ptr };
+        let frame = self.call_stack.last()?;
+        let declared = &data.def(frame.d_nr).position;
+        Some(Position {
+            file: declared.file.clone(),
+            line: declared.line,
+            pos: 1,
+        })
+    }
+
+    /// [`Self::raise`] with the position supplied rather than read off the dispatching
+    /// op — for a fault whose op is not where the author should look.
+    pub fn raise_at(
+        &mut self,
+        kind: crate::runtime_error::RuntimeErrorKind,
+        position: Option<Position>,
+    ) {
         // Production: log + had_fatal + return.  Do NOT populate
         // runtime_error so the dispatch loop continues (per C66).
         // The check matches `n_panic` / `n_assert`'s production check
@@ -6102,7 +6152,6 @@ impl State {
             generate_depth: 0,
             #[cfg(debug_assertions)]
             in_call_arg: false,
-            call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
             const_refs: Vec::new(),
@@ -6145,7 +6194,6 @@ impl State {
         let depth = self.call_stack.len();
         let saved_code_pos = self.code_pos;
         let saved_stack_pos = self.stack_pos;
-        let saved_call_depth = self.call_depth;
         // The OUTER program's fault slot is set aside for the duration. Without
         // this the containment below would swallow a fault the caller was
         // already carrying, which is the opposite of what it is for.
@@ -6174,7 +6222,6 @@ impl State {
             self.database.had_fatal = outer_fatal;
             self.stack_pos = saved_stack_pos;
             self.code_pos = saved_code_pos;
-            self.call_depth = saved_call_depth;
             return Err("the call stack is too deep to run a fetch here".to_string());
         }
 
@@ -6210,7 +6257,6 @@ impl State {
             // counter exists for, so it is a real debt rather than a cosmetic
             // one, and it is recorded as such rather than papered over.
             self.call_stack.truncate(depth);
-            self.call_depth = saved_call_depth;
             self.stack_pos = saved_stack_pos;
             self.code_pos = saved_code_pos;
             return Err(format!("{}: {}", err.kind.label(), err.message));
@@ -6219,7 +6265,6 @@ impl State {
         let result = *self.get_stack::<i64>();
         self.stack_pos = saved_stack_pos;
         self.code_pos = saved_code_pos;
-        self.call_depth = saved_call_depth;
         Ok(result)
     }
 

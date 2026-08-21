@@ -9,6 +9,54 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### One cap, one guard — the call-stack limit stops meaning two things (loft#1058, 2026-08-21)
+
+```
+$ loft --interpret p.loft      $ loft --native p.loft        # the DEFAULT backend
+depth=9999                     error: call stack overflow — exceeded 10000 nested calls
+```
+
+The same program, one call short of the cap, answered on one backend and halted on the
+other. That was found while closing what #1058 filed — a *rendering* divergence, the last
+halting fault still printed two ways: `--interpret` gave the loft diagnostic (`-->`, source
+line, caret) and `--native` a hand-rolled line with no position block, its own frame layout,
+and the depth count only on that side.
+
+**The filed blocker was the wrong question.** The issue said converging the caret would cost
+either a per-frame current-line slot on every native call or a caret pointing at the
+declaration — "a decision about a shipped surface and about native call cost". Both options
+took for granted that the position had to be the CALL SITE. It does not: the fault is a
+property of ten thousand frames, not of a point, and the running function is what both
+backends already know. Nothing was added to the hot path.
+
+Two guards were enforcing one cap and counting different things:
+
+- **`State::fn_call` tested a `call_depth` counter, not the stack.** The counter never
+  counted `main`, and the coroutine paths truncate `call_stack` without touching it — so it
+  drifted from the real depth in two independent ways. It now reads `call_stack.len()`, the
+  quantity `cr_call_push` tests and `stack_trace()` reports on both backends, and the
+  counter is deleted rather than corrected: there is no second number left to keep in step,
+  and with it go its save/restore in `snapshot_checkpoint` and on the host-call path.
+- **`cr_call_push` pushed the frame and tripped afterwards.** A refused call never runs, so
+  its frame is not part of the stack the diagnostic reports — but native put it on top of
+  the chain, one frame longer than the interpreter's, and named the callee where the
+  interpreter named its caller. It now checks before pushing, as `fn_call` does, and reads
+  the position off the frame below.
+
+`cr_stack_overflow` is now three lines over `RuntimeError::stack_overflow(...).report_and_exit()`,
+so the diagnostic, the frame block and the `in_lazy_driver` containment are the ones #1056
+built. The depth moved into `RuntimeErrorKind::describe()`, which gives BOTH backends the
+count, and it says `stack frames` rather than `nested calls` because `main` is one of them.
+
+**Where the axes had to move together.** Self-recursion cannot see any of this: `deep` calls
+`deep`, so caller and callee are the same name and every wrong reading looks right. Mutual
+recursion separates the callee from the running function; a nested argument
+(`runaway(helper(n))`) separates the refused call from both; and only a program sitting
+exactly ON the cap shows that the budgets differed at all. The regression tests carry all
+three, and `tests/oracle/32-stack-overflow-halt.loft` pins the boundary from both sides in
+one program — 9 998 must answer, 9 999 must halt — because a budget that moves by one is
+invisible to a test that only checks the side it moved away from.
+
 ### One fault, one rendering, whatever backend ran it (loft#1056, 2026-08-21)
 
 ```

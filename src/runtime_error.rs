@@ -100,7 +100,7 @@ pub enum RuntimeErrorKind {
     /// not the value the slot now holds — but recoverable, like every other
     /// uncomputable: one value degrades and the run continues (C80).
     RangeDefaulted { value: i64, lo: i64, hi: i64 },
-    /// Recursion exceeded `State::MAX_CALL_DEPTH`.
+    /// A call would have taken the stack past `State::MAX_CALL_DEPTH` frames.
     StackOverflow,
     /// `panic("msg")` builtin called from loft code.
     UserPanic { message: String },
@@ -156,7 +156,10 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::CastOutOfRange => {
                 "cast value cannot be represented in the target type".to_string()
             }
-            RuntimeErrorKind::StackOverflow => "call stack overflow".to_string(),
+            RuntimeErrorKind::StackOverflow => format!(
+                "call stack overflow — exceeded {} stack frames",
+                crate::state::State::MAX_CALL_DEPTH
+            ),
             RuntimeErrorKind::UserPanic { message } => format!("panic: {message}"),
             RuntimeErrorKind::AssertionFailed { message } => {
                 format!("assertion failed: {message}")
@@ -322,6 +325,39 @@ impl RuntimeError {
             Some(Position { file, line, pos: 1 })
         };
         let kind = RuntimeErrorKind::AssertionFailed { message };
+        let detail = kind.describe();
+        Self {
+            kind,
+            position,
+            op_pc: u32::MAX,
+            message: detail,
+            call_chain: Vec::new(),
+        }
+    }
+
+    /// Construct a `StackOverflow` error against the DECLARATION of the function whose
+    /// entry exceeded [`crate::state::State::MAX_CALL_DEPTH`].
+    ///
+    /// Both backends detect the overflow at that entry and both know the callee's
+    /// declaration, so this is the position they can agree on — the interpreter reads it
+    /// off `Definition::position`, the generated binary off the string literals
+    /// `cr_call_push` was emitted with, and one renderer prints both (loft#1058).  It is
+    /// also the position worth printing: the fault is a property of ten thousand frames,
+    /// not of a point, so naming the function that recursed without bound says more than
+    /// naming whichever of ten thousand identical call sites happened to be last.
+    ///
+    /// The column is 1 — the start of the declaration line — as it is for `panic` and
+    /// `assert`.  A definition's stored `position.pos` is the parser's cursor partway
+    /// through the signature (after `->`), so a caret there lands on whitespace and
+    /// points at nothing.
+    #[must_use]
+    pub fn stack_overflow(file: String, line: u32) -> Self {
+        let position = if file.is_empty() {
+            None
+        } else {
+            Some(Position { file, line, pos: 1 })
+        };
+        let kind = RuntimeErrorKind::StackOverflow;
         let detail = kind.describe();
         Self {
             kind,

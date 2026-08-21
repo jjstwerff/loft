@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: the call-stack cap.
+//
+// Two backends, two guards: `State::fn_call` reads `call_stack.len()`, the generated
+// binary reads its shadow stack in `cr_call_push`.  One cap enforced in two places is
+// the shape that drifts, and it had (loft#1058): the guards counted different things,
+// so `rec(9999)` printed an answer on `--interpret` and halted on `--native`, and when
+// they did agree that a program had overflowed they said so in two different spellings
+// — no `-->` block or caret on native, its own frame format, and the depth count only
+// on that side.
+//
+// One program checks both halves, and pins the boundary from both directions:
+//   * 9998 must ANSWER — main + 9999 frames is exactly MAX_CALL_DEPTH (10 000), so a
+//     budget that shrank by one on either backend fails here rather than passing
+//     quietly one call short of the cap;
+//   * 9999 must HALT — one frame past, so a budget that grew by one fails too.
+// The stdout line lands before the halt, so the value channel is compared as well as
+// the exit code and the diagnostic on stderr.
+//
+// @ORACLE_NO_WASM: the wasm engine's stack is exhausted between 4 000 and 8 000 frames,
+// so the 10 000-frame cap this program is about cannot be reached there at all — the
+// module aborts (exit 134, no output) before either half runs.  That gap is loft#1059,
+// filed with the measurement; it is not this program's axis and hiding it here would be
+// the misuse `wasm_opt_out` refuses.
+
+fn rec1058(n: integer) -> integer {
+  if n <= 0 { return 0; }
+  return rec1058(n - 1) + 1;
+}
+
+fn main() {
+  print("at_limit={rec1058(9998)}\n");
+  print("past_limit={rec1058(9999)}\n");
+}

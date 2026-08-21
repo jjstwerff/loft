@@ -298,6 +298,23 @@ fn corpus() -> Vec<PathBuf> {
     files
 }
 
+/// The reason a corpus program excludes the WASM leg, when it declares one.
+///
+/// A program says so in its own header — `// @ORACLE_NO_WASM: <why>` — and the sweep
+/// PRINTS what it skipped and why, because a leg that drops out silently reads as a leg
+/// that agreed.  This is for a program whose axis the wasm target cannot reach at all,
+/// not for one that merely fails there: a wasm failure is the divergence this test is
+/// built to report, and hiding one behind this marker is the exact misuse to refuse.
+fn wasm_opt_out(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .take_while(|l| l.trim_start().starts_with("//") || l.trim().is_empty())
+        .find_map(|l| {
+            l.split_once("@ORACLE_NO_WASM:")
+                .map(|(_, why)| why.trim().to_string())
+        })
+}
+
 /// Run the whole corpus on both backends; a divergence on ANY program is a
 /// caught cross-backend bug. Heavy (rustc per program) — `#[ignore]` by default.
 #[test]
@@ -314,7 +331,9 @@ fn oracle_corpus_agrees_across_backends() {
         // THIRD backend: headless WASM (wasm32-wasip2 / wasmtime), when the toolchain is present.
         // wasm shares the native Rust generator, so a shape that compiles native but breaks wasm —
         // OR breaks BOTH (the compound-&& / format-hook / text-if class this cycle) — is caught here.
-        if let Some(wasm) = run_wasm(&path) {
+        if let Some(why) = wasm_opt_out(&path) {
+            println!("  (wasm leg skipped for {name}: {why})");
+        } else if let Some(wasm) = run_wasm(&path) {
             d.extend(wasm_divergences(&interp, &wasm));
             // accept/reject must agree with the interpreter: a wasm-compile-fail on a program the
             // interpreter accepts is exactly the #520/#533/#534 class.

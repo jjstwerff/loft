@@ -716,3 +716,130 @@ fn i1056_a_fault_inside_a_lazy_driver_is_contained_on_both_backends() {
         );
     }
 }
+
+/// A call-stack overflow reports the function that is RUNNING — not the one it refused
+/// to enter, and not an arbitrary one of ten thousand identical call sites.
+///
+/// This is the divergence loft#1058 filed: `--interpret` printed the loft diagnostic
+/// (`-->`, source line, caret) and `--native` a hand-rolled line with no position block
+/// and its own frame format.  Converging them turned up the reason they could not simply
+/// be folded — the two backends describe the same stack from opposite ends.  The
+/// interpreter refuses a call before the frame exists; native pushed the frame and
+/// tripped after, so it named the callee while the interpreter named its caller.  A
+/// refused call never runs, so it is not on the stack the diagnostic reports, and both
+/// guards now say so.
+///
+/// `runaway1058(helper1058(n))` is what makes the difference visible: the call being
+/// refused is `helper1058`, the function running is `runaway1058`, and they are
+/// different names.  Plain self-recursion cannot tell the two readings apart.
+#[test]
+fn i1058_an_overflow_reports_the_running_function_on_both_backends() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1058_running",
+        "fn helper1058(n: integer) -> integer { n + 1 }\n\
+         \n\
+         fn runaway1058(n: integer) -> integer { return runaway1058(helper1058(n)); }\n\
+         fn main() { println(\"go1058\"); x = runaway1058(1); println(\"{x}\"); }\n",
+    );
+    assert!(
+        out.contains("go1058"),
+        "the program must run up to the overflow; got stdout: {out}"
+    );
+    assert!(
+        err.contains("error: call stack overflow"),
+        "expected the typed diagnostic; got: {err}"
+    );
+    assert!(
+        err.contains("loft_i1058_running.loft:3:1")
+            && err.contains("fn runaway1058(n: integer)")
+            && err.contains('^'),
+        "the diagnostic must carry the position block, the declaration's source line and \
+         a caret — none of which `--native` printed; got: {err}"
+    );
+    assert!(
+        err.contains("in fn runaway1058() ← called from"),
+        "the running function heads the chain; got: {err}"
+    );
+    assert!(
+        !err.contains("in fn helper1058()"),
+        "the call that was REFUSED never ran, so it is not on the reported stack; got: {err}"
+    );
+    assert!(
+        !err.contains("in runaway1058 ("),
+        "the native-only frame spelling is what this closes; got: {err}"
+    );
+}
+
+/// Both backends admit exactly the same number of frames.
+///
+/// One cap, two guards: `State::fn_call` reads `call_stack.len()`, the generated binary
+/// reads its shadow stack in `cr_call_push`.  The interpreter used to test a separate
+/// `call_depth` counter that never counted `main` and was left untouched when a
+/// coroutine truncated the stack — so the cap meant two different things and
+/// `rec1058(9999)` printed an answer on `--interpret` and halted on `--native`.
+///
+/// The boundary is pinned from BOTH sides in one program, because a budget that moves
+/// by one is invisible to a test that only checks the side it moved away from:
+/// `rec1058(9998)` is `main` plus 9 999 frames — exactly `MAX_CALL_DEPTH` — and must
+/// answer, while one more frame must halt.  Both numbers follow from
+/// `State::MAX_CALL_DEPTH`; change it and this test is the place that says so.
+#[test]
+fn i1058_the_call_stack_budget_is_the_same_on_both_backends() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1058_budget",
+        "fn rec1058(n: integer) -> integer { if n <= 0 { return 0; } return rec1058(n - 1) + 1; }\n\
+         fn main() {\n\
+         \x20 println(\"at_limit={rec1058(9998)}\");\n\
+         \x20 println(\"past_limit={rec1058(9999)}\");\n\
+         }\n",
+    );
+    assert!(
+        out.contains("at_limit=9998"),
+        "a call stack filled to exactly MAX_CALL_DEPTH must answer; got stdout: {out}"
+    );
+    assert!(
+        !out.contains("past_limit="),
+        "one frame past the cap must halt, not answer; got stdout: {out}"
+    );
+    assert!(
+        err.contains("error: call stack overflow — exceeded 10000 stack frames"),
+        "the cap is part of the message, on both backends; got: {err}"
+    );
+}
+
+/// An overflow inside a lazy-store DRIVER is contained, like every other fault there.
+///
+/// `cr_stack_overflow` used to carry its own `in_lazy_driver` bypass (@PLN133 S8); it now
+/// reaches the one on `report_and_exit`, shared with `panic` and `assert`.  That is a
+/// removal, so it needs a guard: the lookup must answer null, `store_lazy_error` must
+/// carry the reason in the `<kind label>: <message>` spelling both backends use, and the
+/// program must survive.
+#[test]
+fn i1058_an_overflow_inside_a_lazy_driver_is_contained_on_both_backends() {
+    let (out, _err) = rendering_shared_by_both_backends(
+        "i1058_driver",
+        "struct LzQ { const id: integer, v: integer }\n\
+         fn spin1058(n: integer) -> integer { return spin1058(n + 1); }\n\
+         fn lazy_fetch(coll: hash<LzQ[id]>, source: text, key_int: integer, key_text: text) -> integer {\n\
+         \x20 return spin1058(0);\n\
+         }\n\
+         fn main() {\n\
+         \x20 people: hash<LzQ[id]> = [];\n\
+         \x20 if !store_bind_lazy(people, \"postgres://127.0.0.1:1/nope\") { println(\"bind failed\"); return }\n\
+         \x20 r = people[7];\n\
+         \x20 println(\"null={r == null}\");\n\
+         \x20 println(\"why={store_lazy_error(people)}\");\n\
+         \x20 println(\"survived1058\");\n\
+         }\n",
+    );
+    assert!(
+        out.contains("survived1058"),
+        "a driver's overflow must not halt the program; got stdout: {out}"
+    );
+    assert!(
+        out.contains("null=true")
+            && out
+                .contains("why=stack_overflow: call stack overflow — exceeded 10000 stack frames"),
+        "the lookup answers null and the reason reaches `store_lazy_error`; got stdout: {out}"
+    );
+}

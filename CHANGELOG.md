@@ -60,6 +60,30 @@ error: assertion failed: n was 9
 Inside a `par` worker the frames are the worker's own, and the halt is reported once
 however many workers hit it at the same moment.
 
+### Runaway recursion stops at the same place on both backends
+
+A program that recurses without end is stopped at 10 000 stack frames. Which frame that
+is no longer depends on which backend ran it: the default backend allowed one call fewer
+than `--interpret`, so a program that recursed almost that deep could print its answer
+under one and die under the other.
+
+The report reads the same way now too — the loft diagnostic, naming the function that was
+running when the stack filled up:
+
+```
+error: call stack overflow — exceeded 10000 stack frames
+  --> game.loft:3:1
+  |
+3 | fn walk(room: Room) -> integer {
+  | ^
+  in fn walk() ← called from
+        fn walk()
+        … (9995 more frames)
+```
+
+The default backend used to print its own shorter line with no source position, no caret
+and a different frame layout.
+
 ### Less memory for a variable reassigned in several branches
 
 ```loft
