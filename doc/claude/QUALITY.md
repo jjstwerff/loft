@@ -88,17 +88,24 @@ next PR, landing on whoever opens one.
 | `loft-libs-docs` #4 | `markdown/src/markdown.loft:261` — *"Cannot index text with 'unknown'"*. A **forward-referenced** `atx_heading_level` (defined :383, called :252) leaves the slice bound unresolved in pass 1. | ✅ **Already fixed** — `1133e272` + `d822dd91`, unmerged on `tuxedo-pln145`. Goes green when that reaches `main`. |
 | `loft-libs-game` #11 | `missing: examples-index.tsv — run 'make examples-index'`. The `exindex` check landed here in `7786d28c` (2026-08-18); that repo's last CI run was 2026-08-17, so its first run after the change is its first red. | ⚠ **Open — see below** |
 
-⚠⚠ **The `exindex` message prescribes a cure the repo does not have.** `make examples-index`
-maps to `bash scripts/check_doc_drift.sh write-examples-index` — a script that lives in **this**
-repo. `loft-libs-game` has **no Makefile at all**, and no library repo carries that script; CI
-checks loft out separately as `loft-src`. So the gate tells a library maintainer to run
-something they cannot run.
+⚠⚠ **The `exindex` message prescribed a cure the repo does not have — FIXED.** `make
+examples-index` maps to a target in **this** repo; `loft-libs-game` has no Makefile at all, and
+no library repo carries the generator (CI checks loft out separately as `loft-src`). So the gate
+told a library maintainer to run something they cannot run.
 
-Two ways to close it and they are not equivalent: teach the check to **generate** the index from
-the checked-out `loft-src` when the repo has no Makefile, or **scope the check to this repo** and
-stop asserting it over library trees. The first keeps the coverage; the second admits the index
-is a loft-repo artefact. Decide before the next adoption round, because a centrally-versioned
-gate makes one unfixable row everybody's red.
+The check now tests the **target** repo for the Make target and, when it is absent, names the
+form that actually works there:
+
+```
+missing: examples-index.tsv (this repo defines worked-example tags)
+         generate it from a loft checkout, which owns the generator:
+         EXAMPLES_REPO_ROOT=$PWD <loft>/scripts/check_doc_drift.sh write-examples-index
+```
+
+⚠ The first cut of that fix tested `-f Makefile` in the **current** directory, which is the loft
+checkout the script runs from — so it kept printing the `make` form for every library repo. The
+control caught it; without one it would have read as fixed. Coverage is unchanged (the index is
+still required wherever tags are defined), which is the half worth keeping.
 
 ⚠ The `loft-libs-docs` row is the sharper lesson: **a published library stopped compiling and
 nothing said so for three weeks**, because that repo's CI had not run since 2026-07-28. A gate

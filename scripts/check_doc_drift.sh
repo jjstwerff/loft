@@ -780,7 +780,18 @@ check_examples_index() {
   local defines_tags=0; grep -qE '^@' "$tmp" && defines_tags=1
   if [ ! -f "$f" ]; then
     if [ $defines_tags -eq 1 ]; then
-      red "  missing: $EXAMPLES_INDEX_FILE — run 'make examples-index' (repo defines worked-example tags)"
+      # ⚠ Name a command the reader can actually RUN.  `make examples-index` is a
+      # loft-repo target; a library repo has no Makefile at all, so telling its
+      # maintainer to run it prescribes a cure they do not have (loft#1052 found
+      # the same shape in the registry validator docs).  Under CI the loft
+      # checkout is beside them as `loft-src`, so name that form there.
+      if [ -f "$root/Makefile" ] && grep -q '^examples-index:' "$root/Makefile" 2>/dev/null; then
+        red "  missing: $EXAMPLES_INDEX_FILE — run 'make examples-index' (repo defines worked-example tags)"
+      else
+        red "  missing: $EXAMPLES_INDEX_FILE (this repo defines worked-example tags)"
+        red "           generate it from a loft checkout, which owns the generator:"
+        red "           EXAMPLES_REPO_ROOT=\$PWD <loft>/scripts/check_doc_drift.sh write-examples-index"
+      fi
       HITS_EXINDEX=1; DRIFT=1
     else
       green "  ok — no worked-example tags defined; no index needed"
