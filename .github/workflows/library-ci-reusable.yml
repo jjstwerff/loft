@@ -54,6 +54,27 @@ jobs:
           ref: ${{ inputs.loft-ref }}
           path: loft-src
 
+      # ⚠⚠ THE KEY MUST CARRY LOFT'S COMMIT, NOT ITS BRANCH NAME.
+      #
+      # It used to be `loft-ref` + `hashFiles(Cargo.lock)`.  `loft-ref` is a BRANCH
+      # (`main`), and `Cargo.lock` does not change when loft's *source* does — so every
+      # commit to loft `main` produced the SAME key.  The cache then restored a
+      # `loft-src/target` built against the previous `libloft.rlib`, and a library's
+      # native cdylib linked against it failed at run time with `native function not
+      # loaded` — which reads as a stale local build and is nothing of the kind.
+      #
+      # Measured 2026-08-21: after loft#1057 merged, loft-libs-graphics' next PR run
+      # failed five `--deps` tests this way, while the identical suite passed locally
+      # against the same loft commit with freshly built cdylibs.  The `restore-keys:`
+      # prefix made it worse, not better — it is a deliberate fallback to ANY older
+      # entry, which is exactly the stale artefact we must not take.
+      #
+      # A cache key has to name everything the cached artefact was built FROM.  This one
+      # omitted the only input that actually varies.
+      - name: Resolve the loft commit (for the cache key)
+        id: loftsha
+        run: echo "sha=$(git -C loft-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo + loft build
         uses: actions/cache@v4
         with:
@@ -61,8 +82,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             loft-src/target
-          key: library-ci-loft-${{ inputs.loft-ref }}-${{ hashFiles('loft-src/Cargo.lock') }}
-          restore-keys: library-ci-loft-
+          key: library-ci-loft-${{ steps.loftsha.outputs.sha }}-${{ hashFiles('loft-src/Cargo.lock') }}
+          # ⚠ Restore-keys deliberately narrowed to the REGISTRY dimension only — see
+          # above.  A prefix that can restore another commit's `target/` is the defect.
+          restore-keys: |
+            library-ci-loft-${{ steps.loftsha.outputs.sha }}-
 
       - name: Build loft
         working-directory: loft-src

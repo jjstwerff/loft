@@ -123,6 +123,8 @@ html-wasm-serial = { max-threads = 1 }
 # bounded drain FIRST — they currently carry their own UNBOUNDED copies of
 # drain_with_timeout, so today they would be exposed to the same 600s-TMT hang.
 heavy-serial = { max-threads = 1 }
+heavy-wide = { max-threads = 6 }
+html-wasm-wide = { max-threads = 4 }
 
 [[profile.default.overrides]]
 filter = 'binary(html_wasm)'
@@ -160,3 +162,15 @@ slow-timeout       = { period = "300s", terminate-after = 1 }
 # Relative to `target/nextest/speed/`, like the `ci` profile above — keep it a
 # bare filename so the two cannot drift apart.
 path = "junit.xml"
+
+[profile.wide]
+failure-output = "immediate"
+success-output = "never"
+status-level   = "fail"
+slow-timeout   = { period = "300s", terminate-after = 1 }
+[[profile.wide.overrides]]
+filter = 'binary(html_wasm)'
+test-group = 'html-wasm-wide'
+[[profile.wide.overrides]]
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(wasm_debug_relay)'
+test-group = 'heavy-wide'
