@@ -722,18 +722,29 @@ for f in tests/scripts/*.loft; do
 done | sort -u
 ```
 
-**Reading it.** A site that PRINTS is reachable on pass 1 — a fact, and the point of the
-tool. Silence is not the converse: it means no program in the run reached that site on pass
-1, which is indistinguishable from "never reached at all", so pair a silent site with a
-probe that reaches its diagnostic on pass 2 before calling it gated. And firing on pass 1
-is not itself a defect — a name collision belongs there, and `s[true]` is refused there
-too, since the deferrals cover only `unknown`. It yields a list to read, not a verdict.
+**A firing site is not a bug — expect most of the list to be correct.** The defect is not
+"refuses on pass 1"; it is "refuses on pass 1 a type that is merely UNRESOLVED". A name
+collision belongs on pass 1, and `s[true]` is rightly refused there too, because the
+deferrals cover only `unknown`. Measured 2026-08-21 over the 811-script corpus, **34
+distinct sites fire on pass 1 and none of them was a new defect** — so read 34 as a
+candidate list, not as 34 bugs. Of the 134 refusals a context heuristic had called
+already-gated, 5 appear in that set and all 5 survive review: two are the text-index bounds
+refusing genuinely wrong types, two are name collisions, and one — a struct-literal field's
+`convert` failure — was the only real candidate by shape and probed clean.
 
-Measured 2026-08-21 over the 811-script corpus: 34 distinct sites fire on pass 1; of the
-134 refusals a context heuristic had called already-gated, 5 appear in that set and all 5
-survive review (two are the text-index sites refusing genuinely wrong types, two are name
-collisions that belong on pass 1, one — a struct-literal field — was probed clean with a
-reachable-path control).
+**The asymmetry is the design, not a caveat.** `Parser::first_pass` is mirrored into an
+atomic beside every write to it, so a write this instrument misses makes it report FEWER
+sites, never a phantom one. That is what makes a printed site safe to act on: it is
+measured. Silence is the other half and is only inferred — it means no program in the run
+reached that site on pass 1, which is indistinguishable from "never reached at all". Pair
+any silent site with a probe that reaches its diagnostic on pass 2 before recording it as
+gated; without that, a dead path and a gated one look identical.
+
+**Where the reading tells fit.** A `diagnostic!` sitting outside an `if !self.first_pass`
+a few lines below it is visible without running anything, and it is how `fields.rs:2202`
+was confirmed. Treat that as a confirmation aid, not a discovery instrument: it reads as a
+tell only once you know the class, and a site whose gate is two functions up looks
+identical to a correct one. **Enumeration finds these; this instrument keeps them found.**
 
 ---
 

@@ -420,7 +420,13 @@ pub fn set_first_pass(v: bool) {
 ///
 /// Firing on pass 1 is not by itself a defect — a name collision is correctly reported
 /// there, and a genuinely wrong type (`s[true]`) is refused there too, since the deferrals
-/// cover only `unknown`. It is a candidate list to read, not a verdict.
+/// cover only `unknown`. Measured over the 811-script corpus, 34 sites fire and none was a
+/// new defect: it is a candidate list to read, not a verdict.
+///
+/// The reporting asymmetry is deliberate. [`set_first_pass`] is called beside every write
+/// to `Parser::first_pass`, so a write this misses can only make it report FEWER sites,
+/// never a phantom — which is what makes a printed site safe to act on and silence merely
+/// inferred.
 #[must_use]
 pub fn audit_pass1_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
