@@ -744,10 +744,25 @@ top-level splitter is line-based, so it skips what it cannot split safely and it
 still need triage by hand. Promoting it to CI needs a real parser-backed split — worth
 doing, since the three defects above came from its first two hundred files.
 
-One residual, deliberately not fixed: `enum T` declared below its use still fails, because
-`T` collides with the type-variable placeholder the stdlib registers for `min_of<T>`. That
-is a name collision, not an order fault, and it wants a clear diagnostic rather than the
-current `Expect token ;`.
+The residual first left open here — `enum T`, which collides with the type-variable
+placeholder the stdlib registers for `min_of<T>` — was **fixed too** (loft#1049), and the
+way it closed is the more useful record. It was filed as a design call, "reserve the name"
+versus "let a user declaration shadow it". `formal/interfaces.md` had already settled it:
+a type variable is *"a name bound by a generic header"*, so the binding is per-header and
+reserving the spelling globally was never admissible. The rules do not change to match the
+code — and here they turned a two-way choice into a one-way fix before any deliberation.
+
+Its own lesson is about *counting the homes*. Three separate lookups had to agree (the
+known-name branch, the forward-reference stub registration, and `parse_constant_value`),
+and fixing two of them changed NOTHING observable — the symptom stayed byte-identical,
+which reads exactly like "wrong hypothesis" and is really "right hypothesis, one home
+short". The third was the one producing the misleading message, by consuming the `.` of
+`T.N` while chasing a variant that does not exist.
+
+A second lesson, this one about instruments: the `code!` harness parses its snippet AS
+source 0, so a fix gated on the current source number was **inert under the tests** while
+working through the CLI. Gating on `!self.default` fixed that. When a guard must
+distinguish "the stdlib" from "user code", the source number is not the thing to ask.
 
 ---
 
