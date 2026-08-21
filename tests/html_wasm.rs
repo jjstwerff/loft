@@ -1853,9 +1853,16 @@ fn html_page_filesystem_unit_checks() {
 /// undebuggable trap for exactly that reason: the consumer could see where in their own
 /// transcript the page died and nothing at all about why.
 ///
-/// Asserted here is what a person acts on: the panic's own message, and the loft call
+/// Asserted here is what a person acts on: the fault's own message, and the loft call
 /// chain it happened under. The Rust `file:line` is deliberately not asserted — it names
 /// generated code, whose line numbers move with the emitter.
+///
+/// loft#1056 moved the mechanism under this cell without changing what it promises. A
+/// failed `assert` is no longer a Rust panic caught by the hook; it is
+/// `RuntimeError::report_and_exit`, which renders the loft diagnostic and reads the same
+/// frames off the shadow call stack the hook used. The frames were the reason the first
+/// attempt at that swap was reverted, so the cell now also pins the diagnostic — a page
+/// that fell back to a bare Rust panic would still carry the frames and must not pass.
 #[test]
 fn html_panic_names_itself_and_its_loft_frames() {
     let src = "fn inner950(n: integer) -> integer {
@@ -1890,6 +1897,15 @@ fn main() {
              alone does not say what the program was doing\n{all}"
         );
     }
+    assert!(
+        all.contains("error: assertion failed: distinctive950 text"),
+        "a failed assert renders as the loft diagnostic, the same on every backend \
+         (loft#1056)\n{all}"
+    );
+    assert!(
+        !all.contains("panicked at"),
+        "…and not as a Rust panic naming generated code\n{all}"
+    );
 }
 
 /// A loft `panic(...)` renders its normal diagnostic into the page too.

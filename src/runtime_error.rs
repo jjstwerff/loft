@@ -203,13 +203,17 @@ impl RuntimeError {
     /// `native.rs::n_panic`: a generated binary boots a plain `Stores` with no logger, so
     /// the log-and-continue mode is not reachable on this path.
     pub fn report_and_exit(&self) -> ! {
-        let entry = self.to_diag_entry();
-        let loader = crate::diagnostic_render::FileSourceLoader::new();
-        let rendered = crate::diagnostic_render::render_entry_pretty(
-            &entry,
-            &loader,
-            crate::diagnostic_render::ColorMode::Auto,
-        );
+        // loft#1056 — a halting fault is the PROGRAM's halt, so it is reported ONCE
+        // however many `par` workers reach it in the same instant.  Before this, six
+        // items over two workers printed the same diagnostic twice on `--native` and
+        // once on `--interpret`.  The lock is never released: the first reporter exits
+        // the process while holding it, so a second worker parks here rather than
+        // racing the print or exiting out from under it.
+        static REPORTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = REPORTING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rendered = self.with_native_frames().render();
         eprint!("{rendered}");
         // loft#950 — and to the PAGE on the browser target, where `eprint!` is a sink.
         // A `--html` build that faulted printed nothing at all and the trap reached the
@@ -218,6 +222,75 @@ impl RuntimeError {
         // every other target.
         crate::live_dispatch::wasm_host_log(&rendered);
         std::process::exit(1);
+    }
+
+    /// This error with the `--native` shadow call stack attached, when it carries no
+    /// frames of its own.
+    ///
+    /// The generated `n_assert` / `n_panic` bodies build the error from the stub's
+    /// `file` / `line` arguments alone — they have no `State` to read frames from — so
+    /// the frames are picked up here, at the one point on the native path that reports.
+    /// An error that already has a chain (the interpreter filled it) is left alone.
+    #[must_use]
+    fn with_native_frames(&self) -> std::borrow::Cow<'_, Self> {
+        if !self.call_chain.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let chain = crate::codegen_runtime::native_call_chain();
+        if chain.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut owned = self.clone();
+        owned.call_chain = chain;
+        std::borrow::Cow::Owned(owned)
+    }
+
+    /// The complete text of a halting fault: the typed diagnostic, then the loft call
+    /// frames it happened under.
+    ///
+    /// ONE renderer for every backend — the interpreter reaches it from `main.rs` once
+    /// `execute_argv` has returned, the generated binary from
+    /// [`Self::report_and_exit`] at the fault site.  They used to print their own
+    /// spellings of the same fact, and the two disagreed: a `--native` `assert` emitted
+    /// a bare Rust panic naming the generated temp file, with no loft rendering and no
+    /// frames at all (loft#1056).
+    #[must_use]
+    pub fn render(&self) -> String {
+        let entry = self.to_diag_entry();
+        let loader = crate::diagnostic_render::FileSourceLoader::new();
+        let mut out = crate::diagnostic_render::render_entry_pretty(
+            &entry,
+            &loader,
+            crate::diagnostic_render::ColorMode::Auto,
+        );
+        out.push_str(&self.render_call_chain());
+        out
+    }
+
+    /// The call frames as the trailing block of [`Self::render`] — innermost first, so
+    /// the eye lands on the function the fault fired in, with the chevron pointing
+    /// outward along the call sequence.
+    ///
+    /// A single-frame chain renders as nothing: the fault's own `file:line:col` already
+    /// names where it fired, and a chain of one says only "called from nowhere".  Deep
+    /// chains are cut at five frames with a count of the rest, because a runaway
+    /// recursion's chain is ten thousand copies of one name.
+    #[must_use]
+    pub fn render_call_chain(&self) -> String {
+        if self.call_chain.len() <= 1 {
+            return String::new();
+        }
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let shown = self.call_chain.iter().take(5);
+        let _ = writeln!(out, "  in fn {}() ← called from", self.call_chain[0]);
+        for name in shown.skip(1) {
+            let _ = writeln!(out, "        fn {name}()");
+        }
+        if self.call_chain.len() > 5 {
+            let _ = writeln!(out, "        … ({} more frames)", self.call_chain.len() - 5);
+        }
+        out
     }
 
     /// Construct an `AssertionFailed` error at the loft surface call site.

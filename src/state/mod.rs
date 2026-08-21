@@ -4614,6 +4614,107 @@ impl State {
     /// deployments (games, servers, browser embeds) where halting on
     /// an edge case would be strictly worse than a wrong-pixel
     /// recovery.
+    /// A runaway worker trips this many operations before its `debug_assert` fires.
+    ///
+    /// `execute_argv` has `LOFT_MAX_OPS`, which names the last sixteen ops it ran; the
+    /// worker dispatchers have only this, so it stays where it was rather than being
+    /// generalised into a second hang guard.  The two callers that pass `0` — a host
+    /// call and a `parallel { }` arm — had no ceiling before and keep none: neither is
+    /// bounded by a row count, and a ceiling a legitimate run can reach reports itself
+    /// as an infinite loop (loft#919).
+    const WORKER_OP_CEILING: u64 = 10_000_000;
+
+    /// Run bytecode from `code_pos` until the function returns or a typed fault halts it.
+    ///
+    /// The body of every worker, arm and host-call dispatcher — ten textually identical
+    /// copies before this, none of which checked for a fault.  That is why a failed
+    /// `assert` inside a `par` worker ran the worker's remaining rows to the end, and why
+    /// the frames it was finally reported with were the PARENT's: by the time the parent
+    /// re-raised the worker's halt, the frames the fault fired under were long gone
+    /// (loft#1056).  One home, so the check cannot be present in some families and absent
+    /// in others — the way loft#1053's first fix covered `parallel { }` and left the other
+    /// three par families silent.
+    ///
+    /// `op_ceiling` of `0` switches off the runaway-worker `debug_assert`; see
+    /// [`Self::WORKER_OP_CEILING`].
+    fn run_to_return(&mut self, op_ceiling: u64) {
+        let mut step: u64 = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = self.code::<u8>();
+            if op == 255 {
+                let ext = self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(
+                op_ceiling == 0 || step < op_ceiling,
+                "Worker: too many operations"
+            );
+            self.note_runtime_error_halt();
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+    }
+
+    /// The loft call frames the interpreter is currently inside, innermost first.
+    ///
+    /// Each entry is the function's name as the source spells it (the registry's `n_`
+    /// prefix stripped).  Empty at top-level script scope, and empty when `data_ptr` is
+    /// not set — there is then no definition table to resolve a frame's name against.
+    ///
+    /// One producer for the whole interpreter: [`Self::raise`] captures it at the fault,
+    /// and [`Self::note_runtime_error_halt`] backfills it for a fault raised somewhere
+    /// no `State` was in reach.
+    #[must_use]
+    fn current_call_chain(&self) -> Vec<String> {
+        if self.data_ptr.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: data_ptr is set at execute_argv start and cleared at exit; valid for
+        // the lifetime of this call.
+        let data = unsafe { &*self.data_ptr };
+        self.call_stack
+            .iter()
+            .rev() // innermost first
+            .map(|frame| {
+                let name = data.def(frame.d_nr).name().to_owned();
+                name.strip_prefix("n_").unwrap_or(&name).to_string()
+            })
+            .collect()
+    }
+
+    /// Turn a pending typed fault into a halt of the running dispatch loop, with the
+    /// frames it fired under attached.
+    ///
+    /// Every dispatch loop calls this after each op — one home for the decision, which
+    /// is what lets the backfill exist at all.  `assert` and `panic` are native fns and
+    /// every `Stores`-side raise sees only `&mut Stores`, so all of them leave the chain
+    /// empty; a failed assertion therefore named its line but never the call that
+    /// reached it, on either backend (loft#1056).  This is the first point that holds
+    /// BOTH the `State` and the error, so the frames go on here rather than at thirteen
+    /// raise sites.  A chain the raiser already filled is left as it is.
+    fn note_runtime_error_halt(&mut self) {
+        if self.database.runtime_error.is_none() {
+            return;
+        }
+        if self
+            .database
+            .runtime_error
+            .as_ref()
+            .is_some_and(|e| e.call_chain.is_empty())
+        {
+            let chain = self.current_call_chain();
+            if let Some(err) = self.database.runtime_error.as_mut() {
+                err.call_chain = chain;
+            }
+        }
+        self.code_pos = u32::MAX;
+    }
+
     pub fn raise(&mut self, kind: crate::runtime_error::RuntimeErrorKind) {
         let position = self.source_loc_for(self.code_pos).cloned();
         // Production: log + had_fatal + return.  Do NOT populate
@@ -4669,27 +4770,7 @@ impl State {
         // short-circuits and main.rs renders the typed error.
         let message = kind.describe();
         let op_pc = self.code_pos;
-        // Plan-07 phase 4g.1 / 4g.2 slice 1 — capture the call
-        // chain (innermost first) so main.rs can render it after
-        // the typed-error block.  Each entry is the function name
-        // (the `n_` prefix from the global registry stripped).
-        // Slice 2 will add per-frame source positions and named-arg
-        // value snapshots; slice 1 ships the function-chain shape.
-        let call_chain: Vec<String> = if self.data_ptr.is_null() {
-            Vec::new()
-        } else {
-            // SAFETY: data_ptr is set at execute_argv start and
-            // cleared at exit; valid for the lifetime of `raise`.
-            let data = unsafe { &*self.data_ptr };
-            self.call_stack
-                .iter()
-                .rev() // innermost first
-                .map(|frame| {
-                    let name = data.def(frame.d_nr).name().to_owned();
-                    name.strip_prefix("n_").unwrap_or(&name).to_string()
-                })
-                .collect()
-        };
+        let call_chain = self.current_call_chain();
         self.database.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
             kind,
             position,
@@ -5198,9 +5279,7 @@ impl State {
                 self.database.runtime_error = Some(err);
                 self.database.had_fatal = true;
             }
-            if self.database.runtime_error.is_some() {
-                self.code_pos = u32::MAX;
-            }
+            self.note_runtime_error_halt();
             if self.code_pos == u32::MAX {
                 break;
             }
@@ -5826,9 +5905,7 @@ impl State {
             // Plan-07 phase 4 — typed runtime error halt (mirrors
             // execute_argv).  Resume path needs the same check so a
             // post-yield panic / failed assert halts gracefully.
-            if self.database.runtime_error.is_some() {
-                self.code_pos = u32::MAX;
-            }
+            self.note_runtime_error_halt();
             if self.code_pos == u32::MAX {
                 break;
             }
@@ -5937,9 +6014,7 @@ impl State {
             if self.database.frame_yield {
                 return true;
             }
-            if self.database.runtime_error.is_some() {
-                self.code_pos = u32::MAX;
-            }
+            self.note_runtime_error_halt();
             if self.code_pos == u32::MAX {
                 break;
             }
@@ -6189,22 +6264,7 @@ impl State {
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         *self.get_stack::<i64>()
     }
 
@@ -6248,22 +6308,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         match return_size {
             8 => *self.get_stack::<u64>(),
             1 => u64::from(*self.get_stack::<u8>()),
@@ -6322,22 +6367,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         match return_size {
             8 => *self.get_stack::<u64>(),
             1 => u64::from(*self.get_stack::<u8>()),
@@ -6455,22 +6485,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         match return_size {
             8 => *self.get_stack::<u64>(),
             1 => u64::from(*self.get_stack::<u8>()),
@@ -6530,22 +6545,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         // Copy `return_size` bytes from the top of the worker
         // stack to `dst`.  Stack grows upward; the return value
         // occupies the topmost `return_size` bytes.
@@ -6615,22 +6615,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         match return_size {
             8 => *self.get_stack::<u64>(),
             1 => u64::from(*self.get_stack::<u8>()),
@@ -6746,22 +6731,7 @@ impl State {
         }
         self.put_stack(u32::MAX);
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         *self.get_stack::<DbRef>()
     }
 
@@ -6822,22 +6792,7 @@ impl State {
         }
         self.put_stack(u32::MAX);
         self.code_pos = fn_pos;
-        let mut step = 0;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            step += 1;
-            debug_assert!(step < 10_000_000, "Worker: too many operations");
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(Self::WORKER_OP_CEILING);
         // Pop the Str return value (16 bytes) and copy into owned String.
         let s = *self.get_stack::<Str>();
         let result = s.str().to_owned();
@@ -6933,19 +6888,7 @@ impl State {
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(0);
         let out = match ret {
             HostRetKind::Void => HostReturn::Void,
             HostRetKind::Prim(sz) => HostReturn::Prim(match sz {
@@ -7016,19 +6959,7 @@ impl State {
             self.stack_pos = 4 + parent_snapshot.len() as u32;
         }
         self.code_pos = fn_pos;
-        let bytecode_len = self.bytecode.len() as u32;
-        while self.code_pos < bytecode_len {
-            let op = self.code::<u8>();
-            if op == 255 {
-                let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
-            } else {
-                OPERATORS[op as usize](self);
-            }
-            if self.code_pos == u32::MAX {
-                break;
-            }
-        }
+        self.run_to_return(0);
     }
 
     /**

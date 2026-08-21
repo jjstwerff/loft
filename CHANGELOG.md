@@ -33,6 +33,33 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A failed `assert` reads the same way whichever backend ran it
+
+```
+$ loft p.loft            # the default backend, before
+thread '<unnamed>' (2466378) panicked at /tmp/loft_native_2466316.rs:966:18:
+p.loft:1 plain assert
+```
+
+That names a Rust file in the temporary directory that loft generated and you have never
+seen. The same program under `--interpret` named *your* source. Now both print the loft
+diagnostic — and both print the functions the fault happened inside, which neither did
+before:
+
+```
+error: assertion failed: n was 9
+  --> game.loft:12:1
+  |
+12|     assert(n < 5, "n was {n}");
+  | ^
+  in fn inner() ← called from
+        fn middle()
+        fn main()
+```
+
+Inside a `par` worker the frames are the worker's own, and the halt is reported once
+however many workers hit it at the same moment.
+
 ### Less memory for a variable reassigned in several branches
 
 ```loft

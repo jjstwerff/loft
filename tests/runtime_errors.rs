@@ -495,3 +495,171 @@ fn i1053_clean_par_programs_are_unaffected() {
         "clean par results must be unchanged, got: {stdout}"
     );
 }
+
+// ── loft#1056 — one fault, one rendering, whatever backend ran it ─────────────────────
+//
+// `assert` and `panic` are the two explicit halt statements, so they are one event with
+// one rendering: the loft diagnostic (message + the program's own `file:line:col` +
+// source line + caret), then the loft frames the fault fired under.  `assert` used to
+// break every part of that on `--native`, the DEFAULT backend — it reached the user as
+// `thread '<unnamed>' panicked at /tmp/loft_native_2466316.rs:966`, a Rust location in a
+// generated file the author has never seen.  And neither backend printed the frames.
+//
+// The cases below are differential on purpose: each asserts that the two backends emit
+// the SAME bytes, then what those bytes must say.  Equality alone would pass on two
+// binaries that are wrong in the same way, which is why every case also pins content.
+
+/// Run a snippet on `backend`, returning (stdout, stderr, exit code).
+///
+/// The script path is shared by both backends of a case so their renderings are
+/// comparable byte-for-byte — the diagnostic names the source file.
+fn run_loft_snippet_on(backend: &str, name: &str, source: &str) -> (String, String, Option<i32>) {
+    let script_path = std::env::temp_dir().join(format!("loft_{name}.loft"));
+    std::fs::write(&script_path, source).expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script_path)
+        .env("LOFT_TIMEOUT", "120")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
+}
+
+/// Run a snippet on both backends, assert they rendered the fault identically, and hand
+/// back the one rendering for the per-case content checks.
+///
+/// `--native` is bounded by `LOFT_TIMEOUT` because rustc can hang.
+fn rendering_shared_by_both_backends(name: &str, source: &str) -> (String, String) {
+    let (i_out, i_err, i_code) = run_loft_snippet_on("--interpret", name, source);
+    let (n_out, n_err, n_code) = run_loft_snippet_on("--native", name, source);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("loft_{name}.loft")));
+    assert_eq!(
+        i_err, n_err,
+        "{name}: the same fault must read the same way on both backends\n\
+         --interpret:\n{i_err}\n--native:\n{n_err}"
+    );
+    assert_eq!(i_code, n_code, "{name}: exit codes diverged");
+    assert_eq!(i_out, n_out, "{name}: stdout diverged");
+    (i_out, i_err)
+}
+
+/// A failed `assert` is a loft diagnostic naming the program's own source, not a Rust
+/// panic naming the generated temp file.
+#[test]
+fn i1056_assert_renders_as_a_loft_diagnostic_on_both_backends() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_plain",
+        "fn main() { assert(1 == 2, \"PLAIN ASSERT\"); }\n",
+    );
+    assert!(
+        err.contains("error: assertion failed: PLAIN ASSERT"),
+        "expected the loft diagnostic; got: {err}"
+    );
+    assert!(
+        err.contains("loft_i1056_plain.loft:1:1"),
+        "the diagnostic must name the loft source and position; got: {err}"
+    );
+    assert!(
+        !err.contains("panicked at") && !err.contains("loft_native_"),
+        "a Rust panic naming the generated file is what this closes; got: {err}"
+    );
+}
+
+/// The frames a fault fired under are part of the rendering — on BOTH backends.
+///
+/// `assert` and `panic` are native fns that never saw a `State`, so both left the chain
+/// empty and a reader was told the line but never the call that reached it.
+#[test]
+fn i1056_a_fault_names_the_calls_that_reached_it() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_frames",
+        "fn inner1056(n: integer) -> integer { assert(n < 5, \"NESTED\"); n }\n\
+         fn middle1056(n: integer) -> integer { inner1056(n + 1) }\n\
+         fn main() { x = middle1056(9); println(\"survived {x}\"); }\n",
+    );
+    assert!(
+        err.contains("in fn inner1056() ← called from")
+            && err.contains("fn middle1056()")
+            && err.contains("fn main()"),
+        "expected the call chain innermost-first; got: {err}"
+    );
+}
+
+/// A `panic` inside a `par` worker names the WORKER's frames, not the parent's.
+///
+/// The parent re-raises a worker's halt as its own (loft#1053), so whatever frames were
+/// attached at that moment belonged to the parent — `main`, which is not where the fault
+/// happened.  Naming the wrong function is worse than naming none.
+#[test]
+fn i1056_a_par_worker_fault_names_the_workers_own_frames() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1056_worker",
+        "fn deep1056(n: integer) -> integer { assert(n < 0, \"IN WORKER\"); n }\n\
+         fn worker1056(n: integer) -> integer { deep1056(n) * 2 }\n\
+         fn main() {\n\
+         \x20 v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = worker1056(a), 2) { t += b; }\n\
+         \x20 println(\"survived t={t}\");\n\
+         }\n",
+    );
+    assert!(
+        err.contains("in fn deep1056() ← called from") && err.contains("fn worker1056()"),
+        "expected the worker's own chain; got: {err}"
+    );
+    assert!(
+        !err.contains("fn main()"),
+        "`main` is the parent's frame, not a frame the worker fault fired under; got: {err}"
+    );
+    assert!(
+        !out.contains("survived"),
+        "the program continued past the failing worker; got: {out}"
+    );
+}
+
+/// A halting fault is reported ONCE, however many workers reach it together.
+///
+/// Six rows over two workers printed the diagnostic twice on `--native` and once on
+/// `--interpret`: the same halt, told a different number of times per backend.
+#[test]
+fn i1056_a_halting_fault_is_reported_once() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_once",
+        "fn worker1056(n: integer) -> integer { panic(\"ONE REPORT\"); n * 2 }\n\
+         fn main() {\n\
+         \x20 v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = worker1056(a), 2) { t += b; }\n\
+         \x20 println(\"survived t={t}\");\n\
+         }\n",
+    );
+    assert_eq!(
+        err.matches("error: panic: ONE REPORT").count(),
+        1,
+        "one halt, one report; got: {err}"
+    );
+}
+
+/// The control: a program that faults nowhere renders nothing and exits 0.
+///
+/// Without it every case above would also pass against a build that printed a
+/// diagnostic on every run.
+#[test]
+fn i1056_a_clean_program_renders_no_fault() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1056_clean",
+        "fn inner1056(n: integer) -> integer { assert(n < 5, \"NOT HIT\"); n }\n\
+         fn main() { x = inner1056(1); println(\"clean1056 {x}\"); }\n",
+    );
+    assert!(
+        out.contains("clean1056 1"),
+        "the program must run; got: {out}"
+    );
+    assert!(
+        !err.contains("assertion failed") && !err.contains("called from"),
+        "a passing assert must say nothing; got: {err}"
+    );
+}

@@ -10998,34 +10998,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         }
     }
     if let Some(err) = runtime_err {
-        let entry = err.to_diag_entry();
-        let loader = loft::diagnostic_render::FileSourceLoader::new();
-        let color = loft::diagnostic_render::ColorMode::Auto;
-        let rendered = loft::diagnostic_render::render_entry_pretty(&entry, &loader, color);
-        eprint!("{rendered}");
-        // Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
-        // call-chain captured at raise time after the typed-
-        // error block.  Innermost first so the eye lands on
-        // the function the fault fired in; chevron points
-        // outward to indicate the call sequence.  Top-level
-        // (single-frame) chains are skipped; the source
-        // location already names the function in spirit via
-        // its file:line:col.
-        if err.call_chain.len() > 1 {
-            let trimmed: Vec<&str> = err
-                .call_chain
-                .iter()
-                .map(String::as_str)
-                .take(5) // top 5 frames; rest summarised
-                .collect();
-            eprintln!("  in fn {}() ← called from", trimmed[0]);
-            for name in &trimmed[1..] {
-                eprintln!("        fn {name}()");
-            }
-            if err.call_chain.len() > 5 {
-                eprintln!("        … ({} more frames)", err.call_chain.len() - 5);
-            }
-        }
+        // The typed-error block plus the call chain captured at raise time, through the
+        // renderer the generated binary also uses (`RuntimeError::report_and_exit`).
+        // Rendering it here in its own spelling is how `--native` and `--interpret`
+        // came to report the same fault two different ways (loft#1056).
+        eprint!("{}", err.render());
     }
     if state.database.had_fatal {
         std::process::exit(1);

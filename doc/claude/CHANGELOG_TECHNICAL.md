@@ -9,6 +9,64 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### One fault, one rendering, whatever backend ran it (loft#1056, 2026-08-21)
+
+```
+$ loft --native p.loft            # the DEFAULT backend, before
+thread '<unnamed>' (2466378) panicked at /tmp/loft_native_2466316.rs:966:18:
+p.loft:1 plain assert
+```
+
+A failed `assert` reached the user as a Rust panic naming a generated temp file, where
+`--interpret` printed a loft diagnostic naming their own source. `panic` next door was
+already right, so the two explicit halt statements — one event — read two different ways.
+
+The issue was filed with the convergence blocked on a decision, and the decision turned out
+not to exist. `RuntimeError::call_chain` is hardcoded `Vec::new()` at both the `user_panic`
+and `assertion_failed` constructors, so on `--interpret` and on plain `--native` there were
+no frames to trade away; only the browser target's panic hook had any. What read as "this
+costs the call chain" was a hole, and one three-deep `--interpret` probe says so in ten
+seconds. Filing from a code reading rather than a measurement is what made it look like a
+design call.
+
+Four chokepoints:
+
+- **`RuntimeError::render()`** — one renderer for the diagnostic plus the frames, called by
+  `main.rs` (interpreter) and by `report_and_exit` (generated binary). Frames come from
+  `State::current_call_chain` on one side and the native shadow `CALL_STACK` on the other,
+  so the two backends agree by construction rather than by two spellings being kept in step.
+- **`State::note_runtime_error_halt()`** — the three interpreter dispatch loops each carried
+  their own copy of the halt check; now one method, which also BACKFILLS the chain. `assert`
+  and `panic` are native fns and every `Stores`-side raise sees only `&mut Stores`, so none
+  of them can reach a `State`; the dispatch loop is the first point that holds both.
+- **`State::run_to_return()`** — ten textually identical worker / `parallel` arm / host-call
+  dispatch loops folded into one, and not one of the ten checked for a fault. That is
+  loft#1053's residue: a failed assert inside a `par` worker ran the worker's remaining rows
+  to the end, and the frames it was finally reported with were the PARENT's — `main`, which
+  is not where the fault happened. Naming the wrong function is worse than naming none.
+- **`report_and_exit` takes a never-released lock** — a halting fault is the program's halt,
+  so it is reported once however many workers reach it together (six rows over two workers
+  printed it twice on `--native`, once on `--interpret`).
+
+`assert`'s generated body now takes `panic`'s path:
+`RuntimeError::assertion_failed(msg, file, line).report_and_exit()`.
+
+Eleven differential cells (top-level and nested `assert` and `panic`, three `par` families,
+a runtime-built message, two clean controls) are byte-identical on both backends, with the
+comparator proved able to report a difference. Five regression cells in
+`tests/runtime_errors.rs`, each shown to fail under a deliberate break of the mechanism it
+names, and `html_panic_names_itself_and_its_loft_frames` now pins the diagnostic as well as
+the frames, so a page that fell back to a bare Rust panic cannot pass it.
+
+**The oracle had been collecting the evidence and discarding it.**
+`tests/differential_oracle.rs` has captured stderr since it was built and compared it only
+for the leak substring — so the channel that would have caught this the day
+`31-assertion-halt.loft` was added was never asked. It is now a compared channel (leak line
+filtered out: leaks have their own channel, and the native binary prints one only under
+`LOFT_NATIVE_LEAK_CHECK`), with a positive control for it and one asserting that a leak
+stays ONE divergence rather than also a stderr difference. Seven of the corpus programs
+write to it, so it is exercised rather than agreeing by emptiness.
+
 ### A generic function is callable as a `par` worker (loft#1033, 2026-08-20)
 
 ```loft

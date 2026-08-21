@@ -5032,6 +5032,26 @@ thread_local! {
     static CALL_STACK: RefCell<Vec<(&'static str, &'static str, u32)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The loft frames this native thread is inside, innermost first.
+///
+/// The `--native` counterpart of the interpreter's `State::current_call_chain`, in the
+/// same shape (bare function names) so that one renderer serves both backends —
+/// `RuntimeError::report_and_exit` attaches these to a fault raised by `assert` or
+/// `panic`, neither of which can see a `State` to read frames from.
+///
+/// `try_borrow` rather than `borrow`, for the reason `browser_panic_frames` gives: a
+/// fault must not turn into a second fault over its own frame list.  Missing frames are
+/// worth strictly less than the message, so they yield.
+#[must_use]
+pub fn native_call_chain() -> Vec<String> {
+    CALL_STACK.with(|s| {
+        s.try_borrow().map_or_else(
+            |_| Vec::new(),
+            |b| b.iter().rev().map(|(nm, _, _)| (*nm).to_string()).collect(),
+        )
+    })
+}
+
 /// Push a frame onto the shadow call stack.  Called at the start of every
 /// generated function body.  The `&'static str` arguments are string literals
 /// embedded in the generated Rust code.

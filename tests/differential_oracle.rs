@@ -13,7 +13,8 @@
 //!
 //! This oracle turns that class into a CAUGHT failure: every program in
 //! `tests/oracle/` is run on BOTH backends and their observable outcome must
-//! AGREE — normalised stdout (value / null), exit code (halt), and leak-freedom.
+//! AGREE — normalised stdout (value / null), exit code (halt), stderr (what the program
+//! SAID: warnings and the diagnostic a fault renders), and leak-freedom.
 //! The operational.md rules guide what the corpus should cover; the corpus
 //! GROWS over time, and every fixed divergence graduates a guard program here.
 //!
@@ -86,6 +87,20 @@ fn normalise_stdout(s: &str) -> String {
     out
 }
 
+/// Normalise stderr for cross-backend comparison: CRLF→LF, trailing blank lines
+/// dropped, and the leak line removed — leaks are their own channel below, and the
+/// native binary only prints one when `LOFT_NATIVE_LEAK_CHECK` is set, so comparing
+/// it here would report the switch rather than the program.
+fn normalise_stderr(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .lines()
+        .filter(|l| !l.contains("stores not freed"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
 /// Both backends report a store leak identically — a `… stores not freed at
 /// program exit …` line on stderr. The interpreter prints it unconditionally;
 /// the native binary only when `LOFT_NATIVE_LEAK_CHECK` is set (which the sweep
@@ -111,6 +126,19 @@ fn divergences(interp: &ModeRun, native: &ModeRun) -> Vec<String> {
         d.push(format!(
             "exit code differs: interp={:?} native={:?}",
             interp.exit_code, native.exit_code
+        ));
+    }
+    // What the program SAID about itself — warnings and the diagnostic a fault renders.
+    // Captured since the oracle was built and never once compared, which is how a failed
+    // `assert` came to print a loft diagnostic on one backend and a Rust panic naming a
+    // generated temp file on the other, for as long as both existed (loft#1056).  Seven
+    // of the corpus programs write to this channel, so it is exercised rather than
+    // agreeing by having nothing in it.
+    let ie = normalise_stderr(&interp.stderr);
+    let ne = normalise_stderr(&native.stderr);
+    if ie != ne {
+        d.push(format!(
+            "stderr differs:\n    interp = {ie:?}\n    native = {ne:?}"
         ));
     }
     if leaked(interp) {
@@ -344,6 +372,30 @@ mod tests {
         assert!(
             !divergences(&base, &run("x=1\n", "", Some(1))).is_empty(),
             "an exit-code difference must be caught"
+        );
+
+        // stderr divergence (the diagnostic class — loft#1056: the same fault rendered
+        // as a loft diagnostic on one backend and a Rust panic on the other)
+        assert!(
+            !divergences(
+                &base,
+                &run("x=1\n", "thread 'main' panicked at /tmp/x.rs", Some(0))
+            )
+            .is_empty(),
+            "a stderr difference must be caught"
+        );
+
+        // …but the leak line is NOT that difference: it has its own channel, and the
+        // native binary prints it only under `LOFT_NATIVE_LEAK_CHECK`.  Without this the
+        // stderr channel would double-report every leak and read as flaky.
+        assert_eq!(
+            divergences(
+                &run("x=1\n", "Warning: 1 stores not freed", Some(0)),
+                &run("x=1\n", "", Some(0)),
+            )
+            .len(),
+            1,
+            "a leak is one divergence, not also a stderr difference"
         );
 
         // a native store leak (the @PLN85 ownership class)
