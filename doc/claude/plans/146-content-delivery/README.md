@@ -13,10 +13,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — design ready, nothing built.** Everything a game needs that is not the frame:
-content in, sound out, native and browser alike. **Parity between the two targets is the
-through-line**, and the gates say so — a byte-range log, a headless-Chrome audio handle, a
-throttled font source.
+**Open — arc F's delivery half is built and gated; arcs E and W are not.** Everything a game
+needs that is not the frame: content in, sound out, native and browser alike. **Parity
+between the two targets is the through-line**, and the gates say so — a byte-range log, a
+headless-Chrome audio handle, a throttled font source.
+
+**6 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3`), 1 blocked, 12 open. The pack
+exists, round-trips byte-identically on the interpreter, `--native` and wasm, pages over HTTP
+range at 9 % of the file per read, and takes **zero** fetches inside a frame. What is left is
+in other trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is
+`graphics` and a new `audio_bus`, and `F4`/`F5`/`F6` need a vehicle or `--html` page emission.
+
+**Three findings changed the plan rather than following it.** A pack is TWO stores because
+the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
+so arc W is smaller than it was cut; and `imaging` drops alpha, which blocks `F7` and F1's
+premultiplication both. Each is written up in its phase's own doc.
+
+**Four loft defects were found by these gates and three are fixed** — a `store_load` that
+never returned, a paged load that refused any entry type with an `enum` field, a refusal
+message that named a type the record did not have, and
+[loft#1063](https://github.com/loft-lang/loft/issues/1063) (filed). The pack is the shape
+that found them: several keyed collections plus values big enough to reach the allocator's
+linear scan.
 
 ## Goal
 
