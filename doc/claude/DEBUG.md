@@ -800,6 +800,33 @@ identical to a correct one. **Enumeration finds these; this instrument keeps the
 4. If the opcode itself is wrong (wrong opcode for the operation), check
    `src/state/codegen.rs` and the `Stack::operator` delta table in `src/stack.rs`.
 
+### A repro that cannot separate the candidate causes is a coincidence
+
+Reproducing the reported symptom is not the same as reproducing the reported BUG,
+and an issue that names two failures usually offers two causes to tell apart.  So
+before reading anything, ask what the probe would look like under each — if the
+answer is "the same", the probe has not started work yet.
+
+Two things make this concrete:
+
+- **Find the control the environment already gives you.**  loft#1061 filed a placed
+  library answering EMPTY and panicking on a large return, as one defect with a size
+  threshold.  `--native` is NEVER placed, and it answered empty too — one run, and
+  the wire is innocent for half the symptom.  They were two defects sharing a
+  symptom.
+- **A bug's own mechanism can fake its reproduction.**  The same probe, put in a
+  scratchpad, "confirmed" the empty answers on both backends — because loft runs a
+  script with CWD = the SCRIPT's directory, so `git` ran outside the repository and
+  the library flattened the failure to `""`.  That IS the bug, reached by accident
+  from the wrong direction, and it looked like confirmation of the wire theory.
+  Put a probe that touches the filesystem or a subprocess **inside the tree it is
+  about**.
+
+The general form: *whose* explanation does this run rule out?  A cell that no
+hypothesis fails is not evidence, which is the same reason [the matrix
+protocol](../../CLAUDE.md) requires a hand-computed expected value per cell rather
+than agreement between two binaries.
+
 ### When the crash will not repeat — the crash report file
 
 On SIGSEGV / SIGABRT / SIGBUS, `src/crash_report.rs` prints the last opcode, its
