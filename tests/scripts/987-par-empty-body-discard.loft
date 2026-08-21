@@ -18,10 +18,18 @@
 //     heap-returning worker's hidden destination) was never pushed, which shifted
 //     every slot the worker reads — the text case SEGFAULTED the interpreter.
 //
-// So each worker here ASSERTS the row it was handed.  That is the oracle the route
-// itself cannot provide: an assertion inside a worker is observable, its return value
-// is not.  Row-count and value coverage sit in the queue-route control at the bottom,
-// which reads the same workers through a body that names the result.
+// So each worker here ASSERTS the row it was handed.  ⚠ That oracle DOES NOT WORK, and
+// the claim this comment used to make — "an assertion inside a worker is observable" —
+// is false: a runtime fault raised inside a worker (assert or panic) is silently
+// discarded on both backends, so falsifying any in-worker assertion below still exits 0
+// (loft#1053).  They are kept because they state each worker's contract where it
+// applies, but they guard nothing until that is fixed.
+//
+// What actually pins these workers is the queue-route control at the bottom, which reads
+// the same workers through a body that NAMES the result, so the parent can assert on it.
+// The file anticipated its own vacuity ("if the discard tests above ever went vacuous,
+// this is what still pins…") — it was right about the risk and wrong about which half had
+// gone vacuous.
 
 fn i987_scalar(n: integer) -> integer {
   assert(n >= 10 && n <= 30 && n % 10 == 0, "discard worker got row {n}, expected 10/20/30");

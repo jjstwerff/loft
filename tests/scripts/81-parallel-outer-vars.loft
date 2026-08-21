@@ -10,6 +10,13 @@
 // Forwards `n` so the parallel arm has work to do; the arm-body
 // codegen reads `n` (the call argument) from the parent's frame
 // position — this is the read that returned 0 pre-P245-fix.
+//
+// ⚠ The assertion below does NOT fail the run.  A runtime fault raised inside a
+// `parallel` arm — assert or panic — is silently discarded on both backends
+// (loft#1053): falsifying this line still exits 0.  It is kept because it states the
+// arm's contract at the place the contract applies, but it is NOT the guard.  The
+// enforceable half is `main`'s queue-route cell below, which routes the SAME read
+// through a body that names the result, so the parent can assert on what the arm saw.
 fn forward(n: integer) -> integer {
   assert(n == 42, "arm received outer var unchanged: got {n}");
   n
@@ -24,4 +31,26 @@ fn main() {
   // After the parallel block completes, the parent's outer is
   // unchanged (each arm's writes go to its own worker stack).
   assert(outer == 42, "outer var preserved across parallel block");
+
+  // The ENFORCEABLE half of the P245 guarantee.  `parallel { … }` discards its arms'
+  // results, so nothing the arm observed can reach the parent and an in-arm assertion
+  // is currently the only place to look — which loft#1053 makes silent.  The queue form
+  // names the result, so the value the worker SAW comes back and is checked here, where
+  // an assertion does fail the run.  Verified to bite: changing `== 42` fails the file.
+  rows: vector<integer> = [];
+  for i in 0..2 { rows += [i]; }
+  seen = 0;
+  total = 0;
+  for r in rows par(saw = forward_outer(r, outer), 2) {
+    total += saw;
+    seen += 1;
+  }
+  assert(seen == 2, "queue route expected 2 rows, got {seen}");
+  assert(total == 84, "each arm must observe outer==42, so 42+42; got {total}");
+}
+
+// The same read as `forward`, with the outer var passed as an argument the worker
+// returns — so the parent can see what the arm saw.
+fn forward_outer(row: integer, n: integer) -> integer {
+  n + row * 0
 }
