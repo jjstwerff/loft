@@ -3594,6 +3594,44 @@ impl Parser {
             .collect()
     }
 
+    /// Bring a CONDITION to `boolean` — the `if` / `while` position, where LOFT.md
+    /// § Conversions promises the coercion for every type: *"`false` and null are falsy;
+    /// integer `i32::MIN` is falsy; every other value is truthy"*.
+    ///
+    /// Separate from [`convert`](Parser::convert) because the promise is about this
+    /// POSITION, not about the pair of types: passing a `vector` where a `boolean`
+    /// PARAMETER is declared stays the error it has always been, and that error catches
+    /// real mistakes.  Only a condition asks to be read as present-or-absent.
+    ///
+    /// The heap types register no `OpConv*FromX → Boolean`, so without this the raw
+    /// `DbRef` reached the condition.  `--native` emitted `rec != 0` from its own
+    /// lowering and obeyed the rule; the interpreter's `GotoFalseWord` read
+    /// `*get_stack::<u8>()` — the FIRST BYTE of a twelve-byte pointer.  So `if [1, 2]`
+    /// took the ELSE arm on one backend and the THEN arm on the other, a live collection
+    /// FIELD read as absent, and the eleven extra bytes on the evaluation stack ran the
+    /// next argument off its slot and ended a run in a SIGSEGV.  The type list is the one
+    /// [`coalesce_not_null`](Parser::coalesce_not_null) uses, for the same reason.
+    pub(crate) fn convert_condition(&mut self, code: &mut Value, tp: &Type) -> bool {
+        if matches!(
+            tp.base(),
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+                | Type::Enum(_, true, _)
+        ) {
+            if !self.first_pass {
+                let not_null = self.coalesce_not_null(&code.clone(), tp.base());
+                *code = not_null;
+            }
+            return true;
+        }
+        self.convert(code, tp, &Type::Boolean)
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
