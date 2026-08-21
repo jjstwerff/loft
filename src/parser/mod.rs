@@ -3594,6 +3594,27 @@ impl Parser {
             .collect()
     }
 
+    /// Is a value of this type carried as a heap `DbRef` — a record, a collection, or a
+    /// struct-enum?  These are the types with no registered `OpConv*FromX → Boolean`, so
+    /// every position that reads one as present-or-absent has to say so itself.
+    ///
+    /// One home, because the answer is shared by the `??` null check, the `if` / `while`
+    /// / `assert` condition, and the `!x` null test — three places that must agree about
+    /// which values `rec` speaks for.
+    pub(crate) fn is_heap_handle(tp: &Type) -> bool {
+        matches!(
+            tp.base(),
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+                | Type::Enum(_, true, _)
+        )
+    }
+
     /// Bring a CONDITION to `boolean` — the `if` / `while` position, where LOFT.md
     /// § Conversions promises the coercion for every type: *"`false` and null are falsy;
     /// integer `i32::MIN` is falsy; every other value is truthy"*.
@@ -3612,17 +3633,7 @@ impl Parser {
     /// next argument off its slot and ended a run in a SIGSEGV.  The type list is the one
     /// [`coalesce_not_null`](Parser::coalesce_not_null) uses, for the same reason.
     pub(crate) fn convert_condition(&mut self, code: &mut Value, tp: &Type) -> bool {
-        if matches!(
-            tp.base(),
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Enum(_, true, _)
-        ) {
+        if Self::is_heap_handle(tp) {
             if !self.first_pass {
                 let not_null = self.coalesce_not_null(&code.clone(), tp.base());
                 *code = not_null;

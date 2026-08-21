@@ -107,6 +107,28 @@ fn test_a_while_reads_its_handle_the_same_way() {
   assert(m == 0, "a null handle must not enter the body at all: got {m}");
 }
 
+fn test_not_on_a_heap_handle_is_the_null_test() {
+  // LOFT.md lists `!v` as the fourth position, and the parser already documents what
+  // `!x` means on a non-boolean: *"is x null?"*.  So `!x` must equal `x == null` for
+  // every handle — it used to be refused outright (*"No matching operator Not on
+  // vector<integer>"*) while `if v` on the same value compiled.
+  v = [1, 2];
+  empty: vector<integer> = [];
+  vn: vector<integer>? = null;
+  r = Crec { a: 1 };
+  rn: Crec? = null;
+
+  assert(!v == (v == null), "! on a vector holding elements");
+  assert(!empty == (empty == null), "! on an EMPTY vector");
+  assert(!vn == (vn == null), "! on a null vector");
+  assert(!r == (r == null), "! on a record");
+  assert(!rn == (rn == null), "! on a null record");
+
+  // Ordinary boolean negation is untouched — the operand type is what parts the two.
+  assert(!true == false, "! still negates a boolean");
+  assert(!false == true, "! still negates a false");
+}
+
 fn test_a_condition_drives_the_arm_that_runs() {
   // Reading the flag is not the same as BRANCHING on it: this asks which arm actually
   // executed, so a conversion that answers right but jumps wrong cannot pass.
@@ -128,6 +150,7 @@ fn main() {
   test_a_field_read_agrees_with_its_own_null_test();
   test_assert_takes_a_heap_value_like_a_condition();
   test_a_while_reads_its_handle_the_same_way();
+  test_not_on_a_heap_handle_is_the_null_test();
   test_a_condition_drives_the_arm_that_runs();
   print("heap-value-as-a-condition ok\n");
 }
