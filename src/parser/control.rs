@@ -3039,8 +3039,8 @@ impl Parser {
         let index_pairs =
             crate::parser::operators::collect_guard_pairs(&test, &self.data, &empty_caps);
         self.index_bounded.extend(index_pairs);
-        let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
-        let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
+        let is_aliases: Vec<(String, Option<u16>)> = std::mem::take(&mut self.is_capture_aliases);
+        let is_bindings: Vec<Value> = std::mem::take(&mut self.is_capture_bindings);
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();

@@ -278,7 +278,7 @@ pub(crate) fn sha1(data: &[u8]) -> [u8; 20] {
         msg.push(0);
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
         for (i, word) in w.iter_mut().enumerate().take(16) {
             let o = i * 4;

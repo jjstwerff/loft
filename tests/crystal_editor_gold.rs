@@ -69,7 +69,7 @@ fn decode_rgba8(path: &std::path::Path) -> (Vec<u8>, u32, u32) {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => {
             let mut out = Vec::with_capacity(buf.len() / 3 * 4);
-            for chunk in buf.chunks_exact(3) {
+            for chunk in buf.as_chunks::<3>().0 {
                 out.extend_from_slice(chunk);
                 out.push(255);
             }
@@ -95,7 +95,7 @@ fn compare_rgba(a: &[u8], b: &[u8]) -> DiffReport {
     let mut max_abs = 0u32;
     let mut sum_abs = 0u64;
     let mut differing_pixels = 0u64;
-    for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
         let mut pixel_diff = 0u32;
         for (x, y) in p.iter().zip(q.iter()) {
             let d = x.abs_diff(*y) as u32;

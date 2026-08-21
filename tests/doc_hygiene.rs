@@ -219,7 +219,7 @@ fn quality_const_store_mmap_matches_const_store_md() {
         .expect("QUALITY.md must contain a top-level Tier 3 item `8. **...`");
     let block_end = q[heading_start..]
         .find("\n9. ")
-        .map_or(q.len() - heading_start, |e| e)
+        .unwrap_or(q.len() - heading_start)
         + heading_start;
     let block = &q[heading_start..block_end];
     assert!(
