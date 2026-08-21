@@ -818,13 +818,21 @@ examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:li
 # pushing: it gates the citation faults CI would report — dangling / duplicate /
 # unregistered — without demanding an `examples-index.tsv`, which libraries no longer
 # commit.  REPO=. checks loft itself.
+# The LOCAL fast gate — same tests, ~1.9x quicker, by widening the two serial groups
+# that exist for the 3-core CI runner.  See `.config/nextest.toml [profile.fast]` for the
+# measurement and, more importantly, for what it does NOT prove: those groups close a
+# starvation window, so re-run a networked failure under `--profile ci` before believing
+# it.  `make ci` is unchanged and stays the pre-push gate.
+test-fast:  ## The suite under the local `fast` profile (~1.9x quicker than `make ci`'s)
+	@bash scripts/box-claim.sh cargo nextest run --profile fast
+
 examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO=../loft-libs-x)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-preflight
 
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-preflight examples-progress features-review libraries-review bug-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 

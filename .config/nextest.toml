@@ -123,6 +123,7 @@ html-wasm-serial = { max-threads = 1 }
 # bounded drain FIRST — they currently carry their own UNBOUNDED copies of
 # drain_with_timeout, so today they would be exposed to the same 600s-TMT hang.
 heavy-serial = { max-threads = 1 }
+# Widened twins of the two serial groups, used ONLY by `[profile.fast]` below.
 heavy-wide = { max-threads = 6 }
 html-wasm-wide = { max-threads = 4 }
 
@@ -163,14 +164,45 @@ slow-timeout       = { period = "300s", terminate-after = 1 }
 # bare filename so the two cannot drift apart.
 path = "junit.xml"
 
-[profile.wide]
+# ---- `fast` — the LOCAL gate, 1.9x quicker, and NOT what CI runs ----
+#
+# The two serial groups above exist for a 3-core CI runner, and the note there is right
+# that widening them buys ~0 on `macos-latest`.  On a 24-thread developer box the same
+# change is worth almost half the wall clock, because the denominator moved: when the
+# suite was ~570s the 122s serial chain was noise, and after the JSON parser fix
+# (loft#1057, `json::parse` 124s -> 123ms on a single-line document) the suite is ~153s
+# and that same chain is most of it.
+#
+# ⚠ A RECORDED "NOT WORTH IT" IS A RATIO, AND RATIOS HAVE DENOMINATORS THAT MOVE.  The
+# July measurement was correct when taken and expired without saying so — re-measure a
+# conclusion when the thing it was measured against changes.
+#
+# MEASURED 2026-08-21, 24 threads, warm, claimed box, ALTERNATED ci/fast/ci/fast/ci/fast
+# so drift lands on both arms rather than on whichever went second:
+#
+#   ci     152.78s  153.71s              mean 153.2s
+#   fast    82.00s   81.48s   80.89s     mean  81.5s      -> 1.88x
+#
+# (A seventh run of `fast` confirmed 4375 passed / 0 failed in 86.0s.  A first run of
+# 381s was discarded: 3253s of user time says it paid for the build, which
+# `cargo build --release --tests` had not covered — nextest builds its own test profile.)
+#
+# ⚠⚠ WHAT THIS IS NOT: proof it is safe under load.  The serial groups close a STARVATION
+# window — `wasm_debug_relay` and the multiplayer suites pass in isolation and fail when a
+# rustc storm runs beside them — and a quiet box is the least likely place to see that.
+# Four green runs on an idle machine is evidence, not a guarantee.  So this is opt-in and
+# `ci` is untouched: if you see a networked test fail here, re-run under `--profile ci`
+# before believing it, exactly as you would a failure from a shared box.
+[profile.fast]
 failure-output = "immediate"
 success-output = "never"
 status-level   = "fail"
 slow-timeout   = { period = "300s", terminate-after = 1 }
-[[profile.wide.overrides]]
+
+[[profile.fast.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-wide'
-[[profile.wide.overrides]]
+
+[[profile.fast.overrides]]
 filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(wasm_debug_relay)'
 test-group = 'heavy-wide'
