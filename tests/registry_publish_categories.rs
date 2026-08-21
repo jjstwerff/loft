@@ -194,7 +194,7 @@ fn malformed_categories_are_refused() {
 fn registry_fixture(tag: &str, validator: Option<&str>) -> PathBuf {
     let dir = work_dir(tag);
     std::fs::write(
-        &dir.join("index.json"),
+        dir.join("index.json"),
         r#"{"schema_version": 1, "packages": {}}"#,
     )
     .expect("write index");
