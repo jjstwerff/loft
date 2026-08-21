@@ -728,7 +728,7 @@ non-goals *for these four* — see @PLN144 § Goal.
 | Plan | Arcs | Phases | One line |
 |---|---|---|---|
 | **[@PLN144](144-2d-stage/README.md)** the 2-D stage ✅ **SHIPPED** | A scene ✅ · P presentation ✅ · L light ✅ · G paths *(deferred)* | 17 | A retained **flat** node array batched by a *merge-adjacent, never-reorder* rule, presenting a 3-D world through three knobs — sprite **origin**, `layer` + `depth`, projected position |
-| **[@PLN145](145-authoring-libs/README.md)** text, tweens, widgets | B C D | 11 | What you write a game *with*: a font that works headless, text that costs no upload, property tweens, and a widget kit **extracted** rather than written |
+| **[@PLN145](145-authoring-libs/README.md)** text, tweens, widgets ✅ **SHIPPED** | B text ✅ · C tweens ✅ · D widgets ✅ | 11 | What you write a game *with*: a font that works headless, text that costs no upload, property tweens, and a widget kit that turned out to be **someone else's to publish** rather than ours to extract |
 | **[@PLN146](146-content-delivery/README.md)** content + delivery | E audio · F assets · W drawing | 19 | The pack **is a loft store** on a dumb file server, range-read; plus authoring sprites in loft instead of Python, and browser audio that is currently a stub |
 | **[@PLN147](147-content-editor/README.md)** the editor | S T U V · X sprites | 16 | An in-browser editor whose invariant is that **it edits the same store the game loads**, so editor↔runtime agreement is structural; arc X adds sprite + animation editing |
 
@@ -739,14 +739,19 @@ how both of those findings surfaced. @PLN146's gates are a byte-range log and a 
 audio handle; neither can redden the other or the stage. Phases that cannot fail together are a
 programme, not a plan.
 
-**Where to start — two phases depend on nothing** (`B0` and `A0` were the other two and have
-both shipped; @PLN144 is closed and @PLN145's arcs `B` and `C1` are done):
+**Where to start — @PLN144 and @PLN145 are both closed, so the set's open half is @PLN146
+and @PLN147** (`A0`, `B0` and `D0b` were the other no-dependency phases and have all shipped):
 
 - **`E1`** (@PLN146) — ~30 lines of JS. `loft_audio_load` answers `i32::MIN` in the browser, so
   a `--html` game can only make procedural noise today.
-- **`D0b`** (@PLN145) — one probe program, and the only phase in the set that can retire a
-  dependency before it is load-bearing: three consumers wrote their own input layer and none
-  reached for the published `input` package.
+
+⚠ **`D0b` is the one to read before starting either.** It was the set's cheapest phase — one
+probe program — and it did not do what it was cut to do: it was scoped on *"three consumers
+wrote their own input layer"*, the true count was **one**, and instead of retiring the `input`
+dependency it retired the *reason to doubt it* and returned a named structural limit
+(a modifier is not expressible) that `D1` and `D2` could then plan around. Two of the three
+miscounted rows came from judging a file by its **name**. It is the set's standing argument for
+spending the first probe on the **premise** rather than on the task.
 
 **The through-lines**, which is what makes the set readable as one piece:
 

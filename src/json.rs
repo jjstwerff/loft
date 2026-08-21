@@ -269,20 +269,54 @@ use crate::lexer::{LexConfig, LexItem, Lexer, Position};
 
 /// Maps the lexer's 1-based `(line, char-column)` back to the absolute byte
 /// offset the old byte-scanner reported (Option 1 — keep the byte-offset model).
+///
+/// ⚠⚠ THIS IS A HOT PATH, AND THE OBVIOUS IMPLEMENTATION IS QUADRATIC.  `byte()` is
+/// called once per token, and the naive form walks `col - 1` chars from the START of the
+/// line every time.  On a multi-line file that is short; on a **single-line** file — which
+/// a serialiser produces by default, including our own `data_to_json` — `col` IS the
+/// offset, so the walk is O(n) per token and O(n²) over the parse.  Measured 2026-08-21:
+/// the 1 MB single-line stdlib snapshot took **124 s** to parse, ~8 KB/s.
+///
+/// A huge single-line document is a normal input, not an edge case, so both routes below
+/// are O(1)-amortised rather than only the tidy one:
+///
+///   * **ASCII line** — a char column IS a byte column, so the answer is arithmetic.
+///     `line_ascii` is computed in the same pass that finds the line starts, so it costs
+///     nothing extra.
+///   * **Non-ASCII line** — a forward CURSOR.  Positions arrive in lexing order, so the
+///     walk resumes from the previous answer instead of restarting; total work across the
+///     parse is O(n), not O(n²).  A backwards or foreign request falls back to the walk
+///     from the line start, which is still correct, just not amortised.
 struct ByteMapper {
     /// Byte offset of the start of each 1-based line (`line_starts[0]` = 0).
     line_starts: Vec<usize>,
+    /// Per line: does it contain only ASCII?  Then char column == byte column.
+    line_ascii: Vec<bool>,
+    /// Memo for the non-ASCII path: the last `(line_index, chars_consumed, byte_offset)`
+    /// answered, so an in-order request continues from there.
+    cursor: std::cell::Cell<(usize, usize, usize)>,
 }
 
 impl ByteMapper {
     fn new(input: &str) -> Self {
         let mut line_starts = vec![0usize];
+        let mut line_ascii = Vec::new();
+        let mut ascii = true;
         for (i, b) in input.bytes().enumerate() {
             if b == b'\n' {
                 line_starts.push(i + 1);
+                line_ascii.push(ascii);
+                ascii = true;
+            } else if !b.is_ascii() {
+                ascii = false;
             }
         }
-        ByteMapper { line_starts }
+        line_ascii.push(ascii); // the final line, which has no terminating newline
+        ByteMapper {
+            line_starts,
+            line_ascii,
+            cursor: std::cell::Cell::new((usize::MAX, 0, 0)),
+        }
     }
 
     /// Absolute byte offset of `(line, col)`.  `col` is a 1-based char column, so
@@ -294,15 +328,29 @@ impl ByteMapper {
         if start >= input.len() {
             return input.len();
         }
-        let mut off = start;
-        let mut remaining = col.saturating_sub(1) as usize;
-        for ch in input[start..].chars() {
-            if remaining == 0 {
+        let want = col.saturating_sub(1) as usize; // chars into the line
+
+        // ASCII line: a char column IS a byte column.  No walk at all.
+        if self.line_ascii.get(li).copied().unwrap_or(false) {
+            return (start + want).min(input.len());
+        }
+
+        // Non-ASCII: resume from the cursor when this request is at or after it on the
+        // SAME line, which is what in-order lexing produces.  Otherwise restart.
+        let (c_li, c_chars, c_off) = self.cursor.get();
+        let (mut off, mut done) = if c_li == li && c_chars <= want {
+            (c_off, c_chars)
+        } else {
+            (start, 0)
+        };
+        for ch in input[off..].chars() {
+            if done >= want {
                 break;
             }
             off += ch.len_utf8();
-            remaining -= 1;
+            done += 1;
         }
+        self.cursor.set((li, done, off));
         off.min(input.len())
     }
 }
@@ -846,6 +894,91 @@ fn write_json_string(out: &mut String, s: &str) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod bytemapper_tests {
+    use super::{Dialect, parse, parse_with};
+
+    // ⚠ `byte()` maps a CHAR column back to a BYTE offset, and it has two routes: an
+    // arithmetic fast path for an all-ASCII line, and a resumable walk otherwise.  The
+    // golden corpus covers non-ASCII as VALUES but never reports an error offset AFTER a
+    // multi-byte char on the same line — which is precisely where the fast path would be
+    // wrong if it were applied to a non-ASCII line.
+    //
+    // Asserted as a PROPERTY, not a pinned number, so it does not encode this parser's
+    // choice of which token to blame: wherever it points, the offset must be a real char
+    // boundary and must land on the text it means.  Under an ASCII-only assumption the
+    // offset comes out 2 bytes short here (the width of `é`) and lands mid-token.
+    #[test]
+    fn an_error_offset_after_a_multibyte_char_is_a_byte_offset() {
+        let input = "{\"k\":\"é\",\"bad\" 1}";
+        let err = parse(input).expect_err("missing colon must fail");
+        assert!(
+            input.is_char_boundary(err.byte_offset),
+            "offset {} is not a char boundary in {input:?}",
+            err.byte_offset
+        );
+        // ⚠ NOT `starts_with('1') || starts_with(' ')`.  That first spelling passed under
+        // a deliberately broken build (the control), because a 2-byte undershoot still
+        // landed on the space — a guard that cannot fail for the defect it names.  The
+        // offset must be exactly the reported token.
+        assert!(
+            input[err.byte_offset..].starts_with('1'),
+            "offset {} points at {:?}, not at the `1` the error is about",
+            err.byte_offset,
+            &input[err.byte_offset..]
+        );
+    }
+
+    // The same, with the multi-byte char in a KEY and several of them, so the walk has to
+    // accumulate more than one width before the reported position.
+    #[test]
+    fn several_multibyte_chars_before_the_error_offset() {
+        let input = "{\"é😀𝄞\":1,\"b\" 2}";
+        let err = parse(input).expect_err("missing colon must fail");
+        assert!(input.is_char_boundary(err.byte_offset));
+        assert!(
+            input[err.byte_offset..].starts_with('2'),
+            "offset {} points at {:?}, not at the `2` the error is about",
+            err.byte_offset,
+            &input[err.byte_offset..]
+        );
+    }
+
+    // ⚠⚠ THE PERFORMANCE GUARD, and it guards a CLASS rather than a number.
+    //
+    // `byte()` used to walk from the line start on every call.  On a single-line document
+    // — what a serialiser emits by default, ours included — the char column IS the offset,
+    // so that is O(n) per token and O(n²) over the parse: the 1 MB single-line stdlib
+    // snapshot took **124 s**, about 8 KB/s.  It is now ~120 ms.
+    //
+    // The bound is deliberately loose (10 s for ~1 MB).  It is not a benchmark and must not
+    // flake on a loaded machine; it only has to separate "linear" from "quadratic", and the
+    // gap between the two is three orders of magnitude.
+    #[test]
+    fn a_huge_single_line_document_parses_in_linear_time() {
+        let mut src = String::from("[");
+        for i in 0..40_000 {
+            if i > 0 {
+                src.push(',');
+            }
+            src.push_str("{\"k\":123,\"s\":\"abcdefgh\"}");
+        }
+        src.push(']');
+        assert!(src.len() > 900_000, "fixture too small: {}", src.len());
+        assert_eq!(src.matches('\n').count(), 0, "fixture must be ONE line");
+
+        let t = std::time::Instant::now();
+        let parsed = parse_with(&src, Dialect::Strict).expect("huge single-line parse");
+        let took = t.elapsed();
+        drop(parsed);
+        assert!(
+            took.as_secs() < 10,
+            "parsing {} bytes on one line took {took:?} — the quadratic byte-mapper is back",
+            src.len()
+        );
+    }
 }
 
 #[cfg(test)]

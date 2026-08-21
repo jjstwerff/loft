@@ -5566,6 +5566,7 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
         );
         // The guard only fires when !first_pass.
         p.first_pass = false;
+        crate::diagnostics::set_first_pass(false);
         p.change_var_type(v_nr, &Type::Integer(crate::data::IntegerSpec::signed32()));
         match p.vars.tp(v_nr) {
             Type::Reference(d, _) => {

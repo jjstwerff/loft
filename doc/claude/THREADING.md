@@ -589,9 +589,24 @@ for why a unifying trait collapse was considered and rejected.
 
 | Dispatcher | Return shape | `Stores` borrow | Worker primitive | Per-row execute call | Per-thread state | Merge step |
 |---|---|---|---|---|---|---|
-| `run_parallel_queue` (line 1251) | `Vec<u64>` (i64 / float / 8B prim) | `&Stores` | `parallel_workers` | 4-way input ladder (`execute_at_raw_text_input` / `_primitive_input_wide` / `_primitive_input` / `execute_at_raw`) | none | `merge_batches(…, 0u64)` |
+| `run_parallel_queue` (line 1251) | `Vec<u64>` (i64 / float / 8B prim) | `&Stores` | `parallel_workers` | `execute_at_raw_worker_arg` | none | `merge_batches(…, 0u64)` |
 | `run_parallel_text` (line 585) | `Vec<String>` | `&Stores` | `parallel_workers` | `execute_at_text` (single shape) | per-worker output store slot via `add_output_slot` + `s_pos` array record | iterate slots, `get_str` per row |
 | `run_parallel_queue_ref` (line 669) | `(Vec<DbRef>, Vec<u16>)` | `&mut Stores` | raw rayon (`pool.install` + `into_par_iter`) | `execute_at_ref` with caller-pre-allocated hidden destination stores | `worker_slot_dispenser` (atomic) + `worker_allocated_indices.clear()` + `n_hidden_dests` claim | `mem::swap` stores at allocated indices into parent + `revive_record_chain` graph walk |
+
+**Whatever else a dispatcher does, it does not decide how the row reaches the worker.**
+`parallel::worker_row_arg` answers that for all of them, and `WorkerArg` is the vocabulary:
+`Text` (16-byte `Str`), `Primitive` (1/4/8-byte value), `Wide` (9..=64 bytes inline — a
+tuple), `Ref` (12-byte `DbRef`).  The rule is that the row's SHAPE picks the spelling and
+the worker's RETURN type never enters into it.
+
+That was four hand-written ladders until loft#1055, each stopping at a different rung, and
+every gap ended at the same wrong answer — `WorkerArg::Ref`, so the worker read a pointer's
+bits as its value.  `run_parallel_text` had no wide arm at all, `run_parallel_queue_ref`
+had neither a wide nor a text arm, and `run_parallel_discard` had a wide arm it could only
+take when the worker had NO hidden parameters — which made a tuple into a text-returning
+worker answer wrong, a 3-tuple underflow the worker stack, and `vector<text>` into a
+struct-returning worker SIGSEGV.  A new dispatcher gets this right by calling that
+function; it cannot get it right by copying a neighbour.
 | `run_parallel_queue_narrow` (today `run_parallel_int`, line 927) | `Vec<i64>` packed via narrow stride elsewhere | `&Stores` | `parallel_workers` | `execute_at` (i64) | none | `merge_batches(…, i64::MIN)` |
 | `run_parallel_queue_fn` (line 1347, cfg-gated) | `Vec<u8>` (packed 20-byte fn-ref blobs) | `&Stores` | `parallel_workers` | `execute_at_raw_to(fn_pos, …, dst)` writing through `SendMutPtr` to disjoint slots in a pre-allocated buffer | none | no merge — buffer filled in-place |
 
@@ -599,6 +614,16 @@ Plus 3 non-Queue dispatchers: `run_parallel_discard` (Stitch::Discard,
 no buffer), `run_parallel_fold` (Stitch::Reduce, scalar accumulator),
 `run_parallel_block` (`parallel { arm; arm }` — internal, not a row
 loop).
+
+`run_parallel_block`'s native twin is `codegen_runtime::n_parallel_block_native`, which
+takes one Rust closure per arm instead of one bytecode position per arm.  The generator
+emits every variable the arms assign at the top of EVERY closure, at its type's default:
+each arm is a separate top-level expression, so `sum = 0;` and the loop that reads `sum`
+are two different arms, and the interpreter gives the second one an entry-value copy
+through the parent's stack snapshot.  Private per closure, which is the isolation the
+construct promises.  A `&`-link local is left out — a raw pointer has no honest default,
+so an arm reading a sibling's link fails to compile rather than dereferencing a made-up
+address.
 
 ### When to add a new dispatcher vs extend an existing one
 

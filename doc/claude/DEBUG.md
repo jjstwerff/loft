@@ -16,8 +16,10 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 ---
 
 ## Contents
+
 - [Interactive debugging (`loft debug`)](#interactive-debugging-loft-debug)
 - [Preset Guide](#preset-guide)
+- [Which refusals are reachable before types resolve (`LOFT_AUDIT_PASS1`)](#which-refusals-are-reachable-before-types-resolve-loft_audit_pass1)
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
 - [Before you believe a fault is RANDOM](#before-you-believe-a-fault-is-random)
@@ -696,6 +698,53 @@ fn n_first(stores: &mut Stores, mut var_a: DbRef) -> Str {
 When rustc reports a borrow-check error or type mismatch, scroll
 upward in the generated file from the error line to the nearest
 `// loft:` comment — that's the source line under suspicion.
+
+---
+
+## Which refusals are reachable before types resolve (`LOFT_AUDIT_PASS1`)
+
+Prints `[pass1-site] <file>:<line>` for every diagnostic emitted while the parser is on its
+FIRST pass. The audience is this repo, not a loft author.
+
+It exists for one recurring class: a refusal phrased as a type REQUIREMENT that fires on
+pass 1 may be refusing an *unresolved* type as a *wrong* one, which makes declaration order
+decide whether a program compiles — against LOFT.md § File structure's "in any order". Five
+sites have been found and fixed (`call_op`, `parse_match`'s `!valid_enum` exit, both
+text-index bounds, a spatial slice's limit). The fourth pair retro-broke the published
+`markdown` 0.2.0; the fifth was found by ENUMERATING refusals after a 29-probe behavioural
+sweep came back clean, because a probe sweep can only test shapes someone thinks to write.
+
+Use it as the confirming half of that enumeration:
+
+```bash
+for f in tests/scripts/*.loft; do
+  LOFT_AUDIT_PASS1=1 loft --interpret "$f" 2>&1 | grep '^\[pass1-site\]'
+done | sort -u
+```
+
+**A firing site is not a bug — expect most of the list to be correct.** The defect is not
+"refuses on pass 1"; it is "refuses on pass 1 a type that is merely UNRESOLVED". A name
+collision belongs on pass 1, and `s[true]` is rightly refused there too, because the
+deferrals cover only `unknown`. Measured 2026-08-21 over the 811-script corpus, **34
+distinct sites fire on pass 1 and none of them was a new defect** — so read 34 as a
+candidate list, not as 34 bugs. Of the 134 refusals a context heuristic had called
+already-gated, 5 appear in that set and all 5 survive review: two are the text-index bounds
+refusing genuinely wrong types, two are name collisions, and one — a struct-literal field's
+`convert` failure — was the only real candidate by shape and probed clean.
+
+**The asymmetry is the design, not a caveat.** `Parser::first_pass` is mirrored into an
+atomic beside every write to it, so a write this instrument misses makes it report FEWER
+sites, never a phantom one. That is what makes a printed site safe to act on: it is
+measured. Silence is the other half and is only inferred — it means no program in the run
+reached that site on pass 1, which is indistinguishable from "never reached at all". Pair
+any silent site with a probe that reaches its diagnostic on pass 2 before recording it as
+gated; without that, a dead path and a gated one look identical.
+
+**Where the reading tells fit.** A `diagnostic!` sitting outside an `if !self.first_pass`
+a few lines below it is visible without running anything, and it is how `fields.rs:2202`
+was confirmed. Treat that as a confirmation aid, not a discovery instrument: it reads as a
+tell only once you know the class, and a site whose gate is two functions up looks
+identical to a correct one. **Enumeration finds these; this instrument keeps them found.**
 
 ---
 

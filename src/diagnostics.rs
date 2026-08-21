@@ -390,6 +390,58 @@ pub fn diagnostic_format(_level: Level, message: Arguments<'_>) -> String {
     format!("{message}")
 }
 
+/// Whether the parser is on its FIRST pass, mirrored out of `Parser::first_pass` so a
+/// diagnostic can know which pass emitted it without threading the parser through.
+pub static IN_FIRST_PASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keep [`IN_FIRST_PASS`] in step with `Parser::first_pass`.  Called beside every write to
+/// that field; a missed one under-reports, which is the safe direction for an audit.
+pub fn set_first_pass(v: bool) {
+    IN_FIRST_PASS.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `LOFT_AUDIT_PASS1=1` — report which diagnostic SITES can fire while the parser is still
+/// on pass 1.
+///
+/// Not a user diagnostic: the audience is this repo. It answers one question, about the
+/// compiler rather than the program — *which refusals are reachable before types are
+/// resolved?* A refusal phrased as a type REQUIREMENT that fires on pass 1 may be refusing
+/// an UNRESOLVED type as a WRONG one, which makes declaration order decide whether a
+/// program compiles. Five sites of that class have been found and fixed (`call_op`,
+/// `parse_match`'s `!valid_enum` exit, both text-index bounds, and a spatial slice's
+/// limit); the fourth pair retro-broke a published library, and the fifth was found by
+/// enumerating refusals rather than by writing probes.
+///
+/// **Reading the output.** A site that PRINTS is reachable on pass 1 — that is a fact, and
+/// it is what this instrument is for. Silence is NOT the converse: it means only that no
+/// program in the run reached that site on pass 1, which is indistinguishable from "never
+/// reached at all". Pair a silent site with a probe that reaches its diagnostic on pass 2
+/// before recording it as gated.
+///
+/// Firing on pass 1 is not by itself a defect — a name collision is correctly reported
+/// there, and a genuinely wrong type (`s[true]`) is refused there too, since the deferrals
+/// cover only `unknown`. Measured over the 811-script corpus, 34 sites fire and none was a
+/// new defect: it is a candidate list to read, not a verdict.
+///
+/// The reporting asymmetry is deliberate. [`set_first_pass`] is called beside every write
+/// to `Parser::first_pass`, so a write this misses can only make it report FEWER sites,
+/// never a phantom — which is what makes a printed site safe to act on and silence merely
+/// inferred.
+#[must_use]
+pub fn audit_pass1_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_AUDIT_PASS1").is_some())
+}
+
+/// Record a diagnostic emission site when the pass-1 audit is armed.  Cheap and inert
+/// otherwise: one cached bool, then one relaxed atomic load.
+pub fn audit_site(loc: &'static std::panic::Location<'static>) {
+    if !audit_pass1_enabled() || !IN_FIRST_PASS.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    eprintln!("[pass1-site] {}:{}", loc.file(), loc.line());
+}
+
 #[macro_export]
 macro_rules! diagnostic {
     // @PLN102 arc-E E1 — coded form: `diagnostic!(lexer, Level::Error, code =

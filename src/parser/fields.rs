@@ -1942,7 +1942,16 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // @PLN110 3a — snapshot the raw index BEFORE `convert` may wrap it, so the
         // strict-index lint below can still recognise a bare loop variable.
         let raw_index = p.unspan().clone();
-        if !self.convert(p, index_t, &I32) {
+        // A first-pass UNRESOLVED index is not a wrong one — it is one whose type
+        // pass 2 has not supplied yet, and refusing it here makes declaration order
+        // decide whether a program compiles.  `heading_text = line[start..ln]` in the
+        // published `markdown` broke exactly this way once operand deferral widened:
+        // `start = hlevel + 1` correctly defers on pass 1, so the index arrives here
+        // as `unknown` and this refusal fired on a program that had been compiling
+        // for two releases.  Pass 2 sees the real type and still refuses a genuinely
+        // non-integer index, which is the case this message is for.
+        let deferred = self.first_pass && index_t.is_unknown();
+        if !self.convert(p, index_t, &I32) && !deferred {
             // Name the offending type: the bare "invalid index" this used to
             // print reads as "indexing text is unsupported" and sent a consumer
             // hunting for a missing feature instead of at their index expression.
@@ -1981,7 +1990,14 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 // @PLN110 3a / loft#749 — snapshot the END before `convert` wraps it, for
                 // the units lint below.
                 let raw_end = other.unspan().clone();
-                if !self.convert(&mut other, &ot_type, &I32) {
+                // Deferred on the first pass exactly as the START bound is, and for the
+                // same reason: operand deferral can leave a bound untyped on pass 1, and
+                // refusing it there makes declaration order decide whether a program
+                // compiles.  `s[start..start + 2]` reaches this site with BOTH bounds
+                // unresolved, which is why guarding only the start left the shape still
+                // refused — with a different message, from four lines down.
+                let end_deferred = self.first_pass && ot_type.is_unknown();
+                if !self.convert(&mut other, &ot_type, &I32) && !end_deferred {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -2179,7 +2195,20 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         } else if self.lexer.has_token(":") {
             let mut n = Value::Null;
             let nt = self.expression(&mut n);
-            if !self.convert(&mut n, &nt, &crate::data::I64) {
+            // A first-pass UNRESOLVED limit is not a wrong one — the same escape the
+            // start bound and the range end take a few hundred lines up, and for the
+            // same reason: operand deferral can leave `xs[(0, 0)..: lim()]` untyped on
+            // pass 1 when `lim` is declared lower in the file, and refusing it here makes
+            // declaration order decide whether the program compiles.  Pass 2 has the real
+            // type and still refuses a genuinely non-integer limit, which is the case this
+            // message is for.
+            //
+            // Fifth site of one rule, and the one a behavioural sweep missed: 29 probes
+            // over operation kinds and return types came back clean because nobody thinks
+            // to write a spatial slice.  It was found by ENUMERATING the parser's
+            // type-requirement refusals instead — see STABILITY_REDFLAGS.md § Result 5.
+            let limit_deferred = self.first_pass && nt.is_unknown();
+            if !self.convert(&mut n, &nt, &crate::data::I64) && !limit_deferred {
                 diagnostic!(
                     self.lexer,
                     Level::Error,

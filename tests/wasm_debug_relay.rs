@@ -83,7 +83,7 @@ fn agent_debugs_a_browser_wasm_client_through_the_server_relay() {
         return;
     }
     let tmp = std::env::temp_dir();
-    let port: u16 = common::test_port(19322);
+    let port: u16 = common::bind_port(19322);
 
     // 1. Build the browser CLIENT: `--html --debug` with a breakpointable fn.
     let client_src = tmp.join("p98_relay_client.loft");

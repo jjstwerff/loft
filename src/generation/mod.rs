@@ -2704,7 +2704,15 @@ extern crate loft;"
                  // on its `android_main` thread (the ALooper owner — a spawned thread\n    \
                  // would panic in the graphics event pump), so both run `__run` inline.\n    \
                  #[cfg(all(not(target_arch = \"wasm32\"), not(target_os = \"android\")))]\n    \
-                 std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
+                 if std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().is_err() {{ std::process::exit(1); }}\n    \
+                 // wasm32 has no thread to join, so the halt cannot be observed at a\n    \
+                 // join point.  A panic HOOK runs before the abort, which makes the exit\n    \
+                 // code reachable even where panics abort rather than unwind — without\n    \
+                 // this a halting program exits 134 (SIGABRT) here, 101 natively and 1 on\n    \
+                 // the interpreter: three backends, three answers, for every failed\n    \
+                 // assertion.  The previous hook still runs, so the message is unchanged.\n    \
+                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 {{ let prev = std::panic::take_hook(); std::panic::set_hook(Box::new(move |info| {{ prev(info); std::process::exit(1); }})); }}\n    \
                  #[cfg(any(target_arch = \"wasm32\", target_os = \"android\"))]\n    \
                  __run();"
             )?;
@@ -2733,7 +2741,15 @@ extern crate loft;"
                  // on its `android_main` thread (the ALooper owner — a spawned thread\n    \
                  // would panic in the graphics event pump), so both run `__run` inline.\n    \
                  #[cfg(all(not(target_arch = \"wasm32\"), not(target_os = \"android\")))]\n    \
-                 std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
+                 if std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().is_err() {{ std::process::exit(1); }}\n    \
+                 // wasm32 has no thread to join, so the halt cannot be observed at a\n    \
+                 // join point.  A panic HOOK runs before the abort, which makes the exit\n    \
+                 // code reachable even where panics abort rather than unwind — without\n    \
+                 // this a halting program exits 134 (SIGABRT) here, 101 natively and 1 on\n    \
+                 // the interpreter: three backends, three answers, for every failed\n    \
+                 // assertion.  The previous hook still runs, so the message is unchanged.\n    \
+                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 {{ let prev = std::panic::take_hook(); std::panic::set_hook(Box::new(move |info| {{ prev(info); std::process::exit(1); }})); }}\n    \
                  #[cfg(any(target_arch = \"wasm32\", target_os = \"android\"))]\n    \
                  __run();"
             )?;
@@ -4346,6 +4362,17 @@ extern crate loft;"
             )?;
             // @PLN17: `test` is a boolean in storage form (u8); the assert fails
             // when it is not the true byte (1) — i.e. false (0) OR null (255).
+            //
+            // Still a `panic!` and not `RuntimeError::report_and_exit()`, which is what
+            // `n_panic` below uses and what would render the interpreter's diagnostic
+            // verbatim.  Tried, and reverted for a reason worth recording: the panic HOOK
+            // is what prints the loft call frames, and `report_and_exit` does not — so the
+            // swap produced a prettier message that had lost `inner950` / `middle950` /
+            // `main`, and `html_panic_names_itself_and_its_loft_frames` caught it.  A
+            // Rust location alone does not say what the program was doing.  Converging the
+            // two renderings means teaching `report_and_exit` to print the chain first
+            // (`RuntimeError::call_chain` is rendered only by `main.rs` today), which
+            // changes `panic`'s output too — filed rather than smuggled in here.
             writeln!(
                 w,
                 "  if test != 1 {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"

@@ -70,7 +70,19 @@ impl WorkerProgram {
     }
 
     /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
-    fn new_state(&self, worker_stores: WorkerStores) -> State {
+    ///
+    /// Returns a [`WorkerState`] rather than a bare `State` so a worker's HALT cannot be
+    /// forgotten.  Every `run_parallel_*` variant builds its state here — thirteen sites —
+    /// and each previously dropped the state, and with it any `runtime_error` an `assert`
+    /// or `panic` had raised inside the worker.  Recording at the one construction point
+    /// makes coverage a property of the mechanism instead of of remembering thirteen
+    /// call sites; the block form was fixed by hand first and the other three families
+    /// stayed silent, which is the argument for doing it here.
+    fn new_state(&self, worker_stores: WorkerStores) -> WorkerState {
+        WorkerState(Some(self.new_state_inner(worker_stores)))
+    }
+
+    fn new_state_inner(&self, worker_stores: WorkerStores) -> State {
         let (bytecode, library) = self.clone_refs();
         let mut state = State::new_worker(worker_stores, bytecode, library);
         state.stack_trace_lib_nr = self.stack_trace_lib_nr;
@@ -759,6 +771,7 @@ pub fn run_parallel_text(
     n_rows: usize,
     n_hidden_text: usize,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) -> Vec<String> {
     if n_rows == 0 {
         return Vec::new();
@@ -767,6 +780,7 @@ pub fn run_parallel_text(
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
     let prim_in = primitive_input_size;
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
     // Plan-06 phase 1b: workers write text results into a per-worker
     // output Store slot — same path text always uses inside loft.
     // Each worker reserves a single record holding `row_count` u32
@@ -776,6 +790,7 @@ pub fn run_parallel_text(
     // them into the result `Vec<String>`.  The `Vec<String>` per-
     // thread accumulation is gone — replaced by N store slots.
     let batches = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
+        let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
         let row_count = end - start;
         // The s_pos array record needs 4 bytes for the record-size header
         // (fld 0..4) plus 4 bytes per row; writes start at fld 4 — writing
@@ -791,28 +806,28 @@ pub fn run_parallel_text(
                 row_idx as i64,
                 &state.database.allocations,
             );
-            // Deliver the element the way the worker's first parameter expects —
-            // the same ladder `run_parallel_queue` applies for integer returns.
+            // Deliver the element the way the worker's first parameter expects.
             // Without it a `vector<integer>` / range / text element was always
             // pushed as a 12-byte DbRef → garbage worker arg (text input: SIGSEGV).
-            // Wide / tuple inputs (`prim_in > 8`) keep the DbRef path: they are
-            // not constructible as a vector literal today, so unreachable here.
-            let arg = if prim_in == u32::MAX {
-                crate::state::WorkerArg::Text(read_text_at(&state.database, &row_ref))
-            } else if prim_in > 0 && prim_in <= 8 {
-                crate::state::WorkerArg::Primitive {
-                    value: read_primitive_at(&state.database, &row_ref, element_size),
-                    size: prim_in,
-                }
-            } else {
-                crate::state::WorkerArg::Ref(row_ref)
-            };
+            let arg = worker_row_arg(
+                &state.database,
+                &row_ref,
+                prim_in,
+                element_size,
+                tuple_types_arc.as_deref().map(Vec::as_slice),
+            );
             let s = state.execute_at_text(fn_pos, arg, &extras, n_hidden_text);
             let slot_store = &mut state.database.allocations[slot.store_nr as usize];
             let s_pos = slot_store.set_str(&s);
             slot_store.set_u32_raw(array_rec, 4 + (local_idx as u32) * 4, s_pos);
         }
-        (start, row_count, slot.store_nr, array_rec, state.database)
+        (
+            start,
+            row_count,
+            slot.store_nr,
+            array_rec,
+            state.into_database(),
+        )
     });
     let mut results = vec![String::new(); n_rows];
     for (start, count, slot_nr, array_rec, worker_db) in batches {
@@ -865,11 +880,13 @@ pub fn run_parallel_queue_ref(
     data: &crate::data::Data,
     n_hidden_dests: usize,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) -> (Vec<DbRef>, Vec<u16>) {
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
     }
     let prim_in = primitive_input_size;
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
     // ARC.md A2: shared atomic dispenser for parent-namespace slot
     // indices.  Every worker's `database_named` call pulls a unique
     // index from this counter and records it in
@@ -927,6 +944,7 @@ pub fn run_parallel_queue_ref(
         // Leave `worker_slot_dispenser = None` until
         // `new_state` returns, then attach it for the
         // worker's user-code allocations.
+        let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
         let mut state = prog_ref.new_state(ws);
         state.database.worker_slot_dispenser = Some(Arc::clone(dispenser_ref));
         state.database.worker_allocated_indices.clear();
@@ -959,17 +977,16 @@ pub fn run_parallel_queue_ref(
             let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
                 .map(|_| state.database.database(100))
                 .collect();
-            // Primitive element (a `vector<integer>` / materialised range)
-            // must reach the worker as its value, not the element DbRef.
-            // Text and struct/DbRef inputs keep the DbRef path (correct as-is).
-            let arg = if prim_in > 0 && prim_in <= 8 {
-                crate::state::WorkerArg::Primitive {
-                    value: read_primitive_at(&state.database, &row_ref, element_size),
-                    size: prim_in,
-                }
-            } else {
-                crate::state::WorkerArg::Ref(row_ref)
-            };
+            // Every element reaches the worker the way its first parameter reads it.
+            // This route used to answer `DbRef` for a text or wide element as well,
+            // which SIGSEGV'd a struct-returning worker over `vector<text>`.
+            let arg = worker_row_arg(
+                &state.database,
+                &row_ref,
+                prim_in,
+                element_size,
+                tuple_types_arc.as_deref().map(Vec::as_slice),
+            );
             let r = state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref);
             // @PLAN59 witness-free (mirrors the plain-call
             // `OpFreeRefIfDistinct` pair): a worker whose tail built
@@ -983,7 +1000,7 @@ pub fn run_parallel_queue_ref(
             }
             batch.push((row_idx, r));
         }
-        (batch, state.database)
+        (batch, state.into_database())
     });
     trace.report("run_parallel_queue_ref", n_rows, n_workers);
     let null_db = DbRef::NULL;
@@ -1397,47 +1414,23 @@ pub fn run_parallel_discard(
             // fault until a worker that also PRINTS put three rows through it and got
             // one wrong value three times (loft#987).
             //
-            // The INPUT: a worker taking `integer` reads its first slot as a VALUE, so
-            // handing it the row's `DbRef` gives it the pointer's bits.  Same ladder as
-            // `run_parallel_queue`.
+            // The INPUT is `worker_row_arg`'s single answer.  It used to be decided
+            // here, and only when the worker had no HIDDEN parameters: a wide row had
+            // no `WorkerArg` spelling, so a tuple reaching a text- or heap-returning
+            // worker fell to the `DbRef` arm and the worker read the pointer's bits
+            // (loft#1055).
             //
             // The HIDDEN parameters: a text-returning worker is compiled with a
             // `__work_N` buffer parameter and a heap-returning one with a destination
             // parameter, both after the row.  Leaving them off shifts every slot the
             // worker reads — a text worker SEGFAULTED the interpreter.
-            // `u32::MAX` is the TEXT marker, not a width, so it has to leave before
-            // any size test.
-            let wide = prim_in != u32::MAX && prim_in > 8;
-            let hidden = n_hidden_text > 0 || n_hidden_dests > 0;
-            if wide && !hidden {
-                // A wide / tuple row has no `WorkerArg` spelling, so it keeps the raw
-                // entry — which is also why it cannot go there when the worker has
-                // hidden parameters: that entry has nowhere to put them.  Such a
-                // worker falls to the `DbRef` arm below, the same answer
-                // `run_parallel_text` and `run_parallel_queue_ref` give it.
-                let buf = if let Some(ref types) = tuple_types_arc {
-                    read_tuple_at_wide(&state.database, &row_ref, types)
-                } else {
-                    read_primitive_at_wide(&state.database, &row_ref, element_size)
-                };
-                let _ = state.execute_at_raw_primitive_input_wide(
-                    fn_pos,
-                    &buf[..prim_in as usize],
-                    &extras,
-                    return_size,
-                );
-                continue;
-            }
-            let arg = if prim_in == u32::MAX {
-                crate::state::WorkerArg::Text(read_text_at(&state.database, &row_ref))
-            } else if prim_in > 0 && !wide {
-                crate::state::WorkerArg::Primitive {
-                    value: read_primitive_at(&state.database, &row_ref, element_size),
-                    size: prim_in,
-                }
-            } else {
-                crate::state::WorkerArg::Ref(row_ref)
-            };
+            let arg = worker_row_arg(
+                &state.database,
+                &row_ref,
+                prim_in,
+                element_size,
+                tuple_types_arc.as_deref().map(Vec::as_slice),
+            );
             if n_hidden_text > 0 {
                 let _ = state.execute_at_text(fn_pos, arg, &extras, n_hidden_text);
             } else if n_hidden_dests > 0 {
@@ -1449,16 +1442,7 @@ pub fn run_parallel_discard(
                     .collect();
                 let _ = state.execute_at_ref(fn_pos, arg, &dests, &extras);
             } else {
-                let _ = match arg {
-                    crate::state::WorkerArg::Text(t) => {
-                        state.execute_at_raw_text_input(fn_pos, t, &extras, return_size)
-                    }
-                    crate::state::WorkerArg::Primitive { value, size } => state
-                        .execute_at_raw_primitive_input(fn_pos, value, size, &extras, return_size),
-                    crate::state::WorkerArg::Ref(r) => {
-                        state.execute_at_raw(fn_pos, &r, &extras, return_size)
-                    }
-                };
+                let _ = state.execute_at_raw_worker_arg(fn_pos, arg, &extras, return_size);
             }
         }
     });
@@ -1562,34 +1546,16 @@ pub fn run_parallel_queue(
                 row_idx as i64,
                 &state.database.allocations,
             );
-            // Mirrors `run_parallel_direct`'s primitive-/text-/wide-
-            // /DbRef-input dispatch ladder so the Queue path covers
-            // the same input shapes.  Step 8b' wired in the primitive
-            // and tuple/wide arms so fused for-par over
-            // `vector<integer>` / `vector<u8>` / `vector<(int, int)>`
-            // can route through Queue too.
-            let val = if prim_in == u32::MAX {
-                let s = read_text_at(&state.database, &row_ref);
-                state.execute_at_raw_text_input(fn_pos, s, &extras, return_size)
-            } else if prim_in > 8 {
-                let buf = if let Some(ref types) = tuple_types_arc {
-                    read_tuple_at_wide(&state.database, &row_ref, types)
-                } else {
-                    read_primitive_at_wide(&state.database, &row_ref, element_size)
-                };
-                state.execute_at_raw_primitive_input_wide(
-                    fn_pos,
-                    &buf[..prim_in as usize],
-                    &extras,
-                    return_size,
-                )
-            } else if prim_in > 0 {
-                let v = read_primitive_at(&state.database, &row_ref, element_size);
-                state.execute_at_raw_primitive_input(fn_pos, v, prim_in, &extras, return_size)
-            } else {
-                state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
-            };
-            batch.push(val);
+            // Covers every input shape the other families do, because it asks the
+            // same question of the same function.
+            let arg = worker_row_arg(
+                &state.database,
+                &row_ref,
+                prim_in,
+                element_size,
+                tuple_types_arc.as_deref().map(Vec::as_slice),
+            );
+            batch.push(state.execute_at_raw_worker_arg(fn_pos, arg, &extras, return_size));
         }
         (start, batch)
     });
@@ -1829,6 +1795,168 @@ pub(crate) fn read_tuple_at_wide(
         arg_offset += arg_sz;
     }
     buf
+}
+
+/// Read one input row the way the worker's FIRST PARAMETER reads it — the single
+/// place that decision is made.
+///
+/// A worker's slot 0 is filled from the row, and how depends only on the row's shape:
+/// a text element arrives as a 16-byte `Str`, a 1/4/8-byte primitive as its value, a
+/// wide (9..=64 byte) element such as a tuple as its bytes INLINE, and anything else
+/// as the element's `DbRef`.  Nothing about the worker's RETURN type enters into it.
+///
+/// It lives here because it used to live in four places.  Each dispatch family wrote
+/// its own ladder and each stopped at a different rung: `run_parallel_text` had no wide
+/// arm at all (its comment claimed a wide element was "not constructible as a vector
+/// literal today" — a five-row `vector<(integer, integer)>` literal falsifies it),
+/// `run_parallel_queue_ref` had neither a wide nor a text arm, and `run_parallel_discard`
+/// had a wide arm it could only take when the worker had no hidden parameters.  Every
+/// gap ended at the same wrong answer, `WorkerArg::Ref`, so the worker read the row's
+/// pointer bits as its value: wrong numbers for `vector<(integer, integer)>`, a worker
+/// stack underflow for a 3-tuple, and a SIGSEGV for `vector<text>` into a
+/// struct-returning worker (loft#1055).
+///
+/// `tuple_types` is `Some` for a tuple element, whose in-vector STORAGE layout differs
+/// from its argument-slot layout (see [`read_tuple_at_wide`]); `None` reads the row's
+/// bytes straight.
+pub(crate) fn worker_row_arg(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    primitive_input_size: u32,
+    element_size: u32,
+    tuple_types: Option<&[crate::data::Type]>,
+) -> crate::state::WorkerArg {
+    // `u32::MAX` is the TEXT marker, not a width, so it has to be tested before any
+    // size comparison.
+    if primitive_input_size == u32::MAX {
+        crate::state::WorkerArg::Text(read_text_at(stores, row_ref))
+    } else if primitive_input_size > 8 {
+        let buf = match tuple_types {
+            Some(types) => read_tuple_at_wide(stores, row_ref, types),
+            None => read_primitive_at_wide(stores, row_ref, element_size),
+        };
+        crate::state::WorkerArg::Wide {
+            buf,
+            size: primitive_input_size,
+        }
+    } else if primitive_input_size > 0 {
+        crate::state::WorkerArg::Primitive {
+            value: read_primitive_at(stores, row_ref, element_size),
+            size: primitive_input_size,
+        }
+    } else {
+        crate::state::WorkerArg::Ref(*row_ref)
+    }
+}
+
+/// A worker's fatal halt, carried to the parent so the WHOLE program stops.
+///
+/// `assert` and `panic` are not exceptions and nothing here propagates one: a failing
+/// assert sets `runtime_error` on the `Stores` it runs against, and the dispatch loop
+/// halts when it sees that.  A worker runs against a CLONE of `Stores`, so its halt was
+/// set on a copy that is dropped at join — the arm stopped and the program carried on,
+/// silently, on both backends (loft#1053).
+///
+/// The contract is that a failed assertion stops the whole program, not one arm of it, so
+/// the worker's already-built halt is handed back and the parent raises it through the
+/// SAME path a main-thread assert takes.  No new error channel, and nothing a loft program
+/// can observe or catch.
+static WORKER_FATAL: std::sync::Mutex<Option<Box<crate::runtime_error::RuntimeError>>> =
+    std::sync::Mutex::new(None);
+
+/// Cheap gate for the dispatch loop, which asks after EVERY op.  A relaxed load costs
+/// nothing measurable; taking the mutex there would not be free, and in the overwhelming
+/// case there is nothing to take.
+pub static WORKER_FATAL_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a worker halted and the parent has not yet raised it.
+#[must_use]
+pub fn worker_fatal_pending() -> bool {
+    WORKER_FATAL_PENDING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A worker's `State`, which records its halt when it goes out of scope.
+///
+/// Deref, not inheritance: every existing `state.execute_*(…)` call site keeps working
+/// unchanged, and the only added behaviour is at drop, where the worker is finished and
+/// its `runtime_error` is either set or not.
+pub(crate) struct WorkerState(Option<State>);
+
+impl std::ops::Deref for WorkerState {
+    type Target = State;
+    fn deref(&self) -> &State {
+        self.0
+            .as_ref()
+            .expect("worker state is present until taken")
+    }
+}
+impl std::ops::DerefMut for WorkerState {
+    fn deref_mut(&mut self) -> &mut State {
+        self.0
+            .as_mut()
+            .expect("worker state is present until taken")
+    }
+}
+impl Drop for WorkerState {
+    fn drop(&mut self) {
+        if let Some(s) = &self.0 {
+            record_worker_fatal(&s.database);
+        }
+    }
+}
+
+impl WorkerState {
+    /// Hand the worker's stores back to the parent, recording any halt FIRST.
+    ///
+    /// Two `run_parallel_*` variants return `state.database` so the parent can adopt the
+    /// worker's stores.  That moves the field out from under the drop guard, which the
+    /// compiler refuses — correctly, since it is exactly the path where a halt would go
+    /// unrecorded.  Taking it explicitly keeps the recording and the hand-off in one place
+    /// instead of leaving the guard silently bypassed.
+    fn into_database(mut self) -> Stores {
+        let s = self.0.take().expect("worker state taken once");
+        record_worker_fatal(&s.database);
+        s.database
+    }
+}
+
+/// Record a worker's halt if it ended with one.  First writer wins: the message a user
+/// reads must not depend on thread scheduling, and one arm's assertion is enough to stop
+/// the program.
+pub fn record_worker_fatal(db: &Stores) {
+    if let Some(err) = db.runtime_error.clone()
+        && let Ok(mut slot) = WORKER_FATAL.lock()
+        && slot.is_none()
+    {
+        *slot = Some(err);
+        WORKER_FATAL_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Forget any recorded halt, so a new run cannot inherit one.
+///
+/// `record_worker_fatal` is first-writer-wins and the dispatch loop is the only consumer,
+/// so a halt recorded on a path that never reaches that loop — a worker whose stack
+/// underflowed PANICS, and the panic unwinds past it — stays in the slot.  The next run
+/// then raises someone else's fault as its own, which is how a text-element test came to
+/// fail with a tuple worker's message.  Cleared at the entry point of every run rather
+/// than at the panic, because "a run starts with no inherited halt" is the property, and
+/// it holds however the previous one ended.
+pub fn clear_worker_fatal() {
+    WORKER_FATAL_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut slot) = WORKER_FATAL.lock() {
+        *slot = None;
+    }
+}
+
+/// Take the recorded halt, if any, for the parent to raise as its own.
+pub fn take_worker_fatal() -> Option<Box<crate::runtime_error::RuntimeError>> {
+    if !worker_fatal_pending() {
+        return None;
+    }
+    WORKER_FATAL_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    WORKER_FATAL.lock().ok().and_then(|mut s| s.take())
 }
 
 /// Run N independent arms concurrently, each at a given bytecode position.

@@ -13,8 +13,44 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Why a by-hand pass exists
 
-The automated gate (`scripts/check_doc_drift.sh examples`, blocked on by CI)
-catches the two failures a machine can see: a worked-example tag that **dangles**
+> ⚠ **The gate BLOCKS inside loft and ADVISES in a library repo**, and the asymmetry is
+> deliberate. `examples` and `examples-index` are the only two checks that span
+> repositories: a library's CI checks loft out as `loft-src` and runs *loft's* script
+> against the library, so the rules arrive from whatever loft `main` happens to be. That
+> bit in both directions before it was tiered — `exindex` landed in loft on 2026-08-18 and
+> reddened loft-libs-game's next PR for a file it never touched (last green run
+> 2026-08-17), and switching a *library checkout's branch* turned loft's own run red with
+> two dangling tags, a failure with no bad commit in either repo. A gate whose rules change
+> under you, from a repo you do not control, lands its red on whoever opens the next PR.
+>
+> It follows this repo's own diagnostic rule: **a diagnostic gates if and only if ignoring
+> it can produce a wrong result** ([CLAUDE.md](../../CLAUDE.md) § Two diagnostic tiers). A
+> dangling doc citation is a broken link; it cannot. Inside loft — which owns the generator
+> *and* the feature-doc citations, with no cross-repo coupling — it still gates, and the
+> scanner's own selftests gate everywhere, because a scanner that stops following its
+> documented rules is loft's bug whoever runs it.
+>
+> **Advisory does not mean quiet.** The findings go to the library PR's job summary in
+> full — the same place a failing test writes its excerpt, so it is as visible as a red
+> tick without being able to block a merge.
+>
+> **Advisory costs you a local pass/fail, so one command gives it back:** `make
+> examples-preflight REPO=<library>` gates the citation faults CI reports and exits
+> non-zero on them, without demanding the (no longer committed) index.
+> `EXAMPLES_GATE=hard` restores full blocking for a repo that wants it.
+>
+> ⚠⚠ **`examples-index.tsv` is not committed in a library repo at all — CI builds it.**
+> The index is DERIVED and its generator is in loft, so a committed copy there can only
+> rot: it cannot be regenerated where it sits, and "regenerate it" names a command that
+> repo does not have. CI emits it per run (`check_doc_drift.sh emit-examples-index`),
+> folds it into the job summary and uploads it as an artifact. **A derived file that is
+> never committed cannot be stale** — that retires the failure mode rather than
+> downgrading it. loft keeps its own committed copy: loft owns the generator, and a
+> greppable offline index is what the agent development model runs on.
+
+
+The automated gate (`scripts/check_doc_drift.sh examples`) catches the two failures a
+machine can see: a worked-example tag that **dangles**
 (cited, but no test carries it) or **duplicates** (one tag on two functions). It
 cannot see the two failures that actually rot a library's docs over time:
 

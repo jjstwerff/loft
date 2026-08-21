@@ -2343,7 +2343,101 @@ impl Stores {
                     );
                 }
             }
-            _ => {}
+            // An ARRAY / ORDERED holds a record of element REFERENCES.  The root word is
+            // the claim; each slot is a rec number into this store.  Bounds-check both,
+            // then validate the elements — this walk exists to run over a heap that may
+            // already be corrupt, so every number is guarded before it is followed.
+            Parts::Array(v) | Parts::Ordered(v, _) => {
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return;
+                }
+                if cur >= cap {
+                    crate::loft_eprintln!(
+                        "[cr-check] {path}: array rec {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let len = store.get_u32_raw(cur, 4);
+                if u64::from(len) * 4 > u64::from(cap) * 8 {
+                    crate::loft_eprintln!(
+                        "[cr-check] {path}: array rec {cur} len {len} exceeds store #{} \
+                         capacity {cap} words",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                for i in 0..len.min(16) {
+                    let elm = store.get_u32_raw(cur, 8 + 4 * i);
+                    if elm == 0 {
+                        continue;
+                    }
+                    if elm >= cap {
+                        crate::loft_eprintln!(
+                            "[cr-check] {path}[{i}]: array element rec {elm} beyond store #{} \
+                             capacity {cap}",
+                            rec.store_nr
+                        );
+                        *problems += 1;
+                        return;
+                    }
+                    self.validate_claims(
+                        &DbRef {
+                            store_nr: rec.store_nr,
+                            rec: elm,
+                            pos: 8,
+                        },
+                        *v,
+                        &format!("{path}[{i}]"),
+                        problems,
+                    );
+                }
+            }
+            // A RADIX / TRIE root word claims the tree record.  The LEAVES belong to the
+            // primary collection and are validated through it, so this checks the spine
+            // itself is in range and stops — the same split `for_each_owned_child` makes
+            // (it keeps `cur` and no per-leaf children).
+            Parts::Radix(_, _) | Parts::Trie(_, _) => {
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 && cur >= cap {
+                    crate::loft_eprintln!(
+                        "[cr-check] {path}: tree rec {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                }
+            }
+            // A stored 12-byte DbRef points OUT of this store, so the only thing checkable
+            // here without following it into another allocation is its store number.
+            // Following it is what `validate_claims` is called ON, one level up.
+            Parts::DbRef => {
+                let sn = store.get_u32_raw(rec.rec, rec.pos);
+                if sn != u32::from(u16::MAX) && sn as usize >= self.allocations.len() {
+                    crate::loft_eprintln!(
+                        "[cr-check] {path}: stored DbRef names store #{sn}, out of range"
+                    );
+                    *problems += 1;
+                }
+            }
+            // Deliberately nothing, and each for its own reason — not a catch-all.
+            //
+            // `Index` BORROWS its rows from the primary collection: `for_each_owned_child`
+            // answers `empty(None, …)` for it, so there is no claim of its own to check
+            // and walking into the primary's rows would double-report every problem.
+            //
+            // The narrow-integer kinds and a non-text `Base` hold VALUES, not claims:
+            // there is no record number in them to be out of range, so a walk has nothing
+            // to say.  (`Base` at `tp == 5` is `text`, which DOES hold an offset and is
+            // checked in the first arm above.)
+            Parts::Index(_, _, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::Int(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Base => {}
         }
     }
 

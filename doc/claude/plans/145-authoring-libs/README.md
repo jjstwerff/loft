@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN145 — Text, tweens and widgets
 
 > Tracker: [loft-lang/plans#145](https://github.com/loft-lang/plans/issues/145)
-> (`subject:libs`, `status:future`). Split out of [@PLN144](../144-2d-stage/README.md), whose
+> (`subject:libs`, `status:finished`). Split out of [@PLN144](../144-2d-stage/README.md), whose
 > scene arcs share a gate family these do not.
 > **Part of the 2-D game stack** — four plans cut from one design: @PLN144 the stage ·
 > @PLN145 text/tweens/widgets · @PLN146 content + delivery · @PLN147 the editor. Set overview,
@@ -14,7 +14,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Effectively COMPLETE — every phase this stream owns has shipped.** `text2d` 0.4.0 (arc B), `tween` 0.1.0 (`C1`), `stage` 0.18.0 (`C2` + `D1` + `D2`), `D0b` answered. **Only `D0` remains and it is not ours** — moros shipped `lavition_ui` 0.1.0 on 2026-08-20 and its registry entry is now blocked behind a red gate in `loft-lang/registry` that predates the submission — and no `ui` package will be built (§ The `ui` package that is not ours). These are the libraries a game author writes against
+**CLOSED 2026-08-21 — every phase shipped, every package resolves from the registry and every Verify clause is met.** `text2d` 0.4.0 (arc B), `tween` 0.1.0 (`C1`), `stage` 0.18.1 (`C2` + `D1` + `D2`, plus the gate fix in § The CI list), `D0b` answered. **`D0` is DONE on both sides** — moros shipped `lavition_ui` 0.1.0 on 2026-08-20, the red gate in `loft-lang/registry` that predated the submission turned out to be a publish-path defect of ours, and with that fixed their PR rebased, merged and the package now resolves from the registry (2026-08-21) — and no `ui` package will be built (§ The `ui` package that is not ours). These are the libraries a game author writes against
 *above* the stage. Each has its own gate family — a metrics seam, a headless font, an event
 replay — which is why they are not @PLN144's phases.
 
@@ -27,7 +27,7 @@ is not ours, decided 2026-08-20.
 
 ## Effort + design
 
-- **Effort:** MH — 11 phases, none above M. **Arcs `B` and `C` complete: `B0` + `B1` 2026-08-19, `B1m` + `B2` 2026-08-20; `C1` + `C2` + `D0b` 2026-08-20.** **Design:** ✓, except D0, which is another tree's call.
+- **Effort:** MH — 11 phases, none above M, **all shipped**: `B0` + `B1` 2026-08-19, `B1m` + `B2` 2026-08-20; `C1` + `C2` + `D0b` 2026-08-20; `D1` + `D2` 2026-08-20; `D0` 2026-08-21. **Design:** ✓ — `D0` was the one call this stream did not own, and it came back as *promote it there, do not extract it here*.
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -43,7 +43,7 @@ cut, not when it is implemented.
 | **B2** — wrapping + alignment | `text2d` | ✅ **Shipped** as `text2d` 0.4.0 — the trap is **measured, not assumed**: `"héllo"[0..5]` is `"héll"`, four characters, and loft snaps a byte cut outward so it under-fills rather than corrupting. ⚠ **`fit_text` had shipped that way in `B1m`** and is fixed here. Hand-computed table on the **built-in** face (the one target measurable without a font); self-consistency gated over fixed-pitch, fractional-advance and proportional metrics. Two design calls stated: a line always takes **≥1 character** (its control HANGS rather than asserting, and the timeout names the termination test), and an overlong line starts **at** its box under every alignment. Nine controls fire | ✅ **Shipped** |
 | **C1** — tween core + easing set | `tween` | ✅ **Shipped** as `tween` 0.1.0 — the two gates turned out to be **one defect with two faces**: float seconds sum to `0.99999999999999989` at 30 Hz and `1.00000000000000133` at 60 Hz, so the animation both parts by rate AND never arrives. Integer base units make the two rates equal *to the bit*. The endpoint needed the **other spelling of a lerp**: `a+(b−a)·t` lands on `b` for 5 of 8 pairs and answers **0.0** for `(1e17, 1.0)`; `a(1−t)+bt` lands 8 of 8. Eleven curves cover 33 by reflection, with the clamp **underneath** the reflections — in front of them an in-out at its midpoint asks the raw curve for `in(1)` and answers `0.5000000000000001`. Chains carry their leftover: discarding runs **43 % long at 30 Hz**. 20 tests, both backends, three controls fire | ✅ **Shipped** |
 | **C2** — bind to node properties | **`stage`** (0.16.0) | ✅ **Shipped** — and `advance` settled the placement: `stage.advance(dt_us)` already walks every node once a frame, so a bound tween **rides it** and one call steps the sequences and the property tweens together. That keeps `tween` dependency-free and decides the unit too — **microseconds**, because that is what `advance` takes. THE GATE is a parallel run (`draw_list.loft`'s A2 shape): eight frames of a tweened `x` compared **pixel for pixel** against a hand-moved node, with numbers picked so the hand side needs **no library call** (64 px / 800 000 µs sampled every 100 000 µs is exactly 8 px a frame). ⚠ The switch is gated **cell by cell** — each of nine properties must move its own field and no other. ⚠⚠ **At most one tween per (node, property)**; a second replaces it, and a finished one releases the property. 9 tests, suite 144 on both backends, three controls fire | ✅ **Shipped** |
-| **D0** — publish `lavition_ui` | upstream | 🟡 **moros's half is DONE 2026-08-20** — `lavition_ui-v0.1.0` tagged (`2692bfd`) and released, artifact re-downloaded from the published URL and checked (38 236 bytes, sha `ea646e67…`, 15 entries, no deps), registry PR [#24](https://github.com/loft-lang/registry/pull/24) open. ⛔ **But the Verify is NOT met and cannot be met by either tree**, see below | 🟡 **Shipped upstream, blocked in the registry** |
+| **D0** — publish `lavition_ui` | upstream | ✅ **moros's half was DONE 2026-08-20** — `lavition_ui-v0.1.0` tagged (`2692bfd`) and released, artifact re-downloaded from the published URL and checked (38 236 bytes, sha `ea646e67…`, 15 entries, no deps), registry PR [#24](https://github.com/loft-lang/registry/pull/24) open. ✅ **The registry blocker is CLEARED 2026-08-21** — it was never about this submission: gate 1 was failing on untouched `registry:main` because `zttext` and `fixstep` carried `"categories": []`, and the producer that put them there (`registry_maintain.sh` seeding a new package with `[]`) is fixed at source. Backfilled + re-signed as registry `e7a7d43`; the push validation on `main` went **failure → success** across it, and #24's own `validate` passed once its merge ref was refreshed. ✅ **All three Verify clauses are MET, each measured here.** *Resolves:* #24 rebased and merged (registry `717b369`, re-signed `d1e5b63`) and a scratch project declaring `lavition_ui = ">=0.1.0"` installs it from the published URL and answers identically on both backends; gate 3 reproduced the tarball from its tag and the sign step re-hashed it (38 236 bytes, MATCH). *Tests pass after the move:* there was no move — the extraction was **struck**, not done (§ The `ui` package that is not ours). *Every function we depend on has a production caller:* **it does now, and it did not when the clause was written.** `panel_hit_test` gained one in moros `10d62fa`, whose subject is the whole finding — *"A click on the panel turned the camera, because `panel_hit_test` had no caller"* — so the surface this plan asked to depend on was not merely unused, it was **wrong**, and only a consumer could say so. Counted here off `use` lines rather than filenames: **13 of 33 public functions still have none**, and `lavition_ui`'s README now names all thirteen as *a proposal* — which is [LIBRARY_AUTHORING § 2a1](../../LIBRARY_AUTHORING.md)'s second clause, the honest label rather than a loophole. See below | ✅ **Done — resolves from the registry** |
 | **D0b** — does `input` fit a consumer that already exists? | probe only | ✅ **Answered** ([`probe-d0b.loft`](probe-d0b.loft), both backends identical) — **adopt it, and do not expect it to resolve modifiers.** dryopea's 33-row action set expresses through `Bindings` and replays through `input_tick_from_state` exactly as `D1` needs; edge detection is correct headless. ⚠ But a **modifier is not expressible**, and it is structural: `ActionBinding` is a name + key list, `AxisBinding` is two key *codes*, and neither has a slot for *"suppressed while Ctrl is held"*. Measured: `input` answers **identically** for plain `S` and `Ctrl+S` (`pan_south=true, save=true` both times), so all five of dryopea's Ctrl-combos are indistinguishable from their plain twins — and an axis cannot carry the rule either, which is why dryopea's `bnd_axes` is **empty** and its four pan keys are four actions. ⚠⚠ **The premise was wrong**: dryopea ADOPTED `input`, so the widgets would be its *second* consumer, not the fourth — [PRIOR_ART](../144-2d-stage/PRIOR_ART.md) corrected | ✅ **Answered** |
 | **D1** — widget states over stage routing | **`stage`** (0.17.0) | ✅ **Shipped** — a replayed stream drives the exact state sequence (8 events, both buttons, every state hand-computed first); press-then-leave-then-release does **not** fire while press-then-drift-a-pixel does; touch never shows `Over`, and **one** recorded stream replayed as mouse and as touch fires identically, so the pointer kind changes only what is *shown*. ⚠⚠ **The invariant: a node reads `Down` exactly when a release would FIRE it** — one predicate serves the picture and the click, so a control that breaks the capture check does not even redden the down-means-fires gate: that class is **unrepresentable**, not caught. ⚠ **The fourth clause was struck**, not met — it rested on a premise that did not survive contact; see § The `ui` package that is not ours. 7 tests, suite 151 both backends, three controls fire | ✅ **Shipped** |
 | **D2** — focus, tab order, text field | **`stage`** (0.18.0) | ✅ **Shipped** — replayed keystrokes (incl. multi-character IME commits) produce the exact buffer; tab order is the declared order and wraps both ways. ⚠⚠ **Every index is a CHARACTER index and no byte index ever enters** — a caret *is* a count, and the control proves it: byte-slicing the one edit primitive leaves `"héllo"` **unchanged** after a backspace over the `é`, while all ten ASCII tests still pass. ⚠ **One `splice` does every edit** (insert / backspace / delete / replace-selection / paste). ⚠⚠ **The modifier dilemma was a false dichotomy** — neither answer was needed: `graphics`'s event queue already delivers `gl_event_mods()` per event, and a text field wants *this keystroke with these modifiers*, not an action. 11 tests, suite 162 both backends, three controls fire | ✅ **Shipped** |
@@ -82,10 +82,11 @@ its hit-test — and `D0` on moros.
 `C1`/`C2` and `D0b` are all unblocked and independent of each other; only `D0` is still
 someone else's clock — moros's, and now the registry maintainer's, and `D0b` is the phase that must run before `D1` commits to `input`.
 
-**Everything this stream owns has shipped; only `D0` is left, it is another tree's, and that
-tree has now done its half — what remains is a registry-side fix needing the signing key.**
-`C1` shipped `tween` 0.1.0, `C2` bound it to the stage, `D0b` measured `input`, and `D1` + `D2`
-put the interaction model in `stage` 0.18.0.
+**Everything shipped, `D0` last and a day after the rest.** `C1` shipped `tween` 0.1.0, `C2`
+bound it to the stage, `D0b` measured `input`, and `D1` + `D2` put the interaction model in
+`stage` 0.18.0 (0.18.1 with the gate fix). `D0` was the only phase this stream did not own,
+and the thing that actually held it up was neither tree's submission but **our own publish
+path** — see § `D0`.
 
 ⚠⚠ **Three of arc D's premises did not survive contact, and that is the arc's real lesson.**
 `D0b` was scoped on *"three consumers wrote their own input layer"* (the true count was one);
@@ -96,14 +97,8 @@ as sensible when written and all three were settled by **measuring rather than r
 for the cost of a probe. A phase's stated dilemma is a hypothesis about the world, and arc D
 went 0 for 3.
 
-⚠ **A finding from `C1`'s CI check, and it belongs to @PLN144: `stage` does not pass the
-repo's gate.** `LOFT_DENY_WARNINGS=1 loft test` reddens all 16 of its files on four
-`never-read` parameters (`stage.loft:882` `screen_w`, `:931` `self`, `:1087` `sx`/`sy`).
-Nothing is red today only because `loft-libs-graphics`'s `library-ci.yml` still lists
-`["graphics", "gridmesh", "imaging", "shapes"]` — but that list is **computed from the
-package dirs** by `scripts/deploy-library-ci.sh`, so the next refresh adds `stage` and the
-gate goes red. `text2d` (35 tests) and `tween` (20) both pass it today. The `:931 self` case
-is not a rename away: a method's receiver has to be spelled `self`.
+⚠ **`C1`'s CI check found that `stage` could not pass the repo's gate — fixed, and the
+half that outlived it is in § The CI list below.**
 
 ### `D0` — asked, answered, and then shipped — 2026-08-20
 
@@ -124,6 +119,50 @@ So **gate 1 fails on untouched `main`** and every submission PR inherits a red t
 nothing to do with the submission. Clearing it means editing `index.json` in `loft-lang/registry`
 **and re-signing it**, which needs the signing key: a maintainer action, not a loft or a moros
 one. Until then `D0` is *shipped upstream, blocked in the registry*.
+
+⚠⚠ **CLEARED 2026-08-21, and the cause was a PRODUCER rather than the data.**
+`registry_maintain.sh` seeded a package new to the index with `"categories": []`, and the
+docs gate that rejects an empty one landed 2026-06-19 — so **every package first published
+since that date went in unmergeable**, and `zttext` and `fixstep` are exactly the two that
+had been. That is why the red tick appeared on somebody else's PR: gate 1 runs over the
+WHOLE index, so the first submission after a bad publish inherits it, and clearing it needs
+the signing key.
+
+Fixed in both directions. The **door**: the own-lib fold and the `submissions/` drain read
+`[package] categories` off the manifest and refuse a package the index has never seen without
+one. The **chokepoint**: `scripts/registry_schema_gate.sh` runs gate 1 out of the checkout
+being signed and `registry-sign.sh` refuses on a rejection, so a hand edit cannot get an
+unmergeable index signed either — and it IMPORTS `tools/validate.py` rather than restating
+its rules, because a second list of one type's facts drifts — and that one already has, in
+both directions ([loft#1052](https://github.com/loft-lang/loft/issues/1052)). Loft-side `583c31da`,
+registry `e7a7d43`.
+
+Measured before and after rather than reported: the registry's own push validation on `main`
+was **failure** at `205f8398` and **success** at `e7a7d43a`, and PR #24's index with the two
+backfills passes gate 1 locally while the same index without them fails on `zttext`.
+
+⚠ **Two operational traps found clearing it, both of which read as the wrong diagnosis.**
+A CI **re-run replays the cached merge ref**: after fixing base `main`, re-running #24's failed
+job used the merge commit computed BEFORE the fix and failed identically on the same
+`zttext` — a fresh `pull_request` event (close + reopen) is what recomputes it. And the same
+day's publish rewrote `index.json` wholesale, which left #24 `CONFLICTING` through no fault of
+its own; a foreign submission racing a maintenance publish is a standing hazard of a
+single-file index, not a one-off.
+
+**Closed 2026-08-21.** #24 rebased onto the rewritten index, `validate` green (gate 3 cloned
+`lavition_ui-v0.1.0` and re-packaged it — *reproduces from source*, which proves the uploaded
+tarball matches the TAG rather than someone's working tree), merged as `717b369` and re-signed
+as `d1e5b63`. ⚠ **A merged registry PR leaves the index unsigned for its content** — `gh pr
+merge` changes `index.json` on the remote and nothing re-signs it, so the re-sign is part of
+the merge, not a follow-up. The Verify's first clause was then checked by CONSUMING it: a
+scratch project declaring `lavition_ui = ">=0.1.0"` installs from the published URL and answers
+identically on interpreter and `--native`.
+
+⚠ **`registry_maintain.sh` has no per-package filter** — its worklist is every own lib behind
+the index, which was **10** on the day three were wanted. Five published; **five `hex_*` were
+refused by the compat gate**, each declaring an `api_compatible_with` that measurably does not
+hold (`compat check --full` → `0.1.0: BREAK`). That refusal is the gate working, and those
+libraries' own fix: restore compatibility or raise the floor.
 
 ⚠ **A doc of ours sent them the wrong way, and they were right not to follow it.**
 [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md) § 4 calls staging a `submissions/` file the
@@ -194,6 +233,55 @@ the other's dependencies, which is why no third package is needed to hold them.
 ⚠ **Consequence for the goal line and for `D2`:** this plan ships `text2d` and `tween`, and
 extends `stage`. It does not ship a `ui`. `D2`'s interaction half (focus, tab order, caret)
 lands in `stage` for `D1`'s reason; its *rendering* half is `lavition_ui`'s.
+
+## The CI list — the packages are published, and three of them are not gated
+
+⚠ **Found by `C1`'s CI check and fixed the same day: `stage` could not pass
+`LOFT_DENY_WARNINGS=1 loft test`** — it reddened all sixteen of its files on four
+`never-read` parameters. Fixed as `stage` 0.18.1 (`loft-libs-graphics` `a75500a`), and
+the four were **not silenced alike**, which is the part worth keeping: two had already
+gained a use from `D1`; `ensure_light_target`'s `const Stage` was **removed** because an
+offscreen colour target is a Painter and a size and nothing about the scene changes it;
+and `gl_draw_band`'s `screen_w` was **kept and marked `_screen_w`**, because its sibling
+`gl_composite` uses both and dropping one of two symmetric floats would leave a bare
+positional float at three call sites that could take either dimension. A receiver spelled
+`self` is not a rename away, and did not need to be.
+
+⚠⚠ **The live half is that nothing gated any of this, and still does not.**
+`loft-libs-graphics` holds **seven** package dirs and `library-ci.yml` lists **four** —
+`["graphics", "gridmesh", "imaging", "shapes"]`. So `stage`, `text2d` and `tween` are
+published to the registry with **no CI at all**, and the reason `stage` was never red is
+the same reason it would never have gone green: it was not in the list. That list is
+**computed from the package dirs** by `scripts/deploy-library-ci.sh`, so a refresh adds
+all three at once.
+
+**Measured here 2026-08-21 on BOTH backends, because the gate runs both:** the reusable
+workflow runs `loft --interpret --tests`, `loft --native --tests` and `loft test --deps`, each
+with `LOFT_DENY_WARNINGS=1` unless the package carries an `.allow_warnings` file — and no
+package in the repo does, so none of this is exempted. All three pass: `stage` 162, `text2d`
+35, `tween` 20, zero `Warning[…]` lines, interpreter and `--native` alike. ⚠ The first
+measurement was interpreter-only and would not have been enough to recommend landing.
+
+**Refreshed 2026-08-21** — `scripts/deploy-library-ci.sh --branch unify-library-ci-fpm`, one
+branch per repo, no PRs (landing is the maintainer's call).
+
+⚠⚠ **The refresh found a second drift, and it is a deployment one rather than a data one.**
+The script also writes two org lifecycle stubs (`fpm-apply.yml` / `fpm-strip.yml`, which
+label `fixed-pending-merge` on a `Fixes #NNN` push). **Seven of the eight `loft-libs-*` repos
+have neither.** Not because the unification failed — every repo's `unify-library-ci` PR
+MERGED, back on 2026-07-26 — but because that PR predates the stubs: `loft-libs-core` #26
+changed `library-ci.yml` and nothing else. The script grew its second half afterwards and was
+never re-run. `loft-libs-graphics` is the only repo that has them, and only because it carried
+them by hand all along, which is exactly what hid the gap.
+
+So in seven repos a `Fixes #NNN` push has been labelling nothing, and **nothing fails when a
+label is missing** — the same failure shape as the `categories` producer in § `D0`: a fix
+applied to the generator, and the generator never re-deployed. A tool whose output is only as
+current as its last run needs the run to be part of the change, not a follow-up.
+
+⚠ The stale `unify-library-ci` branches from the merged PRs are still on all eight remotes and
+block a same-name re-push; hence the new branch name rather than a force-push over someone
+else's merged history.
 
 ## The sandbox boundary
 

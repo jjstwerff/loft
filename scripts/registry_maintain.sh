@@ -405,6 +405,14 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     # description on FIRST publish; it never overwrites an existing one.
     desc=$(sed -n 's/^[[:space:]]*description[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$tmp/$repo/$name/loft.toml" | head -1)
     desc_src=manifest
+    # Categories: the `[package] categories` list groups the library in the
+    # generated catalogue, and `tools/validate.py` gate 1 REJECTS an empty one.
+    # There is no fallback to invent — a category is a curation decision — so a
+    # package new to the index is refused below when its manifest omits it.
+    # `.*$` after the closing bracket, so a trailing `# comment` does not make
+    # the line read as "no categories declared" — a silent miss there would keep
+    # publishing an existing package's stale list.
+    cats=$(sed -n 's/^[[:space:]]*categories[[:space:]]*=[[:space:]]*\(\[[^]]*\]\).*$/\1/p' "$tmp/$repo/$name/loft.toml" | head -1)
     if [ -z "$desc" ]; then
         desc_src=readme
         desc=$(awk '
@@ -419,12 +427,39 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
         ' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
     fi
     if ! python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
-        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" "$desc_src" <<'EOF'
+        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" "$desc_src" \
+        "${cats:-}" <<'EOF'
 import json, sys
 
-index_path, name, ver, entry_path, homepage, desc, desc_src = sys.argv[1:8]
+index_path, name, ver, entry_path, homepage, desc, desc_src, cats_raw = sys.argv[1:9]
 entry = json.loads("{%s}" % open(entry_path).read())[ver]
 index = json.load(open(index_path))
+
+# `[package] categories` off the manifest.  A package the index has never seen
+# is REFUSED without one: `tools/validate.py` gate 1 rejects an empty
+# `categories`, so seeding `[]` here mints an index that the registry's own PR
+# validation will not accept — and it fails on somebody else's submission PR,
+# far from the publish that caused it.  Measured: every package first published
+# since the docs gate landed (2026-06-19) went in that way.
+cats = []
+if cats_raw.strip():
+    try:
+        cats = json.loads(cats_raw)
+    except json.JSONDecodeError:
+        print(f"::error::`{name}`: [package] categories is not a JSON list: {cats_raw}")
+        sys.exit(1)
+    if not isinstance(cats, list) or not all(isinstance(c, str) and c.strip() for c in cats):
+        print(f"::error::`{name}`: [package] categories must be non-empty strings")
+        sys.exit(1)
+if name not in index["packages"] and not cats:
+    print(
+        f"::error::`{name}` is new to the index and its loft.toml declares no "
+        f"[package] categories — add e.g. `categories = [\"graphics\"]` beside "
+        f"`description`.  Gate 1 of the registry's own validation rejects an "
+        f"empty list, so publishing without one leaves the index unmergeable."
+    )
+    sys.exit(1)
+
 pkg = index["packages"].setdefault(
     name, {"description": desc, "homepage": homepage, "categories": [], "yanked": [], "versions": {}}
 )
@@ -434,6 +469,11 @@ pkg = index["packages"].setdefault(
 # existing, possibly hand-curated, description.
 if desc_src == "manifest" and desc:
     pkg["description"] = desc
+# Same rule for categories, and for the same reason: the manifest is where the
+# author states them, so a corrected list propagates on the next publish.  A
+# manifest that declares none leaves an existing (hand-curated) list alone.
+if cats:
+    pkg["categories"] = cats
 pkg["versions"][ver] = entry
 # Bump the top-level `updated` so it reflects this publish (REGISTRY_SUBMIT.md).
 # Reuse the entry's own `published` UTC stamp — the precise moment this version
@@ -493,9 +533,22 @@ index_path, sub_path = sys.argv[1:3]
 sub = json.load(open(sub_path))
 name, ver, entry = sub["name"], sub["version"], sub["entry"]
 index = json.load(open(index_path))
+# A submission that introduces a package must carry its own `categories`, for
+# the reason the own-lib fold states: gate 1 rejects an empty list, so folding
+# one in leaves the index unmergeable.  Refusing here leaves the staging file in
+# place (the caller reports it), which is the recoverable outcome.
+cats = sub.get("categories") or []
+if not isinstance(cats, list) or not all(isinstance(c, str) and c.strip() for c in cats):
+    print(f"::error::submission `{name}`: `categories` must be a list of non-empty strings")
+    sys.exit(1)
+if name not in index["packages"] and not cats:
+    print(f"::error::submission `{name}` is new to the index and carries no `categories`")
+    sys.exit(1)
 pkg = index["packages"].setdefault(name, {
     "description": sub.get("description", f"loft library {name}"),
     "homepage": sub.get("homepage", ""), "categories": [], "yanked": [], "versions": {}})
+if cats:
+    pkg["categories"] = cats
 entry.setdefault("published", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 pkg["versions"][ver] = entry
 index["updated"] = entry["published"]

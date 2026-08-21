@@ -41,6 +41,51 @@ cd "$(dirname "$0")/.."
 # loft-src`).  Anything scanning "the repo under test" has to be able to exclude it.
 LOFT_ROOT="$PWD"
 
+# ---- Cross-repo tier: are the worked-example checks GATING or ADVISORY? ----
+#
+# `examples` + `examples-index` are the only two checks that span repositories: a
+# library's CI checks loft out as `loft-src` and runs THIS script against the library.
+# That makes the gate's rules arrive from whatever loft `main` happens to be, and it
+# bites in both directions.  Measured 2026-08-21: the `exindex` check landed here
+# 2026-08-18 and reddened loft-libs-game's next PR for a file it never touched (its
+# last green run was 2026-08-17); and in the other direction, switching a LIBRARY
+# CHECKOUT's branch turned loft's own run red with two dangling tags — a failure with
+# no bad commit in either repo.
+#
+# So they gate INSIDE loft, which owns the generator and the feature-doc citations and
+# where no cross-repo coupling exists, and ADVISE in a library repo.  That follows the
+# repo's own diagnostic rule (CLAUDE.md): a diagnostic gates if and only if ignoring it
+# can produce a WRONG RESULT.  A dangling doc citation is a broken link — it cannot.
+#
+# ⚠ The scanner SELFTESTS stay hard everywhere: a scanner that no longer follows its
+# documented rules is loft's bug whichever repo happens to run it.
+#
+# `EXAMPLES_GATE=hard|advisory` overrides, for testing and for a repo that wants the
+# strict behaviour back.
+EXAMPLES_FOREIGN=0
+if [ -n "${EXAMPLES_REPO_ROOT:-}" ]; then
+  _err_p=$(cd "$EXAMPLES_REPO_ROOT" 2>/dev/null && pwd -P) || _err_p=""
+  _loft_p=$(cd "$LOFT_ROOT" 2>/dev/null && pwd -P) || _loft_p="$LOFT_ROOT"
+  if [ -n "$_err_p" ] && [ "$_err_p" != "$_loft_p" ]; then EXAMPLES_FOREIGN=1; fi
+fi
+case "${EXAMPLES_GATE:-}" in
+  hard)     EXAMPLES_FOREIGN=0 ;;
+  advisory) EXAMPLES_FOREIGN=1 ;;
+esac
+
+# PREFLIGHT — "would my PR report anything on tags?", answered locally with a real exit
+# code.  Advisory CI is the right default and it costs you a pass/fail you can act on
+# before pushing, so keep one command that gives it back.
+#
+# ⚠ It gates the CITATION faults (dangling / duplicate / unregistered — the things CI
+# would surface) WITHOUT re-demanding a committed `examples-index.tsv`.  Those are two
+# different questions and only the first is a defect: the index is generated in CI now, so
+# a preflight that insisted on the file would fail for the exact state this is supposed to
+# be.  Hence a flag of its own rather than reusing EXAMPLES_GATE=hard.
+EXAMPLES_CITE_GATES=1
+[ "${EXAMPLES_FOREIGN:-0}" -eq 1 ] && EXAMPLES_CITE_GATES=0
+[ "${EXAMPLES_PREFLIGHT:-0}" -eq 1 ] && EXAMPLES_CITE_GATES=1
+
 QUIET=0
 if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
   QUIET=1
@@ -57,6 +102,8 @@ HITS_LIBS=0
 HITS_EXAMPLES=0
 HITS_EXAMPLES_WARN=0
 HITS_EXINDEX=0
+HITS_VALIDATOR=0
+HITS_VALIDATOR_WARN=0
 
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
@@ -654,7 +701,21 @@ check_examples() {
   # byte-for-byte; the library CI sets REPO_ROOT + CITE_ROOTS to the package under test.
   local registry="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
   local repo_root="${EXAMPLES_REPO_ROOT:-.}"
-  local cite_roots="${EXAMPLES_CITE_ROOTS:-default lib}"
+  # ⚠ The default `default lib` is LOFT's own layout.  In a library repo those directories
+  # do not exist, so an unset CITE_ROOTS scans nothing and the check passes VACUOUSLY —
+  # which is the worst outcome for a local preflight, because it looks like a pass.  So a
+  # foreign repo defaults to its package dirs (`*/src`, `*/tests`), falling back to the
+  # whole tree.  CI still sets CITE_ROOTS explicitly to the package under test.
+  local cite_roots="${EXAMPLES_CITE_ROOTS:-}"
+  if [ -z "$cite_roots" ]; then
+    if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
+      cite_roots=$(cd "$repo_root" 2>/dev/null && \
+        for d in */src */tests src tests; do [ -d "$d" ] && printf '%s ' "$d"; done)
+      [ -n "$cite_roots" ] || cite_roots="."
+    else
+      cite_roots="default lib"
+    fi
+  fi
   # The loft repo hosting this gate is always available in place at `.` (the script cd'd
   # to the loft root at startup) — even in a library CI, where loft is checked out as
   # loft-src rather than a sibling ../loft.  So loft's OWN acronyms (STD/GIT/LEX/…)
@@ -721,19 +782,40 @@ check_examples() {
   rm -rf "$cited" "$cache"
   HITS_EXAMPLES=$hits
   if [ $hits -gt 0 ]; then
-    DRIFT=1
+    [ $EXAMPLES_CITE_GATES -eq 1 ] && DRIFT=1
   elif [ "${HITS_EXAMPLES_WARN:-0}" -eq 0 ]; then
-    green "  ok — $n_cited citation(s) resolve to a test/function"
+    if [ "$n_cited" -eq 0 ]; then
+      # A check that examined nothing is not a pass — say which roots were scanned, so a
+      # vacuous run reads as vacuous instead of green.
+      yellow "  ok — but 0 citations were found (scanned: $cite_roots)"
+    else
+      green "  ok — $n_cited citation(s) resolve to a test/function"
+    fi
   fi
 }
 
 # ---- Worked-example index: where each tag lives (@PLN141) ----
-# examples-index.tsv (repo root) lists every `// @AAA-###`-tagged fn in this repo with
-# its file:line and git blob link, so a reader — or loft's cross-repo `idx` — knows
-# where a tag resolves WITHOUT a checkout.  Generated, never hand-edited: `write-examples-
-# index` writes it; `examples-index` VERIFIES the committed copy is current (fail-on-diff,
-# the features-check pattern).  Line numbers churn, so it lives WITH the code it indexes,
-# not in the central acronym registry (which stays one stable row per acronym).
+# examples-index.tsv lists every `// @AAA-###`-tagged fn in a repo with its file:line and
+# git blob link, so a READER can find where a tag resolves without a checkout.
+#
+# ⚠ Nothing machine-reads it.  This comment used to claim "or loft's cross-repo `idx`";
+# measured 2026-08-21, `scripts/idx` does not open the file and never has, and neither does
+# `check_examples`, which resolves cross-repo tags through a local CHECKOUT.  So its only
+# automated purpose was being checked for freshness — a file that exists so a check can
+# verify the file.
+#
+# WHERE IT LIVES follows the same axis as whether the check gates: does the repo OWN the
+# generator?
+#   * loft — yes.  `make examples-index`, the pre-commit hook keeps it current, and a
+#     committed copy is greppable offline, which the agent development model relies on
+#     (BUS_FACTOR.md).  Committed, and verified current (fail-on-diff).
+#   * a library repo — no.  The generator is in loft, so the file cannot be regenerated
+#     where it lives; it can only rot, and a "regenerate it" message there names a command
+#     the maintainer does not have.  So CI GENERATES it per run and publishes it, and
+#     nothing is committed.  A derived file that is never committed cannot be stale.
+#
+# Line numbers churn, so it lives WITH the code it indexes, not in the central acronym
+# registry (which stays one stable row per acronym).
 EXAMPLES_INDEX_FILE="${EXAMPLES_INDEX_FILE:-examples-index.tsv}"
 
 # Emit the index body: `tag <TAB> file:line <TAB> fn <TAB> blob_url`, one row per def,
@@ -755,11 +837,24 @@ _examples_index_body() {
 
 _examples_index_full() {
   local root="$1" reg="$2"
-  printf '# Generated by scripts/check_doc_drift.sh write-examples-index (@PLN141) — DO NOT EDIT.\n'
-  printf '# Regenerate: make examples-index    Verified in CI: check_doc_drift.sh examples-index\n'
+  printf '# Generated by scripts/check_doc_drift.sh (@PLN141) — DO NOT EDIT.\n'
+  # The two homes differ, so the header must not advertise a cure the reader cannot run:
+  # loft commits this file and regenerates it with `make`; a library repo commits nothing
+  # and CI rebuilds it every run.
+  if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
+    printf '# Built by CI from the loft checkout that owns the generator; NOT committed here.\n'
+  else
+    printf '# Regenerate: make examples-index    Verified in CI: check_doc_drift.sh examples-index\n'
+  fi
   printf '# Every worked-example tag defined in this repo: where it lives + its git blob link.\n'
   printf '# tag\tfile:line\tfn\tblob_url\n'
   _examples_index_body "$root" "$reg"
+}
+
+# Emit the index to STDOUT — what CI uses in a repo that does not commit one.
+emit_examples_index() {
+  local root="${EXAMPLES_REPO_ROOT:-.}" reg="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
+  _examples_index_full "$root" "$reg"
 }
 
 write_examples_index() {
@@ -768,14 +863,39 @@ write_examples_index() {
   say "wrote $root/$EXAMPLES_INDEX_FILE ($(grep -cvE '^#' "$root/$EXAMPLES_INDEX_FILE") tag(s))"
 }
 
-# Verify the committed examples-index.tsv matches the tags in the tree.  Absent index is
-# fine ONLY when the repo defines no tags; otherwise it is stale/missing drift (red).
+# The index check, and it asks a DIFFERENT question depending on who owns the generator.
+#
+#   * loft (native run) — the committed copy must exist and be current (fail-on-diff, the
+#     features-check pattern).  We own the generator, so "regenerate it" is a real cure.
+#   * a library repo (cross-repo run) — nothing is required and nothing is verified: CI
+#     generates the index per run and publishes it.  A derived file that is never committed
+#     cannot be stale, which retires the whole failure mode rather than downgrading it.
 check_examples_index() {
-  say "=== Worked-example index (examples-index.tsv) is current ==="
   local root="${EXAMPLES_REPO_ROOT:-.}" reg="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
   local f="$root/$EXAMPLES_INDEX_FILE" tmp; tmp=$(mktemp)
   _examples_index_full "$root" "$reg" > "$tmp"
   local defines_tags=0; grep -qE '^@' "$tmp" && defines_tags=1
+  local n; n=$(grep -cE '^@' "$tmp")
+
+  if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
+    say "=== Worked-example index (generated here, not committed) ==="
+    if [ $defines_tags -eq 0 ]; then
+      green "  ok — no worked-example tags defined; no index to build"
+    else
+      green "  ok — generated $n tag(s); CI publishes it, this repo commits nothing"
+      # ⚠ A leftover committed copy is not an error — it is just unmaintainable here, since
+      # the generator lives in loft.  Say so once, as a warning, rather than diffing it:
+      # reporting it "stale" would be the exact message this change exists to delete.
+      if [ -f "$f" ]; then
+        yellow "  note: $EXAMPLES_INDEX_FILE is committed but no longer needed — CI generates it"
+        yellow "        now, and it cannot be regenerated here.  Safe to delete."
+        HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1))
+      fi
+    fi
+    rm -f "$tmp"; return
+  fi
+
+  say "=== Worked-example index (examples-index.tsv) is current ==="
   if [ ! -f "$f" ]; then
     if [ $defines_tags -eq 1 ]; then
       red "  missing: $EXAMPLES_INDEX_FILE — run 'make examples-index' (repo defines worked-example tags)"
@@ -793,6 +913,43 @@ check_examples_index() {
     HITS_EXINDEX=1; DRIFT=1
   fi
   rm -f "$tmp"
+}
+
+# ---- Registry validator: the template and the deployed copy are ONE file ----
+# `doc/claude/registry_ci_template/validate.py` is the file a registry deploys at
+# `tools/validate.py`, and its own docstring says so.  The two drifted for eleven
+# weeks in BOTH directions with neither a superset (loft#1052): the deployment grew
+# a docs gate, a `yanked` type-check and chunk-repo homepages; the template grew a
+# trigger-uniqueness gate and an `api` re-derive.  Deploying the template would then
+# have REMOVED three live checks, and the producer in `registry_maintain.sh` was
+# written against the template's weaker rules — which is how every package published
+# after 2026-06-19 went in unmergeable.
+#
+# So the invariant is byte-identity, not "roughly the same": one file, two homes.
+# Validated OFFLINE against a local registry checkout and WARN-only when none is
+# present, the same convention `check_examples` uses for a cross-repo tag.
+check_validator() {
+  say "=== Registry validator template matches the deployed copy ==="
+  local tpl="doc/claude/registry_ci_template/validate.py"
+  if [ ! -f "$tpl" ]; then
+    green "  ok — no validator template in this repo"; return
+  fi
+  local reg=""
+  for cand in "${LOFT_REGISTRY_DIR:-}" ../loft-registry ../registry; do
+    [ -n "$cand" ] && [ -f "$cand/tools/validate.py" ] && { reg="$cand"; break; }
+  done
+  if [ -z "$reg" ]; then
+    yellow "  unvalidated: no local loft-lang/registry checkout (set LOFT_REGISTRY_DIR) — cannot compare"
+    HITS_VALIDATOR_WARN=1; return
+  fi
+  if cmp -s "$tpl" "$reg/tools/validate.py"; then
+    green "  ok — template is byte-identical to $reg/tools/validate.py"
+  else
+    red "  DRIFT: $tpl differs from $reg/tools/validate.py (loft#1052)"
+    red "         they are ONE file with two homes — deploying a drifted template removes live gates"
+    [ $QUIET -eq 0 ] && diff "$tpl" "$reg/tools/validate.py" | sed 's/^/      /' | head -20
+    HITS_VALIDATOR=1; DRIFT=1
+  fi
 }
 
 # ---- Rollout progress: is a library repo ready to PR? (@PLN141) ----
@@ -1213,6 +1370,12 @@ case "$CHECK" in
   examples) check_examples ;;
   examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest ;;
   examples-index) check_examples_index ;;
+  emit-examples-index) emit_examples_index; exit 0 ;;
+  examples-preflight)
+    # Everything a library PR's tag checks would report, with a REAL exit code.
+    EXAMPLES_PREFLIGHT=1; EXAMPLES_CITE_GATES=1
+    check_examples; sep; check_examples_index ;;
+  validator) check_validator ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
   features-progress) check_features_progress; exit 0 ;;   # a REVIEW AID — never in `all`, never a gate
@@ -1237,17 +1400,32 @@ case "$CHECK" in
     check_examples
     sep
     check_examples_index
+    sep
+    check_validator
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|emit-examples-index|examples-preflight|validator|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
     exit 2
     ;;
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
-total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX))
-warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX"
+if [ "${EXAMPLES_CITE_GATES:-1}" -eq 0 ]; then
+  # Cross-repo run: the worked-example checks ADVISE rather than gate (see the tier note
+  # at the top).  They still print in full and still show in the summary.
+  total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_VALIDATOR))
+  warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES + HITS_EXAMPLES_WARN + HITS_EXINDEX + HITS_VALIDATOR_WARN))
+  tier_note=" [worked-example checks advisory: cross-repo — 'examples-preflight' to gate them here]"
+else
+  total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX + HITS_VALIDATOR))
+  warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN + HITS_VALIDATOR_WARN))
+  if [ "${EXAMPLES_PREFLIGHT:-0}" -eq 1 ]; then
+    tier_note=" [preflight: citation faults GATE, the index is not required]"
+  else
+    tier_note=""
+  fi
+fi
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX validator=$HITS_VALIDATOR/w$HITS_VALIDATOR_WARN$tier_note"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0

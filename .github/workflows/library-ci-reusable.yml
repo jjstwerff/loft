@@ -177,18 +177,79 @@ jobs:
       # drift.  Vacuously green for a package with no citations, so it is safe on every
       # library from day one and only begins gating once the package opts in by authoring
       # a citation.  REPO_ROOT is the library checkout; the acronym resolves in place.
-      # Two checks, both gating and both vacuously green until the package authors tags:
+      # Two checks, vacuously green until the package authors tags:
       #   examples       — every `// Example: @AAA-###` citation resolves to a tagged fn
       #   examples-index — the committed examples-index.tsv (tag -> file:line -> blob link)
-      #                    is current (regenerate with `make examples-index` in loft-src,
-      #                    or let the pre-commit hook do it).
+      #                    is current.
+      #
+      # ⚠ ADVISORY HERE, GATING INSIDE LOFT — and that asymmetry is the point.  These are
+      # the only two checks that span repositories: this job runs LOFT's script against
+      # THIS library, so the rules arrive from whatever loft `main` happens to be.  It bit
+      # in both directions before being tiered: `exindex` landed in loft 2026-08-18 and
+      # reddened loft-libs-game's next PR for a file it never touched (last green run
+      # 2026-08-17), and switching a library CHECKOUT's branch turned loft's own run red
+      # with two dangling tags — a failure with no bad commit in either repo.  A gate whose
+      # rules change under you, from a repo you do not control, lands its red on whoever
+      # opens the next PR.
+      #
+      # It follows the repo's own diagnostic rule (CLAUDE.md): a diagnostic gates if and
+      # only if ignoring it can produce a WRONG RESULT.  A dangling doc citation is a broken
+      # link — it cannot.  So it advises, LOUDLY: the findings go to the job summary in full,
+      # the same place a failing test writes its excerpt.  `EXAMPLES_GATE=hard` restores the
+      # blocking behaviour for a repo that wants it.
       - name: Worked-example tags resolve — ${{ matrix.package }}
         env:
           EXAMPLES_REPO_ROOT: ${{ github.workspace }}
           EXAMPLES_CITE_ROOTS: ${{ matrix.package }}/src ${{ matrix.package }}/tests
         run: |
-          bash loft-src/scripts/check_doc_drift.sh examples
-          bash loft-src/scripts/check_doc_drift.sh examples-index
+          log="$RUNNER_TEMP/examples-${{ matrix.package }}.log"
+          bash loft-src/scripts/check_doc_drift.sh examples       2>&1 | tee    "$log"
+          bash loft-src/scripts/check_doc_drift.sh examples-index 2>&1 | tee -a "$log"
+          # The index is DERIVED and this repo commits nothing: build it here, every run,
+          # so it cannot be stale.  Published below and uploaded as an artifact.
+          bash loft-src/scripts/check_doc_drift.sh emit-examples-index \
+            > "$RUNNER_TEMP/examples-index.tsv"
+          # `warning(s)` is the advisory summary line; anything else is clean.  The script
+          # exits 0 in this mode, so the summary block is the ONLY signal — which is why it
+          # carries the whole finding and the runnable cure, not a pointer to the log.
+          if grep -q 'warning(s)' "$log"; then
+            {
+              echo "### ⚠️ \`${{ matrix.package }}\` — worked-example docs need attention"
+              echo
+              echo "Advisory: this does **not** fail the build.  It is the documentation gate"
+              echo "loft owns, run against this library."
+              echo
+              echo "Reproduce locally with a real exit code, from a loft checkout:"
+              echo '`make examples-preflight REPO=/path/to/${{ github.event.repository.name }}`'
+              echo
+              echo '```'
+              sed -e 's/\x1b\[[0-9;]*m//g' "$log" \
+                | grep -vE '^\s*ok( |$)' | grep -vE '^clean \(' | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # The index itself, always — this is what replaces the committed file.  Folded so
+          # it costs a reader nothing until they want it.
+          if [ -s "$RUNNER_TEMP/examples-index.tsv" ] \
+             && grep -qE '^@' "$RUNNER_TEMP/examples-index.tsv"; then
+            {
+              echo "<details><summary>📇 <code>${{ matrix.package }}</code> — worked-example index"
+              echo "($(grep -cE '^@' "$RUNNER_TEMP/examples-index.tsv") tag(s), generated)</summary>"
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/examples-index.tsv"
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload worked-example index — ${{ matrix.package }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: examples-index-${{ matrix.package }}
+          path: ${{ runner.temp }}/examples-index.tsv
+          if-no-files-found: ignore
 
       # Library compatibility contract, step 4 — ADVISORY, never gating.
       #

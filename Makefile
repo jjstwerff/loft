@@ -353,6 +353,22 @@ install:
 # Copy the wasm (wasm32-wasip2, wasm32-unknown-unknown) + html-mt browser runtimes
 # into the install prefix.  Split out of `install` so a native-only install can skip
 # it; called with the same PREFIX/SUDO the parent resolved.
+#
+# The html-mt dependency copy reads BOTH cargo layouts.  `-Z build-std` lands its
+# rlibs under the per-unit `build/<crate>/<hash>/out/` tree cargo adopted on
+# 2026-07-29, where `release/deps/` does not exist at all — so `cp .../deps/*.rlib`
+# failed with `cannot stat` and took the whole install down.  This step runs BEFORE
+# the binary is installed, so the failure is at least honest: it leaves the user on
+# their previous loft rather than pairing a new binary with stale runtimes.
+# `src/native_utils.rs::dep_search_dirs` already reads both layouts for the LINK;
+# this is the same fact on the install side.  The two blocks above still assume
+# `deps/` and are correct today: they are ordinary cargo builds, not build-std ones.
+#
+# loft's OWN rlib is excluded, for the reason `assemble_atomics_sysroot` gives when
+# it skips the same file: the link names it with `--extern` and `-L dependency=`, and
+# a second copy on the search path is how rustc comes to report multiple candidates
+# for one crate.  Under the per-unit layout it is worse than redundant — two build
+# dirs each hold a `libloft.rlib`, so the copy aborts on the duplicate basename.
 install-wasm-artifacts:
 	@$(SUDO) install -d $(PREFIX)/share/loft/wasm32-wasip2/deps
 	@$(SUDO) install -m 644 target/wasm32-wasip2/release/libloft.rlib $(PREFIX)/share/loft/wasm32-wasip2/
@@ -368,8 +384,11 @@ install-wasm-artifacts:
 	  $(SUDO) install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
 	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/; \
 	  $(SUDO) rm -f $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
-	  $(SUDO) cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
-	    $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
+	  set -- $$(ls target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib 2>/dev/null); \
+	  [ $$# -gt 0 ] || set -- $$(ls target/loft/html-mt/wasm32-unknown-unknown/release/build/*/*/out/*.rlib 2>/dev/null \
+	    | grep -v '/libloft[.-]'); \
+	  [ $$# -gt 0 ] || { echo "install: html-mt built but no dependency rlibs found in either cargo layout" >&2; exit 1; }; \
+	  $(SUDO) cp "$$@" $(PREFIX)/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
 	else \
 	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
 	fi
@@ -794,10 +813,18 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:line -> blob link)
 	@bash scripts/check_doc_drift.sh write-examples-index
 
+# The tag checks ADVISE in a library repo (their rules come from loft, so a gate there
+# reddens a PR for a change loft made).  This is how you get a real pass/fail back before
+# pushing: it gates the citation faults CI would report — dangling / duplicate /
+# unregistered — without demanding an `examples-index.tsv`, which libraries no longer
+# commit.  REPO=. checks loft itself.
+examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO=../loft-libs-x)
+	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-preflight
+
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-progress features-review libraries-review bug-review
+.PHONY: examples-index examples-preflight examples-progress features-review libraries-review bug-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 

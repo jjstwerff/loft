@@ -250,11 +250,35 @@ test so the next reader never needs the pointer.
 caller of loft's reusable workflow, which checks loft out into `loft-src/` — so the
 shared gate `loft-src/scripts/check_doc_drift.sh examples` and the acronym registry
 are present in your CI run with no per-repo copy.  It is **vacuously green until you
-author your first citation**, then begins gating.  Faults: `dangling` (cited, no fn
-carries it), `duplicate` (one tag on two fns here), `unregistered` (acronym missing
-from the registry).  A generated `examples-index.tsv` at the repo root records where
-each tag lives (`tag ⇥ file:line ⇥ fn ⇥ git-link`) so a reader resolves it without a
-checkout; CI verifies the committed copy is current.
+author your first citation**.  Faults: `dangling` (cited, no fn carries it),
+`duplicate` (one tag on two fns here), `unregistered` (acronym missing from the
+registry).
+
+⚠ **It ADVISES here, it does not gate** — the findings go to your PR's job summary in
+full, with the cure, and cannot block a merge.  The rules arrive from whatever loft
+`main` is, so a gate would redden your PR for a change loft made; and by loft's own
+tier rule a dangling doc citation cannot produce a wrong result.  It still gates inside
+loft.  See [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md) § Why a by-hand pass exists.
+
+**To get a pass/fail back before you push**, from a loft checkout:
+
+```
+make examples-preflight REPO=/path/to/your-library
+```
+
+It gates exactly the citation faults CI would report — `dangling`, `duplicate`,
+`unregistered` — and exits non-zero on any of them.  ⚠ It deliberately does NOT demand
+an `examples-index.tsv`: libraries no longer commit one, so a preflight that insisted on
+the file would fail for the correct state.  With no `EXAMPLES_CITE_ROOTS` set it scans
+your `*/src` and `*/tests`; if it finds **zero** citations it says so rather than
+reporting green, because a check that examined nothing is not a pass.
+
+⚠⚠ **Do not commit `examples-index.tsv` — CI builds it.**  The index (`tag ⇥ file:line
+⇥ fn ⇥ git-link`) is DERIVED, and its generator lives in loft, so a copy committed here
+can only rot: you cannot regenerate it where it sits.  CI now emits it every run,
+publishes it folded into the job summary and uploads it as an artifact, so a derived
+file that is never committed cannot be stale.  A leftover committed copy is not an
+error — CI says once that it is safe to delete.
 
 **Recording that a package owes nothing.**  Because there is no retroactive sweep, an
 untagged package is ambiguous: nobody can tell *no function here needs an example* from
@@ -305,6 +329,15 @@ suite's** needs rather than a consumer's, and nothing in a green run says so.
 answering @PLN145's `D0` request): **15 of 31 public functions had no production caller.**
 `panel_hit_test` — the one function @PLN145 asked to depend on — was *"built, tested green and
 invoked by nothing"*, in that tree's own words.
+
+⚠⚠ **The follow-up is stronger than the measurement, and it is why the bar is not a style
+rule.** moros gave `panel_hit_test` a caller the next day, and the commit subject is the
+finding: *"A click on the panel turned the camera, because `panel_hit_test` had no caller."*
+The function was not merely unused — under the one consumer that finally called it, the
+program was **wrong**, and no amount of its own green tests could say so, because a test
+asks *does it answer what I expect* and a consumer asks *is this the question I have*.
+Re-counted 2026-08-21: **13 of 33** public functions still have no production caller, and
+that tree's README now names all thirteen and calls them *a proposal*.
 
 So a promotion check of the form *"its own tests pass unchanged after the move"* verifies the
 **move** and says nothing about whether the surface was ever **honoured**. Both are needed:
@@ -434,6 +467,18 @@ Before you ship a version:
       what the index already says and merge rather than replace; if the text
       there is already right, copy it in verbatim so a later edit cannot drop
       it.
+- [ ] `[package] categories = ["…"]` — **required for a package the registry
+      index has never seen**, and the publish REFUSES without it.  The registry's
+      own gate 1 rejects an empty `categories`, so a package that goes in without
+      one leaves an index that turns every later submission PR red on a check
+      that has nothing to do with that submission — and clearing it needs the
+      signing key.  `zttext` and `fixstep` reached `main` that way.  Reuse a tag
+      the catalogue already uses (`geometry` `graphics` `text` `net` `world`
+      `game` `time` `math` `random` `crypto` `encoding` `cli` `plugins`
+      `asset-format` `animation`) before minting a new one — a category nothing
+      else carries groups nothing.  Same refresh rule as `description`: the
+      manifest is authoritative and propagates on every publish, and a manifest
+      that declares none leaves the index's curated list alone.
 - [ ] README, doc comments on every `pub fn` / `pub struct`.
 - [ ] CHANGELOG note for the version (free-form).
 - [ ] Local re-package produces a byte-identical sha256 across

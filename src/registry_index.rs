@@ -2455,6 +2455,23 @@ mod tests {
     /// the signature is still the old one.  The writer finishes mid-settle, and
     /// the reader must come back with the matched pair rather than with the torn
     /// verdict that reads as tampering.
+    ///
+    /// The refresh is finished from inside the `accept` closure rather than by a
+    /// thread racing a sleep.  `accept` runs once per attempt, AFTER both files
+    /// are read, so completing the refresh on the first call places the second
+    /// rename in exactly the window the field report describes — and places it
+    /// there on every machine.  The thread it replaces slept for
+    /// `SETTLE_PAUSE * 1.5` against a budget of `(SETTLE_ATTEMPTS - 1) *
+    /// SETTLE_PAUSE`, i.e. 15 ms inside 40 ms; `sleep` guarantees a MINIMUM, so
+    /// under a full `make ci` (24 parallel rustc compiles) the wakeup overshot
+    /// and the gate went red on a machine, not on a defect.
+    ///
+    /// Nothing is lost by dropping the thread: what a concurrent writer buys is
+    /// the atomicity of `replace_atomically`, and that is
+    /// `a_replaced_file_is_never_read_half_written`'s job next door — which is
+    /// robust because it exits on a CONDITION under a deadline instead of racing
+    /// a fixed sleep.  What is under test here is the settle's re-read, and that
+    /// is single-reader sequencing.
     #[test]
     fn a_pair_torn_by_a_refresh_settles_into_the_new_generation() {
         let dir = scratch_dir("1045-torn");
@@ -2462,16 +2479,17 @@ mod tests {
         std::fs::write(&content, b"gen2").expect("content");
         std::fs::write(&sig, b"gen1").expect("stale sig");
 
-        let finishing = {
-            let sig = sig.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(SETTLE_PAUSE + SETTLE_PAUSE / 2);
+        let mut attempts = 0;
+        let mut finish_the_refresh_after_the_first_read = |c: &[u8], s: &[u8]| {
+            attempts += 1;
+            if attempts == 1 {
                 replace_atomically(&sig, b"gen2").expect("finish the refresh");
-            })
+            }
+            c == s
         };
         let settled =
-            read_signed_pair_settling(&content, &sig, &mut |c, s| c == s).expect("read pair");
-        finishing.join().expect("writer");
+            read_signed_pair_settling(&content, &sig, &mut finish_the_refresh_after_the_first_read)
+                .expect("read pair");
 
         assert!(
             settled.accepted,
@@ -2480,6 +2498,13 @@ mod tests {
         );
         assert_eq!(settled.content, b"gen2");
         assert_eq!(settled.signature, b"gen2");
+        // Without this the test could pass by never having settled at all: one
+        // attempt reads the torn pair, the second reads the finished one, and a
+        // reader that skipped the re-read would answer on attempt 1.
+        assert_eq!(
+            attempts, 2,
+            "the pair must be accepted on the SECOND attempt — the first reads it torn"
+        );
     }
 
     /// A signature that genuinely does not match is still refused: the settle

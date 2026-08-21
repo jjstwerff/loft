@@ -76,6 +76,68 @@ un-ignored and passing).  See CHANGELOG.md.
 
 Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
 
+### The library-CI gate reddens library repos for reasons they cannot cure
+
+Found 2026-08-21 opening the eight `unify-library-ci-fpm` adoption PRs. Six went green; two did
+not, **neither for anything in the PR** — both branches only add workflow files. The gate is
+versioned centrally (`loft-lang/loft@main`), so a change here reddens every library repo on its
+next PR, landing on whoever opens one.
+
+| Repo | Red because | Owner |
+|---|---|---|
+| `loft-libs-docs` #4 | `markdown/src/markdown.loft:261` — *"Cannot index text with 'unknown'"*. A **forward-referenced** `atx_heading_level` (defined :383, called :252) leaves the slice bound unresolved in pass 1. | ✅ **Already fixed** — `1133e272` + `d822dd91`, unmerged on `tuxedo-pln145`. Goes green when that reaches `main`. |
+| `loft-libs-game` #11 | `missing: examples-index.tsv — run 'make examples-index'`. The `exindex` check landed here in `7786d28c` (2026-08-18); that repo's last CI run was 2026-08-17, so its first run after the change is its first red. | ✅ **Cured at the source** — the two cross-repo checks are now ADVISORY in a library repo (see below); this red becomes a job-summary note. Goes green when this branch reaches `main`. |
+
+⚠⚠ **The `exindex` message prescribed a cure the repo does not have — FIXED.** `make
+examples-index` maps to a target in **this** repo; `loft-libs-game` has no Makefile at all, and
+no library repo carries the generator (CI checks loft out separately as `loft-src`). So the gate
+told a library maintainer to run something they cannot run.
+
+The check now tests the **target** repo for the Make target and, when it is absent, names the
+form that actually works there:
+
+```
+missing: examples-index.tsv (this repo defines worked-example tags)
+         generate it from a loft checkout, which owns the generator:
+         EXAMPLES_REPO_ROOT=$PWD <loft>/scripts/check_doc_drift.sh write-examples-index
+```
+
+⚠ The first cut of that fix tested `-f Makefile` in the **current** directory, which is the loft
+checkout the script runs from — so it kept printing the `make` form for every library repo. The
+control caught it; without one it would have read as fixed. Coverage is unchanged (the index is
+still required wherever tags are defined), which is the half worth keeping.
+
+### ✅ Resolved — the two cross-repo checks are tiered
+
+`examples` and `examples-index` now **gate inside loft and advise in a library repo**, by
+this repo's own rule that a diagnostic gates iff ignoring it can produce a wrong result. A
+dangling doc citation is a broken link, so it advises — loudly: the findings go to the
+library PR's job summary in full, with the runnable regenerate command, which is the
+`compat check` pattern (*"ADVISORY, never gating"*) applied to docs.
+
+⚠ The scanner's own **selftests still gate everywhere** — a scanner that stops following
+its documented rules is loft's bug whoever runs it — and `EXAMPLES_GATE=hard` restores
+blocking for a repo that wants it. Full rationale: [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md)
+§ Why a by-hand pass exists.
+
+⚠⚠ **And the deeper smell is fixed too: `examples-index.tsv` is no longer committed in a
+library repo.** It is DERIVED and its generator lives in loft, so a copy committed there
+could only rot — it cannot be regenerated where it sits. CI now emits it every run
+(`check_doc_drift.sh emit-examples-index`), folds it into the job summary and uploads it as
+an artifact. A derived file that is never committed cannot be stale, which retires the
+failure mode instead of downgrading it. loft keeps its own committed copy, because loft owns
+the generator and a greppable offline index is what the agent development model runs on.
+
+⚠ Found while doing it: the file's header claimed it existed so *"loft's cross-repo `idx`"*
+could resolve tags without a checkout. Measured — `scripts/idx` does not open it and never
+has, and `check_examples` resolves through a local checkout. Its only automated consumer was
+the check verifying it. That is what made deleting it safe, and it is why the check was worth
+reading before the file was trusted.
+
+⚠ The `loft-libs-docs` row is the sharper lesson: **a published library stopped compiling and
+nothing said so for three weeks**, because that repo's CI had not run since 2026-07-28. A gate
+that only runs on a PR cannot report a break that arrives from outside the repo.
+
 ### JSON cluster
 
 | Item | Section | Status |
@@ -162,12 +224,12 @@ belongs to [COMPATIBILITY.md](COMPATIBILITY.md)'s process, not to a fix pass.
 
 | Item | Section | Status |
 |---|---|---|
-| **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57](plans/2-vector-store-watermark/cluster-III-reassignment-pin.md) | **Benign watermark residual** of the now-closed plan-57 (exit-safe, below the `LOFT_STORES=warn` floor — not a correctness/leak bug).  A shared `z` reassigned across `else` blocks / `x` across `match` arms keeps the overwritten store pinned to scope exit → watermark O(reassignments).  The gated foundation (`confine_reassign_safe`, `multi_store` recovery) is **inert in `src/scopes.rs`** as a head-start.  M effort; "do nothing, it's benign" is explicitly on the table. |
+| **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57](plans/2-vector-store-watermark/cluster-III-reassignment-pin.md) | **CLOSED 2026-08-21 — shipped, default ON.**  A local reassigned across sibling `if`/`else if`/`match` arms kept EVERY arm's store to scope exit, so the watermark grew with the number of reassignment SITES and not with how many ran: a 16-site function measured peak 20 whichever single arm was taken.  Route 2 (`recover_backer`) confines each block's store to its block — peak is now a flat 5 at 2/4/8/16 sites.  It had sat behind `LOFT_CONF_RECOVER` since 2026-06 pending an un-gate decision; re-measured on 4232 tests (2.2× the evidence it was parked on) and un-gated.  `LOFT_NO_CONF_RECOVER=1` is the opt-out and the first bisect step for a wrong answer in such a function.  Soundness is `store_dead_after_block`, not the flag: a local READ after the blocks does not confine, because freeing a confined store while the local still holds it returns the wrong element on the branch NOT taken.  Both branches verified green (4232 each), values identical on both backends, pinned by `tests/scripts/reassign-across-sibling-blocks.loft`. |
 | **@PLN85 cluster I** — FFI struct-return read gap (latent) | [@PLN85 README probe 01](plans/85-store-lifetime-retirement/README.md) | **Latent / unreachable** residual of the now-closed @PLN85.  A `#native` fn returning a non-vector **struct** has no `alloc_struct` helper to lay out a loft-readable ref, so the read path can't be exercised — gated on a future struct-return helper.  The reachable FFI **vector**-return instances (#409/#410) are FIXED.  Re-probe when the helper lands. |
-| **@PLN85 cluster IV** — @PLAN51 hidden-buffer-aliasing latent residuals | [@PLN85 README cluster IV](plans/85-store-lifetime-retirement/README.md).  Cites the `@PLAN51` probe set, preserved at [`plans/finished/51-hidden-buffer-aliasing/`](plans/finished/51-hidden-buffer-aliasing/) — the **legacy local plan** `@PLAN51`, *not* the tracker issue `@PLN51` (which is "[audience] Bumper-airplanes") | Re-probed at @PLN85 closure: ~11 raw @PLAN51 probes still show **native-mostly latent leaks on edge shapes** (tuple-of-canvas, lambda/operator vector-return, capture-heap-return, mixed-lit-call).  **Pre-existing** (identical on `origin/main` — not a @PLN85 regression), below the graduated-corpus leak-gate; the standing instruments (leak-gate + ASan + Miri) cover the graduated class.  L effort; edge-shape, not shipped-consumer-reachable. |
+| **@PLN85 cluster IV** — @PLAN51 hidden-buffer-aliasing latent residuals | [@PLN85 README cluster IV](plans/85-store-lifetime-retirement/README.md).  Cites the `@PLAN51` probe set, preserved at [`plans/finished/51-hidden-buffer-aliasing/`](plans/finished/51-hidden-buffer-aliasing/) — the **legacy local plan** `@PLAN51`, *not* the tracker issue `@PLN51` (which is "[audience] Bumper-airplanes") | **RE-MEASURED 2026-08-21: 3 of 62, not ~11, and INTERPRETER-only — the row's "native-mostly" was inverted.**  All 62 probes run clean on both backends (exit 0); `40-nested-tuple-of-canvases`, `47-tuple-local-not-return` and `51-tuple-as-arg` leak on `--interpret` and are clean under `LOFT_NATIVE_LEAK_CHECK=1`, matching @PLAN51 cluster II's own note that *"`--interpret` leaked; `--native` was always clean"*.  The lambda/operator-vector-return, capture-heap-return and mixed-lit-call shapes the row named are now clean.  All three reduce to ONE mechanism, filed as **loft#1051** and **FIXED 2026-08-21**; guarded by `tests/scripts/1051-tuple-destructure-ownership.loft` on both backends.  ⚠ **The root cause recorded here on 2026-08-21 was WRONG, and the correction is the useful part.**  This row (and the issue) named `materialize_tuple_element` and concluded that "who owns a tuple's records" was an ownership-model question that had to be answered before the leak could be fixed.  Instrumented, that function is **never reached** for this shape — it serves the tuple-RETURN path (`t = pair()`), which was already clean, and its copy does not appear in the IR dump because it is inserted during IR-to-bytecode.  The real site is `codegen.rs`'s `gen_set_first_ref_tuple_copy`, which deep-copied a `Type::Reference` element UNCONDITIONALLY: the copy allocates a store and makes the binding its owner, while the binding's `deps` said BORROW, and a borrow is skip-free.  No ownership question needed answering — [formal/ownership.md](formal/ownership.md) **O-Deps** had already answered it (*the free DERIVES from `deps`; a codegen condition that re-derives it is the bug*), and the element-read arm three lines above carried the correct guard, `depend().is_empty()`, for exactly this reason.  Adding that same guard is the whole fix.  It also closed a backend divergence (O-NoDiverge): `--native` reads the same deps and aliases a borrow, which is why it was always clean.  **Why the earlier attempt failed and read as "the model must change first":** the dep was stripped in the parser, at a site this shape never executes, so nothing moved and the no-op looked like evidence for a deeper problem.  **Instrument note:** `LOFT_STORES=warn` reports NOTHING for these (below its floor, as this row said); `LOFT_STORES=timeline` states leak status explicitly and is what separated 3 from 59. |
 
 | **@PLN130 Q6** — which uncovered copy families should be accepted rather than eliminated | [COPY_DIAGNOSTICS.md § What remains open](COPY_DIAGNOSTICS.md) | **Design question, framing settled.**  The owner's rule is recorded — an accept written at the SITE, never a blanket env exemption, so the decision stays reviewable — but which of the measured families qualify is not chosen.  Blocks nothing: an unaccepted copy is reported, which is the state the model requires. |
-| **@PLN130** — the uncovered copy set | [COPY_DIAGNOSTICS.md § What remains open](COPY_DIAGNOSTICS.md) | **Sized, not drained: 29 distinct sites over a 90-script sample, across four origins.**  A legitimate resting state under the plan's decision 3 (`Avoidable` copies may stand while STATED and tracked), and `LOFT_COPY_MANIFEST=1` is the standing instrument that keeps the *Unknown* bucket empty.  This is the largest known unfinished measurement of the plan, not a defect.  L effort. |
+| **@PLN130** — the uncovered copy set | [COPY_DIAGNOSTICS.md § What remains open](COPY_DIAGNOSTICS.md) | **RE-MEASURED 2026-08-21 over the WHOLE corpus: 504 distinct uncovered sites across 811 scripts (`--interpret`), not "29 over a 90-script sample"** — `InterpCallReturn` 225, `InterpReassignCall` 177, `InterpRecordBind` 72, `InterpReassignVar` 30; a both-backends sample adds `NativeCallReturn` + `NativeRecordBind`, so **five** origins carry uncovered sites rather than four.  `InterpTupleBind` and `ParserMaterialise` never appear (the latter by design — it is classified `Implicit`).  **The guarantee HOLDS: the `Unknown` bucket is empty, 0 rows corpus-wide**, which is the claim that matters — every emitted copy is attributed to a named emitter.  Head of the set by type: `File` 47, `Box` 41, `A` 24, `S` 23, `__tuple` 13, with the stdlib's own `exists(path)` the most-cited shape (`file(path).format` lifts and copies a whole `File` to read one field — the case `Origin::InterpReassignCall`'s doc already names).  Still a legitimate `Avoidable` resting state under decision 3; what changed is that it is now ranked rather than merely sized.  **Cost is NOT established** — a record copy is cheap beside the syscall, and size should not be read as impact.  L effort. |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 

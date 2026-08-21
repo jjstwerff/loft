@@ -558,6 +558,20 @@ fn assemble_atomics_sysroot(
             if src.extension().is_none_or(|e| e != "rlib") {
                 continue;
             }
+            // The `.rmeta` beside it comes too.  A toolchain that stops embedding full
+            // metadata in the rlib leaves a STUB there, and rustc then refuses the
+            // sysroot with "only metadata stub found for `rlib` dependency `std` —
+            // please provide path to the corresponding .rmeta file with full metadata".
+            // What follows is not a link error but a resolution one: the prelude import
+            // cannot resolve, so `String`, `Ok`, `to_string`, `i32::from` and the `todo!`
+            // macro all go missing at once and the failure reads as eighteen unrelated
+            // codegen faults in the generated program.  `--native` learned this already
+            // (loft#1030's rlib/rmeta pairing); the threaded browser sysroot had not.
+            //
+            // Paired by IDENTITY — the same `lib<name>-<hash>` stem, not merely a
+            // neighbour in the directory — so a stale `.rmeta` from another build cannot
+            // be adopted by a fresh rlib.
+            copy_sibling_rmeta(&src, &lib_dir)?;
             let Some(name) = src.file_name() else {
                 continue;
             };
@@ -590,6 +604,31 @@ fn assemble_atomics_sysroot(
                     .map_or_else(|| "nowhere".to_string(), |d| d.display().to_string())
             ),
         ));
+    }
+    Ok(())
+}
+
+/// Copy the `.rmeta` that belongs to `rlib` into `lib_dir`, if one is beside it.
+///
+/// Identity, not proximity: the metadata file must share the rlib's exact
+/// `lib<name>-<hash>` stem.  Absent is fine — a toolchain that still embeds full
+/// metadata in the rlib writes no separate `.rmeta`, and the sysroot is complete
+/// without it.
+fn copy_sibling_rmeta(rlib: &std::path::Path, lib_dir: &std::path::Path) -> std::io::Result<()> {
+    let meta = rlib.with_extension("rmeta");
+    let Some(name) = meta.file_name() else {
+        return Ok(());
+    };
+    if !meta.is_file() {
+        return Ok(());
+    }
+    let dst = lib_dir.join(name);
+    let same = std::fs::metadata(&dst)
+        .ok()
+        .zip(std::fs::metadata(&meta).ok())
+        .is_some_and(|(a, b)| a.len() == b.len());
+    if !same {
+        std::fs::copy(&meta, &dst)?;
     }
     Ok(())
 }

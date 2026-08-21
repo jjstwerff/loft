@@ -388,3 +388,110 @@ fn main() {
         "renderer fired without a typed error; got: {stderr:?}"
     );
 }
+
+// ── loft#1053 — a fault inside a `par` worker stops the WHOLE program ─────────────────
+//
+// `assert` and `panic` are not exceptions; they are the program's own request to stop, and
+// the decided semantics is that the stop is total — the whole program, not one arm of it.
+// A worker raises against its own `Stores` CLONE, which is dropped at join, so every halt
+// raised inside a worker used to die with it: the arms printed nothing and the program
+// exited 0, having computed a result from workers that had all failed their assertions
+// (`par_fold` cheerfully returned 190).
+//
+// One case per par FAMILY, because the fix was first written for the block form alone and
+// the other three stayed silent — the families do not share a spawn path, and a guard on
+// one proves nothing about the others.
+
+/// The shape each case shares: a worker that always fails, and a program that would print
+/// `survived` if the halt were swallowed.
+fn assert_par_family_halts(name: &str, source: &str, expected: &str) {
+    let (stdout, stderr, code) = run_loft_snippet(name, source);
+    assert_eq!(
+        code,
+        Some(1),
+        "{name}: a failing worker must stop the whole program\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(expected),
+        "{name}: expected {expected:?} in stderr, got: {stderr}"
+    );
+    assert!(
+        !stdout.contains("survived"),
+        "{name}: the program continued past the failing par construct\nstdout: {stdout}"
+    );
+}
+
+#[test]
+fn i1053_parallel_block_arm_assert_halts_the_program() {
+    assert_par_family_halts(
+        "i1053_block",
+        "fn w(n: integer) -> integer { assert(false, \"BLOCK ARM\"); n }\n\
+         fn main() { o = 1; parallel { w(o); w(o); } println(\"survived\"); }\n",
+        "assertion failed: BLOCK ARM",
+    );
+}
+
+#[test]
+fn i1053_par_queue_worker_assert_halts_the_program() {
+    assert_par_family_halts(
+        "i1053_queue",
+        "fn w(n: integer) -> integer { assert(false, \"QUEUE WORKER\"); n * 2 }\n\
+         fn main() { v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = w(a), 2) { t += b; } println(\"survived t={t}\"); }\n",
+        "assertion failed: QUEUE WORKER",
+    );
+}
+
+#[test]
+fn i1053_par_discard_worker_assert_halts_the_program() {
+    assert_par_family_halts(
+        "i1053_discard",
+        "fn w(n: integer) -> integer { assert(false, \"DISCARD WORKER\"); n }\n\
+         fn main() { v: vector<integer> = []; for i in 0..6 { v += [i]; }\n\
+         \x20 for a in v par(b = w(a), 2) { } println(\"survived\"); }\n",
+        "assertion failed: DISCARD WORKER",
+    );
+}
+
+#[test]
+fn i1053_par_fold_worker_assert_halts_the_program() {
+    assert_par_family_halts(
+        "i1053_fold",
+        "fn add(a: integer, b: integer) -> integer { assert(false, \"FOLD WORKER\"); a + b }\n\
+         fn main() { v: vector<integer> = []; for i in 0..20 { v += [i]; }\n\
+         \x20 println(\"survived {par_fold(v, 0, add, 2)}\"); }\n",
+        "assertion failed: FOLD WORKER",
+    );
+}
+
+/// `panic` too, not just `assert` — they share the halt path, and a fix that covered only
+/// the assert would leave the louder of the two silent.
+#[test]
+fn i1053_par_worker_panic_halts_the_program() {
+    assert_par_family_halts(
+        "i1053_panic",
+        "fn w(n: integer) -> integer { panic(\"QUEUE PANIC\"); n }\n\
+         fn main() { v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = w(a), 2) { t += b; } println(\"survived\"); }\n",
+        "panic: QUEUE PANIC",
+    );
+}
+
+/// The other half: a clean par program must be untouched.  A halt-on-worker-fault change
+/// that also stopped healthy runs would pass every test above.
+#[test]
+fn i1053_clean_par_programs_are_unaffected() {
+    let (stdout, stderr, code) = run_loft_snippet(
+        "i1053_clean",
+        "fn w(n: integer) -> integer { n * 2 }\n\
+         fn add(a: integer, b: integer) -> integer { a + b }\n\
+         fn main() { v: vector<integer> = []; for i in 0..10 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = w(a), 2) { t += b; }\n\
+         \x20 println(\"t={t} s={par_fold(v, 0, add, 2)}\"); }\n",
+    );
+    assert_eq!(code, Some(0), "a clean par program must exit 0: {stderr}");
+    assert!(
+        stdout.contains("t=90") && stdout.contains("s=45"),
+        "clean par results must be unchanged, got: {stdout}"
+    );
+}

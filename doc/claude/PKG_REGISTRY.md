@@ -226,9 +226,9 @@ only sets one explicitly once the corresponding feature ships.
 |---|---|---|
 | `schema_version` | yes | Integer.  Bump on incompatible schema changes.  Today: `1`. |
 | `updated` | yes | ISO-8601 UTC timestamp of the last index modification.  Lets clients detect stale caches. |
-| `packages.<name>.description` | no | Display string for `loft search` output. |
-| `packages.<name>.homepage` | no | URL to the package's repo / docs. |
-| `packages.<name>.categories` | no | Array of category tags for discovery.  Free-form; `loft search --category crypto` filters on them.  Inspired by Debian's `Section:` field and cargo's `categories = […]`.  Empty by default; future curation can establish a canonical set. |
+| `packages.<name>.description` | **yes** | Display string for `loft search` output, and the library's one line in the generated catalogue.  At least 10 characters — `tools/validate.py` gate 1 rejects a shorter one. |
+| `packages.<name>.homepage` | **yes** | http(s) URL to the package's repo / docs; the catalogue links to it.  Gate 1 rejects a non-http value. |
+| `packages.<name>.categories` | **yes — non-empty** | Array of category tags for discovery.  Free-form; `loft search --category crypto` filters on them.  Inspired by Debian's `Section:` field and cargo's `categories = […]`.  Declared as `[package] categories = ["graphics", "game"]` in the library's `loft.toml`; `registry_maintain.sh` reads it from there and **refuses to publish a package new to the index without one**.  In use today: `geometry` `graphics` `text` `net` `world` `game` `time` `math` `random` `crypto` `encoding` `cli` `plugins` `asset-format` `animation` — reuse a tag before minting one. |
 | `packages.<name>.yanked` | no | Array of yanked versions.  Yanked versions stay listed so `loft.lock`-pinned consumers don't break, but new installs / version resolution skip them. |
 | `packages.<name>.versions.<semver>.url` | yes | Direct download URL for the tarball.  Convention: GitHub release asset. |
 | `…sha256` | yes | Lowercase hex of the SHA-256 hash of the tarball bytes.  Verified post-download. |
@@ -625,6 +625,15 @@ Enumerated first, because this is where the design earns its shape:
    actually fetched ([GOALS.md](GOALS.md) — loft is noticed in its absence).
 4. **Index staleness is bounded, not fatal.** The 1-hour TTL plus conditional
    GET; when the refresh fails the run continues and the cache answers.
+   ⚠ **Right after a publish it reads as the publish having failed.** Two lags
+   compound — the local TTL, and GitHub raw's CDN, which serves the pre-push
+   index to some edges for a few minutes.  Measured 2026-08-21: `loft install`
+   answered *"package `tween` not found in registry"* while `curl` on the SAME
+   url returned the index containing it, and the cache held commit `205f839`
+   byte for byte — two registry commits behind.  **Verify a publish with `loft
+   install --refresh`**, and read a "not found" straight after a publish as a
+   cache question before a publish one.  (`registry_maintain.sh`'s own coverage
+   check already reads the LOCAL index copy for exactly this reason.)
 5. **A transitive dep of a bare `use`** is resolved by the library's own manifest
    constraint, unchanged. "Latest" applies to what the *program* named, not to
    what its libraries pinned.
@@ -915,6 +924,22 @@ Borrowed from Debian's `Release.gpg` / `InRelease`.
    If no card is present, signing **falls back to a local key file**
    (`~/.loft/trust-root/registry-signing-key.bin`) behind a typed
    `yes` prompt. Either way:
+   - **Schema gate first**: `scripts/registry_schema_gate.sh` runs
+     `tools/validate.py`'s gate 1 out of the checkout being signed, and
+     `registry-sign.sh` refuses on a rejection.  It IMPORTS the deployed
+     validator rather than restating its rules, so it inherits every
+     future tightening and cannot drift from the check `pr-validate.yml`
+     applies.  An ABSENT validator refuses rather than skips — a gate that
+     skips looks exactly like one that passes, and this one stands in
+     front of the signing key.
+     ⚠ **This is the chokepoint, and the reason it is here rather than at
+     publish time:** an index that fails gate 1 reaches `main` only through
+     a signature, and once there it reddens EVERY later submission PR on a
+     check that has nothing to do with that submission — which the person
+     seeing it cannot clear, because clearing it needs this key.  Measured:
+     `zttext` and `fixstep` went in with `"categories": []` (see the
+     `categories` row in § Schema) and blocked an unrelated submission for
+     days.
    - Maintainer reviews the diff `registry-sign.sh` prints (raw
      `index.json` diff + each changed release's provenance +
      re-downloaded tarball sha256) before confirming.
