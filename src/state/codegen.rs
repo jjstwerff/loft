@@ -2536,9 +2536,27 @@ impl State {
             self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::TupleGet(_, _) = value
+            && stack.function.tp(v).depend().is_empty()
         {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
             // is Type::Reference, deep-copy the record to avoid aliasing.
+            //
+            // ONLY when the binding OWNS, which is what empty deps mean.  The copy
+            // allocates a store and puts the binding in charge of it, and a binding that
+            // deps say is a BORROW is skip-free — so the copy had an owner nobody frees,
+            // and `t = (a, b); (ca, cb) = t` leaked one record per struct element on
+            // every execution, unbounded in a loop (loft#1051).
+            //
+            // The guard is the one the element-read arm above already uses, for the same
+            // reason and out of the same rule: ownership.md O-Deps — the free placement
+            // DERIVES from `deps`, and a codegen condition that re-derives it is the bug.
+            // This condition re-derived "copy" without consulting the fact.
+            //
+            // It also closes a backend divergence, which is the other half of O-Deps:
+            // `--native` reads the same deps and aliases a borrow, so it was always
+            // clean here while the interpreter leaked.  A binding that keeps its deps
+            // now aliases on BOTH backends, exactly as the undestructured read `ca = t.0`
+            // already did on both.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
