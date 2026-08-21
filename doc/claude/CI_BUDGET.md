@@ -33,6 +33,62 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > "parallelise or move to a slower cadence until we are consistently back under"
 > half of the rule is still owed work.
 
+## A LOCAL `make ci` is ~10 min, and it is two tests (2026-08-21)
+
+This document is about the CI runner. A developer's complaint is different — *a local
+`make ci` costs ten minutes and blocks iteration* — and it has a different answer, so it is
+recorded separately rather than folded in.
+
+**Measured on 24 cores.** Full run: **572 s**, of which `cargo nextest` is ~478–572 s and the
+three builds ~130 s. So the test step is the whole question.
+
+⚠⚠ **The "slowest tests" list is a trap, and reading it is how this went wrong the first
+time.** JUnit `time` is WALL clock, so on a saturated machine it counts *waiting*:
+
+| test | in the full run | alone |
+|---|---|---|
+| `deliver_reconstructs_nested_value_in_js` | **89.4 s** | **0.9 s** |
+
+Summing those wall times gave "4696 s of CPU" and a confident, wrong conclusion that
+`deliver_wasm` was the biggest cost. It is ~1 s a test. **Anything derived from JUnit `time`
+under load measures contention, not work** — isolate before believing it.
+
+**Where the time actually is.** `ir_schema_roundtrip`, in the general pool:
+
+| test | alone, 24 cores free |
+|---|---|
+| `stdlib_whole_data_round_trip` | **136.4 s** |
+| `stdlib_load_compares_equal_to_fresh` | **135.6 s** |
+| `tests_scripts_round_trip` | 67.3 s |
+| the other five | < 19 s combined |
+
+That is real work, and two tests at ~136 s running concurrently are the **wall-clock floor of
+any schedule** — no amount of parallelism goes below it. The cost is the whole-stdlib JSON
+round-trip, not the parse (`cached_default()` is a `OnceLock`, but nextest gives every test
+its own process so it never carries across; the parse is under a second —
+`stdlib_definitions_round_trip` is 0.7 s). `stdlib_whole_data_round_trip` serialises the
+entire stdlib **three times**: `json`, `data_to_json(&back)`, and the comparison.
+
+**The serial groups are not the answer, on this box either.** The `[test-groups]` note in
+`.config/nextest.toml` says widening buys ≈0 on `macos-latest`; the obvious objection is that
+a 24-core box is not a 3-core runner, so it was re-measured. Same eight binaries, serial vs
+widened: **122.5 s → 103.5 s**, 19 s, on a leg that is not the critical path and in isolation.
+Against 572 s that is noise, and it re-opens the starvation flake the group exists to close.
+
+**So the options are, in order:**
+
+1. **Do not run `make ci` to iterate** — it is a pre-push gate, not an inner loop. Use
+   `scripts/find_problems.sh --bg` (designed for exactly this: start it before editing) or a
+   targeted selection. Costs seconds, not minutes.
+2. **Shrink the round-trip fixture** — round-trip a representative slice every run and the
+   whole stdlib on a schedule. Cuts the floor directly.
+3. **Make `data_to_json` faster.** It is product code, so the win is not only in CI, and
+   serialising the same `Data` three times in one test is a test-side saving available for
+   free.
+
+⚠ 2 and 3 are not equivalent: 2 reduces what is checked, 3 does not. Prefer 3 if the
+serialiser turns out to be the cost, and measure it before choosing.
+
 ## Where the 31 minutes actually are (2026-08-10) — measured, and one axis untried
 
 Per-job wall-clock on the last green PR run (`31359676983`). **One job is the whole

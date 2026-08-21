@@ -106,6 +106,19 @@ html-wasm-serial = { max-threads = 1 }
 # ≈0 wall-clock while re-opening the starvation flake it exists to close.  The leg
 # is bound by TOTAL WORK ÷ PARALLELISM.  See doc/claude/CI_BUDGET.md.
 #
+# RE-MEASURED LOCALLY 2026-08-21, on 24 cores, because "that reasoning is about a
+# 3-core runner" is the obvious objection and it deserved a number rather than an
+# argument.  Same eight binaries, serial vs widened (4/6):
+#
+#   serial (ci profile)     122.5s
+#   widened (6 threads)     103.5s     -> 19s, and that is the group IN ISOLATION
+#
+# Against a 572s full run, on the leg that is not the critical path.  So the
+# conclusion holds on a big box too: this group is not where local time goes.
+# ⚠ Where it actually goes: `ir_schema_roundtrip`, in the general POOL, whose two
+# `stdlib_*_round_trip` tests measure 136s EACH ALONE with every core free — real
+# work, not contention.  They are the wall-clock floor of any schedule here.
+#
 # If v2/v3 are ever to leave this group the way v5 did, they need v5's JOIN_CAP
 # bounded drain FIRST — they currently carry their own UNBOUNDED copies of
 # drain_with_timeout, so today they would be exposed to the same 600s-TMT hang.
