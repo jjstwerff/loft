@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 F2 — write the shipped form of the demo pack's BULK half.
+//
+// `store_persist_copy`, not `store_persist_bind`: a bound image keeps every record
+// where it was INSERTED, and this one is laid out in each collection's own order,
+// so one keyed lookup is one run of pages rather than a scatter.  That layout is
+// what makes the range read worth doing — and it is a write-once call, which is
+// right for a pack: it is final by the time it ships.
+//
+// The bulk store roots the HASH itself.  A collection reached through a field
+// records the wrapper struct as the store's type, and the paged loaders refuse
+// such a store outright (loft#632) — so this half cannot be a field, which is
+// exactly why a pack is two stores.
+//
+//   F2_PACK_OUT=/tmp/f2_pack.store loft --interpret probes/f2_pack.loft
+use assets_schema;
+
+fn main() {
+  out = env_variable("F2_PACK_OUT");
+  if out == "" { println("F2_PACK_OUT unset"); return }
+  if file(out).exists() { _ = delete(out); }
+  b: hash<Blob[bl_key]> = [];
+  demo_blobs(b);
+  if !store_persist_copy(b, out) { println("FAIL: persist_copy"); return }
+  println("packed {file(out).size} bytes to {out}");
+}

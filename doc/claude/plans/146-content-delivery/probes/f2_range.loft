@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 F2 — the same source, from a local pack and from a URL.
+//
+// `store_load_key_text` takes a local path or an `http(s)://` URL interchangeably,
+// so the ONLY thing that changes between the two runs is `$F2_SOURCE`.  What the
+// gate proves is not that both work but that both answer the SAME bytes while the
+// URL run fetches only the pages its keys touch — the server's own range log is
+// the other half, in `probes/f2.sh`.
+//
+//   F2_SOURCE=/tmp/f2_pack.store                   loft --interpret probes/f2_range.loft
+//   F2_SOURCE=http://127.0.0.1:8099/f2_pack.store  loft --interpret probes/f2_range.loft
+use assets_schema;
+
+fn main() {
+  src = env_variable("F2_SOURCE");
+  if src == "" { println("F2_SOURCE unset"); return }
+
+  // The reader starts EMPTY and ends holding only what it asked for — that is the
+  // whole point of a paged read, and the checksum is what says the bytes are the
+  // pack's rather than merely present.
+  q: hash<Blob[bl_key]> = [];
+  if !store_load_key_text(q, src, "hit.ogg") { println("MISS hit.ogg"); return }
+  if !store_load_key_text(q, src, "ui.woff2") { println("MISS ui.woff2"); return }
+  a = q["hit.ogg"];
+  b = q["ui.woff2"];
+  if a == null || b == null { println("MISS after load"); return }
+
+  sum = 0;
+  for i in 0..len(a.bl_bytes) { sum += a.bl_bytes[i]; }
+  for i in 0..len(b.bl_bytes) { sum += b.bl_bytes[i]; }
+  println("hit.ogg={len(a.bl_bytes)} ui.woff2={len(b.bl_bytes)} checksum={sum}");
+
+  // Only what was asked for is resident.  The pack also holds two texture pages,
+  // and a reader that pulled them anyway would be paying the whole file's price
+  // for two keys — which is the thing this phase exists to prove it does not.
+  n = 0;
+  for _r in q { n += 1; }
+  println("resident={n} of 4");
+
+  // A key the pack does not have must answer FALSE, not an empty record: a paged
+  // reader that cannot say "absent" is one a caller has to guess about.
+  absent: hash<Blob[bl_key]> = [];
+  println("absent-key={store_load_key_text(absent, src, "no-such-blob")}");
+}
