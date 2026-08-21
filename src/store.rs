@@ -962,6 +962,28 @@ impl Store {
             }
             debug_assert_ne!(pos, last, "Inconsistent database zero sized block {pos}");
             claim = *self.addr::<i32>(pos, 0);
+            if claim == 0 {
+                // A block that owns no words cannot be stepped over: `pos` stops
+                // advancing and this walk never ends.  That assert above is the
+                // invariant, and it is compiled OUT of every release build
+                // (`[profile.dev.package.loft]` turns debug assertions off even
+                // under `cargo test`), so where it matters the loop simply hung
+                // — a `store_load` that never returned, with nothing on stderr
+                // and no timeout of its own.
+                //
+                // Nothing may produce a zero-sized block; when something does,
+                // say so and treat the chain as ending here.  The store grows
+                // instead, so the words past the break are leaked rather than
+                // walked, and the program keeps its answer.
+                crate::loft_eprintln!(
+                    "loft: block chain is malformed at word {pos} of {} (a block owning no \
+                     words); allocating past it and leaking the remainder",
+                    self.size
+                );
+                claim = *self.addr::<i32>(last, 0);
+                pos = self.size;
+                break;
+            }
         }
         if pos >= self.size {
             // If the last block is free and tracked in the LLRB tree, remove it

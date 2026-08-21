@@ -1,0 +1,84 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression — `store_load` must RETURN.  Compaction-on-load rebuilds the image
+// into a scratch store, and it wrote the root block's header back as the word
+// count it had ASKED for.  `Store::claim` hands out what it asked for or the
+// whole block, whichever is left after its one-third split margin, and here it
+// is always the whole block: the arena is `root_words + 2` and the request is
+// `root_words`.  Writing the request back shortened the block by the word it
+// owned, and that word became a block whose own header is zero — which
+// `claim_scan` steps over by adding zero to its position.  Every later claim on
+// that store looped forever, so `store_load` never returned, with nothing on
+// stderr and no bound of its own.  Fixed in `Stores::rebuild_into_scratch`.
+//
+// The shape is what an asset pack has (@PLN146 F1) and is why it surfaced: a
+// container of several keyed collections — so the root record is wide enough
+// that the claim rounds up — holding vectors big enough that a later claim
+// misses the free list and reaches the linear scan.
+//
+// Driven by tests/store_persist_loft.rs on BOTH backends with a scratch
+// $LOFT_PERSIST_TEST_PATH.  Argless (loft_suite) → benign no-op.
+
+struct Page {
+  pg_name: text,
+  pg_w: integer,
+  pg_h: integer,
+  pg_rgba: vector<u8>,
+}
+
+struct Blob {
+  bl_key: text,
+  bl_bytes: vector<u8>,
+}
+
+// Eight collections, so the container's own record is five words: three or more
+// is all it takes for `claim` to decline the split and hand out the whole arena.
+struct Pack {
+  blobs: hash<Blob[bl_key]>,
+  pages: hash<Page[pg_name]>,
+  c: hash<Blob[bl_key]>,
+  d: hash<Blob[bl_key]>,
+  e: hash<Blob[bl_key]>,
+  f: hash<Blob[bl_key]>,
+  g: hash<Blob[bl_key]>,
+  h: hash<Blob[bl_key]>,
+}
+
+fn empty() -> Pack {
+  Pack { blobs: [], pages: [], c: [], d: [], e: [], f: [], g: [], h: [] }
+}
+
+// A distinctive pattern, so a truncated or misplaced read cannot pass.
+fn bytes(n: integer, salt: integer) -> vector<u8> {
+  out: vector<u8> = [];
+  for i in 0..n { out += [((i * 37 + salt * 11) % 251) as u8 ?? 0]; }
+  out
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  if path == "" { return } // argless run (loft_suite) → no-op
+
+  p = empty();
+  p.pages += [Page { pg_name: "mobs", pg_w: 64, pg_h: 32, pg_rgba: bytes(8192, 1) }];
+  p.pages += [Page { pg_name: "items", pg_w: 32, pg_h: 32, pg_rgba: bytes(4096, 2) }];
+  p.blobs += [Blob { bl_key: "hit", bl_bytes: bytes(2048, 3) }];
+  p.blobs += [Blob { bl_key: "ui", bl_bytes: bytes(3072, 4) }];
+  _ = store_persist_bind(p.blobs, path);
+
+  q = empty();
+  loaded = store_load(q.blobs, path);
+  r = q.pages["items"];
+  if r == null {
+    println("compaction-load: page MISSING");
+    return
+  }
+  s = q.blobs["ui"];
+  if s == null {
+    println("compaction-load: blob MISSING");
+    return
+  }
+  println("compaction-load: loaded={loaded} page={len(r.pg_rgba)}");
+  println("compaction-load: blob={len(s.bl_bytes)} last={s.bl_bytes[3071]}");
+}

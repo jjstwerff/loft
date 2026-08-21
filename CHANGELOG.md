@@ -33,6 +33,24 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### `store_load` cannot hang any more
+
+Loading a store image compacts it, and compaction rebuilt the image into a fresh
+store whose root block was recorded one word shorter than it actually owned. That
+stray word became a block owning nothing, and the allocator walks a block chain by
+stepping over each block's own size — so it stepped over nothing, for ever. The
+symptom was a `store_load` that never came back: no error, no output, no bound of
+its own, on a call the program had only asked to READ a file.
+
+It needed a container of several keyed collections — an asset pack's shape — holding
+values big enough for a later allocation to reach the linear scan, which is why it
+had not been seen before.
+
+Two things changed. The rebuild now records the block at the size it was actually
+given, and the allocator's walk can no longer fail to advance: a malformed chain
+says so on stderr and the store grows past it, so the worst case is a few leaked
+words with a message rather than a program that stops responding.
+
 ### ⚠ Asking `git` a question outside a repository now FAILS instead of answering nothing
 
 **This changes behaviour**, so it belongs here rather than being discovered: if you called

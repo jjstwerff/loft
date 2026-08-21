@@ -211,6 +211,53 @@ fn run_script(script: &Path, backend: &str, path: &Path) -> (String, i32) {
     (stdout, out.status.code().unwrap_or(-1))
 }
 
+/// A `store_load` that never returns is worse than one that answers wrong, and
+/// compaction-on-load produced exactly that: it rebuilt the image into a scratch
+/// store and wrote the root block's header back as the word count it had ASKED
+/// for, where `claim` had handed out the whole arena.  The word past the
+/// shortened header became a block owning nothing, and `claim_scan` steps over a
+/// block by adding its size to its position — so every later claim on that store
+/// looped forever.
+///
+/// The shape is an asset pack's (@PLN146 F1): several keyed collections in one
+/// container, holding vectors big enough that a later claim misses the free list
+/// and reaches the linear scan.  Bounded here rather than left to the suite
+/// watchdog, because the failure mode under test IS an unbounded loop.
+#[test]
+fn compaction_on_load_returns_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_load_compaction_scratch_header.loft");
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!(
+            "compaction_scratch_header_{}",
+            backend.trim_start_matches('-')
+        ));
+        let path = dir.join("pack.store");
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_TIMEOUT", "120")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(
+            out.status.code().unwrap_or(-1),
+            0,
+            "{backend} exit: {stdout:?} / {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("compaction-load: loaded=true page=4096"),
+            "{backend}: the pack must load back whole (the bug hung here): {stdout:?}"
+        );
+        assert!(
+            stdout.contains("compaction-load: blob=3072 last=219"),
+            "{backend}: every byte must survive the rebuild: {stdout:?}"
+        );
+    }
+}
+
 /// #513 — within one process, every bind into a freshly-declared hash must read
 /// the persisted data (not just the first).  Freeing a bound mmap store left it
 /// in its slot; reusing that slot `init()`'d the empty header through the mmap,

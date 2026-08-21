@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `store_load` looped for ever on a pack-shaped image (@PLN146 F1, 2026-08-22)
+
+**Symptom.** `store_load` never returned — no diagnostic, no bound, on a call that only
+reads a file. `LOFT_NO_COMPACT_ON_LOAD=1` made it return, which is what named the
+subsystem.
+
+**Cause.** `Stores::rebuild_into_scratch` claims the root record out of a fresh
+`Store::new_in_use(root_words + PRIMARY + 1)`, raw-copies the source root block over it,
+and then re-asserts the header — as `root_words`. `Store::claim_block` only splits a block
+more than a third larger than the request, and here it never is (`root_words + 1` against
+`root_words`), so the claim had handed out the WHOLE arena. Writing the request back
+shortened the block by the word it owned, and that word became a block whose header reads
+zero. `Store::claim_scan` walks the chain with `pos += abs(claim)`, so it added zero to its
+position for ever. The `debug_assert_ne!(pos, last, "Inconsistent database zero sized
+block")` that states the invariant is compiled out of the loft library in every profile
+(`[profile.dev.package.loft] debug-assertions = false`), so no build had it armed.
+
+**Fix.** Two, at two different chokepoints:
+
+- `rebuild_into_scratch` reads the destination's own header after its claim and restores
+  THAT, so a raw block copy can no longer change the size a block says it owns.
+- `claim_scan` cannot fail to advance: a zero header reports the malformed chain on stderr
+  once, and the walk treats the chain as ending there so the store grows past it. A
+  corrupt chain now costs a few leaked words and a message instead of a hang.
+
+**Reachability.** It needs a container of several keyed collections (three or more root
+words is enough for the claim to decline the split) plus values big enough that a later
+claim misses the free list and reaches the linear scan. That is exactly an asset pack, which
+is how @PLN146 F1 found it.
+
+**Guard.** `tests/store_persist_loft.rs::compaction_on_load_returns_both_backends` over
+`tests/scripts/store_load_compaction_scratch_header.loft`, on both backends, with its own
+`LOFT_TIMEOUT` — the failure under test is an unbounded loop, so leaving it to the suite
+watchdog would report it as a slow test. Reverting either half alone was checked: the
+producer fix alone is silent and correct, and the `claim_scan` guard alone turns the hang
+into three stderr lines and a correct answer.
+
 ### A `par` worker read the element, whatever the call site wrote (loft#1060, 2026-08-21)
 
 ```
