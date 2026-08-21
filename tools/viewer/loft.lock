@@ -4,24 +4,24 @@ schema_version = 1
 
 [[package]]
 name = "server"
-version = "0.3.1"
-url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.1/server-0.3.1.tar.gz"
-sha256 = "bed2e9b00b8034bde442bc4c7f71acb72761bbf6abdf4ed8c641bd39a2543d99"
+version = "0.5.1"
+url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.5.1/server-0.5.1.tar.gz"
+sha256 = "3084319f051525184eed611ff5d8963131cfb4b1168971eb4ff9608fc2ee5c6e"
 source = "registry"
 deps = ["web"]
 
 [[package]]
 name = "web"
-version = "0.3.0"
-url = "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.3.0/web-0.3.0.tar.gz"
-sha256 = "d8f09ebe9d831ee180a29123fef401d8402ac3829415cb4941cccf7a54a13c7f"
+version = "0.3.5"
+url = "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.3.5/web-0.3.5.tar.gz"
+sha256 = "88612d88224af7cf7efad2fcdfae188a439aa058ee0aa3f2d3a9f4ac8979de68"
 source = "registry"
 
 [[package]]
 name = "markdown"
-version = "0.1.0"
-url = "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.1.0/markdown-0.1.0.tar.gz"
-sha256 = "5536baf65642e05fe21c1d7a442e31bcb20de98475bc3ea4a174a952ce8f17bc"
+version = "0.2.0"
+url = "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.2.0/markdown-0.2.0.tar.gz"
+sha256 = "c1217fef276dbf45b0e88504bd5f430560b8fa68f1a3d5aeff69696f72f8f19d"
 source = "registry"
 
 [[package]]

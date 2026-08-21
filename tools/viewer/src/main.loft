@@ -28,14 +28,42 @@ use html;
 
 const PORT: integer = 8765;
 
-fn main() {
-    // Future: read LOFT_VIEW_PORT once a stable env_variable + parse
-    // path is settled.  Today: hard-coded.
+// The port to serve on: `LOFT_VIEW_PORT`, else 8765.
+//
+// ⚠ A parse alone is not a validation.  Measured: `"-3" as integer` and
+// `"99999999" as integer` both SUCCEED, so `?? PORT` catches an unset or
+// unparseable value and waves through a number that cannot be a port.  Only an
+// unusable value falls back; a usable-but-odd one (say 80) is the caller's call.
+fn view_port() -> integer {
+    n = env_variable("LOFT_VIEW_PORT") as integer ?? PORT;
+    if n < 1 || n > 65535 { return PORT; }
+    n
+}
 
-    srv = server::listen(PORT);
-    // Note: println at startup triggers a native-codegen dispatch-table
-    // bug (see PROBLEMS § P262); silent for now.  Revisit when P262 is
-    // closed.
+fn main() {
+    port = view_port();
+
+    // ⚠⚠ LOOPBACK, NOT THE WILDCARD.  `server::listen` binds 0.0.0.0 — every
+    // interface — and this viewer serves `/raw/<path>`, i.e. the contents of any
+    // file under the project root.  On the VM this was designed for that is
+    // invisible; on a shared or remote host it publishes the working tree to
+    // anyone who can reach the port, and your own SSH tunnel works identically
+    // either way, so nothing tells you.
+    //
+    // `listen_on("127.0.0.1", …)` is what the server library's own doc calls the
+    // safe default for "a machine sitting behind a reverse proxy or an SSH
+    // tunnel", and it costs a remote user nothing: `ssh -L 8765:127.0.0.1:8765`
+    // has sshd connect from the remote's own loopback, which is exactly this.
+    srv = server::listen_on("127.0.0.1", port);
+
+    // The startup line is what tells a remote user which port won and how to
+    // reach it.  ⚠ The comment here used to say println at startup tripped a
+    // native-codegen dispatch-table bug and to revisit "when P262 is closed" —
+    // P262 closed 2026-05-13 in the @P262-@P266 arc, so the note outlived its
+    // cause by three months.  Verified by running the built binary, not by
+    // reading the archive.
+    println("loft-view: http://127.0.0.1:{port}/  (loopback only)");
+    println("  remote:  ssh -N -L {port}:127.0.0.1:{port} <host>   then open the URL locally");
 
     while true {
         req = srv.next();

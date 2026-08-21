@@ -1419,21 +1419,43 @@ without scrolling through chat snippets.  Built by @PLAN35 (closed
 
 ### Usage
 
-In the VM:
+On the machine holding the checkout:
 
 ```bash
 make view-build          # one-time, when updating the host loft binary
-make view                # refreshes git state + starts server on 8765
+make view                # refreshes git state + starts the server
 make view-refresh        # refreshes git state without restarting the server
 ```
 
-From the host:
+It prints the URL it took.  Port: `LOFT_VIEW_PORT`, else **8765** — set it when two
+checkouts (or two people) share a host, because the bind is fatal on a taken port.
+A value that is unset, unparseable, or outside 1–65535 falls back to 8765.
+
+From your own machine:
 
 ```bash
-ssh -L 8765:localhost:8765 vm-user@vm-host
+ssh -N -L 8765:127.0.0.1:8765 user@host        # then http://localhost:8765/
 ```
 
-Open `http://localhost:8765/` in a browser.
+⚠⚠ **The viewer binds LOOPBACK only, and that matters more off a VM than on one.**
+It serves `/raw/<path>` — the contents of any file under the project root — so a
+wildcard bind publishes the working tree to anyone who can reach the port.  This was
+written for a VM, where that is invisible and harmless; on a shared or remote host it
+is neither, **and your own tunnel works identically either way, so nothing tells you.**
+`server::listen_on("127.0.0.1", …)` is what the server library calls the safe default
+for exactly this, and it costs a tunnel user nothing: `-L` has sshd connect from the
+remote's own loopback.
+
+⚠ It needs `server >= 0.5`; 0.3.x has no `listen_on` and would bind `0.0.0.0`.  The
+manifest states that floor so a resolver cannot quietly pick a version where the safe
+bind does not exist.
+
+⚠ **Serving a game or data server alongside it:** they are separate listeners, so
+forward both — `ssh -N -L 8765:127.0.0.1:8765 -L 9000:127.0.0.1:9000 user@host`.  A
+single-channel alternative is `ssh -D 1080` (SOCKS).  Proxying the game through the
+viewer is possible but not free: `server`'s response API is text-only, so binary frames
+and WebSockets do not pass through it, and it would put the review tool on the game's
+critical path.
 
 ### Routes
 

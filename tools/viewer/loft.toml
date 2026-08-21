@@ -14,6 +14,14 @@ loft    = ">=0.8"
 entry = "src/main.loft"
 
 [dependencies]
-server   = ">=0.1"
+# ⚠ `>=0.5`, not `>=0.1`: the viewer binds LOOPBACK via `server::listen_on`, which
+# 0.3.x does not have — plain `listen` binds 0.0.0.0 and would publish `/raw/<path>`
+# on every interface of the host.  The floor states the requirement so a resolver
+# cannot quietly pick a version where the safe bind does not exist; at `>=0.1` the
+# lock sat on 0.3.1 and the build failed with "Unknown function listen_on".
+server   = ">=0.5"
 markdown = ">=0.1"
 html     = ">=0.1"
+# Resolved and used transitively through `server`; declared so the manifest says so
+# (the `undeclared-dependency` advice, loft#968).
+web      = ">=0.3"
