@@ -1457,6 +1457,74 @@ viewer is possible but not free: `server`'s response API is text-only, so binary
 and WebSockets do not pass through it, and it would put the review tool on the game's
 critical path.
 
+### Pointing it at another project (moros, dryopea, a consumer repo)
+
+The viewer is `#cwd`: **its project root is the directory it is RUN in**, not the directory
+it lives in. So one loft checkout can review any repo on the box — nothing is copied and
+nothing of the viewer is installed into the other tree.
+
+Two knobs make that safe, and both matter:
+
+- `LOFT_VIEW_STATE` — where `refresh.loft` dumps the git state. It defaults to
+  `tools/viewer/state`, which is *relative to the reviewed repo*, so without this a run
+  would create `tools/viewer/state/` **inside someone else's project**. Point it at a
+  gitignored path there.
+- `LOFT_VIEW_PORT` — 8765 is loft's own. Two viewers on one box must differ, and the bind
+  is fatal on a taken port.
+
+Drop this in the other project's `Makefile` (verified against `moros`):
+
+```make
+# ── loft-view: browse this repo — docs, code, diffs vs main — in a browser ──
+# Needs a loft checkout; point LOFT at it.  Nothing is installed here: the viewer
+# runs from the loft tree and serves THIS directory.
+LOFT       ?= ../loft
+VIEW_PORT  ?= 8766
+VIEW_STATE := .loft/view-state
+VIEW_PID   := .loft/view.pid
+VIEW_LOG   := .loft/view.log
+
+.PHONY: view view-stop view-log
+
+view: view-stop                       ## Start the loft viewer in the background
+	@test -x $(LOFT)/target/release/loft || { \
+	    echo "no loft binary at $(LOFT)/target/release/loft — run 'cargo build --release' there,"; \
+	    echo "or point LOFT at your loft checkout: make view LOFT=/path/to/loft"; exit 1; }
+	@mkdir -p $(VIEW_STATE)
+	@# git state for the dashboard.  Tolerated on failure: it is a nice-to-have, and
+	@# a large repo can trip loft#1061 (a placed library's return crossing) after
+	@# writing most of it.  The viewer serves fine without the diff half.
+	@LOFT_VIEW_STATE=$(VIEW_STATE) $(LOFT)/target/release/loft --interpret \
+	    --lib $(LOFT)/lib $(LOFT)/tools/viewer/refresh.loft >$(VIEW_LOG) 2>&1 || true
+	@LOFT_VIEW_PORT=$(VIEW_PORT) LOFT_VIEW_STATE=$(VIEW_STATE) nohup \
+	    $(LOFT)/target/release/loft --native-release \
+	    --lib $(LOFT)/lib $(LOFT)/tools/viewer/src/main.loft >>$(VIEW_LOG) 2>&1 & \
+	    echo $$! > $(VIEW_PID)
+	@sleep 2
+	@echo "loft-view: http://127.0.0.1:$(VIEW_PORT)/    (make view-stop | make view-log)"
+	@echo "  remote:  ssh -N -L $(VIEW_PORT):127.0.0.1:$(VIEW_PORT) <host>"
+
+view-stop:                            ## Stop it (safe to run when it is not running)
+	@if [ -f $(VIEW_PID) ] && kill -0 $$(cat $(VIEW_PID)) 2>/dev/null; then \
+	    pkill -P $$(cat $(VIEW_PID)) 2>/dev/null; kill $$(cat $(VIEW_PID)) 2>/dev/null; \
+	    echo "loft-view stopped"; \
+	fi; rm -f $(VIEW_PID)
+
+view-log:                             ## Tail its log
+	@tail -40 $(VIEW_LOG) 2>/dev/null || echo "no log yet"
+```
+
+⚠ **`view` depends on `view-stop`, deliberately** — so `make view` is a RESTART and is safe
+to run repeatedly. An agent re-running it does not accumulate servers or hit "cannot bind
+(already in use)", which is fatal.
+
+⚠ **`.loft/` must be gitignored in the target repo** (it is in moros, via `**/.loft/`), so
+the state, pid and log never appear in `git status`. Check before adopting.
+
+⚠ The **first** run compiles the viewer (~6 s, cached in the loft tree afterwards), so the
+first `make view` is slower than the rest. Nothing is written to the reviewed repo except
+the three `.loft/` files above.
+
 ### Routes
 
 | Path | Renders |

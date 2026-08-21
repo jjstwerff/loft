@@ -18,7 +18,19 @@
 
 use git;
 
-STATE = "tools/viewer/state";
+// Where the dumped git state lands, RELATIVE TO THE CWD being reviewed.
+//
+// ⚠⚠ `#cwd` means this tool reviews whatever directory it is RUN in — which is the
+// point, and which makes a hard-coded path a defect the moment it is run anywhere but
+// the loft repo: it would create `tools/viewer/state/` inside SOMEONE ELSE'S project.
+// A review tool must not write a directory tree into the tree it is reviewing without
+// being told where.  `LOFT_VIEW_STATE` is that instruction; the default keeps loft's
+// own `make view` byte-identical to before.
+fn state_dir() -> text {
+    d = env_variable("LOFT_VIEW_STATE") ?? "";
+    if d == "" { return "tools/viewer/state"; }
+    d
+}
 
 // How many per-file diffs to write.  The bash capped this too; the reason is the
 // same, and it is worth keeping visible rather than tucking into a constant with
@@ -30,14 +42,15 @@ DIFF_CAP = 100;
 RECENT = 20;
 
 fn main() {
-  mkdir_all(STATE);
+  st = state_dir();
+  mkdir_all(st);
 
   base = if has_ref("main") { "main" } else { "" };
 
-  write_json("{STATE}/branch.json", branch_state(base));
-  write_json("{STATE}/changed.json", changed_state(base));
-  write_json("{STATE}/commits.json", commits_state());
-  write_json("{STATE}/uncommitted.json", uncommitted_state());
+  write_json("{st}/branch.json", branch_state(base));
+  write_json("{st}/changed.json", changed_state(base));
+  write_json("{st}/commits.json", commits_state());
+  write_json("{st}/uncommitted.json", uncommitted_state());
   n_diffs = write_file_diffs(base);
   n_commits = write_commit_diffs();
 
@@ -104,7 +117,8 @@ fn commits_state() -> JsonValue {
 // `/` becomes `__` so the name is a single filesystem-safe component — the same
 // mapping the viewer undoes when it looks one up.
 fn write_file_diffs(base: text) -> integer {
-  dir = "{STATE}/diffs";
+  st = state_dir();
+  dir = "{st}/diffs";
   clear_dir(dir);
   if len(base) == 0 { return 0; }
   n = 0;
@@ -121,7 +135,8 @@ fn write_file_diffs(base: text) -> integer {
 // @GIT-005 — numstat() reports -1 for a binary file's line counts (git's `-`),
 // so a reader must handle it rather than render it as a number (see count_text).
 fn write_commit_diffs() -> integer {
-  dir = "{STATE}/commits";
+  st = state_dir();
+  dir = "{st}/commits";
   clear_dir(dir);
   n = 0;
   for sha in log_shas(RECENT) {
