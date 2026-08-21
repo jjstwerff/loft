@@ -56,9 +56,16 @@ fn git_query(kind: integer, a: text, b: text, n: integer, dir: text, out: &text)
 #native
 
 // The one place a query's output is turned into text, so a caller never sees an
-// exit code.  A failed query answers "" — every reader below treats that as
-// "nothing to report", which is what an empty repository, an absent ref and an
-// absent git all mean to a caller that wanted a list.
+// exit code.  A query with no answer answers "" — every reader below treats that
+// as "nothing to report", which is what an empty repository and an absent ref
+// both mean to a caller that wanted a list.
+//
+// A query that could not be ASKED is a different thing, and loft#1061 is what
+// happens when the two are one: run outside a repository, every call answered ""
+// and a tool reported a repository with no branch, no commits and no files.  `-1`
+// is this native's "could not be asked at all" and its `out` carries the reason
+// — the contract `git_query` above already states — so it halts here rather than
+// being flattened into the empty answer beside it.
 // The repository read is the one the program is running in — every consumer in
 // this tree is a tool for THIS repository.  The native takes a directory (see
 // `git -C`) so a consumer that needs another one can be given a call of its own
@@ -67,6 +74,7 @@ fn git_query(kind: integer, a: text, b: text, n: integer, dir: text, out: &text)
 fn ask(kind: integer, a: text, b: text, n: integer) -> text {
   out = "";
   code = git_query(kind, a, b, n, "", out);
+  if code == -1 { panic("git: {out}"); }
   if code != 0 { out = ""; }
   out
 }
@@ -76,8 +84,8 @@ fn one_line(s: text) -> text {
   if size(s) > 0 && s[size(s) - 1 .. size(s)] == "\n" { s[0 .. size(s) - 1] } else { s }
 }
 
-// The current branch, or "HEAD" when detached.  Empty when this is not a
-// repository.
+// The current branch, or "HEAD" when detached.  Empty in a repository whose
+// first commit is not made yet, where there is no branch to name.
 pub fn branch() -> text {
   one_line(ask(0, "", "", 0))
 }

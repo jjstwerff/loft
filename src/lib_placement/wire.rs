@@ -399,6 +399,22 @@ struct Frame {
 /// How much of the mapping a frame may use.
 const PAYLOAD_BYTES: usize = WIRE_BYTES - OFF_PAYLOAD;
 
+/// The `pos` a text answer parked in the return arena is handed back with
+/// (loft#1061).  A text handle is a RECORD number, so `rec` carries it and `pos`
+/// has nothing to say; this names the reference as one rather than leaving a
+/// zero that reads like an ordinary record's first field.
+pub(crate) const TEXT_IN_ARENA: u32 = u32::MAX;
+
+/// Can this text be marshalled inline, or must it go through the arena?
+///
+/// The margin covers the response header (`RESP_OK`, both arena sizes, the tag and
+/// the length) with room to spare — the exact byte count is not worth pinning, and
+/// being an answer or two conservative only moves a large text onto the arena path,
+/// which is correct for either.
+fn fits_in_frame(s: &str) -> bool {
+    s.len() + 64 < PAYLOAD_BYTES
+}
+
 impl Frame {
     fn new(base: *mut u8) -> Frame {
         Frame {
@@ -1342,6 +1358,35 @@ fn run_bound(
         Err(_) => return Err(format!("library panicked in '{func}'")),
     };
 
+    // loft#1061 — a TEXT answer bigger than the frame travels in the return arena,
+    // the growable channel a compound answer already uses.  `Value::Text` is
+    // marshalled inline (`put_str`), so the fixed 1 MiB frame was a ceiling on how
+    // long a placed function's text answer could be: `git::show(sha)` on a 3.7 MB
+    // commit reached the caller as `panic: return value does not fit the placement
+    // wire`, where the same call in-process — the invariant PLACEMENT.md states — just
+    // answers.  Parking it in the arena removes the ceiling instead of raising it: the
+    // arena grows and its new size already travels back in `ret_words`, and under
+    // `remote` its bytes travel with the answer.
+    //
+    // No new wire tag: the handle rides the existing `TAG_REF`, and the CALLER knows
+    // to read a text out of it because the function's return kind says `Text`
+    // (`dispatch::finish_call`).  A text that fits keeps the inline path, so the
+    // common small answer costs nothing.
+    if let crate::host::Value::Text(s) = &out
+        && !fits_in_frame(s)
+    {
+        let anchor = crate::keys::DbRef {
+            store_nr: ret_nr,
+            rec: 0,
+            pos: 0,
+        };
+        let handle = program.stores().store_mut(&anchor).set_str(s);
+        return Ok(crate::host::Value::Ref(crate::keys::DbRef {
+            store_nr: ret_nr,
+            rec: handle,
+            pos: TEXT_IN_ARENA,
+        }));
+    }
     let crate::host::Value::Ref(answer) = out else {
         return Ok(out);
     };

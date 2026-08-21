@@ -362,26 +362,37 @@ fn the_viewer_state_dump_reports_what_git_reports() {
     );
 }
 
-/// Outside a repository — and with a ref that does not resolve — every query
-/// answers "nothing", rather than crashing or reporting git's own text as data.
+/// The program every "nothing to read" assertion below runs.
+const NOTHING_TO_READ: &str = "fn main() {\n\
+                               \x20   println(\"branch=[{branch()}]\");\n\
+                               \x20   println(\"logn={len(log(5))}\");\n\
+                               \x20   println(\"chgn={len(changed(\"main\"))}\");\n\
+                               \x20   println(\"uncn={len(uncommitted())}\");\n\
+                               \x20   println(\"hasmain={has_ref(\"main\")}\");\n\
+                               \x20   println(\"showlen={size(show(\"deadbeef\"))}\");\n\
+                               }\n";
+
+/// In a repository with nothing in it yet — no commit, so no branch and no ref
+/// that resolves — every query answers "nothing", rather than crashing or
+/// reporting git's own text as data.
 #[test]
-fn nothing_to_read_is_an_empty_answer_not_a_failure() {
-    let dir = scratch("norepo");
-    let program = "fn main() {\n\
-                   \x20   println(\"branch=[{branch()}]\");\n\
-                   \x20   println(\"logn={len(log(5))}\");\n\
-                   \x20   println(\"chgn={len(changed(\"main\"))}\");\n\
-                   \x20   println(\"uncn={len(uncommitted())}\");\n\
-                   \x20   println(\"hasmain={has_ref(\"main\")}\");\n\
-                   \x20   println(\"showlen={size(show(\"deadbeef\"))}\");\n\
-                   }\n";
+fn a_question_with_no_answer_is_empty_not_a_failure() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skip: no git on this machine");
+        return;
+    }
+    let dir = scratch("emptyrepo");
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .arg(&dir)
+        .output()
+        .expect("git init");
     for placement in ["inproc", "process"] {
-        let (out, err) = run_loft(&dir, program, placement);
+        let (out, err) = run_loft(&dir, NOTHING_TO_READ, placement);
         for expect in [
             "branch=[]",
             "logn=0",
             "chgn=0",
-            "uncn=0",
             "hasmain=false",
             "showlen=0",
         ] {
@@ -390,5 +401,42 @@ fn nothing_to_read_is_an_empty_answer_not_a_failure() {
                 "expected {expect:?} under {placement}, got {out:?} / {err}"
             );
         }
+        // The probe writes its own files into this directory, so git has
+        // something to report here even though the history has nothing — and
+        // git's own count is the only oracle that stays true either way.
+        let untracked = git(&dir, &["status", "--porcelain"]).lines().count();
+        assert!(
+            out.contains(&format!("uncn={untracked}")),
+            "expected uncn={untracked} under {placement}, got {out:?} / {err}"
+        );
+    }
+}
+
+/// A directory that is NOT a repository is a different question from a
+/// repository with nothing to report, and loft#1061 is what happens when the two
+/// answer the same: run outside a repository, every query answered empty and the
+/// viewer rendered a repository with no branch, no commits and no files, with
+/// nothing saying the question had never been asked. So this one must HALT, and
+/// name the directory it looked in — an answer a caller can act on.
+#[test]
+fn outside_a_repository_is_a_failure_not_an_empty_answer() {
+    let dir = scratch("norepo");
+    for placement in ["inproc", "process"] {
+        let (out, err) = run_loft(&dir, NOTHING_TO_READ, placement);
+        assert!(
+            err.contains("not a git repository"),
+            "no diagnostic under {placement}: {out:?} / {err}"
+        );
+        assert!(
+            err.contains(&dir.display().to_string()),
+            "the diagnostic under {placement} does not name {}: {err}",
+            dir.display()
+        );
+        // The empty answer must not reach the program at all — printing it and
+        // then failing is the half-truth the viewer already acted on.
+        assert!(
+            !out.contains("branch=["),
+            "the empty answer still reached the program under {placement}: {out:?}"
+        );
     }
 }

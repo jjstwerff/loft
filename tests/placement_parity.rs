@@ -1317,3 +1317,61 @@ fn the_gate_can_fail() {
         "the gate compared two different libraries and saw no difference — it is blind"
     );
 }
+
+/// A text answer larger than the wire frame crosses intact (loft#1061).
+///
+/// `Value::Text` is marshalled INLINE into the request/response frame, which is a fixed
+/// 1 MiB. Compound answers never had this ceiling — they are built in the return arena,
+/// which grows — so a placed function whose answer was a long text hit a wall no
+/// in-process call has: `git::show(sha)` on a 3.7 MB commit reached the caller as
+/// `panic: return value does not fit the placement wire`, and `make view` had been
+/// broken by it. An oversized text now travels in the arena too.
+///
+/// THE SIZE IS THE TEST. A short text takes the inline path and passes against the
+/// broken build, so this asks for ~1.5 MB — comfortably past the frame — and checks the
+/// BYTES, not just the length: a truncation at the old boundary would keep a plausible
+/// size while losing the tail, so the head, the tail, and a slice straddling the 1 MiB
+/// mark are all compared. The small answer is in the same consumer, so the inline path
+/// is still exercised beside the arena one.
+#[test]
+fn a_text_answer_larger_than_the_frame_crosses_intact() {
+    let library = "pub fn big(kib: integer) -> text {\n\
+                   \x20   b = \"\";\n\
+                   \x20   for _ in 0..64 { b = b + \"ABCDEFGHIJKLMNOP\"; }\n\
+                   \x20   s = \"\";\n\
+                   \x20   for _ in 0..kib { s = s + b; }\n\
+                   \x20   s\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   small = big(1);\n\
+                    \x20   println(\"small = {size(small)} {small[0 .. 4]}\");\n\
+                    \x20   s = big(1536);\n\
+                    \x20   println(\"size  = {size(s)}\");\n\
+                    \x20   println(\"head  = {s[0 .. 16]}\");\n\
+                    \x20   println(\"tail  = {s[size(s) - 16 .. size(s)]}\");\n\
+                    \x20   println(\"cross = {s[1048376 .. 1048392]}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("big_text", library, consumer);
+    assert_eq!(
+        inproc.code, 0,
+        "the in-process run must succeed: {}",
+        inproc.stderr
+    );
+    assert_indistinguishable("a text answer past the frame size", &inproc, &placed);
+    assert!(
+        inproc.stdout.contains("size  = 1572864"),
+        "the consumer did not build the oversized answer: {:?}",
+        inproc.stdout
+    );
+    // `cross` starts 8 bytes into a 16-byte block (1048376 = 16 x 65523 + 8) and ends
+    // past the old 1 MiB frame limit, so the correct answer is the block ROTATED — which
+    // is a sharper check than an aligned slice: it pins the phase as well as the bytes.
+    assert!(
+        placed.stdout.contains("head  = ABCDEFGHIJKLMNOP")
+            && placed.stdout.contains("tail  = ABCDEFGHIJKLMNOP")
+            && placed.stdout.contains("cross = IJKLMNOPABCDEFGH"),
+        "the placed answer is the wrong bytes, not merely the wrong length: {:?}",
+        placed.stdout
+    );
+}
