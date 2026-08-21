@@ -200,6 +200,18 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
         ),
         Type::Single => format!("_ts.get_single(elm.rec, elm.pos + {off})"),
         Type::Float => format!("_ts.get_float(elm.rec, elm.pos + {off})"),
+        // A text element is stored as a 4-byte heap pointer and the worker's slot is a
+        // `&str`, so the pointer has to be resolved through the same store the rest of
+        // the row is read from — the native twin of `parallel::read_text_at`.
+        //
+        // This arm's absence became a BACKEND DIVERGENCE the moment loft#1055 taught the
+        // interpreter to marshal `vector<(text, integer)>` correctly: the same program
+        // then ran on `--interpret` and was refused here.  A divergence introduced by a
+        // fix is worse than one that always existed, because it reads as the fix being
+        // complete.
+        Type::Text(_) => {
+            format!("_ts.get_str(_ts.get_u32_raw(elm.rec, elm.pos + {off}))")
+        }
         other => format!(
             "compile_error!(\"par tuple worker: unsupported by-value element type {other:?}\")"
         ),

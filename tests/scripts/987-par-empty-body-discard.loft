@@ -160,6 +160,35 @@ fn test_987_queue_text_into_struct_worker() {
   assert(seen == 3, "expected 3 cells, got {seen}");
 }
 
+/// A TEXT element inside a wide row.  Its two halves are read from different places —
+/// the text is a 4-byte heap pointer resolved through the row's store, the integer is a
+/// value — so this is the cell where the two backends most easily drift apart.  They did:
+/// fixing the interpreter's marshalling (loft#1055) left native refusing the shape with a
+/// `compile_error!`, a divergence the FIX created.  Both now answer the same.
+fn i987_named(p: const(text, integer)) -> text {
+  assert(len(p.0) == 1, "named worker got text [{p.0}] of length {len(p.0)}");
+  assert(p.1 % 10 == 0 && p.1 >= 10 && p.1 <= 30, "named worker got {p.1}");
+  "n{p.0}"
+}
+
+fn test_987_discard_text_tuple_row() {
+  rows: vector<(text, integer)> = [("a", 10), ("b", 20), ("c", 30)];
+  for a in rows par(b = i987_named(a), 2) { }
+}
+
+/// The same element shape through a worker with NO hidden parameter, so the row and the
+/// return are varied independently rather than together.
+fn i987_named_len(p: const(text, integer)) -> integer {
+  len(p.0) + p.1
+}
+
+fn test_987_queue_text_tuple_row() {
+  rows: vector<(text, integer)> = [("a", 10), ("b", 20), ("c", 30)];
+  total = 0;
+  for a in rows par(b = i987_named_len(a), 2) { total += b; }
+  assert(total == 63, "expected (1+10)+(1+20)+(1+30) = 63, got {total}");
+}
+
 /// A wide row into a worker whose return is a VECTOR — the third hidden-parameter
 /// shape (a destination parameter rather than a text buffer).
 fn i987_pair_out(p: const(integer, integer)) -> vector<integer> {
