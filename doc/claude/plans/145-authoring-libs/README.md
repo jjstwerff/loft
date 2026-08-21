@@ -255,11 +255,33 @@ the same reason it would never have gone green: it was not in the list. That lis
 **computed from the package dirs** by `scripts/deploy-library-ci.sh`, so a refresh adds
 all three at once.
 
-**Measured here 2026-08-21, so the refresh is safe to run:** all three pass the gate on
-this box — `stage` 162 tests, `text2d` 35, `tween` 20, zero `Warning[…]` lines under
-`LOFT_DENY_WARNINGS=1`. The refresh pushes a branch and wants a PR, which is a maintainer
-action rather than part of this plan; it is recorded here because a package that ships
-before its gate does is a ship that nobody can regress-test.
+**Measured here 2026-08-21 on BOTH backends, because the gate runs both:** the reusable
+workflow runs `loft --interpret --tests`, `loft --native --tests` and `loft test --deps`, each
+with `LOFT_DENY_WARNINGS=1` unless the package carries an `.allow_warnings` file — and no
+package in the repo does, so none of this is exempted. All three pass: `stage` 162, `text2d`
+35, `tween` 20, zero `Warning[…]` lines, interpreter and `--native` alike. ⚠ The first
+measurement was interpreter-only and would not have been enough to recommend landing.
+
+**Refreshed 2026-08-21** — `scripts/deploy-library-ci.sh --branch unify-library-ci-fpm`, one
+branch per repo, no PRs (landing is the maintainer's call).
+
+⚠⚠ **The refresh found a second drift, and it is a deployment one rather than a data one.**
+The script also writes two org lifecycle stubs (`fpm-apply.yml` / `fpm-strip.yml`, which
+label `fixed-pending-merge` on a `Fixes #NNN` push). **Seven of the eight `loft-libs-*` repos
+have neither.** Not because the unification failed — every repo's `unify-library-ci` PR
+MERGED, back on 2026-07-26 — but because that PR predates the stubs: `loft-libs-core` #26
+changed `library-ci.yml` and nothing else. The script grew its second half afterwards and was
+never re-run. `loft-libs-graphics` is the only repo that has them, and only because it carried
+them by hand all along, which is exactly what hid the gap.
+
+So in seven repos a `Fixes #NNN` push has been labelling nothing, and **nothing fails when a
+label is missing** — the same failure shape as the `categories` producer in § `D0`: a fix
+applied to the generator, and the generator never re-deployed. A tool whose output is only as
+current as its last run needs the run to be part of the change, not a follow-up.
+
+⚠ The stale `unify-library-ci` branches from the merged PRs are still on all eight remotes and
+block a same-name re-push; hence the new branch name rather than a force-push over someone
+else's merged history.
 
 ## The sandbox boundary
 
