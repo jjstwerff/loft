@@ -567,6 +567,17 @@ fn respond_raw(req: server::Request, rel: text) {
         req.respond_html(body);
         return;
     }
+    // ⚠⚠ AN IMAGE MUST NOT GO THROUGH THE TEXT PATH.  `content()` reads a file as
+    // `text`, and a PNG is not valid UTF-8, so it answered null -> "" and this served
+    // **200 OK with Content-Length: 0**: a successful empty response, a broken image in
+    // the browser, and nothing reporting an error anywhere.  Every `doc/images/*.png`
+    // referenced from a markdown page was served that way, including through the
+    // `/raw/` image prefix `markdown::render` is given below.
+    ct = image_content_type(rel);
+    if ct != "" {
+        req.respond_bytes(200, read_bytes(rel), ct);
+        return;
+    }
     body = f.content() ?? "";
     req.respond_typed(200, body, "text/plain; charset=utf-8");
 }
@@ -598,6 +609,21 @@ fn respond_file(req: server::Request, rel: text) {
 fn is_markdown(rel: text) -> boolean {
     rel.ends_with(".md")
 }
+// An IMAGE is the subset of binary a browser can render inline, so it gets a real
+// content type and an <img> rather than a download link.
+fn image_content_type(rel: text) -> text {
+    if rel.ends_with(".png") { return "image/png"; }
+    if rel.ends_with(".jpg") || rel.ends_with(".jpeg") { return "image/jpeg"; }
+    if rel.ends_with(".gif") { return "image/gif"; }
+    if rel.ends_with(".webp") { return "image/webp"; }
+    if rel.ends_with(".svg") { return "image/svg+xml"; }
+    if rel.ends_with(".ico") { return "image/x-icon"; }
+    ""
+}
+fn is_image_ext(rel: text) -> boolean {
+    image_content_type(rel) != ""
+}
+
 fn is_binary_ext(rel: text) -> boolean {
     rel.ends_with(".png")
         || rel.ends_with(".jpg")
@@ -625,6 +651,15 @@ fn page_file(rel: text, f: File) -> text {
     article += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
     article += view_toggle(rel, "file");
 
+    if is_image_ext(rel) {
+        // Shown, not described: this is a REVIEW viewer, and the GL goldens
+        // (`*_golden.png`) are the case that needs looking at rather than downloading.
+        article += "<p><a href=\"/raw/{esc_rel}\">open raw</a> — {sz} bytes</p>";
+        article += "<p><img src=\"/raw/{esc_rel}\" alt=\"{esc_rel}\" ";
+        article += "style=\"max-width:100%;height:auto;border:1px solid #ccc\"></p>";
+        article += "</article>";
+        return page(rel, article);
+    }
     if is_binary_ext(rel) {
         article += "<p>Binary file ({sz} bytes).  ";
         article += "<a href=\"/raw/{esc_rel}\">download raw</a></p>";

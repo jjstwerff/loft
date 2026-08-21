@@ -19,7 +19,13 @@ entry = "src/main.loft"
 # on every interface of the host.  The floor states the requirement so a resolver
 # cannot quietly pick a version where the safe bind does not exist; at `>=0.1` the
 # lock sat on 0.3.1 and the build failed with "Unknown function listen_on".
-server   = ">=0.5"
+# ⚠ `>=0.6` for `respond_bytes`, and `>=0.5` for `listen_on` before it — each floor
+# states a function this viewer cannot work without, so a resolver cannot pick a
+# version where the safe bind or the byte-safe image response is simply absent.
+# ⚠⚠ 0.6.0 IS NOT PUBLISHED YET (loft-libs-net `tuxedo-respond-bytes`).  Until it is,
+# build against the local checkout:
+#     server = { path = "../../../loft-libs-net/server" }
+server   = ">=0.6"
 markdown = ">=0.1"
 html     = ">=0.1"
 # Resolved and used transitively through `server`; declared so the manifest says so
