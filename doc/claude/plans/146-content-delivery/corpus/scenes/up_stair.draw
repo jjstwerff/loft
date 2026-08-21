@@ -1,0 +1,39 @@
+# UP-STAIR ('<') — frontal staircase ASCENDING toward light. Per-step (discrete) tone:
+# each tread is ONE solid value, stepping LIGHTER toward the top (to white). The BOTTOM
+# step (where the player steps on, floor level) STARTS at the down-stair's floor-level
+# width — the two icons agree at the floor — and the steps WIDEN slightly going up (the
+# upper flight looms toward the higher level). Each step = light tread + a CONSTANT-DARK
+# riser (the shadowed front face); dark risers carry contrast on the light floor.
+size 256x256
+Background transparent
+
+# step 0 (bottom, floor level — same width as the down-stair's top step)
+name s0_tread
+Poly (0.090,0.786) (0.910,0.786) (0.910,0.846) (0.090,0.846) rgb=120,119,124
+name s0_riser
+Poly (0.090,0.846) (0.910,0.846) (0.910,0.880) (0.090,0.880) rgb=48,47,52
+# step 1
+name s1_tread
+Poly (0.078,0.668) (0.922,0.668) (0.922,0.728) (0.078,0.728) rgb=146,145,150
+name s1_riser
+Poly (0.078,0.728) (0.922,0.728) (0.922,0.762) (0.078,0.762) rgb=48,47,52
+# step 2
+name s2_tread
+Poly (0.066,0.550) (0.934,0.550) (0.934,0.610) (0.066,0.610) rgb=174,173,178
+name s2_riser
+Poly (0.066,0.610) (0.934,0.610) (0.934,0.644) (0.066,0.644) rgb=48,47,52
+# step 3
+name s3_tread
+Poly (0.054,0.432) (0.946,0.432) (0.946,0.492) (0.054,0.492) rgb=200,199,204
+name s3_riser
+Poly (0.054,0.492) (0.946,0.492) (0.946,0.526) (0.054,0.526) rgb=48,47,52
+# step 4
+name s4_tread
+Poly (0.042,0.314) (0.958,0.314) (0.958,0.374) (0.042,0.374) rgb=226,225,229
+name s4_riser
+Poly (0.042,0.374) (0.958,0.374) (0.958,0.408) (0.042,0.408) rgb=48,47,52
+# step 5 (top, widest, white — the bright opening above)
+name s5_tread
+Poly (0.030,0.196) (0.970,0.196) (0.970,0.256) (0.030,0.256) rgb=249,249,252
+name s5_riser
+Poly (0.030,0.256) (0.970,0.256) (0.970,0.290) (0.030,0.290) rgb=52,51,56

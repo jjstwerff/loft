@@ -1,0 +1,63 @@
+# PLAYER ('@') — the adventurer, top-down, FRONT=UP. The most-seen sprite in the game:
+# the BLUE cloak is the only blue in the world. CLOAK rule (learned): wide at the BOTTOM,
+# contained A-line — a big back-fan reads like rising out of the ground. ARMS attached and
+# in BODY SCALE: they emerge from under the pauldrons, hands visible — shield strapped on
+# the left forearm, the sword drawn from the right hand. Humanoid-from-above: hair only.
+#
+# --- HAIR recipe, APPLIED (ref assets/sprites/ref/fur/durer_young_hare + skill 2d.md) ---
+# Hair = MASS + VALUE + a FEW strands, never a clean disc. The canonical recipe (reuse for any
+# haired humanoid), as built on the head below: (1) the head is a RADIAL GRADIENT, lit crown ->
+# shadow nape; (2) a few lighter SHEEN strands fan from the crown whorl; (3) a few strays break
+# the edge (a hard outline reads as a helmet/wig); (4) a dark parting between clumps. Kept to
+# ~8 marks — the most-seen sprite must stay clean.
+# Source for assets/sprites/player.png.
+size 256x256
+Background transparent
+
+# the cloak — an A-line falling from the shoulder line: modest widening, curved hem,
+# and a GRADIENT down the fall (lit at the shoulders, shadow at the hem — the drop reads)
+name cloak
+Poly (0.345,0.40) (0.655,0.40) (0.705,0.60)~ (0.66,0.775) (0.50,0.815)~ (0.34,0.775) (0.295,0.60)~ grad=60,86,138>24,34,60 dir=0.5,0.40,0.5,0.82
+
+# arms — in scale with the body, emerging from under the shoulder line
+name armL
+Poly (0.405,0.405)@13 (0.345,0.315)@10 stroke=96,70,44
+name armR
+Poly (0.595,0.405)@13 (0.655,0.315)@10 stroke=96,70,44
+name handL
+Circle (0.336,0.295) r=0.028 rgb=190,152,118
+name handR
+Circle (0.664,0.295) r=0.028 rgb=190,152,118
+
+# the shield — strapped over the LEFT forearm/hand (steel rim, wooden boss)
+name shield
+Circle (0.325,0.315) r=0.105 rgb=140,144,152
+Circle (0.325,0.315) r=0.078 rgb=110,80,48
+Circle (0.325,0.315) r=0.026 rgb=140,144,152
+
+# the sword — from the right hand, angled forward (steel + guard)
+name blade
+Poly (0.655,0.285) (0.685,0.275) (0.745,0.095) (0.712,0.085) rgb=188,192,202
+name guard
+Line (0.630,0.270) - (0.700,0.300) w=5
+
+# pauldrons — steel caps at the shoulder roots (the arms visibly attach under them)
+name pauldrons
+Circle (0.405,0.395) r=0.062 rgb=128,132,142
+Circle (0.595,0.395) r=0.062 rgb=128,132,142
+
+# the head — hair from above (no face). MASS = radial-gradient scalp (lit crown -> shadow
+# nape); lighter SHEEN strands fan back from the crown whorl, a dark parting between them,
+# and a few strays break the silhouette (a clean disc reads as a helmet). Hair recipe.
+name head
+Circle (0.50,0.345) r=0.075 radial=98,66,42>54,34,20 at=0.50,0.325,0.086
+name parting
+Poly (0.50,0.312)@2 (0.492,0.40)~@1 stroke=46,30,18
+name sheen
+Poly (0.50,0.325)@3 (0.50,0.405)~@1 stroke=124,88,56
+Poly (0.486,0.325)@3 (0.451,0.392)~@1 stroke=116,82,52
+Poly (0.514,0.325)@3 (0.549,0.392)~@1 stroke=116,82,52
+name strays
+Poly (0.466,0.398)@1.5 (0.449,0.430)~@0.6 stroke=120,86,56
+Poly (0.534,0.398)@1.5 (0.551,0.430)~@0.6 stroke=120,86,56
+Poly (0.50,0.414)@1.5 (0.50,0.446)~@0.6 stroke=110,80,52

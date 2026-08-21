@@ -1,0 +1,50 @@
+# FLOATING EYE — a severed, drifting EYEBALL seen TOP-DOWN (the game's perspective!), gazing
+# FORWARD (=UP, its facing) — NOT up at the camera: the iris foreshortens to an ELLIPSE
+# (Circle flat=) displaced to the front edge of the ball; the bloodshot veins sweep forward
+# along the sphere like meridians converging on the gaze; torn nerve-tendrils trail BEHIND.
+# The gaze IS the weapon (0 melee), so the eye itself is the attack means. Menace: bloodshot
+# veining, a slit pupil, severed tendrils. Dark rim ring = readability on the light floor.
+# Techniques: flat= ellipse for foreshortening; rim-ring; meridian veins give the sphere
+# volume AND motion direction; tapered-stroke tendrils.
+# Source for assets/sprites/floating_eye.png.
+size 256x256
+Background transparent
+
+# torn nerve tendrils first — trailing BEHIND the drift (down)
+name tendrils
+Poly (0.45,0.76)@5 (0.41,0.87)@3 (0.44,0.97)@1.5 stroke=148,108,104
+Poly (0.52,0.77)@6 (0.55,0.89)@3.5 (0.51,0.995)@1.5 stroke=148,108,104
+Poly (0.58,0.74)@4 (0.64,0.84)@2.5 (0.63,0.94)@1.5 stroke=148,108,104
+
+# the ball — dark rim ring (light-on-light readability), then the sclera (a sphere from
+# above is still a disc; the FORESHORTENING shows in the iris, not the outline)
+name rim
+Circle (0.50,0.48) r=0.300 rgb=44,42,48
+name sclera
+Circle (0.50,0.48) r=0.282 rgb=176,170,156
+
+# bloodshot veins — meridians of the sphere, crawling FORWARD from the back toward the
+# gaze point (volume + motion direction), kinked and asymmetric (organic)
+name veins
+Poly (0.262,0.620)@3 (0.310,0.500)@2.2 (0.296,0.452)@1.8 (0.366,0.330)@1.2 stroke=156,34,30
+Poly (0.738,0.620)@3 (0.690,0.500)@2.2 (0.706,0.448)@1.8 (0.636,0.328)@1.2 stroke=156,34,30
+Poly (0.392,0.742)@2.6 (0.408,0.620)@2 (0.378,0.560)@1.6 (0.420,0.420)@1.2 stroke=156,34,30
+Poly (0.620,0.738)@2.6 (0.600,0.610)@2 (0.632,0.552)@1.6 (0.586,0.418)@1.2 stroke=156,34,30
+Poly (0.408,0.620)@1.6 (0.352,0.582)@1.2 stroke=156,34,30
+Poly (0.500,0.770)@2.4 (0.520,0.680)@1.8 (0.498,0.612)@1.2 stroke=156,34,30
+
+# the iris — foreshortened ELLIPSE at the front edge (gazing ahead/up): dark outer ring,
+# lit amber inner (predator)
+name iris_ring
+Circle (0.50,0.300) r=0.172 flat=0.46 rgb=86,56,14
+name iris
+Circle (0.50,0.300) r=0.146 flat=0.46 rgb=168,122,36
+
+# the pupil — a vertical slit sliver, foreshortened with the iris
+name pupil
+Poly (0.500,0.245) (0.526,0.298) (0.500,0.352) (0.474,0.298) rgb=14,10,10
+
+# catchlight — high on the iris (alive, locked on)
+name glint
+Circle (0.462,0.272) r=0.016 flat=0.3 rgb=240,240,246
+Circle (0.534,0.326) r=0.008 flat=0.3 rgb=200,200,210

@@ -1,0 +1,42 @@
+# DOOR — top-down with SLIGHT PERSPECTIVE (the floating-eye trick): from above-and-ahead
+# you see the slab's narrow TOP EDGE plus its FORESHORTENED FACE below — enough third
+# dimension to read "standing door", while the whole stays inside the wall gap (the door
+# carries NO jambs/frame of its own; the engine's wall renders that). Plank seams + iron
+# straps on the face, the ring handle hanging mid-face. Authored HORIZONTAL; the engine
+# rotates it into the wall's direction.
+# Source for assets/sprites/door.png.
+size 256x256
+Background transparent
+
+# the top edge — the slab's narrow upper surface, PRONOUNCED DARK (end-grain in shadow)
+name topedge
+Poly (0.05,0.405) (0.95,0.405) (0.95,0.455) (0.05,0.455) rgb=70,48,28
+
+# the face — the door front, foreshortened (the larger band below the edge)
+name face
+Poly (0.05,0.455) (0.95,0.455) (0.95,0.625) (0.05,0.625) rgb=106,76,46
+
+# plank seams — down the face (vertical planks, foreshortened)
+name seams
+Line (0.23,0.455) - (0.23,0.625) w=2
+Line (0.41,0.455) - (0.41,0.625) w=2
+Line (0.59,0.455) - (0.59,0.625) w=2
+Line (0.77,0.455) - (0.77,0.625) w=2
+
+# iron straps — two dark bands wrapping over the edge and down the face
+name bands
+Poly (0.155,0.398) (0.205,0.398) (0.205,0.632) (0.155,0.632) rgb=46,46,52
+Poly (0.795,0.398) (0.845,0.398) (0.845,0.632) (0.795,0.632) rgb=46,46,52
+# bolt heads on the straps' face section
+name bolts
+Circle (0.18,0.49) r=0.011 rgb=128,128,136
+Circle (0.18,0.575) r=0.011 rgb=128,128,136
+Circle (0.82,0.49) r=0.011 rgb=128,128,136
+Circle (0.82,0.575) r=0.011 rgb=128,128,136
+
+# the ring — hanging on the face (the handle)
+name ringmount
+Circle (0.62,0.50) r=0.020 rgb=52,52,58
+name ring
+Circle (0.62,0.557) r=0.042 rgb=52,52,58
+Circle (0.62,0.557) r=0.024 rgb=106,76,46

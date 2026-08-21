@@ -1,0 +1,68 @@
+# SSIRATH, THE COILED CROWN — the naga boss (desert_surprise), top-down, FRONT=UP.
+# A NAGA: a great green-scaled serpent coil (the snake construction, boss-scaled) with a
+# humanoid torso rising from it — shoulders foreshortened, two clawed arms spread in a
+# strike, and the GOLD CROWN (her name + the top-down identifier) ringing the head.
+# Menace: the loaded coil + spread claws + crown points; dry-green scale per the quest lore.
+# Techniques: snake S-coil (sand_adder) at boss width; flat= ellipse shoulders; ring =
+# gold disc + inner disc (no stroke-circles in the tool); discrete diamond blotches.
+# Source for assets/sprites/ssirath.png.
+size 256x256
+Background transparent
+
+# the great coil — a thick spiral PILE closing inward under the trunk (no open loop)
+name coil
+Poly (0.80,0.48)@8 (0.72,0.72)~@20 (0.44,0.83)~@26 (0.235,0.65)~@30 (0.32,0.44)~@28 (0.56,0.41)~@26 (0.685,0.55)~@22 (0.585,0.665)~@18 (0.46,0.62)@14 stroke=58,78,46
+
+# scale blotches — discrete dark diamonds riding the coil
+name blotches
+Poly (0.62,0.815) (0.655,0.78) (0.62,0.745) (0.585,0.78) rgb=34,48,26
+Poly (0.40,0.77) (0.435,0.735) (0.40,0.70) (0.365,0.735) rgb=34,48,26
+Poly (0.285,0.585) (0.32,0.55) (0.285,0.515) (0.25,0.55) rgb=34,48,26
+Poly (0.46,0.475) (0.495,0.44) (0.46,0.405) (0.425,0.44) rgb=34,48,26
+Poly (0.635,0.57) (0.665,0.54) (0.635,0.51) (0.605,0.54) rgb=34,48,26
+
+# the rising trunk — serpent body lifting INTO the torso (join: buried under the shoulders)
+name trunk
+Poly (0.47,0.62)@20 (0.50,0.50)~@19 (0.50,0.40)@18 stroke=64,86,52
+
+# clawed arms — spread wide in a strike, reaching forward-out (drawn under the shoulders)
+name armL
+Poly (0.435,0.345)@9 (0.315,0.275)~@6 (0.27,0.20)@4 stroke=88,108,62
+# claws — HOOKED tapered talons (curved ~ ribbons), longer, spread in the strike
+Poly (0.260,0.206)@3.2 (0.240,0.164)~@1.6 (0.224,0.122)@0.3 stroke=230,224,200
+Poly (0.273,0.196)@3.2 (0.262,0.152)~@1.6 (0.254,0.110)@0.3 stroke=230,224,200
+Poly (0.288,0.190)@3.2 (0.298,0.150)~@1.6 (0.306,0.110)@0.3 stroke=230,224,200
+name armR
+Poly (0.565,0.345)@9 (0.685,0.275)~@6 (0.73,0.20)@4 stroke=88,108,62
+Poly (0.740,0.206)@3.2 (0.760,0.164)~@1.6 (0.776,0.122)@0.3 stroke=230,224,200
+Poly (0.727,0.196)@3.2 (0.738,0.152)~@1.6 (0.746,0.110)@0.3 stroke=230,224,200
+Poly (0.712,0.190)@3.2 (0.702,0.150)~@1.6 (0.694,0.110)@0.3 stroke=230,224,200
+
+# the torso — shoulders foreshortened to an ellipse (we look DOWN on her)
+name shoulders
+Circle (0.50,0.335) r=0.135 flat=0.42 rgb=96,118,68
+
+# the head — small from above, mostly CROWN
+name head
+Circle (0.50,0.262) r=0.064 rgb=70,92,54
+
+# THE CROWN — a gold ring (disc + inner disc) with radiating points
+name crown
+Circle (0.50,0.262) r=0.060 rgb=212,172,58
+Circle (0.50,0.262) r=0.040 rgb=70,92,54
+Poly (0.500,0.176) (0.516,0.215) (0.484,0.215) rgb=212,172,58
+Poly (0.434,0.198) (0.466,0.224) (0.438,0.238) rgb=212,172,58
+Poly (0.566,0.198) (0.534,0.224) (0.562,0.238) rgb=212,172,58
+Poly (0.408,0.262) (0.438,0.250) (0.438,0.276) rgb=212,172,58
+Poly (0.592,0.262) (0.562,0.250) (0.562,0.276) rgb=212,172,58
+
+# eyes — two amber points at the head's leading edge (fixed on you)
+name eyes
+Circle (0.477,0.218) r=0.011 rgb=224,160,40
+Circle (0.523,0.218) r=0.011 rgb=224,160,40
+
+# the forked tongue — a SHORT flick (long+thin reads as antennae from above)
+name tongue
+Line (0.500,0.198) - (0.500,0.150) w=2
+Line (0.500,0.150) - (0.487,0.122) w=1
+Line (0.500,0.150) - (0.513,0.122) w=1

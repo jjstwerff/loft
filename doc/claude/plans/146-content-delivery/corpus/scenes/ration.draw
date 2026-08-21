@@ -1,0 +1,14 @@
+# RATION — a crusty bread loaf (the food loot): oval crust, darker base, score lines.
+# Source for assets/sprites/ration.png.
+size 256x256
+Background transparent
+name base
+Circle (0.50,0.56) r=0.30 flat=0.45 rgb=124,82,42
+name crust
+Circle (0.50,0.52) r=0.295 flat=0.46 rgb=176,124,62
+name glaze
+Circle (0.46,0.475) r=0.16 flat=0.5 rgb=196,144,76
+name scores
+Line (0.36,0.45) - (0.46,0.58) w=4
+Line (0.46,0.43) - (0.56,0.56) w=4
+Line (0.56,0.42) - (0.66,0.55) w=4

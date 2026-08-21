@@ -1,0 +1,94 @@
+# WHITE MOUSE — the giant_rat construction, mouse-coded: SMALLER lean body, BIG ROUND ears
+# (round ears = mouse — the rat learned small ears the hard way), pale fur, red albino eyes.
+# ROUNDED/ARCHED SPINE (coiled to propel itself at you — from above: a tense narrow capsule
+# with a dark spine ridge and gathered haunches), DARKER STRIPES in the fur (dorsal ridge +
+# flank striations), pinned-back ears, red eyeshine, bared incisors over a dark gape, clawed
+# forepaws. Whip tail trails DOWN (may overhang). FRONT=UP.
+# Techniques: lean-capsule mass + dark DORSAL-RIDGE stroke + flank striation strokes =
+# the menacing-animal recipe (posture + fur, reusable for jackal/wolf kin).
+#
+# --- FUR (giant_rat.draw recipe, APPLIED): value-graded body + a Fronds flank fur. For the
+# PALE coat the value step matters MORE (a flat light fill reads plastic), and the fur clumps
+# are DARKER than the body so dark strands read on the pale coat (ref assets/sprites/ref/fur).
+# Source for assets/sprites/white_mouse.png.
+size 256x256
+Background transparent
+
+# whip tail first (under the body) — thick base, hard S-curve
+name tail
+Poly (0.50,0.66)@8 (0.61,0.80)@4.5 (0.49,0.91)@2.5 (0.34,0.985)@1.5 stroke=196,150,142
+
+# body — LEAN tense capsule, spine arched: narrow flanks, the mass gathered forward
+name haunches
+Circle (0.50,0.585) r=0.095 radial=210,204,194>176,170,158 at=0.50,0.55,0.13
+name midbody
+Circle (0.50,0.470) r=0.104 radial=214,208,198>180,174,162 at=0.50,0.425,0.14
+name shoulders
+Circle (0.50,0.375) r=0.098 radial=214,208,198>180,174,162 at=0.50,0.335,0.13
+
+# gathered haunch bulges — the hind legs coiled under, ready to spring
+name haunchL
+Circle (0.428,0.610) r=0.044 rgb=188,182,172
+name haunchR
+Circle (0.572,0.610) r=0.044 rgb=188,182,172
+
+# the ROUNDED SPINE — a dark dorsal ridge down the midline (the arch, seen from above),
+# running INTO the skull so head and body read as one animal
+name spine
+Poly (0.50,0.300)@6 (0.50,0.460)@11 (0.50,0.600)@7 (0.50,0.675)@4 stroke=168,162,152
+
+# flank FUR — Fronds off the dorsal midline, mirrored, swept back. Pale coat, so the clumps
+# are DARKER than the body (dark strands read on pale fur); short + sparse.
+name fur
+Fronds (0.50,0.40)-(0.50,0.62) n=6 len=0.10 len2=0.065 w=2.2 w2=1.0 ang=38 ang2=56 mirror=1 bow=0.13 seed=5 stroke=150,144,132
+
+
+# clawed forepaws — splayed beside the muzzle (the lunge)
+name pawL
+Circle (0.405,0.272) r=0.036 rgb=66,44,32
+# claws — HOOKED tapered talons (curved ~ ribbons), larger + fanned forward (the lunge)
+Poly (0.386,0.252)@3.2 (0.372,0.208)~@1.6 (0.366,0.164)@0.3 stroke=210,200,170
+Poly (0.404,0.248)@3.2 (0.400,0.202)~@1.6 (0.396,0.156)@0.3 stroke=210,200,170
+Poly (0.422,0.250)@3.2 (0.432,0.204)~@1.6 (0.440,0.162)@0.3 stroke=210,200,170
+name pawR
+Circle (0.595,0.272) r=0.036 rgb=66,44,32
+Poly (0.614,0.252)@3.2 (0.628,0.208)~@1.6 (0.634,0.164)@0.3 stroke=210,200,170
+Poly (0.596,0.248)@3.2 (0.600,0.202)~@1.6 (0.604,0.156)@0.3 stroke=210,200,170
+Poly (0.578,0.250)@3.2 (0.568,0.204)~@1.6 (0.560,0.162)@0.3 stroke=210,200,170
+
+# head — emerges FROM the shoulder mass, never bolted on: a SKULL circle bridges the joint
+# (tone between body and muzzle), the muzzle wedge's base corners are BURIED inside it, and
+# the spine ridge (above) runs into the skull to tie body and head together.
+name skull
+Circle (0.50,0.340) r=0.078 rgb=196,190,180
+name muzzle
+Poly (0.435,0.355) (0.565,0.355) (0.50,0.175) rgb=188,182,172
+
+# ears — BIG and ROUND (mouse), pink inner
+name earL
+Circle (0.418,0.295) r=0.055 rgb=188,182,172
+Circle (0.422,0.298) r=0.034 rgb=216,160,154
+name earR
+Circle (0.582,0.295) r=0.055 rgb=188,182,172
+Circle (0.578,0.298) r=0.034 rgb=216,160,154
+
+# eyes — small, mean, RED eyeshine
+name eyes
+Circle (0.472,0.296) r=0.013 rgb=170,30,26
+Circle (0.528,0.296) r=0.013 rgb=170,30,26
+Circle (0.475,0.291) r=0.005 rgb=255,110,90
+Circle (0.525,0.291) r=0.005 rgb=255,110,90
+
+# the gape — dark open mouth at the muzzle tip, incisors bared OVER it
+name gape
+Poly (0.476,0.212) (0.524,0.212) (0.500,0.156) rgb=120,70,66
+name incisors
+Poly (0.474,0.215) (0.487,0.112) (0.500,0.209) rgb=238,232,214
+Poly (0.500,0.209) (0.513,0.112) (0.526,0.215) rgb=238,232,214
+
+# bristly whiskers
+name whiskers
+Line (0.464,0.236) - (0.322,0.176) w=1
+Line (0.468,0.258) - (0.304,0.246) w=1
+Line (0.536,0.236) - (0.678,0.176) w=1
+Line (0.532,0.258) - (0.696,0.246) w=1

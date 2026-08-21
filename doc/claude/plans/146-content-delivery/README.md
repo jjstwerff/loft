@@ -27,7 +27,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 19 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19.**
+- **Effort:** H — 19 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` 2026-08-21.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -43,7 +43,7 @@ cut, not when it is implemented.
 | **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
 | *— arc **W**: sprite authoring, in loft —* | | | |
-| **W0** — the corpus and its oracle | probe only | every `.draw` scene in `crawler/tools/` and loft's `sketch/` renders under the **existing Python** `draw.py` to a committed golden. Red on a scene that will not parse — which is how the grammar the port owes gets *measured* rather than guessed | Open |
+| **W0** — the corpus and its oracle | probe only | every `.draw` scene in `crawler/assets/sprites/src/` and loft's `sketch/` renders under the **existing Python** `draw.py` to a committed golden. Red on a scene that will not parse — which is how the grammar the port owes gets *measured* rather than guessed | ✅ **Shipped** — [W0.md](W0.md), 37 scenes green |
 | **W1** — filled polygon in `graphics` | `graphics` | the one primitive genuinely missing (only `fill_triangle` exists today): hand-computed pixel counts for a convex, a concave and a self-intersecting polygon under even-odd, **and** a triangle drawn through the polygon path is pixel-identical to `fill_triangle` | Open |
 | **W2** — parser + `size` / `Background` / `name` / `Line` / `Circle` / `Poly` | `drawing` | **pixel-identical to `draw.py`** over the corpus subset using only these. The Python renderer is the oracle, so this is a parallel run rather than a judgement | Open |
 | **W3** — fills: solid, linear gradient, radial gradient | `drawing` | pixel-identical over the corpus subset that uses them | Open |

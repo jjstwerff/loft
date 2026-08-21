@@ -1,0 +1,17 @@
+# SWORD — point UP (the '|' loot): steel blade with an edge line, dark-gold crossguard,
+# wrapped grip, pommel. Source for assets/sprites/sword.png.
+size 256x256
+Background transparent
+name blade
+Poly (0.500,0.045) (0.545,0.13) (0.545,0.565) (0.455,0.565) (0.455,0.13) rgb=176,182,194
+name fuller
+Line (0.500,0.10) - (0.500,0.555) w=3
+name guard
+Poly (0.345,0.565) (0.655,0.565) (0.655,0.625) (0.345,0.625) rgb=140,108,40
+name grip
+Poly (0.462,0.625) (0.538,0.625) (0.538,0.80) (0.462,0.80) rgb=72,50,36
+Line (0.462,0.665) - (0.538,0.655) w=2
+Line (0.462,0.705) - (0.538,0.695) w=2
+Line (0.462,0.745) - (0.538,0.735) w=2
+name pommel
+Circle (0.500,0.84) r=0.042 rgb=140,108,40

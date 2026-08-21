@@ -1,0 +1,53 @@
+# CENTIPEDE — top-down, FRONT=UP: the unmistakable arthropod from above — a long SEGMENTED
+# body in a hunting S, a leg fringe per segment, whip antennae, and the dark venom
+# FORCIPULES (the pincer fangs, its attack) curving in ahead of the head. Reddish-brown
+# (true colour, dark enough for the floor). Menace: the S + the pincers.
+# Legs: APPLIED — the fringe is now tapered, knee-bent Polys (the cave_spider limb
+# construction), not straight Lines (ref assets/sprites/ref/limbs/). See the legs block below.
+# Source for assets/sprites/centipede.png.
+size 256x256
+Background transparent
+
+# the leg fringe — one pair of TAPERED, knee-bent legs per segment (Poly @root->@tip with a
+# ~ joint, the cave_spider limb construction; ref assets/sprites/ref/limbs/arthropod_legs_scorpion):
+# thick at the root, tapering to a point, swept out + back. Under the body (roots hidden).
+name legs
+Poly (0.455,0.80)@2.6 (0.420,0.831)~@1.4 (0.385,0.85)@0.6 stroke=96,46,26
+Poly (0.545,0.80)@2.6 (0.580,0.831)~@1.4 (0.615,0.85)@0.6 stroke=96,46,26
+Poly (0.487,0.71)@2.6 (0.451,0.741)~@1.4 (0.415,0.76)@0.6 stroke=96,46,26
+Poly (0.583,0.71)@2.6 (0.619,0.741)~@1.4 (0.655,0.76)@0.6 stroke=96,46,26
+Poly (0.50,0.62)@2.6 (0.464,0.648)~@1.4 (0.428,0.665)@0.6 stroke=96,46,26
+Poly (0.60,0.62)@2.6 (0.636,0.648)~@1.4 (0.672,0.665)@0.6 stroke=96,46,26
+Poly (0.487,0.53)@2.6 (0.450,0.556)~@1.4 (0.413,0.57)@0.6 stroke=96,46,26
+Poly (0.583,0.53)@2.6 (0.620,0.556)~@1.4 (0.657,0.57)@0.6 stroke=96,46,26
+Poly (0.452,0.45)@2.6 (0.415,0.474)~@1.4 (0.378,0.485)@0.6 stroke=96,46,26
+Poly (0.548,0.45)@2.6 (0.585,0.474)~@1.4 (0.622,0.485)@0.6 stroke=96,46,26
+Poly (0.417,0.37)@2.6 (0.381,0.391)~@1.4 (0.345,0.40)@0.6 stroke=96,46,26
+Poly (0.513,0.37)@2.6 (0.549,0.391)~@1.4 (0.585,0.40)@0.6 stroke=96,46,26
+Poly (0.412,0.29)@2.6 (0.377,0.309)~@1.4 (0.342,0.315)@0.6 stroke=96,46,26
+Poly (0.508,0.29)@2.6 (0.543,0.309)~@1.4 (0.578,0.315)@0.6 stroke=96,46,26
+
+# the body — segments along a hunting S (discrete beads, joined by overlap)
+name segments
+Circle (0.500,0.815) r=0.050 rgb=138,68,38
+Circle (0.535,0.730) r=0.054 rgb=130,64,36
+Circle (0.550,0.640) r=0.057 rgb=138,68,38
+Circle (0.535,0.550) r=0.058 rgb=130,64,36
+Circle (0.500,0.468) r=0.058 rgb=138,68,38
+Circle (0.465,0.388) r=0.057 rgb=130,64,36
+Circle (0.462,0.308) r=0.055 rgb=138,68,38
+Circle (0.482,0.236) r=0.052 rgb=130,64,36
+
+# the head — darker plate at the front
+name head
+Circle (0.505,0.175) r=0.050 rgb=104,48,28
+
+# forcipules — the venom pincers, two dark hooks curving IN ahead of the head
+name pincers
+Poly (0.468,0.142)@6 (0.452,0.095)@4 (0.478,0.062)@2 stroke=58,26,16
+Poly (0.542,0.142)@6 (0.558,0.095)@4 (0.532,0.062)@2 stroke=58,26,16
+
+# antennae — two whips sweeping out-forward
+name antennae
+Poly (0.478,0.135)@2 (0.398,0.072)@1.5 (0.328,0.052)@1 stroke=104,48,28
+Poly (0.532,0.135)@2 (0.612,0.072)@1.5 (0.682,0.052)@1 stroke=104,48,28

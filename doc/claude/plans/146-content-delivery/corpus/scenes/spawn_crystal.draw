@@ -1,0 +1,28 @@
+# SPAWNING CRYSTAL — the surface crystal (and the future re-spec shrine): a teal shard
+# cluster seen top-down with slight foreshortening (the eye/door trick) — a tall central
+# spire as a bright faceted kite, lesser shards leaning out, dark slate rubble base.
+# The only TEAL in the world (like the player's blue) — a landmark, not a creature.
+# Source for assets/sprites/spawn_crystal.png.
+size 256x256
+Background transparent
+# rubble base — dark slate stones the shards grow from
+name base
+Circle (0.42,0.66) r=0.10 rgb=54,62,68
+Circle (0.58,0.67) r=0.095 rgb=48,56,62
+Circle (0.50,0.71) r=0.085 rgb=44,52,58
+# lesser shards — leaning out of the cluster
+name shardL
+Poly (0.30,0.36) (0.40,0.50) (0.355,0.62) (0.255,0.50) rgb=58,148,168
+Poly (0.30,0.36) (0.255,0.50) (0.355,0.62) rgb=110,196,214
+name shardR
+Poly (0.71,0.42) (0.76,0.55) (0.69,0.64) (0.625,0.52) rgb=58,148,168
+Poly (0.71,0.42) (0.76,0.55) (0.69,0.64) rgb=96,182,200
+# the central spire — tall, bright, faceted (lit face + shaded face)
+name spire
+Poly (0.50,0.14) (0.625,0.46) (0.50,0.62) (0.375,0.46) rgb=66,164,186
+Poly (0.50,0.14) (0.375,0.46) (0.50,0.62) rgb=136,216,232
+# facet glints — alive with light
+name glints
+Circle (0.50,0.175) r=0.014 rgb=240,252,254
+Circle (0.46,0.30) r=0.010 rgb=222,246,250
+Circle (0.295,0.40) r=0.009 rgb=222,246,250

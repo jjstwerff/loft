@@ -1,0 +1,47 @@
+# DUST VIPER — a venomous viper of the dry levels (kin of sand_adder — SAME snake
+# construction, dust-grey palette) top-down, FRONT=UP, in a STRIKE-READY S-COIL (menace =
+# posture: the S is a loaded spring). Identifiers: arrow/viper head WIDER than the neck,
+# the adder's dark dorsal ZIGZAG, forked tongue flicking forward, fang points at the jaw.
+# Dark-sand tones (true colour, darkened to read on the light stone floor).
+# Techniques (the SNAKE construction — reuse for dust_viper / white_snake / ssirath):
+# one tapered ~smooth S-stroke body; chevron zigzag along the spine; kite head buried
+# into the neck (join discipline); slit viper eyes; forked-tongue lines.
+# Source for assets/sprites/dust_viper.png.
+size 256x256
+Background transparent
+
+# the body — a COMPACT loaded-spring S: tight fat coils gathered low, the neck rising out
+name body
+Poly (0.36,0.90)@6 (0.60,0.85)~@18 (0.66,0.71)~@27 (0.42,0.645)~@31 (0.345,0.51)~@31 (0.56,0.43)~@27 (0.525,0.335)~@20 (0.50,0.28)@16 stroke=96,86,72
+
+# the adder pattern — DISCRETE dark diamond blotches at the path's control points
+# (technique: discrete marks never mis-align on a smoothed path, unlike a traced zigzag)
+name blotches
+Poly (0.60,0.845) (0.632,0.81) (0.60,0.775) (0.568,0.81) rgb=46,40,32
+Poly (0.652,0.715) (0.682,0.68) (0.652,0.645) (0.622,0.68) rgb=46,40,32
+Poly (0.48,0.66) (0.515,0.628) (0.48,0.596) (0.445,0.628) rgb=46,40,32
+Poly (0.36,0.525) (0.392,0.49) (0.36,0.455) (0.328,0.49) rgb=46,40,32
+Poly (0.545,0.45) (0.575,0.418) (0.545,0.386) (0.515,0.418) rgb=46,40,32
+Poly (0.518,0.345) (0.545,0.315) (0.518,0.285) (0.491,0.315) rgb=46,40,32
+
+# the head — a viper KITE, wider than the neck, its base buried DEEP in the neck stroke
+name head
+Poly (0.50,0.10) (0.578,0.205) (0.50,0.305) (0.422,0.205) rgb=82,72,58
+
+# slit viper eyes — amber beads with a dark vertical slit, set on the head sides
+name eyes
+Circle (0.468,0.192) r=0.018 rgb=170,150,60
+Circle (0.532,0.192) r=0.018 rgb=170,150,60
+Line (0.468,0.178) - (0.468,0.206) w=2
+Line (0.532,0.178) - (0.532,0.206) w=2
+
+# fang points — two pale tips at the jaw's leading edges (the venomous bite)
+name fangs
+Poly (0.464,0.138) (0.452,0.095) (0.480,0.128) rgb=232,224,200
+Poly (0.536,0.138) (0.548,0.095) (0.520,0.128) rgb=232,224,200
+
+# the forked tongue — flicking dead ahead (front=UP)
+name tongue
+Line (0.500,0.103) - (0.500,0.048) w=2
+Line (0.500,0.048) - (0.483,0.012) w=1
+Line (0.500,0.048) - (0.517,0.012) w=1
