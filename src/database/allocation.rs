@@ -4860,6 +4860,18 @@ impl Stores {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 fields.iter().all(|f| self.is_copyable_field(f.content))
             }
+            // An enum's value is a TAG BYTE stored inline, and a struct-enum
+            // variant's payload lives in the record beside it — `copy_claims`
+            // recurses on the SAME position for both.  So an enum relocates
+            // exactly when every variant it could be holding does, and a simple
+            // variant (`u16::MAX`, no payload) always does.  Without this arm
+            // every enum FIELD made a paged load refuse the whole collection,
+            // and the refusal blamed a `vector<text>` the type did not have —
+            // an asset pack's `bl_kind: BlobKind` was enough to lose the range
+            // read (@PLN146 F2).
+            Parts::Enum(values) => values
+                .iter()
+                .all(|(vt, _)| *vt == u16::MAX || self.is_copyable_field(*vt)),
             _ => false,
         }
     }
@@ -4941,12 +4953,28 @@ impl Stores {
 
     /// The refusal reason when an entry has a field the working-set copy cannot
     /// relocate into the local store.
+    ///
+    /// It NAMES the field. The message used to blame a `vector<text>` /
+    /// `vector<vector>` whatever the real cause was, which sent an author looking
+    /// for a field their type did not have — an `enum` field was refused and
+    /// reported as a nested vector for as long as the enum arm was missing from
+    /// [`Stores::is_copyable_field`]. A refusal a reader cannot act on is barely
+    /// better than a silent one.
     #[cfg(paged_store)]
     fn not_copyable_reason(&self, content_tp: u16) -> String {
+        let culprit = match &self.types[content_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .iter()
+                .find(|f| !self.is_copyable_field(f.content))
+                .map(|f| format!("`{}: {}`", f.name, self.type_name(f.content))),
+            _ => None,
+        };
+        let which = culprit.unwrap_or_else(|| "a field".to_string());
         format!(
-            "entry type `{}` has a field the working-set copy cannot relocate \
-             (a `vector<text>` / `vector<vector>` element pointer would dangle in \
-             the local store); whole-image `store_load` carries these fields",
+            "entry type `{}` has a field the working-set copy cannot relocate: \
+             {which} — its contents live behind pointers this copy would leave \
+             dangling in the local store; read the collection whole with \
+             `store_load` instead, which carries every field",
             self.type_name(content_tp)
         )
     }

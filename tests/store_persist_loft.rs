@@ -211,6 +211,32 @@ fn run_script(script: &Path, backend: &str, path: &Path) -> (String, i32) {
     (stdout, out.status.code().unwrap_or(-1))
 }
 
+/// A paged working-set load must accept an ENUM field — one `kind:` was enough
+/// to lose the range read of a whole collection.
+///
+/// `is_copyable_field` had an arm for a struct and for a struct-enum VARIANT and
+/// none for the enum itself, so every `Parts::Enum` fell to the catch-all and the
+/// load was refused — with a message blaming a `vector<text>` the type did not
+/// have. The values are what is checked here, not just that the load was allowed:
+/// a copy that is accepted and wrong is the worse failure of the two.
+#[test]
+fn paged_load_carries_enum_fields_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_paged_enum_field.loft");
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("paged_enum_{}", backend.trim_start_matches('-')));
+        let path = dir.join("recs.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+        assert!(
+            out.contains(
+                "paged-enum: a:Bytes/0,0,0/40:1/11 b:Ogg/7,9,0/50:2/22 c:Wav/0,0,13/60:3/33"
+            ),
+            "{backend}: every variant, payload and byte must survive the paged copy \
+             (the bug refused the load outright): {out:?}"
+        );
+    }
+}
+
 /// A `store_load` that never returns is worse than one that answers wrong, and
 /// compaction-on-load produced exactly that: it rebuilt the image into a scratch
 /// store and wrote the root block's header back as the word count it had ASKED

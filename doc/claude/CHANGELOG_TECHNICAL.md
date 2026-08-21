@@ -9,6 +9,39 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A paged load refused every entry type with an enum field (@PLN146 F2, 2026-08-22)
+
+**Symptom.** `store_load_key_text` (and its `_key` / `_range` / `_prefix` siblings) refused
+a `hash<Blob[bl_key]>` whose element carries `bl_kind: BlobKind`, loading nothing and
+reporting *"has a field the working-set copy cannot relocate (a `vector<text>` /
+`vector<vector>` element pointer would dangle)"* — of a type with neither.
+
+**Cause.** `Stores::is_copyable_field` has arms for `Parts::Struct` and
+`Parts::EnumValue` (a struct-enum VARIANT) and had none for `Parts::Enum` (the enum
+itself), so every enum field fell to the `_ => false` catch-all. The message was a
+second, independent defect: `not_copyable_reason` named `vector<text>` /
+`vector<vector>` unconditionally rather than reading which field had failed.
+
+**Fix.** An enum's value is a tag byte stored inline, and `copy_claims` recurses on the
+SAME position for a struct-enum's payload — so an enum relocates exactly when every
+variant it could hold does, and a payload-free variant (`u16::MAX`) always does:
+
+```rust
+Parts::Enum(values) => values
+    .iter()
+    .all(|(vt, _)| *vt == u16::MAX || self.is_copyable_field(*vt)),
+```
+
+`not_copyable_reason` now finds the first field the predicate rejects and names it with
+its type (`` `b_names: vector<text>` ``), falling back to "a field" for an element type
+that is not a record.
+
+**Guard.** `tests/store_persist_loft.rs::paged_load_carries_enum_fields_both_backends`
+over `tests/scripts/store_paged_enum_field.loft`. It asserts the VALUES — plain variants,
+a `Box { bw, bh }` payload, a `Line { ln }` payload, the byte vector and a trailing scalar
+— because a copy that is accepted and wrong is the worse of the two failures. Red on the
+pre-fix binary with the refusal quoted above.
+
 ### `store_load` looped for ever on a pack-shaped image (@PLN146 F1, 2026-08-22)
 
 **Symptom.** `store_load` never returned — no diagnostic, no bound, on a call that only

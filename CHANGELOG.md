@@ -33,6 +33,21 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A range-read no longer refuses a collection because one field is an enum
+
+Reading one key out of a big store over HTTP range copies that record's fields into
+your own store, and the check for *"can this field be moved?"* knew about structs and
+about struct-enum variants but not about a plain `enum`. So a single `kind:` field made
+the whole collection unreadable a key at a time — and the refusal blamed a
+`vector<text>`, which the type did not have, sending you looking for the wrong thing.
+
+An enum's value is a tag byte stored in the record, so there was never anything to
+relocate. It reads now, variant and payload alike.
+
+The refusal message also **names the field** it is actually about, rather than always
+naming the same two types. A refusal you cannot act on is barely better than a silent
+one.
+
 ### `store_load` cannot hang any more
 
 Loading a store image compacts it, and compaction rebuilt the image into a fresh
