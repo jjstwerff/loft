@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: a program that HALTS.
+//
+// The oracle has compared exit codes since it was built, and until this file no program
+// in the corpus ever exited non-zero: all thirty ran to completion, so the exit-code
+// channel agreed by never being exercised.  That is the same shape as a green check that
+// examined nothing, and it hid a real divergence — a failed `assert` exited 1 on the
+// interpreter and 101 on `--native`, on every program, for as long as both existed.
+//
+// Output is printed BEFORE the halt so the stdout channel is checked too: a backend that
+// halted too early, or buffered its output away on the abort path, differs here as well
+// as on the code.  Both halves matter — an exit code alone cannot tell a program that
+// stopped at the right place from one that never started.
+
+fn main() {
+  print("before=1\n");
+  n = 6;
+  print("n={n}\n");
+  assert(n == 7, "halt on purpose: n was {n}");
+  print("unreachable\n");
+}
