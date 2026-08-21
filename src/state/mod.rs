@@ -523,6 +523,14 @@ pub enum WorkerArg {
     Primitive { value: u64, size: u32 },
     /// Text element — a 16-byte `Str`.
     Text(crate::keys::Str),
+    /// Wide INLINE element — a tuple, or any other 9..=64 byte value the worker
+    /// reads as one contiguous slot rather than through a pointer.  `size` is the
+    /// worker's argument-slot width; only the first `size` bytes of `buf` are live.
+    ///
+    /// Without this spelling a wide row had no answer but [`WorkerArg::Ref`], so a
+    /// worker taking `(integer, integer)` was handed the row's `DbRef` and read the
+    /// pointer's bits as its tuple — loft#1055.
+    Wide { buf: [u8; 64], size: u32 },
 }
 
 /// What a host call expects the target function to return — selects how the
@@ -4846,6 +4854,11 @@ impl State {
         // RUNTIME panic must not be attributed to whatever line was compiled last.
         // The runtime has its own, better attribution (pc -> source span).
         crate::crash_report::clear_compile_pos();
+        // Same rule for a `par` worker's halt: this run starts owing nothing to the last
+        // one.  A halt recorded by a worker whose parent never reached the dispatch-loop
+        // check below (a panic unwound past it) would otherwise be raised here, against a
+        // program that did not produce it.
+        crate::parallel::clear_worker_fatal();
         // Give the memory-ceiling report its vocabulary before anything can trip it,
         // so a refused growth names `Layer` rather than `kt=112`.  Costs nothing when
         // no ceiling is set, which is every ordinary run.
@@ -6332,6 +6345,37 @@ impl State {
         }
     }
 
+    /// Run a worker whose return is read as a raw `u64`, delivering its slot-0
+    /// argument by kind.
+    ///
+    /// The dispatch twin of [`crate::parallel::worker_row_arg`]: that function decides
+    /// what the argument IS, this one decides which entry point takes it.  Two families
+    /// used to spell this ladder out themselves, which is how they came to cover
+    /// different sets of input shapes.
+    pub fn execute_at_raw_worker_arg(
+        &mut self,
+        fn_pos: u32,
+        arg: WorkerArg,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
+        match arg {
+            WorkerArg::Text(t) => {
+                self.execute_at_raw_text_input(fn_pos, t, extra_args, return_size)
+            }
+            WorkerArg::Primitive { value, size } => {
+                self.execute_at_raw_primitive_input(fn_pos, value, size, extra_args, return_size)
+            }
+            WorkerArg::Wide { buf, size } => self.execute_at_raw_primitive_input_wide(
+                fn_pos,
+                &buf[..size as usize],
+                extra_args,
+                return_size,
+            ),
+            WorkerArg::Ref(r) => self.execute_at_raw(fn_pos, &r, extra_args, return_size),
+        }
+    }
+
     /// Plan-06 phase 4d.A — wide-inline-input worker dispatch.
     /// Same as `execute_at_raw_primitive_input` but accepts an
     /// arbitrary-width slot 0 (1..=64 bytes) instead of a u64.
@@ -6594,6 +6638,60 @@ impl State {
         }
     }
 
+    /// The stack width of a worker's slot-0 argument — the ONE place that fact lives.
+    ///
+    /// Every `execute_at_*` entry point needs it twice (for the frame's `args_size` and
+    /// for the push), and it used to be spelled out at each of them.  Four hand-written
+    /// copies is how a wide element ended up with no answer at three of them and the
+    /// worker read a `DbRef` as its tuple (loft#1055).
+    ///
+    /// A wide slot is STEPPED, matching `execute_at_raw_primitive_input_wide`: the
+    /// worker's own frame advances each argument by `stack_step`, so a tuple whose raw
+    /// total is not a multiple of 8 (`(integer, character)` = 12) must occupy
+    /// `stack_step(12)` here too, or the body's frame is short and the stack underflows.
+    fn worker_arg_size(&self, arg: &WorkerArg) -> u16 {
+        match *arg {
+            WorkerArg::Ref(_) => 12,
+            WorkerArg::Primitive { size, .. } => size as u16,
+            WorkerArg::Text(_) => 16,
+            WorkerArg::Wide { size, .. } => self.stack_step(size) as u16,
+        }
+    }
+
+    /// Push a worker's argument at `stack_pos`, advancing it by [`Self::worker_arg_size`].
+    ///
+    /// The twin of that function, and its only caller-visible partner: whatever width the
+    /// frame reserved is exactly what this writes, so the two cannot drift.
+    fn push_worker_arg(&mut self, arg: WorkerArg) {
+        match arg {
+            WorkerArg::Ref(r) => self.put_stack(r),
+            WorkerArg::Primitive { value, size } => match size {
+                1 => self.put_stack(value as u8),
+                4 => self.put_stack(value as u32),
+                _ => self.put_stack(value),
+            },
+            WorkerArg::Text(s) => self.put_stack(s),
+            WorkerArg::Wide { buf, size } => {
+                // ONE contiguous copy, never a byte-at-a-time `put_stack::<u8>` — under
+                // `LOFT_ALIGN` that advances by `stack_step(1)` = 8 PER BYTE and smears a
+                // packed tuple across 16 separate slots, which the worker then reads at
+                // the raw element offsets and finds padding.  Same rationale, and the same
+                // shape, as `execute_at_raw_primitive_input_wide`.
+                let stepped = self.stack_step(size);
+                self.ensure_stack(stepped);
+                let n = size as usize;
+                let dst = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(buf.as_ptr(), dst, n);
+                }
+                self.stack_pos += stepped;
+            }
+        }
+    }
+
     /// Execute a worker function that returns a struct reference (`DbRef`).
     /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
     /// record lives in `self.database` (the worker's cloned stores).
@@ -6625,14 +6723,7 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
-        // Slot-0 width per input kind — see `execute_at_text`.  A struct/ref
-        // worker takes a 12-byte DbRef; a `vector<integer>`/range worker takes
-        // the primitive value (else it reads the DbRef bytes as its arg → garbage).
-        let args_size: u16 = match arg {
-            WorkerArg::Ref(_) => 12,
-            WorkerArg::Primitive { size, .. } => size as u16,
-            WorkerArg::Text(_) => 16,
-        };
+        let args_size = self.worker_arg_size(&arg);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
@@ -6641,15 +6732,7 @@ impl State {
             line: 0,
         });
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        match arg {
-            WorkerArg::Ref(r) => self.put_stack(r),
-            WorkerArg::Primitive { value, size } => match size {
-                1 => self.put_stack(value as u8),
-                4 => self.put_stack(value as u32),
-                _ => self.put_stack(value),
-            },
-            WorkerArg::Text(s) => self.put_stack(s),
-        }
+        self.push_worker_arg(arg);
         for &dest in hidden_dests {
             // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
             // (NOT 8-byte i64 like extras).  The codegen for the
@@ -6705,16 +6788,7 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
-        // slot-0 width depends on how the element is delivered — a 12-byte
-        // DbRef for struct elements, the primitive's native width for a
-        // `vector<integer>`/range, 16 for a text element.  Mirrors the input
-        // ladder in `run_parallel_queue` so text-returning workers get their
-        // element as the worker's parameter expects, not always as a DbRef.
-        let args_size: u16 = match arg {
-            WorkerArg::Ref(_) => 12,
-            WorkerArg::Primitive { size, .. } => size as u16,
-            WorkerArg::Text(_) => 16,
-        };
+        let args_size = self.worker_arg_size(&arg);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
@@ -6738,15 +6812,7 @@ impl State {
         }
 
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        match arg {
-            WorkerArg::Ref(r) => self.put_stack(r),
-            WorkerArg::Primitive { value, size } => match size {
-                1 => self.put_stack(value as u8),
-                4 => self.put_stack(value as u32),
-                _ => self.put_stack(value),
-            },
-            WorkerArg::Text(s) => self.put_stack(s),
-        }
+        self.push_worker_arg(arg);
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }
@@ -6836,14 +6902,7 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
-        let args_size: u16 = args
-            .iter()
-            .map(|a| match a {
-                WorkerArg::Ref(_) => 12u16,
-                WorkerArg::Primitive { size, .. } => *size as u16,
-                WorkerArg::Text(_) => 16u16,
-            })
-            .sum();
+        let args_size: u16 = args.iter().map(|a| self.worker_arg_size(a)).sum();
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
@@ -6867,15 +6926,7 @@ impl State {
         }
         self.stack_pos = self.stack_step(4);
         for a in args {
-            match *a {
-                WorkerArg::Ref(r) => self.put_stack(r),
-                WorkerArg::Primitive { value, size } => match size {
-                    1 => self.put_stack(value as u8),
-                    4 => self.put_stack(value as u32),
-                    _ => self.put_stack(value),
-                },
-                WorkerArg::Text(s) => self.put_stack(s),
-            }
+            self.push_worker_arg(*a);
         }
         for cr in &work_crs {
             self.put_stack(*cr);

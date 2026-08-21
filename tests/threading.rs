@@ -472,7 +472,8 @@ fn label(r: const Num) -> text { "v{r.v}" }
         &[],
         n_rows,
         n_hidden,
-        0, // primitive_input_size: worker takes `const Num` (DbRef input)
+        0,    // primitive_input_size: worker takes `const Num` (DbRef input)
+        None, // tuple_input_types: not a tuple element
     );
     assert_eq!(
         strings,
@@ -1334,7 +1335,8 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         &ret_type,
         &data,
         n_dests,
-        0, // primitive_input_size: worker takes a struct ref (DbRef input)
+        0,    // primitive_input_size: worker takes a struct ref (DbRef input)
+        None, // tuple_input_types: not a tuple element
     );
     let allocations_after = state.database.allocations.len();
 
@@ -1547,7 +1549,8 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         &ret_type,
         &data,
         0,
-        0, // primitive_input_size: worker takes a struct ref (DbRef input)
+        0,    // primitive_input_size: worker takes a struct ref (DbRef input)
+        None, // tuple_input_types: not a tuple element
     );
     let allocations_after = state.database.allocations.len();
 

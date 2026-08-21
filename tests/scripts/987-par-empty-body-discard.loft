@@ -18,18 +18,17 @@
 //     heap-returning worker's hidden destination) was never pushed, which shifted
 //     every slot the worker reads — the text case SEGFAULTED the interpreter.
 //
-// So each worker here ASSERTS the row it was handed.  ⚠ That oracle DOES NOT WORK, and
-// the claim this comment used to make — "an assertion inside a worker is observable" —
-// is false: a runtime fault raised inside a worker (assert or panic) is silently
-// discarded on both backends, so falsifying any in-worker assertion below still exits 0
-// (loft#1053).  They are kept because they state each worker's contract where it
-// applies, but they guard nothing until that is fixed.
+// So each worker here ASSERTS the row it was handed.  That oracle works only because a
+// worker's fault now stops the whole program (loft#1053) — before that fix a falsified
+// in-worker assertion still exited 0, and this file's claim that "an assertion inside a
+// worker is observable" was false for as long as it stood.  The queue-route control at
+// the bottom is what pinned these workers in the meantime, by reading the same workers
+// through a body that NAMES the result so the parent can assert on it.
 //
-// What actually pins these workers is the queue-route control at the bottom, which reads
-// the same workers through a body that NAMES the result, so the parent can assert on it.
-// The file anticipated its own vacuity ("if the discard tests above ever went vacuous,
-// this is what still pins…") — it was right about the risk and wrong about which half had
-// gone vacuous.
+// The first thing the assertions caught once they COULD fail was loft#1055: a wide row
+// (a tuple) into a worker with a hidden parameter (any text or heap return) fell through
+// to the reference spelling, and the worker read the pointer's bits as its value.  The
+// four tuple/text tests below are that bug's guards, one per shape it took.
 
 fn i987_scalar(n: integer) -> integer {
   assert(n >= 10 && n <= 30 && n % 10 == 0, "discard worker got row {n}, expected 10/20/30");
@@ -110,25 +109,70 @@ fn test_987_discard_empty() {
   for a in none par(b = i987_scalar(a), 2) { }
 }
 
-/// A TUPLE row is wide — it has no single-value spelling, so it reaches the worker as
-/// the element reference.  Paired with a text return here, because a worker with a
-/// hidden parameter cannot take the wide entry (that entry has nowhere to put one).
+/// A TUPLE row is WIDE — bigger than any single value slot — and it is paired with a
+/// text return, which gives the worker a hidden `__work_N` parameter.  That pairing is
+/// the whole point: a wide row alone was always delivered correctly, and a hidden
+/// parameter alone was too.  Only together did the row fall through to the reference
+/// spelling and the worker read the pointer's bits as its tuple (loft#1055).
 fn i987_tuple(p: const(integer, integer)) -> text {
   assert(p.0 * 10 == p.1, "tuple worker got row ({p.0}, {p.1})");
   "t{p.0}"
 }
 
-// @EXPECT_FAIL: loft#1055 — on the INTERPRETER this worker is handed a packed descriptor
-// instead of the tuple's values (`p.0` = offset<<32 | count, `p.1` = the count), so the
-// assertion inside it fires.  That is the bug, not the test: `--native` marshals the same
-// rows correctly and a scalar row is correct on both.  Kept live and expected-failing
-// rather than deleted or weakened, so it flips green the day #1055 is fixed.
-//
-// This is the first thing the in-worker assertions caught once loft#1053 made them capable
-// of failing at all — which is precisely what this file's header claimed they already did.
+// This was the first thing the in-worker assertions caught once loft#1053 made them
+// capable of failing at all — which is precisely what this file's header had claimed they
+// already did.  It stayed here live and `@EXPECT_FAIL` until #1055 was fixed.
 fn test_987_discard_tuple_row() {
   pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
   for a in pairs par(b = i987_tuple(a), 2) { }
+}
+
+/// A THREE-element tuple, so the width is not a multiple of the reference's.  The same
+/// fall-through underflowed the worker's stack here rather than answering wrong —
+/// "No elements left on the stack" — which is the same defect with a louder ending.
+fn i987_triple(p: const(integer, integer, integer)) -> text {
+  assert(p.0 * 10 == p.1 && p.0 * 100 == p.2, "triple worker got ({p.0}, {p.1}, {p.2})");
+  "t{p.0}"
+}
+
+fn test_987_discard_triple_row() {
+  rows: vector<(integer, integer, integer)> = [(1, 10, 100), (2, 20, 200), (3, 30, 300)];
+  for a in rows par(b = i987_triple(a), 2) { }
+}
+
+/// A TEXT element into a worker that returns a STRUCT.  Neither of those is wide, so
+/// this is the other half of the same missing decision: the route that carries heap
+/// returns had no text spelling either, and this shape SIGSEGV'd the interpreter.
+struct I987Cell { v: text }
+
+fn i987_cell(p: const text) -> I987Cell {
+  assert(len(p) == 2, "cell worker got text of length {len(p)}: [{p}]");
+  I987Cell { v: p }
+}
+
+fn test_987_queue_text_into_struct_worker() {
+  names: vector<text> = ["aa", "bb", "cc"];
+  seen = 0;
+  for a in names par(b = i987_cell(a), 2) {
+    assert(len(b.v) == 2, "cell {seen} came back as [{b.v}]");
+    seen += 1;
+  }
+  assert(seen == 3, "expected 3 cells, got {seen}");
+}
+
+/// A wide row into a worker whose return is a VECTOR — the third hidden-parameter
+/// shape (a destination parameter rather than a text buffer).
+fn i987_pair_out(p: const(integer, integer)) -> vector<integer> {
+  [p.0, p.1]
+}
+
+fn test_987_queue_tuple_into_vector_worker() {
+  pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+  total = 0;
+  for a in pairs par(b = i987_pair_out(a), 2) {
+    total += b[0] * 10 + b[1];
+  }
+  assert(total == 120, "expected 20+40+60 = 120, got {total}");
 }
 
 /// The control the discard route cannot be: a body that NAMES the result routes through

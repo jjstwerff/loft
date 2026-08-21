@@ -2033,6 +2033,7 @@ fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: Queue
                 n_rows,
                 n_hidden_text,
                 primitive_input_size,
+                tuple_input_types,
             );
             let n = buf.len() as i64;
             stores.par_text_buffer_stack.push(buf);
@@ -2057,6 +2058,7 @@ fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: Queue
                 data,
                 n_hidden_dests,
                 primitive_input_size,
+                tuple_input_types,
             );
             let n = refs.len() as i64;
             stores.par_ref_buffer_stack.push((refs, adopted));
