@@ -2246,3 +2246,144 @@ fn generated_loft_paths_survive_the_wasm_feature_set() {
          exemption is now unbacked (loft#967, @PLN24 arc E)"
     );
 }
+
+// ── loft#1059 — a page whose stack runs out must say so ──────────────────────────────
+
+/// A TRAP reaches the page, which a panic hook cannot do for it.
+///
+/// The hook loft#950 installs renders a Rust PANIC. Deep recursion is not one: the
+/// engine's stack runs out and the module traps, which never enters the hook — so the
+/// page's only symptom was a thrown `RuntimeError`, printed bare by one shell and lost
+/// entirely by the other, which had no `catch` at all.
+///
+/// Asserted here is the reporter the page actually ships, RUN — extracted from the
+/// emitted HTML and driven with the exception an engine really throws. Checking that the
+/// text appears in the file would pass on a handler that is never wired up, and checking
+/// only that it is wired would pass on one that reports nothing useful.
+///
+/// The bound itself is not loft's to raise: it belongs to the engine running the module
+/// ([WASM.md § How deep a program can recurse]), so what the page owes a reader is to
+/// name it rather than to move it.
+#[test]
+fn html_a_trap_is_reported_to_the_page() {
+    if which("node").is_none() {
+        eprintln!("SKIP: node not installed");
+        return;
+    }
+    if !wasm32_target_installed() {
+        eprintln!("SKIP: rustup target wasm32-unknown-unknown not installed");
+        return;
+    }
+    let root = repo_root();
+    let loft = root.join("target/release/loft");
+    if !loft.exists() {
+        eprintln!("SKIP: target/release/loft not built");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join("loft_html_1059");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create tempdir");
+    let src = dir.join("rec1059.loft");
+    let html = dir.join("rec1059.html");
+    // The issue's own program: deep enough that a default engine stack dies first.
+    std::fs::write(
+        &src,
+        "fn rec1059(n: integer) -> integer { if n <= 0 { return 0 } return rec1059(n - 1) + 1 }\n\
+         fn main() { print(\"depth={rec1059(8000)}\\n\") }\n",
+    )
+    .expect("write source");
+    let out = Command::new(&loft)
+        .args(["--html", html.to_str().unwrap()])
+        .arg(&src)
+        .output()
+        .expect("invoke loft --html");
+    assert!(
+        out.status.success(),
+        "loft --html failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let page = std::fs::read_to_string(&html).expect("read emitted page");
+
+    // Wired, not merely present: a handler the boot path never reaches reports nothing.
+    assert!(
+        page.contains(".catch(loftReportTrap)"),
+        "the page's boot path does not route a trap to the reporter"
+    );
+
+    // Now RUN the reporter the page ships, against what an engine actually throws.
+    let start = page
+        .find("function loftReportTrap(e){")
+        .expect("the page does not define loftReportTrap");
+    let end = page[start..]
+        .find("\n}\n")
+        .expect("cannot delimit loftReportTrap")
+        + start
+        + 3;
+    let probe = dir.join("trap.mjs");
+    std::fs::write(
+        &probe,
+        format!(
+            "globalThis.document={{getElementById:()=>null}};\n\
+             {}\n\
+             const e=new RangeError('call stack exhausted');\n\
+             e.stack='at wasm://wasm/0168beca:wasm-function[1073]:0x56a035';\n\
+             loftReportTrap(e);\n",
+            &page[start..end]
+        ),
+    )
+    .expect("write probe");
+    let run = Command::new("node")
+        .arg(&probe)
+        .output()
+        .expect("run the reporter under node");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        said.contains("call stack exhausted"),
+        "the trap's own message must reach the page: {said}"
+    );
+    assert!(
+        said.contains("belongs to this wasm engine"),
+        "the report must name whose bound this is — the reader's next move is to raise \
+         it on the host, not to change the program: {said}"
+    );
+    assert!(
+        said.contains("wasm-function[1073]"),
+        "the engine's own backtrace is the evidence and must survive: {said}"
+    );
+    assert!(
+        said.contains("--names"),
+        "…and it is unreadable without the flag that resolves those numbers: {said}"
+    );
+
+    // The control: an ordinary exception is reported WITHOUT the stack-exhaustion
+    // explanation, so the cell is not passing on a reporter that says it every time.
+    let probe2 = dir.join("trap2.mjs");
+    std::fs::write(
+        &probe2,
+        format!(
+            "globalThis.document={{getElementById:()=>null}};\n\
+             {}\n\
+             loftReportTrap(new Error('something else entirely'));\n",
+            &page[start..end]
+        ),
+    )
+    .expect("write control probe");
+    let run2 = Command::new("node")
+        .arg(&probe2)
+        .output()
+        .expect("run the control under node");
+    let said2 = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run2.stdout),
+        String::from_utf8_lossy(&run2.stderr)
+    );
+    assert!(
+        said2.contains("something else entirely") && !said2.contains("belongs to this wasm engine"),
+        "an unrelated exception must not be explained as an exhausted stack: {said2}"
+    );
+}

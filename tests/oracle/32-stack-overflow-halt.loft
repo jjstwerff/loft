@@ -19,11 +19,14 @@
 // The stdout line lands before the halt, so the value channel is compared as well as
 // the exit code and the diagnostic on stderr.
 //
-// @ORACLE_NO_WASM: the wasm engine's stack is exhausted between 4 000 and 8 000 frames,
+// @ORACLE_NO_WASM: the HOST ENGINE's stack is exhausted between 4 000 and 8 000 frames,
 // so the 10 000-frame cap this program is about cannot be reached there at all — the
-// module aborts (exit 134, no output) before either half runs.  That gap is loft#1059,
-// filed with the measurement; it is not this program's axis and hiding it here would be
-// the misuse `wasm_opt_out` refuses.
+// module traps (exit 134, no output) before either half runs.  Measured (loft#1059): the
+// module's own shadow stack is not what runs out, and linking at -zstack-size= 1/2/4/8
+// MiB changes nothing; `wasmtime -W max-wasm-stack=8388608` makes this very program
+// agree with both other backends exactly.  So the bound belongs to whoever runs the
+// .wasm, the axis is unreachable here rather than broken, and hiding it would be the
+// misuse `wasm_opt_out` refuses.  WASM.md § How deep a program can recurse.
 
 fn rec1058(n: integer) -> integer {
   if n <= 0 { return 0; }

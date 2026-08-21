@@ -456,6 +456,27 @@ game.loft:2 assertion failed
   in main() (game.loft:6)
 ```
 
+### A trap is not a panic (loft#1059)
+
+The table above is about a PANIC.  A **trap** — most often the stack running out
+under deep recursion — does not run the panic hook at all, so none of that
+rendering fires.  What a trap does do is throw into the JS that called the
+module, and both page shells now catch it: the exception, the browser's own wasm
+backtrace, and — when the message names an exhausted stack — a line saying that
+bound belongs to the page's wasm engine rather than to loft, since the same
+program halts with loft's diagnostic on `--interpret` and `--native`
+([WASM.md § How deep a program can recurse](WASM.md)).
+
+The report does not call back into the module for loft's own frames, and cannot:
+a trap leaves the shadow-stack pointer wherever it died, because the epilogues
+that would restore it never ran, so a second entry runs off the end of the stack
+it just exhausted.  The browser's backtrace is the evidence instead, and
+`--names` is what makes its frame numbers resolve.
+
+The catch covers the boot call and the asyncify RESUME pump both — a trap during
+a frame loop used to stop the pump silently, which reads as a page that simply
+stopped.
+
 **What is still silent:** an allocation failure.  `handle_alloc_error`
 aborts without running the panic hook, so a page that OOMs still traps
 bare.  That is worth knowing rather than worth fixing — after this, a trap

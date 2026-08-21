@@ -9753,6 +9753,35 @@ fn main() {
         // loft#709: what a call that this target cannot serve does at RUNTIME.
         // Placed after the shim and every library bridge have had their say, so
         // it fills only names still free.
+        // loft#1059 — what a page does when the module TRAPS.
+        //
+        // A trap is not a Rust panic, so the hook loft#950 installs never runs and
+        // the page's only symptom is a thrown `RuntimeError`. Deep recursion is the
+        // shape that reaches it: the engine's stack dies well before loft's own
+        // frame cap can report, and one shell used to print the bare exception
+        // while the other had no catch at all and lost it entirely.
+        //
+        // Nothing here calls back into the module for loft's own frames. A trap
+        // leaves the shadow-stack pointer wherever it died — the epilogues that
+        // would restore it never ran — so a second entry would run off the end of
+        // the stack it just exhausted. The browser's OWN wasm backtrace rides on
+        // the error and is the evidence to read; `--names` (loft#954) is what
+        // makes its frame numbers resolve to loft function names.
+        let trap_js = r#"
+function loftReportTrap(e){
+  const msg=(e&&e.message)?e.message:String(e);
+  let out="\n[loft] "+msg;
+  if(/call stack exhausted|Maximum call stack|stack overflow/i.test(msg)){
+    out+="\n[loft] the stack ran out before loft's own frame cap could report it."
+        +"\n[loft] That bound belongs to this wasm engine, not to loft — the same"
+        +"\n[loft] program halts with a loft diagnostic on --interpret and --native.";
+  }
+  if(e&&e.stack)out+="\n"+e.stack;
+  out+="\n[loft] rebuild with `loft --html --names` to resolve the frame numbers above.";
+  try{console.error(out);}catch(_){}
+  try{const o=document.getElementById('out');if(o)o.textContent+=out;}catch(_){}
+}
+"#;
         let stub_js = crate::native_utils::host_import_stub_js(&wasm_bytes);
         let minimal_page =
             crate::native_utils::html_wasm_import_modules(&wasm_bytes).is_some_and(|mods| {
@@ -9942,6 +9971,7 @@ const imports={{loft_io:{{
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
+{trap_js}
 {stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
@@ -9960,7 +9990,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
   }}else{{
     instance.exports.loft_start();
   }}
-}}).catch(e=>{{out.textContent+="\n[loft] "+e;}});
+}}).catch(loftReportTrap);
 </script></body></html>"#
             )
         } else {
@@ -9994,6 +10024,7 @@ const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
   try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
 }}
+{trap_js}
 {stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
@@ -10016,7 +10047,12 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
       // visible so a GL render loop stays vsync-aligned.  schedule() re-checks
       // visibility each tick, so a tab going hidden/visible adapts live.
       const mc=new MessageChannel();
-      const pump=()=>{{ if(ac.resume('loft_start'))schedule(); }};
+      // A trap inside a RESUME lands here rather than on the boot promise, and
+      // an uncaught one stops the pump silently — a frame loop that dies with a
+      // blank page. Same reporter, so a trap reads the same wherever it fires.
+      const pump=()=>{{
+        try{{ if(ac.resume('loft_start'))schedule(); }}catch(e){{ loftReportTrap(e); }}
+      }};
       mc.port1.onmessage=pump;
       const schedule=()=>{{
         if(document.hidden)mc.port2.postMessage(0);
@@ -10027,7 +10063,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   }}else{{
     instance.exports.loft_start();
   }}
-}});
+}}).catch(loftReportTrap);
 </script></body></html>"#
             )
         };
