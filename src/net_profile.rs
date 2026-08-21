@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I76 — Logger runtime: the network profiler, beside `profiler.rs` (CPU) and the
+// allocation-site instrument as the third thing that reports on a RUNNING program
+// rather than on its compilation.  Same subsystem for the same reason they are:
+// an instrument the runtime drives from a `LOFT_*` switch and renders as a report.
 //! `LOFT_NET_PROFILE` — what the network did, beside `LOFT_PROFILE` (CPU) and
 //! `LOFT_ALLOC_SITES` (memory).
 //!
