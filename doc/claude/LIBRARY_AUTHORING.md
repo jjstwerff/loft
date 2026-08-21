@@ -260,6 +260,19 @@ full, with the cure, and cannot block a merge.  The rules arrive from whatever l
 tier rule a dangling doc citation cannot produce a wrong result.  It still gates inside
 loft.  See [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md) § Why a by-hand pass exists.
 
+**To get a pass/fail back before you push**, from a loft checkout:
+
+```
+make examples-preflight REPO=/path/to/your-library
+```
+
+It gates exactly the citation faults CI would report — `dangling`, `duplicate`,
+`unregistered` — and exits non-zero on any of them.  ⚠ It deliberately does NOT demand
+an `examples-index.tsv`: libraries no longer commit one, so a preflight that insisted on
+the file would fail for the correct state.  With no `EXAMPLES_CITE_ROOTS` set it scans
+your `*/src` and `*/tests`; if it finds **zero** citations it says so rather than
+reporting green, because a check that examined nothing is not a pass.
+
 ⚠⚠ **Do not commit `examples-index.tsv` — CI builds it.**  The index (`tag ⇥ file:line
 ⇥ fn ⇥ git-link`) is DERIVED, and its generator lives in loft, so a copy committed here
 can only rot: you cannot regenerate it where it sits.  CI now emits it every run,

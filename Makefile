@@ -813,10 +813,18 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:line -> blob link)
 	@bash scripts/check_doc_drift.sh write-examples-index
 
+# The tag checks ADVISE in a library repo (their rules come from loft, so a gate there
+# reddens a PR for a change loft made).  This is how you get a real pass/fail back before
+# pushing: it gates the citation faults CI would report — dangling / duplicate /
+# unregistered — without demanding an `examples-index.tsv`, which libraries no longer
+# commit.  REPO=. checks loft itself.
+examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO=../loft-libs-x)
+	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-preflight
+
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-progress features-review libraries-review bug-review
+.PHONY: examples-index examples-preflight examples-progress features-review libraries-review bug-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 

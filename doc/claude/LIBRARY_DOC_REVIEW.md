@@ -32,8 +32,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 >
 > **Advisory does not mean quiet.** The findings go to the library PR's job summary in
 > full — the same place a failing test writes its excerpt, so it is as visible as a red
-> tick without being able to block a merge. `EXAMPLES_GATE=hard` restores blocking for a
-> repo that wants it.
+> tick without being able to block a merge.
+>
+> **Advisory costs you a local pass/fail, so one command gives it back:** `make
+> examples-preflight REPO=<library>` gates the citation faults CI reports and exits
+> non-zero on them, without demanding the (no longer committed) index.
+> `EXAMPLES_GATE=hard` restores full blocking for a repo that wants it.
 >
 > ⚠⚠ **`examples-index.tsv` is not committed in a library repo at all — CI builds it.**
 > The index is DERIVED and its generator is in loft, so a committed copy there can only

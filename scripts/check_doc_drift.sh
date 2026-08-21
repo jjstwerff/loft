@@ -73,6 +73,19 @@ case "${EXAMPLES_GATE:-}" in
   advisory) EXAMPLES_FOREIGN=1 ;;
 esac
 
+# PREFLIGHT — "would my PR report anything on tags?", answered locally with a real exit
+# code.  Advisory CI is the right default and it costs you a pass/fail you can act on
+# before pushing, so keep one command that gives it back.
+#
+# ⚠ It gates the CITATION faults (dangling / duplicate / unregistered — the things CI
+# would surface) WITHOUT re-demanding a committed `examples-index.tsv`.  Those are two
+# different questions and only the first is a defect: the index is generated in CI now, so
+# a preflight that insisted on the file would fail for the exact state this is supposed to
+# be.  Hence a flag of its own rather than reusing EXAMPLES_GATE=hard.
+EXAMPLES_CITE_GATES=1
+[ "${EXAMPLES_FOREIGN:-0}" -eq 1 ] && EXAMPLES_CITE_GATES=0
+[ "${EXAMPLES_PREFLIGHT:-0}" -eq 1 ] && EXAMPLES_CITE_GATES=1
+
 QUIET=0
 if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
   QUIET=1
@@ -688,7 +701,21 @@ check_examples() {
   # byte-for-byte; the library CI sets REPO_ROOT + CITE_ROOTS to the package under test.
   local registry="${EXAMPLES_REGISTRY:-scripts/example_repos.tsv}"
   local repo_root="${EXAMPLES_REPO_ROOT:-.}"
-  local cite_roots="${EXAMPLES_CITE_ROOTS:-default lib}"
+  # ⚠ The default `default lib` is LOFT's own layout.  In a library repo those directories
+  # do not exist, so an unset CITE_ROOTS scans nothing and the check passes VACUOUSLY —
+  # which is the worst outcome for a local preflight, because it looks like a pass.  So a
+  # foreign repo defaults to its package dirs (`*/src`, `*/tests`), falling back to the
+  # whole tree.  CI still sets CITE_ROOTS explicitly to the package under test.
+  local cite_roots="${EXAMPLES_CITE_ROOTS:-}"
+  if [ -z "$cite_roots" ]; then
+    if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
+      cite_roots=$(cd "$repo_root" 2>/dev/null && \
+        for d in */src */tests src tests; do [ -d "$d" ] && printf '%s ' "$d"; done)
+      [ -n "$cite_roots" ] || cite_roots="."
+    else
+      cite_roots="default lib"
+    fi
+  fi
   # The loft repo hosting this gate is always available in place at `.` (the script cd'd
   # to the loft root at startup) — even in a library CI, where loft is checked out as
   # loft-src rather than a sibling ../loft.  So loft's OWN acronyms (STD/GIT/LEX/…)
@@ -755,9 +782,15 @@ check_examples() {
   rm -rf "$cited" "$cache"
   HITS_EXAMPLES=$hits
   if [ $hits -gt 0 ]; then
-    [ $EXAMPLES_FOREIGN -eq 0 ] && DRIFT=1
+    [ $EXAMPLES_CITE_GATES -eq 1 ] && DRIFT=1
   elif [ "${HITS_EXAMPLES_WARN:-0}" -eq 0 ]; then
-    green "  ok — $n_cited citation(s) resolve to a test/function"
+    if [ "$n_cited" -eq 0 ]; then
+      # A check that examined nothing is not a pass — say which roots were scanned, so a
+      # vacuous run reads as vacuous instead of green.
+      yellow "  ok — but 0 citations were found (scanned: $cite_roots)"
+    else
+      green "  ok — $n_cited citation(s) resolve to a test/function"
+    fi
   fi
 }
 
@@ -1338,6 +1371,10 @@ case "$CHECK" in
   examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest ;;
   examples-index) check_examples_index ;;
   emit-examples-index) emit_examples_index; exit 0 ;;
+  examples-preflight)
+    # Everything a library PR's tag checks would report, with a REAL exit code.
+    EXAMPLES_PREFLIGHT=1; EXAMPLES_CITE_GATES=1
+    check_examples; sep; check_examples_index ;;
   validator) check_validator ;;
   write-examples-index) write_examples_index; exit 0 ;;
   examples-progress) check_examples_progress; exit 0 ;;   # a REPORT — never in `all`
@@ -1367,22 +1404,26 @@ case "$CHECK" in
     check_validator
     ;;
   *)
-    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|emit-examples-index|validator|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
+    echo "Usage: $0 [-q|--quiet] [all|paths|time|stale|roadmap|refs|libs|examples|examples-selftest|examples-index|emit-examples-index|examples-preflight|validator|write-examples-index|examples-progress|features-progress|libraries-progress]" >&2
     exit 2
     ;;
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
-if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
-  # Cross-repo run: the two worked-example checks ADVISE rather than gate (see the
-  # tier note at the top).  They still print in full and still show in the summary.
+if [ "${EXAMPLES_CITE_GATES:-1}" -eq 0 ]; then
+  # Cross-repo run: the worked-example checks ADVISE rather than gate (see the tier note
+  # at the top).  They still print in full and still show in the summary.
   total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_VALIDATOR))
   warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES + HITS_EXAMPLES_WARN + HITS_EXINDEX + HITS_VALIDATOR_WARN))
-  tier_note=" [worked-example checks advisory: cross-repo]"
+  tier_note=" [worked-example checks advisory: cross-repo — 'examples-preflight' to gate them here]"
 else
   total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX + HITS_VALIDATOR))
   warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN + HITS_VALIDATOR_WARN))
-  tier_note=""
+  if [ "${EXAMPLES_PREFLIGHT:-0}" -eq 1 ]; then
+    tier_note=" [preflight: citation faults GATE, the index is not required]"
+  else
+    tier_note=""
+  fi
 fi
 summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX validator=$HITS_VALIDATOR/w$HITS_VALIDATOR_WARN$tier_note"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then

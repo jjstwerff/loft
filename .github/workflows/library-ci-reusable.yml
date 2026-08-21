@@ -219,6 +219,9 @@ jobs:
               echo "Advisory: this does **not** fail the build.  It is the documentation gate"
               echo "loft owns, run against this library."
               echo
+              echo "Reproduce locally with a real exit code, from a loft checkout:"
+              echo '`make examples-preflight REPO=/path/to/${{ github.event.repository.name }}`'
+              echo
               echo '```'
               sed -e 's/\x1b\[[0-9;]*m//g' "$log" \
                 | grep -vE '^\s*ok( |$)' | grep -vE '^clean \(' | head -40
