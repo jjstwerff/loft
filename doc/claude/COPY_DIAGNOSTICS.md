@@ -382,8 +382,38 @@ warning does not buy any of them off.
 2. **Which measured copy families should be accepted rather than eliminated** — the framing is
    settled (an accept is written at the SITE, never a blanket env exemption, so the decision
    stays reviewable), the selection is not.
-3. **The uncovered copy set** — sized, not drained: 29 distinct sites over a 90-script sample,
-   across four origins. A legitimate `Avoidable` resting state under decision 3.
+3. **The uncovered copy set** — sized, not drained. **Re-measured 2026-08-21 over the WHOLE
+   corpus** rather than a 90-script sample, which is what makes the number usable:
+
+   | origin | distinct uncovered sites (811 scripts, `--interpret`) |
+   |---|---|
+   | `InterpCallReturn` | 225 |
+   | `InterpReassignCall` | 177 |
+   | `InterpRecordBind` | 72 |
+   | `InterpReassignVar` | 30 |
+   | **total** | **504** |
+
+   Two origins never appear uncovered: `InterpTupleBind`, and `ParserMaterialise` — the
+   latter by design, since it is classified `Implicit` and is expected back COVERED. A
+   both-backends sweep over 90 scripts adds `NativeCallReturn` and `NativeRecordBind`, so
+   **five** origins carry uncovered sites, not four.
+
+   **The guarantee still holds: the `Unknown` bucket is EMPTY** — 0 rows across all 811
+   scripts. That is the claim worth re-checking, and it is the one that passed unchanged.
+   Every emitted copy is attributed to a named emitter.
+
+   Ranked by copied TYPE, the head of the set is narrow: `File` 47, `Box` 41, `A` 24,
+   `S` 23, `__tuple` 13. The single most-cited shape is the **stdlib's own `exists(path)`** —
+   `file(path).format != Format.NotExists` lifts the call into `__lift_1` and copies a whole
+   `File` record to read one field. `Origin::InterpReassignCall`'s doc comment already names
+   this exact case as the one that "stayed off the manifest until a known-copying case was
+   measured against it".
+
+   **Not established: that any of this is material to runtime.** A record copy is cheap
+   beside the syscall `exists()` already makes, and an attempt to benchmark it accidentally
+   measured the not-found path — `loft` roots relative paths at the SCRIPT's directory, not
+   the shell's cwd, so a probe in a scratch dir sees no project file. Size is now known;
+   cost is not, and the two should not be conflated when picking what to drain.
 
 ## Probes run while writing this (the prediction-vs-reality record)
 
