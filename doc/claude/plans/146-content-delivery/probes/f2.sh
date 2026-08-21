@@ -12,7 +12,7 @@ LOFT="${LOFT:-loft}"
 PORT="${F2_PORT:-8099}"
 work=$(mktemp -d)
 srv=""
-cleanup() { [ -n "$srv" ] && kill "$srv" 2>/dev/null; rm -rf "$work"; }
+cleanup() { [ -n "$srv" ] && kill "$srv" 2>/dev/null; [ -n "${F2_KEEP_LOG:-}" ] && cp "$log" "${F2_KEEP_LOG}" 2>/dev/null; rm -rf "$work"; }
 trap cleanup EXIT
 
 pack="$work/f2_pack.store"
@@ -48,22 +48,38 @@ elif [ -z "$local_out" ]; then
   fail=1
 fi
 
-full=$(grep -c "^FULL " "$log" || true)
+# The schema sidecar is a separate, tiny file the reader legitimately takes whole;
+# what this gate is about is the PACK.  Count them apart, and count the sidecar's
+# bytes anyway so nothing hides in it.
+full=$(grep -c "^FULL f2_pack.store " "$log" || true)
 ranges=$(grep -c "^RANGE " "$log" || true)
-fetched=$(awk '/^RANGE /{n += $4} END {print n + 0}' "$log")
-echo "server: $ranges range request(s), $full whole-file, $fetched of $size bytes fetched"
+fetched=$(awk '/^RANGE /{n += $4} /^FULL /{n += $3} END {print n + 0}' "$log")
+pct=$((fetched * 100 / size))
+pages=$(awk '/^RANGE /{if ($4 >= 4096) n += 1} END {print n + 0}' "$log")
+probes=$((ranges - pages))
+echo "server: $pages page(s) + $probes probe(s), $full whole-file, $fetched of $size bytes ($pct%)"
 if [ "$full" != 0 ]; then
-  echo "RED — the reader asked for the whole file; the point is that it does not"
+  echo "RED — the reader asked for the pack whole; the point is that it does not"
   fail=1
 fi
 if [ "$ranges" = 0 ]; then
   echo "RED — no range request reached the server, so nothing was proven"
   fail=1
 fi
-# Two keys of ~2 KB and ~4 KB out of a ~20 KB pack: a paged read must stay well
-# under the file.  Half is a generous bound and still fails a whole-file read.
-if [ "$fetched" -ge $((size / 2)) ]; then
+# Two keys of ~2 KB and ~4 KB out of a ~4 MB pack.  Measured: two 64 KiB pages
+# per PRESENT key — the table page and the record's page — and five for an absent
+# one, which is the miss walking the bucket chain.  A quarter of the file is a
+# generous bound on that and still fails anything that reads the whole thing.
+if [ "$fetched" -ge $((size / 4)) ]; then
   echo "RED — $fetched of $size bytes is not a paged read"
+  fail=1
+fi
+# Every data read must be a whole PAGE, never a scatter of small ones: a reader
+# that made a request per record would answer the same bytes and cost a round
+# trip each time, and the byte total alone would not say so.
+odd=$(awk '/^RANGE /{if ($4 > 4096 && $4 != 65536) n += 1} END {print n + 0}' "$log")
+if [ "$odd" != 0 ]; then
+  echo "RED — $odd data read(s) were not a 64 KiB page"
   fail=1
 fi
 [ "$fail" = 0 ] && echo "F2: same answer from disk and from a URL, and only the pages the keys touch"

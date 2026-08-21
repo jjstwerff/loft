@@ -1,0 +1,7 @@
+# Packs the gates build on demand: `f1_pack.loft` writes them, `f3.sh` rebuilds
+# them when they are missing.  Derived, never committed.
+*.store
+*.store.dschema
+*.store.dmeta
+__pycache__/
+.loft/

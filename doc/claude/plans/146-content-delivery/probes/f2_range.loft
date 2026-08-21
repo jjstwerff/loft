@@ -32,12 +32,13 @@ fn main() {
   for i in 0..len(b.bl_bytes) { sum += b.bl_bytes[i]; }
   println("hit.ogg={len(a.bl_bytes)} ui.woff2={len(b.bl_bytes)} checksum={sum}");
 
-  // Only what was asked for is resident.  The pack also holds two texture pages,
-  // and a reader that pulled them anyway would be paying the whole file's price
-  // for two keys — which is the thing this phase exists to prove it does not.
+  // Only what was asked for is resident.  The pack holds two texture pages and
+  // 64 filler blobs besides, and a reader that pulled them anyway would be paying
+  // the whole file's price for two keys — which is the thing this phase exists to
+  // prove it does not.
   n = 0;
   for _r in q { n += 1; }
-  println("resident={n} of 4");
+  println("resident={n}");
 
   // A key the pack does not have must answer FALSE, not an empty record: a paged
   // reader that cannot say "absent" is one a caller has to guess about.

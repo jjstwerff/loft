@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 F3 — plan, fetch, then read.  Never fetch inside a frame.
+//
+// Synchronous wasm cannot await and a round trip is ~40 ms, so a frame that
+// discovers it needs an asset stutters visibly.  The policy is three lines — ask
+// for the ring around the player at a load or level boundary — and the phase is
+// the INSTRUMENT that can assert the frame took nothing.
+//
+// The instrument is the server's own range log (`probes/f3.sh`): it is truncated
+// after the prefetch, so anything in it afterwards is a fetch that happened
+// inside a frame.
+//
+//   F3_SOURCE=<path-or-url> loft --interpret probes/f3_prefetch.loft
+//   F3_FRAMES=0 ...  the baseline: what the BOUNDARY costs, and nothing else
+//   F3_MISS=1   ...  the control: one frame reads a key nobody prefetched
+use assets_schema;
+
+
+
+fn main() {
+  src = env_variable("F3_SOURCE");
+  if src == "" { println("F3_SOURCE unset"); return }
+  miss = env_variable("F3_MISS") != "";
+  // The gate runs this twice and compares the wire: once with no frames at all,
+  // once with all of them.  Same request count means the frames took nothing —
+  // a differential rather than a marker, so nothing has to correlate two streams.
+  frames = 60;
+  fs = env_variable("F3_FRAMES");
+  if fs != "" { frames = fs as integer ?? 60; }
+
+  meta_path = env_variable("F3_META");
+  p = new_pack();
+  if meta_path != "" && !store_load(p, meta_path) {
+    println("FAIL: metadata load");
+    return
+  }
+
+  // The boundary.  Everything the scene draws, once, before the loop starts.
+  res: hash<Blob[bl_key]> = [];
+  want = keys_near(p, "cave", 0.0, 0.0, -1.0);
+  got = prefetch(res, src, want);
+  println("prefetch: {len(want)} key(s) wanted, {got} fetched");
+  println("--- steady state ---");
+
+  // Steady-state play.  Every read is of something the boundary already asked
+  // for, so the loop must touch the wire zero times.
+  drawn = 0;
+  for f in 0..frames {
+    for k in want {
+      b = res[k];
+      if b == null { println("frame {f}: {k} NOT RESIDENT"); return }
+      drawn += len(b.bl_bytes);
+    }
+    // The control: one frame reaches for something the boundary never asked for.
+    // It answers correctly and costs a round trip, which is the whole point — a
+    // fetch inside a frame is not a wrong answer, it is a late one.
+    if miss && f == frames / 2 {
+      if store_load_key_text(res, src, "ui.woff2") {
+        u = res["ui.woff2"];
+        if u != null { drawn += len(u.bl_bytes); }
+      }
+    }
+  }
+  println("--- frames done ---");
+  println("{frames} frame(s), {drawn} byte(s) read, {len(want)} page(s) resident");
+}

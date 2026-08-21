@@ -198,7 +198,7 @@ fn add_anim(p: Pack, def: text, action: text, facing: integer, seq: text) {
 
 // A deterministic byte pattern, so the read-back comparison has something to be
 // wrong about.  A run of zeroes would pass a broken loader.
-fn pattern(n: integer, salt: integer) -> vector<u8> {
+pub fn pattern(n: integer, salt: integer) -> vector<u8> {
   out: vector<u8> = [];
   for i in 0..n { out += [((i * 37 + salt * 11 + i / 251) % 251) as u8 ?? 0]; }
   out
@@ -262,6 +262,56 @@ pub fn demo_blobs(b: &hash<Blob[bl_key]>) {
   // Audio and a font are just bytes; the pack does not decode them.
   add_blob(b, "hit.ogg", Ogg, pattern(2048, 3));
   add_blob(b, "ui.woff2", Woff2, pattern(4096, 4));
+}
+
+// ── what a scene needs, so a loader can ask for it before the frame ─────────
+
+/// Every blob key a scene's instances draw from, within `radius` of `(cx, cy)`.
+///
+/// This is the whole prefetch policy: a frame must never be the thing that
+/// discovers it needs an asset, because a range read is a round trip and a frame
+/// is 16 ms.  So the caller asks for a ring around the player at a load or a
+/// level boundary, and the frame reads what is already resident.
+///
+/// A negative `radius` means the whole scene — what a small room wants, and what
+/// a loading screen asks for.  Duplicates are dropped, because a page shared by
+/// forty instances is still one fetch.
+pub fn keys_near(p: const Pack, scene: text, cx: float, cy: float,
+                 radius: float) -> vector<text> {
+  out: vector<text> = [];
+  for i in p.placed {
+    if i.pd_scene != scene { continue }
+    if radius >= 0.0 {
+      dx = i.pd_x - cx;
+      dy = i.pd_y - cy;
+      if dx * dx + dy * dy > radius * radius { continue }
+    }
+    d = p.defs[i.pd_def];
+    if d == null { continue }
+    if d.df_cell == "" { continue }        // a light draws nothing
+    c = p.cells[d.df_cell];
+    if c == null { continue }
+    page = p.pages[c.ce_page];
+    if page == null { continue }
+    seen = false;
+    for k in out { if k == page.pi_blob { seen = true } }
+    if !seen { out += [page.pi_blob]; }
+  }
+  out
+}
+
+/// Pull `keys` into `into`, and answer how many were not already resident.
+///
+/// The answer is the number that COST something, which is what a caller wants to
+/// log at a level boundary and what a frame must be able to assert is zero.
+pub fn prefetch(into: hash<Blob[bl_key]>, source: text,
+                keys: const vector<text>) -> integer {
+  n = 0;
+  for k in keys {
+    if into[k] != null { continue }
+    if store_load_key_text(into, source, k) { n += 1 }
+  }
+  n
 }
 
 // ── the layout descriptor ───────────────────────────────────────────────────
