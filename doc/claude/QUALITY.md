@@ -120,10 +120,19 @@ its documented rules is loft's bug whoever runs it — and `EXAMPLES_GATE=hard` 
 blocking for a repo that wants it. Full rationale: [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md)
 § Why a by-hand pass exists.
 
-⚠⚠ **What this does NOT fix, and it is the deeper smell:** `examples-index.tsv` is a
-DERIVED file committed into a repo that does not own its generator. Tiering stops it
-blocking; it does not stop it going stale, and the honest cure is to generate it in CI
-rather than commit it. Left open deliberately.
+⚠⚠ **And the deeper smell is fixed too: `examples-index.tsv` is no longer committed in a
+library repo.** It is DERIVED and its generator lives in loft, so a copy committed there
+could only rot — it cannot be regenerated where it sits. CI now emits it every run
+(`check_doc_drift.sh emit-examples-index`), folds it into the job summary and uploads it as
+an artifact. A derived file that is never committed cannot be stale, which retires the
+failure mode instead of downgrading it. loft keeps its own committed copy, because loft owns
+the generator and a greppable offline index is what the agent development model runs on.
+
+⚠ Found while doing it: the file's header claimed it existed so *"loft's cross-repo `idx`"*
+could resolve tags without a checkout. Measured — `scripts/idx` does not open it and never
+has, and `check_examples` resolves through a local checkout. Its only automated consumer was
+the check verifying it. That is what made deleting it safe, and it is why the check was worth
+reading before the file was trusted.
 
 ⚠ The `loft-libs-docs` row is the sharper lesson: **a published library stopped compiling and
 nothing said so for three weeks**, because that repo's CI had not run since 2026-07-28. A gate

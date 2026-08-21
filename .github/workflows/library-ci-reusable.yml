@@ -205,6 +205,10 @@ jobs:
           log="$RUNNER_TEMP/examples-${{ matrix.package }}.log"
           bash loft-src/scripts/check_doc_drift.sh examples       2>&1 | tee    "$log"
           bash loft-src/scripts/check_doc_drift.sh examples-index 2>&1 | tee -a "$log"
+          # The index is DERIVED and this repo commits nothing: build it here, every run,
+          # so it cannot be stale.  Published below and uploaded as an artifact.
+          bash loft-src/scripts/check_doc_drift.sh emit-examples-index \
+            > "$RUNNER_TEMP/examples-index.tsv"
           # `warning(s)` is the advisory summary line; anything else is clean.  The script
           # exits 0 in this mode, so the summary block is the ONLY signal — which is why it
           # carries the whole finding and the runnable cure, not a pointer to the log.
@@ -221,6 +225,28 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+          # The index itself, always — this is what replaces the committed file.  Folded so
+          # it costs a reader nothing until they want it.
+          if [ -s "$RUNNER_TEMP/examples-index.tsv" ] \
+             && grep -qE '^@' "$RUNNER_TEMP/examples-index.tsv"; then
+            {
+              echo "<details><summary>📇 <code>${{ matrix.package }}</code> — worked-example index"
+              echo "($(grep -cE '^@' "$RUNNER_TEMP/examples-index.tsv") tag(s), generated)</summary>"
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/examples-index.tsv"
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload worked-example index — ${{ matrix.package }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: examples-index-${{ matrix.package }}
+          path: ${{ runner.temp }}/examples-index.tsv
+          if-no-files-found: ignore
 
       # Library compatibility contract, step 4 — ADVISORY, never gating.
       #

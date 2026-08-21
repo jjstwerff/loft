@@ -250,11 +250,22 @@ test so the next reader never needs the pointer.
 caller of loft's reusable workflow, which checks loft out into `loft-src/` — so the
 shared gate `loft-src/scripts/check_doc_drift.sh examples` and the acronym registry
 are present in your CI run with no per-repo copy.  It is **vacuously green until you
-author your first citation**, then begins gating.  Faults: `dangling` (cited, no fn
-carries it), `duplicate` (one tag on two fns here), `unregistered` (acronym missing
-from the registry).  A generated `examples-index.tsv` at the repo root records where
-each tag lives (`tag ⇥ file:line ⇥ fn ⇥ git-link`) so a reader resolves it without a
-checkout; CI verifies the committed copy is current.
+author your first citation**.  Faults: `dangling` (cited, no fn carries it),
+`duplicate` (one tag on two fns here), `unregistered` (acronym missing from the
+registry).
+
+⚠ **It ADVISES here, it does not gate** — the findings go to your PR's job summary in
+full, with the cure, and cannot block a merge.  The rules arrive from whatever loft
+`main` is, so a gate would redden your PR for a change loft made; and by loft's own
+tier rule a dangling doc citation cannot produce a wrong result.  It still gates inside
+loft.  See [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md) § Why a by-hand pass exists.
+
+⚠⚠ **Do not commit `examples-index.tsv` — CI builds it.**  The index (`tag ⇥ file:line
+⇥ fn ⇥ git-link`) is DERIVED, and its generator lives in loft, so a copy committed here
+can only rot: you cannot regenerate it where it sits.  CI now emits it every run,
+publishes it folded into the job summary and uploads it as an artifact, so a derived
+file that is never committed cannot be stale.  A leftover committed copy is not an
+error — CI says once that it is safe to delete.
 
 **Recording that a package owes nothing.**  Because there is no retroactive sweep, an
 untagged package is ambiguous: nobody can tell *no function here needs an example* from

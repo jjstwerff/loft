@@ -31,9 +31,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > documented rules is loft's bug whoever runs it.
 >
 > **Advisory does not mean quiet.** The findings go to the library PR's job summary in
-> full, with the runnable regenerate command — the same place a failing test writes its
-> excerpt, so it is as visible as a red tick without being able to block a merge.
-> `EXAMPLES_GATE=hard` restores blocking for a repo that wants it.
+> full — the same place a failing test writes its excerpt, so it is as visible as a red
+> tick without being able to block a merge. `EXAMPLES_GATE=hard` restores blocking for a
+> repo that wants it.
+>
+> ⚠⚠ **`examples-index.tsv` is not committed in a library repo at all — CI builds it.**
+> The index is DERIVED and its generator is in loft, so a committed copy there can only
+> rot: it cannot be regenerated where it sits, and "regenerate it" names a command that
+> repo does not have. CI emits it per run (`check_doc_drift.sh emit-examples-index`),
+> folds it into the job summary and uploads it as an artifact. **A derived file that is
+> never committed cannot be stale** — that retires the failure mode rather than
+> downgrading it. loft keeps its own committed copy: loft owns the generator, and a
+> greppable offline index is what the agent development model runs on.
 
 
 The automated gate (`scripts/check_doc_drift.sh examples`) catches the two failures a
