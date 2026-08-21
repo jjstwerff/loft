@@ -86,7 +86,7 @@ next PR, landing on whoever opens one.
 | Repo | Red because | Owner |
 |---|---|---|
 | `loft-libs-docs` #4 | `markdown/src/markdown.loft:261` — *"Cannot index text with 'unknown'"*. A **forward-referenced** `atx_heading_level` (defined :383, called :252) leaves the slice bound unresolved in pass 1. | ✅ **Already fixed** — `1133e272` + `d822dd91`, unmerged on `tuxedo-pln145`. Goes green when that reaches `main`. |
-| `loft-libs-game` #11 | `missing: examples-index.tsv — run 'make examples-index'`. The `exindex` check landed here in `7786d28c` (2026-08-18); that repo's last CI run was 2026-08-17, so its first run after the change is its first red. | ⚠ **Open — see below** |
+| `loft-libs-game` #11 | `missing: examples-index.tsv — run 'make examples-index'`. The `exindex` check landed here in `7786d28c` (2026-08-18); that repo's last CI run was 2026-08-17, so its first run after the change is its first red. | ✅ **Cured at the source** — the two cross-repo checks are now ADVISORY in a library repo (see below); this red becomes a job-summary note. Goes green when this branch reaches `main`. |
 
 ⚠⚠ **The `exindex` message prescribed a cure the repo does not have — FIXED.** `make
 examples-index` maps to a target in **this** repo; `loft-libs-game` has no Makefile at all, and
@@ -106,6 +106,24 @@ missing: examples-index.tsv (this repo defines worked-example tags)
 checkout the script runs from — so it kept printing the `make` form for every library repo. The
 control caught it; without one it would have read as fixed. Coverage is unchanged (the index is
 still required wherever tags are defined), which is the half worth keeping.
+
+### ✅ Resolved — the two cross-repo checks are tiered
+
+`examples` and `examples-index` now **gate inside loft and advise in a library repo**, by
+this repo's own rule that a diagnostic gates iff ignoring it can produce a wrong result. A
+dangling doc citation is a broken link, so it advises — loudly: the findings go to the
+library PR's job summary in full, with the runnable regenerate command, which is the
+`compat check` pattern (*"ADVISORY, never gating"*) applied to docs.
+
+⚠ The scanner's own **selftests still gate everywhere** — a scanner that stops following
+its documented rules is loft's bug whoever runs it — and `EXAMPLES_GATE=hard` restores
+blocking for a repo that wants it. Full rationale: [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md)
+§ Why a by-hand pass exists.
+
+⚠⚠ **What this does NOT fix, and it is the deeper smell:** `examples-index.tsv` is a
+DERIVED file committed into a repo that does not own its generator. Tiering stops it
+blocking; it does not stop it going stale, and the honest cure is to generate it in CI
+rather than commit it. Left open deliberately.
 
 ⚠ The `loft-libs-docs` row is the sharper lesson: **a published library stopped compiling and
 nothing said so for three weeks**, because that repo's CI had not run since 2026-07-28. A gate

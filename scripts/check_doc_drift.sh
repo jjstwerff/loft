@@ -41,6 +41,38 @@ cd "$(dirname "$0")/.."
 # loft-src`).  Anything scanning "the repo under test" has to be able to exclude it.
 LOFT_ROOT="$PWD"
 
+# ---- Cross-repo tier: are the worked-example checks GATING or ADVISORY? ----
+#
+# `examples` + `examples-index` are the only two checks that span repositories: a
+# library's CI checks loft out as `loft-src` and runs THIS script against the library.
+# That makes the gate's rules arrive from whatever loft `main` happens to be, and it
+# bites in both directions.  Measured 2026-08-21: the `exindex` check landed here
+# 2026-08-18 and reddened loft-libs-game's next PR for a file it never touched (its
+# last green run was 2026-08-17); and in the other direction, switching a LIBRARY
+# CHECKOUT's branch turned loft's own run red with two dangling tags — a failure with
+# no bad commit in either repo.
+#
+# So they gate INSIDE loft, which owns the generator and the feature-doc citations and
+# where no cross-repo coupling exists, and ADVISE in a library repo.  That follows the
+# repo's own diagnostic rule (CLAUDE.md): a diagnostic gates if and only if ignoring it
+# can produce a WRONG RESULT.  A dangling doc citation is a broken link — it cannot.
+#
+# ⚠ The scanner SELFTESTS stay hard everywhere: a scanner that no longer follows its
+# documented rules is loft's bug whichever repo happens to run it.
+#
+# `EXAMPLES_GATE=hard|advisory` overrides, for testing and for a repo that wants the
+# strict behaviour back.
+EXAMPLES_FOREIGN=0
+if [ -n "${EXAMPLES_REPO_ROOT:-}" ]; then
+  _err_p=$(cd "$EXAMPLES_REPO_ROOT" 2>/dev/null && pwd -P) || _err_p=""
+  _loft_p=$(cd "$LOFT_ROOT" 2>/dev/null && pwd -P) || _loft_p="$LOFT_ROOT"
+  if [ -n "$_err_p" ] && [ "$_err_p" != "$_loft_p" ]; then EXAMPLES_FOREIGN=1; fi
+fi
+case "${EXAMPLES_GATE:-}" in
+  hard)     EXAMPLES_FOREIGN=0 ;;
+  advisory) EXAMPLES_FOREIGN=1 ;;
+esac
+
 QUIET=0
 if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
   QUIET=1
@@ -723,7 +755,7 @@ check_examples() {
   rm -rf "$cited" "$cache"
   HITS_EXAMPLES=$hits
   if [ $hits -gt 0 ]; then
-    DRIFT=1
+    [ $EXAMPLES_FOREIGN -eq 0 ] && DRIFT=1
   elif [ "${HITS_EXAMPLES_WARN:-0}" -eq 0 ]; then
     green "  ok — $n_cited citation(s) resolve to a test/function"
   fi
@@ -792,7 +824,7 @@ check_examples_index() {
         red "           generate it from a loft checkout, which owns the generator:"
         red "           EXAMPLES_REPO_ROOT=\$PWD <loft>/scripts/check_doc_drift.sh write-examples-index"
       fi
-      HITS_EXINDEX=1; DRIFT=1
+      HITS_EXINDEX=1; [ $EXAMPLES_FOREIGN -eq 0 ] && DRIFT=1
     else
       green "  ok — no worked-example tags defined; no index needed"
     fi
@@ -803,7 +835,7 @@ check_examples_index() {
   else
     red "  stale: $EXAMPLES_INDEX_FILE is out of date — run 'make examples-index'"
     [ $QUIET -eq 0 ] && diff "$f" "$tmp" | sed 's/^/      /' | head -20
-    HITS_EXINDEX=1; DRIFT=1
+    HITS_EXINDEX=1; [ $EXAMPLES_FOREIGN -eq 0 ] && DRIFT=1
   fi
   rm -f "$tmp"
 }
@@ -1298,9 +1330,18 @@ case "$CHECK" in
 esac
 
 # One-line summary (always printed; even in quiet mode this is the only output).
-total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX + HITS_VALIDATOR))
-warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN + HITS_VALIDATOR_WARN))
-summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX validator=$HITS_VALIDATOR/w$HITS_VALIDATOR_WARN"
+if [ "${EXAMPLES_FOREIGN:-0}" -eq 1 ]; then
+  # Cross-repo run: the two worked-example checks ADVISE rather than gate (see the
+  # tier note at the top).  They still print in full and still show in the summary.
+  total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_VALIDATOR))
+  warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES + HITS_EXAMPLES_WARN + HITS_EXINDEX + HITS_VALIDATOR_WARN))
+  tier_note=" [worked-example checks advisory: cross-repo]"
+else
+  total=$((HITS_PATHS + HITS_STALE + HITS_ROADMAP + HITS_REFS + HITS_EXAMPLES + HITS_EXINDEX + HITS_VALIDATOR))
+  warns=$((HITS_TIME + HITS_LIBS + HITS_EXAMPLES_WARN + HITS_VALIDATOR_WARN))
+  tier_note=""
+fi
+summary="paths=$HITS_PATHS time=$HITS_TIME stale=$HITS_STALE roadmap=$HITS_ROADMAP refs=$HITS_REFS libs=$HITS_LIBS examples=$HITS_EXAMPLES/w$HITS_EXAMPLES_WARN exindex=$HITS_EXINDEX validator=$HITS_VALIDATOR/w$HITS_VALIDATOR_WARN$tier_note"
 if [ $DRIFT -eq 0 ] && [ $warns -eq 0 ]; then
   printf '\033[32mclean\033[0m (%s)\n' "$summary"
   exit 0
