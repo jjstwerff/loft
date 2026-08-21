@@ -15,7 +15,7 @@
 # here would be a second list of one type's facts, and the two would drift.
 # Importing the file cannot drift.  (`doc/claude/registry_ci_template/` holds a
 # SIBLING copy that has already drifted in both directions — do not use it as
-# the authority.)
+# the authority; loft#1052.)
 #
 # WHY IT GATES SIGNING RATHER THAN PUBLISHING.  A signed index that fails gate 1
 # turns EVERY later submission PR red, on a check that has nothing to do with

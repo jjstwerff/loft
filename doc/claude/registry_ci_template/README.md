@@ -11,11 +11,21 @@ the PR-validation + post-merge-signing workflows.
 
 | File in this dir | Destination in `loft-lang/registry` | What it does |
 |---|---|---|
-| `validate.py` | `tools/validate.py` | R9 PR validator: schema lint + tarball sha256 verify + reproducible-build re-check. |
+| `validate.py` | `tools/validate.py` | R9 PR validator: schema lint + tarball sha256 verify + reproducible-build re-check.  ⚠ **Do not deploy this copy as-is — see the warning below.** |
 | `pr-validate.yml` | `.github/workflows/pr-validate.yml` | Wires `validate.py` into every PR that touches `index.json`. |
 | `registry_README.md` | `README.md` (the registry's own) | Visible-on-GitHub landing page for ecosystem contributors. |
 | `SUBMITTING.md` | `SUBMITTING.md` | Author-facing submission guide.  Deploy alongside README so GitHub shows the "SUBMITTING" sidebar link on the repo overview. |
 | `../registry_sample.json` | `index.json` (initial seed) | Empty starter index — strip the `_comment` field; set `"packages": {}` if no real package is ready yet. |
+
+> ⚠⚠ **`validate.py` has drifted from the deployed copy in BOTH directions
+> ([loft#1052](https://github.com/loft-lang/loft/issues/1052)) — copying it over
+> `tools/validate.py` today REMOVES three live checks.**  The registry's copy has gate
+> 1's docs gate (non-empty `description` / `categories`, http `homepage`), the `yanked`
+> type-check, and gate 3's multi-package chunk-repo handling; this copy has a trigger
+> uniqueness gate and an `api` re-derive the registry does not run.  Until that issue is
+> resolved, treat **`loft-lang/registry:tools/validate.py` as the authority** and diff
+> before deploying anything here.  Tooling that needs the real rules should read the
+> deployed file, the way `scripts/registry_schema_gate.sh` does.
 
 `SUBMITTING.md`'s canonical source is
 `doc/claude/REGISTRY_SUBMIT.md` (relative links).  This dir
