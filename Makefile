@@ -1709,6 +1709,29 @@ ci-guard:
 	    echo "  Wait for it to finish, or stop it first."; \
 	    exit 1; \
 	fi
+	@# A SIBLING CHECKOUT is a different question, and gets a warning rather than a
+	@# refusal.  Two loft checkouts on one box do NOT share target/ or result.txt, so
+	@# neither result is fiction — but they share the 24 threads, and that is enough to
+	@# matter twice: a timing measurement in either tree becomes worthless, and the
+	@# 300s slow-timeout starts firing on tests that pass standalone in seconds
+	@# (`instancing_bridge_draws_every_instance` is the known one, 300s under load vs
+	@# 3.6s alone).  Measured 2026-08-21: two agents collided twice in one afternoon,
+	@# reaching load 66 on 24 threads, and both had guessed the box was free from
+	@# `pgrep` — silence read as evidence.
+	@#
+	@# ⚠ This can only see runs that CLAIM.  `make ci` writes `.ci-running`; a bare
+	@# `cargo nextest run` writes nothing and stays invisible, which is exactly how the
+	@# second collision happened.  Claim the tree by hand for a long ad-hoc run:
+	@#     echo $$$$ > .ci-running        # and rm it when done
+	@for d in ../*/; do \
+	    [ "$$(cd "$$d" 2>/dev/null && pwd -P)" = "$$(pwd -P)" ] && continue; \
+	    [ -f "$$d/.ci-running" ] || continue; \
+	    kill -0 "$$(cat "$$d/.ci-running" 2>/dev/null)" 2>/dev/null || continue; \
+	    echo "make ci: WARNING — a gate is also running in $$d (pid $$(cat "$$d/.ci-running"))."; \
+	    echo "  Not refused: separate target/ and result.txt, so neither result is fiction."; \
+	    echo "  But you are sharing $$(nproc) threads — expect a slower run, and treat any"; \
+	    echo "  300s slow-timeout as 'the machine was busy' until it reproduces alone."; \
+	done
 
 ci: ci-guard
 	@echo $$PPID > .ci-running
