@@ -306,6 +306,15 @@ answering @PLN145's `D0` request): **15 of 31 public functions had no production
 `panel_hit_test` — the one function @PLN145 asked to depend on — was *"built, tested green and
 invoked by nothing"*, in that tree's own words.
 
+⚠⚠ **The follow-up is stronger than the measurement, and it is why the bar is not a style
+rule.** moros gave `panel_hit_test` a caller the next day, and the commit subject is the
+finding: *"A click on the panel turned the camera, because `panel_hit_test` had no caller."*
+The function was not merely unused — under the one consumer that finally called it, the
+program was **wrong**, and no amount of its own green tests could say so, because a test
+asks *does it answer what I expect* and a consumer asks *is this the question I have*.
+Re-counted 2026-08-21: **13 of 33** public functions still have no production caller, and
+that tree's README now names all thirteen and calls them *a proposal*.
+
 So a promotion check of the form *"its own tests pass unchanged after the move"* verifies the
 **move** and says nothing about whether the surface was ever **honoured**. Both are needed:
 

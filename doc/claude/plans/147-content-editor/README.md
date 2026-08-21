@@ -102,9 +102,14 @@ does not reinvent it, and it does not schedule moros work — by their own rule 
 promoted once battle-tested where the consumer lives. See
 [`PRIOR_ART.md`](../144-2d-stage/PRIOR_ART.md), shared across all four plans.
 
-`lavition_ui` (@PLN145 `D`) is what the editor's panels are made of, so `D0` gates `T3`
-onward — another reason that publication decision is on the critical path rather than at the
-edge of it.
+`lavition_ui` (@PLN145 `D`) is what the editor's panels are made of. ✅ **`D0` is done and no
+longer gates `T3`** — moros published `lavition_ui` 0.1.0 and it resolves from the registry
+(2026-08-21). ⚠ Two conditions came with it, both of which shape `T3` rather than block it:
+**depend on the panel half and treat verbbar as 0.x that moves** (their `EDITING_MODES` work
+makes the verb table data, so `spec_verb`, `spec_verb_on` and `verbbar_build` change shape),
+and **13 of its 33 public functions still have no production caller** and are labelled a
+proposal in its README — so a `T3` that reaches for one of those thirteen is the first
+consumer to agree to it.
 
 ## Targets
 
@@ -142,8 +147,9 @@ free and a fix to the silhouette fixes every frame at once.
 - **[@PLN146](../146-content-delivery/README.md)** — `F1` is the only hard prerequisite for
   `S1`; `F7` for `U2`; the atlas invariants for `U1`.
 - **[@PLN144](../144-2d-stage/README.md)** — `A4` for `T2`, `P1` for `T3`, the stage for `T1`.
-- **[@PLN145](../145-authoring-libs/README.md)** — `D` is the panel kit; `D0` is another tree's
-  decision, and this plan is the second one it gates.
+- **[@PLN145](../145-authoring-libs/README.md)** ✅ **closed** — `D` is the panel kit and `D0`
+  landed it in the registry, so this plan is no longer gated on it; `text2d`, `tween` and
+  `stage` 0.18.1 are the rest of what the editor draws with.
 - **SANDBOX.md / @PLN86** — `V2` is an application of shipped admission, not new work.
 - **The sandbox boundary and package-authoring rules** apply here as in the sibling plans; see
   [LIBRARY_AUTHORING.md](../../LIBRARY_AUTHORING.md) § 2a.
