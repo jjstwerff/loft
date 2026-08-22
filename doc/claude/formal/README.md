@@ -80,7 +80,8 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > ELEMENT TYPE is never varied at all. That is now the THIRD doc whose zero rested on an
 > all-scalar corpus, after interfaces.md (scalar instantiation) and tuples.md (no `text`) —
 > which makes "what does this corpus instantiate at?" the first question to ask of any
-> conformance list, not a per-doc accident. (D-iter-1, loft#1074, 2026-08-22.)
+> conformance list, not a per-doc accident. (D-iter-1, loft#1074, opened and CLOSED
+> 2026-08-22 — the zero is back, and now rests on a corpus that varies the element type.)
 >
 > **And a zero can fail a third way, with no oracle or corpus involved.**
 > [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three

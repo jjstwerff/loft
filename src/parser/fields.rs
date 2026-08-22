@@ -653,19 +653,34 @@ impl Parser {
                         Box::new(Type::Boolean),
                         crate::data::Deps::none(),
                     )),
-                    // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
-                    // ARG 2 (init is arg 1), so the hint goes on m_arg_idx == 2.
-                    // Both lambda params take the vector's element type; the
-                    // accumulator inherits the init's type but the inference
-                    // here uses elm uniformly because every primitive case
-                    // (sum, max, min, count) keeps acc and elm in the same
-                    // numeric domain.  Heterogeneous reduce can still use the
-                    // free-function form which supplies explicit types.
-                    ("reduce", 2) => Some(Type::Function(
-                        vec![elem.clone(), elem.clone()],
-                        Box::new(elem),
-                        crate::data::Deps::none(),
-                    )),
+                    // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is ARG 2 (init is
+                    // arg 1), so the hint goes on m_arg_idx == 2.
+                    //
+                    // The declared signature is `fn(U, T) -> U`, so the ACCUMULATOR is the
+                    // INIT's type and only the second parameter is the element's.  This
+                    // used to hint `elem` for both, on the reasoning that every primitive
+                    // case (sum, max, min, count) keeps acc and elm in one numeric domain
+                    // — true, and it makes `U != T` unusable in the method form: on a
+                    // `vector<(integer, integer)>` with an `integer` init, `acc` was typed
+                    // as the TUPLE and `acc + t.0` was refused with "No matching operator
+                    // '+' on '(integer, integer)' and 'integer'" (loft#1074).
+                    //
+                    // Reading the init's own type costs nothing where the two agree — the
+                    // homogeneous cases hint exactly what they hinted before — and falls
+                    // back to `elem` when the init has not typed (an earlier parse error),
+                    // so a broken program still gets the old hint rather than `Unknown`.
+                    ("reduce", 2) => {
+                        let acc = types
+                            .get(1)
+                            .filter(|it| !matches!(it, Type::Unknown(_)))
+                            .cloned()
+                            .unwrap_or_else(|| elem.clone());
+                        Some(Type::Function(
+                            vec![acc.clone(), elem],
+                            Box::new(acc),
+                            crate::data::Deps::none(),
+                        ))
+                    }
                     _ => None,
                 };
                 if let Some(h) = hint {

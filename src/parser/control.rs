@@ -13448,10 +13448,15 @@ impl Parser {
         // Use Value::Call(d_nr, ...) directly — no fn_ref_var local needed.  loft#945:
         // through `callback_call`, so a fold whose accumulator is TEXT gets the hidden
         // buffer its callee takes (`xs.reduce("", |a, x| { "{a}{x}" })` was an ICE).
+        // The ELEMENT parameter takes the same unboxing map/filter/any do: a tuple loop
+        // var is a `Reference(__tuple<…>)` and the callee declares the tuple by VALUE, so
+        // the fold read a packed DbRef as its element (loft#1074).  The accumulator is
+        // untouched — it is a local of the init's own type, never an element reference.
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let fold_call = self.callback_call(
             fn_d_nr,
-            vec![Value::Var(acc_var), Value::Var(for_var)],
-            vec![acc_type.clone(), var_tp.clone()],
+            vec![Value::Var(acc_var), elem_arg],
+            vec![acc_type.clone(), elem_arg_tp],
         );
         // loft#951 — a TEXT accumulator cannot take the bare `acc = f(acc, x)`.  A callee
         // answering text writes into ONE caller-allocated buffer and CLEARS it on entry,

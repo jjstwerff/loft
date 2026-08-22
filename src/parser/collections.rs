@@ -122,8 +122,12 @@ struct PredicateLoop {
     /// Statements that run once, before the loop: bind the vector, park the fn-ref value
     /// (when there is one), create the iterator.
     preamble: Vec<Value>,
-    /// The loop variable the predicate is called with.
-    for_var: u16,
+    /// The VALUE handed to the predicate for one element, from
+    /// [`Parser::callback_element_arg`] — `Var(for_var)` for every element type except a
+    /// TUPLE, which is unboxed from its DbRef into the stack tuple the callee declares
+    /// (loft#1074).  Held here rather than rebuilt at the call, so the scaffold and the
+    /// call cannot disagree about the element's representation.
+    elem_arg: Value,
     /// Fetch of the next element into `for_var`, first statement of the loop body.
     for_next: Value,
     /// `if <past the end> { break }`, second statement of the loop body.
@@ -137,11 +141,11 @@ struct PredicateLoop {
 /// fn-ref value [`Parser::predicate_loop_scaffold`] parked in a local.
 fn predicate_call(fn_d_nr: Option<u32>, lp: &PredicateLoop) -> Value {
     match fn_d_nr {
-        Some(d) => Value::Call(d, vec![Value::Var(lp.for_var)]),
+        Some(d) => Value::Call(d, vec![lp.elem_arg.clone()]),
         None => Value::CallRef(
             lp.fn_ref_var
                 .expect("a non-static predicate always parks its fn-ref in a local"),
-            vec![Value::Var(lp.for_var)],
+            vec![lp.elem_arg.clone()],
         ),
     }
 }
@@ -4609,6 +4613,41 @@ use #count instead"
     /// the compiler outright — *"Too few parameters on n_shout (got 1, need 2)"* — while
     /// the equivalent comprehension `[for s in xs { shout(s) }]` was fine.  Routing
     /// through the same filler is what makes the two spellings agree.
+    /// The element value to hand a combinator's CALLBACK, and the type to declare it as.
+    ///
+    /// [`Parser::for_type`]'s P189b block types a TUPLE loop variable as
+    /// `Reference(__tuple<…>)`, because iteration yields a DbRef pointing at the element's
+    /// inline bytes in the vector record.  That is right for a `for` BODY, where `t.0`
+    /// reads through the reference at the stored field offsets.  A callback is a CALL, and
+    /// a `fn(t: (…))` parameter is by VALUE everywhere else in the language — a direct
+    /// call, a comprehension and an index all agree — so the DbRef has to be unboxed into
+    /// the stack tuple first.
+    ///
+    /// Without it the callee read the DbRef's twelve bytes as the tuple's own members:
+    /// `map` answered a packed DbRef as `343597383710`, `filter` SIGSEGV'd once a member
+    /// was `text`, and `--native` refused to compile the call at all — `expected
+    /// (i64, i64), found DbRef` (loft#1074).  A STRUCT element is unaffected and must stay
+    /// on the reference path, because a struct IS a DbRef and the two representations
+    /// already agree; the tuple is the one element type where they do not.
+    ///
+    /// Returns the value and its type together so the three combinators that call this
+    /// cannot drift apart on them — the hazard loft#1006 was, in this same area.
+    pub(crate) fn callback_element_arg(
+        &mut self,
+        in_type: &Type,
+        for_var: u16,
+        var_tp: &Type,
+    ) -> (Value, Type) {
+        if let Type::Vector(elem, _) = in_type.base()
+            && let Type::Tuple(elems) = elem.base()
+        {
+            let elems = elems.clone();
+            let arg = self.unbox_tuple_from_dbref(Value::Var(for_var), &elems);
+            return (arg, Type::Tuple(elems));
+        }
+        (Value::Var(for_var), var_tp.clone())
+    }
+
     pub(crate) fn callback_call(
         &mut self,
         d_nr: u32,
@@ -4757,10 +4796,11 @@ use #count instead"
             fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
         }
 
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let body = if let Some(d) = fn_d_nr {
-            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
+            self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
         };
 
         self.data.vector_def(&mut self.lexer, &out_elem);
@@ -4911,13 +4951,19 @@ use #count instead"
             fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
         }
 
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let if_step = if let Some(d) = fn_d_nr {
-            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
+            self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
         };
 
-        let body = Value::Var(for_var);
+        // What the result vector COLLECTS needs the same unboxing as the predicate's
+        // argument, and for the same reason: `out_elem` is the TUPLE, so appending the
+        // loop variable's `Reference(__tuple<…>)` assigns a DbRef into a tuple slot.  A
+        // second unbox rather than reusing the one above, because the two read at
+        // different points of the loop — the collect runs only when the predicate passed.
+        let (body, _) = self.callback_element_arg(&in_type, for_var, &var_tp);
 
         self.data.vector_def(&mut self.lexer, &out_elem);
 
@@ -5661,9 +5707,10 @@ use #count instead"
         // inline them directly in the loop body.  A v_block wrapper would declare
         // `for_var` inside a nested Rust `{ }` block, making it invisible to the
         // short_circuit/count_step expression that follows in native code.
+        let (elem_arg, _) = self.callback_element_arg(&in_type, for_var, &var_tp);
         PredicateLoop {
             preamble,
-            for_var,
+            elem_arg,
             for_next,
             break_if_done,
             fn_ref_var,

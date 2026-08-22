@@ -1258,6 +1258,18 @@ continue.  Full closure record at
 | `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` must appear; missing → fail |
 | `// @EXPECT_FAIL: <text>` | Per-function (before `fn`) or file header | Runtime panic is tolerated |
 
+⚠ **Check `loft_suite` the way the GATE checks it, not by hand.** `cargo test --release
+--test wrap loft_suite` reports failures that `make ci` does not — measured 2026-08-22:
+`25-narrow-nullable-field-sentinel-collision` as *"was @EXPECT_FAIL, now compiles"*, and a
+panic on `75-native-stub`'s expected-fail naming stale cdylibs. Neither is real. `make ci`
+runs nextest under the **test profile**, and the same scripts pass there. It was confirmed
+not to be a code range (identical output from binaries either side of it) and not stale
+artefacts (`make check-rlib` and `make rebuild-native-cdylibs` changed nothing) — so
+`@EXPECT_FAIL` behaves differently per cargo profile, and the gate only ever exercises one
+of them. That is a real coverage hole and is not yet filed; what matters day to day is
+that a by-hand `cargo test` on this suite can cost twenty minutes chasing two failures
+that do not exist. Reach for `make ci`, or `./scripts/find_problems.sh`.
+
 **Every expectation must match.**  `@EXPECT_ERROR` and `@EXPECT_WARNING` used to be
 collected and then dropped, so an annotation whose diagnostic had been reworded, narrowed
 or removed kept passing.  When that was measured, **56 of the 167 `@EXPECT_ERROR`
