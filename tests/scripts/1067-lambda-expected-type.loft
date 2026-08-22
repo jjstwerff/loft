@@ -22,11 +22,11 @@
 // still fire where nothing names a signature, or this file would pass on a compiler that
 // simply stopped checking.
 //
-// A TUPLE member is the one position with an equally available expected type and no cell
-// here. It is left out on purpose: a `fn(…)` in a tuple cannot be called back out of one
-// whatever spelling put it there (loft#1069, an internal assertion), so threading the
-// type there would replace a clean type error with a panic. The rule extends exactly as
-// far as the storage supports; the cell lands with that fix.
+// A TUPLE member was the one position left out at first, and the reason is worth keeping:
+// a `fn(…)` in a tuple could not be CALLED back out of one whatever spelling put it there
+// (loft#1069), so threading the type there would have replaced a clean type error with a
+// panic. The rule extends exactly as far as the storage supports — and with that fixed,
+// it now extends there too.
 
 struct H1067  { f: fn(integer) -> integer }
 struct O1067  { h: H1067 }
@@ -86,6 +86,14 @@ fn test_every_parameter_infers_not_only_the_first() {
   assert(g.g(4, "a") == "a:4", "two parameters: got {g.g(4, \"a\")}");
 }
 
+fn test_a_tuple_member_infers() {
+  // The eighth position, landed with loft#1069.
+  t: (fn(integer) -> integer, integer) = (|x| { x * 2 }, 1);
+  assert(t.0(3) == 6, "tuple member: got {t.0(3)}");
+  u: (integer, fn(integer, text) -> text) = (5, |n, s| { "{s}{n}" });
+  assert(u.1(4, "a") == "a4", "tuple member, two parameters: got {u.1(4, \"a\")}");
+}
+
 fn test_a_capturing_lambda_in_a_field_carries_its_capture() {
   k = 10;
   c = H1067 { f: |x| { x * k } };
@@ -130,6 +138,7 @@ fn main() {
   test_a_named_argument_infers();
   test_a_parameter_default_infers();
   test_every_parameter_infers_not_only_the_first();
+  test_a_tuple_member_infers();
   test_a_capturing_lambda_in_a_field_carries_its_capture();
   test_a_void_returning_lambda_in_a_field_works();
 }

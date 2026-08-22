@@ -348,9 +348,25 @@ impl Output<'_> {
             ValueType::Tuple => {
                 write!(w, "(")?;
                 let elems = node.tuple_items();
+                // loft#1069 — TAKEN, so a nested tuple element does not read its parent's
+                // positions; the destination re-sets it per assignment.
+                let slots = std::mem::take(&mut self.tuple_slot_types);
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
                         write!(w, ", ")?;
+                    }
+                    // loft#1069 — a fn-ref member whose slot is `(u32, DbRef)` but whose
+                    // VALUE is the bare d_nr (a plain `dbl`, or a non-capturing inline
+                    // lambda) has to be built into the pair here.  Only the destination
+                    // knows: the d_nr infers as an `integer`, which is why the element
+                    // could not be asked.  A CAPTURING source already emits the pair (its
+                    // closure block's type IS the function), so it is left alone — that
+                    // case worked, and it is the shape being matched.
+                    let needs_fn_pair =
+                        matches!(slots.get(i).map(Type::base), Some(Type::Function(_, _, _)))
+                            && !matches!(self.infer_type(e), Some(Type::Function(_, _, _)));
+                    if needs_fn_pair {
+                        write!(w, "((")?;
                     }
                     let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
                     // @PLN17: a boolean tuple element is stored u8 (slot type);
@@ -371,8 +387,12 @@ impl Output<'_> {
                     if elem_is_text && self.tuple_text_to_string {
                         write!(w, ".to_string()")?;
                     }
+                    if needs_fn_pair {
+                        write!(w, ") as u32, DbRef::NULL)")?;
+                    }
                 }
                 write!(w, ")")?;
+                self.tuple_slot_types = slots;
                 return Ok(());
             }
             ValueType::TupleGet => {

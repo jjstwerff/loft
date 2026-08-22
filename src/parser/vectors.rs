@@ -491,7 +491,40 @@ impl Parser {
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {
+            // loft#1067 — a tuple MEMBER's declared type is an expected type like any
+            // other, so `t: (fn(integer) -> integer, integer) = (|x| { x * 2 }, 1)` can
+            // say what `x` is.  Held back until loft#1069, because a `fn(…)` in a tuple
+            // could not be CALLED back out of one whatever spelling put it there — so
+            // threading the type here would have replaced a clean type error with a panic.
+            //
+            // Only the members that ARE a `fn(…)` seed anything: this deliberately does
+            // not thread member types in general, which is a wider question about tuple
+            // literal typing (loft#942/#943) and not this rule.
+            let tuple_members: Vec<Type> = match var_tp.base() {
+                Type::Tuple(ms) => ms.clone(),
+                _ => Vec::new(),
+            };
+            // Touch the `⇐` channel ONLY when this destination actually names a `fn(…)`
+            // member.  A `(` also opens an ordinary parenthesised expression, and that
+            // expression INHERITS the ambient expectation — clearing it unconditionally
+            // silently retyped one (`115-snapshot-roundtrip` went from a text build to
+            // "No matching operator '&' on 'text' and 'integer'").
+            let seeding = tuple_members.iter().any(Self::seeds_lambda_hint);
+            let saved_expected = if seeding {
+                std::mem::replace(&mut self.expected, Type::Unknown(0))
+            } else {
+                Type::Unknown(0)
+            };
+            // Member 0 is parsed before the `,` proves this is a tuple at all.  Seeding it
+            // is still safe: a parenthesised NON-tuple expression checked against a tuple
+            // type is already an error, and only a `fn(…)`-typed member seeds.
+            if seeding && tuple_members.first().is_some_and(Self::seeds_lambda_hint) {
+                self.expected = tuple_members[0].base().clone();
+            }
             let t = self.expression(val);
+            if seeding {
+                self.expected = Type::Unknown(0);
+            }
             if self.lexer.has_token(",") {
                 // T1.2: Tuple literal — (expr, expr, ...)
                 //
@@ -511,12 +544,25 @@ impl Parser {
                         break;
                     }
                     let mut v = Value::Null;
+                    if seeding
+                        && tuple_members
+                            .get(values.len())
+                            .is_some_and(Self::seeds_lambda_hint)
+                    {
+                        self.expected = tuple_members[values.len()].base().clone();
+                    }
                     let t2 = self.expression(&mut v);
+                    if seeding {
+                        self.expected = Type::Unknown(0);
+                    }
                     values.push(v);
                     types.push(t2.unrewritten());
                     if !self.lexer.has_token(",") {
                         break;
                     }
+                }
+                if seeding {
+                    self.expected = saved_expected;
                 }
                 self.lexer.token(")");
                 if types.len() < 2 {
@@ -529,6 +575,9 @@ impl Parser {
                 *val = Value::Tuple(values);
                 Type::Tuple(types)
             } else {
+                if seeding {
+                    self.expected = saved_expected;
+                }
                 self.lexer.token(")");
                 // @P395 — a parenthesised vector concat consumed by a trailing
                 // `.method()` reused the OUTER assignment LHS as its accumulator

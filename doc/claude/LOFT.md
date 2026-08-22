@@ -1036,9 +1036,7 @@ signature (loft#1067):
 | an element of `vector<fn(…)>` | `[\|x\| { x * 2 }, \|x\| { x + 1 }]` |
 | a return position | `fn make() -> fn(integer) -> integer { \|x\| { x * 2 } }` |
 | a parameter default | `fn takes(f: fn(integer) -> integer = \|x\| { x * 2 })` |
-
-Not yet a tuple member: `(\|x\| { x * 2 }, 1)` is refused, because a `fn(…)` stored in a
-tuple cannot be CALLED back out of one whatever spelling put it there (loft#1069).
+| a tuple member | `t: (fn(integer) -> integer, integer) = (\|x\| { x * 2 }, 1)` |
 
 If inference is impossible — nothing in the context names a signature — the compiler
 errors: *"Cannot infer type for lambda parameter 'x'; pass the lambda where the expected

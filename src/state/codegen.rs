@@ -2673,7 +2673,36 @@ impl State {
             // fall-through behaviour) — detected via a stack-position
             // delta check.
             let before = stack.position;
-            self.generate(value, stack, false);
+            // loft#1069 — a fn-ref TUPLE MEMBER has to arrive as the whole 20-byte slot
+            // (8B d_nr + 12B closure DbRef), because `emit_tuple_put_ops` POPS twenty for
+            // it.  A bare `dbl` lowers to `Value::Int(d_nr)` and pushes only eight, so the
+            // pop ran twelve bytes into whatever sat below it — every other member's offset
+            // shifted, and the tuple's own base moved under the reader.  That is why
+            // `t.1`, a plain integer, faulted exactly as `t.0(3)` did: the member that
+            // broke the tuple was not the member being read.
+            //
+            // The top-up is `gen_fn_ref_value`, which every OTHER position for the same
+            // value already routes through (a plain local's first Set, a return, a call
+            // argument).  It has to happen HERE rather than in the tuple walker because
+            // only the destination names the element as a `fn(…)`: a bare `d_nr` generates
+            // as an `integer`, so the value cannot say what it is.
+            if let Type::Tuple(elems) = stack.function.tp(v).base().clone()
+                && let Value::Tuple(items) = value.unspan()
+                && items.len() == elems.len()
+                && elems
+                    .iter()
+                    .any(|e| matches!(e.base(), Type::Function(_, _, _)))
+            {
+                for (e, item) in elems.iter().zip(items.iter()) {
+                    if matches!(e.base(), Type::Function(_, _, _)) {
+                        self.gen_fn_ref_value(item, stack);
+                    } else {
+                        self.generate(item, stack, false);
+                    }
+                }
+            } else {
+                self.generate(value, stack, false);
+            }
             if stack.position == before {
                 return;
             }

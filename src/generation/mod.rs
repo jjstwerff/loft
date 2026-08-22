@@ -234,6 +234,37 @@ fn collect_fn_ref_literals(
             ) {
                 collect_int_fn_refs(IrNode::Native(inner), calls);
             }
+            // loft#1069 — a fn-ref stored into a TUPLE MEMBER. `t: (fn(…), integer) =
+            // (dbl, 1)` puts the d_nr in a plain `Int` element of a `Value::Tuple`, and
+            // the variable's type is a `Tuple`, not a `Function` — so neither the arm
+            // above nor the FnRef-literal walk sees it, and a function called ONLY through
+            // a tuple was pruned as unreachable. It then had no arm in the native fn-ref
+            // dispatch and the call panicked `invalid fn-ref`. Same shape as the @P299
+            // (`OpSetInt4` into a struct field) and @P328 (`yield`) recoveries.
+            //
+            // Read per MEMBER where the shapes line up, so only a member the destination
+            // declares `fn(…)` contributes; a tuple whose arity does not match falls back
+            // to scanning the whole value, which over-approximates exactly as @P299 does
+            // (an integer member equal to a fn d_nr marks that fn reachable). Reachability
+            // over-approximation is correctness-safe — it can only emit an unused
+            // candidate.
+            if let Type::Tuple(elems) = variables.tp(*var)
+                && elems
+                    .iter()
+                    .any(|e| matches!(e.base(), Type::Function(_, _, _)))
+            {
+                if let Value::Tuple(items) = inner.unspan()
+                    && items.len() == elems.len()
+                {
+                    for (e, item) in elems.iter().zip(items.iter()) {
+                        if matches!(e.base(), Type::Function(_, _, _)) {
+                            collect_int_fn_refs(IrNode::Native(item), calls);
+                        }
+                    }
+                } else {
+                    collect_int_fn_refs(IrNode::Native(inner), calls);
+                }
+            }
             collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
         }
         Value::Call(d, args) => {
@@ -565,6 +596,15 @@ pub struct Output<'a> {
     /// element.  Cleared after the assignment so argument-context
     /// tuples (which need `&str`) keep the default emit.
     pub tuple_text_to_string: bool,
+    /// loft#1069 — the DECLARED element types of the tuple currently being emitted, when
+    /// the destination named them.  Set beside [`Self::tuple_text_to_string`] by the same
+    /// destination-aware paths, and for the same reason: a tuple ELEMENT cannot say what
+    /// it is.  A fn-ref written as a bare name lowers to the d_nr alone, which infers as
+    /// an `integer`, while the slot is the whole `(u32, DbRef)` pair — so only the
+    /// destination can ask for the pair to be built.  Empty when the destination is
+    /// unknown, and TAKEN by the emitter so a nested tuple does not read its parent's
+    /// positions.
+    pub tuple_slot_types: Vec<Type>,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
@@ -1233,6 +1273,7 @@ impl<'a> Output<'a> {
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            tuple_slot_types: Vec::new(),
             call_stack_prefix: None,
             wasm_browser: false,
             wasm_wasi: false,
