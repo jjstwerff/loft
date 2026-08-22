@@ -78,7 +78,6 @@ fn page_key(path: &str) -> Result<String, String> {
                 .to_string(),
         );
     }
-    embeddable(path)?;
     if path.starts_with('/') || path.contains('\\') || path.chars().nth(1) == Some(':') {
         return Err(format!(
             "loft.toml: [[embed]] `path = \"{path}\"` is not a relative path.\n  \
@@ -101,10 +100,11 @@ fn page_key(path: &str) -> Result<String, String> {
              segments."
         ));
     }
+    embeddable(path)?;
     Ok(format!("/{path}"))
 }
 
-/// Check the `[[embed]] `declarations and answer the files the page must carry.
+/// Check the `[[embed]]` declarations and answer the files the page must carry.
 ///
 /// Refuses **before** the wasm compile, the way F5 does: a manifest that cannot
 /// produce a working page should not cost a wasm build first.
@@ -253,6 +253,12 @@ mod tests {
         assert!(validate(&[EmbedDecl::default()]).is_err());
         // A name that would break out of the page's script.
         assert!(validate(&[decl("a\"></script>.pack", None, &r)]).is_err());
+        // A Windows spelling is refused as a PATH problem, not as a JavaScript one —
+        // `\\` trips both rules, and only one of them names what is actually wrong.
+        for p in ["C:\\assets\\drift.pack", "assets\\drift.pack"] {
+            let e = validate(&[decl(p, None, &r)]).expect_err("must refuse");
+            assert!(e.contains("is not a relative path"), "{e}");
+        }
         // The control: the same file, spelled the way the program spells it.
         assert!(validate(&[decl(&rel, None, &r)]).is_ok());
     }
