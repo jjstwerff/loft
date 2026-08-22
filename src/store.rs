@@ -3795,6 +3795,20 @@ impl Store {
         matches!(Self::validate_integrity(path), Ok(StoreIntegrity::Clean))
     }
 
+    /// Shim when the `mmap` feature is off — the shape `bind_path` already
+    /// uses, for the same reason: the stdlib surface is one declaration for
+    /// every target, so a target without the sidecar machinery has to answer
+    /// rather than fail to link (loft#1063).
+    ///
+    /// `false` is the honest answer AND the safe one: it means *not verified
+    /// clean*, which routes the caller into the same rebuild-from-source
+    /// branch a corrupt sidecar does.
+    #[cfg(not(feature = "mmap"))]
+    #[must_use]
+    pub fn durable_check(_path: &std::path::Path) -> bool {
+        false
+    }
+
     /// **Phase 01b.**  Write a fresh `.dmeta` sidecar capturing the
     /// current main-file's byte length + CRC32 + a clean-close
     /// timestamp.  Returns `true` on success, `false` on any I/O
@@ -3813,6 +3827,16 @@ impl Store {
     #[must_use]
     pub fn durable_seal(path: &std::path::Path) -> bool {
         Self::write_initial_sidecar(path).is_ok()
+    }
+
+    /// Shim when the `mmap` feature is off — see [`Self::durable_check`]
+    /// (loft#1063).  `false` says the seal did not happen, which is what the
+    /// declared contract already covers ("false on any I/O error") and what
+    /// the caller must know before trusting a later `durable_check`.
+    #[cfg(not(feature = "mmap"))]
+    #[must_use]
+    pub fn durable_seal(_path: &std::path::Path) -> bool {
+        false
     }
 
     /// Captures the current main-file length and CRC at the moment of call.

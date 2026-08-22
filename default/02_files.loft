@@ -352,6 +352,10 @@ pub fn mtime(path: text) -> integer fs#read;
 // payload CRC, tier_id all OK).  Returns false on any failure or
 // missing file.  Pair with `store_durable_seal` after a clean
 // write session to record the new state.
+//
+// Desktop-only: the sidecar is built over memory-mapped files, so on
+// the wasm targets this answers false — "nothing validates", which is
+// the state that sends a caller down its rebuild branch (loft#1063).
 pub fn store_durable_check(path: text) -> boolean fs#read;
 #rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
 #impure(io)
@@ -362,6 +366,10 @@ pub fn store_durable_check(path: text) -> boolean fs#read;
 // finishing a write session; if the program crashes between the
 // last write and the seal, the sidecar stays stale and the next
 // `store_durable_check` returns false → caller rebuilds.
+//
+// Desktop-only, like `store_durable_check`: on the wasm targets this
+// answers false — the seal did not happen — so seal where the store is
+// written and read it back with `store_load` (loft#1063).
 pub fn store_durable_seal(path: text) -> boolean fs#update;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)

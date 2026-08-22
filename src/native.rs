@@ -161,9 +161,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_list_dir", n_list_dir),
     ("n_read_bytes", n_read_bytes),
     ("n_write_bytes", n_write_bytes),
-    #[cfg(feature = "mmap")]
     ("n_store_durable_check", n_store_durable_check),
-    #[cfg(feature = "mmap")]
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
@@ -1255,7 +1253,6 @@ fn n_write_bytes(stores: &mut Stores, stack: &mut DbRef) {
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.
 /// Mirrors the `#rust` template in `default/02_files.loft`.
-#[cfg(feature = "mmap")]
 fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = crate::store::Store::durable_check(std::path::Path::new(v_path.str()));
@@ -1264,7 +1261,6 @@ fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
 /// Mirrors the `#rust` template in `default/02_files.loft`.
-#[cfg(feature = "mmap")]
 fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = crate::store::Store::durable_seal(std::path::Path::new(v_path.str()));

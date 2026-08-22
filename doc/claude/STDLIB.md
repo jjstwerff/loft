@@ -747,6 +747,15 @@ stale — the caller is expected to rebuild from authoritative sources.
 | `store_durable_check(path: text) -> boolean` | Returns `true` iff the `.dmeta` sidecar at `<path>.dmeta` validates against the main file at `path` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns `false` on any failure or missing file.  Phase-01b Tier-1 only (no msync discipline). |
 | `store_durable_seal(path: text) -> boolean` | Writes a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp.  Returns `false` on any I/O error.  Pair with `store_durable_check` to bracket each write session. |
 
+**Both are desktop-only, and say so by answering `false`** (loft#1063).  The sidecar
+machinery is built over memory-mapped files, which the wasm targets have no equivalent
+for, so on `--native-wasm` and `--html` each call compiles and returns `false` — the same
+route `store_persist_bind` takes.  `false` is the honest answer on that target and the safe
+one: it means *the seal did not happen* and *nothing validates*, which is exactly the state
+that sends a caller down its rebuild branch.  Seal where the store is WRITTEN (a desktop
+build) and use the portable readers — `store_load`, `store_load_key*` — in the browser; an
+image sealed by `--native` loads byte-identically on wasm.
+
 Usage pattern:
 
 ```loft
