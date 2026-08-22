@@ -1195,6 +1195,45 @@ impl State {
         }
     }
 
+    /// Push a tuple literal's members with each `fn(…)` member topped up to the whole
+    /// 20-byte pair, recursing into NESTED tuple members.
+    ///
+    /// The flat version of this was loft#1069.  It read the members of the destination
+    /// type against the members of the literal and topped up the ones declared `fn(…)` —
+    /// correct, and blind one level in, because a nested tuple member is a `Type::Tuple`
+    /// and not a `Type::Function`, so the loop handed the whole inner literal to plain
+    /// `generate` and the inner fn member went back to being eight bytes.  Depth was the
+    /// axis that fix held fixed: `((dbl, 1), "z")` panicked `fn_var=16 < 20` with no
+    /// assignment anywhere in the program.
+    ///
+    /// Arity is re-checked per level, so a mismatch degrades to the plain push for that
+    /// member instead of zipping two different shapes together.
+    fn gen_tuple_members_with_fn_refs(
+        &mut self,
+        elems: &[Type],
+        items: &[Value],
+        stack: &mut Stack,
+    ) {
+        for (e, item) in elems.iter().zip(items.iter()) {
+            match e.base() {
+                Type::Function(_, _, _) => self.gen_fn_ref_value(item, stack),
+                Type::Tuple(inner) if inner.iter().any(crate::data::tuple_carries_fn_ref) => {
+                    if let Value::Tuple(inner_items) = item.unspan()
+                        && inner_items.len() == inner.len()
+                    {
+                        let inner = inner.clone();
+                        self.gen_tuple_members_with_fn_refs(&inner, inner_items, stack);
+                    } else {
+                        self.generate(item, stack, false);
+                    }
+                }
+                _ => {
+                    self.generate(item, stack, false);
+                }
+            }
+        }
+    }
+
     /// #263: pad a fn-ref **return value** to the full 20-byte ABI slot.
     ///
     /// A fn-ref returned as a bare d_nr (e.g. `return dbl`, which lowers to
@@ -2737,17 +2776,9 @@ impl State {
             if let Type::Tuple(elems) = stack.function.tp(v).base().clone()
                 && let Value::Tuple(items) = value.unspan()
                 && items.len() == elems.len()
-                && elems
-                    .iter()
-                    .any(|e| matches!(e.base(), Type::Function(_, _, _)))
+                && elems.iter().any(crate::data::tuple_carries_fn_ref)
             {
-                for (e, item) in elems.iter().zip(items.iter()) {
-                    if matches!(e.base(), Type::Function(_, _, _)) {
-                        self.gen_fn_ref_value(item, stack);
-                    } else {
-                        self.generate(item, stack, false);
-                    }
-                }
+                self.gen_tuple_members_with_fn_refs(&elems, items, stack);
             } else {
                 self.generate(value, stack, false);
             }

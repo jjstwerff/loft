@@ -368,6 +368,19 @@ impl Output<'_> {
                     if needs_fn_pair {
                         write!(w, "((")?;
                     }
+                    // A NESTED tuple member gets its own declared element types handed
+                    // down, so the inner arm can ask for its own fn-ref pairs.  Without
+                    // this the `take` above left the inner arm with an empty slot list and
+                    // `needs_fn_pair` false, so `((dbl, 1), "z")` emitted
+                    // `((710_i64, 1_i64), …)` against `(((u32, DbRef), i64), String)` and
+                    // rustc refused the program — depth being the axis loft#1069's fix
+                    // held fixed.  Only a member that CARRIES a fn-ref seeds anything, so
+                    // an ordinary nested tuple keeps taking the path it always did.
+                    if let Some(Type::Tuple(inner)) = slots.get(i).map(Type::base)
+                        && inner.iter().any(crate::data::tuple_carries_fn_ref)
+                    {
+                        self.tuple_slot_types = inner.clone();
+                    }
                     let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
                     // @PLN17: a boolean tuple element is stored u8 (slot type);
                     // wrap `((elem) as u8)` so a `bool` sub-expression fits the slot.

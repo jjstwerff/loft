@@ -4068,7 +4068,41 @@ use a separate collection or add after the loop"
             && self.lexer.has_token("=")
         {
             let mut rhs = Value::Null;
+            // loft#1067's member-ASSIGNMENT position.  The declared type of the member being
+            // written is an inference context exactly as the tuple LITERAL's member is, so
+            // `t.0 = |x| { x + 1 }` should read like `t = (|x| { x + 1 }, 1)` — before this
+            // it was the only fn-ref spelling of the statement that did not work, refused
+            // with "Cannot infer type for lambda parameter" while the long form beside it
+            // compiled.  The container is the root's tuple for `t.0 = …` and the deepest
+            // work var's for a chained `t.0.1 = …`, which is the same walk
+            // `build_nested_tuple_assign` writes through.
+            //
+            // Touch the `⇐` channel ONLY where the destination really does name a `fn(…)`
+            // member — the scoping loft#1069 paid a round trip to learn, because an
+            // expression that merely passes through here INHERITS the ambient expectation
+            // and clearing it unconditionally silently retypes one.
+            let container = match lhs.chain.last() {
+                Some((w, _)) => self.vars.tp(*w).clone(),
+                None => self.vars.tp(lhs.root).clone(),
+            };
+            let member_tp = match container.base() {
+                Type::Tuple(ms) => ms.get(lhs.leaf_idx as usize).cloned(),
+                _ => None,
+            };
+            let seeding = member_tp.as_ref().is_some_and(Self::seeds_lambda_hint);
+            let saved_expected = if seeding {
+                let m = member_tp
+                    .expect("seeding implies a member type")
+                    .base()
+                    .clone();
+                Some(std::mem::replace(&mut self.expected, m))
+            } else {
+                None
+            };
             self.expression(&mut rhs);
+            if let Some(prev) = saved_expected {
+                self.expected = prev;
+            }
             *code = build_nested_tuple_assign(code, &lhs, rhs);
             return Type::Void;
         }

@@ -2740,6 +2740,27 @@ pub fn stored_tuple_offsets(
     stored_tuple_offsets_for_def(data, database, def_nr, elems.len())
 }
 
+/// Does this tuple member type carry a `fn(…)` anywhere inside it?
+///
+/// A fn-ref value is the PAIR — an 8-byte d_nr plus a 12-byte closure DbRef — while a
+/// non-capturing source lowers to the d_nr alone, so only the DESTINATION can ask for the
+/// whole slot to be built.  The member that needs asking can sit at any depth, which is
+/// why this sees through nested tuples: reading only the top level is what left
+/// `((dbl, 1), "z")` broken after loft#1069 fixed the flat case.
+///
+/// Both backends decide with THIS function — the interpreter when it pushes a tuple
+/// literal's members and the native emitter when it hands declared element types down to a
+/// nested member.  One list, on purpose: loft#1006 was two copies of a tuple element list
+/// disagreeing, and this is the same hazard.
+#[must_use]
+pub fn tuple_carries_fn_ref(tp: &Type) -> bool {
+    match tp.base() {
+        Type::Function(_, _, _) => true,
+        Type::Tuple(inner) => inner.iter().any(tuple_carries_fn_ref),
+        _ => false,
+    }
+}
+
 /// Same as [`stored_tuple_offsets`] but with the synthetic struct's
 /// `def_nr` already resolved.  Use when the caller already has the
 /// def_nr (e.g. parser sites that called `tuple_def` directly).

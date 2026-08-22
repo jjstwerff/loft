@@ -185,6 +185,38 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
 /// nested `Set`).  `Call` is the one deliberate exception: there the fn-ref is
 /// the call's RESULT, and its ARGUMENTS are ordinary integers that must not be
 /// mistaken for def numbers.
+/// Mark the functions a tuple literal reaches through its `fn(…)` members, at any DEPTH.
+///
+/// The flat version of this was loft#1069: a function reachable only through a tuple was
+/// pruned as unreachable, then had no arm in the native fn-ref dispatch and the call
+/// panicked `invalid fn-ref`.  It read the TOP-level members only, so a fn one level in
+/// (`((dbl, 1), "z")`) was pruned exactly as before — nesting depth being the axis that
+/// fix held fixed.
+///
+/// Read per MEMBER where the shapes line up, so only a member the destination declares
+/// `fn(…)` contributes; a tuple whose arity does not match falls back to scanning the
+/// whole value, which over-approximates exactly as @P299 does.  Reachability
+/// over-approximation is correctness-safe — it can only emit an unused candidate.
+fn collect_tuple_fn_refs(elems: &[Type], inner: &Value, calls: &mut HashSet<u32>) {
+    let Value::Tuple(items) = inner.unspan() else {
+        collect_int_fn_refs(IrNode::Native(inner), calls);
+        return;
+    };
+    if items.len() != elems.len() {
+        collect_int_fn_refs(IrNode::Native(inner), calls);
+        return;
+    }
+    for (e, item) in elems.iter().zip(items.iter()) {
+        match e.base() {
+            Type::Function(_, _, _) => collect_int_fn_refs(IrNode::Native(item), calls),
+            Type::Tuple(nested) if nested.iter().any(crate::data::tuple_carries_fn_ref) => {
+                collect_tuple_fn_refs(nested, item, calls);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_int_fn_refs(node: IrNode, calls: &mut HashSet<u32>) {
     match node.kind() {
         ValueType::Int => {
@@ -249,21 +281,9 @@ fn collect_fn_ref_literals(
             // over-approximation is correctness-safe — it can only emit an unused
             // candidate.
             if let Type::Tuple(elems) = variables.tp(*var)
-                && elems
-                    .iter()
-                    .any(|e| matches!(e.base(), Type::Function(_, _, _)))
+                && elems.iter().any(crate::data::tuple_carries_fn_ref)
             {
-                if let Value::Tuple(items) = inner.unspan()
-                    && items.len() == elems.len()
-                {
-                    for (e, item) in elems.iter().zip(items.iter()) {
-                        if matches!(e.base(), Type::Function(_, _, _)) {
-                            collect_int_fn_refs(IrNode::Native(item), calls);
-                        }
-                    }
-                } else {
-                    collect_int_fn_refs(IrNode::Native(inner), calls);
-                }
+                collect_tuple_fn_refs(elems, inner, calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
         }

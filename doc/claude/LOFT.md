@@ -1037,6 +1037,7 @@ signature (loft#1067):
 | a return position | `fn make() -> fn(integer) -> integer { \|x\| { x * 2 } }` |
 | a parameter default | `fn takes(f: fn(integer) -> integer = \|x\| { x * 2 })` |
 | a tuple member | `t: (fn(integer) -> integer, integer) = (\|x\| { x * 2 }, 1)` |
+| a tuple member by assignment | `t.0 = \|x\| { x + 1 }` (nested too: `t.0.0 = …`) |
 
 If inference is impossible — nothing in the context names a signature — the compiler
 errors: *"Cannot infer type for lambda parameter 'x'; pass the lambda where the expected

@@ -33,6 +33,7 @@ struct O1067  { h: H1067 }
 struct G1067  { g: fn(integer, text) -> text }
 struct V1067  { f: fn(integer) }
 
+fn dbl1067(x: integer) -> integer { x * 2 }
 fn takes1067(f: fn(integer) -> integer) -> integer { f(5) }
 fn dflt1067(f: fn(integer) -> integer = |x| { x * 2 }) -> integer { f(5) }
 fn make1067() -> fn(integer) -> integer { |x| { x * 2 } }
@@ -94,6 +95,30 @@ fn test_a_tuple_member_infers() {
   assert(u.1(4, "a") == "a4", "tuple member, two parameters: got {u.1(4, \"a\")}");
 }
 
+fn test_a_tuple_member_assignment_infers() {
+  // The ninth position.  The eighth above writes the member in the LITERAL; writing it by
+  // ASSIGNMENT went through a different site that pushed no expected type, so this was the
+  // one fn-ref spelling of the statement that did not work — refused with "Cannot infer
+  // type for lambda parameter" while the long form on the very next line compiled.
+  t: (fn(integer) -> integer, integer) = (|x| { x * 2 }, 1);
+  assert(t.0(3) == 6, "the member as written: got {t.0(3)}");
+  t.0 = |x| { x + 1 };
+  assert(t.0(3) == 4, "after assigning a short lambda: got {t.0(3)}");
+  assert(t.1 == 1, "the member beside it: got {t.1}");
+  // A NESTED member assignment reads its type through the same walk the write uses.
+  //
+  // ⚠ The LITERAL below deliberately uses a named fn, not a short lambda: seeding the
+  // expected type into a tuple literal is per top-level member, and a NESTED member is a
+  // `Type::Tuple` rather than a `Type::Function`, so `((|x| { x * 2 }, 1), "z")` still
+  // reports "cannot infer" while the flat `(|x| { x * 2 }, 1)` above infers (loft#1073).
+  // The ASSIGNMENT below is what this cell pins, and
+  // it works at depth because it reads the member type through the write's own walk.
+  n: ((fn(integer) -> integer, integer), text) = ((dbl1067, 1), "z");
+  n.0.0 = |x| { x + 1 };
+  assert(n.0.0(3) == 4, "nested member, short lambda: got {n.0.0(3)}");
+  assert(n.1 == "z", "the member beside the nested one: got {n.1}");
+}
+
 fn test_a_capturing_lambda_in_a_field_carries_its_capture() {
   k = 10;
   c = H1067 { f: |x| { x * k } };
@@ -139,6 +164,7 @@ fn main() {
   test_a_parameter_default_infers();
   test_every_parameter_infers_not_only_the_first();
   test_a_tuple_member_infers();
+  test_a_tuple_member_assignment_infers();
   test_a_capturing_lambda_in_a_field_carries_its_capture();
   test_a_void_returning_lambda_in_a_field_works();
 }
