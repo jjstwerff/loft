@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A browser page can read a store out of its own filesystem (@PLN146 F4, 2026-08-22)
+
+**Symptom.** `store_load` on a `--html` page answered `false` for every path — politely,
+no panic, nothing to act on. So "a pack IS a loft store" was true on desktop and
+HTTP-only in a browser, and a page could not carry its own assets at all.
+
+**Cause.** `Store::load` reads via `std::fs::read`, and `Stores::load_path` gates on
+`std::fs::metadata`. `wasm32-unknown-unknown` has no filesystem, so both fail there. The
+page's own tree — which `doc/loft-fs.js` already serves from `globalThis.loftBaseFS`, and
+which `png_store.rs` already reads for PNGs — is reachable only through the
+`loft_host_fs_*` bridge, and the store loader never called it.
+
+**Fix.** `store::image_bytes` and `store::image_at_least`: `std::fs` first, the host-FS
+bridge second, behind one `host_fs`-gated helper so the two read as a single path rather
+than a pair of cfg forks. Native is unchanged by construction — `metadata` succeeds, the
+host arm never runs — and 98 store tests confirm it. On wasm the existence probe costs a
+read and the load costs a second; one code path is worth that against bytes the page is
+already holding.
+
+**Gate.** `tests/html_page_store.rs` — the same emitted wasm run twice, differing only in
+whether the store is in the page tree: `load=true read=true` when carried,
+`load=false read=false` when not. Proven red by making the host arm answer `None`. The
+absent-file half is the one that matters: a loader reporting success for a file nobody
+supplied would pass the positive assertion and be worse than the refusal it replaced.
+
+**Not included.** `--html` does not yet emit anything into `loftBaseFS`; a page or a
+library's `host_js` seeds it. Emitting a declared pack is F4's remaining half.
+
 ### A browser page can declare the font it draws with (@PLN146 F5/F6, 2026-08-22)
 
 **New.** `[[font]]` in `loft.toml` — `family`, `native`, and one of `url` (a font file we

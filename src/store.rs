@@ -392,6 +392,50 @@ impl Drop for Store {
 }
 
 #[allow(dead_code)]
+/// The bytes of a store image, wherever THIS target keeps its files.
+///
+/// `std::fs` is the whole story on every native target, and the host-FS arm never runs
+/// there.  It exists for `wasm32-unknown-unknown`, which has no filesystem at all: a
+/// browser page's own tree is reachable only through the `loft_host_fs_*` bridge, so a
+/// page reading a pack it carries in `globalThis.loftBaseFS` arrives here with
+/// `std::fs` failing and the host FS holding the file.  Without it a `--html` page could
+/// not read a store at ALL — `store_load` answered `false` for every path, politely and
+/// with nothing to act on (@PLN146 F4).
+pub(crate) fn image_bytes(path: &str) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(_) => host_image_bytes(path),
+    }
+}
+
+/// Is there an image at `path` of at least `min` bytes, on either filesystem?
+///
+/// The cheap existence probe `load_path` gates on.  On a native target it is one
+/// `metadata` call and never reads the file; on wasm it costs a read, because the host
+/// FS answers bytes rather than sizes — and the caller then reads it again through
+/// [`image_bytes`].  Two reads of an embedded pack is worth the single code path, and a
+/// page carrying its own assets holds them in memory either way.
+pub(crate) fn image_at_least(path: &str, min: u64) -> bool {
+    if let Ok(meta) = std::fs::metadata(path) {
+        return meta.len() >= min;
+    }
+    host_image_bytes(path).is_some_and(|b| b.len() as u64 >= min)
+}
+
+/// The host filesystem's answer, on the targets that have one.  `None` everywhere else,
+/// so the two helpers above read as one path rather than as a pair of cfg forks.
+fn host_image_bytes(path: &str) -> Option<Vec<u8>> {
+    #[cfg(host_fs)]
+    {
+        crate::wasm::host_fs_read_binary(path)
+    }
+    #[cfg(not(host_fs))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 impl Store {
     /// True when this store's memory IS a memory-mapped file
     /// (`store_persist_bind`) — its bytes are DURABLE state.
@@ -656,7 +700,7 @@ impl Store {
     /// image, or a bad `SIGNATURE`); callers that want a clean reject wrap it in
     /// `catch_unwind` (see `Stores::load_path`).
     pub fn load(path: &str) -> Store {
-        let bytes = std::fs::read(path).expect("store load: cannot read file");
+        let bytes = image_bytes(path).expect("store load: cannot read file");
         assert!(
             bytes.len() >= 16,
             "store load: file too small to be a store image"

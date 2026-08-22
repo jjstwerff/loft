@@ -3695,8 +3695,10 @@ impl Stores {
             Some(s) if !s.is_empty() => s,
             _ => return false,
         };
-        // load needs an existing, plausibly-valid store file (≥ the header).
-        if !std::fs::metadata(path).is_ok_and(|m| m.len() >= 16) {
+        // load needs an existing, plausibly-valid store file (≥ the header) — on
+        // EITHER filesystem, so a `--html` page can read a pack out of its own page
+        // tree rather than being told there is no such file (@PLN146 F4).
+        if !crate::store::image_at_least(path_str, 16) {
             return false;
         }
 

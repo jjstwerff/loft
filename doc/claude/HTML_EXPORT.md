@@ -366,6 +366,30 @@ same corrected `AsyncifyCtrl` and pumps on `setImmediate`; the browser gate is
 `tests/html_asyncify.rs` (asserts a multi-suspend program reaches its final line
 both visible and hidden).
 
+## Reading a store in the page (@PLN146 F4)
+
+`wasm32-unknown-unknown` has no filesystem, so `Store::load`'s `std::fs::read` cannot
+answer there — `store_load` used to return `false` for every path in a browser, politely
+and with nothing to act on.  The loader now falls back to the `loft_host_fs_*` bridge
+(`store::image_bytes` / `image_at_least`), which is what `doc/loft-fs.js` serves
+`globalThis.loftBaseFS` through.  A page that CARRIES a store therefore reads it with the
+same `store_load` call the desktop makes:
+
+```html
+<script>globalThis.loftBaseFS = {"/game.meta.store": <Uint8Array>};</script>
+```
+
+Native is unchanged — one `metadata` call, then `std::fs::read`; the host arm never runs
+there.  On wasm the existence probe costs a read and the load costs a second, which is
+the price of one code path and is paid against bytes the page already holds.
+
+⚠ A page with no such file still answers `false`, and `tests/html_page_store.rs` gates
+both halves: a loader that reported success for a file nobody supplied would be worse
+than the refusal it replaced.
+
+`--html` does not yet PUT anything into `loftBaseFS` — a page seeds it, or a library does
+from its `[wasm.bridge] host_js`.  Emitting a declared pack is F4's remaining half.
+
 ## HTML assembly — what ships in the output
 
 The output `.html` is a single self-contained file:
