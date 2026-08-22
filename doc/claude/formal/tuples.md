@@ -184,8 +184,14 @@ OPEN: **1**, and bounded by the oracle note below.
   disagreed is exactly what loft#1006 was. Guard
   `tests/scripts/fn-ref-in-a-nested-tuple.loft`, proven to fail on a pristine tree on both
   backends. The two REFUSALS left at this position — a short lambda not inferred inside a
-  nested literal, and a forward-referenced fn name not resolving in any tuple literal — are
-  loft#1073; neither is a wrong answer.
+  nested literal, and a forward-referenced fn name not resolving in any tuple literal — were
+  loft#1073, and are closed (2026-08-22, guard
+  `tests/scripts/tuple-literal-member-fn-inference.loft`). Both were the same shape one level
+  in: `(T-Chk)`'s push read the TOP-LEVEL members, so a member that merely CONTAINS a
+  `fn(…)` seeded nothing; and `change_var_type` accepted a bare `Unknown` source as pass 1's
+  placeholder but not the same fact inside a composite, so `(later, 1)` was measured against
+  the declared type and refused — the mirror of loft#944, which made that statement about the
+  variable's own type.
 - ⚠ **…but the oracle's elements are all `(integer, integer)`.** It carries no `text`, and that
   gap is measured, not theoretical: this doc read `OPEN: 0` through **two** live tuple deviations
   that the differential it leans on could not see — loft#1004 (a tuple's `text` element written

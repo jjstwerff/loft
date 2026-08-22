@@ -3223,6 +3223,28 @@ impl Parser {
         matches!(tp.base(), Type::Function(_, _, _))
     }
 
+    /// Is this declared tuple MEMBER type worth pushing on the `⇐` channel — because it
+    /// is a `fn(…)`, or because a `fn(…)` sits somewhere inside it?
+    ///
+    /// [`Self::seeds_lambda_hint`] answers for the member that IS the lambda's
+    /// destination; a member that merely CONTAINS one is a step on the way there, and the
+    /// tuple-literal branch needs both. Seeding only the outer step made the seeding
+    /// per top-level member: `(fn(integer) -> integer, integer)` inferred `|x|` and
+    /// `((fn(integer) -> integer, integer), text)` did not, because a nested member is a
+    /// `Type::Tuple`, so nothing reached the inner literal and `x` had no type
+    /// (loft#1073).
+    ///
+    /// Same bound as the flat rule: only a member on the way to a `fn(…)` touches the
+    /// channel at all, so this does not thread member types in general — that is the
+    /// wider question of loft#942/#943.
+    pub(crate) fn seeds_tuple_member_hint(tp: &Type) -> bool {
+        match tp.base() {
+            Type::Function(_, _, _) => true,
+            Type::Tuple(members) => members.iter().any(Self::seeds_tuple_member_hint),
+            _ => false,
+        }
+    }
+
     /// Expected enum type for a bare value-position variant (`f(Red)`) — `expected`
     /// filtered to enum context.
     pub(crate) fn enum_hint(&self) -> Type {

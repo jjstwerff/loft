@@ -497,19 +497,29 @@ impl Parser {
             // could not be CALLED back out of one whatever spelling put it there — so
             // threading the type here would have replaced a clean type error with a panic.
             //
-            // Only the members that ARE a `fn(…)` seed anything: this deliberately does
-            // not thread member types in general, which is a wider question about tuple
-            // literal typing (loft#942/#943) and not this rule.
+            // Only the members on the way to a `fn(…)` seed anything: this deliberately
+            // does not thread member types in general, which is a wider question about
+            // tuple literal typing (loft#942/#943) and not this rule.
+            //
+            // The destination arrives on either channel.  A top-level literal is checked
+            // against the declaration in `var_tp`; a NESTED one re-enters here through
+            // `expression`, which starts its own `var_tp` from `Unknown`, so the member's
+            // declared type comes on `⇐` instead.  Reading only `var_tp` is what made the
+            // seeding per TOP-LEVEL member: `(fn(integer) -> integer, integer)` inferred
+            // `|x|` while `((fn(integer) -> integer, integer), text)` did not (loft#1073).
             let tuple_members: Vec<Type> = match var_tp.base() {
                 Type::Tuple(ms) => ms.clone(),
-                _ => Vec::new(),
+                _ => match self.expected.base() {
+                    Type::Tuple(ms) => ms.clone(),
+                    _ => Vec::new(),
+                },
             };
             // Touch the `⇐` channel ONLY when this destination actually names a `fn(…)`
             // member.  A `(` also opens an ordinary parenthesised expression, and that
             // expression INHERITS the ambient expectation — clearing it unconditionally
             // silently retyped one (`115-snapshot-roundtrip` went from a text build to
             // "No matching operator '&' on 'text' and 'integer'").
-            let seeding = tuple_members.iter().any(Self::seeds_lambda_hint);
+            let seeding = tuple_members.iter().any(Self::seeds_tuple_member_hint);
             let saved_expected = if seeding {
                 std::mem::replace(&mut self.expected, Type::Unknown(0))
             } else {
@@ -518,7 +528,11 @@ impl Parser {
             // Member 0 is parsed before the `,` proves this is a tuple at all.  Seeding it
             // is still safe: a parenthesised NON-tuple expression checked against a tuple
             // type is already an error, and only a `fn(…)`-typed member seeds.
-            if seeding && tuple_members.first().is_some_and(Self::seeds_lambda_hint) {
+            if seeding
+                && tuple_members
+                    .first()
+                    .is_some_and(Self::seeds_tuple_member_hint)
+            {
                 self.expected = tuple_members[0].base().clone();
             }
             let t = self.expression(val);
@@ -547,7 +561,7 @@ impl Parser {
                     if seeding
                         && tuple_members
                             .get(values.len())
-                            .is_some_and(Self::seeds_lambda_hint)
+                            .is_some_and(Self::seeds_tuple_member_hint)
                     {
                         self.expected = tuple_members[values.len()].base().clone();
                     }

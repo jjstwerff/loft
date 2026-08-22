@@ -118,14 +118,6 @@ fn test_assigning_into_a_nested_fn_member() {
   assert(t.1 == "z", "the outer member after it: got {t.1}");
 }
 
-// Declared BEFORE its use on purpose.  A forward-referenced fn name in a tuple LITERAL
-// member resolves to `unknown` and the literal is rejected — measured flat AND nested, so
-// it is NOT the nesting axis this file is about, and it is not a workaround being hidden
-// either: the same forward reference is accepted as a plain local, as a call argument, and
-// as a member ASSIGNMENT, which is what makes the literal position the odd one out
-// (loft#1073).  Orthogonal to what this file pins, so the declaration is simply moved up.
-fn nst_only_nested(x: integer) -> integer { x + 30 }
-
 fn test_a_fn_reachable_only_through_a_nested_member() {
   // `nst_only_nested` is named NOWHERE else.  Before the reachability walk learned to
   // recurse, it was pruned and the call panicked `invalid fn-ref` on `--native` while
@@ -143,6 +135,15 @@ fn test_a_nested_tuple_with_no_fn_member_is_unchanged() {
   assert(t.0.1 == 2, "plain nested integer: got {t.0.1}");
   assert(t.1 == "z", "plain outer text: got {t.1}");
 }
+
+// Declared BELOW its only use, which is deliberate and is a second thing this cell pins.
+// While loft#1073 was live a forward-referenced fn name in a tuple LITERAL member resolved
+// to `unknown` and the literal was rejected — flat and nested alike — so the declaration
+// had to sit above.  That is closed (guard
+// `tests/scripts/tuple-literal-member-fn-inference.loft`), and leaving the declaration here
+// keeps the two facts entangled on purpose: the fn is reachable ONLY through a nested
+// member, and it is named before it is declared.
+fn nst_only_nested(x: integer) -> integer { x + 30 }
 
 fn main() {
   test_a_fn_in_the_inner_tuple();
