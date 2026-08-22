@@ -195,6 +195,18 @@ falsifier ([@PLN97](../plans/97-layout-contract/README.md)):
   backend. (D-op-1's differential falsifier applies here as elsewhere.)
 - **`L-Null`** — the golden renders a nullable and a not-null field identically (same size, same
   offsets); nullability lives in the schema, not the hash.
+
+  ⚠ **That falsifier covers the first half of the rule only, and the second half broke under
+  it (2026-08-22).** `L-Null` says two things: a nullable field has the same BYTES as its
+  not-null form, and absence is a SENTINEL in those bytes. The golden tests the first — sizes
+  and offsets — and cannot see the second, because a sentinel is a value and the golden
+  compares layout. So a writer may spell absence any way it likes and the golden stays green:
+  loft's `JsonValue` JSON walker wrote the zero code into one-byte widths, so an absent `u8?`
+  read back as the VALUE `0` and an absent `boolean?` as `false`, while every layout gate
+  passed. The sentinel half is now enforced structurally instead — the encodings live at one
+  address (`Stores::write_absent_value` / `Stores::write_narrow_value`, the write-side twins of
+  `Stores::is_null`) and both JSON walkers call them, so a second spelling has nowhere to live.
+  Behavioural guard: `tests/scripts/json-walker-absent-field.loft`, both backends.
 - **`L-Sound`** — `src/schema_sidecar.rs` tests: an unchanged store → `Identical` (raw handoff); a
   changed layout → detected (`SchemaVerdict::Changed`), a garbage sidecar → `Unreadable`, each
   mapping to `CorruptReason::SchemaMismatch`. The layout identity a store records is

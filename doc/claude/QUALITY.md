@@ -110,6 +110,17 @@ clean with a stated reason**:
 covers.  A panic is a bounded risk; `_ => None` / `_ => return <input>` is where a
 type-driven decision goes missing quietly, and it is worth grepping for on its own.
 
+⚠ **A 24th site, found 2026-08-22, and the sweep's own boundary is the lesson.**
+`populate_struct_from_jsonvalue`'s `_ => { /* not yet handled … Leave at zero-init
+default */ }` is the same silent shape and cost more than any of the 14 — it dropped every
+narrow-integer field the `JsonValue` walker was handed, values included (see the Q1/P54
+entry under § JSON cluster). The sweep did not have it because the sweep's own frame was
+*"a `match` on a TYPE that picks an **op**"*, and this one picks a **write**: no opcode is
+selected, so it did not match the grep that found the other 23. The failure mode is
+identical, which says the frame was one word too narrow — the class is a type-driven
+DECISION with a silent default, whatever the decision produces. Worth re-running with that
+wording before treating the 23 as the whole set.
+
 ### The library-CI gate reddens library repos for reasons they cannot cure
 
 Found 2026-08-21 opening the eight `unify-library-ci-fpm` adoption PRs. Six went green; two did
@@ -203,26 +214,65 @@ the null code, so its ops encode against `min + 1` while the schema carried the 
 was absent. Fixed at the one home (`is_null` + `IntegerSpec::part_min`); guarded by
 `tests/scripts/narrow-null-render.loft` on both backends.
 
-**Q1/P54 — an ABSENT nullable field does not read back null at every width (OPEN, S).**
-The fix above stopped `to_json` from masking this, and it is worth stating precisely
-because it is the round-trip's remaining asymmetry. Parsing a JSON object that omits a
-nullable field — or gives it an explicit `null` — lands:
+**Q1/P54 — an absent field is the DECLARATION's question, and the second JSON walker was
+answering it itself — CLOSED 2026-08-22.** The row this replaces named three widths
+(`u16?` → `0`, `i16?` → `-32767`, `boolean?` → `false`) and pointed at
+`structures.rs`'s clear-to-default arm. **Re-measured, it was stale in one direction and
+far too narrow in the other**, and both halves of that are worth keeping.
 
-| field type | absent field reads back |
-|---|---|
-| `u8?`, `integer limit(lo,hi)?`, `integer?`, `float?`, `text?` | `null` ✅ |
-| `u16?` | **`0`** |
-| `i16?` | **`-32767`** (the slot's usable minimum) |
-| `boolean?` | **`false`** |
+*Stale:* those three widths were fixed at exactly the named site before this pass —
+`set_default_value_nullable` writes `i32::MIN` for a `Short` and `255` for a boolean, and
+its own comment quotes the `0` / `-32767` the row reports. That fix is on `main`. Re-run,
+the one-stage `T.parse(text)` is clean at every width.
 
-Identical on `--interpret` and `--native`, and identical on `main` — this is pre-existing,
-not a regression of the render fix. The suspect is the field-DEFAULT writer
-(`structures.rs`'s clear-to-default arm), which writes the 2-byte null as the *value*
-`65535` where `Parts::Short`'s encoding reserves the raw code `0`; the boolean arm writes
-`false` where @PLN17's tri-state reserves `255`. It is the same class as the render bug —
-a sentinel written by one site and read by another, with the two encodings disagreeing —
-so it belongs to Cluster D and should be fixed at `Stores::is_null`'s write-side twin, not
-per width. `silent-wrong`: a null becomes a plausible number with nothing reported.
+*Too narrow:* the same probe on the **two-stage** `T.parse(json_parse(text))` — the form
+this document recommends because it reports diagnostics — was wrong about nearly every
+absent field, and the failing widths were the COMPLEMENT of the ones filed:
+
+```
+struct D { u: u8?, b: boolean?, i: integer, t: text, dd: u8 = 9 }  ..parse("{}")
+  two-stage was  u=0     b=false  i=null  t=null  dd=0
+  one-stage      u=null  b=null   i=0     t=""    dd=9
+```
+
+So an absent `u8?` read back the VALUE `0`, an absent non-null `integer` read back **null
+in a slot `(N-Decl)` says cannot hold one**, and a declared field default was ignored
+outright. `u16?`/`i16?` passed here only by luck — `Parts::Short` reserves the raw code
+`0`, so zero-init bytes happen to spell its null.
+
+And the same gap **dropped narrow fields that WERE given a value**, which is data loss
+rather than a sentinel mix-up: `u8?` handed `42` read back `0`, `u16?` handed `300` read
+back `null`, non-null `u8` handed `7` read back `0`, and `vector<u8?>` given `[1,null,3]`
+read back `[0,0,0]`. A narrow field simply had no arm in that walker; it fell to
+`_ => { /* not yet handled … Leave at zero-init default */ }`. Wrong-KIND values fell
+there too, so the mismatch report never named them either.
+
+Root cause is one sentence: **`populate_struct_from_jsonvalue` answered "what does an
+absent field hold?" per type, instead of asking the declaration.** The rule it broke is
+[formal/layout.md](formal/layout.md) `(L-Null)` — absence is a sentinel inside the slot's
+own bytes, so the sentinel is part of the LAYOUT and belongs at one address. Both walkers
+now call `Stores::write_absent_value` (declared default, else the type's absent value) and
+`Stores::write_narrow_value` (the four narrow encodings); the one-stage walker's four
+open-coded narrow arms and its two copies of the absent-field decision collapsed onto the
+same two calls, so there is no second spelling left to drift. Guarded by
+`tests/scripts/json-walker-absent-field.loft` on both backends.
+
+⚠ **The blast radius is wider than `T.parse`.** `engine_host.rs`'s live build swap
+(@PLN18 08-S5) restores a running world into the new process through this same walker —
+`swap_world_impl` reads the snapshot with `json_parse` and hands it straight to
+`populate_struct_from_jsonvalue`. The snapshot is WRITTEN by loft's schema walker, whose
+narrow-null spelling was fixed on 2026-08-20, and read by this one, which was not: so
+every narrow field in a swapped world came back at its zero and every nullable narrow
+field came back as a number, silently, on hot reload. The round-trip is now pinned as an
+identity (`test_snapshot_restore_is_the_identity`) — worth having because a snapshot test
+written the obvious way is closed under its own encoder and would have passed throughout.
+
+**Two method notes, both measured here.** First, *a filed table is a hypothesis about
+which cells are broken, not just about why* — this one had the right symptom, the wrong
+widths, the wrong route and a suspect that was already fixed, and re-running the probe
+cost less than reading the row carefully. Second, **the reference implementation is the
+oracle**: every cell above is scored against what the one-stage route answers for the same
+document, which is what turned "some widths look odd" into a complete list.
 
 **`record#errors` is a text, and the docs said "iterate" — OPEN (design, XS-if-decided).**
 Both `STDLIB.md` and `LOFT.md` showed `for e in user#errors { log_warn(e); }`.  That
