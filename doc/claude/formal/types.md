@@ -492,7 +492,7 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **1** (DN-SE-inline, below) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **1** (DN-SE-inline, below — narrowed to the loop-binding READ) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
@@ -510,14 +510,20 @@ DbRef`). **Closed for a LOCAL, a parameter and a return** by discriminating `Enu
 from `Enum(_, false, _)` at each site, plus `base()` where a shape was read without peeling
 `Optional` (six sites; guard `tests/scripts/1065-nullable-struct-enum.loft`).
 
-**Still open for INLINE storage** — a struct FIELD and a `vector<Shape?>` element. Those are a
-four-byte record pointer inside the holder's record, which cannot hold the twelve-byte
-sentinel at all, and nothing writes an absence there: the write emits a record COPY into the
-slot. So for those two positions the rule has no implementation, not a wrong one. The field
-keeps its pre-existing refusal of the null test rather than answering it wrongly; the element
-now constructs (it used to abort inside the allocator) and reads back wrong. The fix that fits
-is the mechanism a nullable struct FIELD already uses — the tagged synthetic `__nullable<…>`
-— extended past its `Type::Reference` guard. Tracked: **loft#1071**.
+**INLINE storage closed too** (loft#1071) — a struct FIELD and a `vector<Shape?>` element are
+a four-byte record pointer inside the holder's record, which cannot hold the twelve-byte
+sentinel at all. The rule says the representation follows the base type's STORAGE, and it does
+here: absence is pointer `0`, which is what the field prime already writes. Three sites had to
+agree on that one word — the construction (`Box { s: null }`), the assignment (`b.s = null`,
+which had been silently a no-op), and the test, which must read the stored WORD because
+`OpGetField` answers a sub-reference whose own record is the HOLDER's and so is never null. No
+`__nullable<…>` tag was needed: a record pointer already has an in-band absent value, exactly
+as a narrow scalar does, so the element rides the `Optional` marker like a scalar element.
+
+**Remaining**: `for e in v { e == null }` over such a vector. A loop binding is a
+sub-reference to the element SLOT rather than a handle, so neither the sentinel nor its own
+record answers, and the test reads "present" for an absent element. Indexing (`v[0] == null`)
+is right. This is the last position, and it is a READ-side gap only — the storage is correct.
 
 This entry is also the answer to the "OPEN: 0" line above having been too strong: the rule was
 written, and the code disagreed with it for a whole type former, in both directions at once.

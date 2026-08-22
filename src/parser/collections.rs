@@ -1089,6 +1089,25 @@ impl Parser {
             let syn = *syn;
             return self.build_nullable_set_null(syn, to.clone());
         }
+        // loft#1071 — the same for a USER struct-enum inline slot (`b.s = null` where
+        // `s: Shape?`).  Its absence is not a discriminant but the record pointer `0`, so
+        // write that word.  Shared with the CONSTRUCTION spelling (`Box { s: null }`) in
+        // `handle_field` for the reason the arm above states: the two spellings of
+        // "absent" must not drift, and here they are the same four-byte store.
+        //
+        // Without it the assignment lowered to a record COPY of the null — which, on a
+        // slot whose test now reads the pointer, emitted nothing observable at all: the
+        // field stayed present and `b.s = null` was silently a no-op.
+        // `base()`, because a nullable field arrives as `Optional(Enum(…))` — the same
+        // peel this whole family needs (loft#1065).
+        if op == "="
+            && self.is_null_source(val)
+            && let Type::Enum(syn, true, _) = f_type.base()
+            && !self.data.def(*syn).name.starts_with("__nullable<")
+            && let Some((base, fld)) = self.inline_slot_word(to)
+        {
+            return self.cl("OpSetInt4", &[base, fld, Value::Int(0)]);
+        }
         // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
         // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
         // type is `Reference(S)` (a call / variable, possibly the null sentinel).

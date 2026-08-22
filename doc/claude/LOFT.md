@@ -2010,13 +2010,16 @@ Nullable fields default to `null`. A **bare (non-`Optional`) enum field is the o
 has no zero value (an enum's 0 is `null`, which a non-null field may not hold), so omitting it is a
 compile error — provide it, give it `= <variant>`, or type it `E?` (@PLN116).
 
-**A nullable STRUCT-enum (`Shape?`) works as a local, a parameter and a return** — it is carried
-as a handle, and absence is the reference sentinel, so `= null`, `== null`, truthiness, `??`,
-`match` and reassignment in both directions all behave (loft#1065). It does **not** yet work in
-inline storage — a struct FIELD or a `vector<Shape?>` element — where the slot is a four-byte
-record pointer with no room for that sentinel: the field refuses the null test and the element
-reads back wrong (loft#1071). Until then, put the absence in the ENUM rather than in the slot:
-`enum Shape { None, Dot, Circle { r: integer } }` and drop the `?`.
+**A nullable STRUCT-enum (`Shape?`) works** as a local, a parameter, a return, a struct FIELD and
+a `vector<Shape?>` element — `= null`, `== null`, truthiness, `??`, `match` and reassignment in
+both directions all behave (loft#1065, loft#1071). How absence is STORED follows the slot, as the
+null model says it should: a handle carries the reference sentinel, while an inline slot is a
+four-byte record pointer where absence is `0`.
+
+The one shape that does not work yet is **iterating** such a vector: in `for e in v { e == null }`
+the loop binding is a sub-reference to the element slot rather than a handle, so the test reads
+"present" for an absent element. Index it instead — `v[0] == null` is right — or put the absence
+in the ENUM rather than the slot (`enum Shape { None, Dot, Circle { r: integer } }`, no `?`).
 
 Field access uses `.`:
 ```

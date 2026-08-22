@@ -116,23 +116,20 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
-    /// loft#1065 — does this operand read an INLINE record slot rather than a handle?
+    /// loft#1071 — the `(base, field)` an INLINE struct-enum slot read addresses, when
+    /// `v` is such a read.
     ///
-    /// The distinction decides how absence is spelled. A local, a parameter and a return
-    /// carry a struct-enum as a twelve-byte `DbRef`, where absent is the store-pointer
-    /// sentinel. A FIELD carries it as a four-byte record pointer inside the holder's
-    /// record, where the sentinel cannot be written at all — so the same test answers the
-    /// wrong thing on one of the two.
-    pub(crate) fn reads_inline_slot(&self, v: &Value) -> bool {
-        // A struct FIELD (`OpGetField`) and a vector ELEMENT (`OpGetVector*`) are the two
-        // inline slots. Both are reached by name rather than by opcode number so the list
-        // reads as what it is; the element read arrives here under either spelling
-        // depending on whether the element type is nullable.
-        matches!(v.unspan(), Value::Call(d, _)
-        if {
-            let n = self.data.def(*d).name();
-            n == "OpGetField" || n.starts_with("OpGetVector")
-        })
+    /// A struct-enum FIELD stores a four-byte record pointer, and `0` is how absence is
+    /// spelled there. `OpGetField` on it answers a sub-REFERENCE rather than that word, so
+    /// a caller that needs to ask "is this slot empty" has to re-address the word itself.
+    pub(crate) fn inline_slot_word(&self, v: &Value) -> Option<(Value, Value)> {
+        let Value::Call(d, args) = v.unspan() else {
+            return None;
+        };
+        if self.data.def(*d).name() != "OpGetField" || args.len() < 2 {
+            return None;
+        }
+        Some((args[0].clone(), args[1].clone()))
     }
 
     /// Is this IR node the value a source-level `null` becomes?
@@ -4272,6 +4269,33 @@ impl Parser {
             );
             let clear = self.build_nullable_set_null(syn, field_ref);
             list.push(clear);
+            return;
+        }
+        // loft#1071 — a literal `null` into a USER struct-enum field (`Box { s: null }`
+        // where `s: Shape?`).  The sibling arm above answers it for the synthetic
+        // `__nullable<S>`, whose absence is a discriminant; a user struct-enum has no
+        // discriminant of its own in an inline slot — the slot IS a four-byte record
+        // pointer, and `0` is what absent means there (it is what the field prime writes,
+        // and what every keyed-collection and enum-big field starts as).
+        //
+        // Left to the generic path this emitted `OpCopyRecord(<the null>, <the field>)`:
+        // a record COPY of the null's own record into the slot, which is not how absence
+        // is spelled in four bytes.  Nothing observed it, because the null TEST for the
+        // type was refused — so the write had never been right and could not be seen.
+        // Write the pointer directly, the same shape and the same reason as the arm above.
+        if !self.first_pass
+            && self.is_null_source(value)
+            && let Type::Enum(syn, true, _) = &td_base
+            && !self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            list.push(self.cl(
+                "OpSetInt4",
+                &[code.clone(), Value::Int(item_pos), Value::Int(0)],
+            ));
             return;
         }
         if !self.first_pass

@@ -24,13 +24,19 @@
 // peeling `Optional`.  Six sites; every cell below is one of them, and the cells sweep
 // the POSITION the value stands in, because that is what decided which site was reached.
 //
-// Not covered, and deliberately: a nullable struct-enum in INLINE storage — a struct
-// FIELD or a `vector<Shape?>` element.  An inline slot is a four-byte record pointer that
-// cannot hold the sentinel at all, and its write is a separate defect (loft#1071).  The
-// field keeps the refusal it always had; the vector at least CONSTRUCTS now, where it
-// used to abort inside the allocator.
+// INLINE storage — a struct FIELD, a `vector<Shape?>` element — is covered too, and takes
+// a DIFFERENT encoding for the same reason the rule gives: the slot there is a four-byte
+// RECORD POINTER, which cannot hold the twelve-byte sentinel, so absence is pointer `0` —
+// what the field prime already writes.  Its cells are at the end (loft#1071).
+//
+// Still NOT covered, and the one shape this file cannot assert: `for e in v { e == null }`
+// over a `vector<Shape?>`.  A loop binding is a sub-reference to the element SLOT rather
+// than a handle, so neither the sentinel nor its own record says anything and the test
+// reads "present" for an absent element.  The direct index (`v[0] == null`) IS right, and
+// is asserted below.
 
 enum Shape1065 { Dot, Circle { r: integer } }
+struct Box1065 { s: Shape1065? }
 
 fn takes1065(s: Shape1065?) -> boolean { s == null }
 fn makes1065(present: boolean) -> Shape1065? {
@@ -126,6 +132,40 @@ fn test_a_vector_of_nullable_struct_enums_constructs() {
   assert(len(v) == 1, "a vector of nullable struct-enums builds: got {len(v)}");
 }
 
+fn test_an_inline_field_holds_absence() {
+  // loft#1071 — the write stores the record pointer `0` and the test reads that word.
+  // Before, the write emitted a record COPY of the null into a four-byte slot and the
+  // test was refused outright, so nothing could observe that the write was wrong.
+  a = Box1065 { s: null };
+  b = Box1065 { s: Shape1065::Circle { r: 6 } };
+  assert(a.s == null, "an absent field is null");
+  assert(b.s != null, "a present field is not null");
+  assert(match b.s { Circle { r } => r, Dot => -1 } == 6, "the present field's payload reads back");
+}
+
+fn test_an_inline_field_assigned_both_ways() {
+  // `b.s = null` is a different site from `Box { s: null }`, and it used to be silently a
+  // NO-OP: the assignment lowered to a record copy that stored nothing the test could see.
+  b = Box1065 { s: Shape1065::Dot };
+  assert(b.s != null, "present at construction");
+  b.s = null;
+  assert(b.s == null, "cleared by assignment");
+  b.s = Shape1065::Circle { r: 2 };
+  assert(b.s != null, "set again by assignment");
+}
+
+fn test_a_vector_element_holds_absence() {
+  // Reading the element by INDEX. The whole shape used to abort inside the allocator on
+  // construction ("index out of bounds: the len is 3 but the index is 255" — the enum-null
+  // byte read as a type id), so nothing downstream could be reached at all.
+  v: vector<Shape1065?> = [];
+  v += [null];
+  v += [Shape1065::Circle { r: 4 }];
+  assert(len(v) == 2, "both elements are there: got {len(v)}");
+  assert(v[0] == null, "the absent element");
+  assert(v[1] != null, "the present element");
+}
+
 fn main() {
   test_an_absent_local_is_falsy();
   test_an_absent_local_equals_null();
@@ -137,4 +177,7 @@ fn main() {
   test_the_coalesce_and_a_full_discharge();
   test_a_loop_allocates_nothing_per_iteration();
   test_a_vector_of_nullable_struct_enums_constructs();
+  test_an_inline_field_holds_absence();
+  test_an_inline_field_assigned_both_ways();
+  test_a_vector_element_holds_absence();
 }

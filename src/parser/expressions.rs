@@ -3622,6 +3622,16 @@ use a separate collection or add after the loop"
             {
                 return Type::optional(elem);
             }
+            // loft#1071 — a STRUCT-ENUM element (`vector<Shape?>`) rides the `Optional`
+            // marker for the same reason a scalar does: its slot is a four-byte record
+            // POINTER with an in-band absent value (`0`), so it needs no `__nullable<…>`
+            // tag and no extra storage — only for the type to keep saying it may be
+            // absent.  Without the marker the element typed as a bare `Shape`, so the `?`
+            // was lost at the declaration and a loop binding over it could not be asked
+            // `e == null` at all: the type no longer admitted the question.
+            if crate::keys::pln25_optional_enabled() && matches!(elem, Type::Enum(_, true, _)) {
+                return Type::optional(elem);
+            }
             return elem;
         };
         let struct_d = *struct_d;
