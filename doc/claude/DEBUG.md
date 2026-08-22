@@ -426,9 +426,39 @@ naming `/tmp/loft_native_*.rs` on `--native` for as long as both existed (loft#1
 while a green oracle sat over it.  A field in the harness's own result struct reads like
 coverage and is not.
 
-The three doors together give one question to ask of any instrument: **for each channel
+**A fourth door: a cell that does not USE its value does not compile the code that
+would have faulted.**  The three above are about which channel a cell reads.  This one is
+about whether the faulting code is ever emitted at all — and it can turn one defect into
+an apparent backend difference, a runtime panic, a compile-time ICE, or silence,
+depending only on how the cell reads.
+
+Probing the nested-tuple fn-ref hole (`t = ((dbl, 1), "z")`, nothing else) reported it as
+native-only: rustc E0308 on one side, a clean `built` on the other.  It is not
+native-only.  The reason was in the probe's own output — `warning[never-read]: Variable t
+is never read` — and a cell that reads the tuple back faults on both.  Measured on a
+pristine tree, the *interpreter* gives two different failures depending on what the read
+is: reading by CALLING the nested fn panics at runtime (`fn_call_ref: fn_var=16 < 20`),
+while reading only PLAIN members dies before running at all, an ICE in
+`state/codegen.rs` (`attempt to subtract with overflow`).
+
+So "runtime backend vs compile-time backend" is the wrong axis, and reaching for it is
+the trap: **`--interpret` compiles too** (parser → IR → bytecode), so it has its own
+compile-time failures.  What actually varies is whether a tuple read is emitted, and a
+construct-only cell emits none — which is why `--interpret` says `built` for the same
+reason `--native` says nothing: nobody asked.
+
+A cross-backend cell must therefore **use** what it builds, `warning[never-read]` on a
+probe means the cell is inert rather than that the lint is noisy, and when one backend
+disagrees with the other about whether a bug EXISTS, suspect the probe's shape before
+believing the split.  ⚠ Do not read an ICE on one side and a panic on the other as two
+different bugs — on this one they are the same defect, and the ICE cell is the sharper
+statement of it: the damage lands on whoever reads next, and that reader need have
+nothing to do with functions.
+
+The doors together give one question to ask of any instrument: **for each channel
 it captures, name the assertion that compares it, and name a case where that assertion
-FIRES.**  A channel with no comparison is the third door; a comparison with no case that
+FIRES.**  A channel with no comparison is the third door; a cell whose value is
+never used is the fourth; a comparison with no case that
 can disagree is the "exercised by nothing" trap (thirty corpus programs all exited 0, so
 an exit-code comparator that had run since the oracle was built had never once compared a
 NON-ZERO code); and a comparison scored on the wrong channel is the first two.
