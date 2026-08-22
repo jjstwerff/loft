@@ -168,7 +168,24 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
   a `Type` variant fails the build there rather than joining the unhandled set).  The
   guard is `tests/scripts/generic-monomorph-null-and-element.loft`, which pairs every
   boolean and character cell with its hand-written twin — `(G-Mono)` as an assertion
-  rather than as a claim.  The lesson generalises past this doc: **`_ => None` and
+  rather than as a claim.
+
+  **A seventh, from asking the same question of the WRITE side** (2026-08-22).  The
+  element read was one operation; the element WRITE is another, and its corpus holds a
+  different axis fixed — not the type, and not the operation, but the *spelling*.  P241's
+  rewriter re-emits a monomorph's vector writes, and every test of it since 2026-05 uses
+  `o += [x]`; nothing used `v[i] = x`.  An append emits a three-op sequence the rewriter
+  matches, an indexed assignment emits a LONE `OpCopyRecord`, and that one reached the
+  monomorph carrying the type variable's record id: at every scalar type the run PANICKED
+  in the allocator, and for a struct parameter it silently wrote nowhere and read the old
+  element back.  Closed by routing both spellings through the one setter builder, guarded
+  by `tests/scripts/generic-vector-element-write.loft`, which sweeps spelling × type ×
+  vector origin.
+
+  The three together say the axis to sweep is not fixed: it was the TYPE for #1028, the
+  OPERATION for the `??` check and the element read, and the SPELLING for the write.  What
+  they share is the question — *what does this corpus never vary?* — and that question is
+  the instrument, not any particular answer to it.  The lesson generalises past this doc: **`_ => None` and
   `_ => return` are how a decision that is a function of `τ` goes missing quietly**, and
   a missing arm looks exactly like a deliberate one until something reads the answer.
 
