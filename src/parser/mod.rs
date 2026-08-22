@@ -6893,22 +6893,76 @@ impl Parser {
                     && data.def(new_d).name() == "OpConvBoolFromRef"
                     && new_args.len() == 1
                 {
-                    let conv_name = match concrete.base() {
-                        Type::Integer(_) => Some("OpConvBoolFromInt"),
-                        Type::Text(_) => Some("OpConvBoolFromText"),
-                        Type::Float => Some("OpConvBoolFromFloat"),
-                        Type::Single => Some("OpConvBoolFromSingle"),
-                        Type::Enum(_, false, _) => Some("OpConvBoolFromEnum"),
-                        // Reference / Vector / struct-enum / tuple stay
-                        // on OpConvBoolFromRef (the existing behaviour
-                        // works for any DbRef-shaped loop variable).
-                        _ => None,
-                    };
-                    if let Some(name) = conv_name {
-                        let conv_d_nr = data.def_nr(name);
-                        if conv_d_nr != u32::MAX {
-                            return Value::Call(conv_d_nr, new_args);
+                    // EXHAUSTIVE, and the arms answer what `coalesce_not_null` answers
+                    // for the same type — this map is a MIRROR of that decision, and the
+                    // two spellings it was missing (`boolean`, `character`) are the two
+                    // the `??` null check was missing for the same reason.  Measured
+                    // 2026-08-22: this fixup fires ZERO times across all 826
+                    // `tests/scripts` programs, the 33 `tests/docs` ones and every generic
+                    // probe, because a `for` over a vector now terminates on the LENGTH
+                    // rather than on a null element, so the `OpConvBoolFromRef` the P239
+                    // comment below describes is no longer emitted.  It is completed
+                    // rather than deleted because completing can only repair more paths
+                    // than today and never fewer: if some lowering revives that shape, a
+                    // scalar loop variable gets the right test instead of a `rec` read.
+                    let conv: Option<Value> = match concrete.base() {
+                        Type::Integer(_) => {
+                            Self::conv_bool_call("OpConvBoolFromInt", &new_args, data)
                         }
+                        Type::Text(_) => {
+                            Self::conv_bool_call("OpConvBoolFromText", &new_args, data)
+                        }
+                        Type::Float => Self::conv_bool_call("OpConvBoolFromFloat", &new_args, data),
+                        Type::Single => {
+                            Self::conv_bool_call("OpConvBoolFromSingle", &new_args, data)
+                        }
+                        Type::Character => {
+                            Self::conv_bool_call("OpConvBoolFromCharacter", &new_args, data)
+                        }
+                        Type::Enum(_, false, _) => {
+                            Self::conv_bool_call("OpConvBoolFromEnum", &new_args, data)
+                        }
+                        // A boolean's "is not null" is not a single op — it is `!= 255`,
+                        // the same two-op form `coalesce_not_null` builds — so it is the
+                        // one arm that cannot be a name.
+                        Type::Boolean => {
+                            let ne = data.def_nr("OpNeBool");
+                            let null_b = data.def_nr("OpConvBoolFromNull");
+                            if ne == u32::MAX || null_b == u32::MAX {
+                                None
+                            } else {
+                                Some(Value::Call(
+                                    ne,
+                                    vec![new_args[0].clone(), Value::Call(null_b, vec![])],
+                                ))
+                            }
+                        }
+                        // DbRef-shaped: `OpConvBoolFromRef` IS the right test, so the
+                        // site is left as the template built it.
+                        Type::Reference(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                        | Type::Iterator(_, _)
+                        | Type::Function(_, _, _)
+                        | Type::Routine(_)
+                        | Type::RefVar(_)
+                        | Type::Tuple(_) => None,
+                        // Not loop-variable types: these carry no value to test.
+                        Type::Unknown(_)
+                        | Type::Null
+                        | Type::Void
+                        | Type::Never
+                        | Type::Keys
+                        | Type::Rewritten(_)
+                        | Type::Optional(_) => None,
+                    };
+                    if let Some(call) = conv {
+                        return call;
                     }
                 }
                 // I9-text fixup: when a T-stub had an extra __work_1 parameter
@@ -7838,6 +7892,19 @@ impl Parser {
                 12 // non-struct reference: DbRef = 12 bytes
             }
             _ => 12,
+        }
+    }
+
+    /// One `OpConvBoolFrom<X>` call over `args`, or `None` when the op is not registered.
+    ///
+    /// A helper only so the exhaustive map above reads as a table of decisions rather
+    /// than of `def_nr` bookkeeping repeated per arm.
+    fn conv_bool_call(name: &str, args: &[Value], data: &Data) -> Option<Value> {
+        let d = data.def_nr(name);
+        if d == u32::MAX {
+            None
+        } else {
+            Some(Value::Call(d, args.to_vec()))
         }
     }
 

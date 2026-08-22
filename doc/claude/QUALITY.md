@@ -76,6 +76,40 @@ un-ignored and passing).  See CHANGELOG.md.
 
 Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
 
+### The catch-all audit — every type-driven op choice, classified (2026-08-22)
+
+Two defects in one week had the same shape: a `match` on a TYPE that picks an **op**,
+ending in a silent `_ =>`.  So the shape was swept rather than the symptom —
+**23 such sites**, classified by how the catch-all FAILS:
+
+- **9 fail LOUDLY** (`panic!` / `unreachable!`).  An ICE is not a wrong answer, and four
+  of them (the tuple get/put family) are additionally gated by `ref_tuple_element_ok`,
+  whose comment records why the two lists are one list: *"loft#1006 was them
+  disagreeing"*.
+- **14 fail SILENTLY.**  This is the class that produced both defects.
+
+Result over the silent ones — **1 live bug, 1 stale mirror, 1 already-filed, the rest
+clean with a stated reason**:
+
+| site | verdict |
+|---|---|
+| `parser/mod.rs` fn-ref field write | **BUG — fixed.** A source nobody enumerated (an `if`/`match` arm) wrote four bytes of a twenty-byte fn-ref: SIGSEGV on `--interpret`, `unreachable!("invalid fn-ref")` on `--native`. Now refused like its siblings. |
+| `parser/mod.rs::null()` | the undiscriminated `Type::Enum` arm — **half of loft#1065**, filed |
+| `substitute_type_in_value`'s `OpConvBoolFromRef` map | a stale MIRROR of `coalesce_not_null`, missing the same two types the `??` check was. **Measured: fires 0× across all 826 `tests/scripts`, the 33 `tests/docs` and every generic probe** — a `for` now terminates on the length, not on a null element. COMPLETED and made exhaustive rather than deleted: completing can only repair more paths than today, never fewer. |
+| `wrap_vector_get_val` | was a bug, fixed earlier the same day; now exhaustive and off the scan |
+| `cell_value_set_op` + its read twin in `objects.rs` | clean — `cell_struct_name` gates both, and the three copies of that list agree |
+| `primitive_setter_call` | clean — `is_primitive_vector_element_target` gates it, lists agree |
+| `materialize_tuple_element` | clean, and PROBED (text element, record, vector, destructuring) |
+| `emit_typed_null` | probed on its documented trigger — an omitted `= null` parameter — at seven types incl. a value enum, both backends: the parser's own `null()` answers first |
+| `narrow_route_for` | clean — the catch-all is a documented fallback to the general wide path, which is the SAFE direction |
+| `emit.rs` format-count | clean — a `with_capacity` HINT; falling through costs a preallocation, never a value |
+| `codegen.rs` op-name inference | clean — the catch-all is "use the op's declared return type", which is the correct default |
+| `sandbox.rs` growth walker | clean — the recursion is AFTER the match via `for_each_child`, so a catch-all cannot skip a subtree |
+
+**The reusable half:** classify a catch-all by how it fails before reading what it
+covers.  A panic is a bounded risk; `_ => None` / `_ => return <input>` is where a
+type-driven decision goes missing quietly, and it is worth grepping for on its own.
+
 ### The library-CI gate reddens library repos for reasons they cannot cure
 
 Found 2026-08-21 opening the eight `unify-library-ci-fpm` adoption PRs. Six went green; two did
