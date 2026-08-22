@@ -329,24 +329,43 @@ fn a_declared_font_reaches_the_emitted_page() {
         eprintln!("SKIP a_declared_font_reaches_the_emitted_page: target/release/loft not built");
         return;
     }
-    let dir = std::env::temp_dir().join("loft_html_fonts_emit");
-    let _ = std::fs::remove_dir_all(&dir);
+    let base = std::env::temp_dir().join("loft_html_fonts_emit");
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = base.join("app");
+    let lib = base.join("fontlib");
     std::fs::create_dir_all(dir.join("src")).expect("create package");
+    std::fs::create_dir_all(lib.join("src")).expect("create library");
     std::fs::write(
         dir.join("loft.toml"),
         "[package]\nname = \"fontgame\"\n\n\
+         [dependencies]\nfontlib = { path = \"../fontlib\" }\n\n\
          [[font]]\nfamily = \"LoftProbeFace\"\nnative = \"fonts/LoftProbeFace.ttf\"\n\
          url = \"fonts/LoftProbeFace.woff2\"\n\n\
          [[font]]\nfamily = \"LoftCdnFace\"\n\
          stylesheet = \"https://fonts.example.test/css2?family=LoftCdnFace\"\n",
     )
     .expect("write manifest");
+    // A LIBRARY that draws its own text declares the font it draws with, and that
+    // declaration has to reach the consumer's page — the route `[wasm.bridge]
+    // host_js` already takes.  Untested, this is the half that would rot.
+    std::fs::write(
+        lib.join("loft.toml"),
+        "[package]\nname = \"fontlib\"\n\n\
+         [[font]]\nfamily = \"LoftLibFace\"\nurl = \"fonts/LoftLibFace.woff2\"\n",
+    )
+    .expect("write library manifest");
+    std::fs::write(
+        lib.join("src/fontlib.loft"),
+        "pub fn lib_face() -> text { \"LoftLibFace\" }\n",
+    )
+    .expect("write library source");
     std::fs::write(
         dir.join("src/fontgame.loft"),
         "use graphics;\n\
+         use fontlib;\n\
          fn main() {\n\
          \x20 f = graphics::gl_load_font(\"fonts/LoftProbeFace.ttf\");\n\
-         \x20 print(\"{f}\");\n\
+         \x20 print(\"{f} {fontlib::lib_face()}\");\n\
          }\n",
     )
     .expect("write source");
@@ -381,6 +400,10 @@ fn a_declared_font_reaches_the_emitted_page() {
             "<link rel=\"stylesheet\" href=\"https://fonts.example.test/css2?family=LoftCdnFace\">"
         ),
         "the emitted page carries no <link> for the declared stylesheet source"
+    );
+    assert!(
+        page.contains("@font-face{font-family:\"LoftLibFace\""),
+        "a font declared by a LIBRARY did not reach the consumer's page"
     );
     // F6 is an ORDERING, so position is the assertion: the await has to come before
     // the program starts, and a block emitted after it would satisfy a substring
