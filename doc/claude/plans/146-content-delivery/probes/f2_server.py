@@ -17,6 +17,21 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT, PORT, LOG = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 RANGE = re.compile(r"bytes=(\d*)-(\d*)")
+ROOT_REAL = os.path.realpath(ROOT)
+
+
+def _under_root(name):
+    """The file `name` names inside ROOT, or None if it names anything else.
+
+    `basename` already drops every directory component, so a traversal cannot be
+    spelled — but a served path is still built from a request, and the check that
+    proves it stayed inside belongs where the file is opened rather than in a
+    reader's head one function away.
+    """
+    full = os.path.realpath(os.path.join(ROOT_REAL, name))
+    if full != ROOT_REAL and not full.startswith(ROOT_REAL + os.sep):
+        return None
+    return full
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -29,8 +44,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve(self, body):
         name = os.path.basename(self.path.lstrip("/"))
-        full = os.path.join(ROOT, name)
-        if not os.path.isfile(full):
+        full = _under_root(name)
+        if full is None or not os.path.isfile(full):
             self._note(f"404 {name}")
             self.send_error(404)
             return

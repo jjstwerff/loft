@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-//
+// @F54 — Browser / WASM target (--html / --native-wasm)
+
 //! @PLN146 F5/F6 — turn `[[font]]` declarations into the two things a browser page
 //! needs so text draws in the font the program asked for.
 //!

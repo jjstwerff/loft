@@ -19,6 +19,22 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT, PORT, DELAY_MS = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+ROOT_REAL = os.path.realpath(ROOT)
+
+
+def _under_root(name):
+    """The file `name` names inside ROOT, or None if it names anything else.
+
+    `basename` already drops every directory component, so a traversal cannot be
+    spelled — but a served path is still built from a request, and the check that
+    proves it stayed inside belongs where the file is opened rather than in a
+    reader's head one function away.
+    """
+    full = os.path.realpath(os.path.join(ROOT_REAL, name))
+    if full != ROOT_REAL and not full.startswith(ROOT_REAL + os.sep):
+        return None
+    return full
+
 
 TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -35,8 +51,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):                                       # noqa: N802 (stdlib name)
         name = os.path.basename(self.path.split("?")[0].lstrip("/"))
-        full = os.path.join(ROOT, name)
-        if not name or not os.path.isfile(full):
+        full = _under_root(name)
+        if not name or full is None or not os.path.isfile(full):
             self.send_error(404)
             return
         ext = os.path.splitext(name)[1].lower()
