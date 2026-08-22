@@ -2351,23 +2351,65 @@ impl Stores {
             // dropped from `{x:j}` output.  (Was `handle == 0`, which omitted
             // empty vectors and broke the save→load round-trip.)
             false
-        } else if let Parts::Byte(_, nullable) = &self.types[known_type as usize].parts {
+        } else {
+            // A narrow integer answers from its own home; anything else is not nullable
+            // in a way this walk can see.
+            self.narrow_is_null(store, rec, pos, known_type)
+                .unwrap_or_default()
+        }
+    }
+
+    /// Is the NARROW-integer slot at `(rec, pos)` holding its null code?  `None` when
+    /// `known_type` is not a narrow integer, so a caller can fall through to its own
+    /// dispatch.
+    ///
+    /// One home for the four widths, because the read side and the write side have to
+    /// agree about a code that is invisible in the bytes: `Byte` reserves the raw code
+    /// `255`, `Short`'s `+1` encoding reserves the raw code `0` (which `get_short` maps
+    /// to `i32::MIN`), `ShortRaw` reserves the top code, and `Int` is a raw `i32` whose
+    /// null is `i32::MIN`.
+    ///
+    /// The widths were four inline arms here and `Int` had none at all, which is exactly
+    /// how [STABILITY_REDFLAGS] Cluster D describes this class — *"one width-fact, N
+    /// drifting copies"*.  The measured cost: an absent `i32?` field was not omitted from
+    /// a render and went onto the wire as the NUMBER `-2147483648`, while reading the same
+    /// slot answered null.  The 2026-08-20 pass fixed the three widths that had an arm and
+    /// could not fix the one that did not.
+    ///
+    /// Write twins: [`Self::write_narrow_value`] for a value, and
+    /// `set_default_value_nullable`'s narrow arms for the absent code.
+    ///
+    /// [STABILITY_REDFLAGS]: ../../../doc/claude/STABILITY_REDFLAGS.md
+    #[must_use]
+    pub fn narrow_is_null(
+        &self,
+        store: &crate::store::Store,
+        rec: u32,
+        pos: u32,
+        known_type: u16,
+    ) -> Option<bool> {
+        if known_type == u16::MAX || known_type <= 6 {
+            return None;
+        }
+        match self.types[known_type as usize].parts {
             // The sentinel is the RAW stored code, so read it with NO offset: `get_byte`
-            // answers `stored + min`, and testing THAT against the sentinel only works
+            // answers `stored + min`, and testing THAT against the sentinel only holds
             // when `min` is 0.  A `limit(10, 255)?` slot answered `265 == 255` — never
             // true — so its null rendered as the number 265.
-            *nullable && store.get_byte(rec, pos, 0) == 255
-        } else if let Parts::Short(_, nullable) = &self.types[known_type as usize].parts {
+            Parts::Byte(_, nullable) => Some(nullable && store.get_byte(rec, pos, 0) == 255),
             // The `+1` encoding reserves the stored code 0 for null, and `get_short`
-            // maps that to `i32::MIN`.  The old test (`== 65535`) could not fire at all,
+            // maps that to `i32::MIN`.  An older test (`== 65535`) could not fire at all,
             // so every nullable 2-byte slot rendered its null as `-2147483648`.
-            *nullable && store.get_short(rec, pos, 0) == i32::MIN
-        } else if let Parts::ShortRaw(_, nullable) = &self.types[known_type as usize].parts {
+            Parts::Short(_, nullable) => Some(nullable && store.get_short(rec, pos, 0) == i32::MIN),
             // The direct encoding reserves the top code.  `get_i16_raw` answers
-            // `stored + min`, never `i32::MIN`, so this test could not fire either.
-            *nullable && store.get_short_full(rec, pos, 0) == i32::from(u16::MAX)
-        } else {
-            false
+            // `stored + min`, never `i32::MIN`, so that test could not fire either.
+            Parts::ShortRaw(_, nullable) => {
+                Some(nullable && store.get_short_full(rec, pos, 0) == i32::from(u16::MAX))
+            }
+            // The width that had no arm: a raw `i32` whose reserved code is `i32::MIN`,
+            // which is also exactly what the write side puts there.
+            Parts::Int(_, nullable) => Some(nullable && store.get_i32_raw(rec, pos) == i32::MIN),
+            _ => None,
         }
     }
 

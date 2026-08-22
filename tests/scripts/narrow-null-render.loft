@@ -48,4 +48,37 @@ fn main() {
   w2: vector<i16?> = [-300, 300];
   assert("{w1}" == "[-100,100]" && "{w2}" == "[-300,300]", "signed nullable narrow elements");
   assert(w1[0] == -100 && w2[0] == -300, "elements read back as stored");
+
+  // ── The FOURTH width, and the `min` axis the three above hold fixed ────────────
+  //
+  // `Parts::Int` (a 4-byte `i32`) had no arm in `is_null` AT ALL, so the 2026-08-20
+  // pass fixed the three widths that had one and could not fix the one that did not:
+  // an absent `i32?` was not omitted from a render and went onto the wire as the
+  // NUMBER `-2147483648`, while reading the same slot answered null.  The four widths
+  // now answer from one home (`Stores::narrow_is_null`), which is what stops the next
+  // width being added to the write side and forgotten on the read side.
+  f = F { i0: null, b1: null, s1: null, tag: "t" };
+  assert(f.i0 == null && f.b1 == null && f.s1 == null, "the reads say null");
+  assert("{f}" == "{{tag:\"t\"}}", "and every width is OMITTED from the render");
+  assert(f.to_json() == "{{\"tag\":\"t\"}}", "no plausible number on the wire");
+
+  // A non-zero `min` is the axis: `Byte`/`Short` encode `value - min + 1`, so a
+  // sentinel test that compares a DECODED value only holds at `min == 0`.
+  g = F { i0: 70000, b1: 12, s1: 1500, tag: "t" };
+  assert("{g}" == "{{i0:70000,b1:12,s1:1500,tag:\"t\"}}", "present values at non-zero min");
+  assert(g.i0 == 70000 && g.b1 == 12 && g.s1 == 1500, "and they read back as stored");
+
+  x1: vector<i32?> = [7, null, 9];
+  x2: vector<integer limit(1000,60000)?> = [1500, null];
+  assert("{x1}" == "[7,null,9]", "4-byte narrow elements");
+  assert("{x2}" == "[1500,null]", "2-byte raw elements at a non-zero min");
+  assert(x1[1] == null && x2[1] == null && x1[0] == 7 && x2[0] == 1500,
+         "element reads agree with the render at both");
+}
+
+struct F {
+  i0: i32?,
+  b1: integer limit(10,255)?,
+  s1: integer limit(1000,60000)?,
+  tag: text
 }

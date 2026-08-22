@@ -480,9 +480,33 @@ typed-null encoders (`write_typed_null` native, `emit_typed_null` interp,
 (a text `Str` sentinel `"\0"`, already a single `const` read by all text-null sites)
 and the interp `Reference` path's `database.null()` (which allocates a real null
 *store*, a different runtime mechanism than the `DbRef::NULL` sentinel) — forcing
-either onto `DbRef::NULL` would be a false merge. **Still open (the narrow-width
-facet):** `is_null_field` / `set_default_value` / `walk_parsed_into` per-width arms
-above — a separate `IntegerSpec::range_to_width` sub-thread, not the heap-ref one.
+either onto `DbRef::NULL` would be a false merge.
+
+**✅ The narrow-width facet is CLOSED (2026-08-22).** The three named consumers are
+converged, and the convergence paid for itself immediately:
+
+- `walk_parsed_into`'s four open-coded narrow arms → `Stores::write_narrow_value`, the
+  one place the four encodings live. (Same pass gave the absent-field decision its own
+  home, `Stores::write_absent_value`; see QUALITY.md § Q1/P54.)
+- `is_null`'s three inline arms → `Stores::narrow_is_null`, its read twin.
+- `set_default_value_nullable`'s narrow arms stay where they are — they write through the
+  ENCODING-aware setters (`set_byte`/`set_short`/`set_i16_raw`/`set_i32_raw`), which is a
+  different mechanism from a raw read, so folding them onto the read walk would be the
+  same false merge `validate_claims` was ruled out for in Cluster C.
+
+**What the fold found, which is the argument for doing it at all:** `Parts::Int` — the
+4-byte width — had **no arm in `is_null`**. So the 2026-08-20 render pass fixed the three
+widths that had one and could not fix the one that did not, and nothing said so. An absent
+`i32?` was therefore not omitted from a render and went onto the wire as the NUMBER
+`-2147483648`, on both backends, while reading the same slot answered null — the exact
+symptom that pass was fixing, surviving one width over. A missing arm is invisible to a
+per-width audit and obvious the moment the widths share a home.
+
+Verified across both `min` axes (`Byte` at 0 and 10, `Short` at 0 and 1000, `ShortRaw`
+elements at 1000) — a sentinel test that compares a DECODED value only holds at `min == 0`,
+which is what made the original `limit(10,255)?` cell read `265 == 255`. Guarded by the
+extended `tests/scripts/narrow-null-render.loft` on both backends, falsified by removing
+the new `Int` arm.
 
 ---
 
