@@ -5823,6 +5823,11 @@ impl Parser {
         // `vector<integer>` through the wrong schema and printed `{}`.
         self.retarget_parametric_coroutine_next(d_nr);
         self.retarget_parametric_vector_format(d_nr);
+        // loft#1070 — and any TYPE ROW the template baked as a constant.  Substitution
+        // rewrites types, never the `const u16` schema id an op already carries, so a site
+        // that was lowered while the element was still `T` kept pointing at
+        // `__typevar_T`'s row.
+        self.retarget_parametric_type_rows(d_nr, bindings);
         // loft#1040 — and lower any `par` clause the template could not: it needs the
         // types this body now carries, so it runs after every substitution above.
         self.expand_deferred_par(d_nr);
@@ -6519,6 +6524,87 @@ impl Parser {
                 let gen_arg = args[0].clone();
                 *args = vec![gen_arg, Value::Int(*value_size)];
                 args.extend(kinds.iter().copied().map(Value::Int));
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
+    }
+
+    /// loft#1070 — re-point every TYPE ROW this monomorph inherited from the template.
+    ///
+    /// A schema id is a `const u16` ARGUMENT (`OpDatabase(v, db_tp)`,
+    /// `OpCopyRecord(src, dst, tp)`, …), not a type — so type substitution, which rewrites
+    /// the variable table and the type annotations, walks straight past it.  Any site the
+    /// template lowered while the type was still `T` therefore keeps `__typevar_T`'s row,
+    /// and the record it allocates has the type variable's layout: reading a field lands on
+    /// another word.  Measured, `f<T>(x: T, c: boolean) -> T { if c { y: T = x; y } else …
+    /// }` answered `4294967198` — `-98` read as an unsigned 32-bit word — for a `-7` it was
+    /// handed, on both backends, with no diagnostic, and leaked a `__typevar_T` store per
+    /// call.
+    ///
+    /// The invariant makes this total rather than a list of known sites: after substitution
+    /// the type variable does not exist, so EVERY surviving reference to its row is stale by
+    /// construction, and there is no case where keeping one is right.  The rows are found by
+    /// the op's own declaration — an argument named `tp` or `…_tp` — so an op added later is
+    /// covered without being enumerated here, and `size: const u16` (which is a width, not a
+    /// row) is not swept up with them.
+    ///
+    /// Why the arm-local in that repro was RIGHT while the return wrapper was wrong: the
+    /// local is declared in source and re-derives its row from the substituted variable
+    /// table, whereas the compiler-built `materialized_view_return` block was constructed
+    /// once, at template parse, from the type the arm had THEN.
+    fn retarget_parametric_type_rows(&mut self, d_nr: u32, bindings: &[(u32, Type)]) {
+        // stale row -> fresh row, one entry per bound type variable.
+        let mut rows: Vec<(i32, i32)> = Vec::new();
+        for (holder, bound_to) in bindings {
+            let stale = i32::from(self.data.def(*holder).known_type());
+            let fresh = match bound_to.base() {
+                Type::Reference(d, _) | Type::Enum(d, _, _) => {
+                    i32::from(self.data.def(*d).known_type())
+                }
+                _ => continue,
+            };
+            if stale != fresh
+                && stale != i32::from(u16::MAX)
+                && fresh != i32::from(u16::MAX)
+                && !rows.iter().any(|(s, _)| *s == stale)
+            {
+                rows.push((stale, fresh));
+            }
+        }
+        if rows.is_empty() {
+            return;
+        }
+        // Which ARGUMENT of each op is a type row, read off the op's declaration rather
+        // than hard-coded — the same source `dispatch_call` fills them from.
+        let mut row_arg: std::collections::HashMap<u32, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, def) in self.data.definitions.iter().enumerate() {
+            if !def.name.starts_with("Op") {
+                continue;
+            }
+            let at: Vec<usize> = def
+                .attributes()
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.name == "tp" || a.name.ends_with("_tp"))
+                .map(|(k, _)| k)
+                .collect();
+            if !at.is_empty() {
+                row_arg.insert(i as u32, at);
+            }
+        }
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && let Some(at) = row_arg.get(d)
+            {
+                for &k in at {
+                    if let Some(Value::Int(row)) = args.get(k)
+                        && let Some((_, fresh)) = rows.iter().find(|(stale, _)| stale == row)
+                    {
+                        args[k] = Value::Int(*fresh);
+                    }
+                }
             }
         });
         self.data.definitions[d_nr as usize].code = code;

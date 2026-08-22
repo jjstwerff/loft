@@ -3699,17 +3699,48 @@ impl Definition {
     /// comes back is this body's store either way. Borrowed: a `return` of a parameter or
     /// of a place read out of one. Unknown, hence `false`: a `return` of a CALL, whose
     /// ownership is the callee's fact and not readable here.
+    /// The variable a place chain is ROOTED at — `o[0]`, `s.f`, `v[i].g` all answer the
+    /// variable they read out of. `None` when the value is not a place (a call, a literal).
+    fn root_var(v: &Value) -> Option<u16> {
+        match v.unspan() {
+            Value::Var(n) => Some(*n),
+            Value::Call(_, args) => args.first().and_then(Self::root_var),
+            _ => None,
+        }
+    }
+
+    /// Does ONE return site hand back a store this body owns?  See
+    /// [`Self::monomorph_return_is_fresh`] for what the answer is used for and why it
+    /// under-approximates.
+    fn site_is_fresh(v: &Value, vars: &crate::variables::Function) -> bool {
+        match v.unspan() {
+            // Null is a value, not a store — it can neither leak nor dangle.
+            Value::Null => true,
+            Value::Var(n) => *n < vars.count() && !vars.is_argument(*n),
+            // loft#1070 — a value-yielding `if` / `match` tail: fresh iff EVERY arm is.
+            // Held back while an arm-local of a monomorph was built against the type
+            // variable's row and answered a wrong number; with that fixed the arms are
+            // ordinary owned locals, and leaving them unclassified only kept the leak.
+            // Both arms are required, so one borrowing arm still refuses the whole site —
+            // the under-approximation composes rather than being widened away.
+            Value::If(_, then, els) => {
+                Self::site_is_fresh(then, vars) && Self::site_is_fresh(els, vars)
+            }
+            // A block's value is its tail; an empty one yields nothing to own.
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_none_or(|tail| Self::site_is_fresh(tail, vars)),
+            other => match Self::root_var(other) {
+                Some(n) => n < vars.count() && !vars.is_argument(n),
+                // No readable root (a call, a literal-built aggregate): not proven fresh.
+                None => false,
+            },
+        }
+    }
+
     #[must_use]
     pub fn monomorph_return_is_fresh(&self) -> bool {
-        // Rooted at a parameter? Walk down the place chain to the variable it reads.
-        fn root_var(v: &Value) -> Option<u16> {
-            match v.unspan() {
-                Value::Var(n) => Some(*n),
-                // A place read (index / field / deref) keeps the root of its subject.
-                Value::Call(_, args) => args.first().and_then(root_var),
-                _ => None,
-            }
-        }
         let vars = &self.variables;
         let mut seen_return = false;
         let mut all_fresh = true;
@@ -3736,20 +3767,8 @@ impl Definition {
             let inner = inner.unspan();
             // A bare `Var` is the shape both the owned and the borrowed monomorph end
             // with after the scope pass, and it is the one the answer turns on.
-            match inner {
-                Value::Var(n) => {
-                    if *n >= vars.count() || vars.is_argument(*n) {
-                        all_fresh = false;
-                    }
-                }
-                // Null is a value, not a store — it can neither leak nor dangle.
-                Value::Null => {}
-                other => match root_var(other) {
-                    Some(n) if n < vars.count() && !vars.is_argument(n) => {}
-                    // No readable root (a call, a literal-built aggregate) or a
-                    // parameter root: not proven fresh.
-                    _ => all_fresh = false,
-                },
+            if !Self::site_is_fresh(inner, vars) {
+                all_fresh = false;
             }
         }
         // `LOFT_TRACE_RETFRESH` — the verdict per callee, because a wrong one is
