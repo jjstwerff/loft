@@ -3677,6 +3677,102 @@ impl Definition {
         })
     }
 
+    /// loft#1066 — does every `return` in this MONOMORPH hand back a store the body
+    /// itself owns, rather than one it borrowed from a parameter?
+    ///
+    /// A generic template declares `-> T`, which carries no dep, so substitution gives
+    /// every monomorph the SAME empty return dep whatever its body does. Both
+    /// `f<T>(x: T) -> T { x }` (a borrow of the argument) and
+    /// `f<T>(x: T) -> T { y: T = x; y }` (a fresh copy) therefore read as "owned" to
+    /// [`Self::returns_borrowed_view`] — which is why the caller-side lift could not be
+    /// gated on deps and was gated on the `__retbuf` parameter instead. A monomorph is
+    /// built by IR substitution and never gets one, so a fresh store it returned was
+    /// owned by nobody: one leaked record per call, on both backends.
+    ///
+    /// This answers the question deps cannot, from the body. It is a POSITIVE proof and
+    /// deliberately an UNDER-approximation: a shape it cannot read answers `false`, which
+    /// costs the leak that is already there. Answering `true` wrongly would free a store
+    /// the caller still names, and a leak is the better of those two.
+    ///
+    /// Owned: a `return` of a local, or of a place READ out of a local (`o[0]`, `s.f`) —
+    /// a place tail is materialised into a fresh `__ret_N` COPY before it leaves, so what
+    /// comes back is this body's store either way. Borrowed: a `return` of a parameter or
+    /// of a place read out of one. Unknown, hence `false`: a `return` of a CALL, whose
+    /// ownership is the callee's fact and not readable here.
+    #[must_use]
+    pub fn monomorph_return_is_fresh(&self) -> bool {
+        // Rooted at a parameter? Walk down the place chain to the variable it reads.
+        fn root_var(v: &Value) -> Option<u16> {
+            match v.unspan() {
+                Value::Var(n) => Some(*n),
+                // A place read (index / field / deref) keeps the root of its subject.
+                Value::Call(_, args) => args.first().and_then(root_var),
+                _ => None,
+            }
+        }
+        let vars = &self.variables;
+        let mut seen_return = false;
+        let mut all_fresh = true;
+        // Every explicit `return`, PLUS the body's own tail. The tail matters most and is
+        // easy to miss: at the moment the caller's lift asks this question the callee's
+        // tail is still a bare expression — the `Return` wrapper is put on by the same
+        // scope pass, and whether that has run yet depends on which function it reached
+        // first. Reading only `Return` nodes therefore answered "no return sites" for the
+        // exact monomorph being asked about.
+        let mut sites: Vec<Value> = Vec::new();
+        self.code.walk(&mut |v| {
+            if let Value::Return(inner) = v {
+                sites.push((**inner).clone());
+            }
+        });
+        if let Value::Block(bl) = &self.code
+            && let Some(tail) = bl.operators.last()
+            && !matches!(tail.unspan(), Value::Return(_))
+        {
+            sites.push(tail.clone());
+        }
+        for inner in &sites {
+            seen_return = true;
+            let inner = inner.unspan();
+            // A bare `Var` is the shape both the owned and the borrowed monomorph end
+            // with after the scope pass, and it is the one the answer turns on.
+            match inner {
+                Value::Var(n) => {
+                    if *n >= vars.count() || vars.is_argument(*n) {
+                        all_fresh = false;
+                    }
+                }
+                // Null is a value, not a store — it can neither leak nor dangle.
+                Value::Null => {}
+                other => match root_var(other) {
+                    Some(n) if n < vars.count() && !vars.is_argument(n) => {}
+                    // No readable root (a call, a literal-built aggregate) or a
+                    // parameter root: not proven fresh.
+                    _ => all_fresh = false,
+                },
+            }
+        }
+        // `LOFT_TRACE_RETFRESH` — the verdict per callee, because a wrong one is
+        // invisible from either side: a `false` costs a leak the caller never sees, and
+        // the shape that produced it is the callee's tail, which the caller does not
+        // print. The tail comes along, since "no return sites" and "a tail this cannot
+        // read" are different answers with the same verdict.
+        let verdict = seen_return && all_fresh;
+        if std::env::var_os("LOFT_TRACE_RETFRESH").is_some() {
+            let tail = match &self.code {
+                Value::Block(bl) => format!("tail={:?}", bl.operators.last()),
+                other => format!("{other:?}"),
+            };
+            eprintln!(
+                "[retfresh] {} sites={} fresh={all_fresh} -> {verdict}  {}",
+                self.name(),
+                sites.len(),
+                tail.chars().take(200).collect::<String>()
+            );
+        }
+        verdict
+    }
+
     /// Is this a LOFT-DEFINED function — one written in loft, with a body the
     /// compiler lowered itself?  That is a global (`n_<name>`) or a method /
     /// generic monomorph (`t_<len><Type>_<name>`) that carries loft IR; a native

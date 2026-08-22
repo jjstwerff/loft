@@ -6614,8 +6614,18 @@ impl Scopes {
             // NRVO parameter: a concrete-aggregate return gets it at signature
             // finalization; a borrowed-reference return never does.  So gate the
             // `t_` extension on `__retbuf`, leaving every `n_` case untouched.
+            // loft#1066 — a monomorph with NO `__retbuf` still delivers a fresh store when
+            // its body allocated one, and nobody freed it: one leaked record per inline
+            // call, N calls leaking N stores, on both backends.  `monomorph_return_is_fresh`
+            // answers from the BODY the question the deps cannot — substitution gives every
+            // monomorph of `-> T` the same empty dep, so `{ x }` and `{ y: T = x; y }` are
+            // indistinguishable to `returns_borrowed_view` and lifting on that would double
+            // free the first.  The proof is positive and under-approximating: a shape it
+            // cannot read stays unlifted, which costs the leak that was already there.
             let lift_owned_return = def.name.starts_with("n_")
-                || (def.name.starts_with("t_") && def.attr_names.contains_key("__retbuf"));
+                || (def.name.starts_with("t_")
+                    && (def.attr_names.contains_key("__retbuf")
+                        || def.monomorph_return_is_fresh()));
             if lift_owned_return && def.code != Value::Null {
                 if let Type::Reference(d_nr, _) = returned {
                     return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
