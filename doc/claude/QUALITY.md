@@ -110,16 +110,66 @@ clean with a stated reason**:
 covers.  A panic is a bounded risk; `_ => None` / `_ => return <input>` is where a
 type-driven decision goes missing quietly, and it is worth grepping for on its own.
 
-⚠ **A 24th site, found 2026-08-22, and the sweep's own boundary is the lesson.**
+⚠ **A 24th site, found 2026-08-22, and the sweep's own boundary was the lesson.**
 `populate_struct_from_jsonvalue`'s `_ => { /* not yet handled … Leave at zero-init
 default */ }` is the same silent shape and cost more than any of the 14 — it dropped every
 narrow-integer field the `JsonValue` walker was handed, values included (see the Q1/P54
 entry under § JSON cluster). The sweep did not have it because the sweep's own frame was
 *"a `match` on a TYPE that picks an **op**"*, and this one picks a **write**: no opcode is
 selected, so it did not match the grep that found the other 23. The failure mode is
-identical, which says the frame was one word too narrow — the class is a type-driven
-DECISION with a silent default, whatever the decision produces. Worth re-running with that
-wording before treating the 23 as the whole set.
+identical, which said the frame was one word too narrow — the class is a type-driven
+DECISION with a silent default, whatever the decision produces.
+
+### Re-run with the wider frame (2026-08-22) — 210 sites, and the shape that actually bites
+
+Swept every `match` whose scrutinee is a TYPE source (`.parts`, `known_type`, `content_kt`,
+a `tp`, a discriminant): **210 sites — 56 already exhaustive, 15 with a loud catch-all, 139
+silent.** 139 is too many to read, and reading them is the wrong move: almost all are
+FALLBACKS, where the catch-all hands a value back (`_ => None`, `_ => false`,
+`_ => u16::MAX`) and the caller decides. A fallback is visible to whoever asked.
+
+The shape that bites is narrower and worth naming: **a side-effecting walk whose catch-all
+does NOTHING** (`_ => {}` / `_ => ()` / a bare `return`), because then the destination
+silently keeps whatever it already held and nobody is handed anything to check. Filtering
+the 139 to `.parts` walks of that shape gives **24**, which IS readable. Result:
+
+| verdict | sites |
+|---|---|
+| **the live bug** | `populate_struct_from_jsonvalue` ×2 — fixed today (§ JSON cluster) |
+| **correct, but coupled to a refusal in another file — now exhaustive** | `copy_claims` (below) |
+| **guards** — "only a keyed collection has keys", "only a struct has fields", "only a container can be inserted into": `set_keyed`, `insert_record`, `determine_keys_for`, `load_key_text`, `load_key_sets`, `relocate_ptr_fields`, `collect_sub_records`, `tree_roots`, `layout_closure`, `validate_all_layouts`, `validate_layout_by_nr` | 11 |
+| **diagnostics** — a skip costs a missed warning, never a value: `walk_copy_cmp` (the `copy_check` validator), `first_oob_text`, `search.rs::validate` (whose own doc comment lists what it does not yet check) | 3 |
+| **actually loud** — the catch-all raises a user diagnostic; the regex only read it as silent because the arm body opens a block: `fill_iter` | 1 |
+| **narrow surface, value-returning fallback**: `file_to_bytes` / `file_from_bytes`, `output_init` (which states why an inline container field is emitted elsewhere) | 5 |
+
+**The reusable half, sharpened:** classify by how the catch-all fails, *then* by whether
+anyone is told. A panic is bounded. A value-returning fallback is visible to the caller. A
+**do-nothing arm in a walk that writes** is the one that goes missing quietly — and that
+filter cut 139 unreadable sites to 24 readable ones without dropping either real find.
+
+### `copy_claims` skips `Parts::DbRef` — correct, and now it says so
+
+Measured rather than reasoned. An env-gated counter in the catch-all over the whole
+`tests/scripts` corpus: `Byte` 72276, `Base` 64588, `Int` 14184, `ShortRaw` 3110, and
+**`DbRef` 3** — so the one kind that could own something really does arrive here, from
+`85-poison-return-tail-uaf.loft` passing a `fn(…)`-holding struct by value.
+
+The skip is deliberate: the block copy preceding this walk leaves the destination's 12-byte
+`DbRef` pointing at the SOURCE's closure record, so a copied fn-ref field ALIASES rather
+than owns — which is why a bound fn-ref field read is marked `skip_free`. **That is sound
+only because the copy can never outlive the source, and nothing guaranteeing it lives in
+this file:** #318 refuses a capturing-closure holder as a return value, as a collection
+element, and as a field of another struct, and a fn-ref struct field admits ONE capture
+shape program-wide. Probed all four escape routes — every one is refused at compile time —
+and the two legal copies (passed down by value; copied out of an inner scope into a longer-
+lived local) answer correctly on both backends under `LOFT_POISON=1` with store churn.
+
+So: not a bug, but a guarantee held together across two files with nothing at the load-
+bearing end saying so. The arm set is now EXHAUSTIVE — each remaining kind states why it
+has no claim, and `DbRef` carries the coupling and the measurement. Proven: adding a probe
+`Parts` variant fails the build at `allocation.rs:2876` (`copy_claims`) alongside `:2157`
+(`validate_claims`, made exhaustive the day before for the same reason). Relax #318 and the
+build still won't complain — but the comment now tells the next reader where to look.
 
 ### The library-CI gate reddens library repos for reasons they cannot cure
 
