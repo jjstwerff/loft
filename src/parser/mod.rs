@@ -3809,7 +3809,14 @@ impl Parser {
             }
             return true;
         }
-        if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
+        // loft#1065 — `should.base()`, so a variant literal lands in a NULLABLE struct-enum
+        // as readily as in a bare one.  `s: Shape? = Shape::Circle { r: 7 }` was refused
+        // ("cannot change type from Shape? to Circle") while `s: Shape = …` beside it was
+        // accepted, and a no-payload `Shape::Dot` was accepted either way — so the `?` was
+        // the axis and only for the variants that carry a record.  Whether the slot may be
+        // absent says nothing about which variants it can hold.
+        if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should.base())
+        {
             for a in self.data.def(*enum_tp).attributes() {
                 if a.name == self.data.def(*ref_tp).name() {
                     return true;
@@ -4050,6 +4057,18 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // loft#1065 — and a STRUCT-enum target, for the same reason: its slot is a
+        // twelve-byte `DbRef`, so the only thing that can mean absent in it is the
+        // reference sentinel.  Read through `base()`, because the shape that needs this
+        // most is the nullable one (`s: Shape? = null`) — without it the slot kept a bare
+        // `Value::Null`, which writes nothing, and the scope-exit `OpFreeRef` then read
+        // the untouched bytes as store #0 and tried to free the STACK ("a stack-record
+        // ref was treated as an owned heap store", BUG #306).
+        if *is_type == Type::Null && matches!(should.base(), Type::Enum(_, true, _)) {
+            let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
+            *code = Value::Call(sentinel_nr, vec![]);
+            return true;
+        }
         // @PLN102 — `null` assigned to a value-enum target (`n: Color? = null`, a
         // return, an arg, a field) must become the enum's typed null
         // (`OpConvEnumFromNull` → the 255 sentinel), NOT stay a bare `Value::Null`
@@ -4061,8 +4080,18 @@ impl Parser {
         // Inline `__nullable<S>` fields keep their own disc-0 representation (excluded);
         // a value-enum VECTOR element has no wired per-element null and is rejected in
         // `parse_vector` (which no longer relies on this convert failing).
+        //
+        // loft#1065 — the `false` is load-bearing: THREE shapes share the `Type::Enum`
+        // spelling and take three different nulls, and this arm is only right for one of
+        // them.  A VALUE enum is a discriminant byte, so its null is the `255` sentinel.
+        // A STRUCT-enum is carried as a twelve-byte `DbRef`, so its null is the reference
+        // sentinel — `formal/types.md` derives the representation from the base type's
+        // storage, and a handle's is `nullref`.  Undiscriminated, this wrote one byte
+        // into a handle slot: `--interpret` then read the slot as a live ref and tripped
+        // its own store-lifetime guard, and `--native` would not compile at all
+        // (`non-primitive cast: u8 as loft::keys::DbRef`).
         if *is_type == Type::Null
-            && let Type::Enum(tp, _, _) = should.base()
+            && let Type::Enum(tp, false, _) = should.base()
             && !self.data.def(*tp).name.starts_with("__nullable<")
         {
             *code = self.cl(
@@ -13931,7 +13960,11 @@ impl Parser {
                 // 255 sentinel; truthiness contexts coerce it to false.
                 self.cl("OpConvBoolFromNull", &[])
             }
-            Type::Enum(tp, _, _) => self.cl(
+            // loft#1065 — a STRUCT-enum is a `DbRef`, so its null is the reference
+            // sentinel, not the `255` discriminant byte a value enum uses.  This is the
+            // answer [`Self::null_value`] already documents; the two now agree.
+            Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
+            Type::Enum(tp, false, _) => self.cl(
                 "OpConvEnumFromNull",
                 &[Value::Int(i32::from(self.data.def(*tp).known_type()))],
             ),

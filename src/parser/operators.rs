@@ -609,7 +609,13 @@ impl Parser {
             // read of a simple enum comes back `Enum(_, true, _)`.
             let has_value = self.cl("OpConvBoolFromEnum", &[operand]);
             self.cl("OpNot", &[has_value])
-        } else if let Type::Enum(e_def, _, _) = tp {
+        } else if let Type::Enum(e_def, _, _) = tp.base() {
+            // loft#1065 — read through `base()`, so `Shape?` asks the same question
+            // `Shape` does.  Matching the bare spelling alone left a nullable struct-enum
+            // with no test at all: `s == null` was refused outright ("No matching
+            // operator '==' on 'Shape?' and 'null'") while the same test on the bare type
+            // beside it worked.  Whether a slot may be absent does not change how absence
+            // is spelled in it.
             let e_def = *e_def;
             // A synthetic `__nullable<S>` enum backs an INLINE struct field / vector
             // element (no DbRef slot), so null is discriminant 0 — read it directly,
@@ -3317,12 +3323,34 @@ impl Parser {
             // only for the value enum, because `null_test` answers every shape that
             // passes this gate and returns `None` for the others, and a `None` here
             // leaves the operand in place while retyping it boolean.
+            //
+            // loft#1065 — a STRUCT-enum operand must be a HANDLE.  `null_test` answers it
+            // with `OpRefIsNull`, which reads the store-pointer sentinel a twelve-byte
+            // `DbRef` slot carries; an INLINE slot — a field, or a `vector<Shape?>`
+            // element — is a four-byte record pointer that cannot hold that sentinel, so
+            // the test answers "present" for a value that IS absent.  Excluded rather
+            // than answered, because the write into an inline slot is itself not right
+            // yet (loft#1071) and a silent wrong answer is worse than the refusal it
+            // replaces.  A VALUE enum is untouched: its null is a discriminant byte,
+            // which an inline slot holds perfectly well, and reading a nullable enum
+            // FIELD is exactly what the paragraph above widened this gate for.
+            // The synthetic `__nullable<S>` is excluded from the exclusion: it IS the tagged
+            // inline encoding — absence is discriminant `0`, which an inline slot holds
+            // exactly — and `null_test` already answers it that way.  It is only a
+            // USER-declared struct-enum, which has no tag, that has nothing to read.
+            let senum_inline = |p: &Self, tp: &Type, v: &Value| {
+                matches!(tp.base(), Type::Enum(d, true, _)
+                    if !p.data.def(*d).name.starts_with("__nullable<"))
+                    && p.reads_inline_slot(v)
+            };
             let enum_null = (operator == "==" || operator == "!=")
                 && (((matches!(*ctp, Type::Enum(_, _, _)) || self.is_value_enum(ctp))
+                    && !senum_inline(self, ctp, code)
                     && second_type == Type::Null)
                     || (*ctp == Type::Null
                         && (matches!(second_type, Type::Enum(_, _, _))
-                            || self.is_value_enum(&second_type))));
+                            || self.is_value_enum(&second_type))
+                        && !senum_inline(self, &second_type, &second_code)));
             // @PLN99 A5 — a nullable STRUCT-reference VARIABLE (`s: DT? = null`,
             // typed `Optional(Reference)`) holds the reference null sentinel
             // (`store_nr==u16::MAX`, from OpNullRefSentinel), like a nullable enum variable.
@@ -3342,6 +3370,36 @@ impl Parser {
                 && matches!(second_type.base(), Type::Reference(_, _));
             let ref_null = (operator == "==" || operator == "!=")
                 && ((opt_ref_l && second_type == Type::Null) || (*ctp == Type::Null && opt_ref_r));
+            // loft#1065 — a nullable STRUCT-enum (`Shape?`) is the third shape that
+            // reaches here, and it was the one with no arm: `s == null` was refused
+            // outright ("No matching operator") while the bare `Shape` beside it worked.
+            // It is carried as a `DbRef` and holds the same reference sentinel a nullable
+            // struct reference does, so it wants the same test.  The `enum_null` comment
+            // above sets the precondition for widening a gate here — that `null_test`
+            // actually answers the shape — and it now does: its enum arm reads through
+            // `base()`, so `Shape?` asks what `Shape` asks.
+            //
+            // Scoped to a HANDLE operand, and the exclusion is the load-bearing half.  A
+            // struct-enum LOCAL / parameter / return is a twelve-byte `DbRef` whose absence
+            // is the store-pointer sentinel, which is what `OpRefIsNull` reads.  A struct-enum
+            // FIELD is a four-byte record pointer inside the holder's record, and its write
+            // has never been right — `Box { s: null }` emits `OpCopyRecord(<the null>, …)`
+            // into the slot, which is not how absence is spelled there (pre-existing, and
+            // unchanged by this fix; loft#1071).  Admitting the field here would answer
+            // `false` for a field that IS null — trading a refusal for a silent wrong
+            // answer, which is strictly worse than the refusal.  So the field keeps its
+            // "No matching operator" until its write is fixed.
+            let handle_senum = |p: &Self, tp: &Type, v: &Value| {
+                matches!(tp, Type::Optional(_))
+                    && matches!(tp.base(), Type::Enum(d, true, _)
+                        if !p.data.def(*d).name.starts_with("__nullable<"))
+                    && !p.reads_inline_slot(v)
+            };
+            let opt_senum_l = handle_senum(self, ctp, code);
+            let opt_senum_r = handle_senum(self, &second_type, &second_code);
+            let senum_null = (operator == "==" || operator == "!=")
+                && ((opt_senum_l && second_type == Type::Null)
+                    || (*ctp == Type::Null && opt_senum_r));
             // @PLN102 pre-freeze — a boolean and an integer are NOT comparable with `==`/`!=`.
             // The old path coerced the integer to boolean by "is non-null", so `true == 0` was
             // TRUE and `true == 2` was TRUE (nonsense) — while `bool < int` already errored.
@@ -3404,7 +3462,7 @@ impl Parser {
                     },
                 );
                 *ctp = Type::Boolean;
-            } else if vec_null || float_null || enum_null || ref_null {
+            } else if vec_null || float_null || enum_null || ref_null || senum_null {
                 if !self.first_pass {
                     let (n_code, n_tp) = if *ctp == Type::Null {
                         (second_code, second_type.clone())

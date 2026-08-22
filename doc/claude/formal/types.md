@@ -492,12 +492,35 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **0** — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **1** (DN-SE-inline, below) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### DN-SE-inline — OPEN (2026-08-22): a nullable struct-enum in INLINE storage has no null
+The representation rule above derives `τ?`'s null from `τ`'s storage, and gives a reference the
+out-of-band `nullref`. A struct-enum is carried as a `DbRef`, so `Shape?` takes the reference
+sentinel — which loft#1065 measured it did NOT: several sites answered "what is this type's
+null" without telling a struct-enum from a value enum, and it took the value enum's `255`
+BYTE into a handle slot. `--interpret` then read the slot back as a live ref (its own
+store-lifetime guard fired) and `--native` refused to compile (`non-primitive cast: u8 as
+DbRef`). **Closed for a LOCAL, a parameter and a return** by discriminating `Enum(_, true, _)`
+from `Enum(_, false, _)` at each site, plus `base()` where a shape was read without peeling
+`Optional` (six sites; guard `tests/scripts/1065-nullable-struct-enum.loft`).
+
+**Still open for INLINE storage** — a struct FIELD and a `vector<Shape?>` element. Those are a
+four-byte record pointer inside the holder's record, which cannot hold the twelve-byte
+sentinel at all, and nothing writes an absence there: the write emits a record COPY into the
+slot. So for those two positions the rule has no implementation, not a wrong one. The field
+keeps its pre-existing refusal of the null test rather than answering it wrongly; the element
+now constructs (it used to abort inside the allocator) and reads back wrong. The fix that fits
+is the mechanism a nullable struct FIELD already uses — the tagged synthetic `__nullable<…>`
+— extended past its `Type::Reference` guard. Tracked: **loft#1071**.
+
+This entry is also the answer to the "OPEN: 0" line above having been too strong: the rule was
+written, and the code disagreed with it for a whole type former, in both directions at once.
 
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
 `(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain

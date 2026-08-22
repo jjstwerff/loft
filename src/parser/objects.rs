@@ -97,8 +97,15 @@ impl Parser {
     /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
     /// the expected-enum context for bare value-position variant resolution
     /// once variants are no longer globally keyed.
+    ///
+    /// loft#1065 — read through `base()`: a NULLABLE enum target is an enum context too.
+    /// Without the peel, `s: Shape? = Shape::Circle { r: 7 }` never resolved the variant
+    /// against `Shape`, so the local was retyped to `Circle` and the declaration refused
+    /// itself ("cannot change type from Shape? to Circle") — while the same literal in a
+    /// bare `Shape` slot beside it was accepted. Whether the slot may be ABSENT says
+    /// nothing about which variants it can hold.
     pub(crate) fn enum_context(&self, tp: &Type) -> bool {
-        match tp {
+        match tp.base() {
             Type::Enum(_, _, _) => true,
             Type::Reference(d_nr, _) => self.data.def_type(*d_nr) == DefType::Enum,
             _ => false,
@@ -109,6 +116,25 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
+    /// loft#1065 — does this operand read an INLINE record slot rather than a handle?
+    ///
+    /// The distinction decides how absence is spelled. A local, a parameter and a return
+    /// carry a struct-enum as a twelve-byte `DbRef`, where absent is the store-pointer
+    /// sentinel. A FIELD carries it as a four-byte record pointer inside the holder's
+    /// record, where the sentinel cannot be written at all — so the same test answers the
+    /// wrong thing on one of the two.
+    pub(crate) fn reads_inline_slot(&self, v: &Value) -> bool {
+        // A struct FIELD (`OpGetField`) and a vector ELEMENT (`OpGetVector*`) are the two
+        // inline slots. Both are reached by name rather than by opcode number so the list
+        // reads as what it is; the element read arrives here under either spelling
+        // depending on whether the element type is nullable.
+        matches!(v.unspan(), Value::Call(d, _)
+            if {
+                let n = self.data.def(*d).name();
+                n == "OpGetField" || n.starts_with("OpGetVector")
+            })
+    }
+
     /// Is this IR node the value a source-level `null` becomes?
     ///
     /// Two spellings reach a store site: the bare `Value::Null` the parser starts with, and

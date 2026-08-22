@@ -2012,6 +2012,14 @@ Nullable fields default to `null`. A **bare (non-`Optional`) enum field is the o
 has no zero value (an enum's 0 is `null`, which a non-null field may not hold), so omitting it is a
 compile error — provide it, give it `= <variant>`, or type it `E?` (@PLN116).
 
+**A nullable STRUCT-enum (`Shape?`) works as a local, a parameter and a return** — it is carried
+as a handle, and absence is the reference sentinel, so `= null`, `== null`, truthiness, `??`,
+`match` and reassignment in both directions all behave (loft#1065). It does **not** yet work in
+inline storage — a struct FIELD or a `vector<Shape?>` element — where the slot is a four-byte
+record pointer with no room for that sentinel: the field refuses the null test and the element
+reads back wrong (loft#1071). Until then, put the absence in the ENUM rather than in the slot:
+`enum Shape { None, Dot, Circle { r: integer } }` and drop the `?`.
+
 Field access uses `.`:
 ```
 point.x

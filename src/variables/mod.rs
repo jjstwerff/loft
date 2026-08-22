@@ -1943,7 +1943,14 @@ impl Function {
             // variant as `Reference(variant_d, _)`, but the parent
             // relationship (`def(variant_d).parent == enum_d`)
             // proves subtype compatibility with `Enum(enum_d, true, _)`.
-            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) = (var_tp, type_def)
+            // loft#1065 — through `base()`, so a NULLABLE struct-enum accepts a variant
+            // too.  `s: Shape? = Shape::Circle { r: 7 }` was refused ("cannot change type
+            // from Shape? to Circle") while the bare `Shape` beside it was accepted, and
+            // a no-payload `Shape::Dot` was accepted either way — because only a variant
+            // carrying a RECORD arrives typed as its own `Reference`.  Whether the slot
+            // may be absent says nothing about which variants it can hold.
+            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) =
+                (var_tp.base(), type_def)
                 && data.def(*rhs_d).parent == *parent_d
             {
                 return self.is_new(var_nr);
