@@ -7274,11 +7274,10 @@ impl Parser {
     /// (the caller should pre-check via `is_primitive_vector_element_target`).
     fn primitive_setter_call(
         concrete: &Type,
-        elm_var: u16,
+        elm: Value,
         src_value: Value,
         data: &Data,
     ) -> Option<Value> {
-        let elm = Value::Var(elm_var);
         let pos = Value::Int(0);
         // Resolve op def_nrs.  Each branch resolves only the ones it needs.
         let op = match concrete {
@@ -7439,12 +7438,13 @@ impl Parser {
                     Self::rewrite_generic_vector_writes(inner, concrete, vars, data, database),
                 )))
             }
-            Value::Call(d, args) => Value::Call(
-                d,
-                args.into_iter()
+            Value::Call(d, args) => {
+                let recursed: Vec<Value> = args
+                    .into_iter()
                     .map(|a| Self::rewrite_generic_vector_writes(a, concrete, vars, data, database))
-                    .collect(),
-            ),
+                    .collect();
+                Self::rewrite_indexed_element_write(d, recursed, concrete, data, database)
+            }
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
                     .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
@@ -7612,7 +7612,8 @@ impl Parser {
                         vec![src_value, Value::Var(elm_var), Value::Int(known_tp)],
                     ));
                 } else {
-                    let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
+                    let setter =
+                        Self::primitive_setter_call(concrete, Value::Var(elm_var), src_value, data);
                     if let Some(call) = setter {
                         out.push(call);
                     } else {
@@ -7657,6 +7658,82 @@ impl Parser {
     /// copied into the new vector slot).  Returned by-value (cloned
     /// from the matched IR) so the caller can construct the new
     /// `OpSetInt` Call without borrowing back into `ops`.
+    /// `v[i] = x` inside a template — the write spelling the triplet rewriter does not
+    /// see, because an INDEXED assignment emits a lone `OpCopyRecord` instead of the
+    /// `OpNewRecord` / `OpCopyRecord` / `OpFinishRecord` sequence an APPEND emits.
+    ///
+    /// Left parametric, that `OpCopyRecord` reached the monomorph with the type
+    /// VARIABLE's record id and a source that is no longer a record: at every scalar type
+    /// the run PANICKED in the allocator, at `float`/`text` it walked a corrupt edge, and
+    /// for a struct parameter it silently wrote nowhere and read the old element back.
+    /// The concrete twin emits `OpSetInt(OpGetVector(v, 8, 0), 0, x)`, so that is what the
+    /// monomorph must emit too — `(G-Mono)`, and the same one-home setter builder the
+    /// append path uses.
+    ///
+    /// The two spellings are told apart by WHERE the copy writes: an append's destination
+    /// is the freshly-minted `Var(elm)`, an indexed write's is an element READ.  So only a
+    /// destination rooted in `OpGetVector` is rewritten here, which leaves the triplet for
+    /// its own matcher and leaves an ordinary record copy inside a generic body alone.
+    fn rewrite_indexed_element_write(
+        d: u32,
+        args: Vec<Value>,
+        concrete: &Type,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Value {
+        let copy_record_d = data.def_nr("OpCopyRecord");
+        if d != copy_record_d || copy_record_d == u32::MAX || args.len() != 3 {
+            return Value::Call(d, args);
+        }
+        let Some(elem) = Self::element_write_destination(&args[1], data) else {
+            return Value::Call(d, args);
+        };
+        if Self::is_primitive_vector_element_target(concrete) {
+            // The element's VALUE wrapper is stripped by `element_write_destination`: the
+            // substitution wraps every rewritten element read for value use, and a write
+            // destination is the one place that wrapper is wrong.
+            if let Some(setter) = Self::primitive_setter_call(concrete, elem, args[0].clone(), data)
+            {
+                return setter;
+            }
+            return Value::Call(d, args);
+        }
+        // A struct element keeps the record copy and takes the CONCRETE record id — the
+        // parametric one names an attribute-less placeholder, so the runtime copied the
+        // wrong number of words.
+        let tp = i32::from(database.db_type(concrete, data));
+        Value::Call(d, vec![args[0].clone(), elem, Value::Int(tp)])
+    }
+
+    /// The element reference an `OpCopyRecord` destination names, with the value-getter
+    /// wrapper stripped — or `None` when the destination is not an element read at all.
+    ///
+    /// `substitute_type_in_value` wraps every element read it retargets so the value can
+    /// be USED (`OpGetInt(OpGetVector(…), 0)`); a write destination wants the reference
+    /// itself, and the wrapper is what made the copy read an `i64` where it needed an
+    /// address.  Recognising the wrapper by its ARGUMENT SHAPE — one element read plus a
+    /// zero offset — keeps this from having to carry a second copy of the op list that
+    /// `wrap_vector_get_val` already owns.
+    fn element_write_destination(dest: &Value, data: &Data) -> Option<Value> {
+        let is_element_read = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, _)
+                if *d != u32::MAX
+                    && (*d as usize) < data.definitions.len()
+                    && matches!(data.def(*d).name(), "OpGetVector" | "OpGetVectorNullable"))
+        };
+        if is_element_read(dest) {
+            return Some(dest.clone());
+        }
+        if let Value::Call(_, wrapped) = dest.unspan()
+            && wrapped.len() == 2
+            && matches!(wrapped[1].unspan(), Value::Int(0))
+            && is_element_read(&wrapped[0])
+        {
+            return Some(wrapped[0].clone());
+        }
+        None
+    }
+
     fn match_vector_write_triplet(
         op0: &Value,
         op1: &Value,
