@@ -689,6 +689,13 @@ examples_cited_in_tree() {
 #                (the link is still emitted); a local checkout is validated OFFLINE
 #                and preferred over any online lookup.
 #
+# ⚠ A local checkout is validated at the branch it is PARKED ON, not at its default
+# branch — so parking a sibling library checkout on a branch that predates a tag turns
+# that tag `dangling` here, and loft's own gate goes red for something no loft file
+# says. Measured 2026-08-22: branching `loft-libs-assets` off `main` to add a package
+# left @MSH-002 / @MSH-005 dangling, because their worked examples live on an
+# unmerged branch. Push the work, put the sibling back on the branch you found it on.
+#
 # The `@AAA-###` shape (three letters, hyphen, three digits) is distinct from the
 # repo's other tag families (@F1, @P259, @PLN141) — none has that hyphen.
 check_examples() {
