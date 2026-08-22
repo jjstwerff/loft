@@ -129,15 +129,28 @@ reads; an element or a match binding must NOT show it).
 claimed in, one line per mint, naming the site that asked:
 
 ```
-[workref] fn=bad -> v2 __ref_1 tp=Vector(Reference(707, …)) at src/parser/mod.rs:8977:40
-[workref] fn=bad -> v5 __ref_3 tp=Reference(707, …)         at src/parser/objects.rs:3051:31
+[workref] fn=bad -> v2 __ref_1 arg=no  tp=Vector(Reference(707, …)) at src/parser/mod.rs:8977:40
+[workref] fn=bad -> v5 __ref_3 arg=yes tp=Reference(707, …)         at src/parser/objects.rs:3051:31
 ```
 
 Reach for it when the var table shows the right names in the wrong ROLES.  The table is the
 end state; a collision is about sequence, and the two parser passes mint different ones —
 which is what showed a call's out-param buffer claiming, on pass 2, the name pass 1 had
 promoted to the return-buffer argument (loft#872).  The table alone said only that one
-variable was both.  Its companion is `LOFT_TRACE_RR=1`, which prints `ref_return`'s
+variable was both.
+
+**`arg=` is the field that separates a collision from the intended reuse, and read it before
+reading anything else.**  A `__ref_N` name IS function scratch, so pass 2 re-resolving it to
+the same scratch slot is exactly right and happens constantly — sweeping all 844
+`tests/scripts` for *one variable minted from two different sites in one function* reports
+**138 hits across 24 files**, nearly all of them that.  `arg=yes` on a `__ref_N` can only mean
+`ref_return` promoted it to the return buffer on pass 1, so a DIFFERENT site is now being
+handed the buffer: the same 844-script sweep filtered on it reports **0**, and **7** with
+loft#1078's `LOFT_NO_P2_OBJECT_WORKREF=1` opt-out set.  Six of those seven were scripts
+already in the suite and already passing, which is how the class stayed invisible.  The field
+was added because the trace could not answer the question its own loft#872 example poses.
+
+Its companion is `LOFT_TRACE_RR=1`, which prints `ref_return`'s
 `(ls, ls_types, returned)` plus the per-candidate promotion verdict, with the PASS.
 
 One flag is there for a different reason.  **`amplink`** marks a binding the author

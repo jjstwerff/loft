@@ -1152,7 +1152,7 @@ Guarded by `tests/store_memory_limit.rs`.
 CALL SITES only, so resolving an arbitrary allocation pc through it returns the
 nearest span *below* — routinely in an unrelated function. A diagnostic that sends
 the reader to the wrong file costs more than one that stays quiet, so the report
-prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
+prints the pc and stops there; `LOFT_STORES=timeline` resolves the same pc against the
 denser per-run table.
 
 ## Hang guard (`LOFT_MAX_OPS`)

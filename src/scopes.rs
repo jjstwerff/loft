@@ -4782,13 +4782,30 @@ impl Scopes {
             // through the same hoist + `OpFreeRefIfDistinct` leg the null-arm
             // join uses; view sources (non-empty deps) stay suppressed as
             // borrows.
+            //
+            // loft#1078 — the promoted NRVO buffer is one of those owned sources,
+            // and `is_argument` alone excluded it.  `fn pick(c) -> S { w = S{a:7};
+            // if c { S{a:9} } else { w } }` renames `w` onto the hidden buffer, so
+            // both arms name an owned candidate and exactly one wins; on the arm
+            // that does NOT deliver `w`, the store `w` minted is returned by nobody
+            // and freed by nobody — one orphan per call, which is the same u16
+            // store-table exhaustion loft#688 and loft#1022 each closed for their
+            // own shape.  The carve-out is the one those two already established:
+            // a user PARAMETER belongs to the caller and the callee frees none of
+            // it, while the promoted buffer is the one argument that is really a
+            // local this function minted (`is_promoted_ret_buffer` — hidden attr,
+            // renamed off `__retbuf`).  It reaches here rather than loft#688's leg
+            // because that leg excludes anything in `sources`, and the owning arm
+            // puts it there — the identical reason loft#1022 restated the carve-out
+            // in its own gate.
             if sources.len() > 1 {
                 for &v in &sources {
                     if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
                     ) && function.tp(v).depend().is_empty()
-                        && !function.is_argument(v)
+                        && (!function.is_argument(v)
+                            || self.is_promoted_ret_buffer(function, data, v))
                         && !null_arm_record_sources.contains(&v)
                     {
                         null_arm_record_sources.push(v);

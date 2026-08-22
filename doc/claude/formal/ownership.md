@@ -104,10 +104,49 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **0** (2026-08-20) — **D-own-6 is CLOSED**; the five original D-own deviations remain
-resolved.  Read the entry below for what its oracle now varies before treating this zero as a
-measurement: it rested on a Join corpus that pinned the argument spelling, and moving that one
-axis found six leaking spellings nobody had asked about.
+OPEN: **0** (2026-08-23) — **D-own-7 opened and closed the same day**, and D-own-6 before it;
+the five original D-own deviations remain resolved.  Read both entries for what their oracles
+vary before treating this zero as a measurement: each rested on a Join corpus that pinned one
+axis, and moving that axis found a fresh family every time.
+
+### D-own-7 — CLOSED (2026-08-23, loft#1078): every arm of a Join that OWNS a store is a candidate the free must name
+
+`(O-Derived)` says free a local iff it owns its store and does not transfer it out.  A tail
+`if`/`match` whose arms each own a store transfers exactly ONE of them, so the others are
+locals that must be freed — and the promoted NRVO buffer is one of those arms.
+
+`fn pick(c) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }` renames `w` onto the
+hidden return buffer, so the `else` arm delivers the buffer and the `if` arm delivers a
+different store.  `scopes::free_vars` reaches the losers through three legs — a null arm
+(@PLN85 A.1), a promoted buffer no arm names (loft#688), and arms that disagree about
+ownership (loft#1022) — and the multi-source leg that covers *"several owned candidates, one
+winner"* excluded every ARGUMENT.  That exclusion is right for a user parameter, which belongs
+to the caller, and wrong for the one argument that is really a local this function minted.
+loft#1022's own comment had already named the carve-out and applied it inside its own gate;
+the multi-source leg needed the same one.  One orphan per call, both backends, invisible in a
+single call — `loft_planet` retained ~16,000 records per planet and four planets exhausted the
+65,535-entry `store_nr` table.
+
+**What the oracle held fixed, and what moving it found.** The filed report varied *what the
+non-taken arm names* (a local, a parameter, a vector element) and held the RETURN POSITION and
+the arm COUNT fixed.  Moving those two found two `silent-wrong` defects the leak had hidden,
+neither of them an ownership fact:
+
+* **Two owned locals** — the first is renamed onto the buffer, and the second's copy leg emits
+  `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)`.  The re-mint destroys the store
+  the copy is about to read, so the renamed arm answered a zeroed record.  A three-arm `match`
+  broke only its FIRST arm, which is the tell that the buffer RENAME is the mechanism and the
+  join is not.
+* **Bound, then returned** (`r = if c { … } else { w }; r`) — not a tail join at all.  This is
+  loft#848's class one arm over: the pass-2-only object-literal mint still drew from the shared
+  `__ref_N` counter, so pass 2 handed it the name pass 1 had left on the return buffer, and
+  `return_buffer()` resolves that buffer BY NAME.  The arm's record and the return destination
+  became one slot.
+
+Both answered wrong IDENTICALLY on the two backends, so `(O-NoDiverge)` held while
+`(O-Owner)` did not — a reminder that backend agreement is not an oracle.  Guard:
+`tests/scripts/1078-join-arms-that-each-own-a-store.loft`, both halves falsified on a pristine
+worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap leak gate).
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
 

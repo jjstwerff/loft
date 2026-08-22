@@ -264,6 +264,17 @@ enum RetPromotion {
         buf_var: u16,
         substitute: bool,
     },
+    /// loft#1078 — this candidate is one arm of a runtime JOIN whose OTHER arm was
+    /// already renamed onto the return buffer, so the tail READS the buffer.  `Bind`'s
+    /// copy leg would emit `OpDatabase(buf); OpCopyRecord(<tail reading buf>, buf)` —
+    /// the re-mint destroys the very store the copy is about to read, and the renamed
+    /// arm answers a zeroed record (`if c { u } else { w }` gave `0` for `u` on both
+    /// backends, and a three-arm `match` broke only its first arm).  Stay a plain
+    /// local instead: the join delivers one store, and the multi-source
+    /// `OpFreeRefIfDistinct` leg in `scopes::free_vars` frees the losers — the same
+    /// lowering the single-named-local shape already uses and which loft#1078's own
+    /// leak fix proved out.
+    SkipJoinArm,
     /// Vector / struct-Enum returns on LAMBDAS still grow the arity in place:
     /// a lambda is defined at its literal site and invoked via CallRef, so no
     /// earlier caller can hold a short arg list.  PASS-1 growth on a plain fn
@@ -11483,6 +11494,24 @@ impl Parser {
                 chain_site: ctx.site == RetSite::MidReturn && is_work_ref,
             };
         }
+        // loft#1078 — the buffer a named local would be COPIED into is READ by the tail.
+        // A RECORD return only: `materialize_return_into` re-mints the destination with
+        // `OpDatabase` before the copy evaluates its source, so a destination the source
+        // reads is destroyed first.  The collection and text returns carry their own
+        // aliasing-aware delivery (`OpReplaceVector` is a documented no-op when the
+        // source still aliases the buffer, and the B5-L3 text hoist copies first), and
+        // both were measured clean on this shape — narrowing here keeps the guard on the
+        // path that actually re-mints.
+        let tail_reads_buffer = matches!(
+            ctx.ret.ret_promo_base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && !is_work_ref
+            && self.return_buffer().is_some_and(|(_, buf_var)| {
+                buf_var != v && body.last().is_some_and(|t| t.reads_var(buf_var))
+            });
+        if tail_reads_buffer {
+            return RetPromotion::SkipJoinArm;
+        }
         // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
         if ctx.is_plain_fn
             && matches!(
@@ -11738,7 +11767,8 @@ impl Parser {
                     RetPromotion::SkipDelivered
                     | RetPromotion::SkipReassigned
                     | RetPromotion::MergeOnly
-                    | RetPromotion::SkipInnerRef => {}
+                    | RetPromotion::SkipInnerRef
+                    | RetPromotion::SkipJoinArm => {}
                     // loft#974 — a shape that carries its own delivery takes the borrow
                     // fact and nothing else: no buffer rename, no bind, no arity growth.
                     // Every leg below rewrites where the value LIVES, and this return

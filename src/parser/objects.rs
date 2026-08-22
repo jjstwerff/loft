@@ -3559,7 +3559,22 @@ impl Parser {
             new_object = true;
             self.data.set_referenced(td_nr, self.context, Value::Null);
             let ret = self.data.def(td_nr).returned();
-            let w = self.vars.work_refs(ret, &mut self.lexer);
+            // loft#1078 — the SECOND pass-2-only arm of this same function, and it kept the
+            // shared counter after loft#848 moved its sibling above off it.  Same failure,
+            // one arm over: `fn pick(c) -> S { w = S{a:7}; r = if c { S{a:9} } else { w }; r }`
+            // mints nothing here on pass 1 (the view-return materialiser takes `__ref_1` and
+            // `ref_return` renames it onto the return buffer), so on pass 2 this literal is
+            // handed the name pass 1 left on that buffer — `return_buffer()` resolves the
+            // buffer BY NAME, so the arm's record and the return destination became one
+            // slot.  The return then re-mints it with `OpDatabase` before copying, and the
+            // fresh arm answered `0` on BOTH backends while the borrow arm was correct.
+            // A pass-2-only mint site draws from the pass-2 sequence — see
+            // `Vars::work_ref_p2`.
+            let w = if crate::keys::p2_object_workref_enabled() {
+                self.vars.work_refs_p2(ret, &mut self.lexer)
+            } else {
+                self.vars.work_refs(ret, &mut self.lexer)
+            };
             let tp = i32::from(self.data.def(td_nr).known_type());
             list.push(v_set(w, Value::Null));
             list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));

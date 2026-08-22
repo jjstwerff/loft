@@ -725,8 +725,9 @@ impl Stores {
             slot != u16::MAX,
             "store table exhausted: 65535 stores live at once (store_nr is \
              u16; 65535 is the null sentinel).  This usually indicates a \
-             store leak — run with LOFT_STORES=summary to list live stores \
-             by type."
+             store leak — run with LOFT_STORES=timeline, which lists the live \
+             stores by type and says whether they are a LEAK or a large but \
+             clean working set."
         );
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
@@ -1312,7 +1313,7 @@ impl Stores {
     /// the leak-check preview) buried the signal in store numbers; naming the culprit
     /// directly (e.g. `kt=68 ChunkKey×6026`) is what pinpointed the @P317 native
     /// ref-local leak.  Used by `LOFT_NATIVE_LEAK_CHECK` (native) and
-    /// `LOFT_STORES=summary` (interp).
+    /// `LOFT_STORES=timeline` (interp).
     #[must_use]
     pub fn collect_store_leaks(&self) -> Vec<String> {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =

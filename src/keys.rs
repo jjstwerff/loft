@@ -864,6 +864,26 @@ pub fn work_ref_stepover_enabled() -> bool {
     *ON.get_or_init(|| !env_set("LOFT_NO_WORKREF_STEPOVER"))
 }
 
+/// loft#1078: a pass-2-only object literal draws from the pass-2 work-ref sequence —
+/// **DEFAULT ON**.  `parser/objects.rs`'s value-position `Object` arm is guarded by
+/// `!self.first_pass`, so it mints on pass 2 only; on the shared `__ref_N` counter its
+/// position therefore shifts relative to pass 1, and it was handed the name pass 1 had left
+/// on the promoted return buffer.  `return_buffer()` resolves that buffer BY NAME, so the
+/// literal's record and the return destination became one slot and the return re-minted it
+/// with `OpDatabase` before copying — the fresh arm of `r = if c { S{a:9} } else { w }; r`
+/// answered `0` on both backends.  This is loft#848's cure applied to the sibling arm of the
+/// same function.  Opt OUT with `LOFT_NO_P2_OBJECT_WORKREF` (restores the shared counter, and
+/// with it the collision): the A/B on one binary, and the first bisect step for a wrong value
+/// out of a struct literal in value position.  It is the THIRD independent guard on the
+/// collapse `LOFT_NO_A1B` and `LOFT_NO_WORKREF_STEPOVER` also guard, which is why
+/// `oracle_flags_the_a1b_wrong_plan` has to disable all three to have a defect to catch.
+/// One cached env read.  See `Vars::work_ref_p2`.
+#[must_use]
+pub fn p2_object_workref_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_P2_OBJECT_WORKREF"))
+}
+
 /// loft#953: a copy may not claim a buffer the CALLER owns — **DEFAULT ON**. `OpCopyRecord`'s
 /// `0x8000` free-source bit releases the store its source came from, which is right for a callee
 /// that allocated one of its own and wrong for a callee handed the caller's hidden `__ref_N`

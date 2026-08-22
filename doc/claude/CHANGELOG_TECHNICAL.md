@@ -9,6 +9,56 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A Join whose arms each own a store: one leak and two silent wrong answers (loft#1078, 2026-08-23)
+
+**Symptom.** `fn pick(c) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }` retained
+one record per call — the value was right, only the ownership was wrong, so a single call
+looked clean and only a loop showed it. `loft_planet` reached ~16,000 retained records per
+planet, and four planets exhausted the 65,535-entry `store_nr` table.
+
+**Cause.** `w` is renamed onto the hidden return buffer (NRVO), so the `else` arm delivers
+the buffer and the `if` arm delivers a different store. `scopes::free_vars` reaches this
+class through three legs, and the one covering *"several owned candidates, one winner"*
+excluded every ARGUMENT. Right for a user parameter, which belongs to the caller; wrong for
+the promoted buffer, the one argument that is really a local this function minted.
+loft#1022 had already written that carve-out down and applied it inside its own gate,
+noting that loft#688's leg "cannot claim it here because it excludes anything in
+`sources`" — the sibling leg three lines up needed the identical sentence.
+
+**Two more, found by moving the axes the report pinned** (return position and arm count),
+both `silent-wrong` and both IDENTICAL on the two backends, so the interp-vs-native
+differential was structurally blind to them:
+
+* **Two owned locals** (`if c { u } else { w }`) — the first is renamed onto the buffer and
+  the second's copy leg emits `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)`.
+  The re-mint destroys the store the copy is about to read, so `u` answered a zeroed record.
+  A three-arm `match` broke only its FIRST arm, which named the RENAME as the mechanism.
+  New verdict `RetPromotion::SkipJoinArm`: a named local is not deep-copied into a buffer the
+  tail reads — it stays a plain local, and the conditional free above releases the loser.
+* **Bound, then returned** (`r = if c { … } else { w }; r`) — loft#848's class one arm over.
+  `parser/objects.rs`'s value-position `Object` arm is `!first_pass`-guarded, so it mints on
+  pass 2 only; on the shared `__ref_N` counter it was handed the name pass 1 had left on the
+  return buffer, and `return_buffer()` resolves that buffer BY NAME. It now draws from
+  `__ref_p2_N`, as loft#848 already made its sibling arm do.
+
+Collections and text were measured clean on the same shape — each carries its own
+aliasing-aware delivery — so the guard is scoped to the record path that re-mints.
+
+**Opt-out.** `LOFT_NO_P2_OBJECT_WORKREF=1` restores the shared counter: the A/B on one binary
+and the first bisect step for a wrong value out of a struct literal in value position. It is
+the THIRD independent guard on the collapse `LOFT_NO_A1B` and `LOFT_NO_WORKREF_STEPOVER` also
+guard, which is why `oracle_flags_the_a1b_wrong_plan` now disables all three to have a defect
+to catch — that test going green is how the independence was measured rather than argued.
+
+**Guard.** `tests/scripts/1078-join-arms-that-each-own-a-store.loft`, 10 cells on both
+backends, falsified on a pristine worktree at `f7a57124`: the value cells by assertion, the
+leak cell by the wrap leak gate (`1 store(s) leaked at program exit: kt=78 S1078×39`).
+`formal/ownership.md` gained D-own-7, opened and closed the same day.
+
+Also: the store-table-exhaustion panic advised `LOFT_STORES=summary`, which has never been an
+accepted value — it now names `timeline`, the one that answers the leak-vs-working-set
+question. Two stale doc-comment echoes of the same non-value corrected with it.
+
 ### A browser page can read a store out of its own filesystem (@PLN146 F4, 2026-08-22)
 
 **Symptom.** `store_load` on a `--html` page answered `false` for every path — politely,

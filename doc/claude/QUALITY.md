@@ -207,6 +207,87 @@ says `null`. The sentinel IS the literal NUL — `types.md` records the collisio
 loft#1014 asserts it — so the two channels genuinely differ, and the difference is the
 price of an in-band sentinel rather than a sixth disagreement.
 
+### A Join whose arms each OWN a store — one leak, and two wrong answers behind it (2026-08-23)
+
+loft#1078, filed by `loft_planet` against `main`.  A tail `if`/`match` that returns a fresh
+record on one arm and a named LOCAL on the other retained one record per call:
+
+```loft
+fn pick(c: boolean) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }
+```
+
+`w` is renamed onto the hidden return buffer (NRVO), so the `else` arm delivers the buffer and
+the `if` arm delivers a different store — and on the arm that does not deliver `w`, the store
+`w` minted was returned by nobody and freed by nobody.  The value was right; only the ownership
+was wrong, which is why a single call looks clean and only a loop shows it.  In the field:
+~16,000 retained records per planet, and four planets exhausted the 65,535-entry `store_nr`
+table.
+
+`scopes::free_vars` already reaches this class through three legs — a null arm, a promoted
+buffer no arm names (loft#688), and arms that disagree about ownership (loft#1022).  The one
+that covers *"several owned candidates, one winner"* excluded every ARGUMENT.  Right for a user
+parameter; wrong for the promoted buffer, which is the one argument that is really a local this
+function minted.  **loft#1022's own comment had already written the carve-out down** and applied
+it inside its own gate, noting that loft#688's leg "cannot claim it here because it excludes
+anything in `sources`".  The multi-source leg needed the identical sentence.
+
+⚠ **The filed report's matrix moved one axis and pinned two, and the two it pinned each hid a
+`silent-wrong`.**  It varied *what the non-taken arm names* (local / parameter / vector element)
+and held the RETURN POSITION and the ARM COUNT fixed.  Moving those:
+
+| moved axis | what appeared |
+|---|---|
+| a SECOND owned local (`if c { u } else { w }`) | `u` answered **0**.  The first candidate is renamed onto the buffer; the second's copy leg then emits `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)` — the re-mint destroys the store the copy is about to read.  A three-arm `match` broke only its FIRST arm, which is what named the RENAME rather than the join. |
+| BOUND, then returned (`r = if c { … } else { w }; r`) | the fresh arm answered **0**.  Not a tail join at all — this is loft#848's class one arm over: `parser/objects.rs`'s value-position `Object` arm is `!first_pass`-guarded, so it mints on pass 2 only, and on the shared `__ref_N` counter it was handed the name pass 1 left on the return buffer.  `return_buffer()` resolves the buffer BY NAME, so the literal's record and the return destination became one slot.  loft#848 had moved the SIBLING arm of the same function onto `__ref_p2_N` and left this one. |
+
+Both wrong answers were **identical on both backends**, so neither backend could witness the
+other and the `--interpret`/`--native` differential — the workhorse gate for this subsystem —
+was structurally blind to them.  Collections and text were measured CLEAN on the same shape:
+each carries its own aliasing-aware delivery (`OpReplaceVector` is a documented no-op when the
+source still aliases the buffer; the B5-L3 text hoist copies first), so the defect is the record
+path's re-mint.
+
+The three cures are three INDEPENDENT guards on one collapse, which the ownership oracle proves:
+`oracle_flags_the_a1b_wrong_plan` needed `LOFT_NO_A1B` + `LOFT_NO_WORKREF_STEPOVER` to have a
+defect to catch, and now needs `LOFT_NO_P2_OBJECT_WORKREF` as well.  That test failing is how
+the third guard's independence was measured rather than argued.
+
+Guard: `tests/scripts/1078-join-arms-that-each-own-a-store.loft` — 10 cells, the leak half
+proven to fire the wrap leak gate on a pristine worktree at `f7a57124` and the value half proven
+to fail its assertions there.  `formal/ownership.md` gained D-own-7, opened and closed the same
+day.
+
+**The sweep, and the number that explains why it shipped.**  `LOFT_TRACE_WORKREF` prints one
+line per work-ref mint with the SITE that asked for it, so the collision has an exact
+signature: *one variable minted from TWO different sites inside one function*.  Sweeping all
+844 `tests/scripts` on that signature gives **138 hits across 24 files** — and almost all are
+benign, because a work-ref name IS scratch and pass 2 re-resolving it to the same scratch slot
+is the intended reuse.  The harmful half is narrower: the name resolves to an **argument**,
+which for a `__ref_N` can only mean `ref_return` promoted it to the return buffer on pass 1.
+
+The trace could not say which — including for its own headline example — so `arg=yes|no` was
+added to it.  Filtered on that predicate the sweep reads:
+
+| | argument-resolving collisions | files |
+|---|---|---|
+| with the fix | **0** | 0 |
+| with `LOFT_NO_P2_OBJECT_WORKREF=1` | 29 | **7** |
+
+Six of those seven are scripts that were **already in the suite and already passing** (`85`,
+`744`, `877`, `882`, `889`, `890`).  They reached the collision every run and never witnessed
+it — the buffer was handed out, re-minted, and the value still arrived, so nothing failed.
+That is the whole answer to "how did this ship": the corpus had the shape six times over and
+no channel that could see it.  The detector was proven able to fire before the zero was
+believed: it reports the loft#1078 repro under the opt-out and goes silent with the guard on.
+A zero from an instrument that was never shown to fire is not a measurement.
+
+**The reusable half:** when a fix's own comment says *"that other leg cannot claim it because
+…"*, the sentence is a map of where the same hole is.  loft#1022 wrote down the promoted-buffer
+carve-out and applied it to one gate; the sibling gate three lines up needed it too, and nothing
+connected them.  Grep the carve-out, not the symptom.  And when a sweep over a whole corpus
+reports a number too large to read, the fix is usually a missing FIELD on the instrument, not a
+narrower grep — one `arg=` flag took 138 unreadable hits to 7 readable ones.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
