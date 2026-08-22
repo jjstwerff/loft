@@ -26,13 +26,21 @@ left is in other trees: arc W is a `graphics` primitive and a new `drawing` pack
 `graphics` and a new `audio_bus`, and `F4` needs a vehicle.
 
 **The schema is now a package.** `assets` 0.1.0 —
-[`loft-libs-assets` branch `tuxedo-assets-package`](https://github.com/loft-lang/loft-libs-assets/tree/tuxedo-assets-package),
-unmerged — carries the F1 schema, `pack_write`/`pack_read`, `keys_near`/`prefetch` and the
-layout fingerprint, with 12 tests on both backends. The promotion found two things the
-probes could not: the two halves accept **different URL spellings** (the metadata half reads
-a `file://` URL, the paged half refuses one), so one base would have loaded a game's scenes
-and silently none of its art; and the layout fingerprint is now **pinned**, which is what
-makes a format change say so. `F4` reads packs from there once it is published.
+[loft-libs-assets#7](https://github.com/loft-lang/loft-libs-assets/pull/7), open — carries
+the F1 schema, `pack_write`/`pack_read`, `keys_near`/`prefetch` and the layout fingerprint,
+with 12 tests on both backends. The promotion found two things the probes could not: the two
+halves accept **different URL spellings** (the metadata half reads a `file://` URL, the paged
+half refuses one), so one base would have loaded a game's scenes and silently none of its
+art; and the layout fingerprint is now **pinned**, which is what makes a format change say
+so. `F4` reads packs from there once it lands.
+
+⚠ **That PR's CI cannot go green until this branch merges.** The library CI builds loft from
+`loft-lang/loft@main`, which still has the `store_load` hang F1 found — so the package's
+round-trip test hangs and the 300 s watchdog kills it. Measured both ways on the exact CI
+command: a loft binary from before the fix reproduces it, one from this branch passes 12/12.
+The pack is the shape that triggers it, so the package cannot avoid it and should not try —
+shrinking the fixture past the allocator's linear scan would hide a defect every real pack
+will hit.
 
 **Four findings changed the plan rather than following it.** A pack is TWO stores because
 the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
