@@ -3200,12 +3200,27 @@ impl Parser {
     /// Return the next expression; with `Value::None` the iterator creation was impossible.
     /// Expected function type for a short-form lambda (`|x| {…}`) — the `⇐` push
     /// ([`Self::expected`]) filtered to `Type::Function` (D1: one channel, not four).
+    ///
+    /// Read through `base()`, so a nullable expectation (`Optional(fn(…) -> R)`)
+    /// still names the parameter types. Nullability is about whether the SLOT may be
+    /// absent; it says nothing about the signature a value in it would have, and a
+    /// hint that dropped out on `?` would make the rule depend on it (loft#1067).
     pub(crate) fn lambda_hint(&self) -> Type {
-        if matches!(self.expected, Type::Function(_, _, _)) {
-            self.expected.clone()
+        if matches!(self.expected.base(), Type::Function(_, _, _)) {
+            self.expected.base().clone()
         } else {
             Type::Unknown(0)
         }
+    }
+
+    /// May this expected type seed a short lambda's parameter types?
+    ///
+    /// The one predicate behind every `⇐` push site that can carry a `fn(…)`, so the
+    /// answer cannot differ between a call argument, a struct-literal field, a vector
+    /// element, a block tail and a parameter default (loft#1067). LOFT.md states the
+    /// rule as *the expected type wherever there is one* — this is "wherever".
+    pub(crate) fn seeds_lambda_hint(tp: &Type) -> bool {
+        matches!(tp.base(), Type::Function(_, _, _))
     }
 
     /// Expected enum type for a bare value-position variant (`f(Red)`) — `expected`

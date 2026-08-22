@@ -1013,18 +1013,36 @@ Two syntactic forms are available:
 fn(x: integer) -> integer { x * 2 }
 fn(x: integer, y: integer) -> integer { x + y }
 
-// Short form — types inferred from call-site context
+// Short form — types inferred from the expected type
 |x| { x * 2 }
 |x, y| { x + y }
 || { 0 }                        // zero parameters: uses the || token
 
-// Short form with explicit annotations (when no context is available)
-transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 }
+// No context to infer from?  Use the LONG form — a `|x|` lambda takes no
+// annotations of its own (neither `|x: integer|` nor a trailing `-> R`).
+transform: fn(integer) -> integer = fn(x: integer) -> integer { x * 2 }
 ```
 
-Short-form parameter types are inferred from the expected `fn(T1, T2) -> R` type at the
-call site.  If inference is impossible (no context, no annotation), the compiler errors:
-*"cannot infer type for lambda parameter 'x'; add an explicit type annotation"*.
+Short-form parameter types are inferred from the expected `fn(T1, T2) -> R` type
+**wherever there is one** — the position does not matter, only that something names the
+signature (loft#1067):
+
+| where | example |
+|---|---|
+| a call argument | `takes(\|x\| { x * 2 })` |
+| a named argument | `takes(f: \|x\| { x * 2 })` |
+| a declared local | `a: fn(integer) -> integer = \|x\| { x * 2 }` |
+| a struct-literal field | `H { f: \|x\| { x * 2 } }` |
+| an element of `vector<fn(…)>` | `[\|x\| { x * 2 }, \|x\| { x + 1 }]` |
+| a return position | `fn make() -> fn(integer) -> integer { \|x\| { x * 2 } }` |
+| a parameter default | `fn takes(f: fn(integer) -> integer = \|x\| { x * 2 })` |
+
+Not yet a tuple member: `(\|x\| { x * 2 }, 1)` is refused, because a `fn(…)` stored in a
+tuple cannot be CALLED back out of one whatever spelling put it there (loft#1069).
+
+If inference is impossible — nothing in the context names a signature — the compiler
+errors: *"Cannot infer type for lambda parameter 'x'; pass the lambda where the expected
+type is known, or use fn(name: &lt;type&gt;) { ... }"*.
 
 Its primary use is with the higher-order functions `map`, `filter`, and `reduce`, as well as the `par(...)` for-loop clause:
 

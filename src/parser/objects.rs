@@ -3276,7 +3276,17 @@ impl Parser {
                 // that field type, so a `&` in a field of any OTHER type stays the
                 // sub-expression use the rule forbids.
                 self.amp_head = matches!(td, Type::Reference(_, _));
+                // loft#1067 — a field's DECLARED type is an inference context, so a short
+                // lambda may stand as its value: `H { f: |x| { x * 2 } }` says exactly what
+                // `takes(|x| { x * 2 })` says, and used to be refused only because the `⇐`
+                // channel was never pushed here. `var_tp` (`td`, below) already carries the
+                // type for everything that reads it, but `lambda_hint` reads the channel.
+                let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+                if Self::seeds_lambda_hint(&td) {
+                    self.expected = td.clone();
+                }
                 let t = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
+                self.expected = saved_expected;
                 self.amp_head = false;
                 t
             };

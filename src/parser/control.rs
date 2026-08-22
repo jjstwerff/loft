@@ -748,9 +748,14 @@ impl Parser {
             // parameter.  `interpolation_target` is a pure lookup (Reference → struct →
             // defines `lit`), so widening the gate costs a def-table probe on block tails
             // whose result is a struct.
+            // loft#1067 — a `fn(…)` result threads for the FOURTH time for the same
+            // reason: `fn make() -> fn(integer) -> integer { |x| { x * 2 } }` has no
+            // other way to say what `x` is, and the return type is as much an expected
+            // type as a parameter is.
             if self.enum_context(result)
                 || crate::parser::vectors::is_collection(result)
                 || self.interpolation_target(result) != u32::MAX
+                || Self::seeds_lambda_hint(result)
             {
                 self.expected = result.clone();
             }
@@ -12553,8 +12558,12 @@ impl Parser {
                     for a in 0..self.data.attributes(hint_d_nr) {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
+                            // loft#1067 — `takes(f: |x| { x * 2 })` names the same
+                            // parameter the positional form does, so it must infer the
+                            // same way; the spelling of the argument is not the axis.
                             if Self::seeds_collection_hint(&expected)
                                 || self.interpolation_target(&expected) != u32::MAX
+                                || Self::seeds_lambda_hint(&expected)
                             {
                                 self.expected = expected;
                             }

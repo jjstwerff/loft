@@ -1105,7 +1105,7 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) {{{{ ... }}}} (add `-> <ret>` only for non-void returns)",
+                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) {{ ... }} (add `-> <ret>` only for non-void returns)",
                         a.name
                     );
                 }
@@ -2998,7 +2998,17 @@ impl Parser {
             // its elements `i32`, not wide `integer`).  When `in_t` is Unknown
             // (untyped inferred literal) this is identical to the prior
             // `Type::Unknown(0)` behaviour.
-            self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0)
+            // loft#1067 — an element of a `vector<fn(…)>` is an inference context for the
+            // same reason a call argument is: the declared element type names the
+            // signature. Saved and restored rather than cleared, because an element is
+            // parsed INSIDE whatever push the literal itself arrived under.
+            let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+            if Self::seeds_lambda_hint(in_t) {
+                self.expected = in_t.base().clone();
+            }
+            let parsed = self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0);
+            self.expected = saved_expected;
+            parsed
         };
         let elem_capturing_lambda = self.last_closure_work_var != u16::MAX;
         if let Type::Rewritten(tp) = in_t {
