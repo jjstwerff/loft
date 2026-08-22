@@ -1288,8 +1288,7 @@ fn brick_buster_pack_step_matches_its_manifest() {
         .filter_map(|o| o.split('"').nth(1))
     {
         assert!(
-            makefile.contains(&format!("tools/brick-buster/{out}"))
-                || out.ends_with(".meta.store"),
+            makefile.contains(&format!("tools/brick-buster/{out}")) || out.ends_with(".meta.store"),
             "loft.toml promises `{out}` but nothing in the Makefile checks for it."
         );
     }
