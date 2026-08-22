@@ -8,8 +8,9 @@
 // plan reads the schema from THIS file, so a gate that agrees with another gate
 // is agreeing about the same types rather than about two copies of them.
 //
-// The seed of the `assets` package: F1 proved this schema round-trips
-// byte-identically on all three targets, F2 pages it over HTTP range.
+// FROZEN.  This was the seed of the `assets` package, which now carries the schema
+// and its API (`loft-libs-assets`, branch `tuxedo-assets-package`).  Edit the package;
+// this copy stays as the evidence F1/F2/F3 were measured against.
 //
 // A pack is TWO stores, split by how each half is READ — the split
 // REMOTE_STORES.md already prescribes, and F2's gate is what forced it here:

@@ -25,6 +25,15 @@ a page declares the font it draws with and gets that font rather than a fallback
 left is in other trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is
 `graphics` and a new `audio_bus`, and `F4` needs a vehicle.
 
+**The schema is now a package.** `assets` 0.1.0 —
+[`loft-libs-assets` branch `tuxedo-assets-package`](https://github.com/loft-lang/loft-libs-assets/tree/tuxedo-assets-package),
+unmerged — carries the F1 schema, `pack_write`/`pack_read`, `keys_near`/`prefetch` and the
+layout fingerprint, with 12 tests on both backends. The promotion found two things the
+probes could not: the two halves accept **different URL spellings** (the metadata half reads
+a `file://` URL, the paged half refuses one), so one base would have loaded a game's scenes
+and silently none of its art; and the layout fingerprint is now **pinned**, which is what
+makes a format change say so. `F4` reads packs from there once it is published.
+
 **Four findings changed the plan rather than following it.** A pack is TWO stores because
 the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
 so arc W is smaller than it was cut; `imaging` drops alpha, which blocks `F7` and F1's
