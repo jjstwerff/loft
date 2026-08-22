@@ -30,6 +30,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// The port this test's viewer serves on, via `LOFT_VIEW_PORT`.  Deliberately NOT
+/// 8765: that is the default a developer's `make view` takes, and two viewers cannot
+/// share it.  Both halves of the test must use this — polling 8765 instead read
+/// whichever viewer happened to be up, and went green off a process it had not
+/// started (fixed 2026-08-22, after 240 s of waiting on a box where 8765 was free).
 const VIEWER_PORT: u16 = 18765;
 
 fn loft_bin() -> PathBuf {
@@ -193,10 +198,6 @@ fn http_get(path: &str, port: u16) -> String {
     }
 }
 
-/// Note: the viewer hard-codes port 8765 today (no
-/// LOFT_VIEW_PORT support); this test honours that until the
-/// viewer learns the env var.  Adjust both the const above
-/// and the viewer once env var support lands.
 // @speed 1.9
 #[test]
 fn markdown_renderer_pins_high_impact_features() {
@@ -210,8 +211,7 @@ fn markdown_renderer_pins_high_impact_features() {
         return;
     }
     let mut viewer = ViewerGuard::spawn();
-    // Note: viewer ignores LOFT_VIEW_PORT today; uses hard-coded 8765.
-    let port = 8765u16;
+    let port = VIEWER_PORT;
     if !viewer.wait_listening(port) {
         panic!(
             "viewer did not start listening on {port} within 240s\n{}",

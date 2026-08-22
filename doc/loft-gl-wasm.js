@@ -149,9 +149,13 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   // mixes narrow and wide letters so a proportional and a fixed-pitch face cannot
   // measure the same.
   function familyResolves(base) {
-    const quoted = '"' + base.replace(/"/g, '') + '"', cx = text2d();
-    const w = (list) => { cx.font = '40px ' + list; return cx.measureText('iiiWWWmmmlll').width; };
-    return w(quoted + ', monospace') === w(quoted + ', sans-serif');
+    try {
+      const quoted = '"' + base.replace(/"/g, '') + '"', cx = text2d();
+      const w = (list) => { cx.font = '40px ' + list; return cx.measureText('iiiWWWmmmlll').width; };
+      return w(quoted + ', monospace') === w(quoted + ', sans-serif');
+    } catch (e) {
+      return true;   // no 2-D canvas to measure with — say nothing rather than warn wrongly
+    }
   }
   // Metrics for font `fi` at `sz`, in the same terms the desktop backend reports:
   // `asc`/`desc` from the font's own box, `line` the height a bitmap gets.

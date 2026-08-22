@@ -48,6 +48,16 @@ real `loft --html` page carries the block with the await ahead of the `loft_star
 and a drifting family is refused with no page written.
 `tests/data/slow_font_server.py` is the throttle.
 
+### The viewer smoke test read a viewer it had not started (2026-08-22)
+
+`tests/viewer_markdown.rs` spawns the viewer with `LOFT_VIEW_PORT=18765` — deliberately
+not 8765, which is what a developer's `make view` takes — and then polled **8765** for
+its listener, with two comments saying the viewer did not support the env var. It does.
+So the test connected to whatever viewer happened to be up on 8765 and rendered its
+pages, in another checkout or from an earlier session; on a box where 8765 was free it
+waited the full 240 s and failed. Both halves now use `VIEWER_PORT`: 0.66 s, and it
+examines the process it spawned.
+
 ### A paged load refused every entry type with an enum field (@PLN146 F2, 2026-08-22)
 
 **Symptom.** `store_load_key_text` (and its `_key` / `_range` / `_prefix` siblings) refused
