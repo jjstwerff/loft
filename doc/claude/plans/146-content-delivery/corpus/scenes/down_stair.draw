@@ -1,0 +1,45 @@
+# DOWN-STAIR ('>') — frontal staircase DESCENDING into dark. Per-step (discrete) tone:
+# each tread is ONE solid value, stepping DARKER toward the bottom (to near-black), fan
+# narrowing downward — a stepped pit. Each step = tread + a darker riser (shadowed front).
+# The pit MOUTH behind the steps is SOLID BLACK (a backdrop trapezoid) — with transparent
+# gaps the floor-tile colour shines through between the steps and breaks the hole illusion.
+# Strong contrast on the light floor.
+size 256x256
+Background transparent
+
+# the pit mouth — the stairs descend into a black CUBE: the hole is the cube's TOP face,
+# so the backdrop is a solid black RECTANGLE (the square opening in the floor); the
+# narrowing step fan inside it is the perspective down the shaft
+name pit
+Poly (0.075,0.150) (0.925,0.150) (0.925,0.880) (0.075,0.880) rgb=8,8,10
+
+# step 0 (top, widest, lightest — the lit rim at floor level)
+name s0_tread
+Poly (0.090,0.160) (0.910,0.160) (0.910,0.220) (0.090,0.220) rgb=152,150,144
+name s0_riser
+Poly (0.090,0.220) (0.910,0.220) (0.910,0.254) (0.090,0.254) rgb=66,65,62
+# step 1
+name s1_tread
+Poly (0.144,0.278) (0.856,0.278) (0.856,0.338) (0.144,0.338) rgb=124,122,117
+name s1_riser
+Poly (0.144,0.338) (0.856,0.338) (0.856,0.372) (0.144,0.372) rgb=52,51,49
+# step 2
+name s2_tread
+Poly (0.198,0.396) (0.802,0.396) (0.802,0.456) (0.198,0.456) rgb=98,97,93
+name s2_riser
+Poly (0.198,0.456) (0.802,0.456) (0.802,0.490) (0.198,0.490) rgb=40,40,38
+# step 3
+name s3_tread
+Poly (0.252,0.514) (0.748,0.514) (0.748,0.574) (0.252,0.574) rgb=72,71,68
+name s3_riser
+Poly (0.252,0.574) (0.748,0.574) (0.748,0.608) (0.252,0.608) rgb=29,29,28
+# step 4
+name s4_tread
+Poly (0.306,0.632) (0.694,0.632) (0.694,0.692) (0.306,0.692) rgb=46,46,47
+name s4_riser
+Poly (0.306,0.692) (0.694,0.692) (0.694,0.726) (0.306,0.726) rgb=18,18,20
+# step 5 (bottom, narrowest, near-black — the depth)
+name s5_tread
+Poly (0.360,0.750) (0.640,0.750) (0.640,0.810) (0.360,0.810) rgb=22,22,26
+name s5_riser
+Poly (0.360,0.810) (0.640,0.810) (0.640,0.844) (0.360,0.844) rgb=9,9,12

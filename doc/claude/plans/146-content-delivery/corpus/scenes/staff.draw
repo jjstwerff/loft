@@ -1,0 +1,15 @@
+# STAFF — the IT_STAFF loot (frontal-iconic): a long wooden rod, carved knob head,
+# leather grip bands. Source for assets/sprites/staff.png.
+size 256x256
+Background transparent
+name rod
+Poly (0.32,0.90)@8 (0.62,0.22)@7 stroke=110,80,48
+name knob
+Circle (0.645,0.165) r=0.052 rgb=150,116,82
+Circle (0.63,0.15) r=0.016 rgb=222,206,170
+name collar
+Line (0.595,0.255) - (0.655,0.285) w=5
+name grip
+Line (0.425,0.64) - (0.485,0.67) w=5
+Line (0.405,0.685) - (0.465,0.715) w=5
+Line (0.385,0.73) - (0.445,0.76) w=5

@@ -781,8 +781,17 @@ fn OpConstEnum(val: const enumerate) -> enumerate;
 #rust"@val"
 fn OpPutEnum(pos: const u16, value: enumerate);
 #rust"s.put_var(@pos, @value);"
+// "This enum holds a value" — the ONE predicate every null test over an enum
+// asks, and the one the RENDERER already answers the same way: `enum_val`
+// indexes real variants from 1 and shows both discriminant 0 and 255 as
+// `null`.  Both bytes reach a program: an explicit null writes 255
+// (`OpConvEnumFromNull`), while zero-init storage and `OpGetEnum` on an absent
+// record produce 0.  Testing only 255 made the two disagree — `v[9] ?? fb` and
+// a never-set field both answered `null` through a coalesce whose whole job is
+// to discharge one, on both backends.  0 is safe to reject because it is not a
+// variant of any enum.
 fn OpConvBoolFromEnum(v1: enumerate) -> boolean;
-#rust"@v1 != 255"
+#rust"@v1 != 255 && @v1 != 0"
 fn OpCastTextFromEnum(v1: enumerate, enum_tp: const u16) -> text;
 #rust"Str::new(s.database.enum_val(@enum_tp, @v1))"
 fn OpCastEnumFromText(v1: text, enum_tp: const u16) -> enumerate;

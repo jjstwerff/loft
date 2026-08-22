@@ -1,0 +1,19 @@
+# BOOK — the IT_BOOK loot (frontal-iconic): a clasped tome — dark red cover, spine band,
+# page-block edge, brass clasp + corner caps. Source for assets/sprites/book.png.
+size 256x256
+Background transparent
+name pageblock
+Poly (0.30,0.20) (0.78,0.20) (0.78,0.80) (0.30,0.80) rgb=216,202,168
+name cover
+Poly (0.24,0.17) (0.72,0.17) (0.72,0.77) (0.24,0.77) rgb=118,42,36
+name spine
+Poly (0.24,0.17) (0.31,0.17) (0.31,0.77) (0.24,0.77) rgb=86,28,24
+name emboss
+Circle (0.515,0.45) r=0.085 rgb=158,64,54
+Circle (0.515,0.45) r=0.055 rgb=118,42,36
+name clasp
+Poly (0.66,0.42) (0.78,0.42) (0.78,0.50) (0.66,0.50) rgb=170,140,70
+Circle (0.715,0.46) r=0.016 rgb=110,88,40
+name corners
+Poly (0.66,0.17) (0.72,0.17) (0.72,0.23) rgb=170,140,70
+Poly (0.66,0.77) (0.72,0.77) (0.72,0.71) rgb=170,140,70

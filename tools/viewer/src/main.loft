@@ -28,14 +28,52 @@ use html;
 
 const PORT: integer = 8765;
 
-fn main() {
-    // Future: read LOFT_VIEW_PORT once a stable env_variable + parse
-    // path is settled.  Today: hard-coded.
+// Where `refresh.loft` dumped the git state — `LOFT_VIEW_STATE`, else the in-repo
+// default.  Must agree with refresh.loft's STATE; the two are a pair, and a viewer
+// reading a different directory than the refresher wrote shows an empty dashboard
+// rather than an error.
+fn state_dir() -> text {
+    d = env_variable("LOFT_VIEW_STATE") ?? "";
+    if d == "" { return "tools/viewer/state"; }
+    d
+}
 
-    srv = server::listen(PORT);
-    // Note: println at startup triggers a native-codegen dispatch-table
-    // bug (see PROBLEMS § P262); silent for now.  Revisit when P262 is
-    // closed.
+// The port to serve on: `LOFT_VIEW_PORT`, else 8765.
+//
+// ⚠ A parse alone is not a validation.  Measured: `"-3" as integer` and
+// `"99999999" as integer` both SUCCEED, so `?? PORT` catches an unset or
+// unparseable value and waves through a number that cannot be a port.  Only an
+// unusable value falls back; a usable-but-odd one (say 80) is the caller's call.
+fn view_port() -> integer {
+    n = env_variable("LOFT_VIEW_PORT") as integer ?? PORT;
+    if n < 1 || n > 65535 { return PORT; }
+    n
+}
+
+fn main() {
+    port = view_port();
+
+    // ⚠⚠ LOOPBACK, NOT THE WILDCARD.  `server::listen` binds 0.0.0.0 — every
+    // interface — and this viewer serves `/raw/<path>`, i.e. the contents of any
+    // file under the project root.  On the VM this was designed for that is
+    // invisible; on a shared or remote host it publishes the working tree to
+    // anyone who can reach the port, and your own SSH tunnel works identically
+    // either way, so nothing tells you.
+    //
+    // `listen_on("127.0.0.1", …)` is what the server library's own doc calls the
+    // safe default for "a machine sitting behind a reverse proxy or an SSH
+    // tunnel", and it costs a remote user nothing: `ssh -L 8765:127.0.0.1:8765`
+    // has sshd connect from the remote's own loopback, which is exactly this.
+    srv = server::listen_on("127.0.0.1", port);
+
+    // The startup line is what tells a remote user which port won and how to
+    // reach it.  ⚠ The comment here used to say println at startup tripped a
+    // native-codegen dispatch-table bug and to revisit "when P262 is closed" —
+    // P262 closed 2026-05-13 in the @P262-@P266 arc, so the note outlived its
+    // cause by three months.  Verified by running the built binary, not by
+    // reading the archive.
+    println("loft-view: http://127.0.0.1:{port}/  (loopback only)");
+    println("  remote:  ssh -N -L {port}:127.0.0.1:{port} <host>   then open the URL locally");
 
     while true {
         req = srv.next();
@@ -101,7 +139,7 @@ fn route(req: server::Request) {
 fn page_landing() -> text {
     // ── Branch header (read tools/viewer/state/branch.json) ──
     body = "";
-    bf = file("tools/viewer/state/branch.json");
+    bf = file("{state_dir()}/branch.json");
     if bf.format == Format.NotExists {
         body += "<p class=\"warn\">No git state.  Run <code>make view-refresh</code> to build the dashboard.</p>";
     } else {
@@ -134,7 +172,7 @@ fn page_landing() -> text {
     // (+adds / −dels) for the files it touched.  Long file
     // lists collapse to the first 4 entries with a "+ N more"
     // toggle.
-    kf = file("tools/viewer/state/commits.json");
+    kf = file("{state_dir()}/commits.json");
     if kf.format != Format.NotExists {
         kv = json_parse(kf.content() ?? "");
         n = kv.len();
@@ -191,7 +229,7 @@ fn page_landing() -> text {
     // ── Uncommitted (only renders when the working tree
     // has changes; otherwise the empty placeholder is
     // suppressed entirely).
-    uf = file("tools/viewer/state/uncommitted.json");
+    uf = file("{state_dir()}/uncommitted.json");
     if uf.format != Format.NotExists {
         uv = json_parse(uf.content() ?? "");
         n = uv.len();
@@ -219,7 +257,7 @@ fn page_landing() -> text {
     // dump becomes a deep-dive surface for the rare audit case.
     // Wrapped in <details class="changes-section"> instead of
     // <section> so it stays one click away.
-    cf = file("tools/viewer/state/changed.json");
+    cf = file("{state_dir()}/changed.json");
     if cf.format != Format.NotExists {
         cv = json_parse(cf.content() ?? "");
         n = cv.len();
@@ -539,6 +577,17 @@ fn respond_raw(req: server::Request, rel: text) {
         req.respond_html(body);
         return;
     }
+    // ⚠⚠ AN IMAGE MUST NOT GO THROUGH THE TEXT PATH.  `content()` reads a file as
+    // `text`, and a PNG is not valid UTF-8, so it answered null -> "" and this served
+    // **200 OK with Content-Length: 0**: a successful empty response, a broken image in
+    // the browser, and nothing reporting an error anywhere.  Every `doc/images/*.png`
+    // referenced from a markdown page was served that way, including through the
+    // `/raw/` image prefix `markdown::render` is given below.
+    ct = image_content_type(rel);
+    if ct != "" {
+        req.respond_bytes(200, read_bytes(rel), ct);
+        return;
+    }
     body = f.content() ?? "";
     req.respond_typed(200, body, "text/plain; charset=utf-8");
 }
@@ -570,6 +619,21 @@ fn respond_file(req: server::Request, rel: text) {
 fn is_markdown(rel: text) -> boolean {
     rel.ends_with(".md")
 }
+// An IMAGE is the subset of binary a browser can render inline, so it gets a real
+// content type and an <img> rather than a download link.
+fn image_content_type(rel: text) -> text {
+    if rel.ends_with(".png") { return "image/png"; }
+    if rel.ends_with(".jpg") || rel.ends_with(".jpeg") { return "image/jpeg"; }
+    if rel.ends_with(".gif") { return "image/gif"; }
+    if rel.ends_with(".webp") { return "image/webp"; }
+    if rel.ends_with(".svg") { return "image/svg+xml"; }
+    if rel.ends_with(".ico") { return "image/x-icon"; }
+    ""
+}
+fn is_image_ext(rel: text) -> boolean {
+    image_content_type(rel) != ""
+}
+
 fn is_binary_ext(rel: text) -> boolean {
     rel.ends_with(".png")
         || rel.ends_with(".jpg")
@@ -597,6 +661,15 @@ fn page_file(rel: text, f: File) -> text {
     article += "<h1>{esc_rel} <small>{sz} bytes</small></h1>";
     article += view_toggle(rel, "file");
 
+    if is_image_ext(rel) {
+        // Shown, not described: this is a REVIEW viewer, and the GL goldens
+        // (`*_golden.png`) are the case that needs looking at rather than downloading.
+        article += "<p><a href=\"/raw/{esc_rel}\">open raw</a> — {sz} bytes</p>";
+        article += "<p><img src=\"/raw/{esc_rel}\" alt=\"{esc_rel}\" ";
+        article += "style=\"max-width:100%;height:auto;border:1px solid #ccc\"></p>";
+        article += "</article>";
+        return page(rel, article);
+    }
     if is_binary_ext(rel) {
         article += "<p>Binary file ({sz} bytes).  ";
         article += "<a href=\"/raw/{esc_rel}\">download raw</a></p>";
@@ -1232,7 +1305,7 @@ fn render_refs(arr: JsonValue) -> text {
 fn page_commit(sha: text) -> text {
     esc_sha = sha.escape_html();
     body = "<h1>commit <code>{esc_sha}</code></h1>";
-    f = file("tools/viewer/state/commits/{sha}.diff");
+    f = file("{state_dir()}/commits/{sha}.diff");
     if f.format == Format.NotExists {
         body += "<p class=\"warn\">No diff captured for <code>{esc_sha}</code>. ";
         body += "Run <code>make view-refresh</code> to (re)build.  Only the last 20 commits are kept.</p>";
@@ -1260,7 +1333,7 @@ fn diff_safe_name(rel: text) -> text {
 // the changed-files list and refresh.sh dumped its diff).
 fn diff_exists_for(rel: text) -> boolean {
     safe = diff_safe_name(rel);
-    f = file("tools/viewer/state/diffs/{safe}.diff");
+    f = file("{state_dir()}/diffs/{safe}.diff");
     f.format != Format.NotExists
 }
 
@@ -1271,7 +1344,7 @@ fn page_diff(rel: text) -> text {
     body = breadcrumbs(rel, "diff");
     body += "<h1>{esc_rel} <small>diff vs main</small></h1>";
     body += view_toggle(rel, "diff");
-    f = file("tools/viewer/state/diffs/{safe}.diff");
+    f = file("{state_dir()}/diffs/{safe}.diff");
     if f.format == Format.NotExists {
         body += "<p class=\"warn\">No diff captured for <code>{esc_rel}</code>. ";
         body += "Run <code>make view-refresh</code>; if the file isn't changed vs <code>main</code>, no diff is generated.</p>";
@@ -1496,7 +1569,7 @@ fn render_activity_card(sha: text, esc_sha: text, esc_date: text, esc_msg: text)
     }
     out += "<span class=\"act-msg\">{esc_msg}</span>";
 
-    ff = file("tools/viewer/state/commits/{sha}.files.json");
+    ff = file("{state_dir()}/commits/{sha}.files.json");
     if ff.format == Format.NotExists {
         out += "</header></article>";
         return out;

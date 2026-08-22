@@ -79,7 +79,7 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 | `character` | `'\0'` (NUL) | The null character is not a valid loft character value |
 | `text` | internal null pointer | Opaque; `!t` detects it; `len(t)` returns null |
 | `reference` | record 0 | Opaque; `!r` detects it |
-| plain `enum` | byte `255` | Limits plain enums to 255 variants |
+| plain `enum` | byte `255` **or** byte `0` | Limits plain enums to 255 variants.  **Two bytes mean absent, and every test accepts both:** an explicit `null` writes `255`, while zero-initialised storage and a read of an absent record produce `0`.  Variants are numbered from 1, so `0` is a variant of no enum — which is why the renderer has always shown both as `null`.  A `??` that recognised only `255` let `v[9] ?? d` and a field never set answer `null` through a coalesce. |
 | narrow int (`u8`/`u16`/`i8`/`i16`) | top of the packed range | e.g. `i8::MIN` for `i8`; stored compactly in `Parts::Byte`/`Short` |
 | `i32` / `integer size(4)` | `i32::MIN` | 4-byte storage via `Parts::Int`; widens to i64 on the stack |
 
@@ -880,7 +880,7 @@ do by looking up the pair in this table:
 
 | From → To                          | Mode          | Notes |
 |------------------------------------|---------------|-------|
-| Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table |
+| Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table.  **These four POSITIONS are the whole of it** — a `vector` passed where a `boolean` PARAMETER is declared stays an error, because there the coercion would hide a mistake rather than express one.  An EMPTY collection and a payload-less enum variant are values, so both are truthy; only null is falsy. |
 | Integer ↔ `float` in arithmetic    | Implicit      | `3 + 1.5` is `4.5` — the integer widens to the float operand's width |
 | Integer / `single` → `float`       | Implicit      | widening; `single` (32-bit) widens to `float` (64-bit) with no loss |
 | Integer → `single`                 | Implicit      | `[1, 2]` is a valid `vector<single>` |

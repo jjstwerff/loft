@@ -90,6 +90,33 @@ pub struct BuildTest {
     pub inputs: Vec<String>,
 }
 
+/// @PLN146 F5 — one `[[font]]` declaration: a font family the program draws with,
+/// and where each target gets it from.
+///
+/// The declaration exists because the browser cannot be handed a font file the way
+/// the desktop backend can: `gl_load_font("fonts/Foo.ttf")` opens no file under
+/// `--html`, it resolves the path's base name to a CSS family. So the page has to
+/// carry the family already, and the name it carries must be the name the program
+/// asks for — drift between the two is a silent fallback, never an error
+/// (`plans/146-content-delivery/FONTS.md`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FontDecl {
+    /// `family = "PressStart2P"` — the CSS family name AND the key the program
+    /// looks the font up by. Required.
+    pub family: Option<String>,
+    /// `native = "fonts/PressStart2P.ttf"` — the file the program passes to
+    /// `gl_load_font`, used by every target except the browser. Its base name must
+    /// equal `family`, because that base name is what the browser resolves.
+    pub native: Option<String>,
+    /// `url = "fonts/PressStart2P.woff2"` — a font FILE this page fetches, emitted
+    /// as an `@font-face` rule. Our own file server, or a packed asset served by
+    /// range like every other one.
+    pub url: Option<String>,
+    /// `stylesheet = "https://fonts.googleapis.com/css2?family=Press+Start+2P"` —
+    /// a provider's stylesheet, emitted as a `<link>`. Zero bytes of ours.
+    pub stylesheet: Option<String>,
+}
+
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
@@ -274,6 +301,8 @@ pub struct Manifest {
     pub build_assets: Vec<BuildAsset>,
     /// @PLN100 Slice 4 — the `[[test]]` declared test entries, in file order.
     pub build_tests: Vec<BuildTest>,
+    /// @PLN146 F5 — the `[[font]]` declarations, in file order.
+    pub fonts: Vec<FontDecl>,
 }
 
 impl Manifest {
@@ -362,8 +391,8 @@ fn parse_manifest(content: &str, filename: &str) -> Manifest {
 }
 
 /// Read a `[section]` or `[[array-of-tables]]` header (current token is `[`) and
-/// return the section string.  An `[[build.asset]]` / `[[test]]` header also pushes
-/// a fresh element and returns the `[[…]]` sentinel the key-walk keys on.
+/// return the section string.  An `[[build.asset]]` / `[[test]]` / `[[font]]` header
+/// also pushes a fresh element and returns the `[[…]]` sentinel the key-walk keys on.
 fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
     lex.has_token("["); // consume the opening `[`
     let array_of_tables = lex.has_token("["); // a second `[` => `[[name]]`
@@ -374,6 +403,7 @@ fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
         match name.as_str() {
             "build.asset" => m.build_assets.push(BuildAsset::default()),
             "test" => m.build_tests.push(BuildTest::default()),
+            "font" => m.fonts.push(FontDecl::default()),
             _ => {}
         }
         return format!("[[{name}]]");
@@ -512,6 +542,18 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
                 "inputs" => a.inputs = value.list(),
                 "outputs" => a.outputs = value.list(),
                 "targets" => a.targets = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    if section == "[[font]]" {
+        if let Some(f) = m.fonts.last_mut() {
+            match key {
+                "family" => f.family = Some(value.scalar()),
+                "native" => f.native = Some(value.scalar()),
+                "url" => f.url = Some(value.scalar()),
+                "stylesheet" => f.stylesheet = Some(value.scalar()),
                 _ => {}
             }
         }
@@ -1259,6 +1301,44 @@ features = ["random", "png"]
         let p = write_temp("nobuild", "[package]\nname = \"plain\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert!(m.build_default_targets.is_empty() && m.build_targets.is_empty());
+    }
+
+    // @PLN146 F5 — [[font]] array-of-tables: the three sources, in file order.
+    #[test]
+    fn parses_font_declarations() {
+        let p = write_temp(
+            "fonts",
+            r#"[package]
+name = "game"
+
+# a family the browser already has: nothing to bring
+[[font]]
+family = "DejaVu Sans"
+native = "fonts/DejaVu Sans.ttf"
+
+# our own file server
+[[font]]
+family = "PressStart2P"
+native = "fonts/PressStart2P.ttf"
+url    = "fonts/PressStart2P.woff2"
+
+# a provider's stylesheet
+[[font]]
+family     = "Inter"
+stylesheet = "https://fonts.example.test/css2?family=Inter"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.fonts.len(), 3);
+        assert_eq!(m.fonts[0].family.as_deref(), Some("DejaVu Sans"));
+        assert_eq!(m.fonts[0].native.as_deref(), Some("fonts/DejaVu Sans.ttf"));
+        assert!(m.fonts[0].url.is_none() && m.fonts[0].stylesheet.is_none());
+        assert_eq!(m.fonts[1].url.as_deref(), Some("fonts/PressStart2P.woff2"));
+        assert_eq!(
+            m.fonts[2].stylesheet.as_deref(),
+            Some("https://fonts.example.test/css2?family=Inter")
+        );
+        assert!(m.fonts[2].native.is_none());
     }
 
     // @PLN100 Slice 3 — [[build.asset]] array-of-tables, inline + full-line

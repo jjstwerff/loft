@@ -9097,6 +9097,44 @@ fn main() {
         } else {
             html_path.clone()
         };
+        // @PLN146 F5 — the fonts this page has to carry, decided BEFORE the build:
+        // a manifest that cannot produce a working page should not cost a wasm
+        // compile first.  Two sources, because a main script's own package is never
+        // resolved as a library — the entry program's nearest-ancestor `loft.toml`,
+        // plus every `use`d package's declarations (collected by the parser).  This
+        // refuses rather than reports: a family that drifts from the name the
+        // program passes draws in a fallback with nothing on stderr, which is the
+        // failure the declaration exists to remove.
+        let page_fonts = {
+            let mut decls = Vec::new();
+            let mut dir = std::path::Path::new(&abs_file)
+                .parent()
+                .map(std::path::Path::to_path_buf);
+            while let Some(d) = dir {
+                let manifest = d.join("loft.toml");
+                if manifest.exists() {
+                    if let Some(m) = loft::manifest::read_manifest(&manifest.to_string_lossy()) {
+                        decls.extend(m.fonts);
+                    }
+                    break;
+                }
+                dir = d.parent().map(std::path::Path::to_path_buf);
+            }
+            for f in &p.data.declared_fonts {
+                if !decls.contains(f) {
+                    decls.push(f.clone());
+                }
+            }
+            match loft::html_fonts::validate(&decls) {
+                Ok(fonts) => fonts,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        };
+        let fonts_head = loft::html_fonts::head_html(&page_fonts);
+        let fonts_await = loft::html_fonts::boot_await_js(&page_fonts);
         let end_def = p.data.definitions();
         // Per-process scratch dir for EVERY intermediate of this --html build
         // (generated .rs, the wasm output + its objects, bridge rlibs, wasm-opt
@@ -9715,6 +9753,35 @@ fn main() {
         // loft#709: what a call that this target cannot serve does at RUNTIME.
         // Placed after the shim and every library bridge have had their say, so
         // it fills only names still free.
+        // loft#1059 — what a page does when the module TRAPS.
+        //
+        // A trap is not a Rust panic, so the hook loft#950 installs never runs and
+        // the page's only symptom is a thrown `RuntimeError`. Deep recursion is the
+        // shape that reaches it: the engine's stack dies well before loft's own
+        // frame cap can report, and one shell used to print the bare exception
+        // while the other had no catch at all and lost it entirely.
+        //
+        // Nothing here calls back into the module for loft's own frames. A trap
+        // leaves the shadow-stack pointer wherever it died — the epilogues that
+        // would restore it never ran — so a second entry would run off the end of
+        // the stack it just exhausted. The browser's OWN wasm backtrace rides on
+        // the error and is the evidence to read; `--names` (loft#954) is what
+        // makes its frame numbers resolve to loft function names.
+        let trap_js = r#"
+function loftReportTrap(e){
+  const msg=(e&&e.message)?e.message:String(e);
+  let out="\n[loft] "+msg;
+  if(/call stack exhausted|Maximum call stack|stack overflow/i.test(msg)){
+    out+="\n[loft] the stack ran out before loft's own frame cap could report it."
+        +"\n[loft] That bound belongs to this wasm engine, not to loft — the same"
+        +"\n[loft] program halts with a loft diagnostic on --interpret and --native.";
+  }
+  if(e&&e.stack)out+="\n"+e.stack;
+  out+="\n[loft] rebuild with `loft --html --names` to resolve the frame numbers above.";
+  try{console.error(out);}catch(_){}
+  try{const o=document.getElementById('out');if(o)o.textContent+=out;}catch(_){}
+}
+"#;
         let stub_js = crate::native_utils::host_import_stub_js(&wasm_bytes);
         let minimal_page =
             crate::native_utils::html_wasm_import_modules(&wasm_bytes).is_some_and(|mods| {
@@ -9904,6 +9971,7 @@ const imports={{loft_io:{{
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
+{trap_js}
 {stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
@@ -9922,14 +9990,14 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
   }}else{{
     instance.exports.loft_start();
   }}
-}}).catch(e=>{{out.textContent+="\n[loft] "+e;}});
+}}).catch(loftReportTrap);
 </script></body></html>"#
             )
         } else {
             format!(
                 r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
-<style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>
+<style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>{fonts_head}
 </head><body>
 <canvas id="c" tabindex="0" style="display:none"></canvas>
 <pre id="out"></pre>
@@ -9956,6 +10024,7 @@ const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
   try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
 }}
+{trap_js}
 {stub_js}
 // @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
 // built for it AND the host is cross-origin isolated, and otherwise brings it up
@@ -9965,7 +10034,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   loftInstallEnv(instance, mem);
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
-  ctrl.assets=await decodeLoftAssets(ctrl.assets);
+  ctrl.assets=await decodeLoftAssets(ctrl.assets);{fonts_await}
   if(instance.exports.asyncify_start_unwind){{
     const ac=new AsyncifyCtrl(instance);
     ctrl.ac=ac;
@@ -9978,7 +10047,12 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
       // visible so a GL render loop stays vsync-aligned.  schedule() re-checks
       // visibility each tick, so a tab going hidden/visible adapts live.
       const mc=new MessageChannel();
-      const pump=()=>{{ if(ac.resume('loft_start'))schedule(); }};
+      // A trap inside a RESUME lands here rather than on the boot promise, and
+      // an uncaught one stops the pump silently — a frame loop that dies with a
+      // blank page. Same reporter, so a trap reads the same wherever it fires.
+      const pump=()=>{{
+        try{{ if(ac.resume('loft_start'))schedule(); }}catch(e){{ loftReportTrap(e); }}
+      }};
       mc.port1.onmessage=pump;
       const schedule=()=>{{
         if(document.hidden)mc.port2.postMessage(0);
@@ -9989,7 +10063,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   }}else{{
     instance.exports.loft_start();
   }}
-}});
+}}).catch(loftReportTrap);
 </script></body></html>"#
             )
         };
@@ -10998,34 +11072,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         }
     }
     if let Some(err) = runtime_err {
-        let entry = err.to_diag_entry();
-        let loader = loft::diagnostic_render::FileSourceLoader::new();
-        let color = loft::diagnostic_render::ColorMode::Auto;
-        let rendered = loft::diagnostic_render::render_entry_pretty(&entry, &loader, color);
-        eprint!("{rendered}");
-        // Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
-        // call-chain captured at raise time after the typed-
-        // error block.  Innermost first so the eye lands on
-        // the function the fault fired in; chevron points
-        // outward to indicate the call sequence.  Top-level
-        // (single-frame) chains are skipped; the source
-        // location already names the function in spirit via
-        // its file:line:col.
-        if err.call_chain.len() > 1 {
-            let trimmed: Vec<&str> = err
-                .call_chain
-                .iter()
-                .map(String::as_str)
-                .take(5) // top 5 frames; rest summarised
-                .collect();
-            eprintln!("  in fn {}() ← called from", trimmed[0]);
-            for name in &trimmed[1..] {
-                eprintln!("        fn {name}()");
-            }
-            if err.call_chain.len() > 5 {
-                eprintln!("        … ({} more frames)", err.call_chain.len() - 5);
-            }
-        }
+        // The typed-error block plus the call chain captured at raise time, through the
+        // renderer the generated binary also uses (`RuntimeError::report_and_exit`).
+        // Rendering it here in its own spelling is how `--native` and `--interpret`
+        // came to report the same fault two different ways (loft#1056).
+        eprint!("{}", err.render());
     }
     if state.database.had_fatal {
         std::process::exit(1);

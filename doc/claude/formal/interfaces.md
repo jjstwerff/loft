@@ -144,6 +144,51 @@ deviation and shrinks operational.md's D-op-1 on the dispatch side).
   A scalar instantiation is therefore one axis this doc's oracle was missing, and the count
   stays 0 only as long as the tests keep one.
 
+  **The count is now six, and the two newest were found by sweeping the OPERATION rather
+  than the type** (2026-08-22).  Both `1028-*` and `1032-*` sweep `T` across the scalars,
+  but each sweeps ONE operation — the null, the yield channel — so the axis left fixed
+  was *which operation the template decides*.  Moving it turned up two more the same day:
+
+  - **The `??` null CHECK.**  `== null` was deferred by loft#1020; `??` asks the same
+    question and was not.  It took the placeholder's own shape (a reference) and baked
+    `rec != 0`, and the after-the-fact repair listed integer / text / float / single /
+    enum and ended `_ => None`, so `boolean` and `character` fell through it.  `x ?? fb`
+    LOOPED FOREVER at `T = boolean` and corrupted a record at `T = character` on
+    `--interpret`; `--native` refused to compile either monomorph.  All three spellings
+    were affected — `x ?? d`, `x?`, and `x ?? return d` — because all three reach the
+    one check.
+  - **The element READ.**  `wrap_vector_get_val` picks the value-extraction op from the
+    element type and ended `_ => return code`, which reads as *"everything else is
+    reference-shaped"* and was not: `character` and a VALUE enum both need unpacking.
+    A template's `v[1]` handed back the address as the value — a garbage codepoint for
+    `['a','b']`, `null` for `[Col::Blue, Col::Green]` — on BOTH backends, while the
+    concrete twin was right.
+
+  Both are now closed, the check by deferral and the read by an EXHAUSTIVE match (adding
+  a `Type` variant fails the build there rather than joining the unhandled set).  The
+  guard is `tests/scripts/generic-monomorph-null-and-element.loft`, which pairs every
+  boolean and character cell with its hand-written twin — `(G-Mono)` as an assertion
+  rather than as a claim.
+
+  **A seventh, from asking the same question of the WRITE side** (2026-08-22).  The
+  element read was one operation; the element WRITE is another, and its corpus holds a
+  different axis fixed — not the type, and not the operation, but the *spelling*.  P241's
+  rewriter re-emits a monomorph's vector writes, and every test of it since 2026-05 uses
+  `o += [x]`; nothing used `v[i] = x`.  An append emits a three-op sequence the rewriter
+  matches, an indexed assignment emits a LONE `OpCopyRecord`, and that one reached the
+  monomorph carrying the type variable's record id: at every scalar type the run PANICKED
+  in the allocator, and for a struct parameter it silently wrote nowhere and read the old
+  element back.  Closed by routing both spellings through the one setter builder, guarded
+  by `tests/scripts/generic-vector-element-write.loft`, which sweeps spelling × type ×
+  vector origin.
+
+  The three together say the axis to sweep is not fixed: it was the TYPE for #1028, the
+  OPERATION for the `??` check and the element read, and the SPELLING for the write.  What
+  they share is the question — *what does this corpus never vary?* — and that question is
+  the instrument, not any particular answer to it.  The lesson generalises past this doc: **`_ => None` and
+  `_ => return` are how a decision that is a function of `τ` goes missing quietly**, and
+  a missing arm looks exactly like a deliberate one until something reads the answer.
+
   loft#1032 is the same reading a second time, and adds a **third** thing the oracle did not
   carry: a RETURN TYPE that is not the bare `T`. `substitute_type` had arms for `vector<T>`,
   `(T, T)` and `T?` and none for `iterator<T>`, in BOTH twins — the parser's and the variable

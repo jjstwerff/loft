@@ -675,7 +675,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
             let detail = if intact {
                 e
             } else {
-                format!("{e} — AND this program's own stores did not survive it")
+                e.with_detail(" — AND this program's own stores did not survive it")
             };
             fault(stores, detail);
             return;
@@ -692,7 +692,7 @@ fn placed_dispatch(stores: &mut Stores, stack: &mut DbRef) {
     let out = match out {
         Value::Ref(_) => worker
             .reread_answer(ret_nr)
-            .ok_or_else(|| "malformed compound answer".to_string()),
+            .ok_or_else(|| super::wire::Fault::from("malformed compound answer")),
         other => Ok(other),
     };
 
@@ -759,17 +759,63 @@ fn compound_arguments_intact(stores: &Stores, compound: &[CompoundArg]) -> bool 
 
 /// Surface a failed crossing as the CALLER's runtime error.
 ///
-/// What makes a placed library's error behaviour match an in-process one: the
-/// message is the library's own, and no position is claimed because the position
-/// is the library's, not the caller's — pointing at the caller's file would name
-/// the wrong line with complete confidence.
-fn fault(stores: &mut Stores, message: String) {
-    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::user_panic(
-        message,
-        String::new(),
-        0,
+/// What makes a placed library's error behaviour match an in-process one — the
+/// fourth thing the module's invariant names, beside type, effect and lifetime.
+/// The fault is rebuilt from the parts that crossed rather than re-derived, so
+/// the position is the LIBRARY's own file and line and the detail is the one the
+/// library rendered.  Re-describing it here is what used to print
+/// `panic: runtime error: panic: …`, with the position, the caret and the frames
+/// all gone.
+///
+/// The call chain arriving here is only the library's half; `main()` is in THIS
+/// process. `State::note_runtime_error_halt` adds the caller's frames, which is
+/// what `crossed_placement` is for.
+fn fault(stores: &mut Stores, e: super::wire::Fault) {
+    stores.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError::relayed(
+        e.label,
+        e.message,
+        e.position,
+        e.call_chain,
     )));
     stores.had_fatal = true;
+}
+
+/// Put a text answer where the CALL SITE asked for it.
+///
+/// A text return has two call shapes and the call site chose which one, so this
+/// reads the choice rather than assuming it — the same two branches the cdylib
+/// bridge (`bridge_text_result`) has.
+///
+///   * Destination-passing, emitted where the result is assigned to a text
+///     variable: the answer goes straight into that variable's record and
+///     NOTHING is pushed.
+///   * Otherwise the ordinary loft convention, which every other position uses:
+///     the answer goes into the hidden work buffer the caller passed, and a
+///     `Str` over it is pushed as the result.
+///
+/// Both of the wire's two text shapes — inline in the frame, or parked in the
+/// return arena for loft#1061 — end here, so the caller cannot tell them apart
+/// and neither shape can drift away from the other.
+fn deliver_text(
+    stores: &mut Stores,
+    stack: &mut DbRef,
+    text_dest: Option<DbRef>,
+    work_buf: Option<DbRef>,
+    answer: &str,
+) {
+    let into = text_dest.or(work_buf).expect("checked before the crossing");
+    let buf = stores
+        .store_mut(&into)
+        .addr_mut::<String>(into.rec, into.pos);
+    // Append: the call site cleared the buffer beforehand, exactly as it does
+    // for an in-process text return.
+    buf.push_str(answer);
+    if text_dest.is_none() {
+        // `Str` borrows the buffer's bytes; the buffer is the caller's own
+        // variable and outlives this result.
+        let result = crate::keys::Str::new(buf.as_str());
+        stores.put(stack, result);
+    }
 }
 
 /// Write the answer back where the emitted code expects it — the half of a
@@ -779,7 +825,7 @@ fn finish_call(
     stores: &mut Stores,
     stack: &mut DbRef,
     ret: Kind,
-    out: Result<Value, String>,
+    out: Result<Value, super::wire::Fault>,
     text_dest: Option<DbRef>,
     work_buf: Option<DbRef>,
     compound_dest: Option<DbRef>,
@@ -790,30 +836,18 @@ fn finish_call(
             (Kind::Int, Value::Int(i)) => stores.put::<i64>(stack, i),
             (Kind::Bool, Value::Bool(b)) => stores.put(stack, b),
             (Kind::Single, Value::Float(f)) => stores.put::<f32>(stack, f as f32),
-            // A text return has two call shapes and the call site chose which
-            // one, so this reads the choice rather than assuming it — the same
-            // two branches the cdylib bridge (`bridge_text_result`) has.
-            //
-            //   * Destination-passing, emitted where the result is assigned to a
-            //     text variable: the answer goes straight into that variable's
-            //     record and NOTHING is pushed.
-            //   * Otherwise the ordinary loft convention, which every other
-            //     position uses: the answer goes into the hidden work buffer the
-            //     caller passed, and a `Str` over it is pushed as the result.
             (Kind::Text, Value::Text(s)) => {
-                let into = text_dest.or(work_buf).expect("checked before the crossing");
-                let buf = stores
-                    .store_mut(&into)
-                    .addr_mut::<String>(into.rec, into.pos);
-                // Append: the call site cleared the buffer beforehand, exactly
-                // as it does for an in-process text return.
-                buf.push_str(&s);
-                if text_dest.is_none() {
-                    // `Str` borrows the buffer's bytes; the buffer is the
-                    // caller's own variable and outlives this result.
-                    let result = crate::keys::Str::new(buf.as_str());
-                    stores.put(stack, result);
-                }
+                deliver_text(stores, stack, text_dest, work_buf, &s);
+            }
+            // loft#1061 — a text answer too large for the frame travelled in the
+            // return arena instead, and arrives as the handle to it.  The return KIND
+            // is what distinguishes this from a compound answer, which is why it needs
+            // no wire tag of its own; the arena is still bound here, so the bytes are
+            // readable, and copying them out first keeps the borrow honest.  Where it
+            // lands from there is the same question as for any other text answer.
+            (Kind::Text, Value::Ref(handle)) if handle.pos == super::wire::TEXT_IN_ARENA => {
+                let parked = stores.store(&handle).get_str(handle.rec).to_string();
+                deliver_text(stores, stack, text_dest, work_buf, &parked);
             }
             // A compound answer was built in the return arena. Where it lands is
             // whatever the caller offered — and the caller offers one of exactly

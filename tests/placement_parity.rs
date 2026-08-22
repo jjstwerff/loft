@@ -1317,3 +1317,137 @@ fn the_gate_can_fail() {
         "the gate compared two different libraries and saw no difference — it is blind"
     );
 }
+
+/// A text answer larger than the wire frame crosses intact (loft#1061).
+///
+/// `Value::Text` is marshalled INLINE into the request/response frame, which is a fixed
+/// 1 MiB. Compound answers never had this ceiling — they are built in the return arena,
+/// which grows — so a placed function whose answer was a long text hit a wall no
+/// in-process call has: `git::show(sha)` on a 3.7 MB commit reached the caller as
+/// `panic: return value does not fit the placement wire`, and `make view` had been
+/// broken by it. An oversized text now travels in the arena too.
+///
+/// THE SIZE IS THE TEST. A short text takes the inline path and passes against the
+/// broken build, so this asks for ~1.5 MB — comfortably past the frame — and checks the
+/// BYTES, not just the length: a truncation at the old boundary would keep a plausible
+/// size while losing the tail, so the head, the tail, and a slice straddling the 1 MiB
+/// mark are all compared. The small answer is in the same consumer, so the inline path
+/// is still exercised beside the arena one.
+#[test]
+fn a_text_answer_larger_than_the_frame_crosses_intact() {
+    let library = "pub fn big(kib: integer) -> text {\n\
+                   \x20   b = \"\";\n\
+                   \x20   for _ in 0..64 { b = b + \"ABCDEFGHIJKLMNOP\"; }\n\
+                   \x20   s = \"\";\n\
+                   \x20   for _ in 0..kib { s = s + b; }\n\
+                   \x20   s\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   small = big(1);\n\
+                    \x20   println(\"small = {size(small)} {small[0 .. 4]}\");\n\
+                    \x20   s = big(1536);\n\
+                    \x20   println(\"size  = {size(s)}\");\n\
+                    \x20   println(\"head  = {s[0 .. 16]}\");\n\
+                    \x20   println(\"tail  = {s[size(s) - 16 .. size(s)]}\");\n\
+                    \x20   println(\"cross = {s[1048376 .. 1048392]}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("big_text", library, consumer);
+    assert_eq!(
+        inproc.code, 0,
+        "the in-process run must succeed: {}",
+        inproc.stderr
+    );
+    assert_indistinguishable("a text answer past the frame size", &inproc, &placed);
+    assert!(
+        inproc.stdout.contains("size  = 1572864"),
+        "the consumer did not build the oversized answer: {:?}",
+        inproc.stdout
+    );
+    // `cross` starts 8 bytes into a 16-byte block (1048376 = 16 x 65523 + 8) and ends
+    // past the old 1 MiB frame limit, so the correct answer is the block ROTATED — which
+    // is a sharper check than an aligned slice: it pins the phase as well as the bytes.
+    assert!(
+        placed.stdout.contains("head  = ABCDEFGHIJKLMNOP")
+            && placed.stdout.contains("tail  = ABCDEFGHIJKLMNOP")
+            && placed.stdout.contains("cross = IJKLMNOPABCDEFGH"),
+        "the placed answer is the wrong bytes, not merely the wrong length: {:?}",
+        placed.stdout
+    );
+}
+
+/// A fault inside the library reads the same way wherever it ran.
+///
+/// The invariant this file is for names ERROR BEHAVIOUR alongside type, effect and
+/// lifetime, and nothing here covered it: every case above is a call that succeeds. A
+/// `panic` in the library is the shortest thing that exercises the fault path on both
+/// sides of the crossing.
+#[test]
+fn a_fault_inside_the_library_reads_the_same_way() {
+    let library = "pub fn refuse(n: integer) -> integer {\n\
+                   \x20   if n < 0 { panic(\"refusing {n}\"); }\n\
+                   \x20   n * 2\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn main() {\n\
+                    \x20   println(\"ok = {refuse(21)}\");\n\
+                    \x20   println(\"bad = {refuse(-1)}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("fault", library, consumer);
+    assert!(
+        inproc.stdout.contains("ok = 42"),
+        "the call before the fault must run: {:?}",
+        inproc.stdout
+    );
+    assert_indistinguishable("a panic inside the library", &inproc, &placed);
+}
+
+/// The call chain a fault carries spans BOTH processes, and neither side can see
+/// the whole of it.
+///
+/// `main` and `helper` run in the caller; `refuse` and `deeper` run in the
+/// worker. In-process the chain is one list; placed it is two halves that have to
+/// be joined in the right order, and getting the order wrong renders a chain that
+/// is plausible and backwards. So this moves three axes at once against the
+/// single-frame case above — the depth on the library's side, the depth on the
+/// caller's, and the fault KIND, which is an `assert` here rather than a `panic`
+/// and so must not pick up a `panic:` prefix on the way across.
+#[test]
+fn a_fault_deep_in_a_placed_library_names_every_frame() {
+    let library = "fn deeper(n: integer) -> integer {\n\
+                   \x20   assert(n >= 0, \"n must not be {n}\");\n\
+                   \x20   n * 2\n\
+                   }\n\
+                   pub fn refuse(n: integer) -> integer {\n\
+                   \x20   deeper(n)\n\
+                   }\n";
+    let consumer = "use parity;\n\
+                    fn helper(n: integer) -> integer {\n\
+                    \x20   refuse(n)\n\
+                    }\n\
+                    fn main() {\n\
+                    \x20   println(\"ok = {helper(21)}\");\n\
+                    \x20   println(\"bad = {helper(-1)}\");\n\
+                    }\n";
+    let (inproc, placed) = both_placements("deepfault", library, consumer);
+    assert!(
+        inproc.stdout.contains("ok = 42"),
+        "the call before the fault must run: {:?}",
+        inproc.stdout
+    );
+    // Prove the gate is looking at a chain that spans both sides, rather than at
+    // two runs that happen to agree on saying nothing.
+    for frame in ["fn deeper()", "fn refuse()", "fn helper()", "fn main()"] {
+        assert!(
+            inproc.stderr.contains(frame),
+            "the in-process rendering is missing {frame}: {}",
+            inproc.stderr
+        );
+    }
+    assert!(
+        inproc.stderr.contains("assertion failed") && !inproc.stderr.contains("panic:"),
+        "an assert must not render as a panic: {}",
+        inproc.stderr
+    );
+    assert_indistinguishable("an assert deep inside the library", &inproc, &placed);
+}

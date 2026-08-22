@@ -1,0 +1,18 @@
+# ARMOR — the IT_ARMOR loot (frontal-iconic): a leather cuirass — shoulders, waist taper,
+# neck hole, shoulder straps, stitch lines. Source for assets/sprites/armor.png.
+size 256x256
+Background transparent
+name body
+Poly (0.27,0.26) (0.73,0.26) (0.70,0.46) (0.66,0.80) (0.34,0.80) (0.30,0.46) rgb=122,86,50
+name neck
+Circle (0.50,0.27) r=0.085 flat=0.35 rgb=58,42,28
+name straps
+Poly (0.30,0.255) (0.40,0.255) (0.40,0.31) (0.30,0.31) rgb=70,50,32
+Poly (0.60,0.255) (0.70,0.255) (0.70,0.31) (0.60,0.31) rgb=70,50,32
+name stitch
+Line (0.345,0.34) - (0.36,0.76) w=2
+Line (0.655,0.34) - (0.64,0.76) w=2
+Line (0.38,0.56) - (0.62,0.56) w=2
+name belt
+Poly (0.34,0.66) (0.66,0.66) (0.66,0.71) (0.34,0.71) rgb=58,42,28
+Circle (0.50,0.685) r=0.022 rgb=150,140,90

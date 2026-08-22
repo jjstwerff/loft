@@ -282,6 +282,9 @@ pub mod net_profile;
 // `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
 // does: a native `registry` build, or the browser (`--html`) target.
 pub mod host;
+/// @PLN146 F5/F6 — `[[font]]` declarations become the `<head>` a browser page needs
+/// and the await that holds `loft_start` until the fonts have arrived.
+pub mod html_fonts;
 // `registry` and `remote-store` each pull `ureq` (the native client); the browser
 // arm needs no dependency at all.  `remote-store` is listed because the paged
 // loaders' range GETs live here too (loft#678) and that feature can be selected

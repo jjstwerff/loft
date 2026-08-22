@@ -506,6 +506,23 @@ impl Parser {
         }
     }
 
+    /// Is `tp` a VALUE enum — an enum whose variants carry no payload, so a value of it
+    /// is one discriminant BYTE rather than a reference?  True for the bare spelling and
+    /// for `τ?` alike, which is the point: a nullable field or parameter arrives as
+    /// `Optional(Enum)` and asks the same null question as the bare form.
+    ///
+    /// The shape is read from the enum DEFINITION's `returned` type, never from the
+    /// access type, which is polluted — a field read of a value enum comes back
+    /// `Enum(_, true, _)` even though the enum itself has no payload.  A synthetic
+    /// `__nullable<S>` is excluded: it is @PLN25's nullable wrapper, whose absent
+    /// discriminant is answered by its own path.
+    pub(crate) fn is_value_enum(&self, tp: &Type) -> bool {
+        matches!(tp.base(), Type::Enum(d, _, _)
+            if *d != u32::MAX
+                && matches!(self.data.def(*d).returned, Type::Enum(_, false, _))
+                && !self.data.def(*d).name.starts_with("__nullable<"))
+    }
+
     /// Is this operand's type still a TYPE VARIABLE — a template's `T` / `T?`, whose
     /// placeholder is an attribute-less struct rather than a real type (loft#1020)?
     fn is_type_var_operand(&self, tp: &Type) -> bool {
@@ -577,24 +594,30 @@ impl Parser {
             } else {
                 self.cl("OpNot", &[valid])
             });
+        } else if self.is_value_enum(tp) {
+            // A VALUE enum (`Color`, no payload variants) is a disc byte, and BOTH of
+            // its absent bytes are asked for through the one predicate the coalesce and
+            // the renderer already use.  Testing the discriminant against 0 alone read a
+            // WRITTEN null (255) as a value; testing it against the typed null alone read
+            // a zero-init one (0) as a value — and a field never set is the second kind,
+            // so `h.c == null` answered `false` for a field that renders `null`.
+            //
+            // `τ?` is peeled here on purpose: it is the spelling a nullable field or a
+            // nullable parameter arrives as, and leaving it to the generic `==` lowering
+            // is what let the two encodings disagree.  Read the shape from the enum
+            // DEFINITION's `returned` type — the ACCESS type is polluted, since a field
+            // read of a simple enum comes back `Enum(_, true, _)`.
+            let has_value = self.cl("OpConvBoolFromEnum", &[operand]);
+            self.cl("OpNot", &[has_value])
         } else if let Type::Enum(e_def, _, _) = tp {
             let e_def = *e_def;
             // A synthetic `__nullable<S>` enum backs an INLINE struct field / vector
             // element (no DbRef slot), so null is discriminant 0 — read it directly,
             // NEVER `OpRefIsNull`, whose store_nr test would deref the absent record.
             let inline = e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
-            // A VALUE enum (`Color`, no payload variants) is a disc byte whose null is
-            // discriminant 0.  Read the shape from the enum DEFINITION's `returned`
-            // type: the ACCESS type is polluted — a field read of a simple enum comes
-            // back `Enum(_, true, _)` even though the enum itself is a value enum.
-            let value_enum = e_def != u32::MAX
-                && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
             if inline {
                 let get_enum = self.cl("OpGetEnum", &[operand, Value::Int(0)]);
                 let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
-                self.cl("OpEqInt", &[disc, Value::Int(0)])
-            } else if value_enum {
-                let disc = self.cl("OpConvIntFromEnum", &[operand]);
                 self.cl("OpEqInt", &[disc, Value::Int(0)])
             } else {
                 // A struct-enum reference: null IS the store_nr sentinel, NOT
@@ -2031,6 +2054,90 @@ impl Parser {
         self.ncc_default_end = None;
     }
 
+    /// *"`src` is NOT null"* for a `??` whose subject has type `tp` — the ONE place
+    /// that answers it for the coalesce, as [`null_test`](Parser::null_test) does for
+    /// the `== null` comparison.
+    ///
+    /// Which test that is depends on the type, and every arm below exists because a
+    /// different representation carries null differently: a tuple in its first field,
+    /// a synthetic `__nullable<S>` in its discriminant, the whole heap-DbRef family in
+    /// `rec`, a boolean in the `255` byte, and every remaining scalar through its
+    /// registered `OpConv*FromX → Boolean`.
+    ///
+    /// **A type VARIABLE has no answer yet, so it does not get one.**  The
+    /// site is stamped [`TV_NULLCHECK`](Parser::TV_NULLCHECK) and
+    /// [`rewrite_generic_type_defaults`](Parser::rewrite_generic_type_defaults) re-runs
+    /// this same dispatch once `T` is concrete.  A nested generic — where `concrete` is
+    /// still an outer template's variable — re-stamps through that same call and stays
+    /// deferred, the way loft#1016 / #1020 / #1028 each do.
+    pub(crate) fn coalesce_not_null(&mut self, src: &Value, tp: &Type) -> Value {
+        if self.is_type_var_operand(tp) {
+            // Deferred, NOT decided.  The placeholder is an attribute-less struct, so
+            // every arm below would read it as a reference and bake `rec != 0` — which
+            // substitution keeps while it rewrites the type around it.
+            return v_block(vec![src.clone()], tp.clone(), Self::TV_NULLCHECK);
+        }
+        // @PLAN52 cluster IV-Tuple (2026-05-30): Tuple values are not heap-DbRef
+        // and have no `.rec != 0` discriminant; testing the WHOLE tuple as a
+        // DbRef (the default `convert(Tuple, Boolean)` path) produces wrong
+        // codegen (native E0308: `expected bool, found tuple`) and silent
+        // corruption on interpret (treating bytes as a DbRef tag).  Convention:
+        // a tuple is null when its FIRST FIELD is its type's null sentinel —
+        // which matches what `OpGetVectorNullable` produces for OOB tuple reads
+        // (each field gets its own null sentinel).
+        if let Type::Tuple(elems) = tp
+            && !elems.is_empty()
+            && let Value::Var(v) = src
+        {
+            let first_tp = elems[0].clone();
+            let mut nc = Value::TupleGet(*v, 0);
+            self.convert(&mut nc, &first_tp, &Type::Boolean);
+            nc
+        } else if let Type::Enum(syn, true, _) = tp
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            // @PLN25 E2 — a synthetic `__nullable<S>` enum backs an INLINE
+            // field / vector element (no DbRef slot), so null is discriminant 0
+            // — NOT the `.rec`/store_nr sentinel that `OpConvBoolFromRef` below
+            // tests (it would misread the inline value).  The builder produces
+            // "is NOT null" (v_if true → keep lhs), so test discriminant != 0.
+            // Mirrors the E2a.4 `== null` lowering (`enum_null`).
+            let get_enum = self.cl("OpGetEnum", &[src.clone(), Value::Int(0)]);
+            let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+            let is_null = self.cl("OpEqInt", &[disc, Value::Int(0)]);
+            self.cl("OpNot", &[is_null])
+        } else if matches!(
+            tp,
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Enum(_, true, _),
+        ) {
+            // @PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
+            // have no registered `OpConv*FromX → Boolean` so the generic
+            // `convert(Hash/Vector/..., Boolean)` returns the bare Var.
+            // The interpreter's `if <bare Var(DbRef)>` then tests raw
+            // bytes (not `.rec != 0`) and produces the wrong result.
+            // Force an explicit `OpConvBoolFromRef` call — Reference,
+            // Vector, Hash, Sorted, Index, struct-Enum all share the
+            // 12-byte DbRef representation under the hood.
+            let conv_nr = self.data.def_nr("OpConvBoolFromRef");
+            Value::Call(conv_nr, vec![src.clone()])
+        } else if matches!(tp, Type::Boolean) {
+            // @PLN17: the null-check is "is NOT null" (v_if true → keep lhs).
+            // For a boolean that is `src != null` (raw `!= 255`), NOT the
+            // value's truthiness — so `false ?? x` keeps `false`.
+            let null_b = self.cl("OpConvBoolFromNull", &[]);
+            self.cl("OpNeBool", &[src.clone(), null_b])
+        } else {
+            let mut nc = src.clone();
+            self.convert(&mut nc, tp, &Type::Boolean);
+            nc
+        }
+    }
+
     /// `lhs ?? return ret_expr` — emit the block that returns early when `lhs`
     /// is null and otherwise evaluates to `lhs`.
     fn build_null_coalesce_return(&mut self, code: &mut Value, ctp: &mut Type, lhs_type: &Type) {
@@ -2056,7 +2163,14 @@ impl Parser {
         // { tmp = lhs; if (tmp == null) { return ret_expr; }; tmp }
         let tmp = self.create_unique("ncr", lhs_type);
         let set_tmp = v_set(tmp, code.clone());
-        let is_null = if matches!(lhs_type, Type::Boolean) {
+        let is_null = if self.is_type_var_operand(lhs_type) {
+            // `T` has no null test yet, so ask the one home and negate its
+            // answer.  Inside a template that call stamps the deferral marker, which the
+            // monomorph answers; for a concrete type this branch never runs, so the two
+            // arms below keep emitting exactly what they always did.
+            let not_null = self.coalesce_not_null(&Value::Var(tmp), lhs_type);
+            self.cl("OpNot", &[not_null])
+        } else if matches!(lhs_type, Type::Boolean) {
             // @PLN17: a boolean is null iff its byte is the 255 sentinel — a raw
             // `tmp == null` compare, NOT truthiness (which would treat `false` as
             // missing).  `false ?? return` keeps `false`; `null ?? return` returns.
@@ -2285,67 +2399,8 @@ impl Parser {
         }
         // `convert(value → result_type)` widens the value branch when widen_ints,
         // and is a no-op otherwise (result_type == lhs_type).
-        // @PLAN52 cluster IV-Tuple (2026-05-30): Tuple values are not heap-DbRef
-        // and have no `.rec != 0` discriminant; testing the WHOLE tuple as a
-        // DbRef (the default `convert(Tuple, Boolean)` path) produces wrong
-        // codegen (native E0308: `expected bool, found tuple`) and silent
-        // corruption on interpret (treating bytes as a DbRef tag).  Convention:
-        // a tuple is null when its FIRST FIELD is its type's null sentinel —
-        // which matches what `OpGetVectorNullable` produces for OOB tuple reads
-        // (each field gets its own null sentinel).
-        let null_check_builder = |this: &mut Self, src: &Value| -> Value {
-            if let Type::Tuple(elems) = lhs_type
-                && !elems.is_empty()
-                && let Value::Var(v) = src
-            {
-                let first_tp = elems[0].clone();
-                let mut nc = Value::TupleGet(*v, 0);
-                this.convert(&mut nc, &first_tp, &Type::Boolean);
-                nc
-            } else if let Type::Enum(syn, true, _) = lhs_type
-                && this.data.def(*syn).name.starts_with("__nullable<")
-            {
-                // @PLN25 E2 — a synthetic `__nullable<S>` enum backs an INLINE
-                // field / vector element (no DbRef slot), so null is discriminant 0
-                // — NOT the `.rec`/store_nr sentinel that `OpConvBoolFromRef` below
-                // tests (it would misread the inline value).  The builder produces
-                // "is NOT null" (v_if true → keep lhs), so test discriminant != 0.
-                // Mirrors the E2a.4 `== null` lowering (`enum_null`).
-                let get_enum = this.cl("OpGetEnum", &[src.clone(), Value::Int(0)]);
-                let disc = this.cl("OpConvIntFromEnum", &[get_enum]);
-                let is_null = this.cl("OpEqInt", &[disc, Value::Int(0)]);
-                this.cl("OpNot", &[is_null])
-            } else if matches!(
-                lhs_type,
-                Type::Reference(_, _)
-                    | Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Enum(_, true, _),
-            ) {
-                // @PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
-                // have no registered `OpConv*FromX → Boolean` so the generic
-                // `convert(Hash/Vector/..., Boolean)` returns the bare Var.
-                // The interpreter's `if <bare Var(DbRef)>` then tests raw
-                // bytes (not `.rec != 0`) and produces the wrong result.
-                // Force an explicit `OpConvBoolFromRef` call — Reference,
-                // Vector, Hash, Sorted, Index, struct-Enum all share the
-                // 12-byte DbRef representation under the hood.
-                let conv_nr = this.data.def_nr("OpConvBoolFromRef");
-                Value::Call(conv_nr, vec![src.clone()])
-            } else if matches!(lhs_type, Type::Boolean) {
-                // @PLN17: the null-check is "is NOT null" (v_if true → keep lhs).
-                // For a boolean that is `src != null` (raw `!= 255`), NOT the
-                // value's truthiness — so `false ?? x` keeps `false`.
-                let null_b = this.cl("OpConvBoolFromNull", &[]);
-                this.cl("OpNeBool", &[src.clone(), null_b])
-            } else {
-                let mut nc = src.clone();
-                this.convert(&mut nc, lhs_type, &Type::Boolean);
-                nc
-            }
-        };
+        let null_check_builder =
+            |this: &mut Self, src: &Value| -> Value { this.coalesce_not_null(src, lhs_type) };
         // loft#1013 — a CALL default needs an owner when the RESULT is a BORROW.
         //
         // `x = v[i] ?? mk()` types the result from the SUBJECT, which names the vector
@@ -3255,9 +3310,19 @@ impl Parser {
             // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
             // must test that sentinel via OpEqRef — the default path reads the
             // discriminant (`OpGetEnum`), which derefs the absent record and OOB-crashes.
+            // `Optional(<value enum>)` is admitted beside the bare spelling: it is how a
+            // nullable enum FIELD and a nullable enum PARAMETER arrive, and leaving it to
+            // the generic `==` lowering is what let a field never set — discriminant 0,
+            // which the renderer shows as `null` — answer `false` to `== null`.  Widened
+            // only for the value enum, because `null_test` answers every shape that
+            // passes this gate and returns `None` for the others, and a `None` here
+            // leaves the operand in place while retyping it boolean.
             let enum_null = (operator == "==" || operator == "!=")
-                && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
+                && (((matches!(*ctp, Type::Enum(_, _, _)) || self.is_value_enum(ctp))
+                    && second_type == Type::Null)
+                    || (*ctp == Type::Null
+                        && (matches!(second_type, Type::Enum(_, _, _))
+                            || self.is_value_enum(&second_type))));
             // @PLN99 A5 — a nullable STRUCT-reference VARIABLE (`s: DT? = null`,
             // typed `Optional(Reference)`) holds the reference null sentinel
             // (`store_nr==u16::MAX`, from OpNullRefSentinel), like a nullable enum variable.

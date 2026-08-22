@@ -1,0 +1,19 @@
+# AMMO — the IT_AMMO loot (frontal-iconic): three arrows bundled diagonal — steel heads,
+# wooden shafts, fletching. Source for assets/sprites/ammo.png.
+size 256x256
+Background transparent
+name shafts
+Poly (0.26,0.80)@4 (0.70,0.24)@4 stroke=140,104,62
+Poly (0.34,0.86)@4 (0.78,0.30)@4 stroke=140,104,62
+Poly (0.20,0.72)@4 (0.62,0.18)@4 stroke=140,104,62
+name heads
+Poly (0.70,0.24) (0.76,0.13) (0.645,0.185) rgb=168,174,184
+Poly (0.78,0.30) (0.84,0.19) (0.725,0.245) rgb=168,174,184
+Poly (0.62,0.18) (0.68,0.07) (0.565,0.125) rgb=168,174,184
+name fletching
+Poly (0.26,0.80) (0.205,0.795) (0.235,0.855) rgb=190,60,50
+Poly (0.26,0.80) (0.315,0.805) (0.285,0.745) rgb=224,216,196
+Poly (0.34,0.86) (0.285,0.855) (0.315,0.915) rgb=190,60,50
+Poly (0.34,0.86) (0.395,0.865) (0.365,0.805) rgb=224,216,196
+Poly (0.20,0.72) (0.145,0.715) (0.175,0.775) rgb=190,60,50
+Poly (0.20,0.72) (0.255,0.725) (0.225,0.665) rgb=224,216,196

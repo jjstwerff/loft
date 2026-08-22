@@ -1214,8 +1214,12 @@ impl Parser {
         // loft#986 — see `in_control_head`: the `{` after the condition opens the body.
         let outer_head = self.in_control_head;
         self.in_control_head = true;
-        self.expression(&mut cond);
+        let cond_tp = self.expression(&mut cond);
         self.in_control_head = outer_head;
+        // The same coercion `if` performs — a `while` over a collection handle is the
+        // identical position, and reading a pointer's first byte as the flag is how the
+        // loop ran the wrong number of times.
+        self.convert_condition(&mut cond, &cond_tp);
         if !self.first_pass && matches!(cond, Value::Null) {
             diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
             return;

@@ -15,6 +15,14 @@ Source: `scripts/lib-branch-audit.sh` (@PLN112 / @PLN20 lib-health).
 
 - `tuxedo-work` — PR #20 closed · (6 files) — @PLN35 arguments 0.2.0: GNU getopt_long parser  ⚠ orphan
 
+## loft-libs-net
+
+- `tuxedo-respond-bytes` — no PR yet · (3 files) — server 0.6.0: `respond_bytes`, a body
+  that is not text. ⚠ **loft's own `tools/viewer` depends on it** (`server >= 0.6`) and
+  cannot build until it is published — the text responses answer `200 OK` with
+  `Content-Length: 0` for any binary body, which is how every `doc/images/*.png` was being
+  served as a blank success. Additive only, so the `0.3.1` compatibility floor is unchanged.
+
 ## loft-libs-graphics
 
 - `ci/test-native-packages` — PR #7 open · (1 files) — ci: test graphics + imaging too (the native pa

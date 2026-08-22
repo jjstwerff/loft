@@ -1,14 +1,14 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: call stack overflow
-  --> <workspace>/default/05_coroutine.loft:18:27
-   |
-18 |   OpCoroutineExhausted(gen)
-   |                           ^
+error: call stack overflow — exceeded 10000 stack frames
+  --> <cases>/26_runtime_recursion_overflow.loft:1:1
+  |
+1 | fn bomb() {
+  | ^
   in fn bomb() ← called from
         fn bomb()
         fn bomb()
         fn bomb()
         fn bomb()
-        … (9996 more frames)
+        … (9995 more frames)

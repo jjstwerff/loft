@@ -433,6 +433,18 @@ impl Parser {
                 });
             }
             let arg = val.clone();
+            // LOFT.md § Conversions lists `!v` beside `if` / `while` / `assert` for the
+            // any-type coercion, and the comment above states what `!x` means on a
+            // non-boolean: *"is x null?"*.  A heap handle has no `Not` operator, so
+            // without this the documented spelling was refused — `!v` on a vector read
+            // *"No matching operator Not on vector<integer>"* while `if v` compiled.
+            // Routed through the ONE condition coercion, so the two cannot part ways.
+            if Self::is_heap_handle(&t) {
+                let mut present = arg;
+                self.convert_condition(&mut present, &t);
+                *val = self.cl("OpNot", &[present]);
+                return Type::Boolean;
+            }
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {
             let operand_pos = self.lexer.peek_pos().clone();

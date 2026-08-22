@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Appending a text to ITSELF, past the size where the buffer has to move (loft#1062).
+//
+// `append_text` / `append_stack_text` both read the source through a `Str` — a raw
+// pointer — and wrote it with `*v1 += text.str()`.  When the source IS the destination,
+// that source points into `v1`'s own buffer, and `String::push_str` reserves before it
+// copies: the moment the reserve had to MOVE the allocation, the copy read the block it
+// had just freed.  SIGSEGV on `--interpret` from 128 KiB up, while `--native` answered
+// — so it was a crash and a backend divergence at once.
+//
+// THE SIZE IS THE POINT, and it is why this file builds a quarter of a megabyte rather
+// than writing `s = s + s` on a short string.  Below the reallocation threshold the
+// destination has spare capacity, nothing moves, the freed-block read never happens and
+// the identical program is correct.  A small-text version of this test passes against
+// the broken build.
+//
+// It also asserts the CONTENT, not the length.  A use-after-free can leave a buffer of
+// exactly the right size holding the wrong bytes, and `size(s)` cannot tell that from a
+// correct answer — so both halves are compared against what they should be.
+
+fn blk1k() -> text {
+  b = "";
+  for _ in 0..64 { b = b + "ABCDEFGHIJKLMNOP"; }
+  return b;
+}
+
+// `n` KiB of a repeating, distinctive block.
+fn make(n: integer) -> text {
+  s = "";
+  k = blk1k();
+  for _ in 0..n { s = s + k; }
+  return s;
+}
+
+// `s = s + s` — the destination is BOTH operands.
+fn test_self_append_by_addition() {
+  half = make(256);
+  n = size(half);
+  assert(n == 262144, "the fixture must be past the reallocation threshold, got {n}");
+  s = half;
+  s = s + s;
+  assert(size(s) == 2 * n, "self-append lost bytes: {size(s)} of {2 * n}");
+  assert(s[0 .. n] == half, "the first half of a self-append is not the original");
+  assert(s[n .. 2 * n] == half, "the second half of a self-append is not the original");
+}
+
+// `s += s` — the same aliasing through the compound-assign op.
+fn test_self_append_by_compound_assign() {
+  half = make(256);
+  n = size(half);
+  s = half;
+  s += s;
+  assert(size(s) == 2 * n, "self += lost bytes: {size(s)} of {2 * n}");
+  assert(s[0 .. n] == half, "the first half of a self += is not the original");
+  assert(s[n .. 2 * n] == half, "the second half of a self += is not the original");
+}
+
+// The control: the same operands with a DIFFERENT destination were always correct, so a
+// fix that quietly changed ordinary appends would show up here.
+fn test_unaliased_append_is_unchanged() {
+  a = make(128);
+  b = make(128);
+  c = a + b;
+  assert(size(c) == size(a) + size(b), "an ordinary append changed size");
+  assert(c[0 .. size(a)] == a, "an ordinary append changed its left operand");
+  assert(c[size(a) .. size(c)] == b, "an ordinary append changed its right operand");
+}
+
+fn main() {
+  test_self_append_by_addition();
+  test_self_append_by_compound_assign();
+  test_unaliased_append_is_unchanged();
+  print("1062 ok\n");
+}

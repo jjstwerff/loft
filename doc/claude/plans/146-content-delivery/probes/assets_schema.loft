@@ -1,0 +1,349 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 — the asset pack's schema, and the reflection that fingerprints it.
+//
+// The struct definitions here ARE the file layout: a pack is a loft store, so
+// there is no codec, no parse step and no serialize seam.  Every probe in this
+// plan reads the schema from THIS file, so a gate that agrees with another gate
+// is agreeing about the same types rather than about two copies of them.
+//
+// FROZEN.  This was the seed of the `assets` package, which now carries the schema
+// and its API (`loft-libs-assets`, branch `tuxedo-assets-package`).  Edit the package;
+// this copy stays as the evidence F1/F2/F3 were measured against.
+//
+// A pack is TWO stores, split by how each half is READ — the split
+// REMOTE_STORES.md already prescribes, and F2's gate is what forced it here:
+//
+//   * `Pack` — the metadata.  Small, read in full at boot, and it is a WRAPPER
+//     STRUCT holding seven keyed collections, so one file carries all of them.
+//   * `hash<Blob[bl_key]>` — the bulk bytes: pixels, audio, fonts.  Declared as
+//     an annotated LOCAL, never as a field, because the paged loaders REFUSE a
+//     store whose root is a wrapper struct (loft#632) — the store records the
+//     wrapper as its type and `store_load_key_text` cannot find a collection in
+//     it.  Rooting the hash directly is what makes a key one run of pages.
+//
+// Mixing the two would make the boot load pay for the art, which is the same
+// reason the split exists in the reference doc.
+
+// ── what a pack holds ───────────────────────────────────────────────────────
+
+/// What a blob's bytes are, so a loader knows what to do with them without
+/// sniffing the content.  `Rgba` is a texture page's own pixels — premultiplied,
+/// row-major, four bytes per texel — which the packer has already decoded, so the
+/// runtime never learns how the art was made.
+pub enum BlobKind { Bytes, Rgba, Png, Ogg, Wav, Ttf, Woff2 }
+
+/// A definition is either something drawn or something that lights; a light is
+/// a placed instance like any other, and this is what says which.
+pub enum DefKind { Sprite, Light }
+
+/// Raw bytes under a key — audio, a font, a source PNG, anything the runtime
+/// hands to a decoder whole.  One blob is the paging unit: `store_load_key_text`
+/// fetches the pages this record touches and nothing else, so a blob is sized
+/// like an atlas page rather than like one sprite.
+pub struct Blob {
+  bl_key: text,
+  bl_kind: BlobKind = Bytes,
+  bl_bytes: vector<u8>,
+}
+
+/// A texture page's SHAPE, and the blob key its pixels live under.
+///
+/// The dimensions are metadata and the pixels are bulk, so they live in different
+/// stores: a loader that needs to know a page is 64x32 — to build UVs, to size a
+/// GL texture, to decide what to prefetch — gets that from the boot load without
+/// fetching a single texel.  Putting them in one record would have made every
+/// such question cost a page fetch.
+pub struct PageInfo {
+  pi_name: text,
+  pi_w: integer,
+  pi_h: integer,
+  pi_blob: text,          // the `Rgba` blob holding this page's pixels
+}
+
+/// One sprite's rect within a page, plus the origin the stage places it by.
+pub struct Cell {
+  ce_key: text,
+  ce_page: text,
+  ce_x: integer,
+  ce_y: integer,
+  ce_w: integer,
+  ce_h: integer,
+  ce_ox: float = 0.0,
+  ce_oy: float = 0.0,
+}
+
+/// An animation: a run of cells laid out in one page's grid.  Mirrors `stage`'s
+/// `Sequence` so a loader hands it straight over.
+pub struct Seq {
+  sq_key: text,
+  sq_page: text,
+  sq_first: integer,
+  sq_count: integer,
+  sq_fps: float = 12.0,
+  sq_mode: integer = 0,
+  sq_cols: integer = 1,
+  sq_rows: integer = 1,
+}
+
+/// An object definition — GameMaker's *object*, the thing a room places.
+///
+/// A walk cycle is asset data and not code, so the animation table hangs off the
+/// definition (`anims`, keyed `(def, action, facing)`) rather than living in a
+/// game's source.  A light carries its own radius, colour and power here, and is
+/// placed exactly like a sprite.
+pub struct Def {
+  df_name: text,
+  df_kind: DefKind = Sprite,
+  df_cell: text = "",          // the still sprite, when it has no sequence
+  df_w: float = 0.0,
+  df_h: float = 0.0,
+  df_ox: float = 0.0,
+  df_oy: float = 0.0,
+  df_layer: integer = 0,
+  df_radius: float = 0.0,      // light only: reach is 0 at exactly this distance
+  df_colour: integer = 0,
+  df_power: float = 0.0,
+}
+
+/// One row of a definition's animation table: `(action, facing) -> sequence`.
+pub struct Anim {
+  an_key: text,                // "{def}/{action}/{facing}" — the composite key
+  an_def: text,
+  an_action: text,
+  an_facing: integer,
+  an_seq: text,
+}
+
+/// A room: a named space that placed instances live in.
+pub struct Scene {
+  sc_name: text,
+  sc_w: integer,
+  sc_h: integer,
+}
+
+/// A placed instance — GameMaker's *room instance*.  Definitions plus these are
+/// what a scene IS; a flat node dump cannot say that two goblins are the same
+/// goblin.  The fields mirror `stage::Place` so loading a scene is a copy.
+pub struct Placed {
+  pd_scene: text,
+  pd_order: integer,
+  pd_def: text,
+  pd_x: float = 0.0,
+  pd_y: float = 0.0,
+  pd_depth: float = 0.0,
+  pd_layer: integer = 0,
+  pd_rot: float = 0.0,
+  pd_sx: float = 1.0,
+  pd_sy: float = 1.0,
+  pd_alpha: float = 1.0,
+  pd_colour: integer = 0,
+  pd_visible: boolean = true,
+}
+
+/// The pack's METADATA half.  Binding through THIS container is what puts every
+/// collection in one file — `store_persist_bind` persists the store a collection
+/// lives in, and a keyed field shares its container's store.  A reader declares
+/// the same container type and gets all of it.
+///
+/// Read it WHOLE (`store_load`, or `store_load_url_trusted` from a URL): it is
+/// small, every part of it is needed from the first frame, and being a wrapper
+/// struct it cannot be paged anyway.  The bytes are the other store's job.
+pub struct Pack {
+  pages: hash<PageInfo[pi_name]>,
+  cells: hash<Cell[ce_key]>,
+  seqs: hash<Seq[sq_key]>,
+  defs: hash<Def[df_name]>,
+  anims: hash<Anim[an_key]>,
+  scenes: hash<Scene[sc_name]>,
+  placed: index<Placed[pd_scene, pd_order]>,
+}
+
+/// An empty pack — every collection present and none of them holding anything.
+pub fn new_pack() -> Pack {
+  Pack { pages: [], cells: [], seqs: [], defs: [], anims: [], scenes: [],
+         placed: [] }
+}
+
+/// The animation table's whole point: ask for an action and a facing, get a
+/// sequence, with no game code holding the mapping.
+pub fn anim_of(p: const Pack, def: text, action: text, facing: integer) -> text {
+  row = p.anims["{def}/{action}/{facing}"];
+  if row == null { return "" }
+  row.an_seq
+}
+
+// ── the demo pack ───────────────────────────────────────────────────────────
+
+fn add_blob(b: &hash<Blob[bl_key]>, key: text, kind: BlobKind, bytes: const vector<u8>) {
+  // Keyed insert rather than `+=`: appending to a `&hash` parameter retypes it to
+  // `vector<Blob>` and the program stops compiling.
+  b[key] = Blob { bl_key: key, bl_kind: kind, bl_bytes: bytes };
+}
+
+fn add_page(p: Pack, name: text, w: integer, h: integer) {
+  p.pages += [PageInfo { pi_name: name, pi_w: w, pi_h: h, pi_blob: "page/{name}" }];
+}
+
+fn add_cell(p: Pack, key: text, page: text, x: integer, y: integer,
+            w: integer, h: integer) {
+  p.cells += [Cell { ce_key: key, ce_page: page, ce_x: x, ce_y: y, ce_w: w, ce_h: h,
+                     ce_ox: (w as float) / 2.0, ce_oy: h as float }];
+}
+
+fn add_anim(p: Pack, def: text, action: text, facing: integer, seq: text) {
+  p.anims += [Anim { an_key: "{def}/{action}/{facing}", an_def: def,
+                     an_action: action, an_facing: facing, an_seq: seq }];
+}
+
+// A deterministic byte pattern, so the read-back comparison has something to be
+// wrong about.  A run of zeroes would pass a broken loader.
+pub fn pattern(n: integer, salt: integer) -> vector<u8> {
+  out: vector<u8> = [];
+  for i in 0..n { out += [((i * 37 + salt * 11 + i / 251) % 251) as u8 ?? 0]; }
+  out
+}
+
+/// The demo pack every gate in this plan packs: two texture pages and the sprites
+/// cut out of them, an audio blob and a font blob, a walk cycle per facing, three
+/// definitions — one of them a light — and a room with four instances in it.
+///
+/// One fixture rather than one per phase, so a gate that agrees with another gate
+/// is agreeing about the same bytes.
+pub fn demo_pack() -> Pack {
+  p = new_pack();
+
+  // Two texture pages and the sprites cut out of them.  Only the SHAPE is here;
+  // `demo_blobs` carries the pixels.
+  add_page(p, "mobs", 64, 32);
+  add_page(p, "items", 32, 32);
+  for i in 0..8 { add_cell(p, "goblin_{i}", "mobs", i * 16 % 64, i / 4 * 16, 16, 16); }
+  add_cell(p, "potion", "items", 0, 0, 16, 16);
+
+  // A walk cycle per facing — asset data, not code.
+  p.seqs += [Seq { sq_key: "goblin_walk_s", sq_page: "mobs", sq_first: 0,
+                   sq_count: 4, sq_fps: 8.0, sq_cols: 4, sq_rows: 2 }];
+  p.seqs += [Seq { sq_key: "goblin_walk_n", sq_page: "mobs", sq_first: 4,
+                   sq_count: 4, sq_fps: 8.0, sq_cols: 4, sq_rows: 2 }];
+
+  p.defs += [Def { df_name: "goblin", df_kind: Sprite, df_cell: "goblin_0",
+                   df_w: 16.0, df_h: 16.0, df_ox: 8.0, df_oy: 16.0, df_layer: 1 }];
+  p.defs += [Def { df_name: "potion", df_kind: Sprite, df_cell: "potion",
+                   df_w: 16.0, df_h: 16.0, df_ox: 8.0, df_oy: 16.0, df_layer: 1 }];
+  p.defs += [Def { df_name: "torch_light", df_kind: Light, df_radius: 96.0,
+                   df_colour: 16755200, df_power: 1.25, df_layer: 1 }];
+
+  add_anim(p, "goblin", "walk", 0, "goblin_walk_s");
+  add_anim(p, "goblin", "walk", 2, "goblin_walk_n");
+  add_anim(p, "goblin", "idle", 0, "goblin_walk_s");
+
+  // A room, and what stands in it.  The light is placed like anything else.
+  p.scenes += [Scene { sc_name: "cave", sc_w: 640, sc_h: 360 }];
+  p.placed += [Placed { pd_scene: "cave", pd_order: 0, pd_def: "goblin",
+                        pd_x: 100.0, pd_y: 200.0, pd_depth: -200.0, pd_layer: 1 }];
+  p.placed += [Placed { pd_scene: "cave", pd_order: 1, pd_def: "goblin",
+                        pd_x: 260.0, pd_y: 140.0, pd_depth: -140.0, pd_layer: 1,
+                        pd_sx: -1.0 }];
+  p.placed += [Placed { pd_scene: "cave", pd_order: 2, pd_def: "potion",
+                        pd_x: 320.0, pd_y: 300.0, pd_depth: -300.0, pd_layer: 1 }];
+  p.placed += [Placed { pd_scene: "cave", pd_order: 3, pd_def: "torch_light",
+                        pd_x: 180.0, pd_y: 90.0, pd_layer: 1 }];
+  p
+}
+
+/// The bulk half of the demo pack: both pages' pixels, an audio clip and a font.
+///
+/// Fills a caller's own annotated local, because the store it roots has to be the
+/// HASH — a collection reached through a field records the wrapper struct as the
+/// store's type and the paged loaders refuse it.
+pub fn demo_blobs(b: &hash<Blob[bl_key]>) {
+  add_blob(b, "page/mobs", Rgba, pattern(64 * 32 * 4, 1));
+  add_blob(b, "page/items", Rgba, pattern(32 * 32 * 4, 2));
+  // Audio and a font are just bytes; the pack does not decode them.
+  add_blob(b, "hit.ogg", Ogg, pattern(2048, 3));
+  add_blob(b, "ui.woff2", Woff2, pattern(4096, 4));
+}
+
+// ── what a scene needs, so a loader can ask for it before the frame ─────────
+
+/// Every blob key a scene's instances draw from, within `radius` of `(cx, cy)`.
+///
+/// This is the whole prefetch policy: a frame must never be the thing that
+/// discovers it needs an asset, because a range read is a round trip and a frame
+/// is 16 ms.  So the caller asks for a ring around the player at a load or a
+/// level boundary, and the frame reads what is already resident.
+///
+/// A negative `radius` means the whole scene — what a small room wants, and what
+/// a loading screen asks for.  Duplicates are dropped, because a page shared by
+/// forty instances is still one fetch.
+pub fn keys_near(p: const Pack, scene: text, cx: float, cy: float,
+                 radius: float) -> vector<text> {
+  out: vector<text> = [];
+  for i in p.placed {
+    if i.pd_scene != scene { continue }
+    if radius >= 0.0 {
+      dx = i.pd_x - cx;
+      dy = i.pd_y - cy;
+      if dx * dx + dy * dy > radius * radius { continue }
+    }
+    d = p.defs[i.pd_def];
+    if d == null { continue }
+    if d.df_cell == "" { continue }        // a light draws nothing
+    c = p.cells[d.df_cell];
+    if c == null { continue }
+    page = p.pages[c.ce_page];
+    if page == null { continue }
+    seen = false;
+    for k in out { if k == page.pi_blob { seen = true } }
+    if !seen { out += [page.pi_blob]; }
+  }
+  out
+}
+
+/// Pull `keys` into `into`, and answer how many were not already resident.
+///
+/// The answer is the number that COST something, which is what a caller wants to
+/// log at a level boundary and what a frame must be able to assert is zero.
+pub fn prefetch(into: hash<Blob[bl_key]>, source: text,
+                keys: const vector<text>) -> integer {
+  n = 0;
+  for k in keys {
+    if into[k] != null { continue }
+    if store_load_key_text(into, source, k) { n += 1 }
+  }
+  n
+}
+
+// ── the layout descriptor ───────────────────────────────────────────────────
+
+/// The pack's own types, as the store records them.
+///
+/// This is what has to agree between native and wasm before anything reads a
+/// pack: the struct definition IS the file layout, so a field that moves by four
+/// bytes on one target reads another field's value on the other, silently.
+/// Derived by reflection rather than written down, so it cannot drift from the
+/// schema above.
+pub fn layout_descriptor() -> text {
+  d = "";
+  for n in ["Blob", "PageInfo", "Cell", "Seq", "Def", "Anim", "Scene", "Placed", "Pack"] {
+    t = type_named(n);
+    if t == null { d += "{n} MISSING\n"; continue }
+    d += "{t.name} size={t.size}\n";
+    for f in t.fields {
+      d += "  {f.name} {f.type_name} @{f.position} {f.kind} null={f.nullable}\n";
+    }
+  }
+  d
+}
+
+/// A 32-bit FNV-1a over the descriptor — one number to compare across targets.
+/// Masked at every step because an unbounded multiply would reach loft's null.
+pub fn layout_fingerprint() -> integer {
+  h = 2166136261;
+  for c in layout_descriptor() {
+    h = (h ^ (c as integer)) & 4294967295;
+    h = (h * 16777619) & 4294967295;
+  }
+  h
+}

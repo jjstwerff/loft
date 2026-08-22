@@ -288,7 +288,7 @@ fn a_worker_killed_mid_call_is_an_error_not_a_hang() {
         .expect("the caller never returned — a dead worker hung the call");
     let msg = died.expect_err("a killed worker cannot have answered");
     assert!(
-        msg.contains("deathlib"),
+        msg.message.contains("deathlib"),
         "the failure must name the library: {msg}"
     );
     assert!(after.is_err(), "a gone worker must stay gone: {after:?}");

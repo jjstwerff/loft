@@ -4363,19 +4363,19 @@ extern crate loft;"
             // @PLN17: `test` is a boolean in storage form (u8); the assert fails
             // when it is not the true byte (1) — i.e. false (0) OR null (255).
             //
-            // Still a `panic!` and not `RuntimeError::report_and_exit()`, which is what
-            // `n_panic` below uses and what would render the interpreter's diagnostic
-            // verbatim.  Tried, and reverted for a reason worth recording: the panic HOOK
-            // is what prints the loft call frames, and `report_and_exit` does not — so the
-            // swap produced a prettier message that had lost `inner950` / `middle950` /
-            // `main`, and `html_panic_names_itself_and_its_loft_frames` caught it.  A
-            // Rust location alone does not say what the program was doing.  Converging the
-            // two renderings means teaching `report_and_exit` to print the chain first
-            // (`RuntimeError::call_chain` is rendered only by `main.rs` today), which
-            // changes `panic`'s output too — filed rather than smuggled in here.
+            // `report_and_exit`, the same path `n_panic` below takes, so the two explicit
+            // halt statements read the same way on every backend.  It used to be a bare
+            // `panic!`, which reached the user as `thread '<unnamed>' panicked at
+            // /tmp/loft_native_2466316.rs:966` — a Rust location in a generated file the
+            // author has never seen, where `--interpret` printed a loft diagnostic naming
+            // their own source (loft#1056).  The first attempt at this swap was reverted
+            // because the panic HOOK was what printed the loft call frames on the browser
+            // target and `report_and_exit` printed none; the frames now come from the
+            // shadow call stack inside `report_and_exit` itself, so nothing is traded away
+            // — and `--interpret`, which had no frames here either, gains them too.
             writeln!(
                 w,
-                "  if test != 1 {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
+                "  if test != 1 {{ loft::runtime_error::RuntimeError::assertion_failed(msg.to_string(), file.to_string(), line as u32).report_and_exit(); }}"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());

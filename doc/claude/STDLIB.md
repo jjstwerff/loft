@@ -451,6 +451,27 @@ implementation.
 | `assert(test: boolean, message: text)` | Panics with `message` if `test` is false. In production mode (`--production` CLI flag), writes an `error` log entry instead of aborting. |
 | `panic(message: text)` | Immediately terminates execution with `message`. In production mode, writes a `fatal` log entry instead of aborting. |
 
+**What a halt looks like.** `assert` and `panic` are the two explicit halt statements, and
+they render the same way as each other on every backend: the message and the program's own
+`file:line:col`, the source line with a caret under it, then the loft functions the fault
+happened inside, innermost first.
+
+```
+error: assertion failed: n was 9
+  --> game.loft:12:1
+  |
+12|     assert(n < 5, "n was {n}");
+  | ^
+  in fn inner() ← called from
+        fn middle()
+        fn main()
+```
+
+A chain of one frame is not printed — the position already names it. Inside a `par` worker
+the frames are the WORKER's, not the parent's; the halt itself is total, stopping the whole
+program rather than one arm (loft#1053). The whole rendering is one thing loft prints once,
+however many workers reach the fault together (loft#1056).
+
 **Printing values — the format-string idiom.** `print`/`println` take `text`, so any
 non-text value is printed through a format string, which interpolates *any* `Printable`
 via its `to_text` (every scalar, and a user type once it defines `fn to_text(self: T) ->

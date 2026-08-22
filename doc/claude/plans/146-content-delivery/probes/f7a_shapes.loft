@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 F7a — will `shapes` accept a proxy of the kind alpha-derivation produces?
+//
+// F7 derives a collision proxy from a sprite's own alpha.  `shapes` ships `Rect`
+// and `Circle` and nothing else, so before F7 depends on it, feed it a real
+// derived proxy and see whether the kinds meet.
+//
+// The boxes below are the 8-band decomposition of `wand.png`'s opaque mask,
+// measured by `probes/f7a_alpha.py` — a diagonal stick, the corpus's worst case
+// for a single box.
+//
+//   loft --interpret probes/f7a_shapes.loft
+use shapes;
+
+// A derived proxy is a SET of boxes, because one box is not the shape.
+struct Proxy {
+  name: text,
+  boxes: vector<shapes::Rect>,
+}
+
+fn wand_proxy() -> Proxy {
+  p = Proxy { name: "wand", boxes: [] };
+  p.boxes += [shapes::Rect { rx: 149.0, ry:  49.0, rw: 20.0, rh: 19.0 }];
+  p.boxes += [shapes::Rect { rx: 143.0, ry:  68.0, rw: 19.0, rh: 18.0 }];
+  p.boxes += [shapes::Rect { rx: 135.0, ry:  86.0, rw: 18.0, rh: 19.0 }];
+  p.boxes += [shapes::Rect { rx: 126.0, ry: 105.0, rw: 18.0, rh: 18.0 }];
+  p.boxes += [shapes::Rect { rx: 117.0, ry: 123.0, rw: 18.0, rh: 18.0 }];
+  p.boxes += [shapes::Rect { rx: 108.0, ry: 141.0, rw: 18.0, rh: 19.0 }];
+  p.boxes += [shapes::Rect { rx:  99.0, ry: 160.0, rw: 17.0, rh: 18.0 }];
+  p.boxes += [shapes::Rect { rx:  94.0, ry: 178.0, rw: 18.0, rh: 18.0 }];
+  p
+}
+
+/// Does anything in the proxy overlap `other`?  Every box is a `shapes::Rect`,
+/// so the whole test is `shapes`' own predicate run N times.
+fn proxy_hits(p: const Proxy, other: const shapes::Rect) -> boolean {
+  for b in p.boxes {
+    if shapes::rects_overlap(b, other) { return true }
+  }
+  false
+}
+
+fn main() {
+  p = wand_proxy();
+  // The single tight box over the same alpha — what a Rect-only proxy would be.
+  aabb = shapes::Rect { rx: 94.0, ry: 49.0, rw: 75.0, rh: 147.0 };
+
+  // A mover in the wand's empty top-left corner: inside the AABB, nowhere near
+  // the stick.  This is the cell where the two proxies must disagree.
+  corner = shapes::Rect { rx: 95.0, ry: 50.0, rw: 10.0, rh: 10.0 };
+  assert(shapes::rects_overlap(aabb, corner), "AABB claims a hit in its empty corner");
+  assert(!proxy_hits(p, corner), "the derived proxy does not");
+
+  // …and a mover on the stick itself is a hit under both, so the proxy has not
+  // simply stopped answering.
+  on_stick = shapes::Rect { rx: 130.0, ry: 90.0, rw: 8.0, rh: 8.0 };
+  assert(shapes::rects_overlap(aabb, on_stick), "AABB hits the stick");
+  assert(proxy_hits(p, on_stick), "the derived proxy hits the stick");
+
+  // Containment: every box came from the alpha, so their union covers it.
+  area = 0.0;
+  for b in p.boxes { area += b.rw * b.rh; }
+  println("wand: opaque=1508  proxy={area}  aabb={aabb.rw * aabb.rh}");
+  println("F7a: shapes::Rect composes into a proxy; a hull has no kind here.");
+}

@@ -1,0 +1,28 @@
+# GREY MOLD — a stationary growth (it never moves; its threat is TOUCH): an amorphous
+# grey-green patch — irregular lobes, sickly lighter blooms, pale spore specks and dark
+# pocks. No face, no front; menace = the wrongness of the texture.
+# Source for assets/sprites/grey_mold.png.
+size 256x256
+Background transparent
+name lobes
+Circle (0.50,0.55) r=0.205 rgb=96,104,88
+Circle (0.36,0.48) r=0.125 rgb=96,104,88
+Circle (0.63,0.46) r=0.135 rgb=90,98,82
+Circle (0.42,0.66) r=0.130 rgb=90,98,82
+Circle (0.60,0.64) r=0.120 rgb=96,104,88
+Circle (0.50,0.38) r=0.110 rgb=90,98,82
+name blooms
+Circle (0.46,0.50) r=0.085 rgb=124,132,108
+Circle (0.59,0.56) r=0.070 rgb=118,126,104
+Circle (0.40,0.61) r=0.055 rgb=124,132,108
+name pocks
+Circle (0.52,0.46) r=0.022 rgb=56,62,50
+Circle (0.43,0.55) r=0.018 rgb=56,62,50
+Circle (0.57,0.64) r=0.020 rgb=56,62,50
+Circle (0.36,0.45) r=0.014 rgb=56,62,50
+name spores
+Circle (0.49,0.53) r=0.008 rgb=210,214,196
+Circle (0.55,0.50) r=0.007 rgb=210,214,196
+Circle (0.45,0.62) r=0.007 rgb=210,214,196
+Circle (0.62,0.59) r=0.006 rgb=210,214,196
+Circle (0.52,0.40) r=0.006 rgb=210,214,196

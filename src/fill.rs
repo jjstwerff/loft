@@ -1317,7 +1317,7 @@ fn put_enum(s: &mut State) {
 
 fn conv_bool_from_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<u8>();
-    let new_value = v_v1 != 255;
+    let new_value = v_v1 != 255 && v_v1 != 0;
     s.put_stack(new_value);
 }
 

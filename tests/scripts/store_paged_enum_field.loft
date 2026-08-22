@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression — a paged working-set load must accept an ENUM field.
+//
+// `is_copyable_field` handled a struct and a struct-enum VARIANT and had no arm
+// for the enum itself, so every `Parts::Enum` fell to the catch-all and the whole
+// collection was refused — with a message blaming a `vector<text>` the type did
+// not have.  One `kind:` field was enough to lose the range read of an asset pack
+// (@PLN146 F2).
+//
+// An enum's value is a tag byte stored inline and a variant's payload lives in
+// the record beside it, so both relocate; this checks the VALUES, not just that
+// the load was allowed — a copy that is accepted and wrong is the worse failure.
+//
+// Driven by tests/store_persist_loft.rs on BOTH backends with a scratch
+// $LOFT_PERSIST_TEST_PATH.  Argless (loft_suite) → benign no-op.
+
+enum Kind { Bytes, Rgba, Ogg, Wav }
+
+enum Shape { Dot, Box { bw: integer, bh: integer }, Line { ln: integer } }
+
+struct Rec {
+  r_key: text,
+  r_kind: Kind = Bytes,
+  r_shape: Shape = Dot,
+  r_bytes: vector<u8>,
+  r_tail: integer,
+}
+
+fn bytes(n: integer, salt: integer) -> vector<u8> {
+  out: vector<u8> = [];
+  for i in 0..n { out += [((i * 7 + salt) % 251) as u8 ?? 0]; }
+  out
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  if path == "" { return } // argless run (loft_suite) → no-op
+
+  // A LOCAL, not a field: a collection reached through a field records the
+  // wrapper struct as the store's type and the paged loaders refuse it (#632).
+  src: hash<Rec[r_key]> = [];
+  src["a"] = Rec { r_key: "a", r_kind: Bytes, r_shape: Dot,
+                   r_bytes: bytes(40, 1), r_tail: 11 };
+  src["b"] = Rec { r_key: "b", r_kind: Ogg, r_shape: Box { bw: 7, bh: 9 },
+                   r_bytes: bytes(50, 2), r_tail: 22 };
+  src["c"] = Rec { r_key: "c", r_kind: Wav, r_shape: Line { ln: 13 },
+                   r_bytes: bytes(60, 3), r_tail: 33 };
+  if !store_persist_copy(src, path) { println("paged-enum: persist FAILED"); return }
+
+  out = "";
+  for k in ["a", "b", "c"] {
+    q: hash<Rec[r_key]> = [];
+    if !store_load_key_text(q, path, k) { println("paged-enum: REFUSED {k}"); return }
+    r = q[k];
+    if r == null { println("paged-enum: MISS {k}"); return }
+    w = 0;
+    h = 0;
+    l = 0;
+    if r.r_shape is Box { bw, bh } { w = bw; h = bh; }
+    if r.r_shape is Line { ln } { l = ln; }
+    out += "{k}:{r.r_kind}/{w},{h},{l}/{len(r.r_bytes)}:{r.r_bytes[0]}/{r.r_tail} ";
+  }
+  println("paged-enum: {out}");
+}

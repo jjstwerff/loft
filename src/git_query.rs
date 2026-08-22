@@ -185,12 +185,56 @@ fn run(query: Query, a: &str, b: &str, n: i64, dir: &str) -> (i64, String) {
     // No shell is involved anywhere on this path, so nothing in `a` or `b` is
     // ever interpreted — it is one `execve` with an argv this process built.
     match cmd.output() {
-        Ok(out) => (
+        Ok(out) if out.status.success() => (
             i64::from(out.status.code().unwrap_or(-2)),
             String::from_utf8_lossy(&out.stdout).into_owned(),
         ),
+        // loft#1061 — a query that FAILED is one of two different things, and the loft
+        // side has to be able to tell them apart: a question with no answer (an absent
+        // ref, an empty log) is "nothing to report", while a directory that is not a
+        // repository means the question could never have been asked.  Both arrive here as
+        // a non-zero exit with git's reason on the stderr this function does not keep, so
+        // every one of them used to reach the caller as `""` — a tool run outside a
+        // repository reported a repository with no commits, no branch and no files, and
+        // nothing said otherwise.
+        //
+        // Asking git itself is what keeps this out of the business of reading git's
+        // prose: `rev-parse --git-dir` answers the question in an exit status, so no
+        // message is parsed and no locale can change the verdict.  It costs one extra
+        // process only where a query has already failed.
+        Ok(out) => {
+            if is_repository(dir) {
+                return (
+                    i64::from(out.status.code().unwrap_or(-2)),
+                    String::from_utf8_lossy(&out.stdout).into_owned(),
+                );
+            }
+            let here = if dir.is_empty() {
+                std::env::current_dir().map_or_else(
+                    |_| "the working directory".to_string(),
+                    |p| p.display().to_string(),
+                )
+            } else {
+                dir.to_string()
+            };
+            (-1, format!("not a git repository: {here}"))
+        }
         Err(e) => (-1, format!("cannot run git: {e}")),
     }
+}
+
+/// Is `dir` (or the working directory, when empty) inside a git repository?
+///
+/// Only ever asked on a failure path, to tell a question with no answer from a place
+/// with no repository (loft#1061).  The answer is an exit status rather than a parsed
+/// message, so it does not depend on git's wording or the caller's locale.
+fn is_repository(dir: &str) -> bool {
+    let mut cmd = std::process::Command::new("git");
+    if !dir.is_empty() {
+        cmd.arg("-C").arg(dir);
+    }
+    cmd.args(["rev-parse", "--git-dir"]);
+    cmd.output().is_ok_and(|o| o.status.success())
 }
 
 /// `git_query(kind, a, b, n, dir, out) -> integer` — the single native behind

@@ -195,6 +195,18 @@ disagree about is **not placed**, and says so.
   walks every compound argument with loft's own guard-before-dereference check
   (`verify_graph_ok`) before reporting. A fault inside the library is the caller's
   runtime error, which is what makes its error behaviour match an in-process call.
+- **A fault is relayed whole, not as prose.** What a fault renders from is its
+  detail line, its kind label, its POSITION and the frames it fired under, and a
+  `String` error channel carries only the first of those — so a placed fault used
+  to print `panic: runtime error: panic: refusing -1` with the library's file,
+  line, caret and call chain all gone, and the message doubled. The wire's error
+  frame carries all four parts, and `RuntimeError::relayed` rebuilds the fault on
+  the caller's side without re-describing it.
+- **The call chain spans both processes, so it is joined in one place.** `main()`
+  is in the caller and the library's own frames are in the worker; neither side
+  can see the whole chain. The library's half crosses with the fault, and
+  `State::note_runtime_error_halt` — the single point that already backfills
+  frames for every `Stores`-side raise — appends the caller's half to it.
 
 ## Cost
 

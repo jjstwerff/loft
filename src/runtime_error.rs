@@ -67,6 +67,16 @@ pub struct RuntimeError {
     /// Rendered as `  in fn <innermost>() ← fn <next>() ← …` after
     /// the typed-error block in main.rs.
     pub call_chain: Vec<String>,
+    /// This fault fired on the far side of a library PLACEMENT boundary, so
+    /// `call_chain` holds the frames the library was in and the caller's own
+    /// frames are still to come.
+    ///
+    /// A call chain spans both processes — `main()` is in the caller and
+    /// `refuse()` is in the worker — and neither side can see the whole of it.
+    /// [`crate::state::State::note_runtime_error_halt`] is where the two halves
+    /// meet, and this is what tells it to APPEND rather than leave a chain that
+    /// is already non-empty alone.
+    pub crossed_placement: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,19 +110,27 @@ pub enum RuntimeErrorKind {
     /// not the value the slot now holds — but recoverable, like every other
     /// uncomputable: one value degrades and the run continues (C80).
     RangeDefaulted { value: i64, lo: i64, hi: i64 },
-    /// Recursion exceeded `State::MAX_CALL_DEPTH`.
+    /// A call would have taken the stack past `State::MAX_CALL_DEPTH` frames.
     StackOverflow,
     /// `panic("msg")` builtin called from loft code.
     UserPanic { message: String },
     /// `assert(test, "msg", file, line)` builtin called with `test == false`.
     AssertionFailed { message: String },
+    /// A fault raised inside a PLACED library and relayed across the crossing.
+    ///
+    /// `label` and `detail` are the ORIGINAL fault's, carried over the wire
+    /// rather than re-derived, so a relayed divide-by-zero stays a
+    /// `divide_by_zero` in a log instead of being flattened into whatever kind
+    /// the relay happened to build.  The variant exists because the kind's own
+    /// structured fields do not cross — only what renders does.
+    Relayed { label: String, detail: String },
 }
 
 impl RuntimeErrorKind {
     /// Stable, machine-readable kind label for log / test output.
     /// Mirrors the variant name verbatim in lower_snake_case.
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             RuntimeErrorKind::DivideByZero => "divide_by_zero",
             RuntimeErrorKind::IndexOutOfBounds { .. } => "index_out_of_bounds",
@@ -125,6 +143,7 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::StackOverflow => "stack_overflow",
             RuntimeErrorKind::UserPanic { .. } => "user_panic",
             RuntimeErrorKind::AssertionFailed { .. } => "assertion_failed",
+            RuntimeErrorKind::Relayed { label, .. } => label,
         }
     }
 
@@ -156,11 +175,17 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::CastOutOfRange => {
                 "cast value cannot be represented in the target type".to_string()
             }
-            RuntimeErrorKind::StackOverflow => "call stack overflow".to_string(),
+            RuntimeErrorKind::StackOverflow => format!(
+                "call stack overflow — exceeded {} stack frames",
+                crate::state::State::MAX_CALL_DEPTH
+            ),
             RuntimeErrorKind::UserPanic { message } => format!("panic: {message}"),
             RuntimeErrorKind::AssertionFailed { message } => {
                 format!("assertion failed: {message}")
             }
+            // Already rendered on the far side; describing it again would
+            // prefix a second `panic:` onto one that is already there.
+            RuntimeErrorKind::Relayed { detail, .. } => detail.clone(),
         }
     }
 }
@@ -184,32 +209,57 @@ impl RuntimeError {
             op_pc: u32::MAX,
             message: detail,
             call_chain: Vec::new(),
+            crossed_placement: false,
         }
     }
 
-    /// Render a user `panic("msg")` the way the interpreter does, then halt.
+    /// Render an explicit halt — `panic("msg")` or a failed `assert` — the way the
+    /// interpreter does, then stop the program.
     ///
     /// The `--native` backend has no bytecode loop to notice `had_fatal` between
     /// statements — the generated `main` only checks it after `n_main` RETURNS — so a
-    /// native `panic` has to report and exit at the call site or it does not halt at all.
+    /// native halt has to report and exit at the call site or it does not halt at all.
     /// Before this existed the generator emitted `fn n_panic(..) {}`, an empty body: on
     /// the DEFAULT backend `panic` printed nothing, halted nothing, and exited 0, while
-    /// `--interpret` printed the error and exited 1.  (`assert` was unaffected — it is
-    /// special-cased in the generator with a real body.)
+    /// `--interpret` printed the error and exited 1.  `assert` had the opposite fault —
+    /// a real body, but a bare `panic!` naming the generated temp file — and joined this
+    /// path with loft#1056.
     ///
-    /// Shared with the interpreter's reporting path (`main.rs`) through the same
-    /// `to_diag_entry` + `render_entry_pretty` pair, so both backends emit byte-identical
-    /// text for the same panic.  There is no production-mode branch here, unlike
-    /// `native.rs::n_panic`: a generated binary boots a plain `Stores` with no logger, so
-    /// the log-and-continue mode is not reachable on this path.
+    /// Shared with the interpreter's reporting path (`main.rs`) through [`Self::render`],
+    /// so both backends emit byte-identical text for the same fault.  There is no
+    /// production-mode branch here, unlike `native.rs::n_panic`: a generated binary boots
+    /// a plain `Stores` with no logger, so the log-and-continue mode is not reachable on
+    /// this path.
     pub fn report_and_exit(&self) -> ! {
-        let entry = self.to_diag_entry();
-        let loader = crate::diagnostic_render::FileSourceLoader::new();
-        let rendered = crate::diagnostic_render::render_entry_pretty(
-            &entry,
-            &loader,
-            crate::diagnostic_render::ColorMode::Auto,
-        );
+        // @PLN133 S8 — a fault inside a lazy DRIVER is the driver's, not the program's.
+        // The generated driver call runs under `catch_unwind` and turns the payload into
+        // `store_lazy_error`, so this UNWINDS into it instead of exiting: a buggy driver
+        // makes the lookup answer null and the program carry on, which is what the
+        // interpreter does, and the two backends must not disagree about whether a buggy
+        // driver halts a program.  The payload is spelled the way the interpreter's
+        // contained-fetch spells it (`<kind label>: <message>`) so `store_lazy_error`
+        // reads identically on both.  Before the lock below, deliberately: taking a lock
+        // that is never released and then unwinding past it would deadlock the next
+        // genuine halt.
+        //
+        // `cr_stack_overflow` and the crash-report panic hook already carry this test;
+        // this is the third site, and the one `assert` reached when loft#1056 moved it
+        // onto this path — `panic` had been exiting the process from inside a driver
+        // since it started using `report_and_exit`.
+        if crate::codegen_runtime::in_lazy_driver() {
+            std::panic::panic_any(format!("{}: {}", self.kind.label(), self.message));
+        }
+        // loft#1056 — a halting fault is the PROGRAM's halt, so it is reported ONCE
+        // however many `par` workers reach it in the same instant.  Before this, six
+        // items over two workers printed the same diagnostic twice on `--native` and
+        // once on `--interpret`.  The lock is never released: the first reporter exits
+        // the process while holding it, so a second worker parks here rather than
+        // racing the print or exiting out from under it.
+        static REPORTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = REPORTING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rendered = self.with_native_frames().render();
         eprint!("{rendered}");
         // loft#950 — and to the PAGE on the browser target, where `eprint!` is a sink.
         // A `--html` build that faulted printed nothing at all and the trap reached the
@@ -218,6 +268,105 @@ impl RuntimeError {
         // every other target.
         crate::live_dispatch::wasm_host_log(&rendered);
         std::process::exit(1);
+    }
+
+    /// This error with the `--native` shadow call stack attached, when it carries no
+    /// frames of its own.
+    ///
+    /// The generated `n_assert` / `n_panic` bodies build the error from the stub's
+    /// `file` / `line` arguments alone — they have no `State` to read frames from — so
+    /// the frames are picked up here, at the one point on the native path that reports.
+    /// An error that already has a chain (the interpreter filled it) is left alone.
+    #[must_use]
+    fn with_native_frames(&self) -> std::borrow::Cow<'_, Self> {
+        if !self.call_chain.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let chain = crate::codegen_runtime::native_call_chain();
+        if chain.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut owned = self.clone();
+        owned.call_chain = chain;
+        std::borrow::Cow::Owned(owned)
+    }
+
+    /// The complete text of a halting fault: the typed diagnostic, then the loft call
+    /// frames it happened under.
+    ///
+    /// ONE renderer for every backend — the interpreter reaches it from `main.rs` once
+    /// `execute_argv` has returned, the generated binary from
+    /// [`Self::report_and_exit`] at the fault site.  They used to print their own
+    /// spellings of the same fact, and the two disagreed: a `--native` `assert` emitted
+    /// a bare Rust panic naming the generated temp file, with no loft rendering and no
+    /// frames at all (loft#1056).
+    #[must_use]
+    pub fn render(&self) -> String {
+        let entry = self.to_diag_entry();
+        let loader = crate::diagnostic_render::FileSourceLoader::new();
+        let mut out = crate::diagnostic_render::render_entry_pretty(
+            &entry,
+            &loader,
+            crate::diagnostic_render::ColorMode::Auto,
+        );
+        out.push_str(&self.render_call_chain());
+        out
+    }
+
+    /// The call frames as the trailing block of [`Self::render`] — innermost first, so
+    /// the eye lands on the function the fault fired in, with the chevron pointing
+    /// outward along the call sequence.
+    ///
+    /// A single-frame chain renders as nothing: the fault's own `file:line:col` already
+    /// names where it fired, and a chain of one says only "called from nowhere".  Deep
+    /// chains are cut at five frames with a count of the rest, because a runaway
+    /// recursion's chain is ten thousand copies of one name.
+    #[must_use]
+    pub fn render_call_chain(&self) -> String {
+        if self.call_chain.len() <= 1 {
+            return String::new();
+        }
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let shown = self.call_chain.iter().take(5);
+        let _ = writeln!(out, "  in fn {}() ← called from", self.call_chain[0]);
+        for name in shown.skip(1) {
+            let _ = writeln!(out, "        fn {name}()");
+        }
+        if self.call_chain.len() > 5 {
+            let _ = writeln!(out, "        … ({} more frames)", self.call_chain.len() - 5);
+        }
+        out
+    }
+
+    /// Rebuild a fault that fired inside a PLACED library, on the caller's side.
+    ///
+    /// Only what RENDERS crosses the wire — the detail line, the position, and the
+    /// frames the library was in — because that is exactly what
+    /// [`Self::to_diag_entry`] and [`Self::render_call_chain`] read.  The kind's
+    /// structured fields stay behind; [`RuntimeErrorKind::Relayed`] carries its
+    /// label so a log still names what kind of fault it was.
+    ///
+    /// `position` is the LIBRARY's, not the caller's, which is the whole point: a
+    /// fault has one true site and it is on the other side of the crossing.
+    #[must_use]
+    pub fn relayed(
+        label: String,
+        detail: String,
+        position: Option<Position>,
+        call_chain: Vec<String>,
+    ) -> Self {
+        Self {
+            kind: RuntimeErrorKind::Relayed {
+                label,
+                detail: detail.clone(),
+            },
+            position,
+            op_pc: u32::MAX,
+            message: detail,
+            call_chain,
+            crossed_placement: true,
+        }
     }
 
     /// Construct an `AssertionFailed` error at the loft surface call site.
@@ -236,6 +385,41 @@ impl RuntimeError {
             op_pc: u32::MAX,
             message: detail,
             call_chain: Vec::new(),
+            crossed_placement: false,
+        }
+    }
+
+    /// Construct a `StackOverflow` error against the DECLARATION of the function whose
+    /// entry exceeded [`crate::state::State::MAX_CALL_DEPTH`].
+    ///
+    /// Both backends detect the overflow at that entry and both know the callee's
+    /// declaration, so this is the position they can agree on — the interpreter reads it
+    /// off `Definition::position`, the generated binary off the string literals
+    /// `cr_call_push` was emitted with, and one renderer prints both (loft#1058).  It is
+    /// also the position worth printing: the fault is a property of ten thousand frames,
+    /// not of a point, so naming the function that recursed without bound says more than
+    /// naming whichever of ten thousand identical call sites happened to be last.
+    ///
+    /// The column is 1 — the start of the declaration line — as it is for `panic` and
+    /// `assert`.  A definition's stored `position.pos` is the parser's cursor partway
+    /// through the signature (after `->`), so a caret there lands on whitespace and
+    /// points at nothing.
+    #[must_use]
+    pub fn stack_overflow(file: String, line: u32) -> Self {
+        let position = if file.is_empty() {
+            None
+        } else {
+            Some(Position { file, line, pos: 1 })
+        };
+        let kind = RuntimeErrorKind::StackOverflow;
+        let detail = kind.describe();
+        Self {
+            kind,
+            position,
+            op_pc: u32::MAX,
+            message: detail,
+            call_chain: Vec::new(),
+            crossed_placement: false,
         }
     }
 
@@ -327,10 +511,37 @@ mod tests {
                 message: "a".into(),
             },
         ];
-        let mut labels: Vec<&'static str> = kinds.iter().map(RuntimeErrorKind::label).collect();
+        let mut labels: Vec<&str> = kinds.iter().map(RuntimeErrorKind::label).collect();
         labels.sort_unstable();
         let n = labels.len();
         labels.dedup();
         assert_eq!(labels.len(), n, "kind labels collided");
+    }
+
+    /// A fault relayed from a placed library keeps what it was, and is not
+    /// described a second time.
+    ///
+    /// Describing it again is what printed `panic: runtime error: panic: …` — the
+    /// detail arriving here has already been rendered on the far side, so the label
+    /// and the detail are carried, never rebuilt.
+    #[test]
+    fn a_relayed_fault_keeps_its_label_and_its_rendered_detail() {
+        let err = RuntimeError::relayed(
+            "divide_by_zero".into(),
+            "divide by zero".into(),
+            Some(Position {
+                file: "lib.loft".into(),
+                line: 7,
+                pos: 1,
+            }),
+            vec!["inner".into()],
+        );
+        assert_eq!(err.kind.label(), "divide_by_zero");
+        assert_eq!(err.message, "divide by zero");
+        assert_eq!(err.kind.describe(), "divide by zero");
+        assert_eq!(err.position.as_ref().expect("position").line, 7);
+        // The caller's own frames are still to come; this is what says so.
+        assert!(err.crossed_placement);
+        assert_eq!(err.call_chain, vec!["inner".to_string()]);
     }
 }

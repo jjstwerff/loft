@@ -3014,7 +3014,7 @@ impl Parser {
         self.in_control_head = true;
         let tp = self.expression(&mut test);
         self.in_control_head = outer_head;
-        self.convert(&mut test, &tp, &Type::Boolean);
+        self.convert_condition(&mut test, &tp);
         // @PLN25 DN3: a non-null proof from the condition narrows the proven var inside the
         // matching branch (then for `!= null`/truthy, else for `== null`).
         let narrow = self.narrowing_from_condition(&test);
@@ -12389,7 +12389,12 @@ impl Parser {
     ) -> Type {
         if name == "assert" {
             let mut test = list[0].clone();
-            self.convert(&mut test, &types[0], &Type::Boolean);
+            // A CONDITION, not an ordinary argument — LOFT.md § Conversions names `assert`
+            // beside `if` and `while` for the any-type coercion, and a plain `convert` left
+            // a heap handle raw here: the interpreter accepted `assert(v)` while `--native`
+            // refused to compile it (`(DbRef) as u8`), which is one program and two drivers
+            // disagreeing about whether it is a program at all.
+            self.convert_condition(&mut test, &types[0]);
             let message = if list.len() > 1 {
                 list[1].clone()
             } else {

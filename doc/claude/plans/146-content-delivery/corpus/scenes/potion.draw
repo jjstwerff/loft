@@ -1,0 +1,20 @@
+# POTION — a stoppered round-bulb flask (the '!' loot). Loot may POP (brighter than mobs):
+# crimson liquid in dark glass, cork stopper, one highlight. Dark glass rim = readability.
+# (The unknown-items system shows flavours by NAME; the sprite stays one generic flask.)
+# Source for assets/sprites/potion.png.
+size 256x256
+Background transparent
+name glass_bulb
+Circle (0.50,0.60) r=0.225 rgb=54,58,70
+name glass_neck
+Poly (0.435,0.28) (0.565,0.28) (0.565,0.50) (0.435,0.50) rgb=54,58,70
+name liquid
+Circle (0.50,0.61) r=0.190 rgb=178,40,48
+name neck_liquid
+Poly (0.465,0.44) (0.535,0.44) (0.535,0.52) (0.465,0.52) rgb=178,40,48
+name cork
+Poly (0.445,0.175) (0.555,0.175) (0.555,0.30) (0.445,0.30) rgb=150,112,68
+Poly (0.445,0.175) (0.555,0.175) (0.555,0.21) (0.445,0.21) rgb=122,90,52
+name highlight
+Circle (0.425,0.535) r=0.040 rgb=236,210,212
+Circle (0.44,0.50) r=0.022 rgb=246,238,238

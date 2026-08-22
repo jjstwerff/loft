@@ -211,6 +211,79 @@ fn run_script(script: &Path, backend: &str, path: &Path) -> (String, i32) {
     (stdout, out.status.code().unwrap_or(-1))
 }
 
+/// A paged working-set load must accept an ENUM field — one `kind:` was enough
+/// to lose the range read of a whole collection.
+///
+/// `is_copyable_field` had an arm for a struct and for a struct-enum VARIANT and
+/// none for the enum itself, so every `Parts::Enum` fell to the catch-all and the
+/// load was refused — with a message blaming a `vector<text>` the type did not
+/// have. The values are what is checked here, not just that the load was allowed:
+/// a copy that is accepted and wrong is the worse failure of the two.
+#[test]
+fn paged_load_carries_enum_fields_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_paged_enum_field.loft");
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!("paged_enum_{}", backend.trim_start_matches('-')));
+        let path = dir.join("recs.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+        assert!(
+            out.contains(
+                "paged-enum: a:Bytes/0,0,0/40:1/11 b:Ogg/7,9,0/50:2/22 c:Wav/0,0,13/60:3/33"
+            ),
+            "{backend}: every variant, payload and byte must survive the paged copy \
+             (the bug refused the load outright): {out:?}"
+        );
+    }
+}
+
+/// A `store_load` that never returns is worse than one that answers wrong, and
+/// compaction-on-load produced exactly that: it rebuilt the image into a scratch
+/// store and wrote the root block's header back as the word count it had ASKED
+/// for, where `claim` had handed out the whole arena.  The word past the
+/// shortened header became a block owning nothing, and `claim_scan` steps over a
+/// block by adding its size to its position — so every later claim on that store
+/// looped forever.
+///
+/// The shape is an asset pack's (@PLN146 F1): several keyed collections in one
+/// container, holding vectors big enough that a later claim misses the free list
+/// and reaches the linear scan.  Bounded here rather than left to the suite
+/// watchdog, because the failure mode under test IS an unbounded loop.
+#[test]
+fn compaction_on_load_returns_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_load_compaction_scratch_header.loft");
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!(
+            "compaction_scratch_header_{}",
+            backend.trim_start_matches('-')
+        ));
+        let path = dir.join("pack.store");
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_TIMEOUT", "120")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(
+            out.status.code().unwrap_or(-1),
+            0,
+            "{backend} exit: {stdout:?} / {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("compaction-load: loaded=true page=4096"),
+            "{backend}: the pack must load back whole (the bug hung here): {stdout:?}"
+        );
+        assert!(
+            stdout.contains("compaction-load: blob=3072 last=219"),
+            "{backend}: every byte must survive the rebuild: {stdout:?}"
+        );
+    }
+}
+
 /// #513 — within one process, every bind into a freshly-declared hash must read
 /// the persisted data (not just the first).  Freeing a bound mmap store left it
 /// in its slot; reusing that slot `init()`'d the empty header through the mmap,

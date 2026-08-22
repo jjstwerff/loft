@@ -99,9 +99,11 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   // A font PATH resolves to a CSS family rather than a file: there is no synchronous
   // way to load font bytes here, and an async load would change the metrics between
   // the measure and the rasterise of the same string.  A page that wants its real
-  // font declares it with `@font-face` under the file's base name (in the `[wasm.bridge]
-  // host_js` or the page's own CSS); `document.fonts.check` then finds it and it is
-  // used exactly. Otherwise the base name picks a generic family, so text still draws.
+  // font declares it with `[[font]]` in its loft.toml, under the file's base name —
+  // `--html` then emits the `@font-face` (or the provider `<link>`) and waits for the
+  // family before starting the program (@PLN146 F5/F6, `src/html_fonts.rs`).  A page
+  // may equally carry its own CSS.  Either way the base name is the family asked for,
+  // and a generic guessed from that name is what CSS falls back to.
   let fonts = [], textCv = null, textCx = null;
   // Audio state.  The context is shared with `audio_play_raw` through the same
   // global it already used, which is also how a test can put an OfflineAudioContext
@@ -118,16 +120,42 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     }
     return textCx;
   }
+  // The CSS font list for a font's base name: the requested family FIRST, then a
+  // generic guessed from the name for CSS to fall back to on its own.
+  //
+  // @PLN146 F5 — this used to ask `document.fonts.check` whether the page had the
+  // family, and that question has no answer: check() is TRUE for a family nothing
+  // declares (no unloaded face matches it) and FALSE for an `@font-face` that is
+  // still loading.  So the one page that HAD brought its own font took the generic
+  // branch, and the answer is cached per handle — locking that handle to
+  // `sans-serif` for the whole run, with nothing on stderr.  The name-heuristic
+  // branch, meanwhile, was unreachable.  Naming both is right whichever way it
+  // goes: a family that resolves wins, and one that does not falls to the generic
+  // its NAME suggests rather than always to `sans-serif`.
   function familyFor(base) {
     const quoted = '"' + base.replace(/"/g, '') + '"';
-    try {
-      // A family the page registered itself wins — this is the exact-font path.
-      if (document.fonts && document.fonts.check('16px ' + quoted)) return quoted + ', sans-serif';
-    } catch (e) { /* check() throws on a malformed family — fall through */ }
+    return quoted + ', ' + genericFor(base);
+  }
+  function genericFor(base) {
     const b = base.toLowerCase();
     if (/mono|courier|consol|code/.test(b)) return 'monospace';
     if (/serif/.test(b) && !/sans/.test(b)) return 'serif';
     return 'sans-serif';
+  }
+  // Did the requested family actually resolve, or is text about to draw in the
+  // generic?  `document.fonts.check` cannot say (see above), so measure: a family
+  // the browser HAS overrides both generics and the two measurements agree, while
+  // one it does not have follows each generic and they differ.  The probe string
+  // mixes narrow and wide letters so a proportional and a fixed-pitch face cannot
+  // measure the same.
+  function familyResolves(base) {
+    try {
+      const quoted = '"' + base.replace(/"/g, '') + '"', cx = text2d();
+      const w = (list) => { cx.font = '40px ' + list; return cx.measureText('iiiWWWmmmlll').width; };
+      return w(quoted + ', monospace') === w(quoted + ', sans-serif');
+    } catch (e) {
+      return true;   // no 2-D canvas to measure with — say nothing rather than warn wrongly
+    }
   }
   // Metrics for font `fi` at `sz`, in the same terms the desktop backend reports:
   // `asc`/`desc` from the font's own box, `line` the height a bitmap gets.
@@ -671,7 +699,19 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         const path = readStr(pp, pl);
         if (!path) return -2147483648;
         const base = path.split(/[\\/]/).pop().replace(/\.[^.]*$/, '');
-        fonts.push({ family: familyFor(base), base: base });
+        // @PLN146 F5 — a font that did not resolve draws perfectly well, in the
+        // wrong face, for ever.  Report it once, here, where the page can still be
+        // told which family it asked for; `globalThis.loftFonts` records every
+        // resolution so a page (or a gate) can read what it actually got.
+        const resolved = familyResolves(base);
+        if (!resolved) {
+          console.warn('[loft] font "' + base + '" is not available to this page — text '
+            + 'draws in ' + genericFor(base) + '.  Declare it with `[[font]]` in loft.toml '
+            + '(family must equal "' + base + '"), or name a family the browser has.');
+        }
+        fonts.push({ family: familyFor(base), base: base, resolved: resolved });
+        (globalThis.loftFonts || (globalThis.loftFonts = [])).push(
+          { base: base, family: familyFor(base), resolved: resolved });
         return fonts.length - 1;
       },
       loft_gl_measure_text(fi, tp, tl, sz) {

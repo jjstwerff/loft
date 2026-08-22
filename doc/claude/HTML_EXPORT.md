@@ -177,10 +177,25 @@ fontdue gives the desktop backend — bitmap height = line height, baseline at
 
 A font PATH resolves to a **CSS family**, not a file: nothing here can load font
 bytes synchronously, and an async load would change the metrics *between* the
-measure and the rasterise of one string.  A page that wants its real font
-declares it with `@font-face` under the file's base name (its own CSS, or the
-`[wasm.bridge] host_js`); `document.fonts.check` then finds it and it is used
-exactly.  Otherwise the base name picks a generic family, so text still draws.
+measure and the rasterise of one string.  `familyFor` answers the requested
+family followed by a generic guessed from the name (`"Foo", monospace`), so a
+family the page carries wins and one it does not have falls to the generic
+rather than to a wrong one.
+
+A page brings its own font by declaring `[[font]]` in its `loft.toml`: `--html`
+emits the `@font-face` (or the provider `<link>`) into the `<head>` and awaits
+`document.fonts.load` for every declared family ahead of `loft_start`
+(@PLN146 F5/F6, `src/html_fonts.rs`).  A library's declarations travel to the
+consumer's page the same way `[wasm.bridge] host_js` does, and a `family` that
+does not match the base name the program passes is refused before the build.
+Carrying the CSS by hand in `host_js` still works.
+
+⚠ `document.fonts.check` cannot be used to decide whether the page HAS a family:
+it is **true** for a family nothing declares and **false** for an `@font-face`
+that is still loading.  To ask, measure the family against two generics — one
+the browser has overrides both, one it does not follows each.  `gl_load_font`
+does exactly that and `console.warn`s when the answer is no; every resolution is
+recorded on `globalThis.loftFonts`.
 
 `gl_upload_alpha_texture` takes a coverage buffer the PROGRAM computed — already
 in wasm memory, so no fetch and no asset pipeline.  WebGL2 has no
@@ -191,8 +206,10 @@ stay identical across targets.  `gl_load_texture` serves a **bundled** asset —
 `loft_start`, so the lookup is synchronous; a runtime URL genuinely needs async
 and reports failure (`0`, never a valid handle — `hold` is 1-based).
 
-Gate: `tests/gl_text_bridge.rs` drives `tests/data/gl_text_probe.html` in
-headless chromium.  It asserts what the bridge PRODUCES — ink in the coverage,
+Gates: `tests/html_fonts.rs` drives the emitted font block in headless chromium
+— three sources resolving to the family asked for, and a throttled source with
+the await removed as the control.  `tests/gl_text_bridge.rs` drives
+`tests/data/gl_text_probe.html` in the same way.  It asserts what the bridge PRODUCES — ink in the coverage,
 metrics that scale with size, handles that are handles — because the failure this
 replaces was stubs that returned plausible numbers and no pixels, which every
 import-shape check passed.
@@ -359,6 +376,7 @@ The output `.html` is a single self-contained file:
   <meta charset="utf-8">
   <title>Loft Program</title>
   <style>/* canvas full-bleed; pre console for non-GL programs */</style>
+  <!-- @PLN146 F5: one @font-face / <link> per declared [[font]] source -->
 </head><body>
   <canvas id="c" tabindex="0" style="display:none"></canvas>
   <pre id="out"></pre>
@@ -437,6 +455,27 @@ game.loft:2 assertion failed
   in middle() (game.loft:5)
   in main() (game.loft:6)
 ```
+
+### A trap is not a panic (loft#1059)
+
+The table above is about a PANIC.  A **trap** — most often the stack running out
+under deep recursion — does not run the panic hook at all, so none of that
+rendering fires.  What a trap does do is throw into the JS that called the
+module, and both page shells now catch it: the exception, the browser's own wasm
+backtrace, and — when the message names an exhausted stack — a line saying that
+bound belongs to the page's wasm engine rather than to loft, since the same
+program halts with loft's diagnostic on `--interpret` and `--native`
+([WASM.md § How deep a program can recurse](WASM.md)).
+
+The report does not call back into the module for loft's own frames, and cannot:
+a trap leaves the shadow-stack pointer wherever it died, because the epilogues
+that would restore it never ran, so a second entry runs off the end of the stack
+it just exhausted.  The browser's backtrace is the evidence instead, and
+`--names` is what makes its frame numbers resolve.
+
+The catch covers the boot call and the asyncify RESUME pump both — a trap during
+a frame loop used to stop the pump silently, which reads as a page that simply
+stopped.
 
 **What is still silent:** an allocation failure.  `handle_alloc_error`
 aborts without running the panic hook, so a page that OOMs still traps

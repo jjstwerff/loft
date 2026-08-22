@@ -1,0 +1,13 @@
+# WAND — the IT_WAND loot (frontal-iconic): a short dark rod, brass caps, a spark gem.
+# Source for assets/sprites/wand.png.
+size 256x256
+Background transparent
+name rod
+Poly (0.38,0.74)@7 (0.62,0.26)@6 stroke=88,62,40
+name cap_low
+Line (0.385,0.755) - (0.425,0.69) w=8
+name cap_top
+Line (0.575,0.31) - (0.615,0.245) w=8
+name gem
+Circle (0.625,0.225) r=0.030 rgb=110,196,214
+Circle (0.617,0.217) r=0.011 rgb=240,252,254

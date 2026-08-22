@@ -1,0 +1,29 @@
+# GOLD PILE — a mound of coins (the '$' loot): overlapping discs, darker rims, glints.
+# Source for assets/sprites/gold_pile.png.
+size 256x256
+Background transparent
+name base_row
+Circle (0.30,0.66) r=0.085 rgb=156,120,30
+Circle (0.44,0.68) r=0.085 rgb=156,120,30
+Circle (0.58,0.67) r=0.085 rgb=156,120,30
+Circle (0.71,0.65) r=0.085 rgb=156,120,30
+Circle (0.30,0.645) r=0.072 rgb=218,176,60
+Circle (0.44,0.665) r=0.072 rgb=218,176,60
+Circle (0.58,0.655) r=0.072 rgb=218,176,60
+Circle (0.71,0.635) r=0.072 rgb=218,176,60
+name mid_row
+Circle (0.37,0.565) r=0.085 rgb=156,120,30
+Circle (0.52,0.575) r=0.085 rgb=156,120,30
+Circle (0.65,0.555) r=0.085 rgb=156,120,30
+Circle (0.37,0.55) r=0.072 rgb=224,184,66
+Circle (0.52,0.56) r=0.072 rgb=224,184,66
+Circle (0.65,0.54) r=0.072 rgb=224,184,66
+name top
+Circle (0.46,0.46) r=0.085 rgb=156,120,30
+Circle (0.58,0.47) r=0.085 rgb=156,120,30
+Circle (0.46,0.445) r=0.072 rgb=232,194,76
+Circle (0.58,0.455) r=0.072 rgb=232,194,76
+name glints
+Circle (0.435,0.42) r=0.014 rgb=252,244,200
+Circle (0.61,0.44) r=0.011 rgb=252,244,200
+Circle (0.35,0.535) r=0.010 rgb=248,236,180

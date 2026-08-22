@@ -73,6 +73,35 @@ a write reports failure, a read answers null, a size answers 0.  That is the
 deliberate rule (loft#709: one source runs on every target, so a call this
 target cannot serve answers at runtime rather than refusing the build).
 
+### How deep a program can recurse (loft#1059)
+
+The call-stack cap is loft's on two backends and the **host engine's** on wasm.
+`--interpret` and `--native` halt at `State::MAX_CALL_DEPTH` (10 000 frames) with
+loft's own diagnostic.  A wasm module has no say: recursion is bounded by the
+stack the engine gives it, and running out is a **trap** — not a Rust panic, so
+the hook that renders a panic to the page never runs.
+
+Measured with `rec(n)` under `wasmtime`: 4 000 frames answer, 8 000 abort with
+`wasm trap: call stack exhausted` (exit 134).  The module's own shadow stack is
+**not** what runs out — linking at `-zstack-size=` 1, 2, 4 and 8 MiB changes
+nothing.  Raising the host's limit is what moves it, and given a host stack that
+can hold the cap the module then agrees with the other two backends exactly —
+same stdout, same exit code, same message, same frames:
+
+```
+$ wasmtime -W max-wasm-stack=8388608 prog.wasm
+error: call stack overflow — exceeded 10000 stack frames
+```
+
+So on `--native-wasm` this bound is **whoever runs the `.wasm`** to raise, and
+loft's part is to say so.  Lowering the cap on wasm instead would halt programs
+that work today, and the right number is a property of the host that the
+compiler cannot know.
+
+On `--html` loft owns the JS that calls in, so the trap is caught and reported to
+the page and the console rather than lost — see
+[HTML_EXPORT.md § When a page faults](HTML_EXPORT.md).
+
 ### A `[native] crate` package on `--native-wasm`
 
 `--native-wasm` is the one wasm target that runs a package's own Rust: loft

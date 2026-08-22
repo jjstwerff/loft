@@ -328,9 +328,25 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
   they GUIDE the differential oracle rather than mechanically defining agreement. Nothing is
   left "spec = the interpreter's code" now — only the differential-vs-definitional gap itself.
 - **Status:** OPEN — **the oracle is BUILT and growing (@PLN89).** `tests/differential_oracle.rs`
-  runs `tests/oracle/*.loft` (26 programs) on BOTH backends and asserts they AGREE on stdout
-  (value/null), exit code (halt), and leak-freedom, with a positive control proving the detector
-  fires.  **2026-07-04 coverage push** — the corpus now spans the divergence-prone areas where the
+  runs `tests/oracle/*.loft` on BOTH backends and asserts they AGREE on stdout
+  (value/null), exit code (halt), **stderr (what the program SAID — warnings and the diagnostic
+  a fault renders)**, and leak-freedom, with a positive control proving the detector
+  fires.  **2026-08-21 — the stderr channel landed (loft#1056).**  It had been captured since
+  the oracle was built and never compared, which is how the same failed `assert` came to print
+  a loft diagnostic on `--interpret` and a Rust panic naming a generated temp file on
+  `--native`, for as long as both existed.  Seven corpus programs write to that channel, so it
+  is exercised rather than agreeing by having nothing in it; the leak line is filtered out
+  because leaks are their own channel and the native binary prints one only under
+  `LOFT_NATIVE_LEAK_CHECK`.  **2026-08-21 — the call-stack cap converged (loft#1058).**  It was
+  the last halting fault rendered two ways, and folding it found more than a rendering: the two
+  guards on one cap counted different things, so `rec(9999)` printed an answer on `--interpret`
+  and halted on `--native`.  The interpreter tested a `call_depth` counter that never counted
+  `main` and was left untouched when a coroutine truncated the stack; it now reads
+  `call_stack.len()`, the same quantity `cr_call_push` tests and `stack_trace()` reports on both
+  backends, and native checks BEFORE pushing as the interpreter does, so a refused call is not on
+  the stack the diagnostic reports.  `32-stack-overflow-halt.loft` pins the boundary from both
+  sides.  Two guards enforcing one cap is the shape that drifts, and it drifted in silence
+  because the corpus had no program near the cap.  **2026-07-04 coverage push** — the corpus now spans the divergence-prone areas where the
   two backends use the most different mechanisms: coroutines/generators (native state machine vs
   interp suspend), collection combinators (map/filter/comprehension), parallel reductions (par
   dispatch vs sequential), text (Rust String vs interp store), keyed collections (hash/sorted walk
@@ -341,7 +357,7 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
   first-class caught property.  The oracle now catches real divergences in practice — three
   found this cycle: **#495** (runtime-Join over-free, FIXED), **#500** (native E0308 on a
   nested-ncc optional-text return, FIXED), **#501** (`.map`/`.filter` on a vector literal
-  receiver, FILED).  Corpus is **26 programs** spanning coroutines / collections / parallel /
+  receiver, FILED).  Corpus is **32 programs** spanning coroutines / collections / parallel /
   text / keyed collections / tuples / nullability / nested enums / recursion / closures + the
   graduated bugs.  **NIGHTLY CI GATE WIRED (ci.yml, commit `971150dd`)**: the full
   `--ignored` sweep runs on the 03:00 UTC schedule + push-to-main (Linux-only, never on a PR),
@@ -349,7 +365,7 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
   a standing automatic guard.  Stays OPEN (the deviation closes only when a shared executable
   semantics replaces "the interpreter is the spec", or is reconciled): the corpus keeps growing.
 - **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
-  backends and assert they AGREE (value / null / halt / stdout / leak); these rules stay the
+  backends and assert they AGREE (value / null / halt / stdout / stderr / leak); these rules stay the
   written contract that GUIDES the corpus (what behaviour to cover), not a third
   implementation. A mismatch is then a divergence caught before ship, and every fixed
   divergence grows the corpus. *Chosen for now over an executable shared semantics (both

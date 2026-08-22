@@ -1,0 +1,33 @@
+# DOOR (OPEN) — the slab swung ALMOST FULLY OPEN (~85 degrees) into the passage, top-down
+# seen SLIGHTLY MORE FROM THE SIDE: the dark top-edge strip runs the slab's length with
+# the lit plank FACE beside it (the side view sliver). Hinged at the wall line's left;
+# the doorway gap itself stays empty (the engine's wall frames it — no jambs of our own).
+# Pairs with door.draw (closed). Authored for a HORIZONTAL wall line; engine rotates.
+# Source for assets/sprites/door_open.png.
+size 256x256
+Background transparent
+
+# the hinge — iron pivot at the wall line
+name hinge
+Circle (0.168,0.475) r=0.026 rgb=52,52,58
+
+# the slab — swinging down into the passage: dark TOP-EDGE strip (left) + lit FACE (right)
+name topedge
+Poly (0.118,0.479) (0.196,0.922) (0.234,0.9155) (0.156,0.4725) rgb=70,48,28
+name face
+Poly (0.156,0.4725) (0.234,0.9155) (0.300,0.904) (0.222,0.461) rgb=112,80,48
+
+# plank seams — running the slab's length on the face
+name seams
+Line (0.178,0.4686) - (0.256,0.9116) w=2
+Line (0.2005,0.4646) - (0.2785,0.9076) w=2
+
+# iron straps — two dark bands across the slab near its ends
+name bands
+Line (0.125,0.546) - (0.239,0.526) w=7
+Line (0.179,0.857) - (0.293,0.837) w=7
+
+# the ring — hanging on the face near the free end
+name ring
+Circle (0.2556,0.8117) r=0.034 rgb=52,52,58
+Circle (0.2556,0.8117) r=0.018 rgb=112,80,48

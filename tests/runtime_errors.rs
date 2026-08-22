@@ -495,3 +495,351 @@ fn i1053_clean_par_programs_are_unaffected() {
         "clean par results must be unchanged, got: {stdout}"
     );
 }
+
+// ── loft#1056 — one fault, one rendering, whatever backend ran it ─────────────────────
+//
+// `assert` and `panic` are the two explicit halt statements, so they are one event with
+// one rendering: the loft diagnostic (message + the program's own `file:line:col` +
+// source line + caret), then the loft frames the fault fired under.  `assert` used to
+// break every part of that on `--native`, the DEFAULT backend — it reached the user as
+// `thread '<unnamed>' panicked at /tmp/loft_native_2466316.rs:966`, a Rust location in a
+// generated file the author has never seen.  And neither backend printed the frames.
+//
+// The cases below are differential on purpose: each asserts that the two backends emit
+// the SAME bytes, then what those bytes must say.  Equality alone would pass on two
+// binaries that are wrong in the same way, which is why every case also pins content.
+
+/// Run a snippet on `backend`, returning (stdout, stderr, exit code).
+///
+/// The script path is shared by both backends of a case so their renderings are
+/// comparable byte-for-byte — the diagnostic names the source file.
+fn run_loft_snippet_on(backend: &str, name: &str, source: &str) -> (String, String, Option<i32>) {
+    let script_path = std::env::temp_dir().join(format!("loft_{name}.loft"));
+    std::fs::write(&script_path, source).expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script_path)
+        .env("LOFT_TIMEOUT", "120")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
+}
+
+/// Run a snippet on both backends, assert they rendered the fault identically, and hand
+/// back the one rendering for the per-case content checks.
+///
+/// `--native` is bounded by `LOFT_TIMEOUT` because rustc can hang.
+fn rendering_shared_by_both_backends(name: &str, source: &str) -> (String, String) {
+    let (i_out, i_err, i_code) = run_loft_snippet_on("--interpret", name, source);
+    let (n_out, n_err, n_code) = run_loft_snippet_on("--native", name, source);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("loft_{name}.loft")));
+    assert_eq!(
+        i_err, n_err,
+        "{name}: the same fault must read the same way on both backends\n\
+         --interpret:\n{i_err}\n--native:\n{n_err}"
+    );
+    assert_eq!(i_code, n_code, "{name}: exit codes diverged");
+    assert_eq!(i_out, n_out, "{name}: stdout diverged");
+    (i_out, i_err)
+}
+
+/// A failed `assert` is a loft diagnostic naming the program's own source, not a Rust
+/// panic naming the generated temp file.
+#[test]
+fn i1056_assert_renders_as_a_loft_diagnostic_on_both_backends() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_plain",
+        "fn main() { assert(1 == 2, \"PLAIN ASSERT\"); }\n",
+    );
+    assert!(
+        err.contains("error: assertion failed: PLAIN ASSERT"),
+        "expected the loft diagnostic; got: {err}"
+    );
+    assert!(
+        err.contains("loft_i1056_plain.loft:1:1"),
+        "the diagnostic must name the loft source and position; got: {err}"
+    );
+    assert!(
+        !err.contains("panicked at") && !err.contains("loft_native_"),
+        "a Rust panic naming the generated file is what this closes; got: {err}"
+    );
+}
+
+/// The frames a fault fired under are part of the rendering — on BOTH backends.
+///
+/// `assert` and `panic` are native fns that never saw a `State`, so both left the chain
+/// empty and a reader was told the line but never the call that reached it.
+#[test]
+fn i1056_a_fault_names_the_calls_that_reached_it() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_frames",
+        "fn inner1056(n: integer) -> integer { assert(n < 5, \"NESTED\"); n }\n\
+         fn middle1056(n: integer) -> integer { inner1056(n + 1) }\n\
+         fn main() { x = middle1056(9); println(\"survived {x}\"); }\n",
+    );
+    assert!(
+        err.contains("in fn inner1056() ← called from")
+            && err.contains("fn middle1056()")
+            && err.contains("fn main()"),
+        "expected the call chain innermost-first; got: {err}"
+    );
+}
+
+/// A `panic` inside a `par` worker names the WORKER's frames, not the parent's.
+///
+/// The parent re-raises a worker's halt as its own (loft#1053), so whatever frames were
+/// attached at that moment belonged to the parent — `main`, which is not where the fault
+/// happened.  Naming the wrong function is worse than naming none.
+#[test]
+fn i1056_a_par_worker_fault_names_the_workers_own_frames() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1056_worker",
+        "fn deep1056(n: integer) -> integer { assert(n < 0, \"IN WORKER\"); n }\n\
+         fn worker1056(n: integer) -> integer { deep1056(n) * 2 }\n\
+         fn main() {\n\
+         \x20 v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = worker1056(a), 2) { t += b; }\n\
+         \x20 println(\"survived t={t}\");\n\
+         }\n",
+    );
+    assert!(
+        err.contains("in fn deep1056() ← called from") && err.contains("fn worker1056()"),
+        "expected the worker's own chain; got: {err}"
+    );
+    assert!(
+        !err.contains("fn main()"),
+        "`main` is the parent's frame, not a frame the worker fault fired under; got: {err}"
+    );
+    assert!(
+        !out.contains("survived"),
+        "the program continued past the failing worker; got: {out}"
+    );
+}
+
+/// A halting fault is reported ONCE, however many workers reach it together.
+///
+/// Six rows over two workers printed the diagnostic twice on `--native` and once on
+/// `--interpret`: the same halt, told a different number of times per backend.
+#[test]
+fn i1056_a_halting_fault_is_reported_once() {
+    let (_out, err) = rendering_shared_by_both_backends(
+        "i1056_once",
+        "fn worker1056(n: integer) -> integer { panic(\"ONE REPORT\"); n * 2 }\n\
+         fn main() {\n\
+         \x20 v: vector<integer> = []; for i in 0..6 { v += [i]; } t = 0;\n\
+         \x20 for a in v par(b = worker1056(a), 2) { t += b; }\n\
+         \x20 println(\"survived t={t}\");\n\
+         }\n",
+    );
+    assert_eq!(
+        err.matches("error: panic: ONE REPORT").count(),
+        1,
+        "one halt, one report; got: {err}"
+    );
+}
+
+/// The control: a program that faults nowhere renders nothing and exits 0.
+///
+/// Without it every case above would also pass against a build that printed a
+/// diagnostic on every run.
+#[test]
+fn i1056_a_clean_program_renders_no_fault() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1056_clean",
+        "fn inner1056(n: integer) -> integer { assert(n < 5, \"NOT HIT\"); n }\n\
+         fn main() { x = inner1056(1); println(\"clean1056 {x}\"); }\n",
+    );
+    assert!(
+        out.contains("clean1056 1"),
+        "the program must run; got: {out}"
+    );
+    assert!(
+        !err.contains("assertion failed") && !err.contains("called from"),
+        "a passing assert must say nothing; got: {err}"
+    );
+}
+
+/// A fault inside a lazy-store DRIVER is contained on both backends, not fatal.
+///
+/// @PLN133 S8 decided that a buggy driver makes the lookup answer null and reports itself
+/// through `store_lazy_error` — it is not the program's to die of. The generated driver
+/// call runs under `catch_unwind`, so the native path has to UNWIND rather than exit, and
+/// `report_and_exit` exits. `panic` had been exiting the process from inside a driver
+/// since it started using that path, and loft#1056 moved `assert` onto it too; both now
+/// take the same `in_lazy_driver` bypass `cr_stack_overflow` already had.
+///
+/// Both statements are checked because they reach the halt by different routes, and the
+/// interpreter contained both all along — so a regression here shows up as a backend
+/// disagreement, which is what `rendering_shared_by_both_backends` reports.
+#[test]
+fn i1056_a_fault_inside_a_lazy_driver_is_contained_on_both_backends() {
+    for (name, halt, marker) in [
+        (
+            "i1056_drv_assert",
+            "assert(false, \"DRIVER FAULT\")",
+            "assertion_failed: assertion failed: DRIVER FAULT",
+        ),
+        (
+            "i1056_drv_panic",
+            "panic(\"DRIVER FAULT\")",
+            "user_panic: panic: DRIVER FAULT",
+        ),
+    ] {
+        let source = format!(
+            "struct LzP {{ const id: integer, v: integer }}\n\
+             fn lazy_fetch(coll: hash<LzP[id]>, source: text, key_int: integer, key_text: text) -> integer {{\n\
+             \x20 {halt};\n\
+             \x20 return 0;\n\
+             }}\n\
+             fn main() {{\n\
+             \x20 people: hash<LzP[id]> = [];\n\
+             \x20 if !store_bind_lazy(people, \"postgres://127.0.0.1:1/nope\") {{ println(\"bind failed\"); return }}\n\
+             \x20 r = people[7];\n\
+             \x20 println(\"null={{r == null}}\");\n\
+             \x20 println(\"why={{store_lazy_error(people)}}\");\n\
+             \x20 println(\"survived1056\");\n\
+             }}\n"
+        );
+        let (out, _err) = rendering_shared_by_both_backends(name, &source);
+        assert!(
+            out.contains("survived1056"),
+            "{name}: a driver's fault must not halt the program\nstdout: {out}"
+        );
+        assert!(
+            out.contains("null=true") && out.contains(&format!("why={marker}")),
+            "{name}: the lookup answers null and the reason reaches `store_lazy_error`\nstdout: {out}"
+        );
+    }
+}
+
+/// A call-stack overflow reports the function that is RUNNING — not the one it refused
+/// to enter, and not an arbitrary one of ten thousand identical call sites.
+///
+/// This is the divergence loft#1058 filed: `--interpret` printed the loft diagnostic
+/// (`-->`, source line, caret) and `--native` a hand-rolled line with no position block
+/// and its own frame format.  Converging them turned up the reason they could not simply
+/// be folded — the two backends describe the same stack from opposite ends.  The
+/// interpreter refuses a call before the frame exists; native pushed the frame and
+/// tripped after, so it named the callee while the interpreter named its caller.  A
+/// refused call never runs, so it is not on the stack the diagnostic reports, and both
+/// guards now say so.
+///
+/// `runaway1058(helper1058(n))` is what makes the difference visible: the call being
+/// refused is `helper1058`, the function running is `runaway1058`, and they are
+/// different names.  Plain self-recursion cannot tell the two readings apart.
+#[test]
+fn i1058_an_overflow_reports_the_running_function_on_both_backends() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1058_running",
+        "fn helper1058(n: integer) -> integer { n + 1 }\n\
+         \n\
+         fn runaway1058(n: integer) -> integer { return runaway1058(helper1058(n)); }\n\
+         fn main() { println(\"go1058\"); x = runaway1058(1); println(\"{x}\"); }\n",
+    );
+    assert!(
+        out.contains("go1058"),
+        "the program must run up to the overflow; got stdout: {out}"
+    );
+    assert!(
+        err.contains("error: call stack overflow"),
+        "expected the typed diagnostic; got: {err}"
+    );
+    assert!(
+        err.contains("loft_i1058_running.loft:3:1")
+            && err.contains("fn runaway1058(n: integer)")
+            && err.contains('^'),
+        "the diagnostic must carry the position block, the declaration's source line and \
+         a caret — none of which `--native` printed; got: {err}"
+    );
+    assert!(
+        err.contains("in fn runaway1058() ← called from"),
+        "the running function heads the chain; got: {err}"
+    );
+    assert!(
+        !err.contains("in fn helper1058()"),
+        "the call that was REFUSED never ran, so it is not on the reported stack; got: {err}"
+    );
+    assert!(
+        !err.contains("in runaway1058 ("),
+        "the native-only frame spelling is what this closes; got: {err}"
+    );
+}
+
+/// Both backends admit exactly the same number of frames.
+///
+/// One cap, two guards: `State::fn_call` reads `call_stack.len()`, the generated binary
+/// reads its shadow stack in `cr_call_push`.  The interpreter used to test a separate
+/// `call_depth` counter that never counted `main` and was left untouched when a
+/// coroutine truncated the stack — so the cap meant two different things and
+/// `rec1058(9999)` printed an answer on `--interpret` and halted on `--native`.
+///
+/// The boundary is pinned from BOTH sides in one program, because a budget that moves
+/// by one is invisible to a test that only checks the side it moved away from:
+/// `rec1058(9998)` is `main` plus 9 999 frames — exactly `MAX_CALL_DEPTH` — and must
+/// answer, while one more frame must halt.  Both numbers follow from
+/// `State::MAX_CALL_DEPTH`; change it and this test is the place that says so.
+#[test]
+fn i1058_the_call_stack_budget_is_the_same_on_both_backends() {
+    let (out, err) = rendering_shared_by_both_backends(
+        "i1058_budget",
+        "fn rec1058(n: integer) -> integer { if n <= 0 { return 0; } return rec1058(n - 1) + 1; }\n\
+         fn main() {\n\
+         \x20 println(\"at_limit={rec1058(9998)}\");\n\
+         \x20 println(\"past_limit={rec1058(9999)}\");\n\
+         }\n",
+    );
+    assert!(
+        out.contains("at_limit=9998"),
+        "a call stack filled to exactly MAX_CALL_DEPTH must answer; got stdout: {out}"
+    );
+    assert!(
+        !out.contains("past_limit="),
+        "one frame past the cap must halt, not answer; got stdout: {out}"
+    );
+    assert!(
+        err.contains("error: call stack overflow — exceeded 10000 stack frames"),
+        "the cap is part of the message, on both backends; got: {err}"
+    );
+}
+
+/// An overflow inside a lazy-store DRIVER is contained, like every other fault there.
+///
+/// `cr_stack_overflow` used to carry its own `in_lazy_driver` bypass (@PLN133 S8); it now
+/// reaches the one on `report_and_exit`, shared with `panic` and `assert`.  That is a
+/// removal, so it needs a guard: the lookup must answer null, `store_lazy_error` must
+/// carry the reason in the `<kind label>: <message>` spelling both backends use, and the
+/// program must survive.
+#[test]
+fn i1058_an_overflow_inside_a_lazy_driver_is_contained_on_both_backends() {
+    let (out, _err) = rendering_shared_by_both_backends(
+        "i1058_driver",
+        "struct LzQ { const id: integer, v: integer }\n\
+         fn spin1058(n: integer) -> integer { return spin1058(n + 1); }\n\
+         fn lazy_fetch(coll: hash<LzQ[id]>, source: text, key_int: integer, key_text: text) -> integer {\n\
+         \x20 return spin1058(0);\n\
+         }\n\
+         fn main() {\n\
+         \x20 people: hash<LzQ[id]> = [];\n\
+         \x20 if !store_bind_lazy(people, \"postgres://127.0.0.1:1/nope\") { println(\"bind failed\"); return }\n\
+         \x20 r = people[7];\n\
+         \x20 println(\"null={r == null}\");\n\
+         \x20 println(\"why={store_lazy_error(people)}\");\n\
+         \x20 println(\"survived1058\");\n\
+         }\n",
+    );
+    assert!(
+        out.contains("survived1058"),
+        "a driver's overflow must not halt the program; got stdout: {out}"
+    );
+    assert!(
+        out.contains("null=true")
+            && out
+                .contains("why=stack_overflow: call stack overflow — exceeded 10000 stack frames"),
+        "the lookup answers null and the reason reaches `store_lazy_error`; got stdout: {out}"
+    );
+}

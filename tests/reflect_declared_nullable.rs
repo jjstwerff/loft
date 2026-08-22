@@ -31,7 +31,18 @@ fn loft_bin() -> PathBuf {
 
 /// Both spellings of every non-scalar kind, plus two scalars as the control that was
 /// always right. Each field is constructed with `null` so the run also reports what the
-/// declaration decides at runtime.
+/// declaration decides at runtime — EXCEPT the two kinds whose not-null spelling really
+/// does hold the null it is handed, `n: integer` and `e: Col995`, which are constructed
+/// with a value instead.
+///
+/// The enum joined that exception once a value enum's two absent bytes were read the
+/// same way: `C995 { e: null }` writes the enum's null sentinel, and the field then
+/// RENDERS `null` and discharges through `??`, so `x.e == null` answering `true` is the
+/// language agreeing with itself rather than a defect. It was `false` only while the
+/// comparison contradicted both the renderer and the coalesce. That makes a null-valued
+/// not-null enum field useless as the ground truth for a DECLARED-nullability flag —
+/// the two facts genuinely differ there — so the cell asks the same question of a field
+/// holding a real variant, exactly as the `integer` control already does.
 /// `p`/`pq` are the POINTER spelling, and they are here because they are the one kind
 /// where the `?` is not the question: #328 made `reference<T>` in field position a
 /// pointer, and a pointer holds null however it is written. Reading the truth out of the
@@ -47,7 +58,7 @@ struct C995 {\n\
 \x20 n: integer,         nq: integer?,\n\
 }\n\
 fn main() {\n\
-\x20 x = C995 { e: null, eq: null, v: null, vq: null, h: null, hq: null,\n\
+\x20 x = C995 { e: Col995::Red, eq: null, v: null, vq: null, h: null, hq: null,\n\
 \x20            r: null, rq: null, p: null, pq: null, n: 0, nq: null };\n\
 \x20 println(\"truth e={x.e == null} eq={x.eq == null} v={x.v == null} vq={x.vq == null}\");\n\
 \x20 println(\"truth h={x.h == null} hq={x.hq == null} r={x.r == null} rq={x.rq == null}\");\n\

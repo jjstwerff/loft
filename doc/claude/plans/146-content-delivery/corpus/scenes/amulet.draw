@@ -1,0 +1,14 @@
+# AMULET — the IT_AMULET loot (frontal-iconic): a gold pendant on a leather cord (the
+# cord as a V — no hole-punching needed), gem boss in the disc.
+# Source for assets/sprites/amulet.png.
+size 256x256
+Background transparent
+name cord
+Poly (0.50,0.475)@5 (0.385,0.30)@4 (0.345,0.175)@4 stroke=70,50,32
+Poly (0.50,0.475)@5 (0.615,0.30)@4 (0.655,0.175)@4 stroke=70,50,32
+name pendant
+Circle (0.50,0.60) r=0.145 rgb=170,140,70
+Circle (0.50,0.60) r=0.112 rgb=212,176,88
+name gem
+Circle (0.50,0.60) r=0.052 rgb=152,30,30
+Circle (0.487,0.587) r=0.016 rgb=246,220,220

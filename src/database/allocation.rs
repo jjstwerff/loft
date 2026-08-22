@@ -3724,7 +3724,9 @@ impl Stores {
 
         self.allocations[slot_idx] = new_store;
         // @PLN123 B2 — the load moment is the one place records may move (see
-        // `compact_slot`).  Off by default; the loaded store is untouched then.
+        // `compact_slot`).  ON by default; `LOFT_NO_COMPACT_ON_LOAD` turns it off
+        // and leaves the loaded store exactly as the file had it, which is the
+        // first bisect step for a wrong answer or a stall inside `store_load`.
         if Self::compact_on_load_enabled() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
             // Say WHY when it does not run: a refusal that reads the same as a
             // dense store is a refusal nobody can test or diagnose.
@@ -4217,6 +4219,17 @@ impl Stores {
         if dst_root != PRIMARY {
             return Err("a fresh store did not hand out PRIMARY first");
         }
+        // The size the destination's claim ACTUALLY handed out, which is not
+        // always what was asked for: `claim_block` only splits a block that is
+        // more than a third larger than the request, so a request that lands
+        // within that margin of the whole arena keeps the whole arena.  Here it
+        // always does — the arena is `root_words + 2` and the request is
+        // `root_words`.  Writing `root_words` back would shrink the block by the
+        // words it owns, and the words past the shortened header become a block
+        // whose own header is zero, which `claim_scan` walks by adding zero to
+        // its position: an unbounded loop inside the next `claim`, on a store
+        // the program only asked to LOAD (`store_load` never returned).
+        let dst_header = *dst.addr::<i32>(PRIMARY, 0);
         // Carry the root block's raw bytes first: `copy_claims` rebuilds the
         // heap children and rewrites the pointers into them, but says nothing
         // about any inline bytes sharing the record.
@@ -4242,8 +4255,8 @@ impl Stores {
         );
         // Re-assert the destination's own block header: the raw copy above
         // brought the SOURCE's size word with it, and the two blocks are the
-        // same size only because we claimed it that way.
-        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = root_words as i32;
+        // same size only when the destination's claim happened not to round up.
+        *self.allocations[dst_slot as usize].addr_mut::<i32>(PRIMARY, 0) = dst_header;
         self.copy_claims(&src, &to, tp);
         // The scratch carries the schema it was rebuilt from. `compact_slot` sets
         // this on the way out and could leave it until then; a caller that runs a
@@ -4847,6 +4860,18 @@ impl Stores {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 fields.iter().all(|f| self.is_copyable_field(f.content))
             }
+            // An enum's value is a TAG BYTE stored inline, and a struct-enum
+            // variant's payload lives in the record beside it — `copy_claims`
+            // recurses on the SAME position for both.  So an enum relocates
+            // exactly when every variant it could be holding does, and a simple
+            // variant (`u16::MAX`, no payload) always does.  Without this arm
+            // every enum FIELD made a paged load refuse the whole collection,
+            // and the refusal blamed a `vector<text>` the type did not have —
+            // an asset pack's `bl_kind: BlobKind` was enough to lose the range
+            // read (@PLN146 F2).
+            Parts::Enum(values) => values
+                .iter()
+                .all(|(vt, _)| *vt == u16::MAX || self.is_copyable_field(*vt)),
             _ => false,
         }
     }
@@ -4928,12 +4953,28 @@ impl Stores {
 
     /// The refusal reason when an entry has a field the working-set copy cannot
     /// relocate into the local store.
+    ///
+    /// It NAMES the field. The message used to blame a `vector<text>` /
+    /// `vector<vector>` whatever the real cause was, which sent an author looking
+    /// for a field their type did not have — an `enum` field was refused and
+    /// reported as a nested vector for as long as the enum arm was missing from
+    /// [`Stores::is_copyable_field`]. A refusal a reader cannot act on is barely
+    /// better than a silent one.
     #[cfg(paged_store)]
     fn not_copyable_reason(&self, content_tp: u16) -> String {
+        let culprit = match &self.types[content_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .iter()
+                .find(|f| !self.is_copyable_field(f.content))
+                .map(|f| format!("`{}: {}`", f.name, self.type_name(f.content))),
+            _ => None,
+        };
+        let which = culprit.unwrap_or_else(|| "a field".to_string());
         format!(
-            "entry type `{}` has a field the working-set copy cannot relocate \
-             (a `vector<text>` / `vector<vector>` element pointer would dangle in \
-             the local store); whole-image `store_load` carries these fields",
+            "entry type `{}` has a field the working-set copy cannot relocate: \
+             {which} — its contents live behind pointers this copy would leave \
+             dangling in the local store; read the collection whole with \
+             `store_load` instead, which carries every field",
             self.type_name(content_tp)
         )
     }

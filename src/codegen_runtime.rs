@@ -5032,16 +5032,31 @@ thread_local! {
     static CALL_STACK: RefCell<Vec<(&'static str, &'static str, u32)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The loft frames this native thread is inside, innermost first.
+///
+/// The `--native` counterpart of the interpreter's `State::current_call_chain`, in the
+/// same shape (bare function names) so that one renderer serves both backends —
+/// `RuntimeError::report_and_exit` attaches these to a fault raised by `assert` or
+/// `panic`, neither of which can see a `State` to read frames from.
+///
+/// `try_borrow` rather than `borrow`, for the reason `browser_panic_frames` gives: a
+/// fault must not turn into a second fault over its own frame list.  Missing frames are
+/// worth strictly less than the message, so they yield.
+#[must_use]
+pub fn native_call_chain() -> Vec<String> {
+    CALL_STACK.with(|s| {
+        s.try_borrow().map_or_else(
+            |_| Vec::new(),
+            |b| b.iter().rev().map(|(nm, _, _)| (*nm).to_string()).collect(),
+        )
+    })
+}
+
 /// Push a frame onto the shadow call stack.  Called at the start of every
 /// generated function body.  The `&'static str` arguments are string literals
 /// embedded in the generated Rust code.
 #[inline]
 pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
-    let depth = CALL_STACK.with(|s| {
-        let mut b = s.borrow_mut();
-        b.push((name, file, line));
-        b.len()
-    });
     // @PLN28 — native call-depth guard.  Generated Rust recurses one native
     // frame per loft call, so unbounded recursion overflows the OS stack with
     // an opaque `fatal runtime error: stack overflow, aborting`.  The
@@ -5050,8 +5065,23 @@ pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
     // a clean, source-located error instead of an abort.  (The generated `main`
     // runs on a large-stack thread — see `NATIVE_MAIN_STACK` — so this depth
     // limit is what actually fires, well before the OS stack is exhausted.)
-    if depth > crate::state::State::MAX_CALL_DEPTH as usize {
-        cr_stack_overflow(name, file, line, depth);
+    //
+    // loft#1058 — the check comes BEFORE the push, as `State::fn_call`'s does: a
+    // refused call never runs, so its frame is not part of the stack the diagnostic
+    // reports.  Pushing first and tripping after put the refused callee on top of the
+    // chain and made it one frame longer than the interpreter's — the two backends
+    // named different functions for one fault.  The position is read off the frame
+    // BELOW for the same reason: it is the function that is running.
+    let overflow = CALL_STACK.with(|s| {
+        let mut b = s.borrow_mut();
+        if b.len() >= crate::state::State::MAX_CALL_DEPTH as usize {
+            return Some(b.last().map_or((file, line), |(_, f, ln)| (*f, *ln)));
+        }
+        b.push((name, file, line));
+        None
+    });
+    if let Some((running_file, running_line)) = overflow {
+        cr_stack_overflow(running_file, running_line);
     }
     // @PLAN49 T1 — refresh the shared breadcrumb at every native fn
     // entry so a watchdog-fired hard-kill identifies the most recent
@@ -5068,34 +5098,25 @@ pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
 /// budget), so the depth guard fires cleanly before the OS stack is exhausted.
 pub const NATIVE_MAIN_STACK: usize = 512 * 1024 * 1024;
 
-/// Render a clean, source-located call-stack-overflow diagnostic (mirroring the
-/// interpreter's typed `StackOverflow`) and exit non-zero.  `#[cold]` /
-/// `inline(never)` keeps it off the hot call-entry path.
+/// Report the call-stack overflow and stop the program, through the renderer every
+/// other halting fault uses.  `#[cold]` / `inline(never)` keeps it off the hot
+/// call-entry path.
+///
+/// `file` / `line` are the string literals `cr_call_push` was emitted with — the
+/// declaration of the function whose entry exceeded the cap, which is the position the
+/// interpreter reports for the same fault (loft#1058).  Before this the two backends
+/// spelled one event two ways: no `-->` block or caret here, its own frame format, and
+/// the depth count only on this side.  The count now lives in
+/// `RuntimeErrorKind::describe()`, so BOTH backends carry it, and the frames come from
+/// the same `render_call_chain` the interpreter's go through.
+///
+/// The lazy-driver bypass @PLN133 S8 asks for is `report_and_exit`'s, shared with
+/// `panic` and `assert`: a fault inside a driver unwinds into `store_lazy_error` rather
+/// than halting the program.
 #[cold]
 #[inline(never)]
-fn cr_stack_overflow(name: &str, file: &str, line: u32, depth: usize) -> ! {
-    // @PLN133 S8 — inside a lazy DRIVER this is not the program's to die of.
-    // Unwind instead, so `OpGetRecord` can report it through arc C and the
-    // lookup answers null — which is what the interpreter does, and the two
-    // backends must not disagree about whether a buggy driver halts a program.
-    if in_lazy_driver() {
-        std::panic::panic_any(format!("stack_overflow: call stack overflow in {name}"));
-    }
-    crate::loft_eprintln!(
-        "error: call stack overflow — exceeded {} nested calls",
-        crate::state::State::MAX_CALL_DEPTH
-    );
-    crate::loft_eprintln!("  in {name} ({file}:{line})");
-    CALL_STACK.with(|s| {
-        let b = s.borrow();
-        for (nm, f, ln) in b.iter().rev().take(10) {
-            crate::loft_eprintln!("        fn {nm}() ({f}:{ln})");
-        }
-        if depth > 10 {
-            crate::loft_eprintln!("        … ({} more frames)", depth - 10);
-        }
-    });
-    std::process::exit(1);
+fn cr_stack_overflow(file: &str, line: u32) -> ! {
+    crate::runtime_error::RuntimeError::stack_overflow(file.to_string(), line).report_and_exit()
 }
 
 /// Pop a frame from the shadow call stack.  Called at the end of every

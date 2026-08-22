@@ -1,0 +1,18 @@
+# HERB SPRIG — a feathery, finely-divided herb (yarrow / dill / fennel / fern), top-down/iconic.
+# Worked example: Fronds at depth=3 ALONE makes a convincing leafy sprig — no symbol/place
+# needed for the feathery class. The fractal does it: the stem is a spine, leaflets are fronds
+# off it, each leaflet sub-divides twice (pinnae -> fine segments). Default clumping + jitter +
+# fray keep the dense foliage organic, not mechanical. (Broad DISTINCT-blade sprigs — a mint or
+# basil twig — still need the symbol + affine-place capability, since a blade is a fill, not a
+# stroke.) A likely gathering-feature herb sprite when that lands; for now the canonical
+# Fronds-depth example. Companion to assets/sprites/src/leaf.draw (the broad-blade, depth=2 leaf).
+size 256x256
+Background transparent
+
+# the main stem (the branch spine), slightly curved + tapered tip
+Poly (0.50,0.95)@5 (0.495,0.58)~@3.2 (0.50,0.18)@1.5 stroke=92,120,64
+
+# the foliage — Fronds depth=3: opposite leaflets (mirror) angled forward, roughly even
+# length, each recursively divided twice by `sub`. Lower sub = finer; raise len2 toward len
+# for a more cylindrical spray, lower it for a conifer/fern triangle.
+Fronds (0.50,0.90)-(0.50,0.20) n=8 len=0.125 len2=0.085 w=2.0 w2=1.0 ang=46 ang2=60 mirror=1 bow=0.14 depth=3 sub=0.42 seed=3 stroke=96,150,76

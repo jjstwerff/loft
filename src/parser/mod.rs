@@ -3594,6 +3594,55 @@ impl Parser {
             .collect()
     }
 
+    /// Is a value of this type carried as a heap `DbRef` — a record, a collection, or a
+    /// struct-enum?  These are the types with no registered `OpConv*FromX → Boolean`, so
+    /// every position that reads one as present-or-absent has to say so itself.
+    ///
+    /// One home, because the answer is shared by the `??` null check, the `if` / `while`
+    /// / `assert` condition, and the `!x` null test — three places that must agree about
+    /// which values `rec` speaks for.
+    pub(crate) fn is_heap_handle(tp: &Type) -> bool {
+        matches!(
+            tp.base(),
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+                | Type::Enum(_, true, _)
+        )
+    }
+
+    /// Bring a CONDITION to `boolean` — the `if` / `while` position, where LOFT.md
+    /// § Conversions promises the coercion for every type: *"`false` and null are falsy;
+    /// integer `i32::MIN` is falsy; every other value is truthy"*.
+    ///
+    /// Separate from [`convert`](Parser::convert) because the promise is about this
+    /// POSITION, not about the pair of types: passing a `vector` where a `boolean`
+    /// PARAMETER is declared stays the error it has always been, and that error catches
+    /// real mistakes.  Only a condition asks to be read as present-or-absent.
+    ///
+    /// The heap types register no `OpConv*FromX → Boolean`, so without this the raw
+    /// `DbRef` reached the condition.  `--native` emitted `rec != 0` from its own
+    /// lowering and obeyed the rule; the interpreter's `GotoFalseWord` read
+    /// `*get_stack::<u8>()` — the FIRST BYTE of a twelve-byte pointer.  So `if [1, 2]`
+    /// took the ELSE arm on one backend and the THEN arm on the other, a live collection
+    /// FIELD read as absent, and the eleven extra bytes on the evaluation stack ran the
+    /// next argument off its slot and ended a run in a SIGSEGV.  The type list is the one
+    /// [`coalesce_not_null`](Parser::coalesce_not_null) uses, for the same reason.
+    pub(crate) fn convert_condition(&mut self, code: &mut Value, tp: &Type) -> bool {
+        if Self::is_heap_handle(tp) {
+            if !self.first_pass {
+                let not_null = self.coalesce_not_null(&code.clone(), tp.base());
+                *code = not_null;
+            }
+            return true;
+        }
+        self.convert(code, tp, &Type::Boolean)
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -5467,6 +5516,18 @@ impl Parser {
     pub(crate) const TV_NULLTEST_EQ: &'static str = "tvnulleq";
     /// The `!=` spelling of [`TV_NULLTEST_EQ`] — same operand, negated answer.
     pub(crate) const TV_NULLTEST_NE: &'static str = "tvnullne";
+    /// A `??` null CHECK whose subject is still a TYPE VARIABLE.
+    ///
+    /// Which test says *"this is not null"* is a function of `τ` — a DbRef's `rec`, a
+    /// boolean's `255`, a character's `char(0)`, a tuple's first field — and inside a
+    /// template `τ` is not known yet.  Undeferred, the site took the placeholder's own
+    /// shape (an attribute-less struct, so a reference) and substitution rewrote the
+    /// TYPE while leaving the TEST behind: `x ?? fb` looped forever at
+    /// `T = boolean`, corrupted a record at `T = character`, and would not compile on
+    /// `--native` at either.  The block holds the SUBJECT and its `result` is the
+    /// subject's type, which substitution rewrites to the concrete one; the sibling of
+    /// [`TV_NULLTEST_EQ`], for the coalesce rather than the comparison.
+    pub(crate) const TV_NULLCHECK: &'static str = "tvnullcheck";
     /// loft#1028 — a `null` VALUE whose type is still a TYPE VARIABLE.
     ///
     /// Which sentinel `τ`'s null is written as is a function of `τ`, and inside a
@@ -6832,22 +6893,76 @@ impl Parser {
                     && data.def(new_d).name() == "OpConvBoolFromRef"
                     && new_args.len() == 1
                 {
-                    let conv_name = match concrete.base() {
-                        Type::Integer(_) => Some("OpConvBoolFromInt"),
-                        Type::Text(_) => Some("OpConvBoolFromText"),
-                        Type::Float => Some("OpConvBoolFromFloat"),
-                        Type::Single => Some("OpConvBoolFromSingle"),
-                        Type::Enum(_, false, _) => Some("OpConvBoolFromEnum"),
-                        // Reference / Vector / struct-enum / tuple stay
-                        // on OpConvBoolFromRef (the existing behaviour
-                        // works for any DbRef-shaped loop variable).
-                        _ => None,
-                    };
-                    if let Some(name) = conv_name {
-                        let conv_d_nr = data.def_nr(name);
-                        if conv_d_nr != u32::MAX {
-                            return Value::Call(conv_d_nr, new_args);
+                    // EXHAUSTIVE, and the arms answer what `coalesce_not_null` answers
+                    // for the same type — this map is a MIRROR of that decision, and the
+                    // two spellings it was missing (`boolean`, `character`) are the two
+                    // the `??` null check was missing for the same reason.  Measured
+                    // 2026-08-22: this fixup fires ZERO times across all 826
+                    // `tests/scripts` programs, the 33 `tests/docs` ones and every generic
+                    // probe, because a `for` over a vector now terminates on the LENGTH
+                    // rather than on a null element, so the `OpConvBoolFromRef` the P239
+                    // comment below describes is no longer emitted.  It is completed
+                    // rather than deleted because completing can only repair more paths
+                    // than today and never fewer: if some lowering revives that shape, a
+                    // scalar loop variable gets the right test instead of a `rec` read.
+                    let conv: Option<Value> = match concrete.base() {
+                        Type::Integer(_) => {
+                            Self::conv_bool_call("OpConvBoolFromInt", &new_args, data)
                         }
+                        Type::Text(_) => {
+                            Self::conv_bool_call("OpConvBoolFromText", &new_args, data)
+                        }
+                        Type::Float => Self::conv_bool_call("OpConvBoolFromFloat", &new_args, data),
+                        Type::Single => {
+                            Self::conv_bool_call("OpConvBoolFromSingle", &new_args, data)
+                        }
+                        Type::Character => {
+                            Self::conv_bool_call("OpConvBoolFromCharacter", &new_args, data)
+                        }
+                        Type::Enum(_, false, _) => {
+                            Self::conv_bool_call("OpConvBoolFromEnum", &new_args, data)
+                        }
+                        // A boolean's "is not null" is not a single op — it is `!= 255`,
+                        // the same two-op form `coalesce_not_null` builds — so it is the
+                        // one arm that cannot be a name.
+                        Type::Boolean => {
+                            let ne = data.def_nr("OpNeBool");
+                            let null_b = data.def_nr("OpConvBoolFromNull");
+                            if ne == u32::MAX || null_b == u32::MAX {
+                                None
+                            } else {
+                                Some(Value::Call(
+                                    ne,
+                                    vec![new_args[0].clone(), Value::Call(null_b, vec![])],
+                                ))
+                            }
+                        }
+                        // DbRef-shaped: `OpConvBoolFromRef` IS the right test, so the
+                        // site is left as the template built it.
+                        Type::Reference(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                        | Type::Iterator(_, _)
+                        | Type::Function(_, _, _)
+                        | Type::Routine(_)
+                        | Type::RefVar(_)
+                        | Type::Tuple(_) => None,
+                        // Not loop-variable types: these carry no value to test.
+                        Type::Unknown(_)
+                        | Type::Null
+                        | Type::Void
+                        | Type::Never
+                        | Type::Keys
+                        | Type::Rewritten(_)
+                        | Type::Optional(_) => None,
+                    };
+                    if let Some(call) = conv {
+                        return call;
                     }
                 }
                 // I9-text fixup: when a T-stub had an extra __work_1 parameter
@@ -7058,6 +7173,18 @@ impl Parser {
                 );
                 out
             }
+            // The deferred `??` null CHECK.  `bl.result` came through type
+            // substitution, so it is the CONCRETE subject type by now, and
+            // `coalesce_not_null` is the same dispatch the parse site uses — the ONE
+            // place that answers *"is a `τ` not null?"* for a coalesce.  A nested
+            // generic (`concrete` still a type variable) re-stamps through that same
+            // call and stays deferred until an outer instantiation names a real type.
+            Value::Block(bl) if bl.name == Self::TV_NULLCHECK => {
+                let mut bl = *bl;
+                let subject = self.rewrite_generic_type_defaults(bl.operators.remove(0), concrete);
+                let tp = bl.result.clone();
+                self.coalesce_not_null(&subject, &tp)
+            }
             // loft#1028 — the deferred `null`.  `bl.result` came through type
             // substitution, so it names the CONCRETE type by now, and `null` is the same
             // dispatch the parse site uses — the ONE place that answers "what is `τ`'s
@@ -7201,11 +7328,10 @@ impl Parser {
     /// (the caller should pre-check via `is_primitive_vector_element_target`).
     fn primitive_setter_call(
         concrete: &Type,
-        elm_var: u16,
+        elm: Value,
         src_value: Value,
         data: &Data,
     ) -> Option<Value> {
-        let elm = Value::Var(elm_var);
         let pos = Value::Int(0);
         // Resolve op def_nrs.  Each branch resolves only the ones it needs.
         let op = match concrete {
@@ -7366,12 +7492,13 @@ impl Parser {
                     Self::rewrite_generic_vector_writes(inner, concrete, vars, data, database),
                 )))
             }
-            Value::Call(d, args) => Value::Call(
-                d,
-                args.into_iter()
+            Value::Call(d, args) => {
+                let recursed: Vec<Value> = args
+                    .into_iter()
                     .map(|a| Self::rewrite_generic_vector_writes(a, concrete, vars, data, database))
-                    .collect(),
-            ),
+                    .collect();
+                Self::rewrite_indexed_element_write(d, recursed, concrete, data, database)
+            }
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
                     .map(|v| Self::rewrite_generic_vector_writes(v, concrete, vars, data, database))
@@ -7539,7 +7666,8 @@ impl Parser {
                         vec![src_value, Value::Var(elm_var), Value::Int(known_tp)],
                     ));
                 } else {
-                    let setter = Self::primitive_setter_call(concrete, elm_var, src_value, data);
+                    let setter =
+                        Self::primitive_setter_call(concrete, Value::Var(elm_var), src_value, data);
                     if let Some(call) = setter {
                         out.push(call);
                     } else {
@@ -7584,6 +7712,82 @@ impl Parser {
     /// copied into the new vector slot).  Returned by-value (cloned
     /// from the matched IR) so the caller can construct the new
     /// `OpSetInt` Call without borrowing back into `ops`.
+    /// `v[i] = x` inside a template — the write spelling the triplet rewriter does not
+    /// see, because an INDEXED assignment emits a lone `OpCopyRecord` instead of the
+    /// `OpNewRecord` / `OpCopyRecord` / `OpFinishRecord` sequence an APPEND emits.
+    ///
+    /// Left parametric, that `OpCopyRecord` reached the monomorph with the type
+    /// VARIABLE's record id and a source that is no longer a record: at every scalar type
+    /// the run PANICKED in the allocator, at `float`/`text` it walked a corrupt edge, and
+    /// for a struct parameter it silently wrote nowhere and read the old element back.
+    /// The concrete twin emits `OpSetInt(OpGetVector(v, 8, 0), 0, x)`, so that is what the
+    /// monomorph must emit too — `(G-Mono)`, and the same one-home setter builder the
+    /// append path uses.
+    ///
+    /// The two spellings are told apart by WHERE the copy writes: an append's destination
+    /// is the freshly-minted `Var(elm)`, an indexed write's is an element READ.  So only a
+    /// destination rooted in `OpGetVector` is rewritten here, which leaves the triplet for
+    /// its own matcher and leaves an ordinary record copy inside a generic body alone.
+    fn rewrite_indexed_element_write(
+        d: u32,
+        args: Vec<Value>,
+        concrete: &Type,
+        data: &Data,
+        database: &mut Stores,
+    ) -> Value {
+        let copy_record_d = data.def_nr("OpCopyRecord");
+        if d != copy_record_d || copy_record_d == u32::MAX || args.len() != 3 {
+            return Value::Call(d, args);
+        }
+        let Some(elem) = Self::element_write_destination(&args[1], data) else {
+            return Value::Call(d, args);
+        };
+        if Self::is_primitive_vector_element_target(concrete) {
+            // The element's VALUE wrapper is stripped by `element_write_destination`: the
+            // substitution wraps every rewritten element read for value use, and a write
+            // destination is the one place that wrapper is wrong.
+            if let Some(setter) = Self::primitive_setter_call(concrete, elem, args[0].clone(), data)
+            {
+                return setter;
+            }
+            return Value::Call(d, args);
+        }
+        // A struct element keeps the record copy and takes the CONCRETE record id — the
+        // parametric one names an attribute-less placeholder, so the runtime copied the
+        // wrong number of words.
+        let tp = i32::from(database.db_type(concrete, data));
+        Value::Call(d, vec![args[0].clone(), elem, Value::Int(tp)])
+    }
+
+    /// The element reference an `OpCopyRecord` destination names, with the value-getter
+    /// wrapper stripped — or `None` when the destination is not an element read at all.
+    ///
+    /// `substitute_type_in_value` wraps every element read it retargets so the value can
+    /// be USED (`OpGetInt(OpGetVector(…), 0)`); a write destination wants the reference
+    /// itself, and the wrapper is what made the copy read an `i64` where it needed an
+    /// address.  Recognising the wrapper by its ARGUMENT SHAPE — one element read plus a
+    /// zero offset — keeps this from having to carry a second copy of the op list that
+    /// `wrap_vector_get_val` already owns.
+    fn element_write_destination(dest: &Value, data: &Data) -> Option<Value> {
+        let is_element_read = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, _)
+                if *d != u32::MAX
+                    && (*d as usize) < data.definitions.len()
+                    && matches!(data.def(*d).name(), "OpGetVector" | "OpGetVectorNullable"))
+        };
+        if is_element_read(dest) {
+            return Some(dest.clone());
+        }
+        if let Value::Call(_, wrapped) = dest.unspan()
+            && wrapped.len() == 2
+            && matches!(wrapped[1].unspan(), Value::Int(0))
+            && is_element_read(&wrapped[0])
+        {
+            return Some(wrapped[0].clone());
+        }
+        None
+    }
+
     fn match_vector_write_triplet(
         op0: &Value,
         op1: &Value,
@@ -7691,13 +7895,36 @@ impl Parser {
         }
     }
 
-    /// I9-vec: wrap an `OpGetVector` result with the appropriate value-extraction op
-    /// for concrete value types (`OpGetInt`, `OpGetFloat`, etc.).  Reference types need
-    /// no wrapper — the `DbRef` IS the value.
+    /// One `OpConvBoolFrom<X>` call over `args`, or `None` when the op is not registered.
+    ///
+    /// A helper only so the exhaustive map above reads as a table of decisions rather
+    /// than of `def_nr` bookkeeping repeated per arm.
+    fn conv_bool_call(name: &str, args: &[Value], data: &Data) -> Option<Value> {
+        let d = data.def_nr(name);
+        if d == u32::MAX {
+            None
+        } else {
+            Some(Value::Call(d, args.to_vec()))
+        }
+    }
+
+    /// I9-vec: wrap an `OpGetVector` result with the value-extraction op the ELEMENT
+    /// type needs (`OpGetInt`, `OpGetCharacter`, …), matching what the hand-written
+    /// concrete function emits for the same read.  A reference-shaped element needs no
+    /// wrapper — the `DbRef` IS the value.
+    ///
+    /// The match is EXHAUSTIVE on purpose.  It used to end `_ => return code`,
+    /// which reads as *"everything else is reference-shaped"* and was not: `character` and
+    /// a VALUE enum both store a raw slot that needs unpacking, and both fell through it.
+    /// A template's `v[i]` then handed back the address as if it were the value —
+    /// `v[1]` on `['a','b']` answered a garbage codepoint and on `[Col::Blue, Col::Green]`
+    /// answered `null`, on both backends, while the concrete twin was right. Nothing said
+    /// so, because a missing arm and a deliberate one looked identical. Now adding a
+    /// `Type` variant fails the build here until someone decides which it is.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
         // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
-        // extraction op as its base; without this it fell to `_ => return code` (no OpGet)
+        // extraction op as its base; without this it fell through with no OpGet
         // and the raw slot was read as a DbRef.
         let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
@@ -7706,7 +7933,36 @@ impl Parser {
             Type::Text(_) => "OpGetText",
             // @PLN17: byte-stored boolean read, preserving 0/1/255 (like enum).
             Type::Boolean => "OpGetBoolean",
-            _ => return code, // reference/struct types: no wrapper needed
+            Type::Character => "OpGetCharacter",
+            // A VALUE enum is a discriminant byte in the slot; a struct-enum below is a
+            // reference, which is why the two spellings part here.
+            Type::Enum(_, false, _) => "OpGetEnum",
+            // Reference-shaped: the slot holds a `DbRef` and the read IS the value.
+            Type::Reference(_, _)
+            | Type::Enum(_, true, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Iterator(_, _)
+            | Type::Function(_, _, _)
+            | Type::Routine(_)
+            | Type::RefVar(_) => return code,
+            // A tuple element is read field by field by its consumer (`TupleGet`), so
+            // there is no single value to unpack here.
+            Type::Tuple(_) => return code,
+            // Not element types: `Unknown`/`Null`/`Void`/`Never` carry no storage,
+            // `Keys` describes a key list, and `Rewritten` is an append form that has
+            // already been lowered.  `Optional` cannot appear — `base()` peeled it.
+            Type::Unknown(_)
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Keys
+            | Type::Rewritten(_)
+            | Type::Optional(_) => return code,
         };
         let d = data.def_nr(op_name);
         if d == u32::MAX {
@@ -12373,6 +12629,20 @@ impl Parser {
         }
     }
 
+    /// @PLN146 F5 — record this package's `[[font]]` declarations for the `--html`
+    /// driver.  Both manifest-registration paths call it, for the same reason
+    /// `[wasm.bridge].host_js` is registered from both: a library reached through
+    /// one path and not the other would lose its browser half silently.  Identical
+    /// declarations are one font — the app and a library it uses may name the same
+    /// one, and agreeing about it is not a conflict.
+    fn register_declared_fonts(&mut self, m: &manifest::Manifest) {
+        for f in &m.fonts {
+            if !self.data.declared_fonts.contains(f) {
+                self.data.declared_fonts.push(f.clone());
+            }
+        }
+    }
+
     /// Register native crate info from a loft.toml manifest.
     /// Called when a .loft file was found directly via lib_dirs (not through
     /// lib_path_manifest), so the manifest's native crate registration would
@@ -12512,6 +12782,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
+        self.register_declared_fonts(&m);
     }
 
     /// Check whether `<dir>/<id>` contains a valid loft package layout.
@@ -12899,6 +13170,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
+        self.register_declared_fonts(m);
         // PKG.3: register dirs for dependency resolution.
         //
         // For plain-version deps (`foo = "0.1"`) and the legacy
@@ -13912,12 +14184,37 @@ fn emit_fn_ref_field_write(
             p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(0)])
         }
         other => {
-            // Fallback (Null default-init etc.) — write 0.
+            // The INTERNAL shapes construction produces: a default-init `Null`, a raw
+            // d_nr already lowered to an `Int`, and a `FnRef` with no closure half.  Each
+            // really is four bytes wide, so writing four bytes is right for them.
+            //
+            // Anything ELSE reaching here is a non-inline SOURCE — an `if` or `match` arm,
+            // a `??` — and it takes the same refusal `Var` and `Call` take above.  It used
+            // to fall through and write four bytes of a value that is twenty wide: the
+            // closure half was dropped, and calling through the field then SIGSEGV'd on
+            // `--interpret` and hit `unreachable!("invalid fn-ref")` on `--native`, at
+            // different arms of the same program.  The two spellings that WERE enumerated
+            // got a diagnostic; the ones nobody thought of got the crash, which is the
+            // difference this arm removes.
             let d_nr_only = match other {
                 Value::FnRef(d, _, _) => Value::Int(d),
                 Value::Int(n) => Value::Int(n),
                 Value::Null => Value::Int(0),
-                v => v,
+                _ => {
+                    if !p.first_pass {
+                        diagnostic!(
+                            p.lexer,
+                            Level::Error,
+                            "only inline lambda literals can be stored in fn-ref struct \
+                             fields; a non-inline source (a variable, a call, an \
+                             `if`/`match` arm) is not yet supported when the source \
+                             closure may capture (P215-deferred)"
+                        );
+                    }
+                    // Emit a no-op so the rest of construction proceeds, exactly as the
+                    // `Var` and `Call` refusals above do.
+                    Value::Int(0)
+                }
             };
             p.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
         }

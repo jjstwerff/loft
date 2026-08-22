@@ -13,7 +13,8 @@
 //!
 //! This oracle turns that class into a CAUGHT failure: every program in
 //! `tests/oracle/` is run on BOTH backends and their observable outcome must
-//! AGREE — normalised stdout (value / null), exit code (halt), and leak-freedom.
+//! AGREE — normalised stdout (value / null), exit code (halt), stderr (what the program
+//! SAID: warnings and the diagnostic a fault renders), and leak-freedom.
 //! The operational.md rules guide what the corpus should cover; the corpus
 //! GROWS over time, and every fixed divergence graduates a guard program here.
 //!
@@ -86,6 +87,20 @@ fn normalise_stdout(s: &str) -> String {
     out
 }
 
+/// Normalise stderr for cross-backend comparison: CRLF→LF, trailing blank lines
+/// dropped, and the leak line removed — leaks are their own channel below, and the
+/// native binary only prints one when `LOFT_NATIVE_LEAK_CHECK` is set, so comparing
+/// it here would report the switch rather than the program.
+fn normalise_stderr(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .lines()
+        .filter(|l| !l.contains("stores not freed"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
 /// Both backends report a store leak identically — a `… stores not freed at
 /// program exit …` line on stderr. The interpreter prints it unconditionally;
 /// the native binary only when `LOFT_NATIVE_LEAK_CHECK` is set (which the sweep
@@ -111,6 +126,19 @@ fn divergences(interp: &ModeRun, native: &ModeRun) -> Vec<String> {
         d.push(format!(
             "exit code differs: interp={:?} native={:?}",
             interp.exit_code, native.exit_code
+        ));
+    }
+    // What the program SAID about itself — warnings and the diagnostic a fault renders.
+    // Captured since the oracle was built and never once compared, which is how a failed
+    // `assert` came to print a loft diagnostic on one backend and a Rust panic naming a
+    // generated temp file on the other, for as long as both existed (loft#1056).  Seven
+    // of the corpus programs write to this channel, so it is exercised rather than
+    // agreeing by having nothing in it.
+    let ie = normalise_stderr(&interp.stderr);
+    let ne = normalise_stderr(&native.stderr);
+    if ie != ne {
+        d.push(format!(
+            "stderr differs:\n    interp = {ie:?}\n    native = {ne:?}"
         ));
     }
     if leaked(interp) {
@@ -270,6 +298,23 @@ fn corpus() -> Vec<PathBuf> {
     files
 }
 
+/// The reason a corpus program excludes the WASM leg, when it declares one.
+///
+/// A program says so in its own header — `// @ORACLE_NO_WASM: <why>` — and the sweep
+/// PRINTS what it skipped and why, because a leg that drops out silently reads as a leg
+/// that agreed.  This is for a program whose axis the wasm target cannot reach at all,
+/// not for one that merely fails there: a wasm failure is the divergence this test is
+/// built to report, and hiding one behind this marker is the exact misuse to refuse.
+fn wasm_opt_out(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .take_while(|l| l.trim_start().starts_with("//") || l.trim().is_empty())
+        .find_map(|l| {
+            l.split_once("@ORACLE_NO_WASM:")
+                .map(|(_, why)| why.trim().to_string())
+        })
+}
+
 /// Run the whole corpus on both backends; a divergence on ANY program is a
 /// caught cross-backend bug. Heavy (rustc per program) — `#[ignore]` by default.
 #[test]
@@ -286,7 +331,9 @@ fn oracle_corpus_agrees_across_backends() {
         // THIRD backend: headless WASM (wasm32-wasip2 / wasmtime), when the toolchain is present.
         // wasm shares the native Rust generator, so a shape that compiles native but breaks wasm —
         // OR breaks BOTH (the compound-&& / format-hook / text-if class this cycle) — is caught here.
-        if let Some(wasm) = run_wasm(&path) {
+        if let Some(why) = wasm_opt_out(&path) {
+            println!("  (wasm leg skipped for {name}: {why})");
+        } else if let Some(wasm) = run_wasm(&path) {
             d.extend(wasm_divergences(&interp, &wasm));
             // accept/reject must agree with the interpreter: a wasm-compile-fail on a program the
             // interpreter accepts is exactly the #520/#533/#534 class.
@@ -344,6 +391,30 @@ mod tests {
         assert!(
             !divergences(&base, &run("x=1\n", "", Some(1))).is_empty(),
             "an exit-code difference must be caught"
+        );
+
+        // stderr divergence (the diagnostic class — loft#1056: the same fault rendered
+        // as a loft diagnostic on one backend and a Rust panic on the other)
+        assert!(
+            !divergences(
+                &base,
+                &run("x=1\n", "thread 'main' panicked at /tmp/x.rs", Some(0))
+            )
+            .is_empty(),
+            "a stderr difference must be caught"
+        );
+
+        // …but the leak line is NOT that difference: it has its own channel, and the
+        // native binary prints it only under `LOFT_NATIVE_LEAK_CHECK`.  Without this the
+        // stderr channel would double-report every leak and read as flaky.
+        assert_eq!(
+            divergences(
+                &run("x=1\n", "Warning: 1 stores not freed", Some(0)),
+                &run("x=1\n", "", Some(0)),
+            )
+            .len(),
+            1,
+            "a leak is one divergence, not also a stderr difference"
         );
 
         // a native store leak (the @PLN85 ownership class)

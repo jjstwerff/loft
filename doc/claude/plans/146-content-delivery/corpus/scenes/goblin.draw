@@ -1,0 +1,58 @@
+# GOBLIN — a green raider (d3), top-down, FRONT=UP — the kobold humanoid construction,
+# goblin-coded: green hide, a NOTCHED BLADE couched instead of the spear, redder eyes,
+# (menace = posture): the spear couched DIAGONAL with a narrow killing point, both arms
+# committed forward, the big skull dropped low over the torso, ANGRY BROW over narrowed
+# sulphur eyes, ears swept back. Rust hide, a strap not a pot-shaped loincloth.
+# The humanoid-from-above construction (goblin derives). v1 lesson: a vertical stick with
+# a wedge = a broom; a waving claw = friendly — angle the weapon, commit the arms.
+# Source for assets/sprites/goblin.png.
+size 256x256
+Background transparent
+
+# the spear — couched diagonal for the thrust (under the body), narrow steel point
+name hilt
+Poly (0.585,0.66)@6 (0.645,0.43)@6 stroke=86,62,38
+name blade
+Poly (0.620,0.452) (0.657,0.239) (0.690,0.185) (0.693,0.246) (0.656,0.458) rgb=170,174,184
+name guard
+Line (0.605,0.445) - (0.672,0.470) w=5
+
+# body — slight torso, hunched (the head will drop low over it)
+name torso
+Circle (0.50,0.50) r=0.118 rgb=88,112,58
+# a crude hide strap across the back
+name strap
+Poly (0.405,0.435)@7 (0.595,0.565)@7 stroke=82,60,38
+
+# arms — BOTH committed forward: right drives the spear, left claws ahead
+name armR
+Poly (0.575,0.475)@8 (0.625,0.585)@6 stroke=78,102,52
+name armL
+Poly (0.425,0.455)@8 (0.375,0.345)@6 (0.355,0.285)@4 stroke=78,102,52
+# claws — HOOKED tapered talons (curved ~ ribbons), fanned ahead of the lead hand
+Poly (0.352,0.284)@3 (0.340,0.244)~@1.5 (0.330,0.204)@0.3 stroke=216,208,184
+Poly (0.366,0.276)@3 (0.362,0.234)~@1.5 (0.360,0.192)@0.3 stroke=216,208,184
+Poly (0.380,0.272)@3 (0.384,0.232)~@1.5 (0.390,0.192)@0.3 stroke=216,208,184
+
+# the head — BIG, dropped LOW over the torso (hunch): broad skull + a longer mean snout
+name skull
+Circle (0.50,0.375) r=0.110 rgb=78,102,52
+name snout
+Poly (0.452,0.330) (0.548,0.330) (0.50,0.185) rgb=66,88,46
+
+# ears — swept BACK-out (aggression), long
+name earL
+Poly (0.428,0.365) (0.330,0.300) (0.448,0.318) rgb=66,88,46
+name earR
+Poly (0.572,0.365) (0.670,0.300) (0.552,0.318) rgb=66,88,46
+
+# eyes — tiny hints at the snout-root SIDES (from above you see the skull top, not a
+# face; the head is dropped forward in the lunge — the jackal model)
+name eyes
+Circle (0.448,0.318) r=0.010 rgb=210,90,30
+Circle (0.552,0.318) r=0.010 rgb=210,90,30
+
+# teeth — points at the snout tip (the snarl)
+name teeth
+Poly (0.480,0.225) (0.474,0.188) (0.492,0.218) rgb=226,218,196
+Poly (0.520,0.225) (0.526,0.188) (0.508,0.218) rgb=226,218,196

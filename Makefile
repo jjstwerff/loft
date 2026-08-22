@@ -818,13 +818,21 @@ examples-index:  ## Regenerate examples-index.tsv (worked-example tag -> file:li
 # pushing: it gates the citation faults CI would report — dangling / duplicate /
 # unregistered — without demanding an `examples-index.tsv`, which libraries no longer
 # commit.  REPO=. checks loft itself.
+# The LOCAL fast gate — same tests, ~1.9x quicker, by widening the two serial groups
+# that exist for the 3-core CI runner.  See `.config/nextest.toml [profile.fast]` for the
+# measurement and, more importantly, for what it does NOT prove: those groups close a
+# starvation window, so re-run a networked failure under `--profile ci` before believing
+# it.  `make ci` is unchanged and stays the pre-push gate.
+test-fast:  ## The suite under the local `fast` profile (~1.9x quicker than `make ci`'s)
+	@bash scripts/box-claim.sh cargo nextest run --profile fast
+
 examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO=../loft-libs-x)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-preflight
 
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: examples-index examples-preflight examples-progress features-review libraries-review bug-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -1702,13 +1710,52 @@ ci-guard:
 	@# stale file that the next `kill -0` steps straight over.  A lock that
 	@# outlives its holder is worse than no lock — it fails runs that should
 	@# pass, and gets deleted by hand until nobody trusts it.
-	@if [ -f .ci-running ] && kill -0 "$$(cat .ci-running 2>/dev/null)" 2>/dev/null; then \
-	    echo "make ci: REFUSED — a gate is already running in this tree (make pid $$(cat .ci-running))."; \
+	@# ⚠ A claim held by one of OUR OWN ANCESTORS is not a competing run — it is the
+	@# wrapper that launched us.  `scripts/box-claim.sh make ci` writes the claim, then
+	@# `make ci` refused itself and exited 1; the failure was then invisible, because the
+	@# stale `result.txt` from an earlier run still said ALL GATES PASSED and that is what
+	@# a summary grep reads.  Measured 2026-08-21 — it produced a false green on a real
+	@# cherry-pick.  So walk the pid chain: a claim from an ancestor is ours.
+	@claim=$$(cat .ci-running 2>/dev/null); \
+	if [ -n "$$claim" ] && kill -0 "$$claim" 2>/dev/null; then \
+	    p=$$PPID; mine=0; \
+	    while [ "$$p" -gt 1 ]; do \
+	        [ "$$p" = "$$claim" ] && { mine=1; break; }; \
+	        p=$$(ps -o ppid= -p $$p 2>/dev/null | tr -d ' '); \
+	        [ -n "$$p" ] || p=1; \
+	    done; \
+	    [ "$$mine" = "1" ] && claim=""; \
+	fi; \
+	if [ -n "$$claim" ]; then \
+	    echo "make ci: REFUSED — a gate is already running in this tree (make pid $$claim)."; \
 	    echo "  Two runs share target/ and result.txt; the second deletes the rlib the first"; \
 	    echo "  links against and truncates its report, so BOTH results would be fiction."; \
 	    echo "  Wait for it to finish, or stop it first."; \
 	    exit 1; \
 	fi
+	@# A SIBLING CHECKOUT is a different question, and gets a warning rather than a
+	@# refusal.  Two loft checkouts on one box do NOT share target/ or result.txt, so
+	@# neither result is fiction — but they share the 24 threads, and that is enough to
+	@# matter twice: a timing measurement in either tree becomes worthless, and the
+	@# 300s slow-timeout starts firing on tests that pass standalone in seconds
+	@# (`instancing_bridge_draws_every_instance` is the known one, 300s under load vs
+	@# 3.6s alone).  Measured 2026-08-21: two agents collided twice in one afternoon,
+	@# reaching load 66 on 24 threads, and both had guessed the box was free from
+	@# `pgrep` — silence read as evidence.
+	@#
+	@# ⚠ This can only see runs that CLAIM.  `make ci` writes `.ci-running`; a bare
+	@# `cargo nextest run` writes nothing and stays invisible, which is exactly how the
+	@# second collision happened.  Claim the tree by hand for a long ad-hoc run:
+	@#     echo $$$$ > .ci-running        # and rm it when done
+	@for d in ../*/; do \
+	    [ "$$(cd "$$d" 2>/dev/null && pwd -P)" = "$$(pwd -P)" ] && continue; \
+	    [ -f "$$d/.ci-running" ] || continue; \
+	    kill -0 "$$(cat "$$d/.ci-running" 2>/dev/null)" 2>/dev/null || continue; \
+	    echo "make ci: WARNING — a gate is also running in $$d (pid $$(cat "$$d/.ci-running"))."; \
+	    echo "  Not refused: separate target/ and result.txt, so neither result is fiction."; \
+	    echo "  But you are sharing $$(nproc) threads — expect a slower run, and treat any"; \
+	    echo "  300s slow-timeout as 'the machine was busy' until it reproduces alone."; \
+	done
 
 ci: ci-guard
 	@echo $$PPID > .ci-running

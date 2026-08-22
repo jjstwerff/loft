@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN144 — The asset route: a store on a file server, not a bundler
+# @PLN146 — The asset route: a store on a file server, not a bundler
 
 Reference for arc F. The plan and its phase gates are in [README.md](README.md).
 

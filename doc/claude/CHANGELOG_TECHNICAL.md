@@ -9,6 +9,277 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A browser page can declare the font it draws with (@PLN146 F5/F6, 2026-08-22)
+
+**New.** `[[font]]` in `loft.toml` — `family`, `native`, and one of `url` (a font file we
+serve) or `stylesheet` (a provider's). `--html` emits an `@font-face` or a `<link>` per
+declared source and, ahead of `loft_start`, awaits `document.fonts.load` for every
+declared family. A library's declarations reach a consumer's page by the same route as
+`[wasm.bridge] host_js`. `src/html_fonts.rs` owns validation and both emissions;
+`src/manifest.rs` parses the section; `Data::declared_fonts` carries a library's.
+
+**Refused, before the wasm build:** a `family` that differs from the base name of
+`native`. The browser sees only that base name (`gl_load_font("fonts/Foo.ttf")` reaches
+the page as `Foo`), so the drift means the page registers one family while the program
+asks for another — text draws in a generic face and nothing says so. Also refused: an
+empty family, characters that would break out of the page's CSS/HTML, `url` and
+`stylesheet` together, and one family declared twice with different sources.
+
+**Fixed on the way — `familyFor` resolved backwards.** The bridge decided a font's CSS
+family by asking `document.fonts.check` whether the page had it. That question has no
+answer: `check` is **true** for a family nothing declares (nothing unloaded matches) and
+**false** for an `@font-face` that is still loading. So a page that declared nothing took
+the exact-font branch, and the one page that had brought its own font took the *generic*
+branch — cached per handle, so a single early `gl_load_font` locked that handle to
+`sans-serif` for the run. The name heuristic (`mono` → `monospace`) was unreachable in
+every other case. `familyFor` now answers `"Requested", <generic>` and lets CSS choose.
+
+**And the silence is closed.** `gl_load_font` measures whether the family actually
+resolved — a family the browser has overrides both `monospace` and `sans-serif`, so the
+two measure the same; one it does not have follows each and they differ — and
+`console.warn`s once when it did not, naming the family and the generic that will draw.
+Every resolution is recorded on `globalThis.loftFonts`.
+
+**Gates.** `tests/html_fonts.rs`: the three sources resolve to the requested family in
+headless Chromium (proven red with the head block suppressed); the same page against a
+font server delaying font files by 800 ms still resolves, while the same page WITHOUT
+the await leaves both brought families unresolved (the control, asserted every run); a
+real `loft --html` page carries the block with the await ahead of the `loft_start` call;
+and a drifting family is refused with no page written.
+`tests/data/slow_font_server.py` is the throttle.
+
+### The viewer smoke test read a viewer it had not started (2026-08-22)
+
+`tests/viewer_markdown.rs` spawns the viewer with `LOFT_VIEW_PORT=18765` — deliberately
+not 8765, which is what a developer's `make view` takes — and then polled **8765** for
+its listener, with two comments saying the viewer did not support the env var. It does.
+So the test connected to whatever viewer happened to be up on 8765 and rendered its
+pages, in another checkout or from an earlier session; on a box where 8765 was free it
+waited the full 240 s and failed. Both halves now use `VIEWER_PORT`: 0.66 s, and it
+examines the process it spawned.
+
+### A paged load refused every entry type with an enum field (@PLN146 F2, 2026-08-22)
+
+**Symptom.** `store_load_key_text` (and its `_key` / `_range` / `_prefix` siblings) refused
+a `hash<Blob[bl_key]>` whose element carries `bl_kind: BlobKind`, loading nothing and
+reporting *"has a field the working-set copy cannot relocate (a `vector<text>` /
+`vector<vector>` element pointer would dangle)"* — of a type with neither.
+
+**Cause.** `Stores::is_copyable_field` has arms for `Parts::Struct` and
+`Parts::EnumValue` (a struct-enum VARIANT) and had none for `Parts::Enum` (the enum
+itself), so every enum field fell to the `_ => false` catch-all. The message was a
+second, independent defect: `not_copyable_reason` named `vector<text>` /
+`vector<vector>` unconditionally rather than reading which field had failed.
+
+**Fix.** An enum's value is a tag byte stored inline, and `copy_claims` recurses on the
+SAME position for a struct-enum's payload — so an enum relocates exactly when every
+variant it could hold does, and a payload-free variant (`u16::MAX`) always does:
+
+```rust
+Parts::Enum(values) => values
+    .iter()
+    .all(|(vt, _)| *vt == u16::MAX || self.is_copyable_field(*vt)),
+```
+
+`not_copyable_reason` now finds the first field the predicate rejects and names it with
+its type (`` `b_names: vector<text>` ``), falling back to "a field" for an element type
+that is not a record.
+
+**Guard.** `tests/store_persist_loft.rs::paged_load_carries_enum_fields_both_backends`
+over `tests/scripts/store_paged_enum_field.loft`. It asserts the VALUES — plain variants,
+a `Box { bw, bh }` payload, a `Line { ln }` payload, the byte vector and a trailing scalar
+— because a copy that is accepted and wrong is the worse of the two failures. Red on the
+pre-fix binary with the refusal quoted above.
+
+### `store_load` looped for ever on a pack-shaped image (@PLN146 F1, 2026-08-22)
+
+**Symptom.** `store_load` never returned — no diagnostic, no bound, on a call that only
+reads a file. `LOFT_NO_COMPACT_ON_LOAD=1` made it return, which is what named the
+subsystem.
+
+**Cause.** `Stores::rebuild_into_scratch` claims the root record out of a fresh
+`Store::new_in_use(root_words + PRIMARY + 1)`, raw-copies the source root block over it,
+and then re-asserts the header — as `root_words`. `Store::claim_block` only splits a block
+more than a third larger than the request, and here it never is (`root_words + 1` against
+`root_words`), so the claim had handed out the WHOLE arena. Writing the request back
+shortened the block by the word it owned, and that word became a block whose header reads
+zero. `Store::claim_scan` walks the chain with `pos += abs(claim)`, so it added zero to its
+position for ever. The `debug_assert_ne!(pos, last, "Inconsistent database zero sized
+block")` that states the invariant is compiled out of the loft library in every profile
+(`[profile.dev.package.loft] debug-assertions = false`), so no build had it armed.
+
+**Fix.** Two, at two different chokepoints:
+
+- `rebuild_into_scratch` reads the destination's own header after its claim and restores
+  THAT, so a raw block copy can no longer change the size a block says it owns.
+- `claim_scan` cannot fail to advance: a zero header reports the malformed chain on stderr
+  once, and the walk treats the chain as ending there so the store grows past it. A
+  corrupt chain now costs a few leaked words and a message instead of a hang.
+
+**Reachability.** It needs a container of several keyed collections (three or more root
+words is enough for the claim to decline the split) plus values big enough that a later
+claim misses the free list and reaches the linear scan. That is exactly an asset pack, which
+is how @PLN146 F1 found it.
+
+**Guard.** `tests/store_persist_loft.rs::compaction_on_load_returns_both_backends` over
+`tests/scripts/store_load_compaction_scratch_header.loft`, on both backends, with its own
+`LOFT_TIMEOUT` — the failure under test is an unbounded loop, so leaving it to the suite
+watchdog would report it as a slow test. Reverting either half alone was checked: the
+producer fix alone is silent and correct, and the `claim_scan` guard alone turns the hang
+into three stderr lines and a correct answer.
+
+### A `par` worker read the element, whatever the call site wrote (loft#1060, 2026-08-21)
+
+```
+$ loft --interpret r.loft            # identical on --native
+b=100      <-- for a in rows par(b = takes_int(a.n), 2) — `tag * 100`, `n` never read
+c=2        <-- for a in ns   par(c = dbl(other), 2)     — the element, `other` never read
+```
+
+`parse_parallel_worker_fn` parsed the worker call's first argument into a `dummy` and
+dropped it, because the dispatcher passes the element itself. Nothing checked that the
+argument named the element, and nothing checked that the worker's first PARAMETER could
+take it — so `takes_int(a.n)` handed the worker the whole record and it read the first
+eight bytes as its `integer`. The answer depended on struct FIELD ORDER, which is how it
+stayed hidden: put `n` first and the same program is right.
+
+**The differential oracle could not have caught this.** Both backends agreed — they share
+the parser. `formal/concurrency.md` `(C-Det)` names the SEQUENTIAL loop as the standard,
+and the sequential `b = takes_int(a)` refuses this program outright (*"expected integer,
+got Sq on argument 1"*). So the accept/reject sides of the two forms had drifted, in a
+place a two-backend comparison structurally cannot see. That is now written into the doc's
+Conformance section beside the differential bullet.
+
+The `(A)` kind check already sitting at this site had been narrowed deliberately — scalar
+element paired with a collection first param — to stop false positives, which left the
+REVERSE direction open, and the reverse direction is the one that reinterprets. The fix
+takes the predicate the ordinary call site uses (`can_convert`, after an `is_equal`
+identity test, because the element's type carries the dep list of the collection it came
+out of and the declared parameter carries none) rather than adding a third hand-rolled
+kind test to keep in step with the other two. Identity is compared by VARIABLE NUMBER, so
+a loop that re-spells the element name (loft#915) is handled.
+
+Four shapes refused, all previously silent: a constant, an unrelated variable, a field of
+the element, and a worker declaring no parameter at all. Guards in
+`tests/scripts/36-parse-errors.loft`; the legitimate forms — struct element, extra context
+argument, `a.method()`, scalar element — are verified value-by-value on both backends.
+
+### One cap, one guard — the call-stack limit stops meaning two things (loft#1058, 2026-08-21)
+
+```
+$ loft --interpret p.loft      $ loft --native p.loft        # the DEFAULT backend
+depth=9999                     error: call stack overflow — exceeded 10000 nested calls
+```
+
+The same program, one call short of the cap, answered on one backend and halted on the
+other. That was found while closing what #1058 filed — a *rendering* divergence, the last
+halting fault still printed two ways: `--interpret` gave the loft diagnostic (`-->`, source
+line, caret) and `--native` a hand-rolled line with no position block, its own frame layout,
+and the depth count only on that side.
+
+**The filed blocker was the wrong question.** The issue said converging the caret would cost
+either a per-frame current-line slot on every native call or a caret pointing at the
+declaration — "a decision about a shipped surface and about native call cost". Both options
+took for granted that the position had to be the CALL SITE. It does not: the fault is a
+property of ten thousand frames, not of a point, and the running function is what both
+backends already know. Nothing was added to the hot path.
+
+Two guards were enforcing one cap and counting different things:
+
+- **`State::fn_call` tested a `call_depth` counter, not the stack.** The counter never
+  counted `main`, and the coroutine paths truncate `call_stack` without touching it — so it
+  drifted from the real depth in two independent ways. It now reads `call_stack.len()`, the
+  quantity `cr_call_push` tests and `stack_trace()` reports on both backends, and the
+  counter is deleted rather than corrected: there is no second number left to keep in step,
+  and with it go its save/restore in `snapshot_checkpoint` and on the host-call path.
+- **`cr_call_push` pushed the frame and tripped afterwards.** A refused call never runs, so
+  its frame is not part of the stack the diagnostic reports — but native put it on top of
+  the chain, one frame longer than the interpreter's, and named the callee where the
+  interpreter named its caller. It now checks before pushing, as `fn_call` does, and reads
+  the position off the frame below.
+
+`cr_stack_overflow` is now three lines over `RuntimeError::stack_overflow(...).report_and_exit()`,
+so the diagnostic, the frame block and the `in_lazy_driver` containment are the ones #1056
+built. The depth moved into `RuntimeErrorKind::describe()`, which gives BOTH backends the
+count, and it says `stack frames` rather than `nested calls` because `main` is one of them.
+
+**Where the axes had to move together.** Self-recursion cannot see any of this: `deep` calls
+`deep`, so caller and callee are the same name and every wrong reading looks right. Mutual
+recursion separates the callee from the running function; a nested argument
+(`runaway(helper(n))`) separates the refused call from both; and only a program sitting
+exactly ON the cap shows that the budgets differed at all. The regression tests carry all
+three, and `tests/oracle/32-stack-overflow-halt.loft` pins the boundary from both sides in
+one program — 9 998 must answer, 9 999 must halt — because a budget that moves by one is
+invisible to a test that only checks the side it moved away from.
+
+### One fault, one rendering, whatever backend ran it (loft#1056, 2026-08-21)
+
+```
+$ loft --native p.loft            # the DEFAULT backend, before
+thread '<unnamed>' (2466378) panicked at /tmp/loft_native_2466316.rs:966:18:
+p.loft:1 plain assert
+```
+
+A failed `assert` reached the user as a Rust panic naming a generated temp file, where
+`--interpret` printed a loft diagnostic naming their own source. `panic` next door was
+already right, so the two explicit halt statements — one event — read two different ways.
+
+The issue was filed with the convergence blocked on a decision, and the decision turned out
+not to exist. `RuntimeError::call_chain` is hardcoded `Vec::new()` at both the `user_panic`
+and `assertion_failed` constructors, so on `--interpret` and on plain `--native` there were
+no frames to trade away; only the browser target's panic hook had any. What read as "this
+costs the call chain" was a hole, and one three-deep `--interpret` probe says so in ten
+seconds. Filing from a code reading rather than a measurement is what made it look like a
+design call.
+
+Four chokepoints:
+
+- **`RuntimeError::render()`** — one renderer for the diagnostic plus the frames, called by
+  `main.rs` (interpreter) and by `report_and_exit` (generated binary). Frames come from
+  `State::current_call_chain` on one side and the native shadow `CALL_STACK` on the other,
+  so the two backends agree by construction rather than by two spellings being kept in step.
+- **`State::note_runtime_error_halt()`** — the three interpreter dispatch loops each carried
+  their own copy of the halt check; now one method, which also BACKFILLS the chain. `assert`
+  and `panic` are native fns and every `Stores`-side raise sees only `&mut Stores`, so none
+  of them can reach a `State`; the dispatch loop is the first point that holds both.
+- **`State::run_to_return()`** — ten textually identical worker / `parallel` arm / host-call
+  dispatch loops folded into one, and not one of the ten checked for a fault. That is
+  loft#1053's residue: a failed assert inside a `par` worker ran the worker's remaining rows
+  to the end, and the frames it was finally reported with were the PARENT's — `main`, which
+  is not where the fault happened. Naming the wrong function is worse than naming none.
+- **`report_and_exit` takes a never-released lock** — a halting fault is the program's halt,
+  so it is reported once however many workers reach it together (six rows over two workers
+  printed it twice on `--native`, once on `--interpret`).
+
+`assert`'s generated body now takes `panic`'s path:
+`RuntimeError::assertion_failed(msg, file, line).report_and_exit()`.
+
+Eleven differential cells (top-level and nested `assert` and `panic`, three `par` families,
+a runtime-built message, two clean controls) are byte-identical on both backends, with the
+comparator proved able to report a difference. Five regression cells in
+`tests/runtime_errors.rs`, each shown to fail under a deliberate break of the mechanism it
+names, and `html_panic_names_itself_and_its_loft_frames` now pins the diagnostic as well as
+the frames, so a page that fell back to a bare Rust panic cannot pass it.
+
+**A hazard the differential matrix missed because it held one axis fixed.** All eleven
+cells ran outside a lazy-store driver. @PLN133 S8 decided a fault inside a DRIVER is
+contained — the lookup answers null and the reason reaches `store_lazy_error` — and the
+generated driver call runs under `catch_unwind`, so moving `assert` onto `report_and_exit`
+made it exit the process where the interpreter contained it. The same probe showed `panic`
+had been doing exactly that since it started using that path. Both now take the
+`in_lazy_driver` bypass `cr_stack_overflow` and the crash-report hook already carried, and
+unwind with the payload spelled the way the interpreter's contained-fetch spells it
+(`<kind label>: <message>`), so `store_lazy_error` reads identically on both.
+
+**The oracle had been collecting the evidence and discarding it.**
+`tests/differential_oracle.rs` has captured stderr since it was built and compared it only
+for the leak substring — so the channel that would have caught this the day
+`31-assertion-halt.loft` was added was never asked. It is now a compared channel (leak line
+filtered out: leaks have their own channel, and the native binary prints one only under
+`LOFT_NATIVE_LEAK_CHECK`), with a positive control for it and one asserting that a leak
+stays ONE divergence rather than also a stderr difference. Seven of the corpus programs
+write to it, so it is exercised rather than agreeing by emptiness.
+
 ### A generic function is callable as a `par` worker (loft#1033, 2026-08-20)
 
 ```loft

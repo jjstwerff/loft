@@ -1,0 +1,97 @@
+# GIANT RAT — MENACING through POSTURE + FUR, not ornament (no spikes): a LEAN body with a
+# ROUNDED/ARCHED SPINE (coiled to propel itself at you — from above: a tense narrow capsule
+# with a dark spine ridge and gathered haunches), DARKER STRIPES in the fur (dorsal ridge +
+# flank striations), pinned-back ears, red eyeshine, bared incisors over a dark gape, clawed
+# forepaws. Whip tail trails DOWN (may overhang). FRONT=UP.
+# Techniques: lean-capsule mass + dark DORSAL-RIDGE stroke + flank striation strokes =
+# the menacing-animal recipe (posture + fur, reusable for jackal/wolf kin).
+#
+# --- FUR recipe, APPLIED (ref assets/sprites/ref/fur: Mus decumanus + Dürer hare) ---
+# Fur reads by VALUE + a BROKEN EDGE, not by lines inside a clean circle. How it's built here
+# (the canonical recipe — mouse/king copy it, jackal/wolf kin reuse it):
+#  1. VALUE — the body Circles are RADIAL GRADIENTS lit from the head (crown light -> flank shadow).
+#  2. CLUMP — the flank fur is a FRONDS rooted on the dorsal midline (curved, tapered, swept
+#     back, clumped/jittered), not straight Line striations; the longer jittered strokes reach
+#     the margin and break the silhouette ("fur", not a moulded edge).
+#  3. DARK GAPS — the fur strokes sit darker than the mass, carving the locks.
+# Layer: gradient mass -> dark dorsal ridge -> Fronds fur. Keep it SPARSE (notan stays clear).
+# Source for assets/sprites/giant_rat.png.
+size 256x256
+Background transparent
+
+# whip tail first (under the body) — thick base, hard S-curve
+name tail
+Poly (0.50,0.66)@8 (0.61,0.80)@4.5 (0.49,0.91)@2.5 (0.34,0.985)@1.5 stroke=148,112,102
+
+# body — LEAN tense capsule, spine arched: narrow flanks, the mass gathered forward
+name haunches
+Circle (0.50,0.585) r=0.112 radial=96,66,48>56,38,26 at=0.50,0.55,0.15
+name midbody
+Circle (0.50,0.470) r=0.122 radial=102,72,52>60,40,28 at=0.50,0.425,0.16
+name shoulders
+Circle (0.50,0.375) r=0.114 radial=102,72,52>60,40,28 at=0.50,0.335,0.15
+
+# gathered haunch bulges — the hind legs coiled under, ready to spring
+name haunchL
+Circle (0.418,0.615) r=0.052 rgb=74,50,36
+name haunchR
+Circle (0.582,0.615) r=0.052 rgb=74,50,36
+
+# the ROUNDED SPINE — a dark dorsal ridge down the midline (the arch, seen from above),
+# running INTO the skull so head and body read as one animal
+name spine
+Poly (0.50,0.300)@6 (0.50,0.460)@11 (0.50,0.600)@7 (0.50,0.675)@4 stroke=56,36,26
+
+# flank FUR — Fronds rooted on the dorsal midline, mirrored, swept back toward the haunches:
+# clumped/jittered curved tapers (not straight lines); the longer jittered ones reach the
+# margin and break the silhouette (the "fur" read). Replaces the old straight striations.
+name fur
+Fronds (0.50,0.40)-(0.50,0.62) n=7 len=0.135 len2=0.09 w=2.6 w2=1.1 ang=36 ang2=54 mirror=1 bow=0.14 seed=4 stroke=48,30,22
+
+# clawed forepaws — splayed beside the muzzle (the lunge)
+name pawL
+Circle (0.405,0.272) r=0.036 rgb=66,44,32
+# claws — HOOKED tapered talons (curved ~ ribbons), larger + fanned forward (the lunge)
+Poly (0.386,0.252)@3.2 (0.372,0.208)~@1.6 (0.366,0.164)@0.3 stroke=210,200,170
+Poly (0.404,0.248)@3.2 (0.400,0.202)~@1.6 (0.396,0.156)@0.3 stroke=210,200,170
+Poly (0.422,0.250)@3.2 (0.432,0.204)~@1.6 (0.440,0.162)@0.3 stroke=210,200,170
+name pawR
+Circle (0.595,0.272) r=0.036 rgb=66,44,32
+Poly (0.614,0.252)@3.2 (0.628,0.208)~@1.6 (0.634,0.164)@0.3 stroke=210,200,170
+Poly (0.596,0.248)@3.2 (0.600,0.202)~@1.6 (0.604,0.156)@0.3 stroke=210,200,170
+Poly (0.578,0.250)@3.2 (0.568,0.204)~@1.6 (0.560,0.162)@0.3 stroke=210,200,170
+
+# head — emerges FROM the shoulder mass, never bolted on: a SKULL circle bridges the joint
+# (tone between body and muzzle), the muzzle wedge's base corners are BURIED inside it, and
+# the spine ridge (above) runs into the skull to tie body and head together.
+name skull
+Circle (0.50,0.340) r=0.090 rgb=72,48,35
+name muzzle
+Poly (0.425,0.355) (0.575,0.355) (0.50,0.150) rgb=62,40,30
+
+# ears — PINNED BACK: angular, swept from the skull sides (aggression)
+name earL
+Poly (0.458,0.318) (0.372,0.285) (0.436,0.362) rgb=50,30,22
+name earR
+Poly (0.542,0.318) (0.628,0.285) (0.564,0.362) rgb=50,30,22
+
+# eyes — small, mean, RED eyeshine
+name eyes
+Circle (0.472,0.296) r=0.013 rgb=120,16,12
+Circle (0.528,0.296) r=0.013 rgb=120,16,12
+Circle (0.475,0.291) r=0.005 rgb=255,84,60
+Circle (0.525,0.291) r=0.005 rgb=255,84,60
+
+# the gape — dark open mouth at the muzzle tip, incisors bared OVER it
+name gape
+Poly (0.476,0.212) (0.524,0.212) (0.500,0.156) rgb=28,14,10
+name incisors
+Poly (0.474,0.215) (0.487,0.112) (0.500,0.209) rgb=214,196,140
+Poly (0.500,0.209) (0.513,0.112) (0.526,0.215) rgb=214,196,140
+
+# bristly whiskers
+name whiskers
+Line (0.464,0.236) - (0.322,0.176) w=1
+Line (0.468,0.258) - (0.304,0.246) w=1
+Line (0.536,0.236) - (0.678,0.176) w=1
+Line (0.532,0.258) - (0.696,0.246) w=1

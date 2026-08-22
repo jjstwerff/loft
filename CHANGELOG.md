@@ -33,6 +33,160 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A browser game can bring its own font
+
+A game that draws text in the browser used to get whatever family the browser guessed
+from the file name, and there was no way to say otherwise without hand-writing CSS.  Now
+the font is a line in `loft.toml`:
+
+```toml
+[[font]]
+family = "PressStart2P"
+native = "fonts/PressStart2P.ttf"     # the file every other target uses
+url    = "fonts/PressStart2P.woff2"   # what the page fetches
+```
+
+`--html` puts the `@font-face` in the page (or a `<link>`, if you name a provider's
+stylesheet instead), and waits for the font to arrive before your program starts — a
+webfont that turns up after the first frame is drawn is a fallback nobody was told about.
+Declare only `family` and the page brings nothing: that is the case where the browser
+already has the font.
+
+The name has to match the path your program passes to `gl_load_font`, and the build now
+**says so** instead of quietly drawing in the wrong face.  A font that still cannot be
+found reports itself once in the browser console rather than silently substituting.
+
+### A range-read no longer refuses a collection because one field is an enum
+
+Reading one key out of a big store over HTTP range copies that record's fields into
+your own store, and the check for *"can this field be moved?"* knew about structs and
+about struct-enum variants but not about a plain `enum`. So a single `kind:` field made
+the whole collection unreadable a key at a time — and the refusal blamed a
+`vector<text>`, which the type did not have, sending you looking for the wrong thing.
+
+An enum's value is a tag byte stored in the record, so there was never anything to
+relocate. It reads now, variant and payload alike.
+
+The refusal message also **names the field** it is actually about, rather than always
+naming the same two types. A refusal you cannot act on is barely better than a silent
+one.
+
+### `store_load` cannot hang any more
+
+Loading a store image compacts it, and compaction rebuilt the image into a fresh
+store whose root block was recorded one word shorter than it actually owned. That
+stray word became a block owning nothing, and the allocator walks a block chain by
+stepping over each block's own size — so it stepped over nothing, for ever. The
+symptom was a `store_load` that never came back: no error, no output, no bound of
+its own, on a call the program had only asked to READ a file.
+
+It needed a container of several keyed collections — an asset pack's shape — holding
+values big enough for a later allocation to reach the linear scan, which is why it
+had not been seen before.
+
+Two things changed. The rebuild now records the block at the size it was actually
+given, and the allocator's walk can no longer fail to advance: a malformed chain
+says so on stderr and the store grows past it, so the worst case is a few leaked
+words with a message rather than a program that stops responding.
+
+### ⚠ Asking `git` a question outside a repository now FAILS instead of answering nothing
+
+**This changes behaviour**, so it belongs here rather than being discovered: if you called
+`lib/git` from a directory that is not a git repository, every query used to answer *empty* —
+no commits, no changed files, no diff. It now halts with
+
+```
+git: not a git repository: /path/you/asked/about
+```
+
+The old answer was indistinguishable from a real one. "This repository has no commits" and
+"this is not a repository" arrived as the same empty vector, so a program that branched on
+*"nothing changed, nothing to do"* looked correct while asking a question that could not be
+answered at all. That is the failure the language calls **silent-wrong**, and it is the one
+kind of bug a green test run cannot see.
+
+**If you relied on the old behaviour**, check for a repository before asking, rather than
+reading an empty answer as one.
+
+⚠ An *empty repository* is unchanged and still answers empty — that is a real answer to a
+real question. Only "cannot be asked at all" became a fault.
+
+Why now: adding a fault is a **one-way door**. loft's compatibility promise lets the error
+surface only ever *shrink* after the contract freeze, so a place where loft is too permissive
+— silently accepting something dubious, or handing back a plausible-wrong value where it
+should refuse — is a last chance to add the error. Afterwards it could only be loosened, never
+tightened. See [COMPATIBILITY.md § The error surface is one-directional](doc/claude/COMPATIBILITY.md).
+
+### A failed `assert` reads the same way whichever backend ran it
+
+```
+$ loft p.loft            # the default backend, before
+thread '<unnamed>' (2466378) panicked at /tmp/loft_native_2466316.rs:966:18:
+p.loft:1 plain assert
+```
+
+That names a Rust file in the temporary directory that loft generated and you have never
+seen. The same program under `--interpret` named *your* source. Now both print the loft
+diagnostic — and both print the functions the fault happened inside, which neither did
+before:
+
+```
+error: assertion failed: n was 9
+  --> game.loft:12:1
+  |
+12|     assert(n < 5, "n was {n}");
+  | ^
+  in fn inner() ← called from
+        fn middle()
+        fn main()
+```
+
+Inside a `par` worker the frames are the worker's own, and the halt is reported once
+however many workers hit it at the same moment.
+
+### A `par` worker no longer ignores what you wrote as its first argument
+
+The first argument of a `par` worker is the loop element — the loop hands each element to
+the worker itself. Writing anything else there used to be accepted and quietly replaced:
+
+```loft
+for a in rows par(b = takes_int(a.n), 2) { println("b={b}"); }
+```
+
+That ran `takes_int(a)` — the whole record, reinterpreted as an `integer` — so a
+`Sq { tag, n }` element answered `tag * 100` and never read `n`. Move `n` to the front of
+the struct and the same program answered differently. `f(5)` and `f(other)` were replaced
+the same way.
+
+All of these are now compile errors that say what to write instead, including a worker
+whose first parameter cannot take the element at all — the check the ordinary
+`b = takes_int(a)` has always made. The documented form is unchanged: pass the element
+first, read what you need inside the worker, and pass extra context after it.
+
+### Runaway recursion stops at the same place on both backends
+
+A program that recurses without end is stopped at 10 000 stack frames. Which frame that
+is no longer depends on which backend ran it: the default backend allowed one call fewer
+than `--interpret`, so a program that recursed almost that deep could print its answer
+under one and die under the other.
+
+The report reads the same way now too — the loft diagnostic, naming the function that was
+running when the stack filled up:
+
+```
+error: call stack overflow — exceeded 10000 stack frames
+  --> game.loft:3:1
+  |
+3 | fn walk(room: Room) -> integer {
+  | ^
+  in fn walk() ← called from
+        fn walk()
+        … (9995 more frames)
+```
+
+The default backend used to print its own shorter line with no source position, no caret
+and a different frame layout.
+
 ### Less memory for a variable reassigned in several branches
 
 ```loft

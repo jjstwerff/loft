@@ -43,6 +43,23 @@ friction after every edit, and that is how a check gets switched off.  **A bare
 make check-rlib          # all three, each with its own cure; skips a target that isn't installed
 ```
 
+**Waiting for a backgrounded `make ci` — do not race the file it writes.** The recipe
+truncates `result.txt` and writes `.ci-running` only after `make` has started, so a wait
+loop armed in the same breath as the launch sees NEITHER yet, exits immediately, and
+reads the PREVIOUS run's `result.txt`. That reports the last run's verdict as this one's
+— once here as a `CI-RESULT: FAILED` for a run that had not begun. Give it a moment and
+confirm the marker exists before waiting on its absence:
+
+```bash
+nohup make ci > ci.log 2>&1 &
+sleep 25 && test -f .ci-running || echo "the gate never started — read ci.log"
+until [ ! -f .ci-running ]; do sleep 30; done; tail -3 result.txt
+```
+
+`result.txt` opens with a `== make ci | <rustc> | <UTC timestamp> ==` header for exactly
+this reason: it dates the verdict, so a stale one can be told from a fresh one by
+reading rather than by remembering.
+
 ### Preferred shape — background + peek + wait
 
 ```bash

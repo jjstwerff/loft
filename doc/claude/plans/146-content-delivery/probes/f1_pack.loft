@@ -1,0 +1,152 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 F1 — the pack IS a loft store, and it holds SCENES as well as assets.
+//
+// The gate for the schema in `assets_schema.loft`:
+//
+//   1. build a pack, persist it, load it back — every blob byte-identical, every
+//      scene, definition, animation row and placed instance intact;
+//   2. print the layout fingerprint, derived from the pack's own types by
+//      reflection, so the three targets can be compared.  A silent divergence
+//      there turns every asset into garbage at a byte offset, which reads as a
+//      corrupt file rather than as a layout bug.
+//
+// Run it twice on different backends and the second run READS what the first
+// wrote — a stronger statement than two fingerprints agreeing:
+//
+//   F1_KEEP_PACK=1 loft --native probes/f1_pack.loft
+//   loft --native-wasm pack.wasm probes/f1_pack.loft && wasmtime --dir . pack.wasm
+use assets_schema;
+
+// ── the gate ────────────────────────────────────────────────────────────────
+
+fn same_bytes(a: const vector<u8>, b: const vector<u8>) -> boolean {
+  if len(a) != len(b) { return false }
+  for i in 0..len(a) { if a[i] != b[i] { return false } }
+  true
+}
+
+fn check_blob(p: const hash<Blob[bl_key]>, q: const hash<Blob[bl_key]>, key: text) -> boolean {
+  a = p[key];
+  b = q[key];
+  if a == null || b == null { println("  MISS blob {key}"); return false }
+  if !same_bytes(a.bl_bytes, b.bl_bytes) {
+    println("  DIFF blob {key}: {len(a.bl_bytes)} out, {len(b.bl_bytes)} back");
+    return false
+  }
+  if a.bl_kind != b.bl_kind { println("  DIFF blob {key} kind"); return false }
+  true
+}
+
+/// A page is two records in two stores, so checking one means checking both: the
+/// shape came back from the metadata store and the pixels from the bulk store,
+/// and the metadata's `pi_blob` is what joins them.
+fn check_page(p: const Pack, q: const Pack, pb: const hash<Blob[bl_key]>,
+              qb: const hash<Blob[bl_key]>, name: text) -> boolean {
+  a = p.pages[name];
+  b = q.pages[name];
+  if a == null || b == null { println("  MISS page {name}"); return false }
+  if a.pi_w != b.pi_w || a.pi_h != b.pi_h { println("  DIFF page {name} size"); return false }
+  if a.pi_blob != b.pi_blob { println("  DIFF page {name} blob key"); return false }
+  check_blob(pb, qb, b.pi_blob)
+}
+
+fn main() {
+  keep = env_variable("F1_KEEP_PACK") != "";
+  meta_path = "f1_pack.meta.store";
+  blob_path = "f1_pack.blobs.store";
+  p = demo_pack();
+  pb: hash<Blob[bl_key]> = [];
+  demo_blobs(pb);
+
+  // Build the pack only when it is not already there, so a second run READS what
+  // the first one wrote.  That is the parity gate: run this on a desktop and then
+  // on `--native-wasm`, and the wasm run consumes the native run's bytes.
+  //
+  // Writing is a desktop step by nature.  `store_persist_bind` answers false on
+  // wasm (no mmap), and `store_durable_seal`, which a real packer calls next,
+  // does not COMPILE for wasm at all — its Rust body is `#[cfg(feature =
+  // "mmap")]` and the failure is a raw rustc E0599 naming `loft::store::Store`
+  // (loft#1063).  A browser reads packs; it does not build them.
+  fresh = !file(meta_path).exists();
+  if fresh {
+    if !store_persist_copy(p, meta_path) { println("FAIL: metadata persist"); return }
+    if !store_persist_copy(pb, blob_path) { println("FAIL: blob persist"); return }
+  }
+
+  q = new_pack();
+  qb: hash<Blob[bl_key]> = [];
+  if !store_load(q, meta_path) { println("FAIL: metadata load"); return }
+  if !store_load(qb, blob_path) { println("FAIL: blob load"); return }
+
+  ok = true;
+  println("read-back:");
+  if !check_blob(pb, qb, "hit.ogg") { ok = false }
+  if !check_blob(pb, qb, "ui.woff2") { ok = false }
+  if !check_page(p, q, pb, qb, "mobs") { ok = false }
+  if !check_page(p, q, pb, qb, "items") { ok = false }
+
+  c = q.cells["goblin_5"];
+  if c == null || c.ce_page != "mobs" || c.ce_w != 16 || c.ce_oy != 16.0 {
+    println("  MISS cell goblin_5"); ok = false
+  }
+
+  d = q.defs["torch_light"];
+  if d == null { println("  MISS def torch_light"); ok = false }
+  else if !(d.df_kind is Light) || d.df_radius != 96.0 || d.df_power != 1.25 {
+    println("  DIFF light def"); ok = false
+  }
+
+  if anim_of(q, "goblin", "walk", 2) != "goblin_walk_n" {
+    println("  DIFF anim table: walk/2 -> {anim_of(q, "goblin", "walk", 2)}"); ok = false
+  }
+  if anim_of(q, "goblin", "swim", 0) != "" {
+    println("  DIFF anim table: an absent action answered something"); ok = false
+  }
+
+  sc = q.scenes["cave"];
+  if sc == null || sc.sc_w != 640 { println("  MISS scene cave"); ok = false }
+
+  n = 0;
+  lights = 0;
+  for i in q.placed {
+    if i.pd_scene != "cave" { continue }
+    if i.pd_order != n { println("  DIFF instance order at {n}"); ok = false }
+    dd = q.defs[i.pd_def];
+    if dd == null { println("  MISS def {i.pd_def} for instance {n}"); ok = false }
+    else if dd.df_kind is Light { lights += 1 }
+    n += 1;
+  }
+  if n != 4 { println("  DIFF instance count: {n}"); ok = false }
+  if lights != 1 { println("  DIFF light count: {lights}"); ok = false }
+  flip = q.placed["cave", 1];
+  if flip == null || flip.pd_sx != -1.0 { println("  DIFF mirrored instance"); ok = false }
+
+  // The split is the design, so say what each half costs: the metadata is what a
+  // boot load pays for, and it must stay small beside the art.
+  meta = file(meta_path);
+  blobs = file(blob_path);
+  if fresh {
+    println("  {n} instance(s), {lights} light, metadata {meta.size} B + bytes {blobs.size} B")
+  } else {
+    println("  {n} instance(s), {lights} light, read a pack this run did not write")
+  }
+  if ok { println("read-back: every asset and every scene row identical") }
+  else { println("read-back: FAILED") }
+
+  println("layout fingerprint = {layout_fingerprint()}");
+  if !ok { print(layout_descriptor()) }
+  // The pack is the probe's output, not an artefact of the tree — but leave it
+  // for a second run on another backend to read.  `F1_KEEP_PACK` says so.
+  if fresh && !keep {
+    // `store_persist_copy` leaves a schema sidecar beside each image; both halves
+    // of a pack are two files, not one, and the cleanup has to know that.
+    _ = delete(meta_path);
+    _ = delete(blob_path);
+    ms = "{meta_path}.dschema";
+    bs = "{blob_path}.dschema";
+    _ = delete(ms);
+    _ = delete(bs);
+  }
+}
