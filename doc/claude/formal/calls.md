@@ -87,6 +87,10 @@ site.)
   (F-Drop)   …unless the function is DECLARED with no return type: then a value-typed tail
              expression is a STATEMENT.  It is evaluated for its effects, its value is
              discarded, and the function returns nothing.
+  (F-Block)  the same rule one level in: a `{ … }` block ending in an expression YIELDS that
+             expression, wherever the block stands, and the value flows out to whatever reads
+             it.  It is discarded only where the BLOCK itself is a statement — a `;`-terminated
+             one, a loop body, or the body a function drops by F-Drop.
   (F-Rec)    a call to the same (or a mutually-recursive) function gets its OWN fresh frame —
              recursion is ordinary, bounded only by the stack.
 ```
@@ -95,6 +99,14 @@ site.)
 body returns is the call's result; the frame's own temporaries are released when it returns.
 `return e` leaves early; a function whose last statement is an expression returns it without an
 explicit `return`. Recursion is just a call with a fresh frame.
+
+`(F-Block)` is what `(F-Return)` and `(F-Drop)` are the two function-level cases of, and it
+is written down because it did not hold: `fn f() -> integer { { 5 } }` answered `null` on the
+interpreter and `0` on `--native`, and `fn g() -> integer { n = 5; { n } }` answered `5` on
+one and `0` on the other. A block reaching the expression parser is parsed against `Void` —
+a statement, as far as that site can tell — so its tail was dropped even where its value was
+the function's. The type flowed out correctly the whole time, which is why the function
+type-checked and nothing said anything (loft#1076).
 
 `(F-Drop)` is the edge `(F-Return)` alone cannot answer, and it was written after the two
 backends disagreed about it (loft#1075). `fn main() { store_persist_copy(h, "…") }` ends in a
@@ -160,8 +172,8 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-OPEN: **0**. One deviation has been carried and closed (D-call-1); otherwise this is a *rules*
-doc — it shrinks operational.md's D-op-1 and adds no code deviation of its own.
+OPEN: **0**. Two deviations have been carried and closed (D-call-1, D-call-2); otherwise this
+is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its own.
 
 > **D-call-1 — OPENED AND CLOSED (2026-08-22).** `(F-Drop)` did not exist, and the edge it
 > now names is where the two backends parted: a function DECLARED void whose body ends in a
@@ -207,6 +219,25 @@ doc — it shrinks operational.md's D-op-1 and adds no code deviation of its own
 > to fail on a pristine tree at 655ff4dd with 13 `E0308`s on `--native` while `--interpret`
 > ran it clean. Fixes loft#1075.
 
+> **D-call-2 — OPENED AND CLOSED (2026-08-22).** `(F-Block)` did not hold: a `{ … }` block
+> whose value someone reads dropped its own tail, so `fn f() -> integer { { 5 } }` answered
+> `null` on `--interpret` and `0` on `--native`, and `fn g() -> integer { n = 5; { n } }`
+> answered `5` on one backend and `0` on the other — silently, with the function
+> type-checking, because the block's TYPE is its tail's type and only the value was thrown
+> away. Every `{ … }` reaching `expression` is parsed against `Void` (a statement, as far as
+> that site can tell), and the parse site cannot know which statement turns out to be the
+> last one. The drop is undone after the statement loop, where the block's type is already
+> the value it yields.
+>
+> Two boundaries, each measured rather than argued. **Depth**: a first version asked the
+> question of the block one level DOWN and repaired `{ { 5 } }` while `{ { { 5 } } }` still
+> answered null; asking it of the block's OWN tail holds at any depth. **Context**: the
+> repair is restricted to a bare `{ … }`, the only context handed a `Void` it did not mean —
+> a `for` / `while` / `parallel for` / `fields` body gets one because it IS a statement, and
+> undoing the drop there leaked one store per round, reopening loft#725. Guard
+> `tests/scripts/nested-block-in-value-position.loft`, confirmed to fail at the preceding
+> commit on both backends. Fixes loft#1076.
+
 - **Conformance is differential** — call/return is enforced across the two backends by the
   @PLN89 oracle (D-op-1); recursion, nested calls, and struct returns are in its corpus
   (`17-tuples-recursion`, `21-deep-recursion-large-data`, `08-nrvo-mixed-return-paths`). The
@@ -219,6 +250,13 @@ doc — it shrinks operational.md's D-op-1 and adds no code deviation of its own
 ## Conformance
 
 - **Arg order (`F-Args`)** — `add(tag("A"), tag("B"))` prints `AB` before returning.
+- **A block yields its tail (`F-Block`)** — `fn f() -> integer { { 5 } }` is `5`, at any
+  nesting depth, for every tail kind (a literal, a local, an operator expression, a call, a
+  struct or vector literal) and every type; so is a block as an `if` arm, and one after a
+  side-effecting statement. A block bound directly by an assignment (`x = { 5 }`) always
+  was. The two legitimate discards are the controls: a `for` body's tail (loft#725) and a
+  void function's (`F-Drop`). Guard `tests/scripts/nested-block-in-value-position.loft`,
+  both backends.
 - **Void tail discard (`F-Drop`)** — a function declared void whose body ends in a value runs
   the tail and returns nothing, for every tail type (boolean, integer, text, struct, vector,
   tuple, a narrow `u8`) and every tail shape (a call, a bare literal, an operator expression, a

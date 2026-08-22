@@ -900,6 +900,41 @@ impl Parser {
         if matches!(l.last(), Some(Value::Line(_))) {
             l.pop();
         }
+        // A block that YIELDS a value must not have dropped its own tail.
+        //
+        // Every `{ … }` reaching `expression` is parsed against `Type::Void` — it is a
+        // STATEMENT block as far as that site can tell — so its tail is wrapped in a `Drop`.
+        // That is right for a statement, and wrong for a block whose value someone reads:
+        // `fn f() -> integer { { 5 } }` answered `null` on `--interpret` and `0` on
+        // `--native`, silently, and `fn g() -> integer { n = 5; { n } }` answered `5` on one
+        // backend and `0` on the other. The TYPE flowed out correctly the whole time — `t`
+        // is the tail's type, which is how the function type-checked — and only the value
+        // was thrown away.
+        //
+        // Undone here rather than prevented at the parse, because this is the first point
+        // that knows which statement turned out to be the LAST one, and because the expected
+        // type the parse site would need is not threaded for a plain scalar (the wider
+        // question of loft#942/#943). The rule is local and total: a block typed as a value
+        // ends in that value; whether anyone WANTS it is the enclosing level's question, and
+        // the enclosing level wraps this whole block in a `Drop` of its own when the answer
+        // is no.
+        //
+        // `t` is `Void` for a tail that was legitimately dropped — the `;` form, whose reset
+        // runs at the foot of the loop, and the body of a function declared with no return
+        // type (`formal/calls.md` `(F-Drop)`) — so both are untouched.
+        //
+        // Restricted to a bare `{ … }`, which is the only context that reaches here with a
+        // `Void` it did not mean.  A `for` / `while` / `parallel for` / `fields` body is
+        // handed `Void` because it IS a statement — its tail cannot be anyone's value — and
+        // undoing the drop there leaks whatever the tail returned: measured, `for i in 0..8
+        // { dcr_make(i) }` leaked one store per round, which is loft#725 reopened.
+        if context == "block"
+            && !matches!(t, Type::Void | Type::Never)
+            && let Some(tail @ Value::Drop(_)) = l.last_mut()
+            && let Value::Drop(inner) = std::mem::replace(tail, Value::Null)
+        {
+            *tail = *inner;
+        }
         if matches!(t, Type::RefVar(_)) {
             let mut code = l.pop().unwrap().clone();
             self.un_ref(&mut t, &mut code);

@@ -129,9 +129,14 @@ fn test_the_semicolon_form_is_unchanged() {
 fn test_a_value_function_still_returns_its_tail() {
   // Control: the fix keys on a tail that is DROPPED, which happens only when the
   // enclosing function is declared void.  A declared return type must be unaffected.
+  // Bound, not called inside the assert: `assert`'s MESSAGE is evaluated too, so a
+  // side-effecting call written twice runs twice.
   c: vector<integer> = [0];
-  assert(vt_bump_int(c) == 7, "a value function returns its tail: got {vt_bump_int(c)}");
-  assert(vt_indirect(c) == 7, "…and through another function: got {vt_indirect(c)}");
+  direct = vt_bump_int(c);
+  assert(direct == 7, "a value function returns its tail: got {direct}");
+  indirect = vt_indirect(c);
+  assert(indirect == 7, "…and through another function: got {indirect}");
+  assert(c[0] == 2, "…each running once: got {c[0]}");
 }
 
 fn test_a_block_expression_still_yields_its_tail() {
