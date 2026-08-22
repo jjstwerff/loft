@@ -640,11 +640,23 @@ pub fn run_asset(asset: &BuildAsset, project_dir: &Path, force: bool) -> AssetOu
             // stamp the build time for the TTL.
             let fresh = inputs_fingerprint(project_dir, &asset.inputs);
             write_stamp(project_dir, name, fresh, unix_now());
+            // A step that named its `outputs` promised them.  Exiting zero without
+            // producing them is a failed step, not a passed one — reporting the miss
+            // and then `✓` in the same breath says both, and whoever reads the log
+            // takes the `✓`.  The cost of getting this wrong is paid downstream, where
+            // the reason is no longer in view: a `[[embed]]` naming that output, or a
+            // target compile, fails one step later against a file nobody built.
             if !outputs_present(project_dir, asset) {
                 eprintln!(
-                    "loft build: asset `{name}` ran but a declared output is missing: {}.",
+                    "loft build: asset `{name}` FAILED — it exited zero but did not \
+                     produce: {}.\n  \
+                     A `run` script resolves its paths against the SCRIPT, not the \
+                     project root, so `scripts/pack.loft` writing `assets/x` writes \
+                     `scripts/assets/x`.  Set LOFT_PATHS=cwd, or write the path the \
+                     step declares.",
                     asset.outputs.join(", ")
                 );
+                return AssetOutcome::Failed;
             }
             eprintln!("loft build: asset `{name}` ✓");
             AssetOutcome::Built
@@ -1195,6 +1207,49 @@ mod tests {
             test_fingerprint(&dir, "tests/smoke.loft", &inputs, "interpret")
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A step that exits zero without producing what it declared is a FAILED step.
+    ///
+    /// The shape is easy to write by accident: a `run` script resolves its paths
+    /// against the SCRIPT, so `scripts/pack.loft` writing `assets/x` writes
+    /// `scripts/assets/x` and the project's `assets/x` never appears. Reported as
+    /// `✓`, the reason is gone by the time a `[[embed]]` or a target compile trips
+    /// over the missing file.
+    #[test]
+    fn an_asset_that_does_not_produce_its_declared_output_fails() {
+        let dir = std::env::temp_dir().join(format!("loft_asset_out_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let asset = |run: &str| BuildAsset {
+            name: Some("pack".to_string()),
+            run: Some(run.to_string()),
+            outputs: vec!["assets/game.pack".to_string()],
+            ..Default::default()
+        };
+        // Exits zero, writes nothing.
+        assert_eq!(
+            run_asset(&asset("true"), &dir, true),
+            AssetOutcome::Failed,
+            "a step that produced none of its declared outputs reported success"
+        );
+        // The control, and it is one variable: the same declaration, by a command
+        // that DOES write the file. Without it the assertion above would also pass
+        // for a `run_asset` that could never answer `Built` at all.
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        assert_eq!(
+            run_asset(&asset("touch assets/game.pack"), &dir, true),
+            AssetOutcome::Built
+        );
+        // And a step declaring NO outputs is unchanged — staleness rests on the
+        // fingerprint alone there, so there is nothing to be missing.
+        let bare = BuildAsset {
+            name: Some("bare".to_string()),
+            run: Some("true".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(run_asset(&bare, &dir, true), AssetOutcome::Built);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

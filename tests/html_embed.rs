@@ -255,6 +255,68 @@ fn a_declared_pack_is_readable_in_the_page_by_the_programs_own_path() {
     );
 }
 
+/// @PLN146 F4 — the declared file is the one the PROGRAM reads, not the one beside the
+/// manifest.
+///
+/// loft resolves a path a program passes relative to the PROGRAM file, so with the
+/// standard `src/<name>.loft` layout `assets/game.pack` means `src/assets/game.pack`.
+/// Rooting the source at the manifest instead put a DIFFERENT file in the page under the
+/// key the program asks for — measured, before the fix, as a desktop run answering
+/// `load=false` while its own page answered `load=true`. The decoy at the manifest root
+/// is what makes this a reading rather than a check that a file was found.
+// @speed 40.0
+#[test]
+fn the_embedded_file_is_the_one_the_program_would_open() {
+    let loft = repo_root().join("target/release/loft");
+    if !loft.exists() {
+        eprintln!("SKIP: target/release/loft not built");
+        return;
+    }
+    let root = std::env::temp_dir().join("loft_html_embed_srclayout");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src/assets")).expect("create src tree");
+    std::fs::create_dir_all(root.join("assets")).expect("create decoy tree");
+    std::fs::write(
+        root.join("loft.toml"),
+        "[package]\nname = \"layout\"\n\n[[embed]]\npath = \"assets/game.pack\"\n",
+    )
+    .expect("write manifest");
+    // What the program reads, and what the page must carry.
+    std::fs::write(root.join("src/assets/game.pack"), b"BESIDE-THE-PROGRAM")
+        .expect("write program-side file");
+    // The decoy: same relative name, beside the MANIFEST, which the program's own
+    // `store_load` would never open.
+    std::fs::write(root.join("assets/game.pack"), b"BESIDE-THE-MANIFEST").expect("write decoy");
+    std::fs::write(
+        root.join("src/layout.loft"),
+        "fn main() { println(\"page\") }\n",
+    )
+    .expect("write source");
+
+    let built = Command::new(&loft)
+        .args(["--html", "page.html", "src/layout.loft"])
+        .current_dir(&root)
+        .output()
+        .expect("invoke loft --html");
+    if !built.status.success() || !root.join("page.html").exists() {
+        eprintln!(
+            "SKIP: `loft --html` failed (no wasm toolchain?)\nstderr: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        return;
+    }
+    let page = std::fs::read_to_string(root.join("page.html")).expect("read page");
+    assert!(
+        page.contains(&loft::base64::encode(b"BESIDE-THE-PROGRAM")),
+        "the page does not carry the file the program's own `store_load` would open"
+    );
+    assert!(
+        !page.contains(&loft::base64::encode(b"BESIDE-THE-MANIFEST")),
+        "`source` resolved against the MANIFEST — the page carries a file the desktop \
+         run of this program never reads, under the key it asks for"
+    );
+}
+
 /// @PLN146 F4 — a LIBRARY's `[[embed]]` reaches a consumer's page, and brings the
 /// library's own file.
 ///

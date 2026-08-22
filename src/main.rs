@@ -9148,10 +9148,26 @@ fn main() {
         // for F5's reason: a manifest naming a file that is not there should not cost
         // a wasm compile before it says so.
         let base_fs_js = {
+            // The entry program's own declarations resolve against the PROGRAM, not
+            // against its manifest.  `path` is the string the program passes, and loft
+            // resolves what a program passes relative to the program file — so
+            // `assets/game.pack` in `src/game.loft` is `src/assets/game.pack`, and
+            // reading the manifest's own directory instead would embed a DIFFERENT
+            // file under the key the program asks for.  Measured: with the source
+            // rooted at the manifest, the desktop run answered `load=false` while the
+            // page answered `load=true`, which is the divergence `[[embed]]` exists to
+            // remove.  A library's declarations keep their own root — a library's file
+            // is the library's to locate.
+            let program_dir = std::path::Path::new(&abs_file)
+                .parent()
+                .map_or_else(String::new, |d| d.to_string_lossy().to_string());
             let mut decls: Vec<loft::manifest::EmbedDecl> = own_manifest
                 .as_ref()
                 .map(|m| m.embeds.clone())
                 .unwrap_or_default();
+            for d in &mut decls {
+                d.root.clone_from(&program_dir);
+            }
             for e in &p.data.declared_embeds {
                 if !decls.contains(e) {
                     decls.push(e.clone());

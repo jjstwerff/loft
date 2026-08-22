@@ -52,8 +52,9 @@ ok = store_load(q, "assets/game.pack")   # from disk, and from inside the page
 ```
 
 Add `source = "build/game.pack"` when the file is generated somewhere else — `path`
-stays what the program passes.  A library can declare its own files, and a consumer's
-page brings them along.
+stays what the program passes.  Both are read from beside the **program**, the same
+place loft looks when the program itself opens the file, so the two really are the same
+file.  A library can declare its own files, and a consumer's page brings them along.
 
 This is for what a page needs before its first fetch, and for a page that has to be one
 self-contained file.  Bigger asset sets are still better served over HTTP, where only

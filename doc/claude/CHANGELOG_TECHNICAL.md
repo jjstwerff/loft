@@ -49,7 +49,21 @@ two files. Each would otherwise be carried faithfully under a key the program ne
 asks for — `store_load` answers `false`, the page draws no art, nothing says why.
 That is F5's silent failure in a new place, which is why the spelling is strict.
 
-**Gate.** `tests/html_embed.rs`, three tests. The browser one is the invariant: a page
+**Both are resolved from beside the PROGRAM**, not the manifest — loft resolves any path
+a program passes relative to the program file, so `assets/game.pack` in `src/game.loft`
+is `src/assets/game.pack`. Rooting at the manifest put a *different file* in the page
+under the key the program asks for; measured as a desktop run answering `load=false`
+while its own page answered `load=true`. A library's declarations keep the library's
+root. Found only by moving the fixture off the package root, which the first one had
+pinned.
+
+**Also fixed, from the same probe.** `loft build` reported *"asset `X` ran but a declared
+output is missing"* and then `asset `X` ✓` on the next line. A step that names its
+`outputs` promised them, so it now FAILS, and names the likeliest cause: a `run` script
+resolves its own paths against the script, so `scripts/pack.loft` writing `assets/x`
+writes `scripts/assets/x`.
+
+**Gate.** `tests/html_embed.rs`, four tests. The browser one is the invariant: a page
 declaring a **nested** pack prints exactly what the desktop run of the same source
 prints (`load=true a=7 b=41`), and the control is that same page with the seed
 statement stripped (`load=false a=-1 b=-1`). Proven red by emitting the file under its

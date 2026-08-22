@@ -135,9 +135,14 @@ pub struct EmbedDecl {
     /// relative to the declaring `loft.toml`. Defaults to `path`. A pack is usually
     /// generated into a build dir while the program reads it from where it ships.
     pub source: Option<String>,
-    /// The directory of the `loft.toml` this was declared in, filled by
-    /// [`read_manifest`]. `source` is relative to it — a library's declaration names
-    /// a file in the LIBRARY, and the consumer's page has no way to guess that.
+    /// The directory `path` and `source` are resolved against, filled by
+    /// [`read_manifest`] with the declaring `loft.toml`'s own directory — a library's
+    /// declaration names a file in the LIBRARY, and the consumer's page has no way to
+    /// guess that.
+    ///
+    /// The `--html` driver REPLACES it for the entry program's own manifest with the
+    /// PROGRAM's directory, because `path` is the string that program passes and loft
+    /// resolves such a string relative to the program file (`crate::html_embed`).
     pub root: String,
 }
 

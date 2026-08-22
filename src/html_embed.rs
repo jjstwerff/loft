@@ -23,6 +23,15 @@
 //! build-box path could ask for. `source` is merely where the bytes are on the build
 //! box, so it may be anything that exists.
 //!
+//! **Both are resolved against [`EmbedDecl::root`], and for the entry program's own
+//! manifest that root is the PROGRAM's directory, not the manifest's.** loft resolves
+//! a path a program passes relative to the program file, so `assets/game.pack` in
+//! `src/game.loft` is `src/assets/game.pack`; rooting at the manifest would put a
+//! different file in the page under the key the program asks for. Measured before the
+//! fix: the desktop run answered `load=false` while its own page answered `load=true`.
+//! A library's declarations keep the library's own root — a library's file is the
+//! library's to locate, and no desktop-parity claim is made for it.
+//!
 //! The failure this removes is silent in F5's way: a page that carries the file
 //! under a key nothing asks for answers `store_load` → `false`, the game draws no
 //! art, and nothing on stderr says why.

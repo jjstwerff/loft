@@ -394,9 +394,15 @@ A page carries a file by declaring it in `loft.toml`:
 ```toml
 [[embed]]
 path   = "assets/game.pack"   # what the PROGRAM passes; also the key in the page's FS
-source = "build/game.pack"    # optional — where the bytes are on the build box,
-                              # relative to this loft.toml.  Defaults to `path`.
+source = "build/game.pack"    # optional — where the bytes are on the build box.
+                              # Defaults to `path`.
 ```
+
+Both are resolved against **the program's own directory**, because loft resolves a path
+a program passes relative to the program file: `assets/game.pack` in `src/game.loft`
+means `src/assets/game.pack`, on the desktop and here alike.  So omitting `source` means
+*the file the desktop run opens* — which is what makes the two agree.  (A library's
+declarations resolve against the library instead; its file is the library's to locate.)
 
 `--html` reads the file and seeds `globalThis.loftBaseFS` with it, so
 `store_load(q, "assets/game.pack")` is the same call on the desktop and in the page.
@@ -405,6 +411,9 @@ path under the default cwd `/`.  The seed ADDS to whatever the page already had,
 hand-seeded tree and a library's `host_js` both survive it.  A library's declarations
 reach a consumer's page by the same route as `[wasm.bridge] host_js`, with `source`
 resolved against the LIBRARY.
+
+⚠ `LOFT_PATHS=cwd` moves the desktop's resolution to the working directory while the
+page keeps resolving against `/`.  The parity statement above is about the default.
 
 `path` must be **relative and in normal form** — `--html` refuses `/abs/game.pack`,
 `./assets/game.pack` and `a/../b` before the wasm compile, along with a `source` that
