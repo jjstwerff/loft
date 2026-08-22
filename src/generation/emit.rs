@@ -455,13 +455,34 @@ impl Output<'_> {
                 let bool_cast = elem_tp
                     .as_ref()
                     .and_then(|e| crate::generation::boolean_u8_cast(e));
+                // The fn-ref half of the same rule: the slot is the `(u32, DbRef)` PAIR,
+                // while a bare `inc` carries only the d_nr and emits as an `i64`.  Only
+                // the destination names the element a `fn(…)`, so the pair is asked for
+                // here — through `fn_ref_context`, the same channel the `Set` arm in
+                // dispatch.rs opens for a fn-ref VARIABLE, whose `Int` arm builds the
+                // whole pair.  Going through the shared flag rather than wrapping the
+                // emitted text is what makes an if-VALUED source come out right: the pair
+                // is then built inside EACH BRANCH, where a wrap placed around the whole
+                // `if` would leave both arms bare `i64` and rustc refusing the program.
+                // Without it `t.0 = inc` emitted `var_t.0 = 711_i64;` — E0308 *"expected
+                // `(u32, DbRef)`, found `i64`"*.  A CAPTURING source emits a block that is
+                // already the pair, and a `Var` source is already one, so neither is a
+                // bare `Int` and neither is touched.
+                let elem_is_fn = elem_tp
+                    .as_ref()
+                    .is_some_and(|e| matches!(e.base(), Type::Function(_, _, _)));
                 write!(w, "var_{name}.{idx} = ")?;
                 if bool_cast.is_some() {
                     write!(w, "(")?;
                 }
                 let prev = self.tuple_text_to_string;
+                let prev_fn_ref_ctx = self.fn_ref_context;
                 self.tuple_text_to_string = elem_is_text;
+                if elem_is_fn {
+                    self.fn_ref_context = true;
+                }
                 let r = self.output_code_node(w, node.tupleput_inner());
+                self.fn_ref_context = prev_fn_ref_ctx;
                 self.tuple_text_to_string = prev;
                 // The same conversion the `Tuple` element loop applies, for the same
                 // reason: this position knows the slot is an owned `String` and the

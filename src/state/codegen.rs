@@ -823,8 +823,20 @@ impl State {
                 let elem_tp = elems[idx].clone();
                 let offsets = crate::data::element_stack_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
-                // Generate the value to write.
-                self.generate_node(value, stack, false);
+                // Generate the value to write.  A `Function` element's put-op below is
+                // `OpPutFnRef`, which pops the full 20-byte pair, so the push has to be
+                // the pair too — the same decision the FIRST-Set path makes in
+                // `gen_set_first_at_tos` and the tuple LITERAL makes for loft#1069.  A
+                // bare `inc` lowers to the lone d_nr and pushed only eight, so the pop ran
+                // twelve bytes into whatever sat beneath: `--interpret` panicked
+                // `fn_call_ref: fn_var=16 < 20` and `--native` emitted `var_t.0 = 711_i64`
+                // against a `(u32, DbRef)` slot, failing with a raw rustc E0308.  A
+                // CAPTURING lambda already pushes the pair and is unchanged.
+                if matches!(elem_tp.base(), Type::Function(_, _, _)) {
+                    self.gen_fn_ref_value_node(value, stack);
+                } else {
+                    self.generate_node(value, stack, false);
+                }
                 // Compute distance from stack top to the element's position.
                 let tuple_var_base = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_base + elem_offset;
@@ -1141,6 +1153,42 @@ impl State {
         } else {
             let before = stack.position;
             self.generate(value, stack, false);
+            if stack.position - before < 16 {
+                self.emit_push_sentinel(stack);
+            }
+        }
+    }
+
+    /// `IrNode` sibling of [`Self::gen_fn_ref_value`] — same contract, for the arms that
+    /// walk handles rather than `Value`s (the `TuplePut` element write).
+    ///
+    /// A fn-ref value has to arrive as the whole 20-byte pair (8 B d_nr + 12 B closure
+    /// DbRef) because the put-op that consumes it pops all twenty.  A non-capturing
+    /// source pushes only the d_nr, so it is topped up with the null-closure sentinel.
+    /// For an `if`, the sentinel goes INSIDE each branch, so both reach the join with the
+    /// same stack delta — a branch pushing eight against a branch pushing twenty is the
+    /// shape a delta check taken after the join cannot repair.
+    fn gen_fn_ref_value_node(&mut self, node: IrNode, stack: &mut Stack) {
+        let node = node.unspan();
+        if matches!(node.kind(), ValueType::If) {
+            self.generate_node(node.if_cond(), stack, false);
+            stack.add_op("OpGotoFalseWord", self);
+            let code_step = self.code_pos;
+            self.code_add(0i32);
+            let true_pos = self.code_pos;
+            let stack_pos = stack.position;
+            self.gen_fn_ref_value_node(node.if_then(), stack);
+            stack.add_op("OpGotoWord", self);
+            let end = self.code_pos;
+            self.code_add(0i32);
+            let false_pos = self.code_pos;
+            self.code_put(code_step, (self.code_pos - true_pos) as i32);
+            stack.position = stack_pos;
+            self.gen_fn_ref_value_node(node.if_else(), stack);
+            self.code_put(end, (self.code_pos - false_pos) as i32);
+        } else {
+            let before = stack.position;
+            self.generate_node(node, stack, false);
             if stack.position - before < 16 {
                 self.emit_push_sentinel(stack);
             }
@@ -4403,7 +4451,28 @@ impl State {
             return;
         }
         let stack_before = stack.position;
-        self.generate(value, stack, false);
+        // A fn-ref slot is the PAIR (8 B d_nr + 12 B closure DbRef), and the put-op chosen
+        // below pops all twenty for a `Function` slot.  A non-capturing source — a bare
+        // `dbl`, or a lambda that captures nothing — lowers to the lone d_nr and pushes
+        // only eight, so the pop ran twelve bytes into whatever sat beneath it.  Route the
+        // push through `gen_fn_ref_value`, which tops a short one up with the null-closure
+        // sentinel, exactly as the FIRST-Set path does (`gen_set_first_at_tos`'s
+        // `Type::Function` arm).  Same predicate as the put-op selection below, so the push
+        // and the pop that consumes it stay one decision and cannot drift apart.
+        //
+        // The first Set was the only fn-ref write anyone had exercised, so this
+        // REASSIGNMENT half kept the eight-byte form: `g = dbl` after `g` was already
+        // live panicked `fn_call_ref: fn_var=16 < 20` on `--interpret` while `--native`
+        // ran it, which is the backend split rather than a shared refusal.  A CAPTURING
+        // lambda already pushes the pair (its closure block's type IS the function), so it
+        // is unchanged — that case worked, and it is the shape being matched.
+        if matches!(stack.function.tp(var).base(), Type::Function(_, _, _))
+            && !matches!(value.unspan(), Value::Null)
+        {
+            self.gen_fn_ref_value(value, stack);
+        } else {
+            self.generate(value, stack, false);
+        }
         // loft#1026 — a bare `Value::Null` has no `generate` arm, so it pushes NOTHING while
         // the put-op below pops the slot's full width: `OpAppendText` then read whatever the
         // eval stack happened to hold under it.  Give it the slot's typed null instead, the

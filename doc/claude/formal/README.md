@@ -63,6 +63,16 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > varies** — count what is held fixed, not what is swept. (Closed 2026-08-20; the axis is now
 > swept by `tests/scripts/1029-inline-argument-borrow-source.loft`.)
 >
+> [closures.md](closures.md) read `OPEN: 0` with a crash live, and the held-fixed axis there
+> was not the subject at all but the **moment**. Its `L-Escape` corpus checks three
+> destinations — a local, a struct field, a return — and every one of them writes into a
+> place being INITIALISED, so the axis it never varies is *first-Set vs re-Set*. Assigning a
+> fn-ref into a place that already held one kept the eight-byte form against a twenty-byte
+> slot: `g = inc` panicked on `--interpret` while `--native` ran the same program, so it was
+> a backend SPLIT that neither backend alone could witness. Sweeping the CONTAINER — vector
+> element, keyed value, struct-enum payload, nested struct — came back entirely clean; the
+> find was on the axis nobody had thought of as an axis. (D-clo-3, 2026-08-22.)
+>
 > **And a zero can fail a third way, with no oracle or corpus involved.**
 > [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
 > disagreeing element lists into one — while D-tup-2 was live, because the surviving list is

@@ -92,9 +92,47 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **0** — ✓ closures are a full, uniform first-class contract. Both lambda forms capture
-identically (D-clo-1), and the stored-short-lambda combinator crash is now a clean diagnostic
-(D-clo-2). Both closed 2026-07-04.
+OPEN: **1** (D-clo-3). Both lambda forms capture identically (D-clo-1), and the
+stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
+2026-07-04. D-clo-3 is `L-Escape`'s *storage* half, opened 2026-08-22 by re-measuring the
+`OPEN: 0` this line used to carry.
+
+> **The re-measurement, and what the corpus was holding fixed (2026-08-22).** The
+> Conformance section below verifies `L-Escape` at three destinations — a local, a struct
+> field, and a return — and every one of them writes into a place being **initialised**.
+> The axis it never varied is therefore not the container at all but *first-Set vs re-Set*,
+> and on that axis a live crash was sitting under the zero: a fn-ref written by a
+> NON-CAPTURING source (a bare name, or a lambda capturing nothing) lowers to the 8-byte
+> d_nr while the slot is the 20-byte pair, and only the initialising paths topped it up.
+> `g = inc` on a live `g` panicked `fn_call_ref: fn_var=16 < 20` on `--interpret` while
+> `--native` ran the same program — a backend SPLIT, so neither backend alone could see it
+> — and `t.0 = inc` panicked on one backend and handed the user a raw rustc E0308 on the
+> other. Fixed at the three destination-aware sites (`set_var`, the `TuplePut` arms of both
+> backends, and the native reachability walk), guarded by
+> `tests/scripts/fn-ref-reassignment-tops-up-the-pair.loft`, which was confirmed to fail on
+> a pristine tree on both backends.
+>
+> The rest of the destination sweep came back clean and is recorded here so it is not
+> re-run: vector element (literal and `+= [f]`), keyed-collection value, struct-enum
+> variant payload read per-variant, nested struct-in-vector, and an un-inferrable stored
+> short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
+> `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
+> single-site risk it looked like).
+
+> **D-clo-3 — OPEN (2026-08-22).** `L-Escape` says a closure "may be stored in a variable
+> or struct field". It may be stored in one — in a LITERAL. **Assigning** to a fn-typed
+> struct field or vector element that already holds a value is refused on both backends
+> (`h.f = inc`, `v[0] = inc`), and refused by the wrong rule: the fn-ref field read lowers
+> to a `fn_ref_field_read` Block rather than the `Call`/`Var` place shapes the assignment
+> dispatcher knows, so it falls through to *"Not implemented operation = for type
+> function(…)"* — a message contradicted by the same field accepting the same value one
+> line earlier. The underlying capability is the P215/@P213 deferral (a non-inline source
+> has no closure record built for it), which is a shipped decision pinned by
+> `tests/scripts/fn-ref-field-non-inline-refused.loft`; what is a defect is that the
+> assignment case never reaches that decision's diagnostic. Tracked as loft#1072, which
+> separates the small half (name the real reason) from the design half (support the write).
+> Workaround, verified on both backends: rebuild the value — `h = Holder { f: inc, tag:
+> h.tag }`.
 
 > **D-clo-1 — CLOSED (2026-07-04).** The `|…|` short form now captures outer variables exactly
 > like the `fn(){}` form — the two are pure syntactic sugar (L-Fn), the maker's intent.
@@ -132,9 +170,18 @@ identically (D-clo-1), and the stored-short-lambda combinator crash is now a cle
 - **Capture semantics (`L-CapScalar` / `L-CapHeap`)** — a captured scalar reads its
   creation-time value; a captured struct reads its *current* field value (`b.v=9` ⇒ `9`).
 - **First-class (`L-Escape`)** — a closure returned from a function, or stored in a struct field,
-  works: `mk(7)()` is `7`; `h.f()` is `42`.
+  works: `mk(7)()` is `7`; `h.f()` is `42`. ⚠ Each of these INITIALISES its destination; the
+  *re-*assignment half is D-clo-3 and is only partly satisfied — a live local and a live tuple
+  member now take a new fn-ref (guard
+  `tests/scripts/fn-ref-reassignment-tops-up-the-pair.loft`), a struct field and a vector
+  element still refuse it (loft#1072).
+- **A fn-ref reaches every CONTAINER (`L-Escape`, measured 2026-08-22)** — vector element by
+  literal and by `+= [f]`, keyed-collection value, struct-enum variant payload read
+  per-variant, and struct-in-vector all carry one and call it back out, on both backends.
 - **No-crash on an un-inferrable stored lambda (D-clo-2)** — `g = |y|{…}; xs.map(g)` now emits a
   clean "cannot infer" diagnostic on both backends, not a panic (guard
-  `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash`).
+  `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash`). The same diagnostic covers
+  `any` / `all` / `sort_by` / `filter`: it fires at the LAMBDA, not per combinator.
 
-Closures are now a full, uniform first-class contract — this area is at 0 open, like the rest.
+Closures are a full first-class contract for CONSTRUCTION and for every container measured
+above. The open edge is writing one into a place that already holds a value — D-clo-3.

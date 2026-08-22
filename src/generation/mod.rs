@@ -267,6 +267,21 @@ fn collect_fn_ref_literals(
             }
             collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
         }
+        // The ASSIGNMENT half of the tuple case above: `t.0 = inc` writes the d_nr into a
+        // member without ever building a `Value::Tuple`, so the walk that reads a tuple
+        // LITERAL per member never sees it and a function reachable only this way was
+        // pruned — `invalid fn-ref: 711` at the call.  Here the destination names one
+        // member exactly, so the element type is read straight rather than zipped.
+        Value::TuplePut(var, idx, inner) => {
+            if let Type::Tuple(elems) = variables.tp(*var)
+                && elems
+                    .get(*idx as usize)
+                    .is_some_and(|e| matches!(e.base(), Type::Function(_, _, _)))
+            {
+                collect_int_fn_refs(IrNode::Native(inner), calls);
+            }
+            collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
+        }
         Value::Call(d, args) => {
             let callee = data.def(*d);
             // @P299 — a fn-ref stored into a struct FIELD lowers to
