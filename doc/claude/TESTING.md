@@ -479,6 +479,23 @@ the reason this one was not: it exits on a **condition** under a deadline instea
 racing a fixed sleep. ⚠ A deterministic sequencing test needs its sequencing
 asserted (`attempts == 2`) or it passes for a reader that never re-read at all.
 
+### `assert`'s message runs too
+
+`assert(cond, msg)` is an ordinary call, so **both** arguments are evaluated — the
+message string is built whether or not the assertion fails ([formal/calls.md](formal/calls.md)
+`F-Args`). A side-effecting call written once in the condition and again in the message
+therefore runs **twice**:
+
+```loft
+c: vector<integer> = [0];
+assert(bump(c) == 5, "got {bump(c)}");   // c[0] is now 2, not 1
+assert(c[0] == 1, "…ran once");          // fails, and the fix is not here
+```
+
+Bind first (`got = bump(c); assert(got == 5, "got {got}")`). It costs a line and it is
+the difference between a cell that measures the call and one that measures two of them —
+which is exactly the kind of failure that reads as a bug in the code under test.
+
 ### Backend divergence: the differential check is the instrument
 
 Interpret-vs-native disagreement is also an n=1, deterministic property — and the
