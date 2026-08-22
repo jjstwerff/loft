@@ -14117,12 +14117,37 @@ fn emit_fn_ref_field_write(
             p.cl("OpSetInt4", &[ref_code, pos_val, Value::Int(0)])
         }
         other => {
-            // Fallback (Null default-init etc.) — write 0.
+            // The INTERNAL shapes construction produces: a default-init `Null`, a raw
+            // d_nr already lowered to an `Int`, and a `FnRef` with no closure half.  Each
+            // really is four bytes wide, so writing four bytes is right for them.
+            //
+            // Anything ELSE reaching here is a non-inline SOURCE — an `if` or `match` arm,
+            // a `??` — and it takes the same refusal `Var` and `Call` take above.  It used
+            // to fall through and write four bytes of a value that is twenty wide: the
+            // closure half was dropped, and calling through the field then SIGSEGV'd on
+            // `--interpret` and hit `unreachable!("invalid fn-ref")` on `--native`, at
+            // different arms of the same program.  The two spellings that WERE enumerated
+            // got a diagnostic; the ones nobody thought of got the crash, which is the
+            // difference this arm removes.
             let d_nr_only = match other {
                 Value::FnRef(d, _, _) => Value::Int(d),
                 Value::Int(n) => Value::Int(n),
                 Value::Null => Value::Int(0),
-                v => v,
+                _ => {
+                    if !p.first_pass {
+                        diagnostic!(
+                            p.lexer,
+                            Level::Error,
+                            "only inline lambda literals can be stored in fn-ref struct \
+                             fields; a non-inline source (a variable, a call, an \
+                             `if`/`match` arm) is not yet supported when the source \
+                             closure may capture (P215-deferred)"
+                        );
+                    }
+                    // Emit a no-op so the rest of construction proceeds, exactly as the
+                    // `Var` and `Call` refusals above do.
+                    Value::Int(0)
+                }
             };
             p.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
         }

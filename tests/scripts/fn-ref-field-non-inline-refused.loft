@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A non-inline source for a fn-ref struct field is REFUSED, whichever way it is spelled.
+//
+// Storing a capturing lambda in a `fn`-typed field needs the closure record copied into
+// the host (@P213's split layout), and a source that is not an inline literal does not
+// have that built yet.  So `Var` and `Call` sources were each given a diagnostic naming
+// the deferral — and every OTHER non-inline spelling fell past them into a fallback that
+// wrote the d_nr as four bytes.  A capturing fn-ref is twenty.
+//
+// The result was not a wrong answer but a crash, and a different one per backend:
+// `--interpret` SIGSEGV'd, while `--native` hit `unreachable!("invalid fn-ref")` — and on
+// a program with two such fields they failed at DIFFERENT ones, so neither backend's
+// symptom described the defect.  The enumerated spellings got a diagnostic; the ones
+// nobody thought of got the crash.
+//
+// Every arm below is one of those unenumerated spellings.  They are asserted as ERRORS,
+// not as behaviour: the refusal is the shipped decision (P215-deferred), and this file
+// exists so the decision covers the whole shape rather than the two members of it that
+// someone happened to list.  The spellings that DO work are pinned next door, in
+// `fn-ref-field-inline-sources.loft`.
+//
+// Both diagnostics are pass-2 (`!first_pass`), which is what lets them share a file:
+// one pass-1 error would silence every pass-2 one and leave these annotations inert.
+
+enum Fnpick { A, B }
+
+struct Fnr { f: fn(integer) -> integer }
+
+fn fnr_plain(x: integer) -> integer { x + 1 }
+fn fnr_twice(x: integer) -> integer { x * 2 }
+
+// An `if` chooses between two named functions.
+// @EXPECT_ERROR: a non-inline source (a variable, a call, an `if`/`match` arm)
+fn fnr_from_an_if(cond: boolean) -> integer {
+  h = Fnr { f: if cond { fnr_plain } else { fnr_twice } };
+  h.f(5)
+}
+
+// A `match` does the same over an enum.
+// @EXPECT_ERROR: a non-inline source (a variable, a call, an `if`/`match` arm)
+fn fnr_from_a_match(p: Fnpick) -> integer {
+  h = Fnr { f: match p { A => fnr_plain, B => fnr_twice } };
+  h.f(5)
+}
+
+// A VARIABLE source is deliberately NOT asserted here: it is refused only when the
+// source may capture, and a non-capturing variable written into a four-byte field is
+// admitted on purpose (the `target_is_4b && source_is_noncapturing` shortcut).  Asserting
+// the refusal unconditionally would pin the wrong rule — measured, after the first draft
+// of this file expected an error the compiler was right not to give.
+
+fn main() {
+  _ = fnr_from_an_if(true);
+  _ = fnr_from_a_match(Fnpick::A);
+}
