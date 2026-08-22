@@ -1674,6 +1674,14 @@ impl Output<'_> {
         native_cabi: bool,
         reachable: &HashSet<u32>,
     ) -> std::io::Result<()> {
+        // Every `allow` here suppresses a rustc lint about GENERATED code, which a user
+        // cannot act on and did not write: the emitter names every local whether or not
+        // the body reads it, parenthesises defensively, and emits whatever the IR says.
+        // `unused_must_use` and `path_statements` joined the list for loft#1075: a
+        // `Value::Drop` is the IR saying *discard this value*, so a `#[must_use]` runtime
+        // op or a bare local reached as a statement (`a + 1;`, `n;`, or a value tail in a
+        // void function) is loft doing exactly what it was told — and the warning arrived
+        // in the user's terminal quoting a line of a temporary `.rs` file.
         writeln!(
             w,
             "\
@@ -1688,6 +1696,8 @@ impl Output<'_> {
 #![allow(unused_assignments)]
 #![allow(unused_labels)]
 #![allow(unused_braces)]
+#![allow(unused_must_use)]
+#![allow(path_statements)]
 #![allow(clippy::double_parens)]
 #![allow(clippy::unused_unit)]
 #![allow(unused_unsafe)]

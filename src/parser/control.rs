@@ -543,6 +543,24 @@ impl Parser {
 
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
+    /// Does the definition being parsed take its return type FROM ITS BODY?
+    ///
+    /// True for a lambda, and only for a lambda. A lambda declares no return type, so its
+    /// `returned()` reads `Void` while the body is parsed — the same value a function
+    /// DECLARED with no return type has, and the opposite meaning: a placeholder waiting to
+    /// be filled rather than a decision that nothing comes back.
+    ///
+    /// The name is the test the parser already uses for "is this a lambda" (`n___lambda_N`,
+    /// minted by `lambda_counter` in the same order on both passes).
+    fn def_infers_its_return(&self) -> bool {
+        self.context != u32::MAX
+            && self
+                .data
+                .def(self.context)
+                .name()
+                .starts_with("n___lambda_")
+    }
+
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
         // Cognitive complexity, charged here because `parse_block`'s `context` already names
         // the construct — one hook instead of one per parser entry point.  `match_arm` is
@@ -816,6 +834,39 @@ impl Parser {
                 && (self.lexer.peek_token(";") || *result == Type::Void)
             {
                 l.push(Value::Drop(Box::new(n)));
+                // A DROPPED value is not the block's value.  Every statement but the LAST
+                // reaches the `t = Type::Void` at the foot of this loop, so only a tail
+                // could keep a type here — and a tail is dropped exactly when the enclosing
+                // definition returns nothing, which is the one case where the block's type
+                // and the signature must agree and did not.  `--interpret` ignored the
+                // mismatch and ran; `--native` takes the signature from the DECLARED return
+                // (void, right) and the body's trailing value from the block's INFERRED type,
+                // so it emitted `0 as u8` inside a `()` function and rustc refused the
+                // generated file with a bare `E0308` (loft#1075).  On the interpreter the
+                // same block type kept a dropped struct-literal tail alive to program exit
+                // ("1 stores not freed").  `fn main() { f(); }` — the same IR down to the
+                // `drop` — always worked on both, because the `;` sent the statement round
+                // the loop to that reset.
+                //
+                // Narrow, because `result == Void` reaches here meaning two different
+                // things and only one of them is a decision:
+                //
+                //   * a FUNCTION BODY (`context == "return from block"`) of a definition
+                //     declared with no return type — the decision, and the case above;
+                //   * a placeholder that something else will fill in.  A LAMBDA declares no
+                //     return type either, so its body carries the same Void while its
+                //     return type is INFERRED from this very `t`; and a `{ … }` in
+                //     statement position is parsed against Void even when it is the TAIL of
+                //     an enclosing block, which is the value that block yields.
+                //
+                // Both placeholders were measured, not reasoned about: zeroing `t` for a
+                // lambda gave every stored short `|x| { … }` a void return (`parse_map`
+                // then refuses it with D-clo-2's "cannot infer the type of the function
+                // passed to `map`"), and zeroing it for a nested block made
+                // `x = {{ …; count }}` infer void.
+                if context == "return from block" && !self.def_infers_its_return() {
+                    t = Type::Void;
+                }
             } else {
                 l.push(n);
             }
