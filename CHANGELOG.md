@@ -33,6 +33,38 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A browser page can bring its own assets
+
+A `--html` page has no disk, so a program that reads a pack could only get it over the
+network — and that costs a gallery page the one thing it is for: being a single file you
+can open.  Now the page carries what it reads:
+
+```toml
+[[embed]]
+path = "assets/game.pack"
+```
+
+`loft --html` puts the file in the page, under the name the program reads it by.  The
+same line of loft works either way:
+
+```loft
+ok = store_load(q, "assets/game.pack")   # from disk, and from inside the page
+```
+
+Add `source = "build/game.pack"` when the file is generated somewhere else — `path`
+stays what the program passes.  A library can declare its own files, and a consumer's
+page brings them along.
+
+This is for what a page needs before its first fetch, and for a page that has to be one
+self-contained file.  Bigger asset sets are still better served over HTTP, where only
+the bytes a lookup touches cross the wire — and the page grows by about a third more
+than the file, so the size `--html` reports is worth a look.
+
+If a declared file is not there, or is named in a way the program could never ask for
+(an absolute path, or `./assets/x` where the program says `assets/x`), the build stops
+and says which — before it spends a minute compiling a page that would have drawn
+nothing.
+
 ### A browser game can bring its own font
 
 A game that draws text in the browser used to get whatever family the browser guessed

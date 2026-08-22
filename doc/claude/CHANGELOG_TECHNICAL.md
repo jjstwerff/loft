@@ -34,8 +34,29 @@ whether the store is in the page tree: `load=true read=true` when carried,
 absent-file half is the one that matters: a loader reporting success for a file nobody
 supplied would pass the positive assertion and be worse than the refusal it replaced.
 
-**Not included.** `--html` does not yet emit anything into `loftBaseFS`; a page or a
-library's `host_js` seeds it. Emitting a declared pack is F4's remaining half.
+**And the other half — `[[embed]]` (2026-08-22).** `--html` now seeds `loftBaseFS`
+from the manifest: `[[embed]] path = "assets/game.pack"` (plus an optional `source`,
+where the bytes are on the build box) puts the file in the page under `/` + `path`,
+which is what `loft-fs.js` resolves the program's own relative string to. So one
+`store_load(q, "assets/game.pack")` reads the pack on the desktop and in the page.
+`src/html_embed.rs` owns validation and the emission, `src/manifest.rs` parses the
+section, and `Data::declared_embeds` carries a library's — the same three-part route
+`[[font]]` takes, and a library's `source` resolves against the LIBRARY.
+
+**Refused, before the wasm build:** a `path` that is not relative and in normal form
+(`/abs/x`, `./x`, `a/../b`), a `source` that is not there, and one name declared from
+two files. Each would otherwise be carried faithfully under a key the program never
+asks for — `store_load` answers `false`, the page draws no art, nothing says why.
+That is F5's silent failure in a new place, which is why the spelling is strict.
+
+**Gate.** `tests/html_embed.rs`, three tests. The browser one is the invariant: a page
+declaring a **nested** pack prints exactly what the desktop run of the same source
+prints (`load=true a=7 b=41`), and the control is that same page with the seed
+statement stripped (`load=false a=-1 b=-1`). Proven red by emitting the file under its
+base name — bytes carried, key wrong, which is the defect the shipped loader gate
+could not see because it only ever used a flat path. The library test carries a decoy
+of the same name in the consumer's own directory, so it measures which root `source`
+resolved against rather than whether a file was found.
 
 ### A browser page can declare the font it draws with (@PLN146 F5/F6, 2026-08-22)
 

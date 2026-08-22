@@ -4264,6 +4264,12 @@ pub struct Data {
     /// driver rather than collected here, because a main script's package is never
     /// resolved as a library.
     pub declared_fonts: Vec<crate::manifest::FontDecl>,
+    /// @PLN146 F4 — the `[[embed]]` declarations of every package reached by a
+    /// `use`, in resolution order.  Each carries the directory of the manifest that
+    /// declared it, so a library's file is found in the LIBRARY rather than wherever
+    /// the consumer happens to build (`crate::html_embed`).  The entry program's own
+    /// manifest is read by the driver, for the same reason `declared_fonts` says.
+    pub declared_embeds: Vec<crate::manifest::EmbedDecl>,
     /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
     /// Maps callee def_nr → list of caller def_nrs.  Built once on
     /// first `callers_of` call by walking every user fn's body and
@@ -4558,6 +4564,7 @@ impl Data {
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
             declared_fonts: Vec::new(),
+            declared_embeds: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
             op_sets: OpSetCache::default(),
         }

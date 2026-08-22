@@ -176,6 +176,13 @@ native = "fonts/PressStart2P.ttf"    # what the program passes to gl_load_font;
                                      # its base name MUST equal `family`
 url    = "fonts/PressStart2P.woff2"  # our own server -> an @font-face in the page
 # stylesheet = "https://fonts.example/css2?family=…"   # a provider -> a <link>
+
+# @PLN146 F4 — a file the --html page carries in its own filesystem.
+# One entry per file; a library's entries reach a consumer's page too.
+[[embed]]
+path   = "assets/game.pack"   # what the PROGRAM passes; also the key in the page's FS
+source = "build/game.pack"    # optional: where the bytes are on the build box,
+                              # relative to this loft.toml.  Defaults to `path`.
 ```
 
 ### `[[font]]` — the font a browser page has to carry
@@ -195,6 +202,27 @@ they do not — before the wasm compile. The failure it replaces is silent: the 
 registers one family, the program asks for another, text draws in a generic face and
 nothing anywhere says so. Full reference:
 [plans/146-content-delivery/FONTS.md](plans/146-content-delivery/FONTS.md).
+
+### `[[embed]]` — the file a browser page carries
+
+A `--html` page has no disk. `[[embed]]` puts a file in the page's own filesystem, under
+the exact name the program reads it by, so `store_load(q, "assets/game.pack")` is the
+same call on every target. `source` says where the bytes are on the build box — a pack
+is usually generated into a build dir while the program reads it from where it ships —
+and defaults to `path`.
+
+`path` is the PROGRAM's path, so it must be relative and in normal form. `--html`
+refuses `/abs/game.pack`, `./assets/game.pack`, `a/../b`, a `source` that is not there,
+and one name declared from two files — all before the wasm compile. Each would
+otherwise be carried under a key nothing asks for, and a page that cannot find its pack
+says nothing at all.
+
+This is the exception rather than the pipeline: assets normally travel as a store on a
+dumb file server, read by HTTP range so only the bytes a lookup touches cross the wire.
+Embedding is for what a page needs before its first fetch, and for a page that has to
+be one self-contained file. The bytes go in base64, so the page grows by about 4/3 of
+the file. Full reference:
+[plans/146-content-delivery/F4.md](plans/146-content-delivery/F4.md).
 
 ### `placement` — where the library runs
 

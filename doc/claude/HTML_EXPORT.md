@@ -387,8 +387,41 @@ the price of one code path and is paid against bytes the page already holds.
 both halves: a loader that reported success for a file nobody supplied would be worse
 than the refusal it replaced.
 
-`--html` does not yet PUT anything into `loftBaseFS` — a page seeds it, or a library does
-from its `[wasm.bridge] host_js`.  Emitting a declared pack is F4's remaining half.
+### Putting a file there — `[[embed]]`
+
+A page carries a file by declaring it in `loft.toml`:
+
+```toml
+[[embed]]
+path   = "assets/game.pack"   # what the PROGRAM passes; also the key in the page's FS
+source = "build/game.pack"    # optional — where the bytes are on the build box,
+                              # relative to this loft.toml.  Defaults to `path`.
+```
+
+`--html` reads the file and seeds `globalThis.loftBaseFS` with it, so
+`store_load(q, "assets/game.pack")` is the same call on the desktop and in the page.
+The key is `/` + `path`, which is what `loft-fs.js` `resolve()` makes of a relative
+path under the default cwd `/`.  The seed ADDS to whatever the page already had, so a
+hand-seeded tree and a library's `host_js` both survive it.  A library's declarations
+reach a consumer's page by the same route as `[wasm.bridge] host_js`, with `source`
+resolved against the LIBRARY.
+
+`path` must be **relative and in normal form** — `--html` refuses `/abs/game.pack`,
+`./assets/game.pack` and `a/../b` before the wasm compile, along with a `source` that
+is not there and one name declared from two files.  Each of those would otherwise be
+carried faithfully under a key the program never asks for: `store_load` answers
+`false`, the game draws no art, and nothing says why.
+
+This is the exception, not the pipeline.  Assets travel as a store on a dumb file
+server read by HTTP range; embedding is for the bytes a page needs before its first
+fetch, and for a page that has to be a single self-contained file
+([plans/146-content-delivery/ASSETS.md](plans/146-content-delivery/ASSETS.md)).  The
+bytes go in base64, so the page grows by about 4/3 of the file — the size line
+`--html` prints is what to watch.
+
+⚠ A `store_persist_copy` writes a `.dschema` sidecar beside the store.  A load does
+not need it, so one `[[embed]]` per store is enough; declare the sidecar too if the
+page should carry it.
 
 ## HTML assembly — what ships in the output
 
