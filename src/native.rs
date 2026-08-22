@@ -4292,6 +4292,7 @@ pub(crate) fn populate_struct_from_jsonvalue(
     let kt_float = stores.name("float");
     let kt_bool = stores.name("boolean");
     let kt_text = stores.name("text");
+    let kt_char = stores.name("character");
     // Parts::Struct(_) iteration: clone the field list because we need
     // a long-lived borrow on `stores` for the writes below.
     let fields = match &stores.types[struct_kt as usize].parts {
@@ -4369,6 +4370,20 @@ pub(crate) fn populate_struct_from_jsonvalue(
                     stores
                         .store_mut(dest)
                         .set_u32_raw(dest.rec, dest_field_pos, new_s_rec);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
+        } else if content_kt == kt_char {
+            // `character` is a 4-byte codepoint whose in-band null is codepoint 0
+            // (`formal/types.md`).  It is `Parts::Base`, not a narrow `Parts`, so the
+            // arm below does not catch it and it fell to the catch-all: every character
+            // field the `JsonValue` walker was handed kept its zero-init bytes, so
+            // `T.parse(json_parse(t))` answered NUL for one the document spelled.
+            match unwrap_char(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(cp) => {
+                    stores
+                        .store_mut(dest)
+                        .set_i32_raw(dest.rec, dest_field_pos, cp);
                 }
                 None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
             }
@@ -4605,6 +4620,34 @@ fn unwrap_bool(
     Some(stores.store(sub).get_byte(sub.rec, value_pos, 0))
 }
 
+/// A `character` off the wire: the one-character STRING `to_json` writes, or a NUMBER
+/// read as its codepoint (the form that pre-dates the string spelling).  `None` as in
+/// [`unwrap_long`] — the field takes its declared absent value.
+fn unwrap_char(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> Option<i32> {
+    if item_discr == JV_DISCR_STRING {
+        let str_tp = stores.name("JString");
+        let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
+        let s_rec = stores.store(sub).get_u32_raw(sub.rec, value_pos);
+        let text = stores.store(sub).get_str(s_rec).to_owned();
+        let mut cs = text.chars();
+        if let (Some(c), None) = (cs.next(), cs.next()) {
+            return i32::try_from(u32::from(c)).ok();
+        }
+        // A string that is not exactly one character cannot be a codepoint; report it
+        // the way every other wrong-kind source is reported.
+        push_kind_mismatch(stores, item_discr, JV_DISCR_STRING, struct_name, field_name);
+        return None;
+    }
+    let n = unwrap_long(stores, sub, item_discr, struct_name, field_name)?;
+    i32::try_from(n).ok()
+}
+
 /// `None` as in [`unwrap_long`].  An empty `String` would not do: `""` is a PRESENT text
 /// and a nullable text's absence is the handle `0`, so the two cannot share a spelling.
 fn unwrap_text(
@@ -4671,6 +4714,7 @@ fn populate_vector_from_jarray(
     let kt_float = stores.name("float");
     let kt_bool = stores.name("boolean");
     let kt_text = stores.name("text");
+    let kt_char = stores.name("character");
     let elem_parts = stores.types[elem_kt as usize].parts.clone();
     let elem_name = stores.types[elem_kt as usize].name.clone();
     for i in 0..length {
@@ -4724,6 +4768,14 @@ fn populate_vector_from_jarray(
                     stores
                         .store_mut(&elm)
                         .set_u32_raw(elm.rec, elm.pos, new_s_rec);
+                }
+                None => absent(stores),
+            }
+        } else if elem_kt == kt_char {
+            // A 4-byte codepoint element — see the struct walker's character arm.
+            match unwrap_char(stores, &item, item_discr, "vector", &elem_name) {
+                Some(cp) => {
+                    stores.store_mut(&elm).set_i32_raw(elm.rec, elm.pos, cp);
                 }
                 None => absent(stores),
             }

@@ -1115,8 +1115,8 @@ impl Stores {
     }
 
     /// Schema-driven primitive write.  `tp` is one of the
-    /// low-numbered base-type IDs (0 = int32/Reference, 1 = long,
-    /// 2 = single, 3 = float, 4 = bool, 5 = text, 6 = Reference).
+    /// low-numbered base-type IDs (0 = integer, 1 = long, 2 = single,
+    /// 3 = float, 4 = bool, 5 = text, 6 = character).
     /// `at` is the byte offset where this primitive was parsed —
     /// reported on the [`WalkErr`] of any type mismatch so users
     /// see the real position instead of byte 0.
@@ -1134,11 +1134,40 @@ impl Stores {
             path: path.clone(),
         };
         match tp {
-            0 | 6 => {
+            0 => {
                 let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 self.store_mut(to).set_int(to.rec, to.pos, n);
+                Ok(())
+            }
+            6 => {
+                // `character` is FOUR bytes.  It shared type 0's arm — an 8-byte
+                // `set_int` — because the doc comment above called type 6 "Reference";
+                // the extra word ran into whatever field the layout put next, so
+                // `{"tail":5,"c3":99,"c2":98,"c1":97}` into
+                // `T { c1, c2, c3: character, tail: integer }` answered `a`, NUL, NUL, 5.
+                // Only the LAST character written survived, which is why document order
+                // decided whether the corruption showed. Same spill loft#1014 fixed in
+                // `emit_typed_null`, at a site that pre-dated the shared width rule.
+                //
+                // On the wire a character is the one-character STRING `to_json` writes;
+                // a NUMBER is also accepted as its codepoint, which is the only form
+                // this arm used to take.
+                let cp = if let crate::json::Parsed::Str(t) = parsed {
+                    let mut cs = t.chars();
+                    match (cs.next(), cs.next()) {
+                        (Some(c), None) => u32::from(c),
+                        _ => return Err(mismatch()),
+                    }
+                } else {
+                    let Some(n) = parsed.as_i64() else {
+                        return Err(mismatch());
+                    };
+                    u32::try_from(n).map_err(|_| mismatch())?
+                };
+                #[allow(clippy::cast_possible_wrap)]
+                self.store_mut(to).set_i32_raw(to.rec, to.pos, cp as i32);
                 Ok(())
             }
             1 => {

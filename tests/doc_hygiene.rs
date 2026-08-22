@@ -1449,3 +1449,64 @@ fn repro_matrix_covers_every_published_triple() {
         }
     }
 }
+
+/// No source file may contain a byte that makes `grep` treat it as BINARY, because a
+/// binary file is skipped SILENTLY — no match, no warning, no non-zero exit.
+///
+/// Measured 2026-08-22: one stray NUL, pasted into a comment in
+/// `src/database/format.rs` that was quoting the one-character string a bug produced,
+/// made `grep`/`ripgrep` classify all 99 KB of it as data. Every `grep -rn` over `src/`
+/// had been missing that file — including the sweep that was at that moment auditing
+/// type-driven `match` arms, which is how it surfaced: the backtrace named a function
+/// (`ShowDb::has_visible_field`) that `grep -rn` insisted did not exist anywhere.
+///
+/// That is worth a gate rather than a fix, because the failure mode is invisible in both
+/// directions: the file looks fine in an editor, and the search that misses it reports
+/// success. loft's development model runs on grepping this tree (CLAUDE.md § Key
+/// commands, `scripts/idx`), so a file the tools cannot see is a hole in the method, not
+/// just in one search.
+#[test]
+fn no_source_file_is_invisible_to_grep() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p
+                .extension()
+                .is_some_and(|x| x == "rs" || x == "loft" || x == "md")
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for root in ["src", "doc/claude", "tests/scripts", "default"] {
+        walk(std::path::Path::new(root), &mut files);
+    }
+    assert!(
+        files.len() > 500,
+        "the walk found only {} files — it is not looking where it thinks",
+        files.len()
+    );
+
+    let mut bad = Vec::new();
+    for p in &files {
+        let Ok(bytes) = fs::read(p) else { continue };
+        // A NUL is what actually trips grep's binary heuristic; report the offset and
+        // line so the fix is a one-character edit rather than a hunt.
+        if let Some(off) = bytes.iter().position(|b| *b == 0) {
+            let line = bytes[..off].iter().filter(|b| **b == b'\n').count() + 1;
+            bad.push(format!("{}:{line} (byte {off})", p.display()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "these files contain a NUL byte, so grep skips them silently:\n  {}\n\
+         Replace the stray byte — a comment quoting a NUL should describe it in words.",
+        bad.join("\n  ")
+    );
+}

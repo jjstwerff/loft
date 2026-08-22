@@ -171,6 +171,62 @@ has no claim, and `DbRef` carries the coupling and the measurement. Proven: addi
 (`validate_claims`, made exhaustive the day before for the same reason). Relax #318 and the
 build still won't complain — but the comment now tells the next reader where to look.
 
+### `character` on the JSON surface — five sites, one sentinel, none of them agreeing (2026-08-22)
+
+`formal/types.md` pins `Char`'s in-band null at **codepoint 0**, reserved even in a
+non-null slot, and loft#1014 made every site that WRITES one agree. The sites that READ
+it, and the ones that put a character on the wire, never did. Found by pulling on a dead
+line noticed while fixing the JSON walker: `Stores::is_null`'s `character` arm sits under
+`if known_type < 6`, so it can never run.
+
+| # | site | what it did |
+|---|---|---|
+| 1 | `Stores::is_null` | the arm was unreachable AND tested `u32::MAX`, not the sentinel — two wrongs cancelling into *"a character slot is never null"*. An absent field rendered as a value: `{"a":' '}`, **a space on the wire**, while `x.a == null` answered `true` |
+| 2 | the character renderer (`format.rs`) | re-derived the same `u32::MAX` test, so a null element printed `['a',' ','c']` — and in the plain display, nothing at all: `['a',,'c']` |
+| 3 | `to_json()` | wrote the loft spelling `'q'` in JSON mode. **That is not JSON**, and loft's own parser rejected the document — losing every other field with it |
+| 4 | `walk_parsed_into` (the `text` walker) | put a character through type 0's arm — an 8-byte `set_int` into a **4-byte slot** — running over whatever the layout put next |
+| 5 | `populate_struct_from_jsonvalue` | had no character arm at all, so it dropped the field |
+
+Site 3 is the one that would bite hardest in the field: **a program that saves state with
+`to_json()` writes a file nothing can read, including itself.** Site 4 is the one that
+corrupts: `{"tail":5,"c3":99,"c2":98,"c1":97}` into `T { c1, c2, c3: character, tail:
+integer }` answered `a`, NUL, NUL, `5` — only the LAST character written survived, so
+document ORDER decided whether the damage was visible. That is why the forward-order probe
+passed and looked like a clean bill.
+
+Fixed at the sentinel: `is_null` answers codepoint 0 (and its arm is reachable), the
+renderer asks instead of re-deriving, a character goes on the wire as the one-character
+**string** `to_json` writes, and both walkers read either that string or a NUMBER as its
+codepoint. Guarded by `tests/scripts/character-across-the-json-surface.loft`, six cases on
+both backends, falsified by re-breaking sites 1 and 4.
+
+**Deliberately NOT changed, and now asserted so it stays a decision:** string
+concatenation SKIPS a bare `'\0'` (`OpAppendCharacter`'s documented behaviour), so
+`"a{'\0'}b" == "ab"` and `{c}` on a null character is empty while the structured render
+says `null`. The sentinel IS the literal NUL — `types.md` records the collision and
+loft#1014 asserts it — so the two channels genuinely differ, and the difference is the
+price of an in-band sentinel rather than a sixth disagreement.
+
+### A stray NUL byte made four files invisible to `grep` — now gated
+
+While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
+nowhere, in a tree where a backtrace had just named it. `src/database/format.rs` — 99 KB
+of source — contained **one NUL byte**, pasted into a comment that was quoting the
+one-character string a bug produced. `grep` and `ripgrep` classify such a file as binary
+and skip it **silently**: no match, no warning, no non-zero exit.
+
+That is worth a gate rather than a fix, because the failure is invisible in both
+directions — the file reads fine in an editor, and the search that misses it reports
+success. loft's development model runs on grepping this tree, so a file the tools cannot
+see is a hole in the METHOD, not in one search.
+
+`tests/doc_hygiene.rs::no_source_file_is_invisible_to_grep` scans `src/`, `doc/claude/`,
+`tests/scripts/` and `default/` and names the file, line and byte offset. **It found three
+more on its first run** — `src/extensions.rs`, `doc/claude/CHANGELOG_TECHNICAL.md` and
+`tests/scripts/57-json.loft` — all the same slip, and three of the four were the same
+comment about loft#769's sentinel copy-pasted between files, carrying the byte each time.
+One bad paste, four blind spots. All four now describe the NUL in words.
+
 ### The library-CI gate reddens library repos for reasons they cannot cure
 
 Found 2026-08-21 opening the eight `unify-library-ci-fpm` adoption PRs. Six went green; two did

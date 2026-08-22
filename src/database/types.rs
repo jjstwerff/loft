@@ -2310,10 +2310,21 @@ impl Stores {
         if rec == 0 {
             return true;
         }
-        if known_type < 6 {
+        if known_type <= 6 {
             match known_type {
                 0 => store.get_int(rec, pos) == i64::MIN,
-                6 => store.get_u32_raw(rec, pos) == u32::MAX,
+                // `character` — 4 bytes, and its in-band sentinel is CODEPOINT 0, which
+                // `formal/types.md` reserves even for a non-null slot (`0 as character`
+                // reads null) and loft#1014 made every other site agree on.
+                //
+                // This arm sat under `known_type < 6` and so could never run, and the
+                // `u32::MAX` it tested was not the sentinel either — two ways of being
+                // wrong that cancelled into "a character slot is never null".  The write
+                // side puts 0 there, so an ABSENT character then rendered as a value: a
+                // struct printed `a:' '` and `to_json()` put a SPACE on the wire where
+                // the field should have been omitted, while `x.a == null` answered true.
+                // One absent value, two answers.
+                6 => store.get_u32_raw(rec, pos) == 0,
                 1 => store.get_long(rec, pos) == i64::MIN,
                 2 => store.get_single(rec, pos).is_nan(),
                 3 => store.get_float(rec, pos).is_nan(),

@@ -6253,7 +6253,7 @@ which is what the reader already degrades an unknown tag to.
 
 **An absent `text?` is stored as the sentinel `"\0"`, not as a null pointer**, so
 it reached the JSON escaper and came back as the one-character string
-`" "` — a present, corrupt value where the program meant nothing. It is the
+`"\0"` (a one-character string holding a NUL) — a present, corrupt value where the program meant nothing. It is the
 same absence the null-pointer branch beside it already rendered as `null`, so it
 renders the same way. That is the distinction the type exists to carry: SQL NULL
 and `''` stay different answers across a round trip instead of collapsing.
