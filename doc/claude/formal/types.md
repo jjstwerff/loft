@@ -492,14 +492,14 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **1** (DN-SE-inline, below — narrowed to the loop-binding READ) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
-### DN-SE-inline — OPEN (2026-08-22): a nullable struct-enum in INLINE storage has no null
+### DN-SE-inline — CLOSED (2026-08-22): a nullable struct-enum in INLINE storage
 The representation rule above derives `τ?`'s null from `τ`'s storage, and gives a reference the
 out-of-band `nullref`. A struct-enum is carried as a `DbRef`, so `Shape?` takes the reference
 sentinel — which loft#1065 measured it did NOT: several sites answered "what is this type's
@@ -520,10 +520,10 @@ which had been silently a no-op), and the test, which must read the stored WORD 
 `__nullable<…>` tag was needed: a record pointer already has an in-band absent value, exactly
 as a narrow scalar does, so the element rides the `Optional` marker like a scalar element.
 
-**Remaining**: `for e in v { e == null }` over such a vector. A loop binding is a
-sub-reference to the element SLOT rather than a handle, so neither the sentinel nor its own
-record answers, and the test reads "present" for an absent element. Indexing (`v[0] == null`)
-is right. This is the last position, and it is a READ-side gap only — the storage is correct.
+Iteration closed with it: `for e in v { e == null }` binds a sub-reference to the element
+SLOT, so it reads that slot's word. Which of the two a `Var` is turns on what it VIEWS,
+followed through the DEP CHAIN — a loop variable's own dep names itself, and only its
+declaration's dep names the vector, so reading the first link answers no.
 
 This entry is also the answer to the "OPEN: 0" line above having been too strong: the rule was
 written, and the code disagreed with it for a whole type former, in both directions at once.

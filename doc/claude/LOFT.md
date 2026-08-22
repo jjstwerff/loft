@@ -2016,10 +2016,8 @@ both directions all behave (loft#1065, loft#1071). How absence is STORED follows
 null model says it should: a handle carries the reference sentinel, while an inline slot is a
 four-byte record pointer where absence is `0`.
 
-The one shape that does not work yet is **iterating** such a vector: in `for e in v { e == null }`
-the loop binding is a sub-reference to the element slot rather than a handle, so the test reads
-"present" for an absent element. Index it instead — `v[0] == null` is right — or put the absence
-in the ENUM rather than the slot (`enum Shape { None, Dot, Circle { r: integer } }`, no `?`).
+Iterating one works too: in `for e in v { e == null }` the loop binding is a sub-reference to the
+element slot, and the test reads that slot's word rather than a handle's sentinel.
 
 Field access uses `.`:
 ```

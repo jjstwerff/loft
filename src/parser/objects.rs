@@ -116,6 +116,39 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
+    /// loft#1071 — does this type BORROW a collection, directly or one link on?
+    ///
+    /// A `for e in v` loop variable is a sub-reference into `v`'s element slot, and that
+    /// is what its deps record — but the type at a USE site deps on the variable ITSELF,
+    /// and only the variable's DECLARED type deps on the collection. So the question
+    /// needs the chain followed, not the first link read.
+    ///
+    /// Bounded, because a self-dep (`e` depending on `e`) is exactly the shape that makes
+    /// the walk necessary and would otherwise make it loop.
+    pub(crate) fn views_a_collection(&self, tp: &Type) -> bool {
+        let mut deps: Vec<u16> = tp.depend();
+        let mut seen: Vec<u16> = Vec::new();
+        for _ in 0..3 {
+            let mut next: Vec<u16> = Vec::new();
+            for d in deps {
+                if d >= self.vars.count() || seen.contains(&d) {
+                    continue;
+                }
+                seen.push(d);
+                let dt = self.vars.tp(d);
+                if Self::is_collection_type(dt.base()) {
+                    return true;
+                }
+                next.extend(dt.depend());
+            }
+            if next.is_empty() {
+                return false;
+            }
+            deps = next;
+        }
+        false
+    }
+
     /// loft#1071 — the `(base, field)` an INLINE struct-enum slot read addresses, when
     /// `v` is such a read.
     ///

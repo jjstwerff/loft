@@ -625,6 +625,24 @@ impl Parser {
                 let get_enum = self.cl("OpGetEnum", &[operand, Value::Int(0)]);
                 let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
                 self.cl("OpEqInt", &[disc, Value::Int(0)])
+            } else if matches!(tp.base(), Type::Enum(d, true, _)
+                    if !self.data.def(*d).name.starts_with("__nullable<"))
+                && matches!(operand.unspan(), Value::Var(_))
+                && self.views_a_collection(tp)
+            {
+                // loft#1071 — a struct-enum bound FROM an inline element: the `for e in v`
+                // loop variable over a `vector<Shape?>`.  It is a sub-reference to the
+                // element SLOT, not a handle, so neither the store-pointer sentinel nor
+                // its own record says anything — both read "present" for an absent
+                // element.  The four-byte word AT that slot is where absence lives, the
+                // same word a FIELD read tests below.
+                //
+                // The discriminator is what the binding VIEWS, followed through the dep
+                // chain: the loop variable's own dep names ITSELF, and only its
+                // declaration's dep names the vector. A plain local, parameter or return
+                // reaches no collection that way and keeps the handle test.
+                let word = self.cl("OpGetInt4", &[operand, Value::Int(0)]);
+                self.cl("OpEqInt", &[word, Value::Int(0)])
             } else if let Some((base, fld)) = self.inline_slot_word(&operand) {
                 // loft#1071 — an INLINE slot (a struct field) is a four-byte RECORD
                 // POINTER, which cannot hold the twelve-byte store_nr sentinel at all.

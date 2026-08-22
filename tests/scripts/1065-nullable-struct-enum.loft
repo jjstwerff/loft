@@ -29,11 +29,11 @@
 // RECORD POINTER, which cannot hold the twelve-byte sentinel, so absence is pointer `0` —
 // what the field prime already writes.  Its cells are at the end (loft#1071).
 //
-// Still NOT covered, and the one shape this file cannot assert: `for e in v { e == null }`
-// over a `vector<Shape?>`.  A loop binding is a sub-reference to the element SLOT rather
-// than a handle, so neither the sentinel nor its own record says anything and the test
-// reads "present" for an absent element.  The direct index (`v[0] == null`) IS right, and
-// is asserted below.
+// Including ITERATION: `for e in v { e == null }` binds a sub-reference to the element
+// SLOT rather than a handle, so it reads the same word a field read does.  Which of the
+// two a `Var` is turns on what it VIEWS, followed through the dep chain — a loop
+// variable's own dep names ITSELF, and only its declaration's dep names the vector, so
+// reading the first link answers no.
 
 enum Shape1065 { Dot, Circle { r: integer } }
 struct Box1065 { s: Shape1065? }
@@ -166,6 +166,22 @@ fn test_a_vector_element_holds_absence() {
   assert(v[1] != null, "the present element");
 }
 
+fn test_iterating_a_vector_of_nullable_struct_enums() {
+  // The read that needed the dep chain followed. Mixed on purpose: a count is only
+  // evidence if both answers appear, and the ORDER puts an absent element first and last
+  // so a test that answered one constant could not pass.
+  v: vector<Shape1065?> = [];
+  v += [null];
+  v += [Shape1065::Circle { r: 3 }];
+  v += [null];
+  absent = 0;
+  present = 0;
+  for e in v { if e == null { absent += 1 } else { present += 1 } }
+  assert(len(v) == 3, "all three elements are there: got {len(v)}");
+  assert(absent == 2, "two absent elements: got {absent}");
+  assert(present == 1, "one present element: got {present}");
+}
+
 fn main() {
   test_an_absent_local_is_falsy();
   test_an_absent_local_equals_null();
@@ -180,4 +196,5 @@ fn main() {
   test_an_inline_field_holds_absence();
   test_an_inline_field_assigned_both_ways();
   test_a_vector_element_holds_absence();
+  test_iterating_a_vector_of_nullable_struct_enums();
 }
