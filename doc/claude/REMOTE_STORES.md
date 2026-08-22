@@ -52,7 +52,14 @@ whether a game feels good:
   (`"page/mobs"`, `"hit.ogg"`). Looping the single-key form instead re-fetches the
   bucket-table page once per key: measured on a 447 KB pack, 25 keys cost 5.37 MB
   in 82 requests looped against 256 KB in 4 batched — the loop downloads the whole
-  file twelve times over (loft#1064). `store_load_range` does the same for a
+  file twelve times over (loft#1064). ⚠ **Quote the measurement, not the ratio.**
+  That corpus gives 20×, but the factor is entirely a function of how the keys fall
+  across pages: a second measurement on a 5.1 MB pack of 80 blobs of exactly 64 KiB
+  — close to worst case for bucket sharing — gave 3.4× (20 keys: 81 requests /
+  5 308 416 bytes looped against 24 / 1 572 864 batched). The sentence that travels
+  between corpora is not a number but the shape: *the loop fetches more than the
+  whole pack to deliver a fraction of it, and the batch fetches roughly the
+  payload.* `store_load_range` does the same for a
   contiguous span of ordered keys, and `store_load_box` fetches a viewport's worth
   of a `spatial` index in one traversal.
 

@@ -68,6 +68,17 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
       chore — a library raising it most releases has taught its consumers that its version
       numbers mean nothing. Keeping it still is the default; moving it is the exception you
       write a CHANGELOG line for.
+- [ ] **Every loft symbol the library calls exists on the loft its CI BUILDS — `origin/main` —
+      not on the branch its author happens to be standing in.** A library repo's CI checks loft
+      out separately, so a stdlib function added on an unmerged engine branch compiles locally
+      and fails the library's CI with a bare *"Unknown function &lt;name&gt;"* parse error in every
+      suite. Check before depending on it:
+      `git show origin/main:default/02_files.loft | grep -c '<symbol>'` (or the module that
+      should carry it). This trap is normal here rather than rare, because engine work and
+      library work happen in ONE session under the dogfood loop — so local green proves nothing
+      about it, and the author is the last person positioned to notice. If the symbol is not on
+      `main` yet, the dependency waits for it to land, and the `loft` floor moves in the SAME
+      change that starts calling it.
 - [ ] Repo is `loft-lang/loft-libs-<chunk>` (canonical naming; not `loft-<pkg>`, not a loft-monorepo dir).
 - [ ] Carries the org lifecycle stubs (`fpm-apply` / `fpm-strip` → `loft-lang/.github` reusables).
 - [ ] Deterministic package: two `loft package` runs produce an identical sha256.
