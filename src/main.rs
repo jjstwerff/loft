@@ -10079,7 +10079,7 @@ for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
 loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
   loftInstallEnv(instance, mem);
-  // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
+  // @P321(c) Phase 3b: decode base64 PNG assets to RGBA bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
   ctrl.assets=await decodeLoftAssets(ctrl.assets);{fonts_await}
   if(instance.exports.asyncify_start_unwind){{
