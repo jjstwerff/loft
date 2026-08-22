@@ -5370,7 +5370,22 @@ impl Stores {
         }
         let keys = self.keys(tp).to_vec();
         let key_content = [crate::keys::Content::Str(crate::keys::Str::new(key))];
-        self.load_one(&mut reader, local, content_tp, &keys, &key_content, kind)
+        let found = self.load_one(&mut reader, local, content_tp, &keys, &key_content, kind);
+        // The same meter the batch forms carry, so the two are comparable — which is
+        // the whole question a caller weighing this against
+        // [`load_keys_text`](Stores::load_keys_text) is asking (loft#1064). Off unless
+        // asked.
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            crate::loft_eprintln!(
+                "store_load_key_text: key={key:?} found={found} bytes_fetched={} requests={} depth={} distinct={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.provider().requests(),
+                reader.provider().round_trips(),
+                reader.provider().distinct_bytes(),
+                reader.size()
+            );
+        }
+        found
     }
 
     /// @PLN134 — load every entry whose TEXT key begins with `pre` from a persisted
@@ -5559,7 +5574,58 @@ impl Stores {
     /// See [`load_key`](Stores::load_key) for the single-key form. Same
     /// FLAT-struct restriction (scalar fields only — no relocation yet).
     #[cfg(paged_store)]
-    pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+        let key_sets: Vec<Vec<crate::keys::Content>> = keys_vals
+            .iter()
+            .map(|&kv| vec![crate::keys::Content::Long(kv)])
+            .collect();
+        self.load_key_sets(local, path, &key_sets, "store_load_keys")
+    }
+
+    /// loft#1064 — the TEXT-keyed batch loader: the plural of
+    /// [`load_key_text`](Stores::load_key_text), and the text twin of
+    /// [`load_keys`](Stores::load_keys).
+    ///
+    /// It exists because looping the single-key form is not the same call. Each
+    /// `load_key_text` opens its OWN reader, so the bucket table page is fetched
+    /// again for every key: a ring of twenty asset names around a player cost
+    /// twenty traversals and twenty copies of the same 64 KiB table — about
+    /// 2.5 MB to fetch perhaps 100 KB of art. One reader pays it once.
+    ///
+    /// Text-keyed collections are what asset packs are (`"page/mobs"`,
+    /// `"hit.ogg"`), and a ring prefetched at a load or level boundary is exactly
+    /// the shape the batch form is for.
+    #[cfg(paged_store)]
+    pub fn load_keys_text(&mut self, local: &DbRef, path: &str, keys_vals: &[&str]) -> i64 {
+        let key_sets: Vec<Vec<crate::keys::Content>> = keys_vals
+            .iter()
+            .map(|k| vec![crate::keys::Content::Str(crate::keys::Str::new(k))])
+            .collect();
+        self.load_key_sets(local, path, &key_sets, "store_load_keys_text")
+    }
+
+    /// The batch loader both plural forms are: open the paged reader ONCE, resolve
+    /// the schema once, and materialise every requested key through the shared page
+    /// cache. Returns the count actually found (an absent key is skipped, not an
+    /// error).
+    ///
+    /// One body rather than one per key type, so the warm pipeline below — the part
+    /// that turns O(N) serial round trips into three batches — cannot be present on
+    /// the integer form and missing from the text one.
+    ///
+    /// A **hash** locates by arithmetic on the key's own bytes, so every bucket
+    /// address is known before any of them is read and the warms apply. A **trie**
+    /// locates by descent, where each step's address comes from the node the step
+    /// before it read; there is nothing to batch, and the win is the shared cache —
+    /// the upper nodes every key walks through are fetched once instead of N times.
+    #[cfg(paged_store)]
+    fn load_key_sets(
+        &mut self,
+        local: &DbRef,
+        path: &str,
+        key_sets: &[Vec<crate::keys::Content>],
+        stats_label: &str,
+    ) -> i64 {
         if !self.layout_gate_ok(path, local) {
             return 0;
         }
@@ -5588,13 +5654,18 @@ impl Stores {
         // copy (3b.3+); until then, refuse the whole collection (load nothing)
         // rather than build a heap with a dangling pointer. `store_verify` would
         // catch a broken copy — this makes sure one is never built.
-        // Only Hash supported so far (Sorted lands at 3b.7).
-        let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
-            let reason = self.wrong_collection_reason(root_tp, "a hash");
-            self.refuse_paged(path, &reason);
-            return 0;
+        //
+        // @PLN134 — a TRIE serves an exact lookup too, by one root→leaf descent,
+        // the same kind split [`load_key_text`](Stores::load_key_text) makes.
+        let (content_tp, kind) = match self.types.get(tp as usize).map(|t| &t.parts) {
+            Some(Parts::Hash(c, _)) => (*c, PagedKind::Hash),
+            Some(Parts::Trie(c, _)) => (*c, PagedKind::Trie),
+            _ => {
+                let reason = self.wrong_collection_reason(root_tp, "a hash or a trie");
+                self.refuse_paged(path, &reason);
+                return 0;
+            }
         };
-        let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
             let reason = self.not_copyable_reason(content_tp);
             self.refuse_paged(path, &reason);
@@ -5602,75 +5673,72 @@ impl Stores {
         }
         let keys = self.keys(tp).to_vec();
 
-        // loft#782 — WARM the addresses already known, so round trips stop scaling with the
-        // key count.
-        //
-        // The reads only LOOK sequential. A bucket slot is arithmetic from the key's hash
-        // (the table's `claim`/`elms`/`seed` are the same for every key), and once the
-        // lookups return, every entry's address is known and the bodies are independent.
-        // Three batched fetches replace ~2N demand-paged ones.
-        //
-        // Measured on a 7.2 MB image with a scattered 40-key selection over a 15 ms/request
-        // link, which is the shape that makes depth visible — a selection covering most of
-        // the file has nothing to batch, because `prefetch_run` already coalesced it.
-        //
-        // It cannot make a load wrong or fetch more: warming only fills the page table with
-        // pages the walk would have fetched anyway, and a resident page is never re-fetched.
-        let key_sets: Vec<Vec<crate::keys::Content>> = keys_vals
-            .iter()
-            .map(|&kv| vec![crate::keys::Content::Long(kv)])
-            .collect();
-        let addrs =
-            crate::paged_reader::hash_bucket_addrs(&mut reader, local.rec, local.pos, &key_sets);
-        reader.warm(&addrs);
+        if kind == PagedKind::Hash {
+            // loft#782 — WARM the addresses already known, so round trips stop scaling with the
+            // key count.
+            //
+            // The reads only LOOK sequential. A bucket slot is arithmetic from the key's hash
+            // (the table's `claim`/`elms`/`seed` are the same for every key), and once the
+            // lookups return, every entry's address is known and the bodies are independent.
+            // Three batched fetches replace ~2N demand-paged ones.
+            //
+            // Measured on a 7.2 MB image with a scattered 40-key selection over a 15 ms/request
+            // link, which is the shape that makes depth visible — a selection covering most of
+            // the file has nothing to batch, because `prefetch_run` already coalesced it.
+            //
+            // It cannot make a load wrong or fetch more: warming only fills the page table with
+            // pages the walk would have fetched anyway, and a resident page is never re-fetched.
+            let addrs =
+                crate::paged_reader::hash_bucket_addrs(&mut reader, local.rec, local.pos, key_sets);
+            reader.warm(&addrs);
 
-        // The candidate entries, warmed BEFORE the lookups rather than after.
-        //
-        // This is the step that actually moves the clock, and leaving it out is why an
-        // earlier attempt measured nothing: `find_hash_entry` reads the entry record to
-        // COMPARE the key, so locating already pulls each entry's page — one serial round
-        // trip per key — and a warm placed after the lookups finds every page resident and
-        // does nothing. The bucket slots are warm now, so reading the candidate record
-        // numbers out of them is free, and those pages can go in one batch.
-        let cands: Vec<(u64, usize)> = addrs
-            .iter()
-            .filter_map(|&(off, _)| {
-                let b = reader.resolve(off, 4);
-                let rec = u32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
-                (rec != 0).then(|| (u64::from(rec) * 8, crate::paged_reader::PAGE_SIZE.min(4096)))
-            })
-            .collect();
-        reader.warm(&cands);
+            // The candidate entries, warmed BEFORE the lookups rather than after.
+            //
+            // This is the step that actually moves the clock, and leaving it out is why an
+            // earlier attempt measured nothing: `find_hash_entry` reads the entry record to
+            // COMPARE the key, so locating already pulls each entry's page — one serial round
+            // trip per key — and a warm placed after the lookups finds every page resident and
+            // does nothing. The bucket slots are warm now, so reading the candidate record
+            // numbers out of them is free, and those pages can go in one batch.
+            let cands: Vec<(u64, usize)> = addrs
+                .iter()
+                .filter_map(|&(off, _)| {
+                    let b = reader.resolve(off, 4);
+                    let rec = u32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
+                    (rec != 0).then(|| (u64::from(rec) * 8, crate::paged_reader::PAGE_SIZE.min(4096)))
+                })
+                .collect();
+            reader.warm(&cands);
 
-        // Pass 1 — locate. Independent per key, now against warm bucket pages.
-        let found: Vec<(u32, u32)> = key_sets
-            .iter()
-            .map(|k| {
-                crate::paged_reader::find_hash_entry(&mut reader, local.rec, local.pos, k, &keys)
-            })
-            .collect();
+            // Pass 1 — locate. Independent per key, now against warm bucket pages.
+            let found: Vec<(u32, u32)> = key_sets
+                .iter()
+                .map(|k| {
+                    crate::paged_reader::find_hash_entry(&mut reader, local.rec, local.pos, k, &keys)
+                })
+                .collect();
 
-        // Two EXACT warms rather than one speculative one: headers first (the size word
-        // says how long a record is), then exactly those bodies. Guessing a page per entry
-        // was tried and reverted — it fetched a page the walk did not need, and loft#729
-        // already established that buying depth with bytes just moves the cost.
-        // @PLN135 arc H — an entry is a SLOT at a known stride, so its extent is
-        // arithmetic and there is no per-entry header word to fetch first: one warm
-        // over exactly the bytes the copy reads replaces the header-then-body pair.
-        let stride = crate::hash::stride_for(u32::from(self.size(content_tp)));
-        let bodies: Vec<(u64, usize)> = found
-            .iter()
-            .filter(|&&(m, _)| m != 0)
-            .map(|&(m, pos)| (u64::from(m) * 8 + u64::from(pos), stride as usize))
-            .collect();
-        reader.warm(&bodies);
+            // Two EXACT warms rather than one speculative one: headers first (the size word
+            // says how long a record is), then exactly those bodies. Guessing a page per entry
+            // was tried and reverted — it fetched a page the walk did not need, and loft#729
+            // already established that buying depth with bytes just moves the cost.
+            // @PLN135 arc H — an entry is a SLOT at a known stride, so its extent is
+            // arithmetic and there is no per-entry header word to fetch first: one warm
+            // over exactly the bytes the copy reads replaces the header-then-body pair.
+            let stride = crate::hash::stride_for(u32::from(self.size(content_tp)));
+            let bodies: Vec<(u64, usize)> = found
+                .iter()
+                .filter(|&&(m, _)| m != 0)
+                .map(|&(m, pos)| (u64::from(m) * 8 + u64::from(pos), stride as usize))
+                .collect();
+            reader.warm(&bodies);
+        }
 
-        // Pass 2 — materialise.
+        // Pass 2 — materialise. `load_one` re-locates the entry; for a hash that is
+        // now a warm-page read, and for a trie it is the descent itself.
         let mut loaded = 0i64;
-        for (k, &(matched, _)) in key_sets.iter().zip(&found) {
-            if matched != 0
-                && self.load_one(&mut reader, local, content_tp, &keys, k, PagedKind::Hash)
-            {
+        for k in key_sets {
+            if self.load_one(&mut reader, local, content_tp, &keys, k, kind) {
                 loaded += 1;
             }
         }
@@ -5679,8 +5747,8 @@ impl Stores {
         // keys touch O(N) pages, not O(file). Off unless asked.
         if std::env::var_os("LOFT_LOADER_STATS").is_some() {
             crate::loft_eprintln!(
-                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} requests={} depth={} distinct={} file={} reads={:?}",
-                keys_vals.len(),
+                "{stats_label}: asked={} loaded={loaded} bytes_fetched={} requests={} depth={} distinct={} file={} reads={:?}",
+                key_sets.len(),
                 reader.provider().bytes_fetched(),
                 reader.provider().requests(),
                 reader.provider().round_trips(),
@@ -6087,6 +6155,36 @@ impl Stores {
     pub fn load_keys_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
         let vals = self.int_vector(keys_vec);
         self.load_keys(local, path, &vals)
+    }
+
+    /// Read a `vector<text>` (`keys_vec`) and load those keys via
+    /// [`load_keys_text`](Stores::load_keys_text) — the text twin of
+    /// [`load_keys_vec`](Stores::load_keys_vec). Used by BOTH backends: the
+    /// interpreter handler and the `#rust` codegen body (loft#1064).
+    #[cfg(paged_store)]
+    pub fn load_keys_text_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
+        // Owned first: reading the keys borrows `self`, and loading them mutates it.
+        let owned = self.str_vector(keys_vec);
+        let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+        self.load_keys_text(local, path, &refs)
+    }
+
+    /// The strings a `vector<text>` holds — the text twin of
+    /// [`int_vector`](Stores::int_vector), keeping the element layout in one place.
+    /// A `text` element is a 4-byte string-record offset at `8 + i·4`.
+    ///
+    /// Not `text_vector`: that name is taken by the WRITE direction (build a
+    /// `vector<text>` from a `&[String]`), and the two would read alike.
+    #[cfg(paged_store)]
+    fn str_vector(&self, v: &DbRef) -> Vec<String> {
+        let length = crate::vector::length_vector(v, &self.allocations);
+        let inner = self.store(v).get_u32_raw(v.rec, v.pos);
+        (0..length)
+            .map(|i| {
+                let off = self.store(v).get_u32_raw(inner, 8 + i * 4);
+                self.store(v).get_str(off).to_string()
+            })
+            .collect()
     }
 
     /// The `i64` values a `vector<integer>` holds — the single vector-reading home

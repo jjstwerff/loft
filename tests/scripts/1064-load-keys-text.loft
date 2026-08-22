@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1064 — `store_load_keys_text`: the text-keyed BATCH loader.
+//
+// The paged loaders came in a single form and a batch form, and the batch form
+// existed for a measured reason — one reader, one page cache, "a ring is one
+// traversal rather than N". Only the INTEGER-keyed side had it. Asset packs are
+// text-keyed by nature ("page/mobs", "hit.ogg"), so the case that most wants the
+// batch form was the one that could not ask for it: looping the single call
+// re-fetched the same bucket-table page once per key.
+//
+// Two modes read the SAME keys the two ways, so the harness can compare them.
+// Correctness is asserted first and must be identical — a loader that drops
+// entries also fetches fewer bytes, and would otherwise read as a win.
+//
+// Driven by `store_persist_loft.rs` with a scratch path: a relative path resolves
+// against the PROGRAM's directory (@PLN9), so a suite script must not write beside
+// itself. No path, nothing to do.
+
+struct Blob1064 { bkey: text, payload: text }
+
+fn keys_wanted() -> vector<text> {
+  ks: vector<text> = [];
+  i = 0;
+  // Spread across the key space: adjacent keys share a page, so a clustered
+  // selection would fit one page and measure nothing.
+  while i < 24 { ks += ["asset/{i * 97}/blob"]; i += 1 }
+  // One key the pack does not hold — an absent key must be SKIPPED, not counted
+  // and not an error.
+  ks += ["asset/no-such-thing/blob"];
+  ks
+}
+
+fn report(h: hash<Blob1064[bkey]>, got: integer) {
+  chars = 0;
+  for k in keys_wanted() { e = h[k]; if e != null { chars += len(e.payload) } }
+  println("loaded={got} chars={chars} len={len(h)} verify={store_verify(h)}");
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  if path == "" { return }
+  mode = env_variable("P1064_MODE") ?? "";
+
+  if mode == "write" {
+    src: hash<Blob1064[bkey]> = [];
+    if !store_persist_bind(src, path) { println("FAIL write-bind"); return }
+    i = 0;
+    while i < 4000 {
+      src += [Blob1064 { bkey: "asset/{i}/blob", payload: "payload-{i}-padded-padded-padded-to-give-it-real-size" }];
+      i += 1;
+    }
+    println("seeded={len(src)}");
+    return
+  }
+
+  if mode == "batch" {
+    local: hash<Blob1064[bkey]> = [];
+    report(local, store_load_keys_text(local, path, keys_wanted()));
+  } else if mode == "loop" {
+    local: hash<Blob1064[bkey]> = [];
+    got = 0;
+    for k in keys_wanted() { if store_load_key_text(local, path, k) { got += 1 } }
+    report(local, got);
+  } else if mode == "trie" {
+    // The single-key form serves a TRIE as well as a hash, so the batch form has
+    // to. A trie locates by DESCENT — each step's address comes from the node the
+    // step before it read — so there is nothing to batch and the win is only the
+    // shared page cache: the upper nodes every key walks through are fetched once
+    // instead of once per key. Correctness is the assertion here; the saving is
+    // the harness's.
+    tw: trie<Blob1064[bkey]> = [];
+    if !store_persist_bind(tw, "{path}.trie") { println("FAIL trie-bind"); return }
+    tw += [Blob1064 { bkey: "kerk", payload: "eleven" }];
+    tw += [Blob1064 { bkey: "kerkweg", payload: "five" }];
+    tw += [Blob1064 { bkey: "kerklaan", payload: "nine" }];
+    tw += [Blob1064 { bkey: "lonneker", payload: "seven" }];
+    tr: trie<Blob1064[bkey]> = [];
+    want: vector<text> = ["kerkweg", "lonneker", "kerks"];
+    got = store_load_keys_text(tr, "{path}.trie", want);
+    order = "";
+    for e in tr { order = order + "{e.bkey}:{e.payload} " }
+    println("trie loaded={got} len={len(tr)} got={order}verify={store_verify(tr)}");
+  } else { println("FAIL unknown-mode") }
+}

@@ -834,6 +834,22 @@ pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> i
 #rust"stores.load_keys_vec(&(@local), @path, &(@keys))"
 #impure(io)
 
+// Plural form of `store_load_key_text`, and the text twin of `store_load_keys`:
+// fetch the given text keys' entries into `local` in ONE call, returning how many
+// were found. Keys absent from the remote are skipped. Serves a `hash<T[k]>` and
+// a `trie<T[k]>` alike, like the single-key form. loft#1064.
+//
+// Looping `store_load_key_text` is not the same call: each one opens its own
+// reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table
+// page twenty times. This opens the reader once and shares its page cache — which
+// is what makes it the PREFETCH call: ask for the ring at a load or level
+// boundary, so no frame is ever the thing that discovers it needs an asset.
+//   art: hash<Blob[bl_key]> = []
+//   got = store_load_keys_text(art, "pack.store", ["page/mobs", "hit.ogg"])
+pub fn store_load_keys_text(local: reference, path: text, keys: vector<text>) -> integer fs#read;
+#rust"stores.load_keys_text_vec(&(@local), @path, &(@keys))"
+#impure(io)
+
 // Range form: fetch every entry whose integer key is in [lo, hi] from a
 // persisted `sorted<T[k]>` into `local`, reading only the pages the range walk
 // touches — the ordered-collection counterpart of `store_load_keys` (a phone

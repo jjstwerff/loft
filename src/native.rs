@@ -193,6 +193,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(paged_store)]
     ("n_store_load_keys", n_store_load_keys),
     #[cfg(paged_store)]
+    ("n_store_load_keys_text", n_store_load_keys_text),
+    #[cfg(paged_store)]
     ("n_store_load_prefix", n_store_load_prefix),
     #[cfg(paged_store)]
     ("n_store_load_box", n_store_load_box),
@@ -1496,6 +1498,19 @@ fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let n = stores.load_keys_vec(&v_ref, v_path.str(), &v_keys);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_keys_text` — load the given TEXT keys'
+/// entries from a persisted hash or trie image through ONE shared reader, so the
+/// bucket-table page is fetched once rather than per key; returns the count found.
+/// Args pop in reverse: keys, path, local.  loft#1064.
+#[cfg(paged_store)]
+fn n_store_load_keys_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v_keys = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_keys_text_vec(&v_ref, v_path.str(), &v_keys);
     stores.put(stack, n);
 }
 
