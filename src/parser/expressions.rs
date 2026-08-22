@@ -1502,7 +1502,17 @@ use a separate collection or add after the loop"
         if op != "=" || var_nr != u16::MAX || self.first_pass {
             return false;
         }
-        if f_type.is_unknown() || s_type.is_unknown() || matches!(s_type, Type::Null) {
+        if f_type.is_unknown() || s_type.is_unknown() {
+            return false;
+        }
+        // A bare `null` is exempt because the targets that legitimately take one reach
+        // here: a `τ?` field, a `text` field, and a COLLECTION field, where `null` is the
+        // empty collection (loft#922).  A `fn(…)` target is not one of them — a fn-ref
+        // slot holds a d_nr and has no encoding for absence, which is why the struct
+        // LITERAL refuses `Holder { f: null }` outright.  Without naming the exception the
+        // assignment wrote d_nr `0` and the next call through the field SIGSEGV'd
+        // (loft#1072: the literal and the assignment must accept the same values).
+        if matches!(s_type, Type::Null) && !matches!(f_type.base(), Type::Function(_, _, _)) {
             return false;
         }
         // A narrowing integer store has its OWN diagnostic further down; running
@@ -1785,6 +1795,10 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came
+        // from: the RHS parsed below may itself read a fn-ref field (`a.f = b.g`) and
+        // would leave that attribute behind instead (loft#1072).
+        let lhs_fn_attr = self.fn_ref_read_attr.take();
         // #330: `x = x` is the identity — emit nothing.  Letting it through
         // produced a deep-copy-onto-self whose pre-Set free released the
         // store the RHS was about to read (silent corruption on the
@@ -2570,14 +2584,31 @@ use a separate collection or add after the loop"
         // form still reaches. The checks further down cover a scalar target only, and
         // a `text` or collection target returns before them, so this is the chokepoint.
         if self.field_store_mismatch(op, var_nr, f_type, &s_type) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
-                s_type.name(&self.data),
-                f_type.name(&self.data),
-                f_type.name(&self.data),
-            );
+            if matches!(s_type, Type::Null) {
+                // The only mismatch a bare `null` can be here is a `fn(…)` target (every
+                // other null-taking target is exempted in `field_store_mismatch`), and
+                // "use `as fn(integer) -> integer` to cast explicitly" is advice that
+                // cannot be followed — the cast does not exist and would not help if it
+                // did.  Name what is actually true of the slot instead.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign null to a slot of type {} — a fn-ref holds a \
+                     function's identity and has no encoding for absence, so the slot \
+                     cannot be cleared; assign another function, or keep the absent \
+                     case in a separate field",
+                    f_type.name(&self.data),
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
+                    s_type.name(&self.data),
+                    f_type.name(&self.data),
+                    f_type.name(&self.data),
+                );
+            }
         }
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
@@ -3492,7 +3523,11 @@ use a separate collection or add after the loop"
             );
         }
         if !matches!(code, Value::Insert(_)) {
-            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1]);
+            let lhs = crate::parser::collections::AssignPlace {
+                parent_tp: &lhs_parent_tp,
+                fn_attr: lhs_fn_attr,
+            };
+            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1], &lhs);
             // Plan-22 phase 02d-iii.e — wrap a first-set boxed-
             // scalar write with the cell-allocation preamble.
             // No-op for any other LHS shape (subsequent sets,

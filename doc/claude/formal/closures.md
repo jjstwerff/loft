@@ -92,10 +92,20 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1** (D-clo-3). Both lambda forms capture identically (D-clo-1), and the
-stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
-2026-07-04. D-clo-3 is `L-Escape`'s *storage* half, opened 2026-08-22 by re-measuring the
-`OPEN: 0` this line used to carry.
+OPEN: **0**. Both lambda forms capture identically (D-clo-1), the stored-short-lambda
+combinator crash is now a clean diagnostic (D-clo-2) — both closed 2026-07-04 — and
+`L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22).
+
+⚠ This zero is only as strong as the axes the corpus below varies, and D-clo-3 is what a
+re-measurement of the PREVIOUS zero found. The axis it was blind to was *first-Set vs
+re-Set* — every `L-Escape` cell wrote into a place being **initialised**. The axes now
+varied are destination (local, struct field, vector element, tuple member, return) ×
+first-Set/re-Set × source (bare name, non-capturing lambda, capturing lambda, local, call,
+`if`/`match` arm) × host (named local, `&` parameter, vector element, field chain). Two
+that remain HELD FIXED, and are therefore where a next re-measurement should look: the
+number of DISTINCT capturing lambdas per attribute (one, by a shipped rule), and the
+nesting of the holder itself (a struct that holds a capturing closure cannot go in a
+collection at all, by #318).
 
 > **The re-measurement, and what the corpus was holding fixed (2026-08-22).** The
 > Conformance section below verifies `L-Escape` at three destinations — a local, a struct
@@ -119,20 +129,43 @@ stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — bot
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
-> **D-clo-3 — OPEN (2026-08-22).** `L-Escape` says a closure "may be stored in a variable
-> or struct field". It may be stored in one — in a LITERAL. **Assigning** to a fn-typed
-> struct field or vector element that already holds a value is refused on both backends
-> (`h.f = inc`, `v[0] = inc`), and refused by the wrong rule: the fn-ref field read lowers
-> to a `fn_ref_field_read` Block rather than the `Call`/`Var` place shapes the assignment
-> dispatcher knows, so it falls through to *"Not implemented operation = for type
-> function(…)"* — a message contradicted by the same field accepting the same value one
-> line earlier. The underlying capability is the P215/@P213 deferral (a non-inline source
-> has no closure record built for it), which is a shipped decision pinned by
-> `tests/scripts/fn-ref-field-non-inline-refused.loft`; what is a defect is that the
-> assignment case never reaches that decision's diagnostic. Tracked as loft#1072, which
-> separates the small half (name the real reason) from the design half (support the write).
-> Workaround, verified on both backends: rebuild the value — `h = Holder { f: inc, tag:
-> h.tag }`.
+> **D-clo-3 — CLOSED (2026-08-22).** `L-Escape` says a closure "may be stored in a
+> variable or struct field", and said nothing about the slot being fresh — so **assigning**
+> into a fn-typed struct field or vector element that already held one (`h.f = inc`,
+> `v[0] = inc`) had to work, not merely fail better. It was refused on both backends, and
+> refused by the wrong rule: the fn-ref read lowers to a `fn_ref_field_read` Block rather
+> than the `Call`/`Var` place shapes the assignment dispatcher knows, so it was not
+> recognised as writing ANYWHERE and fell through to *"Not implemented operation = for type
+> function(…)"* — a message about the `=` operator, contradicted by the same field
+> accepting the same value one line earlier.
+>
+> Fixed by peeling the read back to its place and handing each destination to the writer
+> the LITERAL already uses — a struct field to `set_field`, a vector element to
+> `fn_ref_slot_dnr` — so the two positions cannot come to different conclusions about what
+> a fn-ref source may be. The P215/@P213 refusal for a non-inline source and the #247
+> refusal for a capturing source in a collection are unchanged shipped decisions; what
+> changed is that the assignment now REACHES them, which was loft#1072's "small half".
+>
+> Three things a slot that already holds a value needs that a fresh one does not, each
+> measured failing on the way:
+>
+> * the closure half must be RELEASED. A non-capturing source left the previous closure
+>   record in place, so the field read back as the new function paired with the old
+>   closure, and `fn_call_ref` entered a callee that declares no closure with one pushed as
+>   its hidden argument — a corrupt frame, not a stale value: the call returned misaligned
+>   and the next read of an unrelated field faulted in `get_int`. A capturing source
+>   orphaned the old record in the host's store instead — a leak that grows with the loop.
+>   One `OpClearKeyed` against the `child_rec<…>` field closes both, through the same
+>   `remove_claims` cascade that frees it when the host dies;
+> * pass 1 must RECORD a capturing source, because the attribute's split layout comes from
+>   `assigned_lambda_d_nr` being set in that pass and the read's byte offset is `u16::MAX`
+>   there (the struct has no layout yet). The read site's own record of the attribute is
+>   the only answer available on pass 1;
+> * the host may be a `&` parameter — `RefVar(Reference)`, not `Reference`.
+>
+> Guarded by `tests/scripts/fn-ref-assigned-into-a-field.loft` (15 cells, both backends,
+> value + a plain field read beside it + a 200-iteration loop for the leak), confirmed to
+> fail on a pristine tree at 655ff4dd with 19 errors per backend. Fixes loft#1072.
 
 > **D-clo-1 — CLOSED (2026-07-04).** The `|…|` short form now captures outer variables exactly
 > like the `fn(){}` form — the two are pure syntactic sugar (L-Fn), the maker's intent.
@@ -170,18 +203,25 @@ stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — bot
 - **Capture semantics (`L-CapScalar` / `L-CapHeap`)** — a captured scalar reads its
   creation-time value; a captured struct reads its *current* field value (`b.v=9` ⇒ `9`).
 - **First-class (`L-Escape`)** — a closure returned from a function, or stored in a struct field,
-  works: `mk(7)()` is `7`; `h.f()` is `42`. ⚠ Each of these INITIALISES its destination; the
-  *re-*assignment half is D-clo-3 and is only partly satisfied — a live local and a live tuple
-  member now take a new fn-ref (guard
-  `tests/scripts/fn-ref-reassignment-tops-up-the-pair.loft`), a struct field and a vector
-  element still refuse it (loft#1072).
+  works: `mk(7)()` is `7`; `h.f()` is `42`.
 - **A fn-ref reaches every CONTAINER (`L-Escape`, measured 2026-08-22)** — vector element by
   literal and by `+= [f]`, keyed-collection value, struct-enum variant payload read
   per-variant, and struct-in-vector all carry one and call it back out, on both backends.
+- **…and a place that ALREADY holds one takes a new fn-ref (`L-Escape`, D-clo-3)** — a live
+  local, a live tuple member (guard
+  `tests/scripts/fn-ref-reassignment-tops-up-the-pair.loft`), and a struct field, a vector
+  element, an element's field, a field's element and a `&`-parameter's field (guard
+  `tests/scripts/fn-ref-assigned-into-a-field.loft`), from a bare name, an inline lambda
+  (capturing or not), a non-capturing local and a call — including over a field that already
+  owns a closure record, and 200 times in a loop without the store growing. A source the
+  LITERAL refuses (an `if`/`match` arm, P215; a capturing source into a collection, #247)
+  is refused identically here, by the same diagnostic.
 - **No-crash on an un-inferrable stored lambda (D-clo-2)** — `g = |y|{…}; xs.map(g)` now emits a
   clean "cannot infer" diagnostic on both backends, not a panic (guard
   `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash`). The same diagnostic covers
   `any` / `all` / `sort_by` / `filter`: it fires at the LAMBDA, not per combinator.
 
-Closures are a full first-class contract for CONSTRUCTION and for every container measured
-above. The open edge is writing one into a place that already holds a value — D-clo-3.
+Closures are a full first-class contract: construction, every container measured above, and
+re-assignment into a place that already holds one. What a closure may not do is bounded by
+two decisions rather than by gaps — one capture shape per fn-ref attribute, and no capturing
+closure inside a collection (#247/@P213) or inside a struct that a collection holds (#318).

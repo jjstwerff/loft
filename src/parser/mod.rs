@@ -633,6 +633,18 @@ pub struct Parser {
     expr_not_null: bool,
     /// The field name for the most recently parsed `not null` field access (for diagnostics).
     expr_not_null_name: String,
+    /// The struct attribute the most recently parsed `fn(…)` FIELD read came from —
+    /// `(struct def_nr, attribute index)`.
+    ///
+    /// Set by [`Self::get_field`], taken by `parse_assign_op` before it parses the RHS
+    /// (which would otherwise overwrite it with the attribute of a fn-ref read on the
+    /// right-hand side). It exists for ONE thing pass 1 cannot do any other way: a fn-ref
+    /// assignment must recover which attribute it writes, and the byte offset the read
+    /// carries is `u16::MAX` on pass 1 because the struct has no database layout yet — so
+    /// the layout-based lookup that is authoritative on pass 2 answers nothing on pass 1,
+    /// and pass 1 is exactly when a capturing source has to be RECORDED for the attribute
+    /// to get its split layout at all (loft#1072).
+    fn_ref_read_attr: Option<(u32, usize)>,
     /// Counter incremented each time a lambda expression is parsed.
     /// Lambda names are `__lambda_N`; the same N is produced on both passes because the counter
     /// advances identically in both passes (same token order → same parse order).
@@ -1069,6 +1081,7 @@ impl Parser {
             resolutions: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
+            fn_ref_read_attr: None,
             lambda_counter: 0,
             expected: Type::Unknown(0),
             fields_of: u32::MAX,
@@ -8324,6 +8337,10 @@ impl Parser {
         if let Type::Function(_, _, _) = &tp
             && f_nr != usize::MAX
         {
+            // Remember WHICH attribute this read came from, for an assignment through it
+            // (loft#1072). The read carries a byte offset, and on pass 1 that offset is
+            // `u16::MAX` for every field of a struct whose layout does not exist yet.
+            self.fn_ref_read_attr = Some((d_nr, f_nr));
             // @PLN114 — the layout decides the reader, and BOTH answers are now
             // explicit: a split field reads its closure_rec child, a legacy one
             // synthesises a NULL closure.  `get_val`'s Function arm is the legacy

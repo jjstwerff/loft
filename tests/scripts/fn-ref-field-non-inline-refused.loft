@@ -51,7 +51,64 @@ fn fnr_from_a_match(p: Fnpick) -> integer {
 // the refusal unconditionally would pin the wrong rule — measured, after the first draft
 // of this file expected an error the compiler was right not to give.
 
+// ─── the same refusals through an ASSIGNMENT (loft#1072) ───
+//
+// `h.f = …` now reaches the writer the LITERAL uses, so a source the literal refuses must
+// be refused here too and by the SAME diagnostic.  Before that it was not refused by any
+// of these rules: the assignment was not recognised as writing anywhere and answered
+// *"Not implemented operation = for type function(…)"* whatever the source was.  These
+// cells are the half of the fix that is a refusal — they fail if the assignment ever
+// starts accepting something the literal does not.
+
+// @EXPECT_ERROR: a non-inline source (a variable, a call, an `if`/`match` arm)
+fn fnr_assign_from_an_if(cond: boolean) -> integer {
+  h = Fnr { f: fnr_plain };
+  h.f = if cond { fnr_plain } else { fnr_twice };
+  h.f(5)
+}
+
+// A `fn(…)` slot holds a d_nr and has no encoding for absence, which is why the LITERAL
+// refuses `Fnr { f: null }`.  The assignment reached the write with a `null` and stored
+// d_nr `0`; the next call through the field SIGSEGV'd.
+// @EXPECT_ERROR: a fn-ref holds a function's identity and has no encoding for absence
+fn fnr_assign_null() -> integer {
+  h = Fnr { f: fnr_plain };
+  h.f = null;
+  h.f(5)
+}
+
+// The same for a vector ELEMENT, which has no closure half at all.
+// @EXPECT_ERROR: a fn-ref holds a function's identity and has no encoding for absence
+fn fnr_assign_null_element() -> integer {
+  v: vector<fn(integer) -> integer> = [fnr_plain];
+  v[0] = null;
+  v[0](5)
+}
+
+// #247: a capturing closure in a collection is the deferred layout, whether the capturing
+// source is written INLINE or held in a local.  The inline form arrives wrapped in its
+// closure-allocation block, which the shape test alone could not see through.
+// @EXPECT_ERROR: a capturing closure cannot be stored in a collection yet
+fn fnr_assign_capturing_element_inline(k: integer) -> integer {
+  v: vector<fn(integer) -> integer> = [fnr_plain];
+  v[0] = fn(x: integer) -> integer { x + k };
+  v[0](5)
+}
+
+// @EXPECT_ERROR: a capturing closure cannot be stored in a collection yet
+fn fnr_assign_capturing_element_local(k: integer) -> integer {
+  g = fn(x: integer) -> integer { x + k };
+  v: vector<fn(integer) -> integer> = [fnr_plain];
+  v[0] = g;
+  v[0](5)
+}
+
 fn main() {
   _ = fnr_from_an_if(true);
   _ = fnr_from_a_match(Fnpick::A);
+  _ = fnr_assign_from_an_if(true);
+  _ = fnr_assign_null();
+  _ = fnr_assign_null_element();
+  _ = fnr_assign_capturing_element_inline(1);
+  _ = fnr_assign_capturing_element_local(1);
 }

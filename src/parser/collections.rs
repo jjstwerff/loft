@@ -237,6 +237,25 @@ fn elem_borrow_bindings(block: &Value, elem_var: u16) -> Vec<u16> {
     out
 }
 
+/// What the LEFT-hand side of an assignment is, beyond the expression itself.
+///
+/// Both fields answer a question the lvalue EXPRESSION cannot: which container the place
+/// lives in, and — for a `fn(…)` field — which attribute of it. Both must be captured
+/// before the right-hand side is parsed, because parsing an RHS overwrites the parser
+/// state they come from (an `a.f = b.g` would otherwise leave `b`'s answers behind).
+/// Carried as one value so the two cannot be threaded apart and disagree.
+#[derive(Clone, Copy)]
+pub(crate) struct AssignPlace<'a> {
+    /// The type of what the place is read OUT of — `Reference(S)` for `s.f`, `&S` for the
+    /// same write inside a `&`-parameter, `vector<τ>` for `v[i]`.
+    pub parent_tp: &'a Type,
+    /// `(struct def_nr, attribute index)` when the place is a `fn(…)` FIELD read. The
+    /// authoritative answer is the field's byte offset, but that is `u16::MAX` on pass 1
+    /// (the struct has no layout yet), and pass 1 is when a capturing source must be
+    /// recorded for the attribute to get its split layout at all (loft#1072).
+    pub fn_attr: Option<(u32, usize)>,
+}
+
 impl Parser {
     pub(crate) fn iter_text(
         &mut self,
@@ -938,7 +957,12 @@ impl Parser {
         f_type: &Type,
         src_tp: &Type,
         op: &str,
+        lhs: &AssignPlace<'_>,
     ) -> Value {
+        let AssignPlace {
+            parent_tp,
+            fn_attr: lhs_fn_attr,
+        } = *lhs;
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
         if let Some(result) = self.towards_set_hash_remove(to, val, op, f_type) {
             return result;
@@ -1197,6 +1221,143 @@ impl Parser {
             let (dest, mut ops) = self.hoist_index_arg(dest);
             ops.extend(self.emit_tuple_set_ops(&dest, 0, &elems, val.clone()));
             return v_block(ops, Type::Void, "tuple_elem_index_set");
+        }
+        // loft#1072 — `h.f = inc` on a fn-typed struct FIELD, and `v[0] = inc` on a
+        // fn-typed vector ELEMENT.
+        //
+        // Neither was recognised as writing anywhere.  A fn-ref READ is a Block (@PLN114's
+        // split layout takes two reads to assemble the 20-byte pair), not the `Call`
+        // getter or `Var` the dispatch at the bottom of this function knows, so both fell
+        // through to *"Not implemented operation = for type function(…)"* — a message
+        // about the `=` operator, contradicted by the same field accepting the same value
+        // in a literal one line earlier.  `formal/closures.md`'s `L-Escape` says a closure
+        // may be STORED in a struct field, and says nothing about the slot being fresh, so
+        // this is the rule's storage half rather than a message to reword (D-clo-3).
+        //
+        // Each destination is handed to the writer the LITERAL already uses, so a literal
+        // and an assignment into the same place cannot come to different conclusions about
+        // what a fn-ref source may be:
+        //
+        //   * a struct field → `set_field`, which carries the whole contract — the
+        //     capturing-lambda closure record, the `assigned_lambda_d_nr` bookkeeping that
+        //     gives the attribute its split layout, the heterogeneous-capture diagnostic,
+        //     the #318 frame-lifetime refusal, and the P215 deferral for a source that is
+        //     not an inline literal (which is the diagnostic this case never reached);
+        //   * a vector element → `fn_ref_slot_dnr`, the same four-byte projection the
+        //     vector literal writes, behind the same #247 capture refusal.
+        if op == "="
+            && matches!(f_type.base(), Type::Function(_, _, _))
+            && let Some((host, pos, split)) = self.fn_ref_place(to)
+        {
+            // The host may be named directly (`Reference`) or through a `&` parameter
+            // (`RefVar(Reference)`) — `h.f = inc` inside `fn f(h: &Holder)` is the same
+            // write, and reading only the first shape sent it to the four-byte path
+            // below, which is wrong the moment the field is split.
+            let host_def = match parent_tp.base() {
+                Type::Reference(d, _) => Some(*d),
+                Type::RefVar(inner) => match inner.base() {
+                    Type::Reference(d, _) => Some(*d),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(d_nr) = host_def {
+                let Value::Int(offset) = pos.unspan() else {
+                    return Value::Null;
+                };
+                let offset = *offset;
+                // The layout answers on pass 2 and is authoritative there; on pass 1 the
+                // struct has no layout, every field offset reads `u16::MAX`, and the read
+                // site's own record of the attribute is the only answer there is.  Pass 1
+                // is not optional here: a capturing source must be RECORDED against the
+                // attribute in that pass for `fill_database` to give it the split layout,
+                // and a pass-2-only recording emits a write into a `__closure_rec` half
+                // that was never registered.
+                let f_nr = self
+                    .fn_ref_attr_at(d_nr, offset)
+                    .or_else(|| lhs_fn_attr.filter(|(md, _)| *md == d_nr).map(|(_, f)| f));
+                if let Some(f_nr) = f_nr {
+                    // A SPLIT field already owns a closure record, and the write is about
+                    // to replace the d_nr that record belongs to.  Release it first,
+                    // whatever the new source is:
+                    //
+                    //   * a capturing source claims a FRESH child record and overwrites
+                    //     the pointer, so without this the old record is orphaned in the
+                    //     host's store — an unbounded leak when the assignment runs in a
+                    //     loop;
+                    //   * a NON-capturing source writes only the d_nr, so without this the
+                    //     field reads back as that function paired with the PREVIOUS
+                    //     closure — and `fn_call_ref` pushes a non-null closure as the
+                    //     hidden argument, so the callee is entered with an argument it
+                    //     does not declare. That is not a stale value but a corrupt frame:
+                    //     measured, the call returned with the stack misaligned and the
+                    //     NEXT read of an unrelated field (`h.tag`) faulted in `get_int`.
+                    //
+                    // `OpClearKeyed` against the `child_rec<…>` field frees the record and
+                    // zeroes the pointer in one step — the same `remove_claims` cascade
+                    // that frees it when the host dies. Emitted only here, on the
+                    // REASSIGNMENT path: an initialising write (a struct literal) has a
+                    // freshly claimed record whose pointer is already zero, so the
+                    // literal's emit stays exactly what it was.
+                    let mut ops = Vec::new();
+                    if split
+                        && let Ok(crec_off) = u16::try_from(offset + 4)
+                        && let Some(crec_tp) = self
+                            .database
+                            .field_content_at(self.data.def(d_nr).known_type(), crec_off)
+                    {
+                        let tp_val = Value::Int(i32::from(crec_tp));
+                        let field = self.cl(
+                            "OpGetField",
+                            &[host.clone(), Value::Int(offset + 4), tp_val.clone()],
+                        );
+                        ops.push(self.cl("OpClearKeyed", &[field, tp_val]));
+                    }
+                    let write = self.set_field(d_nr, f_nr, 0, host, val.clone());
+                    if ops.is_empty() {
+                        return write;
+                    }
+                    ops.push(write);
+                    return v_block(ops, Type::Void, "fn_ref_field_reset");
+                }
+            }
+            // Everything below writes FOUR BYTES and nothing else, so a destination that
+            // has a closure half must never reach it: the field would read back as the
+            // new function paired with the PREVIOUS closure, and `fn_call_ref` enters a
+            // callee that declares no closure with one pushed as its hidden argument.
+            // Reaching here with `split` means the attribute could not be resolved, which
+            // is a gap in this dispatch rather than a program to run.
+            if split {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot assign into this fn-ref field — the attribute it belongs to \
+                         could not be resolved from the assignment target, and its closure \
+                         half cannot be released without it; assign through a named holder, \
+                         or rebuild the value (`h = Holder {{ f: …, … }}`)"
+                    );
+                }
+                return Value::Null;
+            }
+            // A vector element (and any other four-byte fn-ref slot): no `__closure_rec`
+            // half exists to receive a captured environment, which is @P213/@P214's
+            // deferral and the refusal the collection LITERAL already gives.
+            if !self.first_pass && self.fn_ref_source_captures(val) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a capturing closure cannot be stored in a collection yet — the \
+                     co-located closure-record layout is deferred (@P213/@P214); hold the \
+                     captured state separately (e.g. a struct field) and store a \
+                     non-capturing fn that reads it"
+                );
+                return Value::Null;
+            }
+            let (dnr_val, mut ops) = self.fn_ref_slot_dnr(val, f_type);
+            let write = self.cl("OpSetInt4", &[host, pos, dnr_val]);
+            ops.push(write);
+            return v_block(ops, Type::Void, "fn_ref_slot_set");
         }
         if matches!(
             *f_type,
