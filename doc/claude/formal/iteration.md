@@ -128,7 +128,32 @@ without a guard.
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **1** (D-iter-1), opened 2026-08-22 by re-measuring the `OPEN: 0` this line used to
+carry. It remains a *rules* doc that shrinks operational.md's D-op-1; the deviation below is
+a code one the corpus could not see.
+
+> **D-iter-1 — OPEN (2026-08-22). Every combinator is broken over a TUPLE element.**
+> `xs.map(|t| { t.0 * 10 })` on a `vector<(integer, integer)>` answers
+> `343597383710 1030792151070` on `--interpret` — a packed DbRef read as an integer, with
+> no diagnostic — and does not compile on `--native`. `filter` SIGSEGVs, `reduce` mistypes
+> its accumulator. So `I-Map`'s element values and `I-Reduce`'s fold both fail at one
+> element type, in the `silent-wrong` direction.
+>
+> `for_type`'s P189b block deliberately gives a tuple loop var
+> `Reference(__tuple<…>)`, because iteration yields a DbRef at the tuple's inline bytes —
+> right for a `for` BODY. `parse_map` reuses that as the callback's ARGUMENT type while the
+> lambda is generated taking the tuple BY VALUE, so a `DbRef` is passed where a tuple is
+> declared. A struct element is unaffected because a struct IS a DbRef, so the two
+> representations coincide; the tuple is the one element type where they do not. Tracked as
+> loft#1074, with the measured matrix and the four spellings that DO work.
+>
+> **What the corpus was holding fixed:** every combinator cell in § Conformance below runs
+> on `vector<integer>`. Text iteration is a different SOURCE kind, not a vector of text, so
+> the ELEMENT TYPE is never varied at all — the same axis that left
+> [interfaces.md](interfaces.md) blind to scalar instantiation and [tuples.md](tuples.md)
+> blind to `text`. Measured alongside: `vector<text>`, `vector<Struct>`, `vector<fn(…)>`
+> and `vector<integer?>` elements are all CLEAN through `map`, so the tuple is the whole
+> deviation and not the tip of a wider one.
 
 - **Conformance is differential** — the iteration steps are enforced across the two backends by
   the @PLN89 differential oracle (D-op-1). Its corpus explicitly covers the combinators

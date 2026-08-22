@@ -73,6 +73,15 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > element, keyed value, struct-enum payload, nested struct — came back entirely clean; the
 > find was on the axis nobody had thought of as an axis. (D-clo-3, 2026-08-22.)
 >
+> [iteration.md](iteration.md) read `OPEN: 0` while every vector combinator was broken over
+> a TUPLE element — `map` answering a packed DbRef as `343597383710`, `filter` segfaulting,
+> `--native` refusing to compile. Its conformance corpus runs map/filter/reduce entirely on
+> `vector<integer>`; the text cell is a different SOURCE kind, not a vector of text, so the
+> ELEMENT TYPE is never varied at all. That is now the THIRD doc whose zero rested on an
+> all-scalar corpus, after interfaces.md (scalar instantiation) and tuples.md (no `text`) —
+> which makes "what does this corpus instantiate at?" the first question to ask of any
+> conformance list, not a per-doc accident. (D-iter-1, loft#1074, 2026-08-22.)
+>
 > **And a zero can fail a third way, with no oracle or corpus involved.**
 > [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
 > disagreeing element lists into one — while D-tup-2 was live, because the surviving list is
