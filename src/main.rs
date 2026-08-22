@@ -9097,6 +9097,44 @@ fn main() {
         } else {
             html_path.clone()
         };
+        // @PLN146 F5 — the fonts this page has to carry, decided BEFORE the build:
+        // a manifest that cannot produce a working page should not cost a wasm
+        // compile first.  Two sources, because a main script's own package is never
+        // resolved as a library — the entry program's nearest-ancestor `loft.toml`,
+        // plus every `use`d package's declarations (collected by the parser).  This
+        // refuses rather than reports: a family that drifts from the name the
+        // program passes draws in a fallback with nothing on stderr, which is the
+        // failure the declaration exists to remove.
+        let page_fonts = {
+            let mut decls = Vec::new();
+            let mut dir = std::path::Path::new(&abs_file)
+                .parent()
+                .map(std::path::Path::to_path_buf);
+            while let Some(d) = dir {
+                let manifest = d.join("loft.toml");
+                if manifest.exists() {
+                    if let Some(m) = loft::manifest::read_manifest(&manifest.to_string_lossy()) {
+                        decls.extend(m.fonts);
+                    }
+                    break;
+                }
+                dir = d.parent().map(std::path::Path::to_path_buf);
+            }
+            for f in &p.data.declared_fonts {
+                if !decls.contains(f) {
+                    decls.push(f.clone());
+                }
+            }
+            match loft::html_fonts::validate(&decls) {
+                Ok(fonts) => fonts,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        };
+        let fonts_head = loft::html_fonts::head_html(&page_fonts);
+        let fonts_await = loft::html_fonts::boot_await_js(&page_fonts);
         let end_def = p.data.definitions();
         // Per-process scratch dir for EVERY intermediate of this --html build
         // (generated .rs, the wasm output + its objects, bridge rlibs, wasm-opt
@@ -9929,7 +9967,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
             format!(
                 r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
-<style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>
+<style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>{fonts_head}
 </head><body>
 <canvas id="c" tabindex="0" style="display:none"></canvas>
 <pre id="out"></pre>
@@ -9965,7 +10003,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   loftInstallEnv(instance, mem);
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
-  ctrl.assets=await decodeLoftAssets(ctrl.assets);
+  ctrl.assets=await decodeLoftAssets(ctrl.assets);{fonts_await}
   if(instance.exports.asyncify_start_unwind){{
     const ac=new AsyncifyCtrl(instance);
     ctrl.ac=ac;

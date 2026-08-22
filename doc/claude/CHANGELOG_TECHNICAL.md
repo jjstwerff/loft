@@ -9,6 +9,45 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A browser page can declare the font it draws with (@PLN146 F5/F6, 2026-08-22)
+
+**New.** `[[font]]` in `loft.toml` — `family`, `native`, and one of `url` (a font file we
+serve) or `stylesheet` (a provider's). `--html` emits an `@font-face` or a `<link>` per
+declared source and, ahead of `loft_start`, awaits `document.fonts.load` for every
+declared family. A library's declarations reach a consumer's page by the same route as
+`[wasm.bridge] host_js`. `src/html_fonts.rs` owns validation and both emissions;
+`src/manifest.rs` parses the section; `Data::declared_fonts` carries a library's.
+
+**Refused, before the wasm build:** a `family` that differs from the base name of
+`native`. The browser sees only that base name (`gl_load_font("fonts/Foo.ttf")` reaches
+the page as `Foo`), so the drift means the page registers one family while the program
+asks for another — text draws in a generic face and nothing says so. Also refused: an
+empty family, characters that would break out of the page's CSS/HTML, `url` and
+`stylesheet` together, and one family declared twice with different sources.
+
+**Fixed on the way — `familyFor` resolved backwards.** The bridge decided a font's CSS
+family by asking `document.fonts.check` whether the page had it. That question has no
+answer: `check` is **true** for a family nothing declares (nothing unloaded matches) and
+**false** for an `@font-face` that is still loading. So a page that declared nothing took
+the exact-font branch, and the one page that had brought its own font took the *generic*
+branch — cached per handle, so a single early `gl_load_font` locked that handle to
+`sans-serif` for the run. The name heuristic (`mono` → `monospace`) was unreachable in
+every other case. `familyFor` now answers `"Requested", <generic>` and lets CSS choose.
+
+**And the silence is closed.** `gl_load_font` measures whether the family actually
+resolved — a family the browser has overrides both `monospace` and `sans-serif`, so the
+two measure the same; one it does not have follows each and they differ — and
+`console.warn`s once when it did not, naming the family and the generic that will draw.
+Every resolution is recorded on `globalThis.loftFonts`.
+
+**Gates.** `tests/html_fonts.rs`: the three sources resolve to the requested family in
+headless Chromium (proven red with the head block suppressed); the same page against a
+font server delaying font files by 800 ms still resolves, while the same page WITHOUT
+the await leaves both brought families unresolved (the control, asserted every run); a
+real `loft --html` page carries the block with the await ahead of the `loft_start` call;
+and a drifting family is refused with no page written.
+`tests/data/slow_font_server.py` is the throttle.
+
 ### A paged load refused every entry type with an enum field (@PLN146 F2, 2026-08-22)
 
 **Symptom.** `store_load_key_text` (and its `_key` / `_range` / `_prefix` siblings) refused

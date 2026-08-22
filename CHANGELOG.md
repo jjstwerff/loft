@@ -33,6 +33,29 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A browser game can bring its own font
+
+A game that draws text in the browser used to get whatever family the browser guessed
+from the file name, and there was no way to say otherwise without hand-writing CSS.  Now
+the font is a line in `loft.toml`:
+
+```toml
+[[font]]
+family = "PressStart2P"
+native = "fonts/PressStart2P.ttf"     # the file every other target uses
+url    = "fonts/PressStart2P.woff2"   # what the page fetches
+```
+
+`--html` puts the `@font-face` in the page (or a `<link>`, if you name a provider's
+stylesheet instead), and waits for the font to arrive before your program starts — a
+webfont that turns up after the first frame is drawn is a fallback nobody was told about.
+Declare only `family` and the page brings nothing: that is the case where the browser
+already has the font.
+
+The name has to match the path your program passes to `gl_load_font`, and the build now
+**says so** instead of quietly drawing in the wrong face.  A font that still cannot be
+found reports itself once in the browser console rather than silently substituting.
+
 ### A range-read no longer refuses a collection because one field is an enum
 
 Reading one key out of a big store over HTTP range copies that record's fields into

@@ -4121,6 +4121,13 @@ pub struct Data {
     /// a registration callback onto `globalThis.LOFT_WASM_EXTENSIONS`
     /// which the preamble dispatches after `buildLoftImports` returns.
     pub wasm_bridge_host_js_files: Vec<String>,
+    /// @PLN146 F5 — the `[[font]]` declarations of every package reached by a
+    /// `use`, in resolution order.  A library that draws its own text declares the
+    /// font it draws with, and the `--html` driver brings each one into the page
+    /// (`crate::html_fonts`).  The entry program's own manifest is read by the
+    /// driver rather than collected here, because a main script's package is never
+    /// resolved as a library.
+    pub declared_fonts: Vec<crate::manifest::FontDecl>,
     /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
     /// Maps callee def_nr → list of caller def_nrs.  Built once on
     /// first `callers_of` call by walking every user fn's body and
@@ -4414,6 +4421,7 @@ impl Data {
             wasm_bridge_packages: Vec::new(),
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
+            declared_fonts: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
             op_sets: OpSetCache::default(),
         }

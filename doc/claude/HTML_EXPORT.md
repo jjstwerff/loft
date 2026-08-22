@@ -177,10 +177,25 @@ fontdue gives the desktop backend — bitmap height = line height, baseline at
 
 A font PATH resolves to a **CSS family**, not a file: nothing here can load font
 bytes synchronously, and an async load would change the metrics *between* the
-measure and the rasterise of one string.  A page that wants its real font
-declares it with `@font-face` under the file's base name (its own CSS, or the
-`[wasm.bridge] host_js`); `document.fonts.check` then finds it and it is used
-exactly.  Otherwise the base name picks a generic family, so text still draws.
+measure and the rasterise of one string.  `familyFor` answers the requested
+family followed by a generic guessed from the name (`"Foo", monospace`), so a
+family the page carries wins and one it does not have falls to the generic
+rather than to a wrong one.
+
+A page brings its own font by declaring `[[font]]` in its `loft.toml`: `--html`
+emits the `@font-face` (or the provider `<link>`) into the `<head>` and awaits
+`document.fonts.load` for every declared family ahead of `loft_start`
+(@PLN146 F5/F6, `src/html_fonts.rs`).  A library's declarations travel to the
+consumer's page the same way `[wasm.bridge] host_js` does, and a `family` that
+does not match the base name the program passes is refused before the build.
+Carrying the CSS by hand in `host_js` still works.
+
+⚠ `document.fonts.check` cannot be used to decide whether the page HAS a family:
+it is **true** for a family nothing declares and **false** for an `@font-face`
+that is still loading.  To ask, measure the family against two generics — one
+the browser has overrides both, one it does not follows each.  `gl_load_font`
+does exactly that and `console.warn`s when the answer is no; every resolution is
+recorded on `globalThis.loftFonts`.
 
 `gl_upload_alpha_texture` takes a coverage buffer the PROGRAM computed — already
 in wasm memory, so no fetch and no asset pipeline.  WebGL2 has no
@@ -191,8 +206,10 @@ stay identical across targets.  `gl_load_texture` serves a **bundled** asset —
 `loft_start`, so the lookup is synchronous; a runtime URL genuinely needs async
 and reports failure (`0`, never a valid handle — `hold` is 1-based).
 
-Gate: `tests/gl_text_bridge.rs` drives `tests/data/gl_text_probe.html` in
-headless chromium.  It asserts what the bridge PRODUCES — ink in the coverage,
+Gates: `tests/html_fonts.rs` drives the emitted font block in headless chromium
+— three sources resolving to the family asked for, and a throttled source with
+the await removed as the control.  `tests/gl_text_bridge.rs` drives
+`tests/data/gl_text_probe.html` in the same way.  It asserts what the bridge PRODUCES — ink in the coverage,
 metrics that scale with size, handles that are handles — because the failure this
 replaces was stubs that returned plausible numbers and no pixels, which every
 import-shape check passed.
@@ -359,6 +376,7 @@ The output `.html` is a single self-contained file:
   <meta charset="utf-8">
   <title>Loft Program</title>
   <style>/* canvas full-bleed; pre console for non-GL programs */</style>
+  <!-- @PLN146 F5: one @font-face / <link> per declared [[font]] source -->
 </head><body>
   <canvas id="c" tabindex="0" style="display:none"></canvas>
   <pre id="out"></pre>

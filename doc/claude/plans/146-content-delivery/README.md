@@ -13,28 +13,33 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — arc F's delivery half is built and gated; arcs E and W are not.** Everything a game
+**Open — arc F is built and gated end to end; arcs E and W are not.** Everything a game
 needs that is not the frame: content in, sound out, native and browser alike. **Parity
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**6 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3`), 1 blocked, 12 open. The pack
-exists, round-trips byte-identically on the interpreter, `--native` and wasm, pages over HTTP
-range at 9 % of the file per read, and takes **zero** fetches inside a frame. What is left is
-in other trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is
-`graphics` and a new `audio_bus`, and `F4`/`F5`/`F6` need a vehicle or `--html` page emission.
+**8 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3` · `F5` · `F6`), 1 blocked, 10
+open. The pack exists, round-trips byte-identically on the interpreter, `--native` and wasm,
+pages over HTTP range at 9 % of the file per read, and takes **zero** fetches inside a frame;
+a page declares the font it draws with and gets that font rather than a fallback. What is
+left is in other trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is
+`graphics` and a new `audio_bus`, and `F4` needs a vehicle.
 
-**Three findings changed the plan rather than following it.** A pack is TWO stores because
+**Four findings changed the plan rather than following it.** A pack is TWO stores because
 the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
-so arc W is smaller than it was cut; and `imaging` drops alpha, which blocks `F7` and F1's
-premultiplication both. Each is written up in its phase's own doc.
+so arc W is smaller than it was cut; `imaging` drops alpha, which blocks `F7` and F1's
+premultiplication both; and `document.fonts.check` cannot say whether a page has a font —
+it answers **true** for a family nothing declares and **false** for one that is loading, which
+is how the browser text bridge came to take its exact-font branch for every page except the
+one that had brought a font. Each is written up in its phase's own doc.
 
-**Four loft defects were found by these gates and three are fixed** — a `store_load` that
+**Five loft defects were found by these gates and four are fixed** — a `store_load` that
 never returned, a paged load that refused any entry type with an `enum` field, a refusal
-message that named a type the record did not have, and
+message that named a type the record did not have, `familyFor` resolving a declared webfont
+to a generic and caching it for the run ([F5](F5.md)), and
 [loft#1063](https://github.com/loft-lang/loft/issues/1063) (filed). The pack is the shape
-that found them: several keyed collections plus values big enough to reach the allocator's
-linear scan.
+that found the store ones: several keyed collections plus values big enough to reach the
+allocator's linear scan.
 
 ## Goal
 
@@ -45,7 +50,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 19 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` 2026-08-22.**
+- **Effort:** H — 19 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -72,8 +77,8 @@ cut, not when it is implemented.
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from a range-honouring static server with only the URL changed; a byte-range log shows **only** the requested keys fetched. (`python3 -m http.server` IGNORES `Range` and answers 200 with the whole body — loft reads correctly through that, so it proves the URL path works and nothing about what crossed the wire; the gate ships its own logging server) | ✅ **Shipped** — [F2.md](F2.md): 9 % of the file, two pages per key |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | ✅ **Shipped** — [F3.md](F3.md): 60 frames, 0 fetches, and a control that costs 7 |
 | **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | Open |
-| **F5** — font sources: browser-resident, our server, or a CDN | `assets` | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes. Field evidence rather than deduction: `moros/probe/b1` measured a desktop fixed-pitch font arriving as a **proportional** browser fallback | Open |
-| **F6** — font readiness ordering | `assets` | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | Open |
+| **F5** — font sources: browser-resident, our server, or a CDN | this repo | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes. Field evidence rather than deduction: `moros/probe/b1` measured a desktop fixed-pitch font arriving as a **proportional** browser fallback | ✅ **Shipped** — [F5.md](F5.md): `[[font]]` in `loft.toml`, and the drift is refused before the build. It found `familyFor` taking its **generic** branch for the one page that had brought a font, and caching it |
+| **F6** — font readiness ordering | this repo | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | ✅ **Shipped** — [F6.md](F6.md): two pages, one delayed server, and the control fires |
 ## Effort per phase
 
 | Phase | E | What the effort actually is |
@@ -92,8 +97,8 @@ cut, not when it is implemented.
 | **F2** | S | One call site — `store_load_key_text` from a URL with a local-path fallback. The effort was *proving* only the requested ranges crossed the wire, which meant writing the logging static file server (`python3 -m http.server` ignores `Range`) **and** padding the fixture: a 20 KB pack is a third of one page, so a paged read of it fetches everything and a gate on it measures nothing. |
 | **F3** | S | An explicit request-these-keys call at load and level boundaries, a ring-around-player helper, and a counter that can assert zero fetches inside a frame. The instrumentation was the work, and it turned out to need no counter: run the same program with 0 frames and with 60 and compare the server's request count. The policy is three lines. |
 | **F4** | XS | Pack `build_atlas()`'s output as a PNG, load it from the pack, delete 190 lines, pixel-compare. |
-| **F5** | S | Manifest fields (family, browser source, native path), page emission of the `@font-face` or `<link>`, and enforcing family-name-equals-lookup-key **at build time** instead of leaving it to be discovered as a silent fallback at runtime. |
-| **F6** | XS | Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The fix is two lines; the throttled test is the phase. |
+| **F5** | S ✅ | *Done.* Manifest fields (family, browser source, native path), page emission of the `@font-face` or `<link>`, and enforcing family-name-equals-lookup-key **at build time** instead of leaving it to be discovered as a silent fallback at runtime. ⚠ The predicted effort missed the half that mattered: `document.fonts.check` cannot say whether a page has a font, so the *instrument* had to be built before the feature — measure the family against two generics — and it immediately found the bridge resolving backwards. |
+| **F6** | XS ✅ | *Done, and the two-line prediction held exactly.* Emit the `document.fonts.load` await for each declared family ahead of `loft_start`. The throttled test is the phase, and its control — the same page without the await, against the same delayed server — is what makes the green half a reading. |
 | **F7a** | XS | One probe. `shapes` is published and unadopted; `F7` is the first thing that would depend on it, so the shape mismatch is worth finding now rather than inside `F7`. |
 | **F7** | S | Derive at pack time from the same alpha A4 already reads to pick — the art contains the answer, so nobody hand-authors a hitbox per sprite. **[F7a](F7a.md) settled the shape:** 16 `Rect` bands on the tighter axis, which beats the convex hull on mean, median and worst case while needing no new kind in `shapes`; gate at overshoot ≤ +100 %, which 35 of 36 corpus sprites meet, and REPORT the one that does not. Produces *data*; `shapes` and `lib_plans/75-physics-2body` consume it, so this is not a physics engine arriving by the back door. Containment is what makes substitution safe (a system validated against the proxy stays valid when the art changes); the bound is what stops containment being satisfied by a screen-sized rectangle. |
 
@@ -112,8 +117,7 @@ does on desktop — `E1`'s browser stub is a `--html` problem only. Both depend 
 and it is the phase that can shrink the arc. **`E1` first** — ~30 lines of JS, independent of everything, and it turns silent browser games
 into games with music. Its gate runs on the current tree *before* the fix, so the harness is
 proven red. **`F1` next**, because everything else stores into its schema. `F4` needs
-@PLN144's `A2`; `F5`/`F6` land with @PLN145's `B`. `E2`/`E3` whenever a consumer asks — they
-are comfort, not capability.
+@PLN144's `A2`. `E2`/`E3` whenever a consumer asks — they are comfort, not capability.
 
 ## The sandbox boundary
 

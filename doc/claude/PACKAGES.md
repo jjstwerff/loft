@@ -166,7 +166,35 @@ gl_swap_buffers = "graphics_native::webgl::flush_canvas"
 glutin = "0.32"
 fontdue = "0.9"
 png = "0.17"
+
+# @PLN146 F5 — a font this package draws with, and where each target gets it.
+# One entry per family; a library's entries reach a consumer's page too.
+[[font]]
+family = "PressStart2P"              # the CSS family AND the name the program
+                                     # looks the font up by
+native = "fonts/PressStart2P.ttf"    # what the program passes to gl_load_font;
+                                     # its base name MUST equal `family`
+url    = "fonts/PressStart2P.woff2"  # our own server -> an @font-face in the page
+# stylesheet = "https://fonts.example/css2?family=…"   # a provider -> a <link>
 ```
+
+### `[[font]]` — the font a browser page has to carry
+
+Under `--html` a font path is never opened: `gl_load_font("fonts/Foo.ttf")` reaches the
+page as the base name `Foo`, which the browser bridge resolves to a CSS family. So the
+page must already carry the family, under exactly that name.
+
+Declaring neither `url` nor `stylesheet` means the browser already has the family and
+the page brings nothing. `url` names a font FILE we serve and becomes an `@font-face`;
+`stylesheet` names a provider's stylesheet and becomes a `<link>`. `--html` also emits a
+`document.fonts.load` await for every declared family ahead of `loft_start`, because a
+webfont that arrives after the first frame draws is a fallback nobody was told about.
+
+`family` and the base name of `native` must agree, and `--html` refuses the build when
+they do not — before the wasm compile. The failure it replaces is silent: the page
+registers one family, the program asks for another, text draws in a generic face and
+nothing anywhere says so. Full reference:
+[plans/146-content-delivery/FONTS.md](plans/146-content-delivery/FONTS.md).
 
 ### `placement` — where the library runs
 

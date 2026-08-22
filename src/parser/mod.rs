@@ -12373,6 +12373,20 @@ impl Parser {
         }
     }
 
+    /// @PLN146 F5 — record this package's `[[font]]` declarations for the `--html`
+    /// driver.  Both manifest-registration paths call it, for the same reason
+    /// `[wasm.bridge].host_js` is registered from both: a library reached through
+    /// one path and not the other would lose its browser half silently.  Identical
+    /// declarations are one font — the app and a library it uses may name the same
+    /// one, and agreeing about it is not a conflict.
+    fn register_declared_fonts(&mut self, m: &manifest::Manifest) {
+        for f in &m.fonts {
+            if !self.data.declared_fonts.contains(f) {
+                self.data.declared_fonts.push(f.clone());
+            }
+        }
+    }
+
     /// Register native crate info from a loft.toml manifest.
     /// Called when a .loft file was found directly via lib_dirs (not through
     /// lib_path_manifest), so the manifest's native crate registration would
@@ -12512,6 +12526,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
+        self.register_declared_fonts(&m);
     }
 
     /// Check whether `<dir>/<id>` contains a valid loft package layout.
@@ -12899,6 +12914,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
+        self.register_declared_fonts(m);
         // PKG.3: register dirs for dependency resolution.
         //
         // For plain-version deps (`foo = "0.1"`) and the legacy
