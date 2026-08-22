@@ -740,6 +740,40 @@ impl Output<'_> {
     /// loft#1029's argument hoist produces. Matching the bare variant made the lift
     /// depend on whether the value happened to carry a position, and one native template
     /// (`OpGetInt`) then received a spanned `Insert` and mis-emitted it.
+    /// Does this argument's emitted Rust hand back an OWNED text — a `Str` or a `String` —
+    /// where the callee's parameter is `&str`?
+    ///
+    /// Three shapes do, and they are the same shape at different depths, which is why
+    /// this asks about the TAIL rather than about the outermost node: a text-returning
+    /// USER function produces a `Str`; a value BLOCK yields its declared result; and a
+    /// SEQUENCE yields its last operator, which is typically one of the other two.
+    ///
+    /// The sequence case is the one that was missing.  `print("{f([\"aa\"])}")`, where
+    /// `f(v: vector<text>) -> text { v[0] }`, hoists the vector's CONSTRUCTION and the
+    /// call together into one `_pre_N`, so the node is an `Insert` and neither of the
+    /// two shapes that were listed matched — `--native` then handed a `String` to
+    /// `format_text` and rustc refused the program (`expected &str, found String`) while
+    /// the interpreter ran it.  Binding the argument first was the difference, because
+    /// then there was nothing to hoist.
+    ///
+    /// `unspan` on the way in for the same reason: a `Span` wrapper is not a different
+    /// value, and matching the bare node treated it as one.
+    ///
+    /// Over-applying the deref cannot be silent — an extra `&*` on something already
+    /// borrowed is a rustc error, not a wrong answer.
+    fn yields_owned_text(&self, arg: &Value) -> bool {
+        match arg.unspan() {
+            Value::Call(d, _) => {
+                matches!(self.data.def(*d).returned(), Type::Text(_))
+                    && self.data.def(*d).rust().is_empty()
+                    && !self.data.def(*d).name().starts_with("Op")
+            }
+            Value::Block(b) => matches!(b.result, Type::Text(_)),
+            Value::Insert(ops) => ops.last().is_some_and(|tail| self.yields_owned_text(tail)),
+            _ => false,
+        }
+    }
+
     fn is_sequence_arg(arg: &Value) -> bool {
         matches!(arg.unspan(), Value::Block(_) | Value::Insert(_))
     }
@@ -815,24 +849,11 @@ impl Output<'_> {
                     // then a bogus `((), u8) as i64`). A block `{ … } as i64` is valid for a single
                     // expression AND a statement sequence, so it works in every case.
                     format!("{{ {substituted} }} as i64")
-                } else if matches!(tp, Type::Text(_))
-                    && matches!(arg, Value::Call(d, _) if
-                        matches!(self.data.def(*d).returned(), Type::Text(_))
-                        && self.data.def(*d).rust().is_empty()
-                        && !self.data.def(*d).name().starts_with("Op"))
-                {
-                    // Text-returning user fn calls produce `Str`; callees
-                    // expect `&str`.  Deref at the binding site.
-                    format!("&*({bound})")
-                } else if matches!(tp, Type::Text(_))
-                    && matches!(arg, Value::Block(b) if matches!(b.result, Type::Text(_)))
-                {
-                    // Plan-06 phase 4d: tuple-element read blocks
-                    // (e.g. `tuple_tmp_X` produced by my get_val
-                    // Type::Tuple arm) end in `var_tmp.0` of type
-                    // `String`.  Callees expect `&str`, so deref at
-                    // the binding site so format helpers, equality,
-                    // etc. accept the value without an explicit `&`.
+                } else if matches!(tp, Type::Text(_)) && self.yields_owned_text(arg) {
+                    // The binding holds an owned text where the callee's parameter is
+                    // `&str`, so deref at the binding site.  See `yields_owned_text` for
+                    // which shapes those are and why asking about the TAIL is what makes
+                    // the list total.
                     format!("&*({bound})")
                 } else {
                     bound.clone()
