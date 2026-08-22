@@ -18,13 +18,14 @@ needs that is not the frame: content in, sound out, native and browser alike. **
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**8 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3` · `F5` · `F6`), `F4`'s engine
-half with them, 1 blocked, 10 open. The pack exists, round-trips byte-identically on the
+**9 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6`), 1 blocked,
+9 open. **Arc F is complete.** The pack exists, round-trips byte-identically on the
 interpreter, `--native` and wasm, pages over HTTP range at 9 % of the file per read, and takes
 **zero** fetches inside a frame; a page declares the font it draws with and gets that font
-rather than a fallback, and declares the pack it reads and can now carry it. What is left is
-in other trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is
-`graphics` and a new `audio_bus`, and `F4` needs a vehicle.
+rather than a fallback, and declares the pack it reads and can now carry it. Brick Buster's sprite sheet is
+now a packed asset rather than 180 lines of drawing per launch. What is left is in other
+trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is `graphics`
+and a new `audio_bus`.
 
 **The schema is now a package.** `assets` 0.1.0 —
 [loft-libs-assets#7](https://github.com/loft-lang/loft-libs-assets/pull/7), open — carries
@@ -94,7 +95,7 @@ cut, not when it is implemented.
 | **F1** — the pack **is** a loft store, and it holds **scenes** as well as assets | `assets` | pack → read back: every asset byte-identical, **and** `type_layout_fingerprint` matches across native and wasm. If that check fails everything downstream is wrong. A scene is **definitions + placed instances** (GameMaker's object/room split), not a flat node dump — and a definition carries its **animation table**, `(action, facing) → sequence`, since a walk cycle is asset data and not code. A **light is a placed instance** like any other — the shape a prefab and an editor both need. In the first schema, because retrofitting costs a format break; and once scenes are in, reloading the store **is** hot reload | ✅ **Shipped** — [F1.md](F1.md): identical on all three targets, and it found a `store_load` that never returned |
 | **F2** — range-read loader | `assets` | the same game source runs from a local pack and from a range-honouring static server with only the URL changed; a byte-range log shows **only** the requested keys fetched. (`python3 -m http.server` IGNORES `Range` and answers 200 with the whole body — loft reads correctly through that, so it proves the URL path works and nothing about what crossed the wire; the gate ships its own logging server) | ✅ **Shipped** — [F2.md](F2.md): 9 % of the file, two pages per key |
 | **F3** — prefetch policy | `assets` | instrument the frame loop: **zero fetches inside a frame** during steady-state play | ✅ **Shipped** — [F3.md](F3.md): 60 frames, 0 fetches, and a control that costs 7 |
-| **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | 🟡 **Engine done, vehicle open** — [F4.md](F4.md). Both engine halves have shipped: the loader reads the page's own filesystem (`tests/html_page_store.rs`), and `[[embed]]` in `loft.toml` PUTS the declared pack there (`tests/html_embed.rs`). A page now prints exactly what the desktop run of the same source prints, reading the same pack by the same name. What remains is the vehicle, which waits on the `assets` package landing |
+| **F4** — retire `build_atlas()` | vehicle | Brick Buster's 190 hand-poked lines become a packed asset; frames pixel-identical to the baked version | ✅ **Shipped** — [F4.md](F4.md). Both engine halves (`tests/html_page_store.rs`, `tests/html_embed.rs`) **and the vehicle**: `build_atlas()` moved out of the game into `pack_atlas.loft`, which draws the atlas once at build time into an `assets` pack the game reads and the page carries. **1983 → 1849 lines**, and the same hash `219174857032355` off `build_atlas()`, off the pack, and off the game's own loader, on both backends — with the harness proven able to fail on one byte |
 | **F5** — font sources: browser-resident, our server, or a CDN | this repo | a page declaring each of the three sources resolves to the **requested** family, not the fallback. Assert the *resolved* family — text draws either way, so "text appeared" is not the gate. Red on a manifest that lets the declared `font-family` drift from the name the program passes. Field evidence rather than deduction: `moros/probe/b1` measured a desktop fixed-pitch font arriving as a **proportional** browser fallback | ✅ **Shipped** — [F5.md](F5.md): `[[font]]` in `loft.toml`, and the drift is refused before the build. It found `familyFor` taking its **generic** branch for the one page that had brought a font, and caching it |
 | **F6** — font readiness ordering | this repo | with the font source **throttled**, the page still resolves to the requested family — i.e. the `document.fonts.load` await genuinely holds `loft_start`. Remove the await and this goes red while F5 stays green on a fast local font, which is why it is its own phase | ✅ **Shipped** — [F6.md](F6.md): two pages, one delayed server, and the control fires |
 ## Effort per phase

@@ -13,7 +13,28 @@
 name    = "brick_buster"
 version = "0.0.0"
 loft    = ">=0.8"
+entry   = "25-brick-buster.loft"
 
 [dependencies]
 graphics = ">=0.1"
 shapes   = ">=0.3"
+assets   = ">=0.1"
+
+# The sprite atlas is DRAWN once here, not on every launch.  `pack_atlas.loft`
+# sits beside the game so `assets/bb` names the same two files for the packer
+# and for the game — a path a program passes resolves against the PROGRAM's
+# own directory (@PLN146 F4).
+[[build.asset]]
+name    = "atlas"
+run     = "pack_atlas.loft"
+inputs  = ["pack_atlas.loft"]
+outputs = ["assets/bb.meta.store", "assets/bb.blobs.store"]
+
+# A browser page has no disk, so it carries the pack it reads.  The keys are the
+# program's own strings, which is what makes `pack_read(p, "assets/bb")` the same
+# call on the desktop and in the page.
+[[embed]]
+path = "assets/bb.meta.store"
+
+[[embed]]
+path = "assets/bb.blobs.store"

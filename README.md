@@ -20,7 +20,7 @@
 
 **A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, chiptune music, hand-designed levels, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
 
-The whole game is one file — [read all 1,983 lines](tools/brick-buster/25-brick-buster.loft). No engine, no framework, no build step: that file *is* the game.
+The whole game is one file — [read all 1,849 lines](tools/brick-buster/25-brick-buster.loft). No engine and no framework: that file *is* the game. Its sprite sheet is *art*, not code — drawn once by [a build step](tools/brick-buster/pack_atlas.loft) into a content pack the game reads, and that the browser page carries inside itself.
 
 ## Three ways to see loft
 

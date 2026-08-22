@@ -1249,6 +1249,52 @@ fn readme_brick_buster_line_count_is_current() {
     );
 }
 
+/// @PLN146 F4 — the Makefile and the manifest name ONE atlas packer, not two.
+///
+/// `tools/brick-buster/loft.toml` declares the packer as a `[[build.asset]]` `run`,
+/// which is what `loft build` / `loft check` execute.  `make game` and `make play`
+/// cannot go through `loft build` — it has no assets-only mode and would
+/// compile-check the whole game to reach the asset phase — so the Makefile names the
+/// script itself.  That is two hand-written spellings of one fact, and the failure
+/// when they drift is quiet: the Makefile keeps building whatever the OLD path points
+/// at while the manifest describes something else, so `make game` ships a stale pack
+/// and `loft build` a fresh one.
+///
+/// Pin them: the `run` the manifest declares must be the path the Makefile invokes,
+/// and the `outputs` it promises must be what the Makefile checks for.
+#[test]
+fn brick_buster_pack_step_matches_its_manifest() {
+    let toml = fs::read_to_string("tools/brick-buster/loft.toml").expect("brick-buster loft.toml");
+    let run = toml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("run"))
+        .and_then(|r| r.split('"').nth(1).map(str::to_string))
+        .expect("loft.toml must declare a [[build.asset]] `run`");
+    let makefile = fs::read_to_string("Makefile").expect("Makefile");
+    let invoked = format!("tools/brick-buster/{run}");
+    assert!(
+        makefile.contains(&invoked),
+        "loft.toml's [[build.asset]] runs `{run}`, but the Makefile never invokes \
+         `{invoked}` — the two spellings of the atlas packer have drifted."
+    );
+    // Every declared output must be something the Makefile can see is absent.
+    for out in toml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("outputs"))
+        .and_then(|o| o.split('[').nth(1))
+        .and_then(|o| o.split(']').next())
+        .expect("loft.toml must declare [[build.asset]] `outputs`")
+        .split(',')
+        .filter_map(|o| o.split('"').nth(1))
+    {
+        assert!(
+            makefile.contains(&format!("tools/brick-buster/{out}"))
+                || out.ends_with(".meta.store"),
+            "loft.toml promises `{out}` but nothing in the Makefile checks for it."
+        );
+    }
+}
+
 /// @PLN78 step 6 — the installer's target triples must be ones a release publishes.
 ///
 /// `scripts/install.sh` derives the artifact name from `uname`, and
