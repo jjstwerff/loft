@@ -5574,7 +5574,7 @@ impl Stores {
     /// See [`load_key`](Stores::load_key) for the single-key form. Same
     /// FLAT-struct restriction (scalar fields only — no relocation yet).
     #[cfg(paged_store)]
-pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+    pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
         let key_sets: Vec<Vec<crate::keys::Content>> = keys_vals
             .iter()
             .map(|&kv| vec![crate::keys::Content::Long(kv)])
@@ -5705,7 +5705,8 @@ pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64
                 .filter_map(|&(off, _)| {
                     let b = reader.resolve(off, 4);
                     let rec = u32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
-                    (rec != 0).then(|| (u64::from(rec) * 8, crate::paged_reader::PAGE_SIZE.min(4096)))
+                    (rec != 0)
+                        .then(|| (u64::from(rec) * 8, crate::paged_reader::PAGE_SIZE.min(4096)))
                 })
                 .collect();
             reader.warm(&cands);
@@ -5714,7 +5715,13 @@ pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64
             let found: Vec<(u32, u32)> = key_sets
                 .iter()
                 .map(|k| {
-                    crate::paged_reader::find_hash_entry(&mut reader, local.rec, local.pos, k, &keys)
+                    crate::paged_reader::find_hash_entry(
+                        &mut reader,
+                        local.rec,
+                        local.pos,
+                        k,
+                        &keys,
+                    )
                 })
                 .collect();
 

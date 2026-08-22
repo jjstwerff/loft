@@ -4396,9 +4396,7 @@ fn store_load_keys_text_serves_a_trie() {
         );
         assert!(out.status.success(), "{backend}: {all}");
         assert!(
-            all.contains(
-                "trie loaded=2 len=2 got=kerkweg:five lonneker:seven verify=true"
-            ),
+            all.contains("trie loaded=2 len=2 got=kerkweg:five lonneker:seven verify=true"),
             "{backend}: the two present keys load in key order, `kerks` stays absent, \
              and the trie the loader BUILT is sound: {all}"
         );

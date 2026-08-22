@@ -129,10 +129,10 @@ impl Parser {
         // reads as what it is; the element read arrives here under either spelling
         // depending on whether the element type is nullable.
         matches!(v.unspan(), Value::Call(d, _)
-            if {
-                let n = self.data.def(*d).name();
-                n == "OpGetField" || n.starts_with("OpGetVector")
-            })
+        if {
+            let n = self.data.def(*d).name();
+            n == "OpGetField" || n.starts_with("OpGetVector")
+        })
     }
 
     /// Is this IR node the value a source-level `null` becomes?

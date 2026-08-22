@@ -140,24 +140,26 @@ fn wasm_reachable(sources: &[(PathBuf, String)], item: &str) -> Option<bool> {
         let lines: Vec<&str> = text.lines().collect();
         for (i, l) in lines.iter().enumerate() {
             let t = l.trim_start();
-            let is_def = ["fn ", "pub fn ", "const ", "pub const ", "static ", "pub static "]
-                .iter()
-                .any(|k| {
-                    t.strip_prefix(k).is_some_and(|r| {
-                        r.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                            .next()
-                            == Some(item)
-                    })
-                });
+            let is_def = [
+                "fn ",
+                "pub fn ",
+                "const ",
+                "pub const ",
+                "static ",
+                "pub static ",
+            ]
+            .iter()
+            .any(|k| {
+                t.strip_prefix(k).is_some_and(|r| {
+                    r.split(|c: char| !(c.is_alphanumeric() || c == '_')).next() == Some(item)
+                })
+            });
             if !is_def {
                 continue;
             }
             found_any = true;
             let gates = feature_gates_above(&lines, i);
-            if gates
-                .iter()
-                .all(|f| WASM_FEATURES.contains(&f.as_str()))
-            {
+            if gates.iter().all(|f| WASM_FEATURES.contains(&f.as_str())) {
                 return Some(true);
             }
         }
