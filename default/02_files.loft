@@ -352,6 +352,10 @@ pub fn mtime(path: text) -> integer fs#read;
 // payload CRC, tier_id all OK).  Returns false on any failure or
 // missing file.  Pair with `store_durable_seal` after a clean
 // write session to record the new state.
+//
+// Desktop-only: the sidecar is built over memory-mapped files, so on
+// the wasm targets this answers false — "nothing validates", which is
+// the state that sends a caller down its rebuild branch (loft#1063).
 pub fn store_durable_check(path: text) -> boolean fs#read;
 #rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
 #impure(io)
@@ -362,6 +366,10 @@ pub fn store_durable_check(path: text) -> boolean fs#read;
 // finishing a write session; if the program crashes between the
 // last write and the seal, the sidecar stays stale and the next
 // `store_durable_check` returns false → caller rebuilds.
+//
+// Desktop-only, like `store_durable_check`: on the wasm targets this
+// answers false — the seal did not happen — so seal where the store is
+// written and read it back with `store_load` (loft#1063).
 pub fn store_durable_seal(path: text) -> boolean fs#update;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
@@ -824,6 +832,22 @@ pub fn store_load_box(local: reference, path: text, from: vector<integer>, till:
 //   got = store_load_keys(tiles, "block.store", [7, 13, 42])   // got == 3
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read;
 #rust"stores.load_keys_vec(&(@local), @path, &(@keys))"
+#impure(io)
+
+// Plural form of `store_load_key_text`, and the text twin of `store_load_keys`:
+// fetch the given text keys' entries into `local` in ONE call, returning how many
+// were found. Keys absent from the remote are skipped. Serves a `hash<T[k]>` and
+// a `trie<T[k]>` alike, like the single-key form. loft#1064.
+//
+// Looping `store_load_key_text` is not the same call: each one opens its own
+// reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table
+// page twenty times. This opens the reader once and shares its page cache — which
+// is what makes it the PREFETCH call: ask for the ring at a load or level
+// boundary, so no frame is ever the thing that discovers it needs an asset.
+//   art: hash<Blob[bl_key]> = []
+//   got = store_load_keys_text(art, "pack.store", ["page/mobs", "hit.ogg"])
+pub fn store_load_keys_text(local: reference, path: text, keys: vector<text>) -> integer fs#read;
+#rust"stores.load_keys_text_vec(&(@local), @path, &(@keys))"
 #impure(io)
 
 // Range form: fetch every entry whose integer key is in [lo, hi] from a

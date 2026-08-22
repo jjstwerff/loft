@@ -47,9 +47,21 @@ whether a game feels good:
   trip is ~40 ms and you cannot take one inside a frame. Load the ring around the
   player, not the cell under them.
 - **Batch the ring.** `store_load_keys` opens the reader once and reuses its page
-  cache, so a ring is one traversal rather than N; `store_load_range` does the
-  same for a contiguous span of spatial keys, and `store_load_box` fetches a
-  viewport's worth of a `spatial` index in one traversal.
+  cache, so a ring is one traversal rather than N — `store_load_keys_text` is the
+  same call for a pack keyed by NAME, which is what an asset pack usually is
+  (`"page/mobs"`, `"hit.ogg"`). Looping the single-key form instead re-fetches the
+  bucket-table page once per key: measured on a 447 KB pack, 25 keys cost 5.37 MB
+  in 82 requests looped against 256 KB in 4 batched — the loop downloads the whole
+  file twelve times over (loft#1064). ⚠ **Quote the measurement, not the ratio.**
+  That corpus gives 20×, but the factor is entirely a function of how the keys fall
+  across pages: a second measurement on a 5.1 MB pack of 80 blobs of exactly 64 KiB
+  — close to worst case for bucket sharing — gave 3.4× (20 keys: 81 requests /
+  5 308 416 bytes looped against 24 / 1 572 864 batched). The sentence that travels
+  between corpora is not a number but the shape: *the loop fetches more than the
+  whole pack to deliver a fraction of it, and the batch fetches roughly the
+  payload.* `store_load_range` does the same for a
+  contiguous span of ordered keys, and `store_load_box` fetches a viewport's worth
+  of a `spatial` index in one traversal.
 
 Split the pack the way the reads split: assets needed on **every** frame from the
 first (the UI atlas, the player mesh, core sounds) are small and universal, so
@@ -66,6 +78,7 @@ for the world.
 | `store_load_key(local, url, key)` | only the pages that ONE lookup touches | the dataset is large and reads are sparse |
 | `store_load_key_text(local, url, key)` | same, for a text-keyed hash or trie | |
 | `store_load_keys(local, url, keys)` | several keys, reader opened once | a batch — cheaper than N calls |
+| `store_load_keys_text(local, url, keys)` | same, for a text-keyed hash or trie | an asset pack keyed by name |
 | `store_load_range(local, url, lo, hi)` | a contiguous key range | ordered collections |
 | `store_load_prefix(local, url, pre, n)` | a text prefix, capped at `n` | a search box over a `trie` |
 | `store_load_box(local, url, from, till, n)` | a bounding box, capped at `n` | a map viewport over a `spatial` |

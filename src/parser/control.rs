@@ -543,6 +543,24 @@ impl Parser {
 
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
+    /// Does the definition being parsed take its return type FROM ITS BODY?
+    ///
+    /// True for a lambda, and only for a lambda. A lambda declares no return type, so its
+    /// `returned()` reads `Void` while the body is parsed — the same value a function
+    /// DECLARED with no return type has, and the opposite meaning: a placeholder waiting to
+    /// be filled rather than a decision that nothing comes back.
+    ///
+    /// The name is the test the parser already uses for "is this a lambda" (`n___lambda_N`,
+    /// minted by `lambda_counter` in the same order on both passes).
+    fn def_infers_its_return(&self) -> bool {
+        self.context != u32::MAX
+            && self
+                .data
+                .def(self.context)
+                .name()
+                .starts_with("n___lambda_")
+    }
+
     pub(crate) fn parse_block(&mut self, context: &str, val: &mut Value, result: &Type) -> Type {
         // Cognitive complexity, charged here because `parse_block`'s `context` already names
         // the construct — one hook instead of one per parser entry point.  `match_arm` is
@@ -748,9 +766,14 @@ impl Parser {
             // parameter.  `interpolation_target` is a pure lookup (Reference → struct →
             // defines `lit`), so widening the gate costs a def-table probe on block tails
             // whose result is a struct.
+            // loft#1067 — a `fn(…)` result threads for the FOURTH time for the same
+            // reason: `fn make() -> fn(integer) -> integer { |x| { x * 2 } }` has no
+            // other way to say what `x` is, and the return type is as much an expected
+            // type as a parameter is.
             if self.enum_context(result)
                 || crate::parser::vectors::is_collection(result)
                 || self.interpolation_target(result) != u32::MAX
+                || Self::seeds_lambda_hint(result)
             {
                 self.expected = result.clone();
             }
@@ -811,6 +834,39 @@ impl Parser {
                 && (self.lexer.peek_token(";") || *result == Type::Void)
             {
                 l.push(Value::Drop(Box::new(n)));
+                // A DROPPED value is not the block's value.  Every statement but the LAST
+                // reaches the `t = Type::Void` at the foot of this loop, so only a tail
+                // could keep a type here — and a tail is dropped exactly when the enclosing
+                // definition returns nothing, which is the one case where the block's type
+                // and the signature must agree and did not.  `--interpret` ignored the
+                // mismatch and ran; `--native` takes the signature from the DECLARED return
+                // (void, right) and the body's trailing value from the block's INFERRED type,
+                // so it emitted `0 as u8` inside a `()` function and rustc refused the
+                // generated file with a bare `E0308` (loft#1075).  On the interpreter the
+                // same block type kept a dropped struct-literal tail alive to program exit
+                // ("1 stores not freed").  `fn main() { f(); }` — the same IR down to the
+                // `drop` — always worked on both, because the `;` sent the statement round
+                // the loop to that reset.
+                //
+                // Narrow, because `result == Void` reaches here meaning two different
+                // things and only one of them is a decision:
+                //
+                //   * a FUNCTION BODY (`context == "return from block"`) of a definition
+                //     declared with no return type — the decision, and the case above;
+                //   * a placeholder that something else will fill in.  A LAMBDA declares no
+                //     return type either, so its body carries the same Void while its
+                //     return type is INFERRED from this very `t`; and a `{ … }` in
+                //     statement position is parsed against Void even when it is the TAIL of
+                //     an enclosing block, which is the value that block yields.
+                //
+                // Both placeholders were measured, not reasoned about: zeroing `t` for a
+                // lambda gave every stored short `|x| { … }` a void return (`parse_map`
+                // then refuses it with D-clo-2's "cannot infer the type of the function
+                // passed to `map`"), and zeroing it for a nested block made
+                // `x = {{ …; count }}` infer void.
+                if context == "return from block" && !self.def_infers_its_return() {
+                    t = Type::Void;
+                }
             } else {
                 l.push(n);
             }
@@ -843,6 +899,41 @@ impl Parser {
         self.lexer.token("}");
         if matches!(l.last(), Some(Value::Line(_))) {
             l.pop();
+        }
+        // A block that YIELDS a value must not have dropped its own tail.
+        //
+        // Every `{ … }` reaching `expression` is parsed against `Type::Void` — it is a
+        // STATEMENT block as far as that site can tell — so its tail is wrapped in a `Drop`.
+        // That is right for a statement, and wrong for a block whose value someone reads:
+        // `fn f() -> integer { { 5 } }` answered `null` on `--interpret` and `0` on
+        // `--native`, silently, and `fn g() -> integer { n = 5; { n } }` answered `5` on one
+        // backend and `0` on the other. The TYPE flowed out correctly the whole time — `t`
+        // is the tail's type, which is how the function type-checked — and only the value
+        // was thrown away.
+        //
+        // Undone here rather than prevented at the parse, because this is the first point
+        // that knows which statement turned out to be the LAST one, and because the expected
+        // type the parse site would need is not threaded for a plain scalar (the wider
+        // question of loft#942/#943). The rule is local and total: a block typed as a value
+        // ends in that value; whether anyone WANTS it is the enclosing level's question, and
+        // the enclosing level wraps this whole block in a `Drop` of its own when the answer
+        // is no.
+        //
+        // `t` is `Void` for a tail that was legitimately dropped — the `;` form, whose reset
+        // runs at the foot of the loop, and the body of a function declared with no return
+        // type (`formal/calls.md` `(F-Drop)`) — so both are untouched.
+        //
+        // Restricted to a bare `{ … }`, which is the only context that reaches here with a
+        // `Void` it did not mean.  A `for` / `while` / `parallel for` / `fields` body is
+        // handed `Void` because it IS a statement — its tail cannot be anyone's value — and
+        // undoing the drop there leaks whatever the tail returned: measured, `for i in 0..8
+        // { dcr_make(i) }` leaked one store per round, which is loft#725 reopened.
+        if context == "block"
+            && !matches!(t, Type::Void | Type::Never)
+            && let Some(tail @ Value::Drop(_)) = l.last_mut()
+            && let Value::Drop(inner) = std::mem::replace(tail, Value::Null)
+        {
+            *tail = *inner;
         }
         if matches!(t, Type::RefVar(_)) {
             let mut code = l.pop().unwrap().clone();
@@ -12553,8 +12644,12 @@ impl Parser {
                     for a in 0..self.data.attributes(hint_d_nr) {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
+                            // loft#1067 — `takes(f: |x| { x * 2 })` names the same
+                            // parameter the positional form does, so it must infer the
+                            // same way; the spelling of the argument is not the axis.
                             if Self::seeds_collection_hint(&expected)
                                 || self.interpolation_target(&expected) != u32::MAX
+                                || Self::seeds_lambda_hint(&expected)
                             {
                                 self.expected = expected;
                             }
@@ -13439,10 +13534,15 @@ impl Parser {
         // Use Value::Call(d_nr, ...) directly — no fn_ref_var local needed.  loft#945:
         // through `callback_call`, so a fold whose accumulator is TEXT gets the hidden
         // buffer its callee takes (`xs.reduce("", |a, x| { "{a}{x}" })` was an ICE).
+        // The ELEMENT parameter takes the same unboxing map/filter/any do: a tuple loop
+        // var is a `Reference(__tuple<…>)` and the callee declares the tuple by VALUE, so
+        // the fold read a packed DbRef as its element (loft#1074).  The accumulator is
+        // untouched — it is a local of the init's own type, never an element reference.
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let fold_call = self.callback_call(
             fn_d_nr,
-            vec![Value::Var(acc_var), Value::Var(for_var)],
-            vec![acc_type.clone(), var_tp.clone()],
+            vec![Value::Var(acc_var), elem_arg],
+            vec![acc_type.clone(), elem_arg_tp],
         );
         // loft#951 — a TEXT accumulator cannot take the bare `acc = f(acc, x)`.  A callee
         // answering text writes into ONE caller-allocated buffer and CLEARS it on entry,

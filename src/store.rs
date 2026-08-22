@@ -392,6 +392,50 @@ impl Drop for Store {
 }
 
 #[allow(dead_code)]
+/// The bytes of a store image, wherever THIS target keeps its files.
+///
+/// `std::fs` is the whole story on every native target, and the host-FS arm never runs
+/// there.  It exists for `wasm32-unknown-unknown`, which has no filesystem at all: a
+/// browser page's own tree is reachable only through the `loft_host_fs_*` bridge, so a
+/// page reading a pack it carries in `globalThis.loftBaseFS` arrives here with
+/// `std::fs` failing and the host FS holding the file.  Without it a `--html` page could
+/// not read a store at ALL — `store_load` answered `false` for every path, politely and
+/// with nothing to act on (@PLN146 F4).
+pub(crate) fn image_bytes(path: &str) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(_) => host_image_bytes(path),
+    }
+}
+
+/// Is there an image at `path` of at least `min` bytes, on either filesystem?
+///
+/// The cheap existence probe `load_path` gates on.  On a native target it is one
+/// `metadata` call and never reads the file; on wasm it costs a read, because the host
+/// FS answers bytes rather than sizes — and the caller then reads it again through
+/// [`image_bytes`].  Two reads of an embedded pack is worth the single code path, and a
+/// page carrying its own assets holds them in memory either way.
+pub(crate) fn image_at_least(path: &str, min: u64) -> bool {
+    if let Ok(meta) = std::fs::metadata(path) {
+        return meta.len() >= min;
+    }
+    host_image_bytes(path).is_some_and(|b| b.len() as u64 >= min)
+}
+
+/// The host filesystem's answer, on the targets that have one.  `None` everywhere else,
+/// so the two helpers above read as one path rather than as a pair of cfg forks.
+fn host_image_bytes(path: &str) -> Option<Vec<u8>> {
+    #[cfg(host_fs)]
+    {
+        crate::wasm::host_fs_read_binary(path)
+    }
+    #[cfg(not(host_fs))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 impl Store {
     /// True when this store's memory IS a memory-mapped file
     /// (`store_persist_bind`) — its bytes are DURABLE state.
@@ -656,7 +700,7 @@ impl Store {
     /// image, or a bad `SIGNATURE`); callers that want a clean reject wrap it in
     /// `catch_unwind` (see `Stores::load_path`).
     pub fn load(path: &str) -> Store {
-        let bytes = std::fs::read(path).expect("store load: cannot read file");
+        let bytes = image_bytes(path).expect("store load: cannot read file");
         assert!(
             bytes.len() >= 16,
             "store load: file too small to be a store image"
@@ -3795,6 +3839,20 @@ impl Store {
         matches!(Self::validate_integrity(path), Ok(StoreIntegrity::Clean))
     }
 
+    /// Shim when the `mmap` feature is off — the shape `bind_path` already
+    /// uses, for the same reason: the stdlib surface is one declaration for
+    /// every target, so a target without the sidecar machinery has to answer
+    /// rather than fail to link (loft#1063).
+    ///
+    /// `false` is the honest answer AND the safe one: it means *not verified
+    /// clean*, which routes the caller into the same rebuild-from-source
+    /// branch a corrupt sidecar does.
+    #[cfg(not(feature = "mmap"))]
+    #[must_use]
+    pub fn durable_check(_path: &std::path::Path) -> bool {
+        false
+    }
+
     /// **Phase 01b.**  Write a fresh `.dmeta` sidecar capturing the
     /// current main-file's byte length + CRC32 + a clean-close
     /// timestamp.  Returns `true` on success, `false` on any I/O
@@ -3813,6 +3871,16 @@ impl Store {
     #[must_use]
     pub fn durable_seal(path: &std::path::Path) -> bool {
         Self::write_initial_sidecar(path).is_ok()
+    }
+
+    /// Shim when the `mmap` feature is off — see [`Self::durable_check`]
+    /// (loft#1063).  `false` says the seal did not happen, which is what the
+    /// declared contract already covers ("false on any I/O error") and what
+    /// the caller must know before trusting a later `durable_check`.
+    #[cfg(not(feature = "mmap"))]
+    #[must_use]
+    pub fn durable_seal(_path: &std::path::Path) -> bool {
+        false
     }
 
     /// Captures the current main-file length and CRC at the moment of call.

@@ -1502,7 +1502,17 @@ use a separate collection or add after the loop"
         if op != "=" || var_nr != u16::MAX || self.first_pass {
             return false;
         }
-        if f_type.is_unknown() || s_type.is_unknown() || matches!(s_type, Type::Null) {
+        if f_type.is_unknown() || s_type.is_unknown() {
+            return false;
+        }
+        // A bare `null` is exempt because the targets that legitimately take one reach
+        // here: a `τ?` field, a `text` field, and a COLLECTION field, where `null` is the
+        // empty collection (loft#922).  A `fn(…)` target is not one of them — a fn-ref
+        // slot holds a d_nr and has no encoding for absence, which is why the struct
+        // LITERAL refuses `Holder { f: null }` outright.  Without naming the exception the
+        // assignment wrote d_nr `0` and the next call through the field SIGSEGV'd
+        // (loft#1072: the literal and the assignment must accept the same values).
+        if matches!(s_type, Type::Null) && !matches!(f_type.base(), Type::Function(_, _, _)) {
             return false;
         }
         // A narrowing integer store has its OWN diagnostic further down; running
@@ -1785,6 +1795,10 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came
+        // from: the RHS parsed below may itself read a fn-ref field (`a.f = b.g`) and
+        // would leave that attribute behind instead (loft#1072).
+        let lhs_fn_attr = self.fn_ref_read_attr.take();
         // #330: `x = x` is the identity — emit nothing.  Letting it through
         // produced a deep-copy-onto-self whose pre-Set free released the
         // store the RHS was about to read (silent corruption on the
@@ -2570,14 +2584,31 @@ use a separate collection or add after the loop"
         // form still reaches. The checks further down cover a scalar target only, and
         // a `text` or collection target returns before them, so this is the chokepoint.
         if self.field_store_mismatch(op, var_nr, f_type, &s_type) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
-                s_type.name(&self.data),
-                f_type.name(&self.data),
-                f_type.name(&self.data),
-            );
+            if matches!(s_type, Type::Null) {
+                // The only mismatch a bare `null` can be here is a `fn(…)` target (every
+                // other null-taking target is exempted in `field_store_mismatch`), and
+                // "use `as fn(integer) -> integer` to cast explicitly" is advice that
+                // cannot be followed — the cast does not exist and would not help if it
+                // did.  Name what is actually true of the slot instead.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign null to a slot of type {} — a fn-ref holds a \
+                     function's identity and has no encoding for absence, so the slot \
+                     cannot be cleared; assign another function, or keep the absent \
+                     case in a separate field",
+                    f_type.name(&self.data),
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
+                    s_type.name(&self.data),
+                    f_type.name(&self.data),
+                    f_type.name(&self.data),
+                );
+            }
         }
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
@@ -3492,7 +3523,11 @@ use a separate collection or add after the loop"
             );
         }
         if !matches!(code, Value::Insert(_)) {
-            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1]);
+            let lhs = crate::parser::collections::AssignPlace {
+                parent_tp: &lhs_parent_tp,
+                fn_attr: lhs_fn_attr,
+            };
+            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1], &lhs);
             // Plan-22 phase 02d-iii.e — wrap a first-set boxed-
             // scalar write with the cell-allocation preamble.
             // No-op for any other LHS shape (subsequent sets,
@@ -3620,6 +3655,16 @@ use a separate collection or add after the loop"
                         | Type::Text(_)
                 )
             {
+                return Type::optional(elem);
+            }
+            // loft#1071 — a STRUCT-ENUM element (`vector<Shape?>`) rides the `Optional`
+            // marker for the same reason a scalar does: its slot is a four-byte record
+            // POINTER with an in-band absent value (`0`), so it needs no `__nullable<…>`
+            // tag and no extra storage — only for the type to keep saying it may be
+            // absent.  Without the marker the element typed as a bare `Shape`, so the `?`
+            // was lost at the declaration and a loop binding over it could not be asked
+            // `e == null` at all: the type no longer admitted the question.
+            if crate::keys::pln25_optional_enabled() && matches!(elem, Type::Enum(_, true, _)) {
                 return Type::optional(elem);
             }
             return elem;
@@ -4058,7 +4103,41 @@ use a separate collection or add after the loop"
             && self.lexer.has_token("=")
         {
             let mut rhs = Value::Null;
+            // loft#1067's member-ASSIGNMENT position.  The declared type of the member being
+            // written is an inference context exactly as the tuple LITERAL's member is, so
+            // `t.0 = |x| { x + 1 }` should read like `t = (|x| { x + 1 }, 1)` — before this
+            // it was the only fn-ref spelling of the statement that did not work, refused
+            // with "Cannot infer type for lambda parameter" while the long form beside it
+            // compiled.  The container is the root's tuple for `t.0 = …` and the deepest
+            // work var's for a chained `t.0.1 = …`, which is the same walk
+            // `build_nested_tuple_assign` writes through.
+            //
+            // Touch the `⇐` channel ONLY where the destination really does name a `fn(…)`
+            // member — the scoping loft#1069 paid a round trip to learn, because an
+            // expression that merely passes through here INHERITS the ambient expectation
+            // and clearing it unconditionally silently retypes one.
+            let container = match lhs.chain.last() {
+                Some((w, _)) => self.vars.tp(*w).clone(),
+                None => self.vars.tp(lhs.root).clone(),
+            };
+            let member_tp = match container.base() {
+                Type::Tuple(ms) => ms.get(lhs.leaf_idx as usize).cloned(),
+                _ => None,
+            };
+            let seeding = member_tp.as_ref().is_some_and(Self::seeds_lambda_hint);
+            let saved_expected = if seeding {
+                let m = member_tp
+                    .expect("seeding implies a member type")
+                    .base()
+                    .clone();
+                Some(std::mem::replace(&mut self.expected, m))
+            } else {
+                None
+            };
             self.expression(&mut rhs);
+            if let Some(prev) = saved_expected {
+                self.expected = prev;
+            }
             *code = build_nested_tuple_assign(code, &lhs, rhs);
             return Type::Void;
         }

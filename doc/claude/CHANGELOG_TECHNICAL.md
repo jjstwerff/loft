@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A browser page can read a store out of its own filesystem (@PLN146 F4, 2026-08-22)
+
+**Symptom.** `store_load` on a `--html` page answered `false` for every path — politely,
+no panic, nothing to act on. So "a pack IS a loft store" was true on desktop and
+HTTP-only in a browser, and a page could not carry its own assets at all.
+
+**Cause.** `Store::load` reads via `std::fs::read`, and `Stores::load_path` gates on
+`std::fs::metadata`. `wasm32-unknown-unknown` has no filesystem, so both fail there. The
+page's own tree — which `doc/loft-fs.js` already serves from `globalThis.loftBaseFS`, and
+which `png_store.rs` already reads for PNGs — is reachable only through the
+`loft_host_fs_*` bridge, and the store loader never called it.
+
+**Fix.** `store::image_bytes` and `store::image_at_least`: `std::fs` first, the host-FS
+bridge second, behind one `host_fs`-gated helper so the two read as a single path rather
+than a pair of cfg forks. Native is unchanged by construction — `metadata` succeeds, the
+host arm never runs — and 98 store tests confirm it. On wasm the existence probe costs a
+read and the load costs a second; one code path is worth that against bytes the page is
+already holding.
+
+**Gate.** `tests/html_page_store.rs` — the same emitted wasm run twice, differing only in
+whether the store is in the page tree: `load=true read=true` when carried,
+`load=false read=false` when not. Proven red by making the host arm answer `None`. The
+absent-file half is the one that matters: a loader reporting success for a file nobody
+supplied would pass the positive assertion and be worse than the refusal it replaced.
+
+**And the other half — `[[embed]]` (2026-08-22).** `--html` now seeds `loftBaseFS`
+from the manifest: `[[embed]] path = "assets/game.pack"` (plus an optional `source`,
+where the bytes are on the build box) puts the file in the page under `/` + `path`,
+which is what `loft-fs.js` resolves the program's own relative string to. So one
+`store_load(q, "assets/game.pack")` reads the pack on the desktop and in the page.
+`src/html_embed.rs` owns validation and the emission, `src/manifest.rs` parses the
+section, and `Data::declared_embeds` carries a library's — the same three-part route
+`[[font]]` takes, and a library's `source` resolves against the LIBRARY.
+
+**Refused, before the wasm build:** a `path` that is not relative and in normal form
+(`/abs/x`, `./x`, `a/../b`), a `source` that is not there, and one name declared from
+two files. Each would otherwise be carried faithfully under a key the program never
+asks for — `store_load` answers `false`, the page draws no art, nothing says why.
+That is F5's silent failure in a new place, which is why the spelling is strict.
+
+**Both are resolved from beside the PROGRAM**, not the manifest — loft resolves any path
+a program passes relative to the program file, so `assets/game.pack` in `src/game.loft`
+is `src/assets/game.pack`. Rooting at the manifest put a *different file* in the page
+under the key the program asks for; measured as a desktop run answering `load=false`
+while its own page answered `load=true`. A library's declarations keep the library's
+root. Found only by moving the fixture off the package root, which the first one had
+pinned.
+
+**Also fixed, from the same probe.** `loft build` reported *"asset `X` ran but a declared
+output is missing"* and then `asset `X` ✓` on the next line. A step that names its
+`outputs` promised them, so it now FAILS, and names the likeliest cause: a `run` script
+resolves its own paths against the script, so `scripts/pack.loft` writing `assets/x`
+writes `scripts/assets/x`.
+
+**Gate.** `tests/html_embed.rs`, four tests. The browser one is the invariant: a page
+declaring a **nested** pack prints exactly what the desktop run of the same source
+prints (`load=true a=7 b=41`), and the control is that same page with the seed
+statement stripped (`load=false a=-1 b=-1`). Proven red by emitting the file under its
+base name — bytes carried, key wrong, which is the defect the shipped loader gate
+could not see because it only ever used a flat path. The library test carries a decoy
+of the same name in the consumer's own directory, so it measures which root `source`
+resolved against rather than whether a file was found.
+
 ### A browser page can declare the font it draws with (@PLN146 F5/F6, 2026-08-22)
 
 **New.** `[[font]]` in `loft.toml` — `family`, `native`, and one of `url` (a font file we

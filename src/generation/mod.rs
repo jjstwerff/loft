@@ -185,6 +185,38 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
 /// nested `Set`).  `Call` is the one deliberate exception: there the fn-ref is
 /// the call's RESULT, and its ARGUMENTS are ordinary integers that must not be
 /// mistaken for def numbers.
+/// Mark the functions a tuple literal reaches through its `fn(…)` members, at any DEPTH.
+///
+/// The flat version of this was loft#1069: a function reachable only through a tuple was
+/// pruned as unreachable, then had no arm in the native fn-ref dispatch and the call
+/// panicked `invalid fn-ref`.  It read the TOP-level members only, so a fn one level in
+/// (`((dbl, 1), "z")`) was pruned exactly as before — nesting depth being the axis that
+/// fix held fixed.
+///
+/// Read per MEMBER where the shapes line up, so only a member the destination declares
+/// `fn(…)` contributes; a tuple whose arity does not match falls back to scanning the
+/// whole value, which over-approximates exactly as @P299 does.  Reachability
+/// over-approximation is correctness-safe — it can only emit an unused candidate.
+fn collect_tuple_fn_refs(elems: &[Type], inner: &Value, calls: &mut HashSet<u32>) {
+    let Value::Tuple(items) = inner.unspan() else {
+        collect_int_fn_refs(IrNode::Native(inner), calls);
+        return;
+    };
+    if items.len() != elems.len() {
+        collect_int_fn_refs(IrNode::Native(inner), calls);
+        return;
+    }
+    for (e, item) in elems.iter().zip(items.iter()) {
+        match e.base() {
+            Type::Function(_, _, _) => collect_int_fn_refs(IrNode::Native(item), calls),
+            Type::Tuple(nested) if nested.iter().any(crate::data::tuple_carries_fn_ref) => {
+                collect_tuple_fn_refs(nested, item, calls);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_int_fn_refs(node: IrNode, calls: &mut HashSet<u32>) {
     match node.kind() {
         ValueType::Int => {
@@ -232,6 +264,40 @@ fn collect_fn_ref_literals(
                 variables.tp(*var),
                 Type::Function(_, _, _) | Type::Routine(_)
             ) {
+                collect_int_fn_refs(IrNode::Native(inner), calls);
+            }
+            // loft#1069 — a fn-ref stored into a TUPLE MEMBER. `t: (fn(…), integer) =
+            // (dbl, 1)` puts the d_nr in a plain `Int` element of a `Value::Tuple`, and
+            // the variable's type is a `Tuple`, not a `Function` — so neither the arm
+            // above nor the FnRef-literal walk sees it, and a function called ONLY through
+            // a tuple was pruned as unreachable. It then had no arm in the native fn-ref
+            // dispatch and the call panicked `invalid fn-ref`. Same shape as the @P299
+            // (`OpSetInt4` into a struct field) and @P328 (`yield`) recoveries.
+            //
+            // Read per MEMBER where the shapes line up, so only a member the destination
+            // declares `fn(…)` contributes; a tuple whose arity does not match falls back
+            // to scanning the whole value, which over-approximates exactly as @P299 does
+            // (an integer member equal to a fn d_nr marks that fn reachable). Reachability
+            // over-approximation is correctness-safe — it can only emit an unused
+            // candidate.
+            if let Type::Tuple(elems) = variables.tp(*var)
+                && elems.iter().any(crate::data::tuple_carries_fn_ref)
+            {
+                collect_tuple_fn_refs(elems, inner, calls);
+            }
+            collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
+        }
+        // The ASSIGNMENT half of the tuple case above: `t.0 = inc` writes the d_nr into a
+        // member without ever building a `Value::Tuple`, so the walk that reads a tuple
+        // LITERAL per member never sees it and a function reachable only this way was
+        // pruned — `invalid fn-ref: 711` at the call.  Here the destination names one
+        // member exactly, so the element type is read straight rather than zipped.
+        Value::TuplePut(var, idx, inner) => {
+            if let Type::Tuple(elems) = variables.tp(*var)
+                && elems
+                    .get(*idx as usize)
+                    .is_some_and(|e| matches!(e.base(), Type::Function(_, _, _)))
+            {
                 collect_int_fn_refs(IrNode::Native(inner), calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
@@ -565,6 +631,15 @@ pub struct Output<'a> {
     /// element.  Cleared after the assignment so argument-context
     /// tuples (which need `&str`) keep the default emit.
     pub tuple_text_to_string: bool,
+    /// loft#1069 — the DECLARED element types of the tuple currently being emitted, when
+    /// the destination named them.  Set beside [`Self::tuple_text_to_string`] by the same
+    /// destination-aware paths, and for the same reason: a tuple ELEMENT cannot say what
+    /// it is.  A fn-ref written as a bare name lowers to the d_nr alone, which infers as
+    /// an `integer`, while the slot is the whole `(u32, DbRef)` pair — so only the
+    /// destination can ask for the pair to be built.  Empty when the destination is
+    /// unknown, and TAKEN by the emitter so a nested tuple does not read its parent's
+    /// positions.
+    pub tuple_slot_types: Vec<Type>,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
@@ -1233,6 +1308,7 @@ impl<'a> Output<'a> {
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            tuple_slot_types: Vec::new(),
             call_stack_prefix: None,
             wasm_browser: false,
             wasm_wasi: false,
@@ -1598,6 +1674,14 @@ impl Output<'_> {
         native_cabi: bool,
         reachable: &HashSet<u32>,
     ) -> std::io::Result<()> {
+        // Every `allow` here suppresses a rustc lint about GENERATED code, which a user
+        // cannot act on and did not write: the emitter names every local whether or not
+        // the body reads it, parenthesises defensively, and emits whatever the IR says.
+        // `unused_must_use` and `path_statements` joined the list for loft#1075: a
+        // `Value::Drop` is the IR saying *discard this value*, so a `#[must_use]` runtime
+        // op or a bare local reached as a statement (`a + 1;`, `n;`, or a value tail in a
+        // void function) is loft doing exactly what it was told — and the warning arrived
+        // in the user's terminal quoting a line of a temporary `.rs` file.
         writeln!(
             w,
             "\
@@ -1612,6 +1696,8 @@ impl Output<'_> {
 #![allow(unused_assignments)]
 #![allow(unused_labels)]
 #![allow(unused_braces)]
+#![allow(unused_must_use)]
+#![allow(path_statements)]
 #![allow(clippy::double_parens)]
 #![allow(clippy::unused_unit)]
 #![allow(unused_unsafe)]

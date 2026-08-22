@@ -1798,6 +1798,31 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // loft#1073 — the same rule as the `type_def.is_unknown()` arm above, one level
+        // in.  A bare `Unknown` source is accepted there as "pass 1 has not resolved this
+        // yet"; the same fact inside a composite is not, because `is_unknown()` does not
+        // see through a `Tuple`.  So `t: (fn(integer) -> integer, integer) = (later, 1)`
+        // with `later` declared BELOW measured pass 1's placeholder `(unknown, integer)`
+        // against the declared type and rejected a program pass 2 resolves perfectly —
+        // while the same forward reference in every other position (a plain local, a call
+        // argument, a member ASSIGNMENT) was accepted, because there the placeholder is a
+        // bare `Unknown`.
+        //
+        // The mirror of loft#944, which made the same statement about `var_tp`: a type
+        // carrying an unresolved component is not a baseline a change can be measured
+        // against, and it is no more a MEASUREMENT than it is a baseline.  Restricted to a
+        // resolved current type, so the declared type is KEPT rather than overwritten by
+        // the placeholder — pass 2 re-derives the value's type either way, and an
+        // unresolvable name has its own diagnostic (`Unknown variable`) to report it.
+        if !var_tp.is_unknown()
+            && !crate::data::Data::type_has_unresolved(var_tp)
+            && crate::data::Data::type_has_unresolved(type_def)
+        {
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // @PLN25 (N-Decl): `Optional(τ)` and `τ` share sentinel storage, so storing a
         // non-null `τ` into a nullable `τ?` slot is NOT a type change — accept and KEEP the
         // nullable slot type (do not narrow it to non-null). This is what makes nullable
@@ -1943,7 +1968,14 @@ impl Function {
             // variant as `Reference(variant_d, _)`, but the parent
             // relationship (`def(variant_d).parent == enum_d`)
             // proves subtype compatibility with `Enum(enum_d, true, _)`.
-            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) = (var_tp, type_def)
+            // loft#1065 — through `base()`, so a NULLABLE struct-enum accepts a variant
+            // too.  `s: Shape? = Shape::Circle { r: 7 }` was refused ("cannot change type
+            // from Shape? to Circle") while the bare `Shape` beside it was accepted, and
+            // a no-payload `Shape::Dot` was accepted either way — because only a variant
+            // carrying a RECORD arrives typed as its own `Reference`.  Whether the slot
+            // may be absent says nothing about which variants it can hold.
+            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) =
+                (var_tp.base(), type_def)
                 && data.def(*rhs_d).parent == *parent_d
             {
                 return self.is_new(var_nr);

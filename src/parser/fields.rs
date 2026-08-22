@@ -653,19 +653,34 @@ impl Parser {
                         Box::new(Type::Boolean),
                         crate::data::Deps::none(),
                     )),
-                    // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
-                    // ARG 2 (init is arg 1), so the hint goes on m_arg_idx == 2.
-                    // Both lambda params take the vector's element type; the
-                    // accumulator inherits the init's type but the inference
-                    // here uses elm uniformly because every primitive case
-                    // (sum, max, min, count) keeps acc and elm in the same
-                    // numeric domain.  Heterogeneous reduce can still use the
-                    // free-function form which supplies explicit types.
-                    ("reduce", 2) => Some(Type::Function(
-                        vec![elem.clone(), elem.clone()],
-                        Box::new(elem),
-                        crate::data::Deps::none(),
-                    )),
+                    // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is ARG 2 (init is
+                    // arg 1), so the hint goes on m_arg_idx == 2.
+                    //
+                    // The declared signature is `fn(U, T) -> U`, so the ACCUMULATOR is the
+                    // INIT's type and only the second parameter is the element's.  This
+                    // used to hint `elem` for both, on the reasoning that every primitive
+                    // case (sum, max, min, count) keeps acc and elm in one numeric domain
+                    // — true, and it makes `U != T` unusable in the method form: on a
+                    // `vector<(integer, integer)>` with an `integer` init, `acc` was typed
+                    // as the TUPLE and `acc + t.0` was refused with "No matching operator
+                    // '+' on '(integer, integer)' and 'integer'" (loft#1074).
+                    //
+                    // Reading the init's own type costs nothing where the two agree — the
+                    // homogeneous cases hint exactly what they hinted before — and falls
+                    // back to `elem` when the init has not typed (an earlier parse error),
+                    // so a broken program still gets the old hint rather than `Unknown`.
+                    ("reduce", 2) => {
+                        let acc = types
+                            .get(1)
+                            .filter(|it| !matches!(it, Type::Unknown(_)))
+                            .cloned()
+                            .unwrap_or_else(|| elem.clone());
+                        Some(Type::Function(
+                            vec![acc.clone(), elem],
+                            Box::new(acc),
+                            crate::data::Deps::none(),
+                        ))
+                    }
                     _ => None,
                 };
                 if let Some(h) = hint {
@@ -1836,6 +1851,64 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             Value::Set(_, dbref) => Some((**dbref).clone()),
             _ => None,
         }
+    }
+
+    /// loft#1072 — the PLACE a `fn_ref_field_read` block reads from: the host reference,
+    /// the byte offset the 4-byte d_nr sits at, and whether the field carries a
+    /// `__closure_rec` half at `pos + 4`.
+    ///
+    /// A fn-ref read is a Block, not the `Call` (a getter) or `Var` shape the assignment
+    /// dispatcher recognises as a place, because @PLN114's split layout takes two reads to
+    /// assemble the 20-byte pair. So `h.f = inc` was not recognised as writing ANYWHERE
+    /// and fell through to *"Not implemented operation = for type function(…)"* — a
+    /// message about the `=` operator, for a field that had accepted the same value in a
+    /// literal one line earlier. Peel the read to recover the destination, exactly as
+    /// [`Self::stored_tuple_dest`] does for a stored tuple, so the write can never address
+    /// a different slot than the read.
+    ///
+    /// The layout answer comes from the READ's own shape — an `OpRefFromChildRec` second
+    /// half means split, an `OpNullRefSentinel` means the legacy four bytes. That is the
+    /// same source of truth the reader used, so reader and writer cannot disagree about
+    /// where the closure half lives (or whether there is one).
+    pub(crate) fn fn_ref_place(&self, code: &Value) -> Option<(Value, Value, bool)> {
+        let Value::Block(b) = code.unspan() else {
+            return None;
+        };
+        if b.name != "fn_ref_field_read" || b.operators.len() != 2 {
+            return None;
+        }
+        let Value::Call(get_nr, args) = b.operators[0].unspan() else {
+            return None;
+        };
+        if self.data.def(*get_nr).name() != "OpGetInt4" {
+            return None;
+        }
+        let host = args.first()?.clone();
+        let pos = args.get(1)?.clone();
+        let split = matches!(
+            b.operators[1].unspan(),
+            Value::Call(d, _) if self.data.def(*d).name() == "OpRefFromChildRec"
+        );
+        Some((host, pos, split))
+    }
+
+    /// The attribute index of the `fn(…)` field of `d_nr` stored at byte offset `pos`.
+    ///
+    /// Inverts [`Self::field_position`], which is what put the offset into the read in the
+    /// first place — the assignment site has the offset and needs the attribute back, to
+    /// hand the write to the same `set_field` the struct LITERAL uses. Only `fn(…)` fields
+    /// are considered, so an offset shared with a differently-typed field cannot match.
+    pub(crate) fn fn_ref_attr_at(&mut self, d_nr: u32, pos: i32) -> Option<usize> {
+        let names: Vec<(usize, String)> = (0..self.data.def(d_nr).attributes().len())
+            .filter(|&f| matches!(self.data.attr_type(d_nr, f).base(), Type::Function(_, _, _)))
+            .map(|f| (f, self.data.attr_name(d_nr, f)))
+            .collect();
+        names.into_iter().find_map(|(f, nm)| {
+            let p = self
+                .database
+                .position(self.data.def(d_nr).known_type(), &nm);
+            (p != u16::MAX && i32::from(p) == pos).then_some(f)
+        })
     }
 
     /// Bind an element accessor's INDEX to a local, so a destination that is written

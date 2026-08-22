@@ -128,7 +128,41 @@ without a guard.
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **0** — D-iter-1 was opened and CLOSED on 2026-08-22, by re-measuring the `OPEN: 0`
+this line used to carry. The zero is back, and it now rests on a corpus that varies the
+element type (`tests/scripts/1074-combinators-over-tuple-elements.loft`) rather than on one
+that never did.
+
+> **D-iter-1 — CLOSED (2026-08-22). Every combinator was broken over a TUPLE element.**
+> `xs.map(|t| { t.0 * 10 })` on a `vector<(integer, integer)>` answers
+> `343597383710 1030792151070` on `--interpret` — a packed DbRef read as an integer, with
+> no diagnostic — and does not compile on `--native`. `filter` SIGSEGVs, `reduce` mistypes
+> its accumulator. So `I-Map`'s element values and `I-Reduce`'s fold both fail at one
+> element type, in the `silent-wrong` direction.
+>
+> `for_type`'s P189b block deliberately gives a tuple loop var
+> `Reference(__tuple<…>)`, because iteration yields a DbRef at the tuple's inline bytes —
+> right for a `for` BODY. `parse_map` reuses that as the callback's ARGUMENT type while the
+> lambda is generated taking the tuple BY VALUE, so a `DbRef` is passed where a tuple is
+> declared. A struct element is unaffected because a struct IS a DbRef, so the two
+> representations coincide; the tuple is the one element type where they do not.
+>
+> Fixed (loft#1074) by giving all four combinators ONE helper, `callback_element_arg`,
+> which answers the element's VALUE and its TYPE together so they cannot drift apart —
+> three copies of a tuple element list disagreeing is what loft#1006 was, in this same
+> area. `filter` needed it twice, at the predicate's argument AND at the element it
+> COLLECTS, which a length-only assertion would have missed. `reduce` needed a second,
+> independent fix: its hint typed BOTH lambda parameters as the element, so an `integer`
+> accumulator over a tuple vector was refused before it could run; the declared signature
+> is `fn(U, T) -> U`, so the accumulator now takes the INIT's type.
+>
+> **What the corpus was holding fixed:** every combinator cell in § Conformance below runs
+> on `vector<integer>`. Text iteration is a different SOURCE kind, not a vector of text, so
+> the ELEMENT TYPE is never varied at all — the same axis that left
+> [interfaces.md](interfaces.md) blind to scalar instantiation and [tuples.md](tuples.md)
+> blind to `text`. Measured alongside: `vector<text>`, `vector<Struct>`, `vector<fn(…)>`
+> and `vector<integer?>` elements are all CLEAN through `map`, so the tuple is the whole
+> deviation and not the tip of a wider one.
 
 - **Conformance is differential** — the iteration steps are enforced across the two backends by
   the @PLN89 differential oracle (D-op-1). Its corpus explicitly covers the combinators

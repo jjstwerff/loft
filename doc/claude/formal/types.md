@@ -499,6 +499,35 @@ exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, reta
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
+### DN-SE-inline — CLOSED (2026-08-22): a nullable struct-enum in INLINE storage
+The representation rule above derives `τ?`'s null from `τ`'s storage, and gives a reference the
+out-of-band `nullref`. A struct-enum is carried as a `DbRef`, so `Shape?` takes the reference
+sentinel — which loft#1065 measured it did NOT: several sites answered "what is this type's
+null" without telling a struct-enum from a value enum, and it took the value enum's `255`
+BYTE into a handle slot. `--interpret` then read the slot back as a live ref (its own
+store-lifetime guard fired) and `--native` refused to compile (`non-primitive cast: u8 as
+DbRef`). **Closed for a LOCAL, a parameter and a return** by discriminating `Enum(_, true, _)`
+from `Enum(_, false, _)` at each site, plus `base()` where a shape was read without peeling
+`Optional` (six sites; guard `tests/scripts/1065-nullable-struct-enum.loft`).
+
+**INLINE storage closed too** (loft#1071) — a struct FIELD and a `vector<Shape?>` element are
+a four-byte record pointer inside the holder's record, which cannot hold the twelve-byte
+sentinel at all. The rule says the representation follows the base type's STORAGE, and it does
+here: absence is pointer `0`, which is what the field prime already writes. Three sites had to
+agree on that one word — the construction (`Box { s: null }`), the assignment (`b.s = null`,
+which had been silently a no-op), and the test, which must read the stored WORD because
+`OpGetField` answers a sub-reference whose own record is the HOLDER's and so is never null. No
+`__nullable<…>` tag was needed: a record pointer already has an in-band absent value, exactly
+as a narrow scalar does, so the element rides the `Optional` marker like a scalar element.
+
+Iteration closed with it: `for e in v { e == null }` binds a sub-reference to the element
+SLOT, so it reads that slot's word. Which of the two a `Var` is turns on what it VIEWS,
+followed through the DEP CHAIN — a loop variable's own dep names itself, and only its
+declaration's dep names the vector, so reading the first link answers no.
+
+This entry is also the answer to the "OPEN: 0" line above having been too strong: the rule was
+written, and the code disagreed with it for a whole type former, in both directions at once.
+
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
 `(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain
 `integer`/`text`/`bool`/`float`/`char` field/local/return is NON-null by default (nullability

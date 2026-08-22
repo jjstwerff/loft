@@ -1013,18 +1013,35 @@ Two syntactic forms are available:
 fn(x: integer) -> integer { x * 2 }
 fn(x: integer, y: integer) -> integer { x + y }
 
-// Short form — types inferred from call-site context
+// Short form — types inferred from the expected type
 |x| { x * 2 }
 |x, y| { x + y }
 || { 0 }                        // zero parameters: uses the || token
 
-// Short form with explicit annotations (when no context is available)
-transform: fn(integer) -> integer = |x: integer| -> integer { x * 2 }
+// No context to infer from?  Use the LONG form — a `|x|` lambda takes no
+// annotations of its own (neither `|x: integer|` nor a trailing `-> R`).
+transform: fn(integer) -> integer = fn(x: integer) -> integer { x * 2 }
 ```
 
-Short-form parameter types are inferred from the expected `fn(T1, T2) -> R` type at the
-call site.  If inference is impossible (no context, no annotation), the compiler errors:
-*"cannot infer type for lambda parameter 'x'; add an explicit type annotation"*.
+Short-form parameter types are inferred from the expected `fn(T1, T2) -> R` type
+**wherever there is one** — the position does not matter, only that something names the
+signature (loft#1067):
+
+| where | example |
+|---|---|
+| a call argument | `takes(\|x\| { x * 2 })` |
+| a named argument | `takes(f: \|x\| { x * 2 })` |
+| a declared local | `a: fn(integer) -> integer = \|x\| { x * 2 }` |
+| a struct-literal field | `H { f: \|x\| { x * 2 } }` |
+| an element of `vector<fn(…)>` | `[\|x\| { x * 2 }, \|x\| { x + 1 }]` |
+| a return position | `fn make() -> fn(integer) -> integer { \|x\| { x * 2 } }` |
+| a parameter default | `fn takes(f: fn(integer) -> integer = \|x\| { x * 2 })` |
+| a tuple member | `t: (fn(integer) -> integer, integer) = (\|x\| { x * 2 }, 1)` |
+| a tuple member by assignment | `t.0 = \|x\| { x + 1 }` (nested too: `t.0.0 = …`) |
+
+If inference is impossible — nothing in the context names a signature — the compiler
+errors: *"Cannot infer type for lambda parameter 'x'; pass the lambda where the expected
+type is known, or use fn(name: &lt;type&gt;) { ... }"*.
 
 Its primary use is with the higher-order functions `map`, `filter`, and `reduce`, as well as the `par(...)` for-loop clause:
 
@@ -1993,6 +2010,15 @@ Fields not specified get their `= expr` default, or the zero value for their typ
 Nullable fields default to `null`. A **bare (non-`Optional`) enum field is the one exception**: it
 has no zero value (an enum's 0 is `null`, which a non-null field may not hold), so omitting it is a
 compile error — provide it, give it `= <variant>`, or type it `E?` (@PLN116).
+
+**A nullable STRUCT-enum (`Shape?`) works** as a local, a parameter, a return, a struct FIELD and
+a `vector<Shape?>` element — `= null`, `== null`, truthiness, `??`, `match` and reassignment in
+both directions all behave (loft#1065, loft#1071). How absence is STORED follows the slot, as the
+null model says it should: a handle carries the reference sentinel, while an inline slot is a
+four-byte record pointer where absence is `0`.
+
+Iterating one works too: in `for e in v { e == null }` the loop binding is a sub-reference to the
+element slot, and the test reads that slot's word rather than a handle's sentinel.
 
 Field access uses `.`:
 ```

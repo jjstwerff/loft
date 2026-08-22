@@ -491,7 +491,54 @@ impl Parser {
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {
+            // loft#1067 — a tuple MEMBER's declared type is an expected type like any
+            // other, so `t: (fn(integer) -> integer, integer) = (|x| { x * 2 }, 1)` can
+            // say what `x` is.  Held back until loft#1069, because a `fn(…)` in a tuple
+            // could not be CALLED back out of one whatever spelling put it there — so
+            // threading the type here would have replaced a clean type error with a panic.
+            //
+            // Only the members on the way to a `fn(…)` seed anything: this deliberately
+            // does not thread member types in general, which is a wider question about
+            // tuple literal typing (loft#942/#943) and not this rule.
+            //
+            // The destination arrives on either channel.  A top-level literal is checked
+            // against the declaration in `var_tp`; a NESTED one re-enters here through
+            // `expression`, which starts its own `var_tp` from `Unknown`, so the member's
+            // declared type comes on `⇐` instead.  Reading only `var_tp` is what made the
+            // seeding per TOP-LEVEL member: `(fn(integer) -> integer, integer)` inferred
+            // `|x|` while `((fn(integer) -> integer, integer), text)` did not (loft#1073).
+            let tuple_members: Vec<Type> = match var_tp.base() {
+                Type::Tuple(ms) => ms.clone(),
+                _ => match self.expected.base() {
+                    Type::Tuple(ms) => ms.clone(),
+                    _ => Vec::new(),
+                },
+            };
+            // Touch the `⇐` channel ONLY when this destination actually names a `fn(…)`
+            // member.  A `(` also opens an ordinary parenthesised expression, and that
+            // expression INHERITS the ambient expectation — clearing it unconditionally
+            // silently retyped one (`115-snapshot-roundtrip` went from a text build to
+            // "No matching operator '&' on 'text' and 'integer'").
+            let seeding = tuple_members.iter().any(Self::seeds_tuple_member_hint);
+            let saved_expected = if seeding {
+                std::mem::replace(&mut self.expected, Type::Unknown(0))
+            } else {
+                Type::Unknown(0)
+            };
+            // Member 0 is parsed before the `,` proves this is a tuple at all.  Seeding it
+            // is still safe: a parenthesised NON-tuple expression checked against a tuple
+            // type is already an error, and only a `fn(…)`-typed member seeds.
+            if seeding
+                && tuple_members
+                    .first()
+                    .is_some_and(Self::seeds_tuple_member_hint)
+            {
+                self.expected = tuple_members[0].base().clone();
+            }
             let t = self.expression(val);
+            if seeding {
+                self.expected = Type::Unknown(0);
+            }
             if self.lexer.has_token(",") {
                 // T1.2: Tuple literal — (expr, expr, ...)
                 //
@@ -511,12 +558,25 @@ impl Parser {
                         break;
                     }
                     let mut v = Value::Null;
+                    if seeding
+                        && tuple_members
+                            .get(values.len())
+                            .is_some_and(Self::seeds_tuple_member_hint)
+                    {
+                        self.expected = tuple_members[values.len()].base().clone();
+                    }
                     let t2 = self.expression(&mut v);
+                    if seeding {
+                        self.expected = Type::Unknown(0);
+                    }
                     values.push(v);
                     types.push(t2.unrewritten());
                     if !self.lexer.has_token(",") {
                         break;
                     }
+                }
+                if seeding {
+                    self.expected = saved_expected;
                 }
                 self.lexer.token(")");
                 if types.len() < 2 {
@@ -529,6 +589,9 @@ impl Parser {
                 *val = Value::Tuple(values);
                 Type::Tuple(types)
             } else {
+                if seeding {
+                    self.expected = saved_expected;
+                }
                 self.lexer.token(")");
                 // @P395 — a parenthesised vector concat consumed by a trailing
                 // `.method()` reused the OUTER assignment LHS as its accumulator
@@ -1105,7 +1168,7 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) {{{{ ... }}}} (add `-> <ret>` only for non-void returns)",
+                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) {{ ... }} (add `-> <ret>` only for non-void returns)",
                         a.name
                     );
                 }
@@ -2998,7 +3061,17 @@ impl Parser {
             // its elements `i32`, not wide `integer`).  When `in_t` is Unknown
             // (untyped inferred literal) this is identical to the prior
             // `Type::Unknown(0)` behaviour.
-            self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0)
+            // loft#1067 — an element of a `vector<fn(…)>` is an inference context for the
+            // same reason a call argument is: the declared element type names the
+            // signature. Saved and restored rather than cleared, because an element is
+            // parsed INSIDE whatever push the literal itself arrived under.
+            let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+            if Self::seeds_lambda_hint(in_t) {
+                self.expected = in_t.base().clone();
+            }
+            let parsed = self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0);
+            self.expected = saved_expected;
+            parsed
         };
         let elem_capturing_lambda = self.last_closure_work_var != u16::MAX;
         if let Type::Rewritten(tp) = in_t {
@@ -3156,21 +3229,7 @@ impl Parser {
         // `fn()->T` indistinguishable from a non-capturing fn-ref and still
         // reaches the runtime path — that needs the deferred layout work.)
         if !self.first_pass && matches!(in_t, Type::Function(_, _, _)) {
-            let capturing = elem_capturing_lambda
-                || match p.unspan() {
-                    Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
-                    Value::Var(v) => self.closure_vars.contains_key(v),
-                    // A function that RETURNS a capturing closure carries the
-                    // closure work-var in its `returned` Function dep list
-                    // (emit_lambda_code, this file ~line 957) — so `[make(1)]`,
-                    // a Call whose return type is `fn()->T` indistinguishable by
-                    // signature, IS detectable via that non-empty dep list.
-                    Value::Call(d_nr, _) => matches!(
-                        self.data.def(*d_nr).returned(),
-                        Type::Function(_, _, deps) if !deps.is_empty()
-                    ),
-                    _ => false,
-                };
+            let capturing = elem_capturing_lambda || self.fn_ref_source_captures(&p);
             if capturing {
                 diagnostic!(
                     self.lexer,
@@ -3184,6 +3243,80 @@ impl Parser {
         }
         res.push(p.clone());
         None
+    }
+
+    /// Does this fn-ref SOURCE carry a captured environment?
+    ///
+    /// The statically-detectable shapes only — a direct capturing lambda (bare or wrapped
+    /// in its closure-allocation block), a local holding one, and a call whose return type
+    /// carries the closure work-var in its dep list (a closure FACTORY, which is otherwise
+    /// indistinguishable from a plain `fn()->T` by signature). `false` for anything
+    /// unrecognised, which is the answer that keeps a plain fn-ref working; a capturing
+    /// source that slips through reaches the deferred layout rather than a wrong answer.
+    ///
+    /// One predicate, because two destinations ask the same question and must not answer
+    /// differently: the collection LITERAL (#247) and the element ASSIGNMENT (loft#1072).
+    /// The first half is [`find_capturing_fn_ref`], which walks the Block/Set wrappers a
+    /// lambda arrives inside and knows the pass-1 marker (a bare `Int` d_nr whose def has
+    /// a synthesized closure record); the second half is the two source shapes it cannot
+    /// see through, a LOCAL and a CALL, where the capture is a fact about the source
+    /// rather than about this expression.
+    pub(crate) fn fn_ref_source_captures(&self, p: &Value) -> bool {
+        if super::find_capturing_fn_ref(&self.data, p).is_some() {
+            return true;
+        }
+        match p.unspan() {
+            Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
+            Value::Var(v) => self.closure_vars.contains_key(v),
+            Value::Call(d_nr, _) => matches!(
+                self.data.def(*d_nr).returned(),
+                Type::Function(_, _, deps) if !deps.is_empty()
+            ),
+            _ => false,
+        }
+    }
+
+    /// The four bytes to write into a fn-ref SLOT, projected out of whatever `src` is,
+    /// plus the statements that must run before the write.
+    ///
+    /// A fn-ref slot in a vector element is four bytes holding the d_nr, while a fn-ref
+    /// VALUE on the stack is a 20-byte pair — 8 bytes of d_nr plus a 12-byte closure
+    /// DbRef. Writing the value straight through `OpSetInt4` takes the wrong four bytes
+    /// (the high end of the slot, part of the closure DbRef) and stores a garbage d_nr
+    /// that crashes when the element is later called or freed (#263). So each source
+    /// shape is projected to its d_nr:
+    ///
+    /// * `Value::Int(d)` — what `parse_fn_ref` lowers a bare function name to. Already the
+    ///   bare d_nr; write it.
+    /// * `Value::Var(v)` — a fn-ref local. `FnRefDnr(v)` projects the d_nr via `OpVarInt`.
+    /// * `Value::Call(…)` — a call that returns a fn-ref. Materialise it into a temp
+    ///   first, then project that; the temp is marked `skip_free` because its closure half
+    ///   is the null sentinel and scope-exit must never dereference it.
+    ///
+    /// Anything else is handed back untouched, which is what the struct-field path
+    /// (`emit_fn_ref_field_write`) and the #247 guard are there to judge.
+    pub(crate) fn fn_ref_slot_dnr(&mut self, src: &Value, in_t: &Type) -> (Value, Vec<Value>) {
+        match src.unspan() {
+            Value::Int(_) => (src.clone(), Vec::new()),
+            Value::Var(v) if matches!(self.vars.tp(*v), Type::Function(_, _, _)) => {
+                (Value::FnRefDnr(*v), Vec::new())
+            }
+            Value::Call(_, _) => {
+                let fn_type = if let Type::Function(params, ret, _) = in_t {
+                    Type::Function(params.clone(), ret.clone(), Deps::none())
+                } else {
+                    in_t.clone()
+                };
+                let tmp = self.create_unique("__fn_ref_tmp", &fn_type);
+                self.vars.defined(tmp);
+                self.vars.set_skip_free(tmp);
+                if !self.first_pass {
+                    self.change_var_type(tmp, &fn_type);
+                }
+                (Value::FnRefDnr(tmp), vec![v_set(tmp, src.clone())])
+            }
+            _ => (src.clone(), Vec::new()),
+        }
     }
 
     pub(crate) fn is_field(&self, val: &Value) -> bool {
@@ -3563,57 +3696,15 @@ impl Parser {
                 // narrow gate) keeps the wide `set_field` path below.
                 ls.push(op);
             } else if matches!(in_t, Type::Function(_, _, _)) {
-                // Plan-06 phase 4d.A.2 — fn-ref vector elements store
-                // the 4-byte i32 d_nr.  Emit OpSetInt4 (4-byte write)
-                // not OpSetInt (8-byte) so adjacent element slots
-                // aren't corrupted by overflow.
-                //
-                // #263: the element is a 4-byte d_nr slot, but a fn-ref
-                // *value* source (a local `f = dbl`, or a call-returned
-                // `getfn()`) is a 20-byte slot ([d_nr 8B][closure DbRef
-                // 12B]).  A bare `OpSetInt4(elm, 0, <fn-ref value>)`
-                // reads the wrong 4 bytes (the high end of the slot —
-                // part of the closure DbRef), storing a garbage d_nr
-                // that crashes when later called/freed.  Project the
-                // d_nr (the low 8 bytes, truncated to 4 by OpSetInt4):
-                //   - a literal `Value::Int(d_nr)` from parse_fn_ref is
-                //     already the bare d_nr — write it directly.
-                //   - a `Value::Var(v)` (a fn-ref local) → FnRefDnr(v),
-                //     which projects the d_nr via OpVarInt (mirrors the
-                //     struct-field path at parser/mod.rs:6064).
-                //   - a `Value::Call(..)` (a call-returned fn-ref) →
-                //     materialise the call into a non-capturing fn-ref
-                //     temp first (skip_free so its null closure half is
-                //     never dereferenced), then FnRefDnr(tmp).
-                // Capturing sources are already rejected above (the #247
-                // guard), so discarding the closure half here is lossless.
-                let pos = Value::Int(0);
-                let dnr_val = match p.unspan() {
-                    Value::Int(_) => p.clone(),
-                    Value::Var(v) if matches!(self.vars.tp(*v), Type::Function(_, _, _)) => {
-                        Value::FnRefDnr(*v)
-                    }
-                    Value::Call(_, _) => {
-                        let fn_type = if let Type::Function(params, ret, _) = in_t {
-                            Type::Function(params.clone(), ret.clone(), Deps::none())
-                        } else {
-                            in_t.clone()
-                        };
-                        let tmp = self.create_unique("__fn_ref_tmp", &fn_type);
-                        self.vars.defined(tmp);
-                        // The temp is a borrowed fn-ref value; its closure
-                        // half is the null sentinel (non-capturing).  Mark
-                        // skip_free so scope-exit cleanup never frees it.
-                        self.vars.set_skip_free(tmp);
-                        if !self.first_pass {
-                            self.change_var_type(tmp, &fn_type);
-                        }
-                        ls.push(v_set(tmp, p.clone()));
-                        Value::FnRefDnr(tmp)
-                    }
-                    _ => p.clone(),
-                };
-                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), pos, dnr_val]));
+                // Plan-06 phase 4d.A.2 — a fn-ref vector element stores the 4-byte i32
+                // d_nr, so the write is `OpSetInt4` (4 bytes) and not `OpSetInt` (8),
+                // which would overflow into the next element's slot.  What to WRITE is
+                // [`Self::fn_ref_slot_dnr`]'s job — the source is a 20-byte pair and the
+                // slot is four bytes of it.  Capturing sources are rejected above (the
+                // #247 guard), so discarding the closure half here is lossless.
+                let (dnr_val, pre) = self.fn_ref_slot_dnr(p, in_t);
+                ls.extend(pre);
+                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), Value::Int(0), dnr_val]));
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }

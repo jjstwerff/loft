@@ -122,8 +122,12 @@ struct PredicateLoop {
     /// Statements that run once, before the loop: bind the vector, park the fn-ref value
     /// (when there is one), create the iterator.
     preamble: Vec<Value>,
-    /// The loop variable the predicate is called with.
-    for_var: u16,
+    /// The VALUE handed to the predicate for one element, from
+    /// [`Parser::callback_element_arg`] — `Var(for_var)` for every element type except a
+    /// TUPLE, which is unboxed from its DbRef into the stack tuple the callee declares
+    /// (loft#1074).  Held here rather than rebuilt at the call, so the scaffold and the
+    /// call cannot disagree about the element's representation.
+    elem_arg: Value,
     /// Fetch of the next element into `for_var`, first statement of the loop body.
     for_next: Value,
     /// `if <past the end> { break }`, second statement of the loop body.
@@ -137,11 +141,11 @@ struct PredicateLoop {
 /// fn-ref value [`Parser::predicate_loop_scaffold`] parked in a local.
 fn predicate_call(fn_d_nr: Option<u32>, lp: &PredicateLoop) -> Value {
     match fn_d_nr {
-        Some(d) => Value::Call(d, vec![Value::Var(lp.for_var)]),
+        Some(d) => Value::Call(d, vec![lp.elem_arg.clone()]),
         None => Value::CallRef(
             lp.fn_ref_var
                 .expect("a non-static predicate always parks its fn-ref in a local"),
-            vec![Value::Var(lp.for_var)],
+            vec![lp.elem_arg.clone()],
         ),
     }
 }
@@ -231,6 +235,25 @@ fn elem_borrow_bindings(block: &Value, elem_var: u16) -> Vec<u16> {
         }
     });
     out
+}
+
+/// What the LEFT-hand side of an assignment is, beyond the expression itself.
+///
+/// Both fields answer a question the lvalue EXPRESSION cannot: which container the place
+/// lives in, and — for a `fn(…)` field — which attribute of it. Both must be captured
+/// before the right-hand side is parsed, because parsing an RHS overwrites the parser
+/// state they come from (an `a.f = b.g` would otherwise leave `b`'s answers behind).
+/// Carried as one value so the two cannot be threaded apart and disagree.
+#[derive(Clone, Copy)]
+pub(crate) struct AssignPlace<'a> {
+    /// The type of what the place is read OUT of — `Reference(S)` for `s.f`, `&S` for the
+    /// same write inside a `&`-parameter, `vector<τ>` for `v[i]`.
+    pub parent_tp: &'a Type,
+    /// `(struct def_nr, attribute index)` when the place is a `fn(…)` FIELD read. The
+    /// authoritative answer is the field's byte offset, but that is `u16::MAX` on pass 1
+    /// (the struct has no layout yet), and pass 1 is when a capturing source must be
+    /// recorded for the attribute to get its split layout at all (loft#1072).
+    pub fn_attr: Option<(u32, usize)>,
 }
 
 impl Parser {
@@ -934,7 +957,12 @@ impl Parser {
         f_type: &Type,
         src_tp: &Type,
         op: &str,
+        lhs: &AssignPlace<'_>,
     ) -> Value {
+        let AssignPlace {
+            parent_tp,
+            fn_attr: lhs_fn_attr,
+        } = *lhs;
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
         if let Some(result) = self.towards_set_hash_remove(to, val, op, f_type) {
             return result;
@@ -1089,6 +1117,25 @@ impl Parser {
             let syn = *syn;
             return self.build_nullable_set_null(syn, to.clone());
         }
+        // loft#1071 — the same for a USER struct-enum inline slot (`b.s = null` where
+        // `s: Shape?`).  Its absence is not a discriminant but the record pointer `0`, so
+        // write that word.  Shared with the CONSTRUCTION spelling (`Box { s: null }`) in
+        // `handle_field` for the reason the arm above states: the two spellings of
+        // "absent" must not drift, and here they are the same four-byte store.
+        //
+        // Without it the assignment lowered to a record COPY of the null — which, on a
+        // slot whose test now reads the pointer, emitted nothing observable at all: the
+        // field stayed present and `b.s = null` was silently a no-op.
+        // `base()`, because a nullable field arrives as `Optional(Enum(…))` — the same
+        // peel this whole family needs (loft#1065).
+        if op == "="
+            && self.is_null_source(val)
+            && let Type::Enum(syn, true, _) = f_type.base()
+            && !self.data.def(*syn).name.starts_with("__nullable<")
+            && let Some((base, fld)) = self.inline_slot_word(to)
+        {
+            return self.cl("OpSetInt4", &[base, fld, Value::Int(0)]);
+        }
         // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
         // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
         // type is `Reference(S)` (a call / variable, possibly the null sentinel).
@@ -1174,6 +1221,143 @@ impl Parser {
             let (dest, mut ops) = self.hoist_index_arg(dest);
             ops.extend(self.emit_tuple_set_ops(&dest, 0, &elems, val.clone()));
             return v_block(ops, Type::Void, "tuple_elem_index_set");
+        }
+        // loft#1072 — `h.f = inc` on a fn-typed struct FIELD, and `v[0] = inc` on a
+        // fn-typed vector ELEMENT.
+        //
+        // Neither was recognised as writing anywhere.  A fn-ref READ is a Block (@PLN114's
+        // split layout takes two reads to assemble the 20-byte pair), not the `Call`
+        // getter or `Var` the dispatch at the bottom of this function knows, so both fell
+        // through to *"Not implemented operation = for type function(…)"* — a message
+        // about the `=` operator, contradicted by the same field accepting the same value
+        // in a literal one line earlier.  `formal/closures.md`'s `L-Escape` says a closure
+        // may be STORED in a struct field, and says nothing about the slot being fresh, so
+        // this is the rule's storage half rather than a message to reword (D-clo-3).
+        //
+        // Each destination is handed to the writer the LITERAL already uses, so a literal
+        // and an assignment into the same place cannot come to different conclusions about
+        // what a fn-ref source may be:
+        //
+        //   * a struct field → `set_field`, which carries the whole contract — the
+        //     capturing-lambda closure record, the `assigned_lambda_d_nr` bookkeeping that
+        //     gives the attribute its split layout, the heterogeneous-capture diagnostic,
+        //     the #318 frame-lifetime refusal, and the P215 deferral for a source that is
+        //     not an inline literal (which is the diagnostic this case never reached);
+        //   * a vector element → `fn_ref_slot_dnr`, the same four-byte projection the
+        //     vector literal writes, behind the same #247 capture refusal.
+        if op == "="
+            && matches!(f_type.base(), Type::Function(_, _, _))
+            && let Some((host, pos, split)) = self.fn_ref_place(to)
+        {
+            // The host may be named directly (`Reference`) or through a `&` parameter
+            // (`RefVar(Reference)`) — `h.f = inc` inside `fn f(h: &Holder)` is the same
+            // write, and reading only the first shape sent it to the four-byte path
+            // below, which is wrong the moment the field is split.
+            let host_def = match parent_tp.base() {
+                Type::Reference(d, _) => Some(*d),
+                Type::RefVar(inner) => match inner.base() {
+                    Type::Reference(d, _) => Some(*d),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(d_nr) = host_def {
+                let Value::Int(offset) = pos.unspan() else {
+                    return Value::Null;
+                };
+                let offset = *offset;
+                // The layout answers on pass 2 and is authoritative there; on pass 1 the
+                // struct has no layout, every field offset reads `u16::MAX`, and the read
+                // site's own record of the attribute is the only answer there is.  Pass 1
+                // is not optional here: a capturing source must be RECORDED against the
+                // attribute in that pass for `fill_database` to give it the split layout,
+                // and a pass-2-only recording emits a write into a `__closure_rec` half
+                // that was never registered.
+                let f_nr = self
+                    .fn_ref_attr_at(d_nr, offset)
+                    .or_else(|| lhs_fn_attr.filter(|(md, _)| *md == d_nr).map(|(_, f)| f));
+                if let Some(f_nr) = f_nr {
+                    // A SPLIT field already owns a closure record, and the write is about
+                    // to replace the d_nr that record belongs to.  Release it first,
+                    // whatever the new source is:
+                    //
+                    //   * a capturing source claims a FRESH child record and overwrites
+                    //     the pointer, so without this the old record is orphaned in the
+                    //     host's store — an unbounded leak when the assignment runs in a
+                    //     loop;
+                    //   * a NON-capturing source writes only the d_nr, so without this the
+                    //     field reads back as that function paired with the PREVIOUS
+                    //     closure — and `fn_call_ref` pushes a non-null closure as the
+                    //     hidden argument, so the callee is entered with an argument it
+                    //     does not declare. That is not a stale value but a corrupt frame:
+                    //     measured, the call returned with the stack misaligned and the
+                    //     NEXT read of an unrelated field (`h.tag`) faulted in `get_int`.
+                    //
+                    // `OpClearKeyed` against the `child_rec<…>` field frees the record and
+                    // zeroes the pointer in one step — the same `remove_claims` cascade
+                    // that frees it when the host dies. Emitted only here, on the
+                    // REASSIGNMENT path: an initialising write (a struct literal) has a
+                    // freshly claimed record whose pointer is already zero, so the
+                    // literal's emit stays exactly what it was.
+                    let mut ops = Vec::new();
+                    if split
+                        && let Ok(crec_off) = u16::try_from(offset + 4)
+                        && let Some(crec_tp) = self
+                            .database
+                            .field_content_at(self.data.def(d_nr).known_type(), crec_off)
+                    {
+                        let tp_val = Value::Int(i32::from(crec_tp));
+                        let field = self.cl(
+                            "OpGetField",
+                            &[host.clone(), Value::Int(offset + 4), tp_val.clone()],
+                        );
+                        ops.push(self.cl("OpClearKeyed", &[field, tp_val]));
+                    }
+                    let write = self.set_field(d_nr, f_nr, 0, host, val.clone());
+                    if ops.is_empty() {
+                        return write;
+                    }
+                    ops.push(write);
+                    return v_block(ops, Type::Void, "fn_ref_field_reset");
+                }
+            }
+            // Everything below writes FOUR BYTES and nothing else, so a destination that
+            // has a closure half must never reach it: the field would read back as the
+            // new function paired with the PREVIOUS closure, and `fn_call_ref` enters a
+            // callee that declares no closure with one pushed as its hidden argument.
+            // Reaching here with `split` means the attribute could not be resolved, which
+            // is a gap in this dispatch rather than a program to run.
+            if split {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot assign into this fn-ref field — the attribute it belongs to \
+                         could not be resolved from the assignment target, and its closure \
+                         half cannot be released without it; assign through a named holder, \
+                         or rebuild the value (`h = Holder {{ f: …, … }}`)"
+                    );
+                }
+                return Value::Null;
+            }
+            // A vector element (and any other four-byte fn-ref slot): no `__closure_rec`
+            // half exists to receive a captured environment, which is @P213/@P214's
+            // deferral and the refusal the collection LITERAL already gives.
+            if !self.first_pass && self.fn_ref_source_captures(val) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a capturing closure cannot be stored in a collection yet — the \
+                     co-located closure-record layout is deferred (@P213/@P214); hold the \
+                     captured state separately (e.g. a struct field) and store a \
+                     non-capturing fn that reads it"
+                );
+                return Value::Null;
+            }
+            let (dnr_val, mut ops) = self.fn_ref_slot_dnr(val, f_type);
+            let write = self.cl("OpSetInt4", &[host, pos, dnr_val]);
+            ops.push(write);
+            return v_block(ops, Type::Void, "fn_ref_slot_set");
         }
         if matches!(
             *f_type,
@@ -4590,6 +4774,41 @@ use #count instead"
     /// the compiler outright — *"Too few parameters on n_shout (got 1, need 2)"* — while
     /// the equivalent comprehension `[for s in xs { shout(s) }]` was fine.  Routing
     /// through the same filler is what makes the two spellings agree.
+    /// The element value to hand a combinator's CALLBACK, and the type to declare it as.
+    ///
+    /// [`Parser::for_type`]'s P189b block types a TUPLE loop variable as
+    /// `Reference(__tuple<…>)`, because iteration yields a DbRef pointing at the element's
+    /// inline bytes in the vector record.  That is right for a `for` BODY, where `t.0`
+    /// reads through the reference at the stored field offsets.  A callback is a CALL, and
+    /// a `fn(t: (…))` parameter is by VALUE everywhere else in the language — a direct
+    /// call, a comprehension and an index all agree — so the DbRef has to be unboxed into
+    /// the stack tuple first.
+    ///
+    /// Without it the callee read the DbRef's twelve bytes as the tuple's own members:
+    /// `map` answered a packed DbRef as `343597383710`, `filter` SIGSEGV'd once a member
+    /// was `text`, and `--native` refused to compile the call at all — `expected
+    /// (i64, i64), found DbRef` (loft#1074).  A STRUCT element is unaffected and must stay
+    /// on the reference path, because a struct IS a DbRef and the two representations
+    /// already agree; the tuple is the one element type where they do not.
+    ///
+    /// Returns the value and its type together so the three combinators that call this
+    /// cannot drift apart on them — the hazard loft#1006 was, in this same area.
+    pub(crate) fn callback_element_arg(
+        &mut self,
+        in_type: &Type,
+        for_var: u16,
+        var_tp: &Type,
+    ) -> (Value, Type) {
+        if let Type::Vector(elem, _) = in_type.base()
+            && let Type::Tuple(elems) = elem.base()
+        {
+            let elems = elems.clone();
+            let arg = self.unbox_tuple_from_dbref(Value::Var(for_var), &elems);
+            return (arg, Type::Tuple(elems));
+        }
+        (Value::Var(for_var), var_tp.clone())
+    }
+
     pub(crate) fn callback_call(
         &mut self,
         d_nr: u32,
@@ -4738,10 +4957,11 @@ use #count instead"
             fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
         }
 
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let body = if let Some(d) = fn_d_nr {
-            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
+            self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
         };
 
         self.data.vector_def(&mut self.lexer, &out_elem);
@@ -4892,13 +5112,19 @@ use #count instead"
             fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
         }
 
+        let (elem_arg, elem_arg_tp) = self.callback_element_arg(&in_type, for_var, &var_tp);
         let if_step = if let Some(d) = fn_d_nr {
-            self.callback_call(d, vec![Value::Var(for_var)], vec![var_tp.clone()])
+            self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![Value::Var(for_var)])
+            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
         };
 
-        let body = Value::Var(for_var);
+        // What the result vector COLLECTS needs the same unboxing as the predicate's
+        // argument, and for the same reason: `out_elem` is the TUPLE, so appending the
+        // loop variable's `Reference(__tuple<…>)` assigns a DbRef into a tuple slot.  A
+        // second unbox rather than reusing the one above, because the two read at
+        // different points of the loop — the collect runs only when the predicate passed.
+        let (body, _) = self.callback_element_arg(&in_type, for_var, &var_tp);
 
         self.data.vector_def(&mut self.lexer, &out_elem);
 
@@ -5642,9 +5868,10 @@ use #count instead"
         // inline them directly in the loop body.  A v_block wrapper would declare
         // `for_var` inside a nested Rust `{ }` block, making it invisible to the
         // short_circuit/count_step expression that follows in native code.
+        let (elem_arg, _) = self.callback_element_arg(&in_type, for_var, &var_tp);
         PredicateLoop {
             preamble,
-            for_var,
+            elem_arg,
             for_next,
             break_if_done,
             fn_ref_var,

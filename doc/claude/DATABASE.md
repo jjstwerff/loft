@@ -122,7 +122,8 @@ Full design + implementation history:
 store and writes a `<path>.dschema` **layout-identity sidecar** beside it
 (`src/schema_sidecar.rs`: `LayoutIdentity` = the `layout_algo_hash` + per-type
 layout dump). The **working-set loaders** — `store_load_key` / `store_load_keys`
-/ `store_load_key_text` (hash and trie point lookups), `store_load_range` (sorted
+/ `store_load_key_text` / `store_load_keys_text` (hash and trie point lookups,
+each with a batch form that opens ONE reader), `store_load_range` (sorted
 range) and `store_load_prefix` (trie prefix) — materialise only the entries a
 query touches, reading just the pages those touch from a **local file or an
 `http(s)://` Range server**

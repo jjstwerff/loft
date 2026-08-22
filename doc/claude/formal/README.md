@@ -63,6 +63,28 @@ means the *rule* is wrong and wants extending — that is not a licence to leave
 > varies** — count what is held fixed, not what is swept. (Closed 2026-08-20; the axis is now
 > swept by `tests/scripts/1029-inline-argument-borrow-source.loft`.)
 >
+> [closures.md](closures.md) read `OPEN: 0` with a crash live, and the held-fixed axis there
+> was not the subject at all but the **moment**. Its `L-Escape` corpus checks three
+> destinations — a local, a struct field, a return — and every one of them writes into a
+> place being INITIALISED, so the axis it never varies is *first-Set vs re-Set*. Assigning a
+> fn-ref into a place that already held one kept the eight-byte form against a twenty-byte
+> slot: `g = inc` panicked on `--interpret` while `--native` ran the same program, so it was
+> a backend SPLIT that neither backend alone could witness. Sweeping the CONTAINER — vector
+> element, keyed value, struct-enum payload, nested struct — came back entirely clean; the
+> find was on the axis nobody had thought of as an axis. (D-clo-3, opened and CLOSED
+> 2026-08-22 — the re-Set half is now swept at every destination by
+> `tests/scripts/fn-ref-assigned-into-a-field.loft`.)
+>
+> [iteration.md](iteration.md) read `OPEN: 0` while every vector combinator was broken over
+> a TUPLE element — `map` answering a packed DbRef as `343597383710`, `filter` segfaulting,
+> `--native` refusing to compile. Its conformance corpus runs map/filter/reduce entirely on
+> `vector<integer>`; the text cell is a different SOURCE kind, not a vector of text, so the
+> ELEMENT TYPE is never varied at all. That is now the THIRD doc whose zero rested on an
+> all-scalar corpus, after interfaces.md (scalar instantiation) and tuples.md (no `text`) —
+> which makes "what does this corpus instantiate at?" the first question to ask of any
+> conformance list, not a per-doc accident. (D-iter-1, loft#1074, opened and CLOSED
+> 2026-08-22 — the zero is back, and now rests on a corpus that varies the element type.)
+>
 > **And a zero can fail a third way, with no oracle or corpus involved.**
 > [tuples.md](tuples.md) read `OPEN: 0` again on the day it closed D-tup-1 by collapsing three
 > disagreeing element lists into one — while D-tup-2 was live, because the surviving list is
@@ -134,10 +156,10 @@ shrinks operational.md's single meta-deviation (D-op-1: conformance is *differen
 | [iteration.md](iteration.md) | `for`, ranges, text iteration, the map/filter/reduce/comprehension combinators | **rules written (2026-07-04), 0 own** — index-cursor `for`, deterministic combinator order, fresh result vector; conformance via the oracle |
 | [coroutines.md](coroutines.md) | generators — `yield` / `next`, stackful suspension | **rules written (2026-07-04), 0 own** — lazy one-value-per-advance; straight-line yields lazy on both backends, and so is a loop body that ONLY yields; a loop body with a SECOND statement is eager on native (a DECIDED EDGE — rustc restriction, loft#836); conformance via the oracle |
 | [concurrency.md](concurrency.md) | `par` — the one parallel construct | **rules written (2026-07-04), 0 own** — a parallel map consumed in source order; determinism CONDITIONAL on a pure worker; conformance via the oracle |
-| [calls.md](calls.md) | function call & return — args, parameter binding, the frame | **rules written (2026-07-04), 0 own** — args left-to-right; scalar params by-value, heap params share (mutate-through visible, whole reassign local, `&` writes back); returns independent |
+| [calls.md](calls.md) | function call & return — args, parameter binding, the frame | **0 open** (2026-08-22) — args left-to-right; scalar params by-value, heap params share (mutate-through visible, whole reassign local, `&` writes back); returns independent. `(F-Drop)` was added and D-call-1 opened and closed the same day: a function DECLARED void whose body ends in a VALUE ran on `--interpret` and would not compile on `--native` (a bare rustc `E0308` about a temporary `.rs` file). Filed as a design call; the IR had already chosen — a void tail is wrapped in `Value::Drop` on both backends — and only the BLOCK's type had not followed it. Gated on the function-body context, which is where two attempts broke: the same `Void` is a decision in a declared-void function and a PLACEHOLDER in a lambda (whose return is inferred from the block type) and in a statement-position block (which may be an enclosing block's value) (loft#1075). `(F-Block)` was written down beside it and D-call-2 opened and closed the same day: a `{ … }` block whose value someone reads dropped its OWN tail, so `fn f() -> integer { { 5 } }` answered null on `--interpret` and `0` on `--native` while the function type-checked — the block's type is its tail's type, and only the value was thrown away (loft#1076) |
 | [matching.md](matching.md) | `match` — enum-variant dispatch + payload binding | **rules written (2026-07-04), 0 own** — an expression; struct-payload patterns bind by name; `_` is the final catch-all; **compile-time exhaustiveness** (a missing variant does not compile) |
 | [tuples.md](tuples.md) | tuples — construct / project / destructure | **1 open** (D-tup-1: no rule for `&(…)`, so the composition of two specified features is unspecified — see D-bind-11) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see |
-| [closures.md](closures.md) | lambdas / closures / fn-refs — capture + apply | **0 open** (2026-07-04) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2) |
+| [closures.md](closures.md) | lambdas / closures / fn-refs — capture + apply | **0 open** (2026-08-22) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2). `L-Escape`'s STORAGE half is complete (D-clo-3, opened and closed 2026-08-22 by re-measuring the previous zero): a place that already holds a fn-ref — a local, a tuple member, a struct field, a vector element, a `&`-parameter's field — now takes a new one, releasing the closure record the old one owned, and a source the LITERAL refuses is refused identically |
 | [formatting.md](formatting.md) | text formatting — `"{x}"` interpolation + value→text rendering | **rules written (2026-07-05), 0 own** — arbitrary-expression interpolation, `{{`/`}}` escape, per-type render (null → `"null"`, char-0 → nothing), the width/align/pad/precision/radix specs, and fault-safe interpolation (`{a/b}` → `null(/0)`, never a halt); one rendering sink → backend parity; plus `F-Target` (@PLN124, 2026-08-09) — the same template builds a VALUE when checked against a type defining `lit`/`hole_*`; conformance via the oracle |
 | [interfaces.md](interfaces.md) | interfaces (traits) + generics — bounds, satisfaction, monomorphization | **rules written (2026-07-05), 0 own** — `interface I { fn m(self: Self,…) }`, STRUCTURAL satisfaction (no `impl`), bounded `fn f<T: I>(…)`, parser-side monomorphization (one copy per concrete type → both backends identical), static satisfaction check (`'C' does not satisfy interface 'I': missing m`); compile-time only (no dynamic dispatch / inheritance / associated types — decided edges) |
 | [collections.md](collections.md) | collection kinds (`vector`/`hash`/`sorted`/`index`/`spatial`/`trie`), indexing & slicing | **SCOPE (2026-07-10)** — not yet rules: it inventories the shipped behaviour, names each rule with its anchor, and lists what must be both-backends-verified before it graduates to the normal form at 0 deviations. **`Slice-Open`/`Slice-Cap` now HOLD (2026-08-19, loft#1002)** — the open spatial slices answered the Z-order tail against a rule that already said *outward walk*, and open question 4 (`:n` exact-count) is answered: exactly n from any origin |

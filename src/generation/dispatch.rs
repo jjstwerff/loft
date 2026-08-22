@@ -1087,6 +1087,15 @@ impl Output<'_> {
                 // this the Rust compiler rejects `("a", "b")` against
                 // `(String, String)`.  See `Value::Text` in emit.rs.
                 let prev_tuple_text = self.tuple_text_to_string;
+                // loft#1069 — hand the emitter the DECLARED element types, so a fn-ref
+                // member written as a bare name is built as the `(u32, DbRef)` pair its
+                // slot is rather than emitted as the lone d_nr it infers to.
+                let prev_tuple_slots = std::mem::take(&mut self.tuple_slot_types);
+                if let Type::Tuple(elems) = variables.tp(var)
+                    && elems.iter().any(crate::data::tuple_carries_fn_ref)
+                {
+                    self.tuple_slot_types = elems.clone();
+                }
                 if let Type::Tuple(elems) = variables.tp(var)
                     && tuple_has_text_leaf(elems)
                 {
@@ -1248,6 +1257,7 @@ impl Output<'_> {
                 }
                 self.fn_ref_context = prev_ctx;
                 self.tuple_text_to_string = prev_tuple_text;
+                self.tuple_slot_types = prev_tuple_slots;
                 if needs_to_string
                     && !text_local_clone
                     && !refvar_text_clone

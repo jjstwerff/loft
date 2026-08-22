@@ -117,6 +117,35 @@ pub struct FontDecl {
     pub stylesheet: Option<String>,
 }
 
+/// @PLN146 F4 — one `[[embed]]` declaration: a file the `--html` page carries in
+/// its own filesystem, so a program reads it with the same call on every target.
+///
+/// The pipeline for assets is a store on a file server, range-read
+/// (`plans/146-content-delivery/ASSETS.md`); this is the exception that doc names —
+/// the bytes a page needs before its first fetch, and a gallery page that has to be
+/// one self-contained file.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EmbedDecl {
+    /// `path = "assets/game.pack"` — the path the PROGRAM passes, and therefore the
+    /// key the page carries the file under. Relative and in normal form: the page
+    /// resolves it against `/`, so `/assets/game.pack` is what `store_load(q,
+    /// "assets/game.pack")` asks for. Required.
+    pub path: Option<String>,
+    /// `source = "build/game.pack"` — where the bytes are on the BUILD box,
+    /// relative to the declaring `loft.toml`. Defaults to `path`. A pack is usually
+    /// generated into a build dir while the program reads it from where it ships.
+    pub source: Option<String>,
+    /// The directory `path` and `source` are resolved against, filled by
+    /// [`read_manifest`] with the declaring `loft.toml`'s own directory — a library's
+    /// declaration names a file in the LIBRARY, and the consumer's page has no way to
+    /// guess that.
+    ///
+    /// The `--html` driver REPLACES it for the entry program's own manifest with the
+    /// PROGRAM's directory, because `path` is the string that program passes and loft
+    /// resolves such a string relative to the program file (`crate::html_embed`).
+    pub root: String,
+}
+
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
@@ -303,6 +332,8 @@ pub struct Manifest {
     pub build_tests: Vec<BuildTest>,
     /// @PLN146 F5 — the `[[font]]` declarations, in file order.
     pub fonts: Vec<FontDecl>,
+    /// @PLN146 F4 — the `[[embed]]` declarations, in file order.
+    pub embeds: Vec<EmbedDecl>,
 }
 
 impl Manifest {
@@ -328,7 +359,19 @@ impl Manifest {
 #[must_use]
 pub fn read_manifest(path: &str) -> Option<Manifest> {
     let content = std::fs::read_to_string(path).ok()?;
-    Some(parse_manifest(&content, path))
+    let mut m = parse_manifest(&content, path);
+    // @PLN146 F4 — an `[[embed]] source` is relative to the file that declares it,
+    // and only the reader knows which file that was.  Recording it here rather than
+    // at each call site keeps that fact in one home: a library's declaration and an
+    // app's reach the `--html` driver through different paths, and a base dir
+    // derived twice is a base dir that can differ.
+    let root = std::path::Path::new(path)
+        .parent()
+        .map_or_else(String::new, |d| d.to_string_lossy().to_string());
+    for e in &mut m.embeds {
+        e.root.clone_from(&root);
+    }
+    Some(m)
 }
 
 /// A parsed manifest value: a `Scalar` (string / bool / bareword) or an array
@@ -391,7 +434,8 @@ fn parse_manifest(content: &str, filename: &str) -> Manifest {
 }
 
 /// Read a `[section]` or `[[array-of-tables]]` header (current token is `[`) and
-/// return the section string.  An `[[build.asset]]` / `[[test]]` / `[[font]]` header
+/// return the section string.  An `[[build.asset]]` / `[[test]]` / `[[font]]` /
+/// `[[embed]]` header
 /// also pushes a fresh element and returns the `[[…]]` sentinel the key-walk keys on.
 fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
     lex.has_token("["); // consume the opening `[`
@@ -404,6 +448,7 @@ fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
             "build.asset" => m.build_assets.push(BuildAsset::default()),
             "test" => m.build_tests.push(BuildTest::default()),
             "font" => m.fonts.push(FontDecl::default()),
+            "embed" => m.embeds.push(EmbedDecl::default()),
             _ => {}
         }
         return format!("[[{name}]]");
@@ -554,6 +599,16 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
                 "native" => f.native = Some(value.scalar()),
                 "url" => f.url = Some(value.scalar()),
                 "stylesheet" => f.stylesheet = Some(value.scalar()),
+                _ => {}
+            }
+        }
+        return;
+    }
+    if section == "[[embed]]" {
+        if let Some(e) = m.embeds.last_mut() {
+            match key {
+                "path" => e.path = Some(value.scalar()),
+                "source" => e.source = Some(value.scalar()),
                 _ => {}
             }
         }
@@ -1301,6 +1356,44 @@ features = ["random", "png"]
         let p = write_temp("nobuild", "[package]\nname = \"plain\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert!(m.build_default_targets.is_empty() && m.build_targets.is_empty());
+    }
+
+    // @PLN146 F4 — [[embed]] array-of-tables: the files a --html page carries.
+    #[test]
+    fn parses_embed_declarations() {
+        let p = write_temp(
+            "embeds",
+            r#"[package]
+name = "game"
+
+# ships where the program reads it
+[[embed]]
+path = "assets/game.pack"
+
+# generated into a build dir, read from where it ships
+[[embed]]
+path   = "assets/atlas.pack"
+source = "build/atlas.pack"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.embeds.len(), 2);
+        assert_eq!(m.embeds[0].path.as_deref(), Some("assets/game.pack"));
+        assert_eq!(m.embeds[0].source, None);
+        assert_eq!(m.embeds[1].source.as_deref(), Some("build/atlas.pack"));
+        // The reader is the only place that knows which file declared these, and
+        // `source` is relative to it — so every entry carries that directory.
+        let dir = p.parent().unwrap().to_string_lossy().to_string();
+        assert_eq!(m.embeds[0].root, dir);
+        assert_eq!(m.embeds[1].root, dir);
+        // The control: a manifest that declares none has none.
+        let bare = write_temp("noembed", "[package]\nname = \"plain\"\n");
+        assert!(
+            read_manifest(bare.to_str().unwrap())
+                .unwrap()
+                .embeds
+                .is_empty()
+        );
     }
 
     // @PLN146 F5 — [[font]] array-of-tables: the three sources, in file order.

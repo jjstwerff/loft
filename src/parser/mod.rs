@@ -633,6 +633,18 @@ pub struct Parser {
     expr_not_null: bool,
     /// The field name for the most recently parsed `not null` field access (for diagnostics).
     expr_not_null_name: String,
+    /// The struct attribute the most recently parsed `fn(…)` FIELD read came from —
+    /// `(struct def_nr, attribute index)`.
+    ///
+    /// Set by [`Self::get_field`], taken by `parse_assign_op` before it parses the RHS
+    /// (which would otherwise overwrite it with the attribute of a fn-ref read on the
+    /// right-hand side). It exists for ONE thing pass 1 cannot do any other way: a fn-ref
+    /// assignment must recover which attribute it writes, and the byte offset the read
+    /// carries is `u16::MAX` on pass 1 because the struct has no database layout yet — so
+    /// the layout-based lookup that is authoritative on pass 2 answers nothing on pass 1,
+    /// and pass 1 is exactly when a capturing source has to be RECORDED for the attribute
+    /// to get its split layout at all (loft#1072).
+    fn_ref_read_attr: Option<(u32, usize)>,
     /// Counter incremented each time a lambda expression is parsed.
     /// Lambda names are `__lambda_N`; the same N is produced on both passes because the counter
     /// advances identically in both passes (same token order → same parse order).
@@ -1069,6 +1081,7 @@ impl Parser {
             resolutions: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
+            fn_ref_read_attr: None,
             lambda_counter: 0,
             expected: Type::Unknown(0),
             fields_of: u32::MAX,
@@ -3200,11 +3213,48 @@ impl Parser {
     /// Return the next expression; with `Value::None` the iterator creation was impossible.
     /// Expected function type for a short-form lambda (`|x| {…}`) — the `⇐` push
     /// ([`Self::expected`]) filtered to `Type::Function` (D1: one channel, not four).
+    ///
+    /// Read through `base()`, so a nullable expectation (`Optional(fn(…) -> R)`)
+    /// still names the parameter types. Nullability is about whether the SLOT may be
+    /// absent; it says nothing about the signature a value in it would have, and a
+    /// hint that dropped out on `?` would make the rule depend on it (loft#1067).
     pub(crate) fn lambda_hint(&self) -> Type {
-        if matches!(self.expected, Type::Function(_, _, _)) {
-            self.expected.clone()
+        if matches!(self.expected.base(), Type::Function(_, _, _)) {
+            self.expected.base().clone()
         } else {
             Type::Unknown(0)
+        }
+    }
+
+    /// May this expected type seed a short lambda's parameter types?
+    ///
+    /// The one predicate behind every `⇐` push site that can carry a `fn(…)`, so the
+    /// answer cannot differ between a call argument, a struct-literal field, a vector
+    /// element, a block tail and a parameter default (loft#1067). LOFT.md states the
+    /// rule as *the expected type wherever there is one* — this is "wherever".
+    pub(crate) fn seeds_lambda_hint(tp: &Type) -> bool {
+        matches!(tp.base(), Type::Function(_, _, _))
+    }
+
+    /// Is this declared tuple MEMBER type worth pushing on the `⇐` channel — because it
+    /// is a `fn(…)`, or because a `fn(…)` sits somewhere inside it?
+    ///
+    /// [`Self::seeds_lambda_hint`] answers for the member that IS the lambda's
+    /// destination; a member that merely CONTAINS one is a step on the way there, and the
+    /// tuple-literal branch needs both. Seeding only the outer step made the seeding
+    /// per top-level member: `(fn(integer) -> integer, integer)` inferred `|x|` and
+    /// `((fn(integer) -> integer, integer), text)` did not, because a nested member is a
+    /// `Type::Tuple`, so nothing reached the inner literal and `x` had no type
+    /// (loft#1073).
+    ///
+    /// Same bound as the flat rule: only a member on the way to a `fn(…)` touches the
+    /// channel at all, so this does not thread member types in general — that is the
+    /// wider question of loft#942/#943.
+    pub(crate) fn seeds_tuple_member_hint(tp: &Type) -> bool {
+        match tp.base() {
+            Type::Function(_, _, _) => true,
+            Type::Tuple(members) => members.iter().any(Self::seeds_tuple_member_hint),
+            _ => false,
         }
     }
 
@@ -3794,7 +3844,14 @@ impl Parser {
             }
             return true;
         }
-        if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
+        // loft#1065 — `should.base()`, so a variant literal lands in a NULLABLE struct-enum
+        // as readily as in a bare one.  `s: Shape? = Shape::Circle { r: 7 }` was refused
+        // ("cannot change type from Shape? to Circle") while `s: Shape = …` beside it was
+        // accepted, and a no-payload `Shape::Dot` was accepted either way — so the `?` was
+        // the axis and only for the variants that carry a record.  Whether the slot may be
+        // absent says nothing about which variants it can hold.
+        if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should.base())
+        {
             for a in self.data.def(*enum_tp).attributes() {
                 if a.name == self.data.def(*ref_tp).name() {
                     return true;
@@ -4035,6 +4092,18 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // loft#1065 — and a STRUCT-enum target, for the same reason: its slot is a
+        // twelve-byte `DbRef`, so the only thing that can mean absent in it is the
+        // reference sentinel.  Read through `base()`, because the shape that needs this
+        // most is the nullable one (`s: Shape? = null`) — without it the slot kept a bare
+        // `Value::Null`, which writes nothing, and the scope-exit `OpFreeRef` then read
+        // the untouched bytes as store #0 and tried to free the STACK ("a stack-record
+        // ref was treated as an owned heap store", BUG #306).
+        if *is_type == Type::Null && matches!(should.base(), Type::Enum(_, true, _)) {
+            let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
+            *code = Value::Call(sentinel_nr, vec![]);
+            return true;
+        }
         // @PLN102 — `null` assigned to a value-enum target (`n: Color? = null`, a
         // return, an arg, a field) must become the enum's typed null
         // (`OpConvEnumFromNull` → the 255 sentinel), NOT stay a bare `Value::Null`
@@ -4046,8 +4115,18 @@ impl Parser {
         // Inline `__nullable<S>` fields keep their own disc-0 representation (excluded);
         // a value-enum VECTOR element has no wired per-element null and is rejected in
         // `parse_vector` (which no longer relies on this convert failing).
+        //
+        // loft#1065 — the `false` is load-bearing: THREE shapes share the `Type::Enum`
+        // spelling and take three different nulls, and this arm is only right for one of
+        // them.  A VALUE enum is a discriminant byte, so its null is the `255` sentinel.
+        // A STRUCT-enum is carried as a twelve-byte `DbRef`, so its null is the reference
+        // sentinel — `formal/types.md` derives the representation from the base type's
+        // storage, and a handle's is `nullref`.  Undiscriminated, this wrote one byte
+        // into a handle slot: `--interpret` then read the slot as a live ref and tripped
+        // its own store-lifetime guard, and `--native` would not compile at all
+        // (`non-primitive cast: u8 as loft::keys::DbRef`).
         if *is_type == Type::Null
-            && let Type::Enum(tp, _, _) = should.base()
+            && let Type::Enum(tp, false, _) = should.base()
             && !self.data.def(*tp).name.starts_with("__nullable<")
         {
             *code = self.cl(
@@ -5779,6 +5858,11 @@ impl Parser {
         // `vector<integer>` through the wrong schema and printed `{}`.
         self.retarget_parametric_coroutine_next(d_nr);
         self.retarget_parametric_vector_format(d_nr);
+        // loft#1070 — and any TYPE ROW the template baked as a constant.  Substitution
+        // rewrites types, never the `const u16` schema id an op already carries, so a site
+        // that was lowered while the element was still `T` kept pointing at
+        // `__typevar_T`'s row.
+        self.retarget_parametric_type_rows(d_nr, bindings);
         // loft#1040 — and lower any `par` clause the template could not: it needs the
         // types this body now carries, so it runs after every substitution above.
         self.expand_deferred_par(d_nr);
@@ -6475,6 +6559,87 @@ impl Parser {
                 let gen_arg = args[0].clone();
                 *args = vec![gen_arg, Value::Int(*value_size)];
                 args.extend(kinds.iter().copied().map(Value::Int));
+            }
+        });
+        self.data.definitions[d_nr as usize].code = code;
+    }
+
+    /// loft#1070 — re-point every TYPE ROW this monomorph inherited from the template.
+    ///
+    /// A schema id is a `const u16` ARGUMENT (`OpDatabase(v, db_tp)`,
+    /// `OpCopyRecord(src, dst, tp)`, …), not a type — so type substitution, which rewrites
+    /// the variable table and the type annotations, walks straight past it.  Any site the
+    /// template lowered while the type was still `T` therefore keeps `__typevar_T`'s row,
+    /// and the record it allocates has the type variable's layout: reading a field lands on
+    /// another word.  Measured, `f<T>(x: T, c: boolean) -> T { if c { y: T = x; y } else …
+    /// }` answered `4294967198` — `-98` read as an unsigned 32-bit word — for a `-7` it was
+    /// handed, on both backends, with no diagnostic, and leaked a `__typevar_T` store per
+    /// call.
+    ///
+    /// The invariant makes this total rather than a list of known sites: after substitution
+    /// the type variable does not exist, so EVERY surviving reference to its row is stale by
+    /// construction, and there is no case where keeping one is right.  The rows are found by
+    /// the op's own declaration — an argument named `tp` or `…_tp` — so an op added later is
+    /// covered without being enumerated here, and `size: const u16` (which is a width, not a
+    /// row) is not swept up with them.
+    ///
+    /// Why the arm-local in that repro was RIGHT while the return wrapper was wrong: the
+    /// local is declared in source and re-derives its row from the substituted variable
+    /// table, whereas the compiler-built `materialized_view_return` block was constructed
+    /// once, at template parse, from the type the arm had THEN.
+    fn retarget_parametric_type_rows(&mut self, d_nr: u32, bindings: &[(u32, Type)]) {
+        // stale row -> fresh row, one entry per bound type variable.
+        let mut rows: Vec<(i32, i32)> = Vec::new();
+        for (holder, bound_to) in bindings {
+            let stale = i32::from(self.data.def(*holder).known_type());
+            let fresh = match bound_to.base() {
+                Type::Reference(d, _) | Type::Enum(d, _, _) => {
+                    i32::from(self.data.def(*d).known_type())
+                }
+                _ => continue,
+            };
+            if stale != fresh
+                && stale != i32::from(u16::MAX)
+                && fresh != i32::from(u16::MAX)
+                && !rows.iter().any(|(s, _)| *s == stale)
+            {
+                rows.push((stale, fresh));
+            }
+        }
+        if rows.is_empty() {
+            return;
+        }
+        // Which ARGUMENT of each op is a type row, read off the op's declaration rather
+        // than hard-coded — the same source `dispatch_call` fills them from.
+        let mut row_arg: std::collections::HashMap<u32, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, def) in self.data.definitions.iter().enumerate() {
+            if !def.name.starts_with("Op") {
+                continue;
+            }
+            let at: Vec<usize> = def
+                .attributes()
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.name == "tp" || a.name.ends_with("_tp"))
+                .map(|(k, _)| k)
+                .collect();
+            if !at.is_empty() {
+                row_arg.insert(i as u32, at);
+            }
+        }
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        code.map_nodes(&mut |v| {
+            if let Value::Call(d, args) = v
+                && let Some(at) = row_arg.get(d)
+            {
+                for &k in at {
+                    if let Some(Value::Int(row)) = args.get(k)
+                        && let Some((_, fresh)) = rows.iter().find(|(stale, _)| stale == row)
+                    {
+                        args[k] = Value::Int(*fresh);
+                    }
+                }
             }
         });
         self.data.definitions[d_nr as usize].code = code;
@@ -8172,6 +8337,10 @@ impl Parser {
         if let Type::Function(_, _, _) = &tp
             && f_nr != usize::MAX
         {
+            // Remember WHICH attribute this read came from, for an assignment through it
+            // (loft#1072). The read carries a byte offset, and on pass 1 that offset is
+            // `u16::MAX` for every field of a struct whose layout does not exist yet.
+            self.fn_ref_read_attr = Some((d_nr, f_nr));
             // @PLN114 — the layout decides the reader, and BOTH answers are now
             // explicit: a split field reads its closure_rec child, a legacy one
             // synthesises a NULL closure.  `get_val`'s Function arm is the legacy
@@ -12629,16 +12798,28 @@ impl Parser {
         }
     }
 
-    /// @PLN146 F5 — record this package's `[[font]]` declarations for the `--html`
-    /// driver.  Both manifest-registration paths call it, for the same reason
-    /// `[wasm.bridge].host_js` is registered from both: a library reached through
-    /// one path and not the other would lose its browser half silently.  Identical
-    /// declarations are one font — the app and a library it uses may name the same
-    /// one, and agreeing about it is not a conflict.
-    fn register_declared_fonts(&mut self, m: &manifest::Manifest) {
+    /// @PLN146 F5/F4 — record what this package's `--html` page has to carry: its
+    /// `[[font]]` families and its `[[embed]]` files.  Both manifest-registration
+    /// paths call it, for the same reason `[wasm.bridge].host_js` is registered from
+    /// both: a library reached through one path and not the other would lose its
+    /// browser half silently.  Identical declarations are one entry — the app and a
+    /// library it uses may name the same font or the same pack, and agreeing about
+    /// it is not a conflict.
+    fn register_page_declarations(&mut self, m: &manifest::Manifest) {
         for f in &m.fonts {
             if !self.data.declared_fonts.contains(f) {
                 self.data.declared_fonts.push(f.clone());
+            }
+        }
+        // @PLN146 F4 — and the files this package's page must carry.  Same route,
+        // same reason: a library reached through one registration path and not the
+        // other would lose its browser half with nothing said.  Each declaration
+        // already knows the manifest dir its `source` is relative to, so a
+        // consumer's build finds the LIBRARY's file rather than looking for one of
+        // its own with that name.
+        for e in &m.embeds {
+            if !self.data.declared_embeds.contains(e) {
+                self.data.declared_embeds.push(e.clone());
             }
         }
     }
@@ -12782,7 +12963,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
-        self.register_declared_fonts(&m);
+        self.register_page_declarations(&m);
     }
 
     /// Check whether `<dir>/<id>` contains a valid loft package layout.
@@ -13170,7 +13351,7 @@ impl Parser {
                 self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
-        self.register_declared_fonts(m);
+        self.register_page_declarations(m);
         // PKG.3: register dirs for dependency resolution.
         //
         // For plain-version deps (`foo = "0.1"`) and the legacy
@@ -13916,7 +14097,11 @@ impl Parser {
                 // 255 sentinel; truthiness contexts coerce it to false.
                 self.cl("OpConvBoolFromNull", &[])
             }
-            Type::Enum(tp, _, _) => self.cl(
+            // loft#1065 — a STRUCT-enum is a `DbRef`, so its null is the reference
+            // sentinel, not the `255` discriminant byte a value enum uses.  This is the
+            // answer [`Self::null_value`] already documents; the two now agree.
+            Type::Enum(_, true, _) => self.cl("OpNullRefSentinel", &[]),
+            Type::Enum(tp, false, _) => self.cl(
                 "OpConvEnumFromNull",
                 &[Value::Int(i32::from(self.data.def(*tp).known_type()))],
             ),

@@ -158,7 +158,7 @@ Four page globals tune it, all optional:
 
 | global | meaning |
 |---|---|
-| `loftBaseFS` | `{"/abs/path": string \| Uint8Array}` — the read-only base tree (default empty) |
+| `loftBaseFS` | `{"/abs/path": string \| Uint8Array}` — the read-only base tree (default empty).  `--html` seeds it from each `[[embed]]` in `loft.toml` (@PLN146 F4), adding to whatever the page already set |
 | `loftFSKey` | `localStorage` key for the delta (default `loft-fs-delta`) |
 | `loftFSPersist` | `false` keeps the delta in memory for the tab's lifetime |
 | `loftFSCwd` | what a relative path resolves against (default `/`) |

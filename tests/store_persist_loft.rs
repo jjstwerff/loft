@@ -4252,3 +4252,153 @@ fn a_trie_survives_the_rebuild_and_comes_out_in_key_order() {
         );
     }
 }
+
+/// loft#1064 — `store_load_keys_text`: the text-keyed BATCH loader, and the reason
+/// a batch form exists at all.
+///
+/// The paged loaders shipped a single form and a batch form, and the batch form was
+/// there for a measured reason — one reader, one page cache, so a ring is one
+/// traversal rather than N. Only the INTEGER-keyed side had it. Asset packs are
+/// text-keyed by nature (`"page/mobs"`, `"hit.ogg"`), so the case that most wants the
+/// batch form was the one that could not ask for it, and the workaround — loop
+/// `store_load_key_text` — re-opened a reader per key and re-fetched the same
+/// 64 KiB bucket-table page every time.
+///
+/// **The values are asserted first, and must be IDENTICAL between the two routes.**
+/// A loader that drops entries also fetches fewer bytes, and would read as a win.
+/// Only then does the cell compare cost: on this corpus the loop draws 5.37 MB in
+/// 82 requests and the batch 256 KB in 4 — 20x — against a 447 KB file the loop
+/// therefore downloads twelve times over. The assertion asks for 4x, so a smaller
+/// corpus or a changed page size cannot turn a regression quiet.
+#[test]
+fn store_load_keys_text_batches_what_the_loop_repeats() {
+    let dir = scratch("load_keys_text_1064");
+    let script = workspace_root().join("tests/scripts/1064-load-keys-text.loft");
+    let path = dir.join("pack");
+
+    let run = |backend: &str, mode: &str| -> String {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("P1064_MODE", mode)
+            .env("LOFT_LOADER_STATS", "1")
+            .env("LOFT_TIMEOUT", "240")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{backend} {mode}: {all}");
+        assert!(!all.contains("FAIL"), "{backend} {mode}: {all}");
+        all
+    };
+
+    /// Sum one loader-stats field over every line naming `call` — the loop emits one
+    /// line per key, the batch one line in total, which is the difference being measured.
+    fn stat_sum(out: &str, call: &str, field: &str) -> u64 {
+        out.lines()
+            .filter(|l| l.contains(call))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find_map(|t| t.strip_prefix(&format!("{field}=")))
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+            .sum()
+    }
+    fn answer(out: &str) -> &str {
+        out.lines()
+            .find(|l| l.starts_with("loaded="))
+            .expect("the script must report its load")
+    }
+
+    run("--interpret", "write");
+
+    for backend in ["--interpret", "--native"] {
+        let batch = run(backend, "batch");
+        let looped = run(backend, "loop");
+
+        // Correctness first, and identical: 24 of the 25 requested keys are in the
+        // pack, the 25th is absent and must be SKIPPED rather than counted or raised.
+        assert_eq!(
+            answer(&batch),
+            answer(&looped),
+            "{backend}: the batch form must produce exactly what the loop does"
+        );
+        assert_eq!(
+            answer(&batch),
+            "loaded=24 chars=1282 len=24 verify=true",
+            "{backend}: 24 present keys load with their payloads, the absent key is \
+             skipped, and the copied heap is sound: {batch}"
+        );
+
+        // The cost half — the whole point of the call.
+        let (b_bytes, l_bytes) = (
+            stat_sum(&batch, "store_load_keys_text:", "bytes_fetched"),
+            stat_sum(&looped, "store_load_key_text:", "bytes_fetched"),
+        );
+        let (b_reqs, l_reqs) = (
+            stat_sum(&batch, "store_load_keys_text:", "requests"),
+            stat_sum(&looped, "store_load_key_text:", "requests"),
+        );
+        assert!(
+            b_bytes > 0 && l_bytes > 0 && b_reqs > 0 && l_reqs > 0,
+            "{backend}: both routes must actually have fetched something — a run that \
+             read nothing would satisfy the ratio below vacuously \
+             (batch {b_bytes}B/{b_reqs}req, loop {l_bytes}B/{l_reqs}req)"
+        );
+        assert!(
+            b_bytes * 4 <= l_bytes,
+            "{backend}: one reader must fetch substantially less than N readers. \
+             Measured 262144 against 5373952 (20x); this asks 4x. \
+             batch={b_bytes} loop={l_bytes}"
+        );
+        assert!(
+            b_reqs * 4 <= l_reqs,
+            "{backend}: one reader must make substantially fewer requests than N \
+             readers. Measured 4 against 82 (20x); this asks 4x. \
+             batch={b_reqs} loop={l_reqs}"
+        );
+    }
+}
+
+/// loft#1064 — the batch form serves a TRIE as well as a hash, the way the single
+/// `store_load_key_text` already did.
+///
+/// A trie locates by DESCENT, so unlike a hash there are no addresses to batch: the
+/// win is the shared page cache alone, and correctness is what this cell asserts.
+/// A key the trie does not hold must stay absent — a descent lands on SOME leaf, so
+/// a walk that skipped the key comparison would answer it.
+#[test]
+fn store_load_keys_text_serves_a_trie() {
+    let dir = scratch("load_keys_text_trie_1064");
+    let script = workspace_root().join("tests/scripts/1064-load-keys-text.loft");
+    let path = dir.join("pack");
+
+    for backend in ["--interpret", "--native"] {
+        let _ = std::fs::remove_file(dir.join("pack.trie"));
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(&script)
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("P1064_MODE", "trie")
+            .env("LOFT_TIMEOUT", "240")
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{backend}: {all}");
+        assert!(
+            all.contains("trie loaded=2 len=2 got=kerkweg:five lonneker:seven verify=true"),
+            "{backend}: the two present keys load in key order, `kerks` stays absent, \
+             and the trie the loader BUILT is sound: {all}"
+        );
+    }
+}

@@ -97,8 +97,15 @@ impl Parser {
     /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
     /// the expected-enum context for bare value-position variant resolution
     /// once variants are no longer globally keyed.
+    ///
+    /// loft#1065 — read through `base()`: a NULLABLE enum target is an enum context too.
+    /// Without the peel, `s: Shape? = Shape::Circle { r: 7 }` never resolved the variant
+    /// against `Shape`, so the local was retyped to `Circle` and the declaration refused
+    /// itself ("cannot change type from Shape? to Circle") — while the same literal in a
+    /// bare `Shape` slot beside it was accepted. Whether the slot may be ABSENT says
+    /// nothing about which variants it can hold.
     pub(crate) fn enum_context(&self, tp: &Type) -> bool {
-        match tp {
+        match tp.base() {
             Type::Enum(_, _, _) => true,
             Type::Reference(d_nr, _) => self.data.def_type(*d_nr) == DefType::Enum,
             _ => false,
@@ -109,6 +116,55 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
+    /// loft#1071 — does this type BORROW a collection, directly or one link on?
+    ///
+    /// A `for e in v` loop variable is a sub-reference into `v`'s element slot, and that
+    /// is what its deps record — but the type at a USE site deps on the variable ITSELF,
+    /// and only the variable's DECLARED type deps on the collection. So the question
+    /// needs the chain followed, not the first link read.
+    ///
+    /// Bounded, because a self-dep (`e` depending on `e`) is exactly the shape that makes
+    /// the walk necessary and would otherwise make it loop.
+    pub(crate) fn views_a_collection(&self, tp: &Type) -> bool {
+        let mut deps: Vec<u16> = tp.depend();
+        let mut seen: Vec<u16> = Vec::new();
+        for _ in 0..3 {
+            let mut next: Vec<u16> = Vec::new();
+            for d in deps {
+                if d >= self.vars.count() || seen.contains(&d) {
+                    continue;
+                }
+                seen.push(d);
+                let dt = self.vars.tp(d);
+                if Self::is_collection_type(dt.base()) {
+                    return true;
+                }
+                next.extend(dt.depend());
+            }
+            if next.is_empty() {
+                return false;
+            }
+            deps = next;
+        }
+        false
+    }
+
+    /// loft#1071 — the `(base, field)` an INLINE struct-enum slot read addresses, when
+    /// `v` is such a read.
+    ///
+    /// A struct-enum FIELD stores a four-byte record pointer, and `0` is how absence is
+    /// spelled there. `OpGetField` on it answers a sub-REFERENCE rather than that word, so
+    /// a caller that needs to ask "is this slot empty" has to re-address the word itself.
+    pub(crate) fn inline_slot_word(&self, v: &Value) -> Option<(Value, Value)> {
+        let Value::Call(d, args) = v.unspan() else {
+            return None;
+        };
+        if self.data.def(*d).name() != "OpGetField" || args.len() < 2 {
+            return None;
+        }
+        Some((args[0].clone(), args[1].clone()))
+    }
+
     /// Is this IR node the value a source-level `null` becomes?
     ///
     /// Two spellings reach a store site: the bare `Value::Null` the parser starts with, and
@@ -3276,7 +3332,17 @@ impl Parser {
                 // that field type, so a `&` in a field of any OTHER type stays the
                 // sub-expression use the rule forbids.
                 self.amp_head = matches!(td, Type::Reference(_, _));
+                // loft#1067 — a field's DECLARED type is an inference context, so a short
+                // lambda may stand as its value: `H { f: |x| { x * 2 } }` says exactly what
+                // `takes(|x| { x * 2 })` says, and used to be refused only because the `⇐`
+                // channel was never pushed here. `var_tp` (`td`, below) already carries the
+                // type for everything that reads it, but `lambda_hint` reads the channel.
+                let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+                if Self::seeds_lambda_hint(&td) {
+                    self.expected = td.clone();
+                }
                 let t = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
+                self.expected = saved_expected;
                 self.amp_head = false;
                 t
             };
@@ -4236,6 +4302,33 @@ impl Parser {
             );
             let clear = self.build_nullable_set_null(syn, field_ref);
             list.push(clear);
+            return;
+        }
+        // loft#1071 — a literal `null` into a USER struct-enum field (`Box { s: null }`
+        // where `s: Shape?`).  The sibling arm above answers it for the synthetic
+        // `__nullable<S>`, whose absence is a discriminant; a user struct-enum has no
+        // discriminant of its own in an inline slot — the slot IS a four-byte record
+        // pointer, and `0` is what absent means there (it is what the field prime writes,
+        // and what every keyed-collection and enum-big field starts as).
+        //
+        // Left to the generic path this emitted `OpCopyRecord(<the null>, <the field>)`:
+        // a record COPY of the null's own record into the slot, which is not how absence
+        // is spelled in four bytes.  Nothing observed it, because the null TEST for the
+        // type was refused — so the write had never been right and could not be seen.
+        // Write the pointer directly, the same shape and the same reason as the arm above.
+        if !self.first_pass
+            && self.is_null_source(value)
+            && let Type::Enum(syn, true, _) = &td_base
+            && !self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            list.push(self.cl(
+                "OpSetInt4",
+                &[code.clone(), Value::Int(item_pos), Value::Int(0)],
+            ));
             return;
         }
         if !self.first_pass

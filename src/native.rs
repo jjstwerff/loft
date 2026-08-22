@@ -161,9 +161,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_list_dir", n_list_dir),
     ("n_read_bytes", n_read_bytes),
     ("n_write_bytes", n_write_bytes),
-    #[cfg(feature = "mmap")]
     ("n_store_durable_check", n_store_durable_check),
-    #[cfg(feature = "mmap")]
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
@@ -194,6 +192,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_key_text", n_store_load_key_text),
     #[cfg(paged_store)]
     ("n_store_load_keys", n_store_load_keys),
+    #[cfg(paged_store)]
+    ("n_store_load_keys_text", n_store_load_keys_text),
     #[cfg(paged_store)]
     ("n_store_load_prefix", n_store_load_prefix),
     #[cfg(paged_store)]
@@ -1255,7 +1255,6 @@ fn n_write_bytes(stores: &mut Stores, stack: &mut DbRef) {
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.
 /// Mirrors the `#rust` template in `default/02_files.loft`.
-#[cfg(feature = "mmap")]
 fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = crate::store::Store::durable_check(std::path::Path::new(v_path.str()));
@@ -1264,7 +1263,6 @@ fn n_store_durable_check(stores: &mut Stores, stack: &mut DbRef) {
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
 /// Mirrors the `#rust` template in `default/02_files.loft`.
-#[cfg(feature = "mmap")]
 fn n_store_durable_seal(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = crate::store::Store::durable_seal(std::path::Path::new(v_path.str()));
@@ -1500,6 +1498,19 @@ fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let n = stores.load_keys_vec(&v_ref, v_path.str(), &v_keys);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_keys_text` — load the given TEXT keys'
+/// entries from a persisted hash or trie image through ONE shared reader, so the
+/// bucket-table page is fetched once rather than per key; returns the count found.
+/// Args pop in reverse: keys, path, local.  loft#1064.
+#[cfg(paged_store)]
+fn n_store_load_keys_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v_keys = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_keys_text_vec(&v_ref, v_path.str(), &v_keys);
     stores.put(stack, n);
 }
 

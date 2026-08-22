@@ -2206,7 +2206,16 @@ impl Parser {
                 // out to need a temporary is re-parsed from here into a function of its own.
                 let value_start = self.lexer.link();
                 let mut t = Value::Var(arguments.len() as u16);
+                // loft#1067 — the parameter's declared type is the expected type for its
+                // DEFAULT, exactly as it is for an argument a caller passes: a default is
+                // checked against it a few lines below, and `fn takes(f: fn(integer) ->
+                // integer = |x| { x * 2 })` has no other way to say what `x` is.
+                let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+                if Self::seeds_lambda_hint(&typedef) {
+                    self.expected = typedef.base().clone();
+                }
                 let dtype = self.expression(&mut t);
+                self.expected = saved_expected;
                 // @PLN102 arc-E (E2 Tier-0): type-check + coerce the default
                 // expression against the parameter type, exactly as a call-site
                 // argument is (`convert` then `validate_convert`, mod.rs:5907).
@@ -4063,7 +4072,10 @@ impl Parser {
                         // @PLN22 Phase 1 — hint the field's enum so a bare variant
                         // default (`level: Level = Warning`) resolves against the
                         // declared field type.
-                        if self.enum_context(&a_type) {
+                        // loft#1067 — a DEFAULT is checked against the declared type, so
+                        // `fn takes(f: fn(integer) -> integer = |x| { x * 2 })` infers `x`
+                        // exactly as a caller passing the same lambda would.
+                        if self.enum_context(&a_type) || Self::seeds_lambda_hint(&a_type) {
                             self.expected = a_type.clone();
                         }
                         // loft#698 — where the default's value is BUILT decides whether it

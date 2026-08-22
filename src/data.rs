@@ -2740,6 +2740,27 @@ pub fn stored_tuple_offsets(
     stored_tuple_offsets_for_def(data, database, def_nr, elems.len())
 }
 
+/// Does this tuple member type carry a `fn(…)` anywhere inside it?
+///
+/// A fn-ref value is the PAIR — an 8-byte d_nr plus a 12-byte closure DbRef — while a
+/// non-capturing source lowers to the d_nr alone, so only the DESTINATION can ask for the
+/// whole slot to be built.  The member that needs asking can sit at any depth, which is
+/// why this sees through nested tuples: reading only the top level is what left
+/// `((dbl, 1), "z")` broken after loft#1069 fixed the flat case.
+///
+/// Both backends decide with THIS function — the interpreter when it pushes a tuple
+/// literal's members and the native emitter when it hands declared element types down to a
+/// nested member.  One list, on purpose: loft#1006 was two copies of a tuple element list
+/// disagreeing, and this is the same hazard.
+#[must_use]
+pub fn tuple_carries_fn_ref(tp: &Type) -> bool {
+    match tp.base() {
+        Type::Function(_, _, _) => true,
+        Type::Tuple(inner) => inner.iter().any(tuple_carries_fn_ref),
+        _ => false,
+    }
+}
+
 /// Same as [`stored_tuple_offsets`] but with the synthetic struct's
 /// `def_nr` already resolved.  Use when the caller already has the
 /// def_nr (e.g. parser sites that called `tuple_def` directly).
@@ -3677,6 +3698,121 @@ impl Definition {
         })
     }
 
+    /// loft#1066 — does every `return` in this MONOMORPH hand back a store the body
+    /// itself owns, rather than one it borrowed from a parameter?
+    ///
+    /// A generic template declares `-> T`, which carries no dep, so substitution gives
+    /// every monomorph the SAME empty return dep whatever its body does. Both
+    /// `f<T>(x: T) -> T { x }` (a borrow of the argument) and
+    /// `f<T>(x: T) -> T { y: T = x; y }` (a fresh copy) therefore read as "owned" to
+    /// [`Self::returns_borrowed_view`] — which is why the caller-side lift could not be
+    /// gated on deps and was gated on the `__retbuf` parameter instead. A monomorph is
+    /// built by IR substitution and never gets one, so a fresh store it returned was
+    /// owned by nobody: one leaked record per call, on both backends.
+    ///
+    /// This answers the question deps cannot, from the body. It is a POSITIVE proof and
+    /// deliberately an UNDER-approximation: a shape it cannot read answers `false`, which
+    /// costs the leak that is already there. Answering `true` wrongly would free a store
+    /// the caller still names, and a leak is the better of those two.
+    ///
+    /// Owned: a `return` of a local, or of a place READ out of a local (`o[0]`, `s.f`) —
+    /// a place tail is materialised into a fresh `__ret_N` COPY before it leaves, so what
+    /// comes back is this body's store either way. Borrowed: a `return` of a parameter or
+    /// of a place read out of one. Unknown, hence `false`: a `return` of a CALL, whose
+    /// ownership is the callee's fact and not readable here.
+    /// The variable a place chain is ROOTED at — `o[0]`, `s.f`, `v[i].g` all answer the
+    /// variable they read out of. `None` when the value is not a place (a call, a literal).
+    fn root_var(v: &Value) -> Option<u16> {
+        match v.unspan() {
+            Value::Var(n) => Some(*n),
+            Value::Call(_, args) => args.first().and_then(Self::root_var),
+            _ => None,
+        }
+    }
+
+    /// Does ONE return site hand back a store this body owns?  See
+    /// [`Self::monomorph_return_is_fresh`] for what the answer is used for and why it
+    /// under-approximates.
+    fn site_is_fresh(v: &Value, vars: &crate::variables::Function) -> bool {
+        match v.unspan() {
+            // Null is a value, not a store — it can neither leak nor dangle.
+            Value::Null => true,
+            Value::Var(n) => *n < vars.count() && !vars.is_argument(*n),
+            // loft#1070 — a value-yielding `if` / `match` tail: fresh iff EVERY arm is.
+            // Held back while an arm-local of a monomorph was built against the type
+            // variable's row and answered a wrong number; with that fixed the arms are
+            // ordinary owned locals, and leaving them unclassified only kept the leak.
+            // Both arms are required, so one borrowing arm still refuses the whole site —
+            // the under-approximation composes rather than being widened away.
+            Value::If(_, then, els) => {
+                Self::site_is_fresh(then, vars) && Self::site_is_fresh(els, vars)
+            }
+            // A block's value is its tail; an empty one yields nothing to own.
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_none_or(|tail| Self::site_is_fresh(tail, vars)),
+            other => match Self::root_var(other) {
+                Some(n) => n < vars.count() && !vars.is_argument(n),
+                // No readable root (a call, a literal-built aggregate): not proven fresh.
+                None => false,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn monomorph_return_is_fresh(&self) -> bool {
+        let vars = &self.variables;
+        let mut seen_return = false;
+        let mut all_fresh = true;
+        // Every explicit `return`, PLUS the body's own tail. The tail matters most and is
+        // easy to miss: at the moment the caller's lift asks this question the callee's
+        // tail is still a bare expression — the `Return` wrapper is put on by the same
+        // scope pass, and whether that has run yet depends on which function it reached
+        // first. Reading only `Return` nodes therefore answered "no return sites" for the
+        // exact monomorph being asked about.
+        let mut sites: Vec<Value> = Vec::new();
+        self.code.walk(&mut |v| {
+            if let Value::Return(inner) = v {
+                sites.push((**inner).clone());
+            }
+        });
+        if let Value::Block(bl) = &self.code
+            && let Some(tail) = bl.operators.last()
+            && !matches!(tail.unspan(), Value::Return(_))
+        {
+            sites.push(tail.clone());
+        }
+        for inner in &sites {
+            seen_return = true;
+            let inner = inner.unspan();
+            // A bare `Var` is the shape both the owned and the borrowed monomorph end
+            // with after the scope pass, and it is the one the answer turns on.
+            if !Self::site_is_fresh(inner, vars) {
+                all_fresh = false;
+            }
+        }
+        // `LOFT_TRACE_RETFRESH` — the verdict per callee, because a wrong one is
+        // invisible from either side: a `false` costs a leak the caller never sees, and
+        // the shape that produced it is the callee's tail, which the caller does not
+        // print. The tail comes along, since "no return sites" and "a tail this cannot
+        // read" are different answers with the same verdict.
+        let verdict = seen_return && all_fresh;
+        if std::env::var_os("LOFT_TRACE_RETFRESH").is_some() {
+            let tail = match &self.code {
+                Value::Block(bl) => format!("tail={:?}", bl.operators.last()),
+                other => format!("{other:?}"),
+            };
+            eprintln!(
+                "[retfresh] {} sites={} fresh={all_fresh} -> {verdict}  {}",
+                self.name(),
+                sites.len(),
+                tail.chars().take(200).collect::<String>()
+            );
+        }
+        verdict
+    }
+
     /// Is this a LOFT-DEFINED function — one written in loft, with a body the
     /// compiler lowered itself?  That is a global (`n_<name>`) or a method /
     /// generic monomorph (`t_<len><Type>_<name>`) that carries loft IR; a native
@@ -4128,6 +4264,12 @@ pub struct Data {
     /// driver rather than collected here, because a main script's package is never
     /// resolved as a library.
     pub declared_fonts: Vec<crate::manifest::FontDecl>,
+    /// @PLN146 F4 — the `[[embed]]` declarations of every package reached by a
+    /// `use`, in resolution order.  Each carries the directory of the manifest that
+    /// declared it, so a library's file is found in the LIBRARY rather than wherever
+    /// the consumer happens to build (`crate::html_embed`).  The entry program's own
+    /// manifest is read by the driver, for the same reason `declared_fonts` says.
+    pub declared_embeds: Vec<crate::manifest::EmbedDecl>,
     /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
     /// Maps callee def_nr → list of caller def_nrs.  Built once on
     /// first `callers_of` call by walking every user fn's body and
@@ -4422,6 +4564,7 @@ impl Data {
             wasm_bridge_routes: HashMap::new(),
             wasm_bridge_host_js_files: Vec::new(),
             declared_fonts: Vec::new(),
+            declared_embeds: Vec::new(),
             caller_index: std::sync::OnceLock::new(),
             op_sets: OpSetCache::default(),
         }

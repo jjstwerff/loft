@@ -1,0 +1,24 @@
+// A stdlib entry whose Rust body is cfg-gated out of a target (loft#1063).
+//
+// `store_durable_seal` / `store_durable_check` are implemented over the `mmap`
+// feature, which the wasm runtime rlib is NOT built with (`--no-default-features
+// --features random`, WasmRuntimeShape::features).  The generator emits the same
+// template for every target, so the missing Rust body used to surface as a raw
+// `error[E0599]: no associated function named durable_seal` against loft's own
+// crate — a wasm-compile-fail on a program the interpreter accepts and runs.
+//
+// The contract this guards: a target without the feature ANSWERS rather than
+// fails to link, the way `store_persist_bind` already did.  `false` is the honest
+// answer on both sides here — no sidecar was written, and none validates — so the
+// three backends agree on a path that does not exist.  The desktop TRUE case (a
+// real seal that then checks clean) is `tests/store_durable_loft.rs`; it cannot
+// live here, because a target with no mmap can never agree with it.
+fn main() {
+    // A path no test creates: seal fails (no main file), check fails (no sidecar).
+    absent = "tests/oracle/.no-such-store";
+    println("seal={store_durable_seal(absent)} check={store_durable_check(absent)}");
+    // The gated call inside a branch the program does not take still has to
+    // COMPILE — emission is per call site, not per taken path.
+    if false { println("unreachable={store_durable_seal(absent)}"); }
+    println("done");
+}

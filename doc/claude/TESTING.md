@@ -479,6 +479,23 @@ the reason this one was not: it exits on a **condition** under a deadline instea
 racing a fixed sleep. ⚠ A deterministic sequencing test needs its sequencing
 asserted (`attempts == 2`) or it passes for a reader that never re-read at all.
 
+### `assert`'s message runs too
+
+`assert(cond, msg)` is an ordinary call, so **both** arguments are evaluated — the
+message string is built whether or not the assertion fails ([formal/calls.md](formal/calls.md)
+`F-Args`). A side-effecting call written once in the condition and again in the message
+therefore runs **twice**:
+
+```loft
+c: vector<integer> = [0];
+assert(bump(c) == 5, "got {bump(c)}");   // c[0] is now 2, not 1
+assert(c[0] == 1, "…ran once");          // fails, and the fix is not here
+```
+
+Bind first (`got = bump(c); assert(got == 5, "got {got}")`). It costs a line and it is
+the difference between a cell that measures the call and one that measures two of them —
+which is exactly the kind of failure that reads as a bug in the code under test.
+
 ### Backend divergence: the differential check is the instrument
 
 Interpret-vs-native disagreement is also an n=1, deterministic property — and the
@@ -1257,6 +1274,18 @@ continue.  Full closure record at
 | `// @EXPECT_ERROR: <text>` | Per-function or file header | Parse error containing `<text>` must appear; missing → fail |
 | `// @EXPECT_WARNING: <text>` | Per-function or file header | Warning containing `<text>` must appear; missing → fail |
 | `// @EXPECT_FAIL: <text>` | Per-function (before `fn`) or file header | Runtime panic is tolerated |
+
+⚠ **Check `loft_suite` the way the GATE checks it, not by hand.** `cargo test --release
+--test wrap loft_suite` reports failures that `make ci` does not — measured 2026-08-22:
+`25-narrow-nullable-field-sentinel-collision` as *"was @EXPECT_FAIL, now compiles"*, and a
+panic on `75-native-stub`'s expected-fail naming stale cdylibs. Neither is real. `make ci`
+runs nextest under the **test profile**, and the same scripts pass there. It was confirmed
+not to be a code range (identical output from binaries either side of it) and not stale
+artefacts (`make check-rlib` and `make rebuild-native-cdylibs` changed nothing) — so
+`@EXPECT_FAIL` behaves differently per cargo profile, and the gate only ever exercises one
+of them. That is a real coverage hole and is not yet filed; what matters day to day is
+that a by-hand `cargo test` on this suite can cost twenty minutes chasing two failures
+that do not exist. Reach for `make ci`, or `./scripts/find_problems.sh`.
 
 **Every expectation must match.**  `@EXPECT_ERROR` and `@EXPECT_WARNING` used to be
 collected and then dropped, so an annotation whose diagnostic had been reworded, narrowed

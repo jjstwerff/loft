@@ -169,6 +169,29 @@ OPEN: **1**, and bounded by the oracle note below.
   tuple returns, precisely because the native layout (a synthetic `__tuple<…>` struct, inline
   bytes) differs from the interpreter's. A divergence in element order, value, or type is caught
   there.
+- ⚠ **…and it carries no NESTED tuple with a `fn(…)` inside it — a second axis, measured
+  2026-08-22.** `t: ((fn(integer) -> integer, integer), text) = ((dbl, 1), "z")` — a program
+  with no assignment anywhere in it — panicked `fn_call_ref: fn_var=16 < 20` on the
+  interpreter and was refused by rustc on `--native`, while the cell that touched no
+  function at all (reading the plain members beside it) failed hardest, with an ICE. Depth
+  was the axis loft#1069's own fix held fixed: it taught the tuple literal that a fn-ref
+  member is the whole 20-byte pair and read the TOP-LEVEL members only, so everything it
+  repaired was broken again one level in. Three sites had that shallow reading — the
+  interpreter's literal push, the native emitter's declared-slot hand-down (and its gate),
+  and the native fn-ref reachability walk — and all three now decide with ONE predicate,
+  `data::tuple_carries_fn_ref`, which sees through nesting. That it is one function and not
+  three copies is the D-tup-1 lesson applied before it could bite: three lists that
+  disagreed is exactly what loft#1006 was. Guard
+  `tests/scripts/fn-ref-in-a-nested-tuple.loft`, proven to fail on a pristine tree on both
+  backends. The two REFUSALS left at this position — a short lambda not inferred inside a
+  nested literal, and a forward-referenced fn name not resolving in any tuple literal — were
+  loft#1073, and are closed (2026-08-22, guard
+  `tests/scripts/tuple-literal-member-fn-inference.loft`). Both were the same shape one level
+  in: `(T-Chk)`'s push read the TOP-LEVEL members, so a member that merely CONTAINS a
+  `fn(…)` seeded nothing; and `change_var_type` accepted a bare `Unknown` source as pass 1's
+  placeholder but not the same fact inside a composite, so `(later, 1)` was measured against
+  the declared type and refused — the mirror of loft#944, which made that statement about the
+  variable's own type.
 - ⚠ **…but the oracle's elements are all `(integer, integer)`.** It carries no `text`, and that
   gap is measured, not theoretical: this doc read `OPEN: 0` through **two** live tuple deviations
   that the differential it leans on could not see — loft#1004 (a tuple's `text` element written

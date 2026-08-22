@@ -366,6 +366,72 @@ same corrected `AsyncifyCtrl` and pumps on `setImmediate`; the browser gate is
 `tests/html_asyncify.rs` (asserts a multi-suspend program reaches its final line
 both visible and hidden).
 
+## Reading a store in the page (@PLN146 F4)
+
+`wasm32-unknown-unknown` has no filesystem, so `Store::load`'s `std::fs::read` cannot
+answer there — `store_load` used to return `false` for every path in a browser, politely
+and with nothing to act on.  The loader now falls back to the `loft_host_fs_*` bridge
+(`store::image_bytes` / `image_at_least`), which is what `doc/loft-fs.js` serves
+`globalThis.loftBaseFS` through.  A page that CARRIES a store therefore reads it with the
+same `store_load` call the desktop makes:
+
+```html
+<script>globalThis.loftBaseFS = {"/game.meta.store": <Uint8Array>};</script>
+```
+
+Native is unchanged — one `metadata` call, then `std::fs::read`; the host arm never runs
+there.  On wasm the existence probe costs a read and the load costs a second, which is
+the price of one code path and is paid against bytes the page already holds.
+
+⚠ A page with no such file still answers `false`, and `tests/html_page_store.rs` gates
+both halves: a loader that reported success for a file nobody supplied would be worse
+than the refusal it replaced.
+
+### Putting a file there — `[[embed]]`
+
+A page carries a file by declaring it in `loft.toml`:
+
+```toml
+[[embed]]
+path   = "assets/game.pack"   # what the PROGRAM passes; also the key in the page's FS
+source = "build/game.pack"    # optional — where the bytes are on the build box.
+                              # Defaults to `path`.
+```
+
+Both are resolved against **the program's own directory**, because loft resolves a path
+a program passes relative to the program file: `assets/game.pack` in `src/game.loft`
+means `src/assets/game.pack`, on the desktop and here alike.  So omitting `source` means
+*the file the desktop run opens* — which is what makes the two agree.  (A library's
+declarations resolve against the library instead; its file is the library's to locate.)
+
+`--html` reads the file and seeds `globalThis.loftBaseFS` with it, so
+`store_load(q, "assets/game.pack")` is the same call on the desktop and in the page.
+The key is `/` + `path`, which is what `loft-fs.js` `resolve()` makes of a relative
+path under the default cwd `/`.  The seed ADDS to whatever the page already had, so a
+hand-seeded tree and a library's `host_js` both survive it.  A library's declarations
+reach a consumer's page by the same route as `[wasm.bridge] host_js`, with `source`
+resolved against the LIBRARY.
+
+⚠ `LOFT_PATHS=cwd` moves the desktop's resolution to the working directory while the
+page keeps resolving against `/`.  The parity statement above is about the default.
+
+`path` must be **relative and in normal form** — `--html` refuses `/abs/game.pack`,
+`./assets/game.pack` and `a/../b` before the wasm compile, along with a `source` that
+is not there and one name declared from two files.  Each of those would otherwise be
+carried faithfully under a key the program never asks for: `store_load` answers
+`false`, the game draws no art, and nothing says why.
+
+This is the exception, not the pipeline.  Assets travel as a store on a dumb file
+server read by HTTP range; embedding is for the bytes a page needs before its first
+fetch, and for a page that has to be a single self-contained file
+([plans/146-content-delivery/ASSETS.md](plans/146-content-delivery/ASSETS.md)).  The
+bytes go in base64, so the page grows by about 4/3 of the file — the size line
+`--html` prints is what to watch.
+
+⚠ A `store_persist_copy` writes a `.dschema` sidecar beside the store.  A load does
+not need it, so one `[[embed]]` per store is enough; declare the sidecar too if the
+page should carry it.
+
 ## HTML assembly — what ships in the output
 
 The output `.html` is a single self-contained file:

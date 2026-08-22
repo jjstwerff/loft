@@ -9105,21 +9105,30 @@ fn main() {
         // refuses rather than reports: a family that drifts from the name the
         // program passes draws in a fallback with nothing on stderr, which is the
         // failure the declaration exists to remove.
-        let page_fonts = {
-            let mut decls = Vec::new();
+        //
+        // @PLN146 F4 reads the same two sources for `[[embed]]`: the files the page
+        // carries in its own filesystem, so a program reads a pack with the same call
+        // on the desktop and in a browser.
+        let own_manifest = {
             let mut dir = std::path::Path::new(&abs_file)
                 .parent()
                 .map(std::path::Path::to_path_buf);
+            let mut found = None;
             while let Some(d) = dir {
                 let manifest = d.join("loft.toml");
                 if manifest.exists() {
-                    if let Some(m) = loft::manifest::read_manifest(&manifest.to_string_lossy()) {
-                        decls.extend(m.fonts);
-                    }
+                    found = loft::manifest::read_manifest(&manifest.to_string_lossy());
                     break;
                 }
                 dir = d.parent().map(std::path::Path::to_path_buf);
             }
+            found
+        };
+        let page_fonts = {
+            let mut decls: Vec<loft::manifest::FontDecl> = own_manifest
+                .as_ref()
+                .map(|m| m.fonts.clone())
+                .unwrap_or_default();
             for f in &p.data.declared_fonts {
                 if !decls.contains(f) {
                     decls.push(f.clone());
@@ -9135,6 +9144,44 @@ fn main() {
         };
         let fonts_head = loft::html_fonts::head_html(&page_fonts);
         let fonts_await = loft::html_fonts::boot_await_js(&page_fonts);
+        // @PLN146 F4 — the page's own filesystem, decided (and read) before the build
+        // for F5's reason: a manifest naming a file that is not there should not cost
+        // a wasm compile before it says so.
+        let base_fs_js = {
+            // The entry program's own declarations resolve against the PROGRAM, not
+            // against its manifest.  `path` is the string the program passes, and loft
+            // resolves what a program passes relative to the program file — so
+            // `assets/game.pack` in `src/game.loft` is `src/assets/game.pack`, and
+            // reading the manifest's own directory instead would embed a DIFFERENT
+            // file under the key the program asks for.  Measured: with the source
+            // rooted at the manifest, the desktop run answered `load=false` while the
+            // page answered `load=true`, which is the divergence `[[embed]]` exists to
+            // remove.  A library's declarations keep their own root — a library's file
+            // is the library's to locate.
+            let program_dir = std::path::Path::new(&abs_file)
+                .parent()
+                .map_or_else(String::new, |d| d.to_string_lossy().to_string());
+            let mut decls: Vec<loft::manifest::EmbedDecl> = own_manifest
+                .as_ref()
+                .map(|m| m.embeds.clone())
+                .unwrap_or_default();
+            for d in &mut decls {
+                d.root.clone_from(&program_dir);
+            }
+            for e in &p.data.declared_embeds {
+                if !decls.contains(e) {
+                    decls.push(e.clone());
+                }
+            }
+            let files = loft::html_embed::validate(&decls).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+            loft::html_embed::base_fs_js(&files).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
+        };
         let end_def = p.data.definitions();
         // Per-process scratch dir for EVERY intermediate of this --html build
         // (generated .rs, the wasm output + its objects, bridge rlibs, wasm-opt
@@ -9856,7 +9903,7 @@ function loftReportTrap(e){
 {reader_js}
 {thread_js}
 {fs_js}
-// Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
+{base_fs_js}// Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
 // canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
 // Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
 // suspend for an async `fetch()` without freezing the page.  JS owns the page;
@@ -10007,7 +10054,7 @@ loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
 {reader_js}
 {thread_js}
 {fs_js}
-{gl_js}
+{base_fs_js}{gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
