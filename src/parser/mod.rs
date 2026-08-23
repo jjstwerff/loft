@@ -11659,8 +11659,38 @@ impl Parser {
         // module, and every bare name it exports, is its own.
         let bare_qualifier = spelling.is_empty();
         let key = format!("{pkg}::{module}");
-        if self.data.use_exists(&key) {
-            let lib_source = self.data.get_source(&key);
+        // loft#1080 — the module may already be loaded under a DIFFERENT name.  This key
+        // is deliberately `<pkg>::<module>` so no other package can take the name from
+        // under it, and that is exactly what lets one FILE arrive here twice: an entry
+        // script OUTSIDE the package `use`s the module by its bare name and loads it
+        // flat, then a file INSIDE the package `use`s the same module, computes the
+        // qualified key, finds it absent — and parses the same file into a SECOND source.
+        //
+        // Nothing downstream survives that.  `use_alias` below then rebinds the bare
+        // name to the second source, so the first source's definitions are unreachable
+        // but still present, and native codegen emits every one of them a second time:
+        // `disambiguated_fn_ident` distinguishes same-named functions by hashing their
+        // defining FILE, on the stated ground that "two same-named fns can only come
+        // from different files" — which is precisely the assumption a second parse of
+        // one file breaks.  The generated cdylib then failed to compile with 55 ×
+        // `error[E0428]: the name `loft_shared_n_…_mafed3b7f` is defined multiple times`,
+        // and each pair carried an IDENTICAL hash, which is the tell that it is one file
+        // twice rather than #305's two different files.
+        //
+        // `use_paths` (loft#912) already records the canonical file behind every loaded
+        // name for exactly this question — "is this the same module" — so ask it, and
+        // take the same already-loaded path a repeated `use` of the qualified key takes:
+        // alias the key onto the source that exists and do not read the file again.
+        let existing = if self.data.use_exists(&key) {
+            Some(self.data.get_source(&key))
+        } else {
+            self.source_loaded_from(f)
+        };
+        if let Some(lib_source) = existing {
+            if !self.data.use_exists(&key) {
+                self.data.use_alias(&key, lib_source);
+                self.record_use_path(&key, f);
+            }
             if let Some(a) = alias {
                 self.data.use_alias(a, lib_source);
             } else if bare_qualifier {
@@ -11710,6 +11740,33 @@ impl Parser {
     /// canonicalised, because the same file is reached by different spellings (a
     /// relative `../pkg_dep/src/x.loft` here, an absolute one there) and only the
     /// canonical form answers "is this the same module".
+    /// The source a file is ALREADY loaded into, or `None` if it has not been read.
+    ///
+    /// The reverse of [`Self::record_use_path`], over the same canonical paths, and the
+    /// answer to "is this the same module" that a name-keyed `use_exists` cannot give:
+    /// one file is reachable under more than one name (a bare `use grid;` from outside a
+    /// package and the `<pkg>::grid` key from inside it), and parsing it twice puts two
+    /// copies of every definition in `Data` (loft#1080).
+    fn source_loaded_from(&self, f: &str) -> Option<u16> {
+        let p = std::path::Path::new(f);
+        let canonical = p
+            .canonicalize()
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        // Every id that names this file, not just one of them: `use_paths` outlives a
+        // single pass (it is the parser's, while `use_names` is reset between the two),
+        // so it holds names from the previous pass that this pass has not re-bound yet.
+        // Taking the FIRST match out of a `HashMap` and giving up when it happened to be
+        // one of those made the answer depend on hash order — the two passes then loaded
+        // different files and tripped the H5 cross-pass divergence guard.
+        self.use_paths
+            .iter()
+            .filter(|(_, loaded)| **loaded == canonical)
+            .map(|(id, _)| self.data.get_source(id))
+            .find(|src| *src != u16::MAX)
+    }
+
     fn record_use_path(&mut self, id: &str, f: &str) {
         let p = std::path::Path::new(f);
         let canonical = p

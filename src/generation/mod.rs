@@ -450,6 +450,16 @@ fn scrub_generated_crate_refs(src: &[u8]) -> Vec<u8> {
 /// hash of its defining FILE appended — two same-named fns can only come from
 /// different files (the parser rejects an in-file redefinition), so the pair
 /// (name, defining file) is unique program-wide.
+///
+/// That last sentence is a DEPENDENCY on the loader, not a property of this
+/// function: it holds only while one file is parsed into one source.  When a
+/// module reachable under two names was parsed twice, both copies hashed the
+/// same path, every duplicated function was emitted under one identifier, and
+/// the cdylib would not compile — 55 × `error[E0428] … defined multiple times`,
+/// each pair carrying an IDENTICAL hash, which is what distinguishes it from
+/// #305's two genuinely different files.  The guard is
+/// `Parser::source_loaded_from`, which is keyed on the canonical path for the
+/// same reason this is (loft#1080).
 #[must_use]
 pub fn disambiguated_fn_ident(dups: &HashSet<String>, def: &crate::data::Definition) -> String {
     let name = def.name();

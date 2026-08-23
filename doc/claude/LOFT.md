@@ -647,6 +647,19 @@ Four things to know:
   and you call it bare with both in scope, that is an error naming both — pick one with an
   alias or a selective import. Silently taking one was the old behaviour and the reason
   for the change.
+- **One FILE is one module, however many names reach it.** The `<package>::<module>` key
+  is what keeps another package from taking the name, and it is also a second name for a
+  file that may already be loaded under its bare one — a program OUTSIDE the package
+  writes `use catalogue;` and gets the file flat, then a file INSIDE the package writes
+  the same line and computes the qualified key, which is absent. Until loft#1080 that
+  parsed the same file a SECOND time, and every consequence followed from the two copies:
+  bare calls became ambiguous against a module the author never wrote (`src2::part_list`,
+  the orphaned second source), and a native build emitted every duplicated function twice
+  under one identifier, so the cdylib would not compile (55 × `error[E0428]`, each pair
+  with an identical hash — a same-file collision, unlike loft#305's two different files).
+  The loader now asks whether the FILE is loaded, by canonical path, and binds the second
+  name to the source that exists. Two different files that merely share a module name are
+  untouched: they are still two modules, and still an error when a bare call cannot pick.
 
 ### Shadowing and qualified names (`@PLN22`)
 

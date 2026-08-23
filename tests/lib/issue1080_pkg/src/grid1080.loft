@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The module that must be loaded ONCE however many names reach it.  Two `use`s in this
+// fixture name this one file: the main program's bare `use grid1080;` from outside the
+// package, and `user1080.loft`'s `use grid1080;` from inside it, which is keyed
+// `issue1080_pkg::grid1080`.
+
+pub fn grid_value() -> integer {
+  7
+}

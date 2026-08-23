@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1080 — the main program is OUTSIDE the package and reaches one of its modules by
+// the bare name, while a file INSIDE the package reaches the same file as its own
+// module.  Both values are printed: the point is not that this compiles but that both
+// routes reach the ONE `grid_value`, so a fix that deduplicated by dropping a load would
+// be caught by a missing answer rather than passing quietly.
+
+use grid1080;
+use user1080;
+
+fn main() {
+  println("flat={grid_value()} inside={grid_value_plus_one()}");
+}
