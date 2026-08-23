@@ -335,6 +335,19 @@ pub enum SchemaCheck {
     Refused(String),
 }
 
+/// The runtime-type-name prefix reserved for a generic's TYPE VARIABLE.
+///
+/// A `<T>` type parameter needs a row in the name-keyed type table so a template body
+/// can be parsed at all, and that row is registered under this prefix rather than under
+/// `T` — a name a user type may legitimately carry, and did: a user `enum T` reused the
+/// marker's size-0 entry and divided by zero (`typedef::fill_database`).
+///
+/// It is a constant rather than a spelling because two sites depend on it agreeing: the
+/// one that MINTS the row (`typedef::fill_database`) and the one that REFUSES to allocate
+/// a record with it (`Stores::enum_parent_size`, loft#1070). A prefix that drifted between
+/// them would leave the guard silently matching nothing.
+pub const TYPEVAR_ROW_PREFIX: &str = "__typevar_";
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Stores {
     pub types: Vec<Type>,

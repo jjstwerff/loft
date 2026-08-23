@@ -5,7 +5,7 @@
 
 use crate::calc;
 use crate::data::IntegerSpec;
-use crate::database::{Field, Parts, Stores};
+use crate::database::{Field, Parts, Stores, TYPEVAR_ROW_PREFIX};
 use crate::keys::Content;
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -2719,16 +2719,59 @@ impl Stores {
             _ => true,
         }
     }
-
     /// For EnumValue types, return the parent enum's size (which covers
     /// the largest variant).  For all other types, return their own size.
     /// B2-runtime: unit enum variants may have a smaller type size than
     /// the parent enum needs.  The Database opcode must claim enough
     /// space for `set_default_value` to initialize all fields.
+    ///
+    /// # Panics
+    ///
+    /// When `tp` is a generic's TYPE VARIABLE row.  Every record allocation reaches
+    /// here with its type row in hand, and a template's row surviving substitution is
+    /// a compiler bug whose only other symptom is a field read at the wrong offset —
+    /// see the comment in the body (loft#1070).
     pub fn enum_parent_size(&self, tp: u16) -> u16 {
         if tp == u16::MAX {
             return 0;
         }
+        // loft#1070 — a generic's TYPE VARIABLE has a runtime row (`__typevar_T`,
+        // registered by `typedef::fill_database` so a template body can be parsed at
+        // all), and a record must never be allocated with it.  `Parser::
+        // retarget_parametric_type_rows` re-points every row a monomorph inherited
+        // from its template, on the invariant that after substitution the type
+        // variable does not exist, so every surviving reference to its row is stale
+        // BY CONSTRUCTION and there is no case where keeping one is right.  This is
+        // that invariant, checked where the record is actually born.
+        //
+        // It is here because this is the one call every record allocation makes with
+        // the type row still in hand — both `OpDatabase` twins (`state/io.rs`,
+        // `codegen_runtime.rs`) and the placement arena — so a single site covers
+        // both backends without the interp/native mirror being written twice.
+        //
+        // ⚠ It is checked at RUNTIME, and unconditionally, because the failure it
+        // replaces has no other signal.  A record built to the placeholder's layout
+        // reads a field out of the wrong word: `f<T>(x: T, c: boolean) -> T { if c {
+        // y: T = x; y } else … }` answered `4294967198` for the `-7` it was handed,
+        // on both backends, with no diagnostic and no crash.  What made loft#1070
+        // diagnosable at all was the leak warning naming `__typevar_T` — so a version
+        // of the same defect that FREES correctly would have been completely silent,
+        // and the leak gate is not the guard it looked like.
+        //
+        // The message says "compiler bug" because it is one: no loft program can
+        // provoke this by being wrong, only by finding a lowering site that
+        // `retarget_parametric_type_rows` does not reach — it finds rows by the op's
+        // own declaration naming the argument `tp` / `…_tp`, which is a convention,
+        // not a checked fact.  Measured silent across the 4310-test corpus, so it
+        // costs a comparison that fails on the first byte for every real type name.
+        assert!(
+            !self.types[tp as usize].name.starts_with(TYPEVAR_ROW_PREFIX),
+            "internal compiler error: a record is being allocated with a generic \
+             TYPE VARIABLE's row ({}, kt={tp}) — a template's layout escaped \
+             substitution, so its fields would be read at the wrong offsets. \
+             Please report this program at https://github.com/loft-lang/loft/issues",
+            self.types[tp as usize].name
+        );
         let own_size = self.types[tp as usize].size;
         // Check if any type in the system is an Enum whose variants include tp.
         // If so, use the Enum's size (which is the max of all variants).
@@ -2998,6 +3041,47 @@ impl Type {
         self.field_groups
             .iter()
             .filter(|g| matches!(g.kind, crate::data::LinkedFieldKind::Index))
+    }
+}
+
+#[cfg(test)]
+mod typevar_row_tests {
+    use super::{Stores, TYPEVAR_ROW_PREFIX};
+
+    /// loft#1070 — allocating a record with a generic's TYPE VARIABLE row is refused.
+    ///
+    /// The guard cannot be provoked from loft source: `retarget_parametric_type_rows`
+    /// re-points every inherited row, and the whole 4310-test corpus runs without it
+    /// firing. That is exactly why it is tested here instead — a tripwire nobody has
+    /// shown can trip is indistinguishable from one that matches nothing, and this
+    /// class's defect (a prefix spelled at the minting site and again at the checking
+    /// site) is the way it would silently stop matching.
+    ///
+    /// It builds the row through the same public API `typedef::fill_database` uses, and
+    /// names it with the shared constant rather than a literal, so a renamed prefix
+    /// moves both ends together.
+    #[test]
+    #[should_panic(expected = "TYPE VARIABLE's row")]
+    fn a_record_may_not_be_allocated_with_a_type_variable_row() {
+        let mut s = Stores::new();
+        let tp = s.structure(&format!("{TYPEVAR_ROW_PREFIX}T"), 0);
+        let _ = s.enum_parent_size(tp);
+    }
+
+    /// The control: an ordinary type of a similar shape must still answer its size.
+    ///
+    /// Without it a guard that refused every allocation would pass the cell above.
+    #[test]
+    fn an_ordinary_row_still_answers_its_size() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("T", 0);
+        s.field(tp, "value", int_c);
+        s.finish();
+        assert!(
+            s.enum_parent_size(tp) > 0,
+            "a real struct named `T` is not the type-variable row and must size normally"
+        );
     }
 }
 

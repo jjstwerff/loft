@@ -148,7 +148,40 @@ the NEXT cycle's step 5, which is what keeps the claim honest.
 
 | Cycle | Bands reviewed | Class named | Disposition | Payoff (filled next cycle) |
 |---|---|---|---|---|
-| `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | **Collapse ×5, landed** ([Cluster F](STABILITY_REDFLAGS.md)): the deferred-marker walk onto `Value::for_each_child_mut`, `type_mentions_tv` onto `Type::contains_def`, the `__nullable<S>` eligibility onto one predicate, the tuple emitter's owned-text split, and `tuple_has_text_leaf` peeling `Optional`. One residual, characterised and unfixed. | — |
+| `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | **Collapse ×5, landed** ([Cluster F](STABILITY_REDFLAGS.md)): the deferred-marker walk onto `Value::for_each_child_mut`, `type_mentions_tv` onto `Type::contains_def`, the `__nullable<S>` eligibility onto one predicate, the tuple emitter's owned-text split, and `tuple_has_text_leaf` peeling `Optional`. One residual, characterised and unfixed. | **NO EFFECT.** Across the 26 bugs filed after the pass's own watermark (#1030–#1078), measured against the 100 immediately before it: generic/monomorph **6.4 % → 19.2 %**, tuple **12.8 % → 19.2 %**, null/sentinel **17.9 % → 15.4 %**. Two of the three named classes got LOUDER. Read below — the premise was not wrong, it was too coarse. |
+| `2026-08` (2nd) | #1030–#1078 (26 bugs) | generic/monomorph — still rising, and the titles name one mechanism: the type VARIABLE's layout / null / route used where the instantiation's belongs | **Collapse + check, landed.** `TYPEVAR_ROW_PREFIX` gets one home used by both the site that MINTS the row and the site that refuses it; `Stores::enum_parent_size` — the one call every record allocation makes with the type row in hand — now refuses to allocate a record with a type variable's row. | — |
+
+### Why `2026-08` read NO EFFECT — the premise was too coarse, not wrong
+
+*"One root: the type-variable fact"* named a real root and collapsed five sites onto it,
+and the class still rose. The five post-watermark generic bugs say why: they are not one
+mechanism but **two**, and Cluster F only reached the first.
+
+1. **A decision the template DEFERRED**, carried as an IR marker (`TV_NULLTEST_*`,
+   `TV_NULLCHECK`, `TV_NULL_BLOCK`, `TV_DEFAULT_BLOCK`) and re-asked by
+   `rewrite_generic_type_defaults`. Cluster F's keystone fold made that walk TOTAL —
+   it had enumerated ten of seventeen child-bearing variants — and that half is done.
+2. **A TYPE ROW the template BAKED**, as a `const u16` argument (`OpDatabase(v, db_tp)`,
+   `OpCopyRecord(src, dst, tp)`). A schema id is not a type, so type substitution walks
+   straight past it; `retarget_parametric_type_rows` (loft#1070) is the second total
+   pass, and it landed after the 2026-08 review.
+
+The generalisation over both: **anything a template lowered while `T` was not yet real
+must be re-derived at monomorphisation, and the compiler cannot enumerate what those
+things are** — the next one is whatever the next site happens to bake.
+
+Which is why this cycle's conversion is a CHECK rather than a sixth fold. Each total pass
+claims its own totality by a convention — `rewrite_generic_type_defaults` by delegating to
+the child-walk keystone, `retarget_parametric_type_rows` by finding rows through the op
+declaration naming its argument `tp` / `…_tp` — and neither claim was tested. A record
+allocated with a type variable's row is what every escape of either kind ends as, so
+refusing it there catches the class without predicting the site.
+
+⚠ **The leak gate looked like that guard and is not.** loft#1070 was only diagnosable
+because the wrong record also LEAKED, and the leak warning named `__typevar_T`; a version
+of the same defect that frees correctly answers a wrong number in complete silence. The
+new check does not depend on the record leaking, and it is unconditional for the same
+reason.
 
 Retrospective entries, measured when the protocol was written rather than by a pass:
 

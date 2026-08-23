@@ -16,7 +16,7 @@
 //! - [`complete_definition`] — finalise a single definition's field layout.
 
 use crate::data::{Data, DefType, Deps, I32, IntegerSpec, Type, Value};
-use crate::database::Stores;
+use crate::database::{Stores, TYPEVAR_ROW_PREFIX};
 use crate::diagnostics::Level;
 use crate::keys::{Content, Str};
 use crate::lexer::Lexer;
@@ -997,7 +997,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
         // a user type of the same name (`enum T`) — which made the user's `vector<T>`
         // reuse the marker's size-0 entry and divide by zero.  The DEF name stays `T`
         // for stdlib `<T>` resolution; only the runtime type name is mangled.
-        format!("__typevar_{}", data.def(d_nr).name)
+        format!("{TYPEVAR_ROW_PREFIX}{}", data.def(d_nr).name)
     } else if let Some(name) = synth_variant_name {
         name
     } else if database.has_type(&data.def(d_nr).name) {
