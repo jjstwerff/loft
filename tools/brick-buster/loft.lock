@@ -12,9 +12,9 @@ deps = ["glb", "mesh3d"]
 
 [[package]]
 name = "shapes"
-version = "0.4.0"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.4.0/shapes-0.4.0.tar.gz"
-sha256 = "11adad405b0ae96ec91835e576d0bda4b74677e635bce5ac7ee809c3d3b53ce4"
+version = "0.5.0"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.5.0/shapes-0.5.0.tar.gz"
+sha256 = "205547c497ffc8f12aacf5f85def93d6a5da38b47a478a765588f9c8cbc8a448"
 source = "registry"
 
 [[package]]
@@ -34,7 +34,8 @@ source = "registry"
 
 [[package]]
 name = "assets"
-version = "0.1.0"
-url = "https://github.com/loft-lang/loft-libs-assets/releases/download/assets-v0.1.0/assets-0.1.0.tar.gz"
-sha256 = "ff6d10b4e9dba580a738ee2dd3cccc8c0bb334f19145a407ae9c728390be95e0"
+version = "0.2.0"
+url = "https://github.com/loft-lang/loft-libs-assets/releases/download/assets-v0.2.0/assets-0.2.0.tar.gz"
+sha256 = "a6dd41baf85f29ce7a64171ff266ae5d3530a99b278bb73a08e1fa9821a5b1c4"
 source = "registry"
+deps = ["shapes"]

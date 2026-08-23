@@ -18,8 +18,10 @@ needs that is not the frame: content in, sound out, native and browser alike. **
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**9 of 19 shipped** (`E1` · `W0` · `F7a` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6`), 1 blocked,
-9 open. **Arc F is complete.** The pack exists, round-trips byte-identically on the
+**10 of 18 shipped** (`E1` · `W0` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
+**none blocked**, 8 open — and **arc F really is complete now**: `F7` was still blocked when
+that sentence was first written, and it is the arc's last phase.  (Both tables below list 18
+phases; the "19" this line and the effort row carried was a miscount.) The pack exists, round-trips byte-identically on the
 interpreter, `--native` and wasm, pages over HTTP range at 9 % of the file per read, and takes
 **zero** fetches inside a frame; a page declares the font it draws with and gets that font
 rather than a fallback, and declares the pack it reads and can now carry it. Brick Buster's sprite sheet is
@@ -46,8 +48,8 @@ will hit.
 
 **Four findings changed the plan rather than following it.** A pack is TWO stores because
 the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
-so arc W is smaller than it was cut; `imaging` drops alpha, which blocks `F7` and F1's
-premultiplication both; and `document.fonts.check` cannot say whether a page has a font —
+so arc W is smaller than it was cut; `imaging` DROPPED alpha, which blocked `F7` and F1's
+premultiplication both, and is fixed in `imaging` 0.3.0; and `document.fonts.check` cannot say whether a page has a font —
 it answers **true** for a family nothing declares and **false** for one that is loading, which
 is how the browser text bridge came to take its exact-font branch for every page except the
 one that had brought a font. Each is written up in its phase's own doc.
@@ -69,7 +71,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 19 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22.**
+- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` 2026-08-23.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -80,7 +82,7 @@ cut, not when it is implemented.
 | Item | Where | Verify | Status |
 |---|---|---|---|
 | **F7a** — will `shapes` accept a derived proxy at all? | probe only | hand-build one proxy of the kind alpha-derivation produces and feed it to `shapes`' overlap test. Red if the shape kinds do not meet — `shapes` ships `Rect`/`Circle` and a derived hull is neither. **`shapes` has no consumer today** except loft's own demo, so this asks the question its absence of adoption already raises, for the cost of a compile | ✅ **Shipped** — [F7a.md](F7a.md): derive **16 `Rect` bands**, not a hull |
-| **F7** — a collision proxy derived from the sprite's alpha | `assets` | hexbody's contract, in 2-D: the proxy **contains** every opaque texel and its overshoot is **bounded** — `proxy ⊇ opaque ∧ overshoot ≤ +100 %`, measured per sprite over the corpus rather than asserted ([F7a](F7a.md) set the bound and the shape). Re-art a sprite and its proxy follows with no hand edit; that is the whole point | ⛔ **Blocked** — [loft-libs-graphics#37](https://github.com/loft-lang/loft-libs-graphics/issues/37): `imaging::Pixel` has no alpha, so a decoded PNG cannot say which texels are opaque. Measured: colour-as-alpha is **6.0 %** wrong over the corpus, 35 of 36 sprites |
+| **F7** — a collision proxy derived from the sprite's alpha | `assets` | hexbody's contract, in 2-D: the proxy **contains** every opaque texel and its overshoot is **bounded** — `proxy ⊇ opaque ∧ overshoot ≤ +100 %`, measured per sprite over the corpus rather than asserted ([F7a](F7a.md) set the bound and the shape). Re-art a sprite and its proxy follows with no hand edit; that is the whole point | ✅ **Shipped** — `assets` 0.2.0. The blocker is FIXED, not worked around: `imaging` 0.3.0 gives `Pixel` an alpha channel ([loft-libs-graphics#37](https://github.com/loft-lang/loft-libs-graphics/issues/37), closed), so a decoded PNG answers which texels are opaque instead of the 6.0 %-wrong colour-as-alpha guess. `Cell.ce_proxy` is 16 `shapes::Rect` bands on the tighter axis, derived at pack time; containment is tested **texel by texel** and proven able to fail (shorten every box by one texel → three assertions red), and overshoot is bounded at +100 %. `shapes` 0.5.0 carries `Proxy` / `proxy_hits`, so the set test has one home |
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — it returned `i32::MIN` / `-1`, so the harness went red before the fix | ✅ **Shipped** |
 | **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
