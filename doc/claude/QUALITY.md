@@ -721,6 +721,60 @@ the bisect step that names it; the Record shape has `bad_containers`, `ambiguous
 construction and the copy.  Not fixed here — a separate concern from the projection rule, and
 it belongs in its own change.
 
+### The move-elide outran a read of its own destination (2026-08-23)
+
+@PLN90 phase B transfers a dead-after owned source INTO its copy destination: it drops the
+source's `OpDatabase` / `OpCopyRecord` / `OpFreeRef` and retargets the source's CONSTRUCTION ops
+onto the destination slot.  So the destination is written at the CONSTRUCTION's position rather
+than at the copy's — **that is a REORDER**, and nothing checked what sits between.
+
+`collect_move_dest`'s guards all ask whether the destination is a STABLE container
+(`bad_containers`, a compiler temp, `def_order`).  None asks whether it is TOUCHED.  The
+pre-rewrite IR is the whole story:
+
+```
+    held = null;  OpDatabase(held, 78);  OpSetText(held, 0, …)     ← the build
+    OpCopyRecord(OpGetField(p,4,78), OpGetField(p,0,78), 78)       ← p.0 = p.1, READS p.1
+    OpCopyRecord(held, OpGetField(p,4,78), 78)                     ← p.1 = held, the copy
+```
+
+Retargeting moves the write of `p.1` up past the statement that reads it, so `p.0 = p.1` copied
+the NEW value back.
+
+**The filed repro held three axes fixed, and the defect was wider than all three.**  Measured on
+`d672d261`:
+
+| shape | was | wants |
+|---|---|---|
+| tuple swap through a rebuilt value | `x\|x` | `y\|x` |
+| a **plain READ** of the destination (`seen = p.1.name`) | `n\|n` | `y\|n` |
+| **straight-line**, no loop | `x\|x` | `y\|x` |
+| destination is a struct **FIELD** | `n\|n` | `y\|n` |
+| destination is a **VECTOR ELEMENT** | `n\|n` | `y\|n` |
+
+The read cell is the one that shows the size of it: the intervening statement does not have to
+WRITE anything — a plain read of the destination already sees a value the program has not
+assigned yet.
+
+**The fix is the missing predicate, and it is deliberately conservative.**
+`collect_move_disturbed` refuses a source whose destination's BASE container is mentioned by any
+statement between the source's definition and the copy.  Two carve-outs keep it from
+over-refusing: the source's OWN construction ops are excluded (they are what gets retargeted, so
+`o.f = T { x: o.g }` — building FROM the container into it — stays elidable), and a source whose
+definition is not in this operator list is treated as "from the top", the conservative reading.
+A slot-EXACT test would admit a few more cases and cannot be spelled reliably — two spellings of
+one slot is the shape loft#1006 was.
+
+**The cost is measured, not asserted: emitted IR is byte-identical on 851 of 851
+`tests/scripts`.**  So no legitimate elide anywhere in the corpus is lost, and the five broken
+shapes simply never appeared in it.
+
+**The guard's last two cells are the ones that matter for a reviewer.**  Five cells fail on a
+pristine tree; the two that PASS there are `test_the_clean_move_still_elides` and
+`test_build_from_the_container_into_it` — the control and the carve-out.  A "fix" that simply
+disabled the elision passes every other cell in the file, which is exactly why the control is in
+it.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

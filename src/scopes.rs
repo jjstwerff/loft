@@ -1655,10 +1655,15 @@ fn move_elide(data: &mut Data) {
                 &mut dest,
                 &mut ambiguous,
             );
+            // A destination TOUCHED between the source's build and the copy cannot take the
+            // retarget: the write would move ahead of that access.  See
+            // `collect_move_disturbed`.
+            let mut disturbed: HashSet<u16> = HashSet::new();
+            collect_move_disturbed(&code, &mo, &dest, &mut disturbed);
             let ready: HashSet<u16> = dest
                 .keys()
                 .copied()
-                .filter(|s| !ambiguous.contains(s))
+                .filter(|s| !ambiguous.contains(s) && !disturbed.contains(s))
                 .collect();
             if !ready.is_empty() {
                 move_rewrite(&mut code, &ready, &dest, &mo);
@@ -1786,6 +1791,98 @@ fn collect_move_dest(
             ambiguous,
         );
     });
+}
+
+/// Does `node` mention variable `v` anywhere inside it?
+fn mentions_var(node: &Value, v: u16) -> bool {
+    if matches!(node.unspan(), Value::Var(x) if *x == v) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && mentions_var(c, v) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Sources whose retarget would move the destination's WRITE across a statement that touches
+/// that destination.
+///
+/// [`move_rewrite`] retargets the source's construction ops onto the destination and drops the
+/// copy, so the destination is written at the CONSTRUCTION's position instead of at the copy's.
+/// That is sound only while nothing in between touches the destination.  The guards in
+/// [`collect_move_dest`] all ask whether the destination is a STABLE container; none of them
+/// asks whether it is READ, and that is the hole:
+///
+/// ```text
+///   for p in v { held = Tg { name: p.0.name }; p.0 = p.1; p.1 = held; }
+/// ```
+///
+/// `held`'s build moves into `p.1`, so `p.0 = p.1` then copies the NEW value back and the swap
+/// answers `x|x` where it wants `y|x` — silently, on both backends.
+///
+/// Conservative by BASE variable: any mention of the destination's base container between the
+/// two points disqualifies the move.  The source's own construction ops are excluded (they are
+/// what gets retargeted), so `o.f = T { x: o.g }` — building FROM the container into it — is
+/// still admitted.  A slot-exact test would admit a few more and cannot be spelled reliably:
+/// two spellings of one slot is the shape loft#1006 was.
+fn collect_move_disturbed(
+    node: &Value,
+    mo: &MoveOps,
+    dest: &HashMap<u16, Value>,
+    out: &mut HashSet<u16>,
+) {
+    let scan = |ops: &[Value], out: &mut HashSet<u16>| {
+        for (copy_idx, op) in ops.iter().enumerate() {
+            let Value::Call(d, args) = op.unspan() else {
+                continue;
+            };
+            if *d != mo.op_copy_record {
+                continue;
+            }
+            let Some(Value::Var(s)) = args.first().map(Value::unspan) else {
+                continue;
+            };
+            let Some(slot) = dest.get(s) else { continue };
+            let Some(base) = base_var_of(slot, mo) else {
+                continue;
+            };
+            // Where `s` is first defined in THIS list; absent (built in another block) is
+            // treated as "from the top", which is the conservative reading.
+            let def_idx = ops
+                .iter()
+                .position(|o| match o.unspan() {
+                    Value::Set(v, _) => *v == *s,
+                    Value::Call(d2, a2) => {
+                        *d2 == mo.op_database
+                            && matches!(a2.first().map(Value::unspan), Some(Value::Var(v)) if *v == *s)
+                    }
+                    _ => false,
+                })
+                .unwrap_or(0);
+            if def_idx >= copy_idx {
+                continue;
+            }
+            for between in &ops[def_idx + 1..copy_idx] {
+                // The source's OWN construction ops are what the rewrite retargets, so they
+                // are not a disturbance — that is what keeps `o.f = T { x: o.g }` elidable.
+                let writes_source = matches!(between.unspan(), Value::Call(_, a)
+                    if matches!(a.first().map(Value::unspan), Some(Value::Var(v)) if *v == *s));
+                if !writes_source && mentions_var(between, base) {
+                    out.insert(*s);
+                    break;
+                }
+            }
+        }
+    };
+    match node.unspan() {
+        Value::Block(b) => scan(&b.operators, out),
+        Value::Insert(ops) => scan(ops, out),
+        _ => {}
+    }
+    node.for_each_child(&mut |c| collect_move_disturbed(c, mo, dest, out));
 }
 
 /// Vars defined by `OpNewRecord` (`_elm_N = OpNewRecord(…)`) — the transient element slots the
