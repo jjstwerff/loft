@@ -62,6 +62,20 @@ done
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 
+# The matrix is only as current as the sibling CLONE of the registry, and a clone that
+# lags publishes a green run about the versions it happens to hold.  Say which index this
+# is, and say so LOUDLY when the checkout is behind what it has already fetched — a
+# package published after this commit is not skipped, it is absent, and an absent package
+# is invisible to every count below.
+reg_clone="$(dirname "$registry")"
+echo "registry index: $(git -C "$reg_clone" log --oneline -1 2>/dev/null || echo 'not a git checkout') \
+($(git -C "$reg_clone" log -1 --format=%cs 2>/dev/null || echo 'unknown date'))"
+if upstream="$(git -C "$reg_clone" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" \
+   && behind="$(git -C "$reg_clone" rev-list --count "HEAD..$upstream" 2>/dev/null)" \
+   && [ "${behind:-0}" -gt 0 ]; then
+  echo "  ⚠ $behind commit(s) behind $upstream — run: git -C $reg_clone pull" >&2
+fi
+
 # The matrix: package -> latest non-yanked version, its repo, its tag, its subpath.
 matrix="$work/legs.tsv"
 python3 - "$registry" > "$matrix" <<'PY'
@@ -131,6 +145,18 @@ if [ "$self_test" = 1 ]; then
   echo "self-test: the two classes are distinguished, on $n@$tag"
   exit 0
 fi
+
+# A package named on the command line that the matrix does not carry means the index does
+# not know it — almost always a clone that predates its publish.  Reporting `0 pass, 0
+# COMPILE-BREAK` and exiting 0 there says "green" about a package never looked at, which is
+# the one answer a gate must never give.
+for wnt in ${want[@]+"${want[@]}"}; do
+  cut -f1 "$matrix" | grep -qxF "$wnt" || {
+    echo "package '$wnt' is not in this registry index — it is not published, or this \
+clone predates its publish (see the index line above)" >&2
+    exit 2
+  }
+done
 
 printf '%-18s %-9s %s\n' PACKAGE VERSION VERDICT
 breaks=0 passed=0 skipped=0 envfail=0
