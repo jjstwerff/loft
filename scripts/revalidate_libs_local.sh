@@ -158,6 +158,46 @@ clone predates its publish (see the index line above)" >&2
   }
 done
 
+# Pre-flight: say which packages CANNOT be checked, before spending the run finding out.
+# Every SKIP is decided by two facts a `git rev-parse` answers in milliseconds — is the
+# sibling clone there, and does it carry the release tag — while learning it from the run
+# itself costs a full registry pass first.  A prerequisite is worth naming before it bites,
+# not in the summary afterwards.
+missing_clone="" missing_tag=""
+while IFS=$'\t' read -r n v repo tag sub; do
+  if [ ${#want[@]} -gt 0 ]; then
+    printf '%s\n' "${want[@]}" | grep -qxF "$n" || continue
+  fi
+  clone="$siblings/$(basename "$repo")"
+  if [ ! -d "$clone/.git" ]; then
+    missing_clone="$missing_clone$repo\t$n\n"
+  elif ! git -C "$clone" rev-parse --verify -q "refs/tags/$tag" >/dev/null 2>&1; then
+    missing_tag="$missing_tag$(basename "$repo")\t$n@$tag\n"
+  fi
+done < "$matrix"
+if [ -n "$missing_clone" ] || [ -n "$missing_tag" ]; then
+  echo
+  echo "PRE-FLIGHT — these will SKIP, and a SKIP is not a pass:"
+  if [ -n "$missing_clone" ]; then
+    # One line per REPO, listing the packages it covers — `loft-libs-docs` carries two, and
+    # repeating the same clone command under each reads as two problems.
+    printf "$missing_clone" | sort -u | awk -F'\t' '
+      { pkgs[$1] = ($1 in pkgs) ? pkgs[$1] ", " $2 : $2 }
+      END { for (r in pkgs) print r "\t" pkgs[r] }' | sort |
+    while IFS=$'\t' read -r repo pkgs; do
+      printf '  %-34s covers %s\n      git clone git@github.com:%s.git %s\n' \
+        "$(basename "$repo") (not cloned)" "$pkgs" "$repo" "$siblings/$(basename "$repo")"
+    done
+  fi
+  if [ -n "$missing_tag" ]; then
+    printf "$missing_tag" | sort -u | while IFS=$'\t' read -r clone what; do
+      printf '  %-34s needs %s — git -C %s fetch --tags\n' \
+        "$clone (tag absent)" "$what" "$siblings/$clone"
+    done
+  fi
+  echo
+fi
+
 printf '%-18s %-9s %s\n' PACKAGE VERSION VERDICT
 breaks=0 passed=0 skipped=0 envfail=0
 while IFS=$'\t' read -r n v repo tag sub; do
@@ -189,4 +229,11 @@ echo
 echo "$passed pass, $envfail runtime/env, $skipped skipped, $breaks COMPILE-BREAK"
 [ "$skipped" -gt 0 ] && echo "a SKIP is not a pass — clone the missing repo beside this one, or fetch its tags"
 [ "$breaks" -eq 0 ] || echo "a published library no longer compiles against this loft — the freeze forbids that"
+# You NAMED these packages, so a skip is a non-answer about the thing you asked for — the
+# same reason a named package missing from the index exits 2.  The whole-registry run keeps
+# tolerating skips, because taking the box as it finds it is what that pass is for.
+if [ ${#want[@]} -gt 0 ] && [ "$skipped" -gt 0 ]; then
+  echo "asked about ${#want[@]} package(s) and could not check $skipped of them" >&2
+  exit 2
+fi
 exit $((breaks > 0))
