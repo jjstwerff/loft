@@ -18,16 +18,18 @@ needs that is not the frame: content in, sound out, native and browser alike. **
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**11 of 18 shipped** (`E1` · `W0` · `W1` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
-**none blocked**, 7 open — and **arc F really is complete now**: `F7` was still blocked when
+**12 of 18 shipped** (`E1` · `W0` · `W1` · `W2` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
+**none blocked**, 6 open — and **arc F really is complete now**: `F7` was still blocked when
 that sentence was first written, and it is the arc's last phase.  (Both tables below list 18
 phases; the "19" this line and the effort row carried was a miscount.) The pack exists, round-trips byte-identically on the
 interpreter, `--native` and wasm, pages over HTTP range at 9 % of the file per read, and takes
 **zero** fetches inside a frame; a page declares the font it draws with and gets that font
 rather than a fallback, and declares the pack it reads and can now carry it. Brick Buster's sprite sheet is
-now a packed asset rather than 180 lines of drawing per launch. What is left is in other
-trees: arc W is a `graphics` primitive and a new `drawing` package, arc E is `graphics`
-and a new `audio_bus`.
+now a packed asset rather than 180 lines of drawing per launch, and a sprite is content this
+stack builds rather than one Python draws: `drawing` renders a `.draw` scene pixel-identically
+to the tool that made the corpus, so `W3`–`W6` are the remaining marks and not a renderer.
+What is left is in other trees: arc W finishes `drawing`, arc E is `graphics` and a new
+`audio_bus`.
 
 **The schema is now a package.** `assets` 0.1.0 —
 [loft-libs-assets#7](https://github.com/loft-lang/loft-libs-assets/pull/7), open — carries
@@ -71,7 +73,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` 2026-08-23; `W1` 2026-08-23.**
+- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` + `W1` + `W2` 2026-08-23.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -89,7 +91,7 @@ cut, not when it is implemented.
 | *— arc **W**: sprite authoring, in loft —* | | | |
 | **W0** — the corpus and its oracle | probe only | every `.draw` scene in `crawler/assets/sprites/src/` and loft's `sketch/` renders under the **existing Python** `draw.py` to a committed golden. Red on a scene that will not parse — which is how the grammar the port owes gets *measured* rather than guessed | ✅ **Shipped** — [W0.md](W0.md), 37 scenes green |
 | **W1** — filled polygon in `graphics` | `graphics` | the one primitive genuinely missing (only `fill_triangle` exists today): hand-computed pixel counts for a convex, a concave and a self-intersecting polygon under even-odd, **and** a triangle drawn through the polygon path is pixel-identical to `fill_triangle` | ✅ **Shipped — both primitives.** [W0](W0.md) finding 5 was right that this row undercounts: the oracle draws at 3× and resamples with Pillow's LANCZOS, and nothing in `graphics` or `imaging` resampled at all. `graphics` 0.6.0 is the polygon, **0.7.0 is `resize_lanczos`** — byte-identical to Pillow on eight reference cases (the oracle's 3× downscale, non-integer ratios, degenerate axes, an upscale). The trap was that a faithful port of Pillow's coefficients still disagreed on RGBA: `Image.resize` with alpha is *defined* as `convert("RGBa") → resize → convert("RGBA")`, so premultiplication is contract, and neither rounding is the obvious one. Polygon counts hand-computed (60 / 112 / 60), even-odd pinned by the property that *distinguishes* it (a star's centre is crossed twice, so it is outside — non-zero would fill it), and the `fill_triangle` tie is a **sweep**: every triangle on a 5×5 lattice, 15 625 shapes, 0 pixels differ. Proven able to fail — leave the closing row half-open and 15 000 of them disagree. The agreement was the whole difficulty: a half-open edge rule is required for through-vertices and drops the polygon's lowest row, which is exactly and only where the two fills differed |
-| **W2** — parser + `size` / `Background` / `name` / `Line` / `Circle` / `Poly` | `drawing` | **pixel-identical to `draw.py`** over the corpus subset using only these. The Python renderer is the oracle, so this is a parallel run rather than a judgement | Open |
+| **W2** — parser + `size` / `Background` / `name` / `Line` / `Circle` / `Poly` | `drawing` | **pixel-identical to `draw.py`** over the corpus subset using only these. The Python renderer is the oracle, so this is a parallel run rather than a judgement | ✅ **Shipped** — [W2.md](W2.md): **28 of 28 scenes, 0 pixels different**, and the subset is COMPUTED from the scenes so the gate cannot quietly stop covering one. Proven able to fail (a one-pixel error turns all 28 red), and the package's own suite is green on **both backends**. ⚠ **W1's polygon could not be used.** `graphics::fill_polygon` agrees with `fill_triangle` — its own gated contract — where Pillow fills the pixels whose CENTRES are inside, and the two agree on **4 of 400** random polygons (35 px apart on W1's own reference triangle). Neither rule is wrong; `.draw` is defined by the oracle's, so `drawing` carries a ported Pillow rasteriser and `graphics` is untouched. Two more numeric facts were measured rather than assumed: Pillow's C `float` is load-bearing (widen it and 12 of 500 polygons move), and its `ROUND_DOWN` puts the sign OUTSIDE the `ceil` — invisible until a shape hangs off the left edge |
 | **W3** — fills: solid, linear gradient, radial gradient | `drawing` | pixel-identical over the corpus subset that uses them | Open |
 | **W4** — `Petals` and `Fronds` | `drawing` | pixel-identical over the corpus subset — **and the seeded field reproduces**: same seed, same pixels, on `--interpret` and `--native` alike, because a jittered array whose backends disagree is not a renderer | Open |
 | **W5** — the `check` channel and `--once` | `drawing` | a scene with a deliberately failing `check` exits **non-zero and names the check**; an unparsed line is reported and fails. Both run red first — a report channel that cannot fail is what makes an agent trust a bad sprite | Open |
@@ -109,7 +111,7 @@ cut, not when it is implemented.
 | **E3** | S | Buses as a gain graph with per-bus volume and ducking. Pure composition over E2. |
 | **W0** | XS | Collect and render. The corpus *is* the specification: whatever `draw.py` accepts today is what the port owes, and a scene that fails under the **existing** tool is a finding before a line of loft is written. |
 | **W1** | S | Scanline fill with an even-odd rule, in `graphics` beside `fill_triangle`. The only real primitive gap — lines, circles, ellipses, beziers, blending and `save_png` all ship already. |
-| **W2** | M | The line grammar (`Poly (x,y)… rgb=…`, normalised 0–1 coordinates) and the basic marks. Most of the effort is the comparison rig rather than the drawing: render both ways, diff bytes, and treat every difference as the port's bug rather than the oracle's. |
+| **W2** | M ✅ | *Done, and right about where the effort would go — not about what the rig would find.* The comparison rig was most of it, and the first thing it measured was that **the primitive W1 had just shipped answers a different question**: a polygon filler that agrees with `fill_triangle` is not one that agrees with Pillow. So the drawing half grew a ported rasteriser (`Draw.c`'s `polygon_generic`, verbatim down to its three surprises), and that port needed two numeric facts nobody would guess — 32-bit floats, and a rounding whose sign lives outside the `ceil`. The parser was the small half: a byte scanner shaped after the regex constructs rather than after a tidier grammar, because which lines are ACCEPTED is part of the contract too. |
 | **W3** | S | Two interpolations and an `at=`/`dir=` parameterisation. Small — and pixel-exactness is what keeps it honest, because a gradient that is *nearly* right is one nobody can diff again later. |
 | **W4** | M | The two array primitives, and the interesting half is that they are **deliberately non-uniform**: a seeded low-frequency field plus per-mark jitter and frayed ends, with `depth=2` growing a fractal sub-array. Use the published `random` (PCG-64, seedable) rather than a second generator, or the cross-backend gate cannot pass. |
 | **W5** | S | `landmark` / `check` with `~ < > <= >=` and a tolerance, plus the `--once` exit contract. It draws nothing and is worth having anyway: a metric report costs nothing to read where a PNG costs a look, which is what makes iteration cheap for an agent. |
@@ -162,6 +164,9 @@ suite written as `tests/<pkg>.loft` is what amputated nine published libraries. 
   `[[embed]]` is strict about how a path is spelled.
 - **[ASSETS.md](ASSETS.md)** — why the pack is a store on a dumb file server rather than an
   `[Embed]`-style bundler, and the two constraints that carry over from `routing`.
+- **[W2.md](W2.md)** — arc W's renderer: the gate, and the three findings that decided how the
+  rasteriser is built — why it is not `graphics::fill_polygon`, why the 32-bit float is
+  load-bearing, and the rounding that is invisible until a shape hangs off the canvas.
 - **[FONTS.md](FONTS.md)** — F5/F6: reusing a font the browser has, and bringing one it does not.
 
 ## See also

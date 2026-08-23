@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 W2 — render corpus scenes through the loft `drawing` package.
+//
+// The gate around this (`w2.sh`) renders the same scenes through `oracle/draw.py`
+// and compares the two PICTURES.  Every difference is this port's bug: the
+// goldens are what the corpus's art already looks like.
+//
+//   W2_SCENES=<dir> W2_OUT=<dir> W2_LIST="ammo sword …" loft --native w2.loft
+use drawing;
+
+fn main() {
+  dir = env_variable("W2_SCENES");
+  out = env_variable("W2_OUT");
+  list = env_variable("W2_LIST");
+  if dir == "" || out == "" || list == "" {
+    println("W2_SCENES / W2_OUT / W2_LIST must all be set");
+    return
+  }
+  bad = 0;
+  n = 0;
+  for nm in list.split(' ') {
+    if nm == "" { continue }
+    n += 1;
+    sc = render_file("{dir}/{nm}.draw", "{out}/{nm}.png");
+    for u in sc.unparsed {
+      println("RED  {nm} — unparsed {u}");
+      bad += 1;
+    }
+    for d in sc.deferred {
+      println("RED  {nm} — not drawn by this build: {d}");
+      bad += 1;
+    }
+  }
+  println("rendered {n} scene(s), {bad} parse problem(s)");
+}
