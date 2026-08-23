@@ -81,3 +81,46 @@ fn test_collection_element_writeback_lands() {
   assert(len(v[0].1) == 2, "write-back length: {len(v[0].1)}");
   assert((v[0].1[0] ?? 0) == 1, "write-back .1[0]: {v[0].1[0] ?? 0}");
 }
+
+// D-bind-12's struct half, FIXED: writing back a value BOUND from a sibling element used
+// to vanish from the IR entirely and leak the record with it.
+//
+// `move_elidable_source`'s last gate is "owns a transferable store", read off
+// `Uses::def_vdb` — whose own doc says *`v = OpGetField(vdb, 0, _)` where vdb is
+// OpDatabase'd* and whose walk never checked the second half.  So `hs = p.0`, a read of an
+// EXISTING element through a borrow, counted as owning one; `move_rewrite` then dropped the
+// `OpCopyRecord`, which is sound only when the source is CONSTRUCTED (its build ops get
+// retargeted onto the destination).  `hs` has no build ops, so the copy WAS the write.
+//
+// The cells bracket it deliberately: the two shapes that always worked (`p.1 = p.0`, and a
+// FRESH literal) are what made this read as "writes to p.1 are fine".
+fn test_struct_writeback_from_a_sibling_element_lands() {
+  v: vector<(RtTag, RtTag)> = [(RtTag { name: "a" }, RtTag { name: "b" })];
+  for p in v {
+    held = p.0;
+    p.1 = held;
+  }
+  assert(v[0].1.name == "a", "write-back from a bound sibling: {v[0].1.name}");
+  assert(v[0].0.name == "a", "the source element changed: {v[0].0.name}");
+}
+
+fn test_struct_writeback_direct_and_fresh_still_land() {
+  v: vector<(RtTag, RtTag)> = [(RtTag { name: "a" }, RtTag { name: "b" })];
+  for p in v { p.1 = p.0; }
+  assert(v[0].1.name == "a", "direct sibling write: {v[0].1.name}");
+  w: vector<(RtTag, RtTag)> = [(RtTag { name: "a" }, RtTag { name: "b" })];
+  for p in w { fresh = RtTag { name: "z" }; p.1 = fresh; }
+  assert(w[0].1.name == "z", "fresh-literal write: {w[0].1.name}");
+}
+
+// The full swap, which is what a reader would actually write.
+fn test_struct_elements_swap() {
+  v: vector<(RtTag, RtTag)> = [(RtTag { name: "x" }, RtTag { name: "y" })];
+  for p in v {
+    held = p.0;
+    p.0 = p.1;
+    p.1 = held;
+  }
+  assert(v[0].0.name == "y", "swap .0: {v[0].0.name}");
+  assert(v[0].1.name == "x", "swap .1: {v[0].1.name}");
+}

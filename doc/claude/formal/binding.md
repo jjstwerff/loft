@@ -284,103 +284,62 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **2** (D-bind-11, D-bind-12). B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+OPEN: **1** (D-bind-11); D-bind-12 opened and CLOSED the same day. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 
-> **D-bind-12 — OPEN (2026-08-23) — a heap element of a tuple: the COLLECTION bind
-> aliases, the STRUCT write-back is a no-op.** Two defects found while re-measuring
-> D-bind-11, disjoint by element type, both `silent-wrong`, both IDENTICAL on the two
-> backends — so the interp/native differential is structurally blind to them.
+> **D-bind-12 — CLOSED (2026-08-23) — the struct write-back was a real defect; the
+> collection alias was the RULE being under-stated.** Filed as two halves; measuring the
+> second one properly split them apart.
 >
-> | element | plain bind COPIES (`B-Copy`)? | write-back lands? |
+> **Half one — FIXED.** Writing back a value BOUND from a sibling element vanished from the
+> IR entirely and leaked the record with it: `for p in w { hs = p.0; p.1 = hs; }` left
+> `w[0].1` unchanged, on both backends. `move_elidable_source`'s last gate is *"owns a
+> transferable store"*, read off `Uses::def_vdb` — whose own doc says *`v = OpGetField(vdb,
+> 0, _)` where vdb is OpDatabase'd* and whose walk never checked the second half. So `hs =
+> p.0`, a read of an EXISTING element through a borrow, counted as owning one, and
+> `move_rewrite` dropped the `OpCopyRecord`. That drop is sound only when the source is
+> CONSTRUCTED — its build ops are retargeted onto the destination — and `hs` has no build
+> ops, so the copy WAS the write. `collect_uses` now enforces the documented condition once
+> the whole body has been walked (the `OpDatabase` may not have been visited at insertion
+> time). Precisely scoped: emitted IR is **byte-identical on 120 of 120 scripts**, and
+> `857`'s own allocation count is unchanged at 27, so the pointer-bind it protects is
+> untouched.
+>
+> **Half two — NOT a code deviation; `B-View` is under-stated.** `hv = p.0` on a
+> COLLECTION element aliases, and the first reading scored that against `B-Copy`. Measured
+> across the 2×2 off a BORROWED base, three of four projection cells are views:
+>
+> | construct | element type | behaviour |
 > |---|---|---|
-> | `text` | ✓ | ✓ |
-> | collection (`vector`, …) | ✗ **aliases** | ✓ |
-> | struct | ✓ | ✗ **no-op, and LEAKS** |
+> | struct field | vector-typed | view |
+> | struct field | struct-typed | view |
+> | tuple element | vector-typed | **view** — the cell that was filed |
+> | tuple element | struct-typed | copy |
 >
-> ```loft
-> v: vector<(vector<integer>, integer)> = [([1, 2], 0)];
-> for p in v { hv = p.0; p.0 = [9, 9]; }        // hv is [9,9]; B-Copy says [1,2]
+> The implemented model is *a projection off a borrowed base is a VIEW; off an OWNED base it
+> COPIES* — gated explicitly by `classify_vec_bind`'s `depend().is_empty()`, deliberate
+> (`cells = sc.v; cells[i] = h` writing through is @PLN25 p379's point), and with its
+> alternative measured to CORRUPT (#426, `185-nested-boolean-vector`). Verified in both
+> directions: an owned base copies (`a = h.items` ⇒ `[1,2]`), a borrowed one views
+> (`b = s.vecf` ⇒ `[9,9]`), and the p379 write-through reaches the source.
 >
-> w: vector<(Tg, Tg)> = [(Tg{name:"a"}, Tg{name:"b"})];
-> for p in w { hs = p.0; p.1 = hs; }            // w[0].1 is still "b"; leaks one Tg
-> ```
+> `B-View` above states the view for a **struct-typed** projection only, so the rules cannot
+> express a model the language depends on. Per [README](README.md) that means the RULE wants
+> extending, not the code changing — **a rules question for the owner, deliberately not
+> decided here**, since widening `B-Copy` instead would delete p379's idiom and re-enter
+> #426.
 >
-> **Two reference routes in the same program say what the answer is**, so neither
-> expectation is hand-guessed: under the identical mutate-the-source shape a struct FIELD
-> (`h.items`) and a plain local both copy correctly; only the tuple element aliases. And the
-> struct write-back is bracketed by two cells that WORK — `p.1 = p.0` lands, and writing a
-> FRESH `Tg{…}` lands — so what fails is specifically writing back a value BOUND from a
-> sibling element of the same tuple.
+> ⚠ **The one genuine inconsistency left is the fourth cell**, and it is recorded rather
+> than counted: a STRUCT-typed tuple element COPIES while its three siblings view. No cell
+> of it answers wrongly — a copy is the safer semantic — so it is a consistency question,
+> not a wrong result. Whichever way `B-View` is extended should settle it.
 >
-> **The collection mechanism is visible in the IR and is a bind that never allocates:**
-> `hv = OpGetField(p, 0, 21)` — a bare handle, with none of the `OpDatabase` +
-> `OpCopyRecord` a copy needs — while the write lowers to `OpClearVector` on that same
-> vector. `hv` is meanwhile typed as an OWNER (no dep list; `OpFreeRef(hv)` at scope exit)
-> while holding a handle it does not own. Probed, that free does not reach the container, so
-> this is a wrong VALUE and not a memory-safety hole — but it is why the struct half leaks.
->
-> ⚠ **Two probes on the way here were VACUOUS, and both taught the same thing.** A `print`
-> placed between the steps of the struct swap made it answer CORRECTLY (`y|x`) when the same
-> loop without it answers `y|y` — the observation materialised the value it was measuring. A
-> matrix scored on printed output is worth nothing here; score with `assert`, after the loop.
-> The first reading also mis-scored the struct cell as `B-View` *"aliasing by design"* — it
-> copies, measured — which is what a hand-computed expectation gets you when a rule is
-> reached for to explain an observation rather than to predict one.
->
-> **Why this is not a one-line fix.** loft#857 deliberately made the tuple read a POINTER
-> bind (a dep on the vector) rather than allocate-and-deep-copy, measured at ~13× on a
-> `vector<struct>` read, and `857-vector-tuple-element-read-borrow.loft` pins it. Making the
-> ELEMENT bind copy has to be scoped so it does not undo that: which of the two neighbouring
-> shapes `B-Copy` governs is the question to settle. No guard is added for either broken
-> cell — a failing test cannot land — but every SURROUNDING cell that works is now pinned by
-> `tests/scripts/reference-tuple-heap-element-through-a-record.loft`, so a fix has a
-> before-picture and cannot silently trade one half for the other.
+> Guards: `tests/scripts/reference-tuple-heap-element-through-a-record.loft` — 8 cells, the
+> two write-back ones proven to fail on a pristine worktree at `c3d18a5f` while the shapes
+> that always worked (`p.1 = p.0`, a fresh literal) pass there, which is what made this read
+> as *"writes to `p.1` are fine"*.
 
-> **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
-> B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
-> binding — *scalar OR heap* — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
-> exactly like a `τ` one, with **no operation special-cased**. A reference TUPLE obeys neither
-> once an element is not a scalar:
->
-> ```loft
-> fn sw(p: &(text, text)) { t = p.0; p.0 = p.1; p.1 = t; }   // refused at the signature
-> fn sw(p: &(integer, integer)) { … }                        // fine, both backends
-> ```
->
-> Until 2026-08-19 this was an **internal compiler error** at codegen (`RefTupleGet:
-> unsupported element type Text`, loft#1006); it is now a refusal naming the element type,
-> which is better for the user and still a deviation — the rule says it must work.
->
-> **The cause is that `&(…)` is STACK-backed while the operations it must support are
-> RECORD-based.** Both backends keep the tuple on the stack — there is no store record on either
-> side. `--native` emits `&mut (i64, i64)`, a Rust stack tuple written in place
-> (`var_p.0 = var_p.1`); the interpreter emits `n_sw(OpCreateStack(s))`, whose own contract says
-> the resulting DbRef points into the *stack frame* and is "NOT a valid data store"
-> (`default/01_code.loft:1405-1417`). Its scalar field ops survive only because the interpreter
-> represents the frame as store 0 (`stack_store_at_zero` / `Stores::is_stack_store`), so
-> `OpGetInt(offset)` resolves and reads raw frame bytes.
->
-> `B-Ref-Uniform`'s "every operation goes through the link via the EXISTING mutation code" is
-> what this fails: that code addresses a store record, and a reference tuple has none. A scalar
-> element hides it (its value sits inline in the frame); a `text` element's does not.
-> (Adding only the `OpGetText` / `OpSetText` arms — the fix loft#1006 predicts — is NOT
-> sufficient: measured, it SIGSEGVs the interpreter and leaves `--native` failing to compile,
-> because the addressing, not the opcode, is what is missing.)
->
-> ⚠ **A second defect sat underneath, and the first reading of this entry missed it — now
-> FIXED (2026-08-19).** The two `TupleGet`/`TuplePut` branches derived the element offset from
-> DIFFERENT layouts: `RefVar(Tuple)` used `stored_tuple_field_offset` — the synthetic
-> `__tuple<…>` RECORD layout — while the plain branch beside it used `element_stack_offsets`,
-> the STACK layout. One datum, two derivations, agreeing only where the layouts coincide.
-> Measured: `(integer, integer)` is `[0, 8]` under both, `(text, text)` is `[0, 4]` as a record
-> against `[0, 16]` on the stack — so a reference read of element 1 landed 12 bytes early,
-> inside element 0. `ref_tuple_field_offset` now answers the stack layout, which is the one the
-> data has, and the two branches agree. No shipped program changes (scalars coincide and heap
-> elements are refused); it removes the hazard that would have made any future heap-element work
-> wrong in a way that reads as correct on every scalar test.
->
 > ⚠ **Re-measured 2026-08-23, and the SECOND of the two named options is already running.**
 > This entry says closing it needs *"either an op family that writes the STACK form through a
 > DbRef, or backing a `&(…)` carrying heap elements with a real record"* — and the

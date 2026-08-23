@@ -963,6 +963,13 @@ impl Parser {
             parent_tp,
             fn_attr: lhs_fn_attr,
         } = *lhs;
+        if std::env::var("LOFT_PROBE_TS").is_ok() && !self.first_pass {
+            eprintln!(
+                "TS {}:{} op={op} f_type={f_type:?} src_tp={src_tp:?}\n   to={to:?}\n   val={val:?}",
+                self.lexer.pos().file,
+                self.lexer.pos().line
+            );
+        }
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
         if let Some(result) = self.towards_set_hash_remove(to, val, op, f_type) {
             return result;
@@ -1197,6 +1204,9 @@ impl Parser {
         ) && op == "="
             && !matches!(to, Value::Var(_))
         {
+            if std::env::var("LOFT_PROBE_TS").is_ok() {
+                eprintln!("TS   -> copy_ref branch TAKEN");
+            }
             return self.copy_ref(to, val, f_type.base());
         }
         // loft#821 — `v[i] = t` on a `vector<(…)>`.  A tuple element is stored INLINE, so

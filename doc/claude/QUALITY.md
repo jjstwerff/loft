@@ -619,6 +619,59 @@ disjoint table above.  The same reading also mis-explained the struct cell as `B
 one — the rule says view, the measurement says copy, and the measurement was never in doubt.
 In this subsystem: no `print` inside the loop under test.
 
+### D-bind-12 fixed — and half of it turned out to be the RULE, not the code (2026-08-23)
+
+Filed the day before as two halves.  Measuring the second one properly split them apart, which
+is the whole result: **one was a real defect, the other was `formal/binding.md` under-stating a
+model the language deliberately depends on.**
+
+**Half one — FIXED, and the map was a doc comment describing a condition the code did not
+check.**  `for p in w { hs = p.0; p.1 = hs; }` left `w[0].1` unchanged and leaked the record,
+on both backends.  The write was not "a runtime no-op" — it was **absent from the IR**.
+
+`move_elidable_source`'s last gate is *"owns a transferable store"*, read off
+`Uses::def_vdb`, whose own doc says *`v = OpGetField(vdb, 0, _)` **where vdb is
+OpDatabase'd***.  The walk inserted on ANY `Set(v, OpGetField(Var(x), …))` and never checked
+the second half — so `hs = p.0`, a read of an EXISTING element through a borrow, counted as
+owning a transferable store.  `move_rewrite` then dropped its `OpCopyRecord`, which is sound
+only when the source is CONSTRUCTED (its build ops are retargeted onto the destination): `hs`
+has no build ops, so **the copy WAS the write**.  `collect_uses` now enforces the documented
+condition after the whole body is walked — it cannot be checked at insertion, because the
+`OpDatabase` may not have been visited yet.
+
+**The scope was measured, not argued:** emitted IR is **byte-identical on 120 of 120 scripts**
+(after normalising the worktree path — the first run said 116/120 differed, which was the
+absolute path in the dump and nothing else), and `857`'s allocation count is unchanged at 27,
+so the pointer-bind it protects is untouched.  The change can only ever REMOVE a spurious
+entry, so it is conservative-only by construction.
+
+**Half two — NOT a code deviation.**  `hv = p.0` on a COLLECTION element aliases, and the
+first reading scored that against `B-Copy`.  The 2×2 off a BORROWED base says otherwise:
+
+| construct | element type | behaviour |
+|---|---|---|
+| struct field | vector-typed | view |
+| struct field | struct-typed | view |
+| tuple element | vector-typed | **view** — the filed cell |
+| tuple element | struct-typed | copy |
+
+The implemented model is *a projection off a BORROWED base is a view; off an OWNED base it
+copies* — gated explicitly by `classify_vec_bind`'s `depend().is_empty()`, deliberate
+(`cells = sc.v; cells[i] = h` writing through is @PLN25 p379's point), and with its
+alternative measured to CORRUPT (#426).  Verified both directions, including that the p379
+write-through still reaches the source.  `B-View` states the view for a **struct-typed**
+projection only, so the rules cannot express a model the language depends on — which
+[formal/README](formal/README.md) says means the RULE wants extending.  **Deliberately not
+decided here:** widening `B-Copy` instead would delete p379's idiom and re-enter #426.  The
+one real inconsistency left is the fourth cell (a struct-typed tuple element copies while its
+three siblings view); no cell of it answers wrongly, so it is recorded rather than counted.
+
+**The reusable half:** *"fix the filed thing"* was the wrong instruction to give myself.  The
+filed report had two halves and one of them was not a defect at all — and the way to find that
+out was to complete the matrix (2×2 over construct × element type) rather than to fix the cell
+that was reported.  Had I "fixed" the alias, I would have deleted a documented idiom and
+walked back into a corruption bug closed months ago.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

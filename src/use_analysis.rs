@@ -839,6 +839,21 @@ fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
         record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
+    // `def_vdb` means "`v` is the handle of a FRESH buffer", and its own doc says *where vdb is
+    // OpDatabase'd* — a condition the walk cannot check at insertion, because the `OpDatabase`
+    // may not have been visited yet.  Enforce it here, once the whole body has been seen, so the
+    // map matches what every consumer reads it as.
+    //
+    // Without it ANY `v = OpGetField(x, …)` counted as owning a transferable store — including a
+    // read of an EXISTING element through a borrow, `hs = p.0` over a `vector<(…)>`.
+    // `move_elidable_source`'s last gate is exactly "owns a transferable store", so it admitted
+    // `hs`, and `move_rewrite` then dropped the `OpCopyRecord`: sound when the source is
+    // CONSTRUCTED (its build ops get retargeted onto the destination), but `hs` has no build ops,
+    // so the copy WAS the write and `p.1 = hs` vanished from the IR — silently, on both backends
+    // (`formal/binding.md` D-bind-12).
+    let allocated = std::mem::take(&mut u.database_vars);
+    u.def_vdb.retain(|_, vdb| allocated.contains(vdb));
+    u.database_vars = allocated;
     u
 }
 
