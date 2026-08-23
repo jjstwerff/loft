@@ -348,6 +348,24 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 >
 > `tuples.md` states no rule for `&(…)` at all, which is how a composition of two specified
 > features went unspecified; see its Deviations note.
+>
+> ⚠ **Narrowed 2026-08-23 — a SECOND B-Ref-Alias violation was sitting behind this one, and
+> it was not about element types at all.** This entry reads as *"`&(…)` works for scalars,
+> and the open half is heap elements"*. Measured across POSITIONS instead of element types,
+> the scalar half only worked at a PARAMETER: at a local, neither `b = &a` nor
+> `b: &(integer, integer) = a` linked anything, at any element type. The first dropped the
+> `&` and bound a copy — silently, on both backends — and the second typed a reference over a
+> value, which the interpreter read as a store index and `--native` refused with a raw rustc
+> `E0308` handed to the user. A `&(boolean, boolean)` local answered the un-swapped tuple with
+> exit code 0. Fixed the same day (tuples.md D-tup-2, guard
+> `tests/scripts/reference-tuple-local-binding.loft`): a tuple local is stack-backed, so it
+> joins the scalars at `OpCreateStack` and B-Ref-Alias holds at every position for every
+> admitted element type.
+>
+> **What stays open here is exactly the heap-element half**, and the table above is why. The
+> entry's own framing — element types — is what hid a whole axis: a rule quantified over "ANY
+> binding" is falsified by a POSITION as readily as by a type, and only one of those two was
+> being swept.
 
 > **D-bind-10 — CLOSED (2026-08-09) — the ⚑ VITAL rule was enforced for HALF of each
 > expression.** The rule named `x + &y` as a parse error and grammar.md's D-gram-4

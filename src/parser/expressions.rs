@@ -2041,10 +2041,18 @@ use a separate collection or add after the loop"
             // (interp: `GetStackRef` deref; native: the record DbRef by value, the #257
             // alias shape).  A heap source additionally marks `p` non-owning (skip_free):
             // `o` frees the record, not the alias.
+            // A TUPLE local joins the scalars here rather than the heap sources below:
+            // it lives in the frame, so `OpCreateStack` gives exactly the stack ref a
+            // `&(…)` PARAMETER is already handed at its call site, and the element ops
+            // read it at the same `(ref, offset)` pair.  Without this arm the `&` reached
+            // no lowering at all — `b = &a` silently COPIED the tuple (B-Ref-Alias says
+            // it must LINK), and `b: &(integer, integer) = a` typed `b` as a reference
+            // over a value, so the interpreter read an element as a store index and
+            // `--native` handed the user a raw `E0308` (D-tup-2).
             let stack_src = match *code.unspan() {
                 Value::Var(src)
                     if is_scalar(self.vars.tp(src))
-                        || matches!(self.vars.tp(src), Type::Reference(..)) =>
+                        || matches!(self.vars.tp(src), Type::Reference(..) | Type::Tuple(_)) =>
                 {
                     Some(src)
                 }
@@ -2090,7 +2098,16 @@ use a separate collection or add after the loop"
                 // no `Deps` slot (`depending` is the identity there), which is
                 // consistent: a scalar `&` binder owns no store, so there is no
                 // free decision to derive.
-                s_type = Type::RefVar(Box::new(if is_ref { inner.depending(src) } else { inner }));
+                let linked = if is_ref { inner.depending(src) } else { inner };
+                // An ANNOTATED binding was already gated when the annotation was parsed —
+                // and that is the site that has to hold it, because a `&(…) = <not a
+                // variable>` never reaches this lowering at all.  Here the gate covers the
+                // other spelling, `b = &a`, whose element types nothing has looked at yet.
+                s_type = if var_nr != u16::MAX && self.vars.is_annotated(var_nr) {
+                    Type::RefVar(Box::new(linked))
+                } else {
+                    self.ref_var_type(linked)
+                };
             } else if let Some(eref) = heap_ref {
                 amp_unlowered = false;
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
@@ -2100,6 +2117,33 @@ use a separate collection or add after the loop"
                 *code = eref;
                 s_type = Type::RefVar(Box::new(s_type));
             }
+        }
+        // A `&` of a tuple PLACE (`b = &v[0]`, `b = &s.pair`) reaches no lowering above,
+        // and unlike the struct projection below it cannot be left alone: a tuple place is
+        // read ELEMENT-WISE into a fresh by-value tuple before the `&` is ever seen, so
+        // there is no place left to link to.  Declining is what binding.md B-Ref-Reshape
+        // prescribes where the link cannot be honoured — *"loft will not quietly downgrade
+        // the reference to a copy"* — and quietly downgrading is exactly what happened:
+        // `b.0 = 9` wrote the copy, the source was unchanged, no diagnostic was issued, and
+        // both backends agreed, so the differential could not see it either (D-tup-2).
+        if amp_unlowered
+            && !self.first_pass
+            && matches!(
+                s_type.base(),
+                Type::Tuple(_) | Type::RefVar(_) if matches!(
+                    if let Type::RefVar(ref i) = *s_type.base() { i.base() } else { s_type.base() },
+                    Type::Tuple(_)
+                )
+            )
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a `&` reference to a tuple ELEMENT or FIELD is not a live link — a tuple \
+                 place is read element by element, so there is nothing left to point at. \
+                 Bind the tuple to a local first and take `&` of that, or write the \
+                 element back explicitly"
+            );
         }
         // @PLN130 F9 step 2 — the `&` reached no lowering, so record it on the VARIABLE:
         // the IR is about to lose it entirely.  A marker rather than `Type::RefVar` on
@@ -3905,7 +3949,10 @@ use a separate collection or add after the loop"
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
                 let tp = if is_ref {
-                    Type::RefVar(Box::new(tp))
+                    // D-tup-2 — the SAME admitted-element gate the signature uses; before it
+                    // was shared, a `&(text, text)` LOCAL sailed past the refusal a `&(text,
+                    // text)` PARAMETER got and reached codegen as an internal compiler error.
+                    self.ref_var_type(tp)
                 } else {
                     tp
                 };

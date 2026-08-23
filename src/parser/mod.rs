@@ -2019,6 +2019,40 @@ impl Parser {
     /// So this says so, at the declaration, with the one-line cure. It replaces an internal
     /// compiler error — and, once the rest of loft#944 was fixed, something worse: a body
     /// that ran on the interpreter and read its first member back as `0` on `--native`.
+    /// Wrap `tp` as the reference type a user-written `&` denotes, refusing an element
+    /// type a reference tuple cannot address.
+    ///
+    /// This is the ONE place a `&` in source becomes a `Type::RefVar`, so
+    /// [`tuples.md` `T-Ref-El`](../../doc/claude/formal/formal/tuples.md) is asked wherever
+    /// the annotation is written — a parameter, an annotated local, or an inferred
+    /// `b = &a`.  It used to be asked at the signature only, so the same `&(text, text)`
+    /// that a parameter refused reached codegen from a local and died there as an internal
+    /// compiler error on both backends (D-tup-2).  Route every new `&` position through
+    /// here rather than repeating the check beside it: a second copy of the admitted list
+    /// is the shape loft#1006 already was.
+    ///
+    /// The restriction is on the STACK-backed reference tuple this annotation builds.  A
+    /// record-backed one — the `RefVar(Tuple)` a `for` loop binds over a vector of tuples —
+    /// reaches its elements through a real record and admits any element type; it is built
+    /// elsewhere and does not come through here.
+    pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
+        if !self.first_pass
+            && let Type::Tuple(ref elems) = tp
+            && let Some(bad) = elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
+        {
+            let bad_name = bad.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a `&` reference tuple may only hold scalar elements, and this \
+                 one holds `{bad_name}` — take the tuple by value and return a \
+                 new one, or use a struct, whose fields of any type write \
+                 through a `&` parameter"
+            );
+        }
+        Type::RefVar(Box::new(tp))
+    }
+
     fn refuse_forward_tuple_returns(&mut self, adopted: &[(u32, Type)]) {
         if adopted.is_empty() {
             return;

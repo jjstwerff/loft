@@ -355,7 +355,12 @@ impl Output<'_> {
             && let Type::RefVar(inner) = variables.tp(var)
             && matches!(
                 **inner,
-                Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
+                Type::Integer(..)
+                    | Type::Float
+                    | Type::Single
+                    | Type::Boolean
+                    | Type::Character
+                    | Type::Tuple(_)
             )
         {
             let name = sanitize(variables.name(var));

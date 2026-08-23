@@ -288,6 +288,59 @@ connected them.  Grep the carve-out, not the symptom.  And when a sweep over a w
 reports a number too large to read, the fix is usually a missing FIELD on the instrument, not a
 narrower grep — one `arg=` flag took 138 unreadable hits to 7 readable ones.
 
+### A `&` on a tuple LOCAL linked nothing, at every element type (2026-08-23)
+
+`formal/tuples.md` D-tup-2, open since 2026-08-20, said the admitted-element rule was asked
+at the signature and not at the local — a `&(text, text)` LOCAL reaching codegen and dying
+there as an internal compiler error while the identical PARAMETER was refused with a message.
+
+Re-measured across POSITIONS rather than at the filed cell, the ICE was the mild half.  The
+whole binding was unimplemented at a local, for **every** element type including the admitted
+ones, and how loud it was depended on what the tuple happened to hold:
+
+| written | was | should be |
+|---|---|---|
+| `b = &a` | the `&` **dropped**: a plain copy, so `b.0 = 5` left `a` untouched — no diagnostic, both backends | `a.0 == 5` |
+| `b: &(integer, integer) = a` | a reference typed over a value: interp read an ELEMENT as a store index (`(7, 9)` → *"index is 9"*), `--native` handed the user a raw rustc `E0308` | the link |
+| `b: &(boolean, boolean) = a` | `truefalse` where the swap says `falsetrue`, **exit code 0** | `falsetrue` |
+| `b: &(float, float) = a` | `null` for a present element | `9.5` |
+| `b: &(text, text) = a` | the filed ICE | a refusal |
+| `b: &(integer, integer) = v[0]` | bound a COPY silently; `--native` would not compile | a refusal |
+
+**Both backends agreed on every one of those**, so the tuple differential this subsystem
+leans on (D-op-1) was structurally blind — the two implementations were wrong the same way.
+That is the third time in a week that a defect survived because the workhorse gate compares
+two things that share the mistake.
+
+**The fix is the chokepoint the deviation asked for, plus the mechanism it then needed
+something to admit.**  `Parser::ref_var_type` is now the one place a `&` in source becomes a
+`Type::RefVar`, so the parameter, the annotated local and the inferred `b = &a` ask one list
+(`data::ref_tuple_element_ok`) and cannot disagree.  And a tuple local lives in the FRAME, so
+it joins the scalars at `OpCreateStack` — exactly the stack ref a `&(…)` PARAMETER is already
+handed at its call site, read at the same `(ref, offset)` pair.  Native represents the local
+link as the raw `*mut (…)` @PLN87 L1 gives every local link; two sites read one predicate
+(`generation::is_raw_tuple_link`) to decide it, the element base and the call that forwards
+the local to a `&(…)` parameter.
+
+A tuple PLACE (`b = &v[0]`, `b = &s.pair`) is now refused rather than bound to a copy — the
+place is read element by element into a fresh tuple before the `&` is seen, so nothing
+survives to link to, and `binding.md` B-Ref-Reshape already settles that case: *"loft will not
+quietly downgrade the reference to a copy"*.  `T-Ref` gained the local position, `T-Ref-Src`
+the place refusal; tuples.md is back to **OPEN: 0**.
+
+**Three reusable halves.**  First, **a deviation entry inherits the framing of the report that
+raised it** — this one said "element types" because an ICE on `text` is what got filed, and
+sweeping element types while pinning POSITION left a `silent-wrong` cell that no deviation
+named.  A rule quantified over *"ANY binding"* (B-Ref-Alias) is falsified by a position as
+readily as by a type.  Second, **the refusal boundary was not where the rule seemed to put
+it**: the record-backed `RefVar(Tuple)` a `for` loop builds over a `vector<(text, text)>` reads
+and writes `text` elements correctly on both backends, so putting the gate in a universal
+`RefVar(Tuple)` constructor would have refused a shape that works.  Measuring the OTHER
+construction is what kept the chokepoint at *the `&` written in source*.  Third, the guard was
+proven able to fail on a pristine tree at `1e9d7910` — 6 of 7 cells on `--interpret`, 7 of 7 on
+`--native` — and the prefix-`&` cell fails there on its **value** assertion, not on a crash,
+which is the channel that had been missing.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

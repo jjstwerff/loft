@@ -772,6 +772,43 @@ pub(crate) fn tuple_elem_type(
     elems.get(idx as usize).cloned()
 }
 
+/// Render the base a tuple element access hangs off, and say whether reaching it is
+/// `unsafe` — `("var_x", false)` or `("(*var_x)", true)`.
+///
+/// Reach for this in every position that emits `<base>.<idx>` for a tuple, so the READ
+/// and the WRITE cannot disagree about whether the base needs a dereference.  Both facts
+/// come from one call because they are one decision: a base that needs the deref needs
+/// the `unsafe` too, and answering them separately is how the two arms would drift.
+///
+/// Three spellings arrive here and only one derefs: a by-value local and a `&(…)`
+/// PARAMETER are `(i64, i64)` and `&mut (i64, i64)`, which Rust auto-derefs, while a
+/// `&`-bound LOCAL (`b = &a`, `b: &(integer, integer) = a`) holds the raw `*mut (i64, i64)`
+/// @PLN87 L1 gives every local link — raw so the source stays readable beside the link,
+/// which is legal loft and not legal Rust borrowing.
+#[must_use]
+pub(crate) fn tuple_base(vars: &crate::variables::Function, var: u16) -> (String, bool) {
+    let name = sanitize(vars.name(var));
+    if is_raw_tuple_link(vars, var) {
+        (format!("(*var_{name})"), true)
+    } else {
+        (format!("var_{name}"), false)
+    }
+}
+
+/// True when `var` is a `&`-bound tuple LOCAL, which native represents as a raw
+/// `*mut (…)` rather than the `&mut (…)` a `&(…)` PARAMETER gets.
+///
+/// Every position that hands such a variable to Rust asks this — the element base
+/// ([`tuple_base`]) and the call site that forwards it to a `&(…)` parameter — so the
+/// representation is decided once.  Two sites reading one predicate is the shape
+/// loft#1006 wanted and did not have: there, three copies of the admitted-element list
+/// disagreed and a program died at codegen because of it.
+#[must_use]
+pub(crate) fn is_raw_tuple_link(vars: &crate::variables::Function, var: u16) -> bool {
+    !vars.is_argument(var)
+        && matches!(vars.tp(var), Type::RefVar(inner) if matches!(inner.base(), Type::Tuple(_)))
+}
+
 /// True when tuple element `idx` of `var` is TEXT — nullable or not.  The predicate
 /// behind [`tuple_elem_type`]'s most-asked question; see it for why the two are one.
 #[must_use]
