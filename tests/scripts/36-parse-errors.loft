@@ -241,14 +241,6 @@ fn test_p85c_named_fn_inside_fn() {
   pe_x = 5;
 }
 
-// Regression: lambda expressions must NOT trigger the file-scope diagnostic.
-fn test_p85c_lambda_still_works() {
-  pe_f = fn(x: integer) -> integer {
-    x * 2
-  };
-  assert(pe_f(5) == 10, "lambda works inside fn");
-}
-
 // --- Parallel for-loop clause errors ---
 
 fn pe_double(x: integer) -> integer {

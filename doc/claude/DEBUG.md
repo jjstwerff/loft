@@ -316,6 +316,7 @@ LOFT_IR=distance LOFT_LOG=full loft myprog.loft 2>trace.txt
 | `LOFT_LOG` | `crash_tail:50` | Last 50 execution steps before a crash |
 | `LOFT_DUMP_DEPTH` | `3` | Struct nesting depth in dumps (default 2) |
 | `LOFT_DUMP_ELEMENTS` | `4` | Max vector elements in dumps (default 8) |
+| `LOFT_TRACE_ASSERTS` | `/tmp/ran.txt` | Appends `file:line` for every `assert` that EXECUTES — both backends, every process.  Diff against the `assert(` sites in the source to find the ones a suite contains and never runs, and read a whole file tracing at a constant offset as a wrong injected LINE ([TESTING.md](TESTING.md#the-set-a-suite-runs-is-not-the-set-it-contains-loft_trace_asserts)) |
 
 ---
 

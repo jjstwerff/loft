@@ -9,6 +9,49 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### 81 assertions the corpus never ran, and the wrong line one of them reported (2026-08-23)
+
+**Instrument.** `LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert` that
+EXECUTES, from `n_assert` — the interpreter's implementation and the one a `--native`
+binary links, so one setting covers both backends and every process a suite spawns.
+Diffed against the `assert(` sites in the source it names the assertions a suite contains
+and never runs, which no channel a suite reports can distinguish from passing ones.
+
+**Result over `tests/scripts`: 9 722 sites executed, 81 never.** Three mechanisms:
+a firing `@EXPECT_ERROR:` stops the whole file (52 — including all 21 of
+`1067-lambda-expected-type.loft`'s positive half, in a file whose own header says the
+negative cell exists so a compiler that stopped checking could not pass it); a file with
+`main` runs only `main`, so every other zero-parameter function is dropped (21, in
+`05-enums.loft` and `06-structs.loft`); and 8 deliberate. A fourth, native-only:
+`native_scripts` skipped on `src.contains("@EXPECT_ERROR")` over the whole source, so five
+files — 79 assertions, `93-vector-advanced.loft`'s 49 among them — left that suite because
+a comment in each *mentioned* the tag while recording the file had STOPPED being a refusal
+case. Both runners now read one `common::expect_tag`; native 801 → 806 scripts.
+
+**The live bug it found.** The trace records the position the COMPILER injected, and every
+assert in `685-mutated-scalar-param-capture.loft` traced exactly seven lines early
+(`50-tuples.loft`, five). `Lexer::to` moves the reporting position without moving the read
+cursor, and the tokenizer keeps incrementing it — so a seek never undone shifts the caret,
+runtime spans and injected `assert` lines for the rest of the file by one constant.
+`parse_function` wraps its warning passes in a save/restore whose comment states exactly
+this hazard; `check_ref_mutations` (needless-`&` / `needless-const-parameter`) runs
+eighteen lines above that save. A failing assert on line 184 printed line 177's source —
+itself an `assert` — under this one's message, on both backends, with no other signal.
+
+**Fix at the chokepoint, not a second save/restore:** `to()` records where it seeked FROM
+and the next token scanned from source restores it, so a missing restore costs the one
+diagnostic it was made for. A file switch clears the pending seek — without that the first
+token of a `use`d file inherited the previous file's line (`88-imports`, `850*`, −13 to
+−20). Guard `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`,
+proven able to fail.
+
+**Ratchets** (`tests/wrap.rs`, both proven able to fire):
+`a_refusal_file_carries_no_runtime_assertions` and
+`every_assertion_is_reachable_from_the_entry_point`. Both are under-approximations by
+construction and allow the documented dual guard (`432b`, `751`). Full account:
+[QUALITY.md § 81 assertions the corpus contained and never ran](QUALITY.md).
+
+
 ### A Join whose arms each own a store: one leak and two silent wrong answers (loft#1078, 2026-08-23)
 
 **Symptom.** `fn pick(c) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }` retained

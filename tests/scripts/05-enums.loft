@@ -154,6 +154,14 @@ fn main() {
   assert(first_c.radius == 1.5, "variant cast as Circle: radius={first_c.radius}");
   second_r = mixed[1] as Rect;
   assert(second_r.width == 4.0, "variant cast as Rect: width={second_r.width}");
+
+  // The cells below `main`.  The harness runs ONLY `main` when a file has one, so a
+  // zero-parameter function it does not call is compiled and never executed — eight
+  // assertions here were inert for that reason alone.
+  test_enum_field();
+  test_define_enum();
+  test_base_field();
+  test_enum_collection_types();
 }
 
 enum Content {

@@ -128,6 +128,15 @@ pub struct Lexer {
     /// Keep track of where we are in the current memory structure
     link: usize,
     position: Position,
+    /// Where [`to`](Self::to) moved the reporting position away FROM, until the next
+    /// token is scanned.
+    ///
+    /// `to()` moves the reporting line/pos but not the read cursor, so a seek that is
+    /// never undone offsets every position derived from the lexer for the rest of the
+    /// file — the caret, the `file:line` of a runtime span, the line the compiler
+    /// injects into `assert`.  Restoring it at the next freshly scanned token bounds a
+    /// missing restore to the one diagnostic it was made for.
+    seek_return: Option<(u32, u32)>,
     tokens: HashSet<String>,
     keywords: HashSet<String>,
     /// The comment marker (from it to end-of-line is skipped); loft `//`.  See
@@ -406,6 +415,7 @@ impl Default for Lexer {
             memory: Vec::new(),
             link: 0,
             links: Rc::new(RefCell::new(0)),
+            seek_return: None,
             iter: LINE.chars().collect::<Vec<_>>().into_iter().peekable(),
             tokens: cfg.tokens,
             keywords: cfg.keywords,
@@ -471,6 +481,7 @@ impl Lexer {
             memory: Vec::new(),
             link: 0,
             links: Rc::new(RefCell::new(0)),
+            seek_return: None,
             iter: LINE.chars().collect::<Vec<_>>().into_iter().peekable(),
             tokens: config.tokens,
             keywords: config.keywords,
@@ -486,11 +497,23 @@ impl Lexer {
         }
     }
 
+    /// Point the REPORTING position at `scope` so the next diagnostic carries it.
+    ///
+    /// The read cursor does not move: this is for a warning pass that walks a finished
+    /// body and wants its caret on the declaration it is complaining about.  The seek
+    /// lasts until the next token is scanned from the source, which then restores the
+    /// real cursor — see [`seek_return`](Self#structfield.seek_return).  A pass that
+    /// emits several diagnostics and then keeps parsing should still restore explicitly
+    /// (`let p = lexer.at(); … lexer.to(p);`), because a position READ back with
+    /// [`at`](Self::at) before the next token still sees the seek.
     pub fn to(&mut self, scope: (u32, u32)) {
         lex_trace(format_args!(
             "to() seek {}:{} -> {}:{}",
             self.position.line, self.position.pos, scope.0, scope.1
         ));
+        if self.seek_return.is_none() {
+            self.seek_return = Some((self.position.line, self.position.pos));
+        }
         self.position.line = scope.0;
         self.position.pos = scope.1;
     }
@@ -505,6 +528,17 @@ impl Lexer {
                 n.has, n.position.line, n.position.pos, self.position.line, self.position.pos
             ));
             return Some(n);
+        }
+        // Scanning fresh source: the read cursor is authoritative again, so a
+        // reporting seek that was never undone ends here rather than shifting every
+        // later position in the file (loft#625's mechanism, at a second site).
+        if let Some((line, pos)) = self.seek_return.take() {
+            lex_trace(format_args!(
+                "seek_return restore {}:{} -> {line}:{pos}",
+                self.position.line, self.position.pos
+            ));
+            self.position.line = line;
+            self.position.pos = pos;
         }
         if self.mode != Mode::Formatting {
             loop {
@@ -1810,6 +1844,9 @@ impl Lexer {
             line: 0,
             pos: 0,
         };
+        // A pending reporting seek belongs to the file being left: restoring it after
+        // the switch would stamp the OLD file's line onto the new one's first token.
+        self.seek_return = None;
         self.peek = LexResult {
             has: LexItem::None,
             position: self.position.clone(),

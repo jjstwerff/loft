@@ -129,14 +129,16 @@ fn test_zero_pad_on_text() {
 
 // ── From 70-struct-methods.loft ─────────────────────────────────
 
-// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
-// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 fn smb_vec_sum(r: vector<integer>) -> integer {
   total = 0;
   for smb_e in r { total += smb_e; }
   total
 }
 
+// The two concats are in the CALLS below, not in `smb_vec_sum` — the annotations used to
+// sit above the helper, which reads as if the refusal were its declaration's.
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 fn test_struct_method_vec() {
   assert(
     smb_vec_sum([1, 2] + [3])+100 * smb_vec_sum([1, 2, 3] + [4, 5]) == 1506,

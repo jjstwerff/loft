@@ -341,6 +341,116 @@ proven able to fail on a pristine tree at `1e9d7910` — 6 of 7 cells on `--inte
 `--native` — and the prefix-`&` cell fails there on its **value** assertion, not on a crash,
 which is the channel that had been missing.
 
+### 81 assertions the corpus contained and never ran — and the wrong line one of them reported (2026-08-23)
+
+The differential oracle's finding one level further out.  That pass converted 153 hand-written
+expectations from COMMENTS into `assert`s, on the reasoning that a channel captured and never
+compared is not a gate.  The question this pass asks is the next one: **of the assertions the
+corpus does contain, which ones EXECUTE?**
+
+It is not answerable by reading.  A file skipped for an expected error, a function the entry
+point never calls, a branch never taken and a passing test all look identical from outside —
+green.  So the instrument: **`LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert`
+that runs**, in `n_assert`, which is the interpreter's implementation AND the one a `--native`
+binary links, so one hook covers both backends and many processes.  Diffing the trace against
+the `assert(` sites in the source names the silent ones.
+
+**Result over `tests/scripts`: 9 722 sites executed, 81 never.** Three mechanisms, none of
+which any file said anything about:
+
+| # | mechanism | sites |
+|---|---|---|
+| 1 | **a firing `@EXPECT_ERROR:` stops the whole file** — `run_test` returns at *"ok (errors consumed)"* and `native_scripts` skips the file, so every runtime cell in it is compiled and dropped | 52 |
+| 2 | **a file with `main` runs ONLY `main`** — every other zero-parameter function is compiled and dropped | 21 |
+| 3 | deliberate: `assert(false, "unreachable")` markers, a branch not taken, an `assert` that IS the refused expression's use | 8 |
+
+Mechanism 1's sharpest case is **`1067-lambda-expected-type.loft`, whose entire positive half
+— 13 cells, 21 assertions — had never run.** Its own header states that the negative cell
+exists *"or this file would pass on a compiler that simply stopped checking"*; that negative
+cell is what stopped the positive cells from running, so the file passed on the refusal alone.
+The cure is the corpus's own convention (`102`/`102b`, `36`/`36b`): a file asserts a refusal
+OR runs.  Split into `1067b-lambda-no-expected-type-refused.loft`; same for the stranded
+positive cells in `36-parse-errors.loft` and `pln119-assign-to-file-scope-text.loft`.
+
+Mechanism 2 was `05-enums.loft` and `06-structs.loft` — struct formatting, `limit()` narrow
+fields, `&`-default parameters, copy-on-bind, a named codegen regression guard — 21
+assertions, wired into `main` now.  All 21 pass on both backends, which is the point: nobody
+knew.
+
+**A fourth mechanism, on the native side only.** `native_scripts` decided to skip a file with
+`src.contains("@EXPECT_ERROR")` over the whole source, so a file that merely NAMED the tag in
+prose dropped out of the native suite — silently, since a skip prints and passes.  Five files,
+**79 assertions**, including `93-vector-advanced.loft`'s 49.  Every one of the five was
+carrying a comment recording that it had **stopped** being a refusal case: *"this file used to
+be an @EXPECT_ERROR case"*, *"stayed here live and `@EXPECT_FAIL` until #1055 was fixed"*.  The
+sentence saying a file was no longer refused is what stopped it being tested.  Both runners now
+read one `common::expect_tag`, which is the same lesson `ref_tuple_element_ok` carries:
+*two lists that must agree are one list*.  Native goes 801 → 806 scripts, all green.
+
+**And the trace found a live bug, because it records the position the COMPILER injected.**
+Every assert in `685-mutated-scalar-param-capture.loft` traced exactly seven lines early, and
+every assert in `50-tuples.loft` five.  Breaking one proved it reaches a user: an assertion on
+line 184 failed and the diagnostic printed
+
+```
+error: assertion failed: repeat call, two params
+  --> …/685-mutated-scalar-param-capture.loft:177:1
+177 |   assert(inner == 13, "by-value: callee sees its own writes, got {inner}");
+```
+
+— **this assert's message under a different assert's source line**, and the line it named is
+itself an `assert`, so the report looks entirely plausible.
+
+The mechanism is loft#625's, at a site that fix did not reach.  `Lexer::to` moves the
+REPORTING position without moving the read cursor, and the tokenizer keeps incrementing that
+position on every physical line it pulls — so a seek that is never undone shifts every position
+derived from the lexer for the rest of the file: the caret, a runtime span, and the line the
+compiler injects into `assert`.  `parse_function` wraps its warning passes in a save/restore
+and its comment says exactly this — *"Each warning pass below seeks the lexer to a diagnostic
+site … Save the true position and restore it once the passes finish"* — and
+`check_ref_mutations` (the needless-`&` / `needless-const-parameter` pass) runs **eighteen lines
+above that save**.  The carve-out comment was the map: *below* was doing the work of a fence.
+
+Fixed at the chokepoint rather than by a second save/restore, because a rule spelled at each
+call site is how the first one came to be missed.  `to()` now records where it seeked FROM, and
+the next token scanned from source restores it: **a reporting seek lasts until the next token,
+so a missing restore costs the one diagnostic it was made for instead of every position after
+it.**  A file switch clears the pending seek — without that, the first token of a `use`d file
+inherited the previous file's line, which the corpus caught immediately (`88-imports`,
+`850*`, at −13 to −20 lines).
+
+Minimal repro, six lines, both backends, `silent-wrong` in the diagnostic channel:
+
+```loft
+fn f(n: const integer) -> integer { n }   // draws `needless-const-parameter`, which seeks
+fn main() { assert(false, "MARK"); }      // reported line 2, not 5
+```
+
+Guard: `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`, proven
+able to fail (it reports line 2 with the restore disabled).  Corpus-wide re-measure: the two
+constant shifts are gone and no file has one.
+
+**Two ratchets, both static, both proven able to fire** (`tests/wrap.rs`):
+`a_refusal_file_carries_no_runtime_assertions` (mechanism 1) and
+`every_assertion_is_reachable_from_the_entry_point` (mechanism 2).  They are
+UNDER-approximations by construction and say so: they cannot see a branch never taken, and they
+deliberately allow the documented dual guard `751`/`432b` uses, where an annotated `main`
+carries assertions that run only if the refusal ever regresses.  `LOFT_TRACE_ASSERTS` is how
+the remainder gets re-measured — a report, not a gate, because a gate over 9 800 sites would
+need an allow-list keyed on line numbers and would rot.
+
+**Measured residual, so it is a decision and not an oversight.** `751`'s near-side cell —
+*"a `vector<u8>` built from integer LITERALS … must stay legal"* — is inert for the same
+reason the far side is, because both live in that file's annotated `main`.  Coherent as
+written (the whole file runs only if the refusal regresses), and the shape is positively
+covered by the running `432-untyped-vector-literal-arg.loft`; recorded here because a
+ratchet that allows a pattern owes a reader the list of what the allowance costs.
+
+**The reusable half.** A test suite's guarantee is the set of assertions it RUNS, and that set
+is not the set it CONTAINS. The difference is invisible in every channel a suite reports —
+exit code, pass count, output — so it has to be measured directly. Every mechanism found here
+was a file being SKIPPED for a good reason that quietly took a second thing with it.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

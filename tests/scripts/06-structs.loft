@@ -163,6 +163,20 @@ fn main() {
   // --- const local variable with struct ---
   const fixed = Counter {};
   assert(fixed.count == 0, "const local struct: field readable");
+
+  // The cells below `main`.  The harness runs ONLY `main` when a file has one, so a
+  // zero-parameter function it does not call is compiled and never executed —
+  // thirteen assertions here were inert for that reason alone.
+  test_print_object();
+  test_special_fields();
+  test_colours();
+  test_mutable_reference();
+  test_mutable_vector();
+  test_return_text();
+  test_assign_text();
+  test_independent_strings();
+  test_method_on_constructor();
+  test_loop_dep_above_tos();
 }
 
 struct PObj {

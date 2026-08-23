@@ -350,6 +350,200 @@ fn loft_suite() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Every `.loft` file the two corpus runners execute, in sorted order.
+///
+/// `tests/docs/` runs through the same `run_test` as `tests/scripts/`, so the entry-point
+/// rule below applies identically to both.
+fn corpus_files() -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = ["tests/scripts", "tests/docs"]
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .filter_map(|f| f.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// One top-level `fn` of a corpus file: where it starts, whether it takes parameters,
+/// whether an `@EXPECT_ERROR:` annotation sits directly above it, and how many `assert`
+/// calls its body contains.
+struct CorpusFn {
+    name: String,
+    line: usize,
+    zero_param: bool,
+    expect_error: bool,
+    asserts: usize,
+}
+
+/// Split a corpus file into its top-level functions.
+///
+/// A body runs from the `fn` line to the next line that is exactly `}` — the corpus's
+/// house style — with a one-line `fn f() { … }` handled by looking for the closing brace
+/// on the `fn` line itself.  Brace COUNTING is not usable here: `"{name}"` interpolation
+/// puts unbalanced braces inside string literals.
+fn corpus_fns(source: &str) -> Vec<CorpusFn> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    let mut pending_expect_error = false;
+    for (i, raw) in lines.iter().enumerate() {
+        if raw.trim_start().starts_with("//") {
+            if common::expect_tag(raw, "@EXPECT_ERROR:").is_some() {
+                pending_expect_error = true;
+            }
+            continue;
+        }
+        let Some(rest) = raw.strip_prefix("fn ") else {
+            // A blank line keeps a pending annotation alive (they are often separated by
+            // one); anything else at top level ends it.
+            if !raw.trim().is_empty() {
+                pending_expect_error = false;
+            }
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        // A signature that runs past this line (`fn datetime(` + one parameter per line)
+        // has no `)` here, and `None` must read as "has parameters": the reachability
+        // ratchet only asks about ZERO-parameter functions, so guessing the other way
+        // would invent a finding rather than miss one.
+        let params = rest
+            .split_once('(')
+            .and_then(|(_, r)| r.split_once(')'))
+            .map_or_else(|| "…".to_string(), |(p, _)| p.trim().to_string());
+        let end = if raw[raw.find('{').map_or(raw.len(), |b| b + 1)..].contains('}') {
+            i
+        } else {
+            lines
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .find(|(_, l)| **l == "}")
+                .map_or(lines.len() - 1, |(j, _)| j)
+        };
+        let body = lines[i..=end].join("\n");
+        let asserts = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("assert(").count())
+            .sum();
+        out.push(CorpusFn {
+            name,
+            line: i + 1,
+            zero_param: params.is_empty(),
+            expect_error: pending_expect_error,
+            asserts,
+        });
+        pending_expect_error = false;
+    }
+    out
+}
+
+/// R1 — a runtime cell may not share a file with a refusal it would never survive.
+///
+/// A file whose `@EXPECT_ERROR:` fires never reaches execution: `run_test` stops at
+/// "errors consumed" and `native_scripts` skips the file outright.  So an `assert` in a
+/// function that is NOT itself the refusal is compiled and never run, and the file passes
+/// on the refusal alone.  Measured before this guard existed: 52 such assertions, twenty-one
+/// of them the entire positive half of `1067-lambda-expected-type.loft` — a file whose own
+/// header explains that its negative cell exists so a compiler that stopped checking could
+/// not pass it, while that negative cell was what stopped the positive cells running.
+///
+/// The cure is the corpus's own convention: `102`/`102b`, `36`/`36b`, `1067`/`1067b` — a
+/// file asserts a refusal OR runs.
+///
+/// An `assert` inside an `@EXPECT_ERROR` function is fine and common: it is the USE that
+/// makes the refused expression matter (`assert(len(v) == 0, "unreached")`).
+#[test]
+fn a_refusal_file_carries_no_runtime_assertions() {
+    let mut bad: Vec<String> = Vec::new();
+    for entry in corpus_files() {
+        let Ok(src) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        if !common::declares_expect_error(&src) {
+            continue;
+        }
+        for f in corpus_fns(&src) {
+            if f.asserts > 0 && !f.expect_error {
+                bad.push(format!(
+                    "{}:{} fn {} — {} assertion(s) that can never run",
+                    entry.display(),
+                    f.line,
+                    f.name,
+                    f.asserts
+                ));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "these functions assert in a file that stops at its expected error, so nothing \
+         they claim is ever checked — move them to a companion file that RUNS (the \
+         `<n>b-…` convention):\n  {}",
+        bad.join("\n  ")
+    );
+}
+
+/// R2 — an assertion in a function nothing calls is a claim nobody checks.
+///
+/// When a file has a `main`, both runners execute ONLY `main` (`run_test` here,
+/// `prepare_native_test` there): every other zero-parameter function is compiled and
+/// dropped.  `05-enums.loft` and `06-structs.loft` carried twenty-one assertions that way
+/// — struct formatting, `limit()` fields, `&`-default parameters, copy-on-bind — none of
+/// which had run in the life of those files.
+///
+/// Only zero-parameter functions are asked: one WITH parameters is a helper, reached
+/// through whatever calls it.
+#[test]
+fn every_assertion_is_reachable_from_the_entry_point() {
+    let mut bad: Vec<String> = Vec::new();
+    for entry in corpus_files() {
+        let Ok(src) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        let fns = corpus_fns(&src);
+        if !fns.iter().any(|f| f.name == "main") {
+            continue; // no `main`: every zero-parameter function is an entry point
+        }
+        for f in &fns {
+            if f.name == "main" || !f.zero_param || f.asserts == 0 || f.expect_error {
+                continue;
+            }
+            let called = src
+                .lines()
+                .enumerate()
+                .filter(|(i, _)| *i + 1 != f.line)
+                .any(|(_, l)| {
+                    let l = l.trim_start();
+                    !l.starts_with("//") && l.contains(&format!("{}(", f.name))
+                });
+            if !called {
+                bad.push(format!(
+                    "{}:{} fn {} — {} assertion(s), and `main` never calls it",
+                    entry.display(),
+                    f.line,
+                    f.name,
+                    f.asserts
+                ));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "a file with a `main` runs ONLY `main`, so these assertions are compiled and \
+         never executed — call them from `main` or delete them:\n  {}",
+        bad.join("\n  ")
+    );
+}
+
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
@@ -1082,9 +1276,8 @@ fn expect_fail_fns(source: &str) -> (HashSet<String>, bool) {
             pending = false;
             continue;
         }
-        if let Some(comment) = trimmed.strip_prefix("//") {
-            let comment = comment.trim();
-            if comment.starts_with("@EXPECT_FAIL") {
+        if trimmed.starts_with("//") {
+            if common::expect_tag(trimmed, "@EXPECT_FAIL").is_some() {
                 if in_header {
                     file_level = true;
                 } else {
@@ -1108,18 +1301,15 @@ fn expected_annotations(source: &str) -> (Vec<String>, Vec<String>) {
     let mut warnings = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim();
-        if let Some(comment) = trimmed.strip_prefix("//") {
-            let comment = comment.trim();
-            if let Some(rest) = comment.strip_prefix("@EXPECT_ERROR:") {
-                let sub = rest.trim();
-                if !sub.is_empty() {
-                    errors.push(sub.to_string());
-                }
-            } else if let Some(rest) = comment.strip_prefix("@EXPECT_WARNING:") {
-                let sub = rest.trim();
-                if !sub.is_empty() {
-                    warnings.push(sub.to_string());
-                }
+        if let Some(rest) = common::expect_tag(trimmed, "@EXPECT_ERROR:") {
+            let sub = rest.trim();
+            if !sub.is_empty() {
+                errors.push(sub.to_string());
+            }
+        } else if let Some(rest) = common::expect_tag(trimmed, "@EXPECT_WARNING:") {
+            let sub = rest.trim();
+            if !sub.is_empty() {
+                warnings.push(sub.to_string());
             }
         }
     }

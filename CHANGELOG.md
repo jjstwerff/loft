@@ -33,6 +33,24 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A failed `assert` names the line it is on
+
+If a function above it took a `const` (or a `&`) parameter it never modifies, every
+message after that function pointed at the wrong line — always by the same amount, so
+nothing looked odd:
+
+```
+error: assertion failed: repeat call, two params
+  --> game.loft:177:1
+177 |   assert(inner == 13, "by-value: callee sees its own writes");
+```
+
+The message belongs to line 184; line 177 is a different assertion, which is what made
+the report so convincing.  The caret of a warning, the file and line in a runtime error,
+and the line a failed `assert` prints all come from the same place, so all three moved
+together.  They are right now, and a test file whose nineteen assertions had all been
+reporting seven lines early reads correctly again.
+
 ### A function that picks between a fresh value and a local no longer piles up records
 
 This shape is everywhere, and it was leaking one record on every call:

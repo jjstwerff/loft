@@ -114,6 +114,10 @@ fn main() {
   // Note: '#index' works on a sorted collection — it is a sequential counter that
   // advances one per visited element (see the loop above). It is only 'index<T>'
   // collections that reject '#index' — use '#count' there instead (see 11-index).
+  // ## Iterating a Key Range
+  // The range examples live in `main_ranges` below; run them here, because a file
+  // with a `main` runs only its `main`.
+  main_ranges();
 }
 
 struct Word {

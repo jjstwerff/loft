@@ -801,11 +801,48 @@ pub fn init(state: &mut State) {
     }
 }
 
+/// `LOFT_TRACE_ASSERTS=<path>` — append `file:line` for every `assert` that EXECUTES.
+///
+/// The instrument for the assertion nobody checks.  A corpus's guarantee is the set of
+/// `assert`s it RUNS, and that set is invisible: a file skipped for an expected error, a
+/// function the entry point never calls, a branch never taken all look exactly like a
+/// passing test.  Diffing this trace against the `assert(` sites in the source names them
+/// — 81 in `tests/scripts` when it was first run, and a `--native` run appends to the same
+/// file because the generated binary calls this same function.
+///
+/// It also reads the position the COMPILER injected, which is how it found loft#625's
+/// mechanism at a second site: every assert in one file traced exactly seven lines early,
+/// so a failure printed another assert's source under the caret.
+///
+/// Off costs one `OnceLock` read.  Append rather than truncate: a suite runs many
+/// programs, and each is a separate process under `--native`.
+fn trace_assert_site(file: &str, line: i64) {
+    use std::io::Write;
+    use std::sync::OnceLock;
+    static SINK: OnceLock<Option<std::sync::Mutex<std::fs::File>>> = OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        std::env::var("LOFT_TRACE_ASSERTS").ok().and_then(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+                .map(std::sync::Mutex::new)
+        })
+    });
+    if let Some(m) = sink
+        && let Ok(mut f) = m.lock()
+    {
+        let _ = writeln!(f, "{file}:{line}");
+    }
+}
+
 fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     let v_test = *stores.get::<bool>(stack);
+    trace_assert_site(v_file.str(), v_line);
     if stores.report_asserts {
         stores.assert_results.push((
             v_test,

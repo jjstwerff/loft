@@ -362,6 +362,26 @@ fix-on-save applies.
    `tests/error_messages/cases/48_advice_points_at_the_function_it_names.loft`, whose
    fixture deliberately ends in a `next_function_marker` no caret may land on.
 
+5. **A seek to a diagnostic site is not free — it moves what every LATER position is read
+   from.** `Lexer::to` points the reporting position at a declaration a whole-body pass is
+   complaining about; it does **not** move the read cursor, and the tokenizer keeps
+   incrementing that reporting position on every physical line it pulls afterwards. So a
+   seek left standing shifts the caret of every diagnostic in the rest of the file, the
+   `file:line` of a runtime span, and the line the compiler injects into `assert` — all by
+   the same constant, which is what makes it read as correct. Measured: a needless-`const`
+   parameter made all nineteen assertions of one test file report seven lines early, so a
+   failure printed **another** assert's source under this one's message (loft#625's
+   mechanism, at a site that fix did not reach).
+
+   The seek now ends at the next token scanned from source, so a missing restore costs the
+   one diagnostic it was made for. A pass that emits several diagnostics and then keeps
+   parsing still restores explicitly (`let p = lexer.at(); … lexer.to(p);`) — a position
+   read back with `at()` before that next token still sees the seek. Guard:
+   `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`; the
+   corpus-wide re-measure is `LOFT_TRACE_ASSERTS`
+   ([TESTING.md](TESTING.md#the-set-a-suite-runs-is-not-the-set-it-contains-loft_trace_asserts)),
+   which reads exactly this injected line.
+
 ## See also
 
 - [COPY_DIAGNOSTICS.md](COPY_DIAGNOSTICS.md) — the copy-vs-borrow model behind `avoidable-copy`.
