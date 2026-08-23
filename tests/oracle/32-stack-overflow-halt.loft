@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
+// @ORACLE_HALTS: the call-depth cap is the subject — the program must exceed it and
+// halt the same way on both backends (loft#1058).
+//
 // @PLN89 differential-oracle corpus — AXIS: the call-stack cap.
 //
 // Two backends, two guards: `State::fn_call` reads `call_stack.len()`, the generated
@@ -34,6 +37,14 @@ fn rec1058(n: integer) -> integer {
 }
 
 fn main() {
-  print("at_limit={rec1058(9998)}\n");
+  // The cap's exact BOUNDARY is the claim (loft#1058: two guards on one cap counted
+  // different things, so this depth printed an answer on one backend and halted on the
+  // other).  9998 must ANSWER, and answer its own depth — a cap that fired one frame
+  // early would still print a plausible number.
+  at = rec1058(9998);
+  assert(at == 9998, "the deepest permitted call returns its own depth; got {at}");
+  print("at_limit={at}\n");
+  // …and 9999 must HALT.  Nothing after this line runs, which is what @ORACLE_HALTS
+  // above declares.
   print("past_limit={rec1058(9999)}\n");
 }

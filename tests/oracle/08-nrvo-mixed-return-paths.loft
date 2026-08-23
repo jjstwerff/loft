@@ -24,16 +24,26 @@ fn pick(f: boolean, n: integer) -> vector<integer> {
 fn main() {
   // take the literal path — was a leak before the fix
   a = pick(false, 7);
-  print("a={a[0]}+{a[1]}+{a[2]} alen={len(a)}\n"); // 7+7+7, len 3
+  a0 = a[0] ?? -1; a1 = a[1] ?? -1; a2 = a[2] ?? -1;
+  assert(a0 == 7 && a1 == 7 && a2 == 7, "the literal arm delivers [7,7,7]; got {a0} {a1} {a2}");
+  assert(len(a) == 3, "…three elements, not the other arm's four; got {len(a)}");
+  print("a={a0}+{a1}+{a2} alen={len(a)}\n");
 
   // take the Call path — always clean
   b = pick(true, 4);
-  print("b={b[0]}+{b[3]} blen={len(b)}\n"); // 0 + 9, len 4
+  b0 = b[0] ?? -1; b3 = b[3] ?? -1;
+  assert(b0 == 0 && b3 == 9, "the Call arm delivers squares(4), so ends are 0 and 9; got {b0} {b3}");
+  assert(len(b) == 4, "…four elements; got {len(b)}");
+  print("b={b0}+{b3} blen={len(b)}\n");
 
-  // both, kept together, then consume
+  // Both alive at once, then consumed: the orphaned-store bug this file is named for
+  // showed up as one of them holding the OTHER's contents, which reads fine element by
+  // element and only breaks when both are summed.
   sa = 0;
   for x in a { sa += x; }
   sb = 0;
   for x in b { sb += x; }
-  print("sa={sa} sb={sb}\n"); // 21, 14
+  assert(sa == 21, "7*3 = 21; got {sa}");
+  assert(sb == 14, "0+1+4+9 = 14; got {sb}");
+  print("sa={sa} sb={sb}\n");
 }

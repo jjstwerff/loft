@@ -14,11 +14,20 @@ fn build(n: integer) -> vector<Acc> {
 }
 
 fn main() {
-    // deep-ish recursion (400 frames) — sum 1..400 = 80200
-    println("recur={sum_to(400)}");
+    // deep-ish recursion (400 frames)
+    rec = sum_to(400);
+    assert(rec == 80200, "1..400 sums to 400*401/2 = 80200; got {rec}");
+    println("recur={rec}");
     // a large vector of structs, reduced two ways
     v = build(300);
     tot_n = 0;
     for j in 0..len(v) { e = v[j] ?? Acc { n: 0, sum: 0 }; tot_n += e.n; }
-    println("len={len(v)} tot_n={tot_n} last_sum={(v[299] ?? Acc { n: 0, sum: 0 }).sum}");
+    last = (v[299] ?? Acc { n: 0, sum: 0 }).sum;
+    // The two reductions are computed by DIFFERENT routes — one by the loop here, one
+    // accumulated inside `build` — so agreeing with each other is a real check and not
+    // the same arithmetic twice.
+    assert(len(v) == 300, "300 elements built; got {len(v)}");
+    assert(tot_n == 44850, "0..299 sums to 299*300/2 = 44850; got {tot_n}");
+    assert(last == tot_n, "the running total in the last element equals the sum of all `n`; got {last}");
+    println("len={len(v)} tot_n={tot_n} last_sum={last}");
 }

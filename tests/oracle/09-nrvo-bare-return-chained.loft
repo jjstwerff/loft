@@ -44,28 +44,42 @@ fn mixed(c: boolean, n: integer) -> vector<integer> {
 }
 
 fn main() {
-  // single-return literal, chained: leaked before the fix
+  // An orphaned return buffer keeps the VALUES right and loses the store, so the length
+  // is the discriminating half on every line here — each arm returns a different one on
+  // purpose, and a buffer delivered from the wrong path shows up as the other arm's.
   a = wrap1(7);
-  print("a={a[0]}+{a[2]} alen={len(a)}\n");        // 7+7, len 3
+  a0 = a[0] ?? -1; a2 = a[2] ?? -1;
+  assert(a0 == 7 && a2 == 7, "the chained literal arrives intact; got {a0} {a2}");
+  assert(len(a) == 3, "triple gives three; got {len(a)}");
+  print("a={a0}+{a2} alen={len(a)}\n");
 
   // multi-return literal, chained, take the TAIL path
   b = wrap2(false);
-  print("b={b[0]} blen={len(b)}\n");               // 2, len 3
+  b0 = b[0] ?? -1;
+  assert(b0 == 2 && len(b) == 3, "the tail arm is [2,2,2]; got {b0} len {len(b)}");
+  print("b={b0} blen={len(b)}\n");
 
   // multi-return literal, chained, take the EARLY path
   d = wrap2(true);
-  print("d={d[0]} dlen={len(d)}\n");               // 1, len 2
+  d0 = d[0] ?? -1;
+  assert(d0 == 1 && len(d) == 2, "the early arm is [1,1] — a different length; got {d0} len {len(d)}");
+  print("d={d0} dlen={len(d)}\n");
 
   // mirror: early literal + tail call-chain, take the EARLY path (was the h4 leak)
   e = mixed(true, 7);
-  print("e={e[0]} elen={len(e)}\n");               // 7, len 2
+  e0 = e[0] ?? -1;
+  assert(e0 == 7 && len(e) == 2, "the mid-body literal is [7,7]; got {e0} len {len(e)}");
+  print("e={e0} elen={len(e)}\n");
 
   // mirror, take the TAIL (call) path
   f = mixed(false, 7);
-  print("f={f[0]} flen={len(f)}\n");               // 7, len 3
+  f0 = f[0] ?? -1;
+  assert(f0 == 7 && len(f) == 3, "the tail chain delivers triple's three; got {f0} len {len(f)}");
+  print("f={f0} flen={len(f)}\n");
 
   // consume so a downstream `+=` would surface any dropped/doubled rows
   sa = 0;
   for x in a { sa += x; }
-  print("sa={sa}\n");                              // 21
+  assert(sa == 21, "7*3 = 21, so no row was dropped or doubled; got {sa}");
+  print("sa={sa}\n");
 }

@@ -16,7 +16,14 @@
 fn main() {
     // A path no test creates: seal fails (no main file), check fails (no sidecar).
     absent = "tests/oracle/.no-such-store";
-    println("seal={store_durable_seal(absent)} check={store_durable_check(absent)}");
+    sealed = store_durable_seal(absent);
+    checked = store_durable_check(absent);
+    // `false` is the ANSWER the contract requires, and it is the whole point: a target
+    // without the mmap feature must answer rather than fail to link.  Asserting it says
+    // the call really ran, where printing it cannot distinguish an answer from a stub.
+    assert(!sealed, "sealing a store with no main file fails honestly; got {sealed}");
+    assert(!checked, "checking a store with no sidecar fails honestly; got {checked}");
+    println("seal={sealed} check={checked}");
     // The gated call inside a branch the program does not take still has to
     // COMPILE — emission is per call site, not per taken path.
     if false { println("unreachable={store_durable_seal(absent)}"); }

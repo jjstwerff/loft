@@ -22,19 +22,29 @@ fn pick(flag: boolean, n: integer) -> vector<integer> {
 }
 
 fn main() {
+  // A leaked or mis-delivered return buffer usually gets the LENGTH right and the
+  // contents wrong, or vice versa, so both are asserted at every step.
   a = squares(5);
   a += [99];                       // += on a returned vector (the #437 shape)
   sa = 0;
   for x in a { sa += x; }
-  print("a_sum={sa} a_len={len(a)}\n"); // 0+1+4+9+16+99 = 129, len 6
+  assert(sa == 129, "squares(5) is 0+1+4+9+16, plus 99 = 129; got {sa}");
+  assert(len(a) == 6, "five squares plus one append = 6; got {len(a)}");
+  print("a_sum={sa} a_len={len(a)}\n");
 
   // concat two returned vectors, then read the last element
   d = squares(3);
   e = squares(4);
   d += e;
-  print("d_len={len(d)} d_last={d[len(d) - 1]}\n"); // 3 + 4 = 7, last = 9
+  dl = d[len(d) - 1] ?? -1;
+  assert(len(d) == 7, "3 + 4 = 7 elements after the concat; got {len(d)}");
+  assert(dl == 9, "the last element is squares(4)'s last, 3*3 = 9; got {dl}");
+  print("d_len={len(d)} d_last={dl}\n");
 
   // multi-arm vector return through a second return
   p = pick(true, 4);
-  print("p_sum={p[0] + p[1] + p[2] + p[3]} p_len={len(p)}\n"); // 0+1+4+9=14, len 4
+  ps = (p[0] ?? -1) + (p[1] ?? -1) + (p[2] ?? -1) + (p[3] ?? -1);
+  assert(ps == 14, "the taken arm returns squares(4): 0+1+4+9 = 14; got {ps}");
+  assert(len(p) == 4, "…and four elements, not the other arm's three; got {len(p)}");
+  print("p_sum={ps} p_len={len(p)}\n");
 }

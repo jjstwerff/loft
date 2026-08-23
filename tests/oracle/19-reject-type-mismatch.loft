@@ -4,6 +4,9 @@
 // ill-typed (`integer + text` has no operator); the oracle asserts all three
 // drivers reject it (none runs, same diagnostic), exercising the reject facet the
 // all-accept corpus never touches.
+//
+// @ORACLE_STATIC_REJECT: the reject IS the subject — this program must not compile, and
+// the oracle's claim is that all three drivers refuse it identically.
 fn main() {
     x = 1;
     y = x + "text";

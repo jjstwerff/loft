@@ -16,16 +16,24 @@ fn at(t: text, i: integer) -> character {
 fn main() {
   s = "hello";
   // arithmetic (i - 1) nested inside text indexing
-  for i in 1..6 { print("{at(s, i)}"); }
+  built = "";
+  for i in 1..6 { built += "{at(s, i)}"; print("{at(s, i)}"); }
+  assert(built == "hello", "the offset index walks the whole word in order; got `{built}`");
   print("\n");
 
-  // arithmetic nested inside vector indexing
+  // arithmetic nested inside vector indexing.  The `?? 0` is the C80 null model, not
+  // decoration: a DYNAMIC index types nullable because it can be out of range, and
+  // without the discharge this program stopped COMPILING — which the oracle read as the
+  // two backends agreeing to reject it, so this whole axis silently stopped running.
   v = [10, 20, 30, 40];
   acc = 0;
-  for j in 0..4 { acc += v[(j * 2) % 4]; }
+  for j in 0..4 { acc += v[(j * 2) % 4] ?? 0; }
+  assert(acc == 80, "(j*2)%4 walks 0,2,0,2 -> 10+30+10+30 = 80; got {acc}");
   print("acc={acc}\n");
 
   // arithmetic nested inside a fn argument, itself nested in another call
   inner = "{1 + 2 * 3}_{(8 - 1) / 7}";
+  assert(inner == "7_1", "precedence inside interpolation: 1+2*3 = 7, (8-1)/7 = 1; got `{inner}`");
+  assert(len(inner) == 3, "three characters; got {len(inner)}");
   print("len={len(inner)} inner={inner}\n");
 }

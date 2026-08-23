@@ -18,11 +18,19 @@ fn area(s: Shape) -> integer {
 fn main() {
   c = Circle { radius: 2 };
   r = Rect { width: 3, height: 4 };
-  print("circle={area(c)} rect={area(r)}\n"); // 12, 12
+  ac = area(c); ar = area(r);
+  // The two happen to be equal, which is worth saying out loud: a reader cannot tell
+  // from `12 12` which arm ran.  Dispatching a `Rect` through the Circle arm would read
+  // `width` as `radius` and give 27, so the cell does discriminate — but the mixed
+  // vector below is what actually separates the arms, and it is asserted too.
+  assert(ac == 12, "a circle of radius 2 is 2*2*3 = 12; got {ac}");
+  assert(ar == 12, "a 3 by 4 rect is 12 — the same number by a different arm; got {ar}");
+  print("circle={ac} rect={ar}\n");
 
   // match over a vector of enum values (element destructuring path)
   shapes = [Circle { radius: 1 }, Rect { width: 5, height: 6 }, Circle { radius: 3 }];
   total = 0;
   for s in shapes { total += area(s); }
-  print("total={total}\n"); // 3 + 30 + 27 = 60
+  assert(total == 60, "3 (circle 1) + 30 (rect 5x6) + 27 (circle 3) = 60; got {total}");
+  print("total={total}\n");
 }

@@ -23,7 +23,15 @@ fn main() {
     se = vec[0];
     se.v = 66;
 
-    // cs copied (o.i.v back to the vi-view value), fv copied (o.items[0] unchanged),
-    // vi aliased (o.i.v == 77), se aliased (vec[0].v == 66)
+    // Each of the four writes above has a DIFFERENT correct destination, and the whole
+    // point of the file is that three of them are decided by rules a reader cannot see at
+    // the write site (H-Copy vs H-View).  A backend that made the copies alias, or the
+    // views copy, still agrees with a backend that made the same mistake.
+    assert(o.i.v == 77, "the struct-field projection is a VIEW, so `vi.v = 77` reached `o`; got {o.i.v}");
+    assert(o.i.v != 99, "…and the whole-value bind `cs = o` COPIED, so `cs.i.v = 99` did not");
+    o0 = o.items[0] ?? -1;
+    assert(o0 == 10, "a vector-valued field projection COPIES, so `fv[0] = 88` did not reach `o`; got {o0}");
+    v0 = (vec[0] ?? In { v: -1 }).v;
+    assert(v0 == 66, "a struct ELEMENT of a vector is a VIEW, so `se.v = 66` reached it; got {v0}");
     println("o_i_v={o.i.v} o_items0={o.items[0]} vec0={vec[0].v}");
 }
