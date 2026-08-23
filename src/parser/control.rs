@@ -1403,9 +1403,27 @@ impl Parser {
                 return tp;
             }
             let last = l.len() - 1;
-            // CO1.3c: generator bodies return void (values come from yield),
-            // so suppress the void-vs-iterator mismatch.
+            // CO1.3c: generator bodies return void (values come from yield), so the
+            // void-vs-iterator mismatch is not an error.
+            //
+            // But "its tail is not the return value" is not the same as "do not look at its
+            // tail", and this used to be written as the second.  A generator body whose tail
+            // IS a value — `fn make() -> iterator<integer> { counting(1) }` — then sailed
+            // through: the value was dropped, `--interpret` answered an EMPTY sequence with
+            // no diagnostic, and `--native` panicked inside `alloc_coroutine`.  That is the
+            // tail-expression spelling of the `return <expr>` this file refuses in
+            // `parse_return`; refusing one and not the other would leave the rule asked at
+            // one of its two construction sites, which is the shape loft#1006 already was.
             let is_generator = matches!(result, Type::Iterator(_, _));
+            if is_generator && !self.first_pass && !matches!(*t, Type::Void | Type::Never) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a generator's body produces values only through `yield`, so this tail \
+                     value is discarded — `for v in <generator>() {{ yield v; }}` forwards \
+                     another generator's values, and a bare statement ends the body"
+                );
+            }
             let ignore = is_generator
                 || (matches!(*t, Type::Void | Type::Never)
                     && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
@@ -12054,6 +12072,37 @@ impl Parser {
                 *val = Value::Return(Box::new(Value::Null));
                 return;
             }
+            // A GENERATOR has no `return`.  `coroutines.md` (G-Call) makes any function
+            // whose return type is `iterator<T>` a generator, and in that model values come
+            // only from `yield`: (G-Done) says reaching the end without a further yield
+            // leaves the iterator done, so a returned value has nothing it could mean and
+            // ending early is what `break` already does.
+            //
+            // A valued return used to be accepted and DISCARDED.
+            // `fn make() -> iterator<integer> { return counting(1); }` — an author
+            // delegating to another generator — gave an EMPTY sequence on `--interpret`
+            // with no diagnostic, and panicked inside `alloc_coroutine` ("RefCell already
+            // borrowed") on `--native`.  Refusing is what binding.md B-Ref-Reshape
+            // prescribes for the same situation elsewhere: where the language cannot honour
+            // what was written it declines the program rather than answering quietly.
+            //
+            // The message names `break` and not a bare `return;` deliberately — both cures
+            // were measured on both backends, and only `break` works.  `detect_lazy_for`
+            // (generation/coroutine.rs) rejects a `return` outright, so such a generator
+            // falls back to the eager buffer, whose factory cannot emit a mid-body return
+            // either (rustc E0308: the factory's type is `Box<dyn LoftCoroutine>`).
+            if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a generator has no `return` — it produces values only through `yield`, \
+                     so this value would be discarded. Use `break` to end it early, or \
+                     forward another generator's values with \
+                     `for v in <generator>() {{ yield v; }}`"
+                );
+                *val = Value::Return(Box::new(Value::Null));
+                return;
+            }
             // T1.7: check for null assigned to `integer not null` tuple elements.
             if !self.first_pass
                 && let (Value::Tuple(elems), Type::Tuple(expected)) = (&v, &r_type)
@@ -12386,6 +12435,19 @@ impl Parser {
                 // OpCopyRecord, then return `__ref_1`.  Mirrors the
                 // Vector arm's OpAppendVector treatment.
             }
+        } else if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
+            // A bare `return;` in a generator: the same rule as the valued one above, and
+            // it gets the same message.  It was already refused — as the generic "Expect
+            // expression after return", because the check reads "the declared type is not
+            // Void" as "a value is required" and a generator's declared type is
+            // `iterator<T>`.  That message sends the author to ADD a value, which is the
+            // one thing the rule forbids.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a generator has no `return` — use `break` to end it early, or forward \
+                 another generator's values with `for v in <generator>() {{ yield v; }}`"
+            );
         } else if !self.first_pass && r_type != Type::Void {
             diagnostic!(self.lexer, Level::Error, "Expect expression after return");
         }

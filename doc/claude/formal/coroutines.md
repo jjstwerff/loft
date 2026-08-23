@@ -62,6 +62,12 @@ point to the entry, and returns the frame as an `iterator<T>` value. Nothing the
   (G-Done)   ⟨next(fr), ⟨ρ, H⟩⟩ → ⟨done, ⟨ρ, H'⟩⟩
                when advance(fr) reaches the generator's end without a further yield:
                  state(fr) := done.  Every later next(fr) is `done` (idempotent exhaustion).
+  (G-Return) a generator has NO `return`.  Values leave a generator only through `yield`, so
+             `return e` in a function whose return type is `iterator<T>` is a STATIC error —
+             the value has nothing it could mean — and so is a bare `return;`, because
+             ending early is what `break` does and the body then reaches its end (G-Done).
+             The rule is asked at BOTH spellings of the same act: the `return` keyword, and
+             a body whose TAIL is a value.
 ```
 
 **In words.** Advancing a generator resumes its saved stack and runs until the **next** `yield`,
@@ -108,7 +114,38 @@ computed lazily, on demand, rather than read from a store.
 
 ## Deviations
 
-OPEN: **0**. One thing the VERIFICATION worklist surfaced (2026-07-04) is a **decided edge**, not
+OPEN: **0** (2026-08-23) — **D-cor-1 opened and closed the same day.**
+
+> **D-cor-1 — CLOSED (2026-08-23) — `return` in a generator was accepted and DISCARDED.**
+> `(G-Call)` makes any `-> iterator<T>` function a generator and the model gives a returned
+> value no meaning, but nothing said so and nothing refused it.  Both spellings of the same
+> act were accepted:
+>
+> ```loft
+> fn make() -> iterator<integer> { return counting(1); }   // the keyword
+> fn make() -> iterator<integer> { counting(1) }           // the tail value
+> ```
+>
+> An author delegating to another generator got an **EMPTY sequence** on `--interpret`,
+> exit 0, no diagnostic — and a panic inside `alloc_coroutine` ("RefCell already borrowed")
+> on `--native`.  `(G-Return)` above now states the rule and both spellings are refused,
+> naming `break` (early end) and `for v in g() { yield v; }` (forwarding).
+>
+> ⚠ **The message names `break` because the other candidate was MEASURED and does not
+> work.** A bare `return;` was refused only as the generic *"Expect expression after
+> return"* — the check reads "the declared type is not Void" as "a value is required" — and
+> it looked like a capability the refusal was removing.  It is not one: `detect_lazy_for`
+> (`generation/coroutine.rs`) rejects a `return` outright, so such a generator falls back to
+> the eager buffer, whose factory cannot emit a mid-body return either (rustc E0308 — the
+> factory's type is `Box<dyn LoftCoroutine>`).  Enabling it in the parser alone would have
+> shipped a shape that runs on one backend and does not compile on the other, which is the
+> divergence the refusal exists to prevent.  Naming an untested cure in a diagnostic is
+> worse than naming none.
+>
+> Guards: `tests/scripts/generator-return-carries-no-value.loft` (what must work, both
+> backends) and three cells in `102-expected-errors.loft`.
+
+One thing the VERIFICATION worklist surfaced (2026-07-04) is a **decided edge**, not
 a deviation — recorded here so it is not mistaken for a bug:
 
 > **DECIDED EDGE — NARROWED (loft#836, slice 1, 2026-08-10): native is eager only for a loop body
@@ -130,6 +167,33 @@ a deviation — recorded here so it is not mistaken for a bug:
 > own; a yield of a struct / vector builds its record into a work local that is not persisted, so
 > lowering it lazily would leak one record per yield. Those keep the eager buffer, and their
 > **values agree**; the observable difference stays side-effect interleaving.
+>
+> ⚠ **One of those reasons fires on code the author did not write, measured 2026-08-23.** A
+> generator that writes a **text field of a heap parameter** is eager:
+>
+> ```loft
+> struct T { s: text }
+> fn g(t: T) -> iterator<integer> { for i in 0..5 { print("p{i} "); t.s += "x"; yield i; } }
+> //  --interpret : p0 g0 p1 g1          --native : p0 p1 p2 p3 p4 g0 g1
+> ```
+>
+> It has ONE yield, and the yield IS the author's last statement — so it reads as a shape the
+> lazy lowering admits. In the IR it is not: a text field write allocates a temp and its
+> cleanup lands after the suspend —
+> `OpSetText(t, 0, _field_1); yield i; OpFreeText(_field_1);` — so `detect_lazy_for` sees
+> *"a statement AFTER the yield"* and demotes the whole generator. The same shape with an
+> **integer** field is lazy on both backends (`OpSetInt(…); yield i;` — nothing trails), as are
+> a text LOCAL written in the loop, a text-typed yield, and a text field READ.
+>
+> **This is the second time a generated cleanup op has silently demoted a generator**: the
+> `detect_yield_from` comment above records the first, where matching the op count exactly
+> *"silently pushed every `yield from` onto the eager path the moment that free appeared"*.
+> That site learned to tolerate a trailing free; this one has not. The fix the pair implies is
+> to hoist a dead temp's free above the suspend — `_field_1` is written into the record by the
+> preceding `OpSetText` and never read again, so freeing it before the yield is
+> semantics-preserving — rather than to widen the recogniser to accept arbitrary trailing
+> statements. Not implemented; it is coroutine-lowering work, and it belongs with the
+> remaining CL-9 slices under loft#836.
 > Slices 2-4 of [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9)
 > close the rest. Tracked as [loft#836](https://github.com/loft-lang/loft/issues/836).
 
@@ -139,7 +203,10 @@ a deviation — recorded here so it is not mistaken for a bug:
   The @PLN89 differential oracle (D-op-1) carries `12-coroutine-generator`, but it checks VALUES
   only — which is exactly why it reported full agreement across the eager/lazy difference.
   `tests/oracle/26-coroutine-laziness.loft` pins the **interleaving** for both the straight-line
-  and the lazy-loop shapes.
+  and the lazy-loop shapes, and since 2026-08-23 it ASSERTS that order rather than only
+  comparing the two backends' output: it records each event into a heap-struct parameter, which
+  a generator can write across a yield. Giving it that assertion is what found the text-field
+  cell above — the trace was written as text first, and recording it made the generator eager.
 - **`yield from` is out of scope** — delegation (CO1.4) is deferred to 1.1+; when it lands it
   extends `G-Yield` (a delegated yield forwards the sub-generator's values) and gets its own
   rule + oracle case. Until then a `yield from` is a parse-level unsupported form, not an

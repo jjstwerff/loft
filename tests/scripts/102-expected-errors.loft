@@ -445,6 +445,38 @@ fn dtup2_amp_of_a_tuple_struct_field() {
   b.0 = 9;
 }
 
+// A generator's `return` carries no value, and both spellings of "return a value from a
+// generator" used to be accepted and DISCARDED — `--interpret` answered an empty sequence
+// with no diagnostic, `--native` panicked in `alloc_coroutine`.  `formal/coroutines.md`
+// (G-Call) makes any `-> iterator<T>` function a generator and gives a returned value no
+// meaning; the working forms are in `generator-return-carries-no-value.loft`.
+fn grcv_counting(k: integer) -> iterator<integer> { yield k; yield k + 1; }
+
+// @EXPECT_ERROR: a generator has no `return` — it produces values only through `yield`
+fn grcv_valued_return() -> iterator<integer> {
+  return grcv_counting(1);
+}
+
+// The SAME act written without the keyword.  Refusing one and not the other would leave
+// the rule asked at one of its two construction sites, which is what loft#1006 was.
+// @EXPECT_ERROR: a generator's body produces values only through `yield`
+fn grcv_tail_expression() -> iterator<integer> {
+  grcv_counting(1)
+}
+
+// A BARE `return;` is the same rule and gets the same message.  It was already refused,
+// as the generic "Expect expression after return" — which sends the author to ADD a value,
+// the one thing the rule forbids.  `break` is the spelling that ends a generator early,
+// and it is what the message names because it is what was measured to work on both
+// backends.
+// @EXPECT_ERROR: a generator has no `return` — use `break` to end it early
+fn grcv_bare_return() -> iterator<integer> {
+  for i in 0..3 {
+    if i == 2 { return; }
+    yield i;
+  }
+}
+
 // loft#1037 — a `limit(...)` bound the type cannot CARRY is refused instead of
 // truncated.  `IntegerSpec` holds `min: i32` / `max: u32`, so `limit(0, 5000000000)`
 // silently became `limit(0, 705032704)` and every in-range value then read back as the
