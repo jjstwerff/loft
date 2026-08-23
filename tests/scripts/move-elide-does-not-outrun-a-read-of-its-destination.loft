@@ -105,3 +105,65 @@ fn test_build_from_the_container_into_it() {
   assert(o.b.name == "src", "build-from-container: {o.b.name}");
   assert(o.a.name == "src", "the source field changed: {o.a.name}");
 }
+
+// ── The same hole in the CONSTRUCT shape (`x.field += src`, `OpAppendVector`) ─────────────
+//
+// B1.3b guards the SOURCE being read between its build and the move (`escaping` /
+// `source_escapes`) and never guarded the DESTINATION — the identical asymmetry the Record
+// shape had.  Both shapes now read ONE predicate, because two copies of one rule is the shape
+// loft#1006 was.
+//
+// The append cell is a silent-wrong; the loop cell is worse than that.
+
+struct MeBag { v: vector<integer>, n: integer }
+
+// A read of the destination between the source's build and the append saw the POST-append
+// state: `seen` reported 3 for a vector that held 2 elements when it was read.
+fn test_a_read_before_an_append_sees_the_pre_append_state() {
+  b = MeBag { v: [1, 2], n: 0 };
+  tmp: vector<integer> = [];
+  tmp += [9];
+  seen = len(b.v);
+  b.v += tmp;
+  assert(seen == 2, "the read saw the retargeted append: {seen}");
+  assert(len(b.v) == 3, "the append did not land: {b.v}");
+  assert((b.v[2] ?? 0) == 9, "appended value: {b.v}");
+}
+
+// Building the source by ITERATING the destination.  The retarget pointed the loop's appends
+// at the vector the loop was walking, so it grew without bound: SIGABRT on `--interpret`, and
+// on `--native` a `store offset overflow: requested 2203149353 words`.  A time bound does not
+// bound memory (CLAUDE.md), which is why this one is a guard and not a note.
+fn test_appending_a_vector_built_by_iterating_it() {
+  c = MeBag { v: [1, 2], n: 0 };
+  doubled: vector<integer> = [];
+  for x in c.v { doubled += [x * 10]; }
+  c.v += doubled;
+  assert(len(c.v) == 4, "length after append: {len(c.v)}");
+  assert((c.v[0] ?? 0) == 1, "c.v[0]: {c.v}");
+  assert((c.v[2] ?? 0) == 10, "c.v[2]: {c.v}");
+  assert((c.v[3] ?? 0) == 20, "c.v[3]: {c.v}");
+}
+
+// The whole-vector REPLACE built by iterating the same field — B1.3d's own territory, which
+// already carried this guard (`try_replace_one`: "base's BUILD must not read the destination
+// container").  Pinned here beside its two siblings so the three cannot drift apart.
+fn test_replacing_a_field_with_a_vector_built_from_it() {
+  d = MeBag { v: [1, 2, 3], n: 0 };
+  kept: vector<integer> = [];
+  for x in d.v { if x != 2 { kept += [x]; } }
+  d.v = kept;
+  assert(len(d.v) == 2, "replace length: {d.v}");
+  assert((d.v[0] ?? 0) == 1, "replace [0]: {d.v}");
+  assert((d.v[1] ?? 0) == 3, "replace [1]: {d.v}");
+}
+
+// CONTROL for the append shape: nothing between, so the move must still be taken.
+fn test_the_clean_append_still_elides() {
+  b = MeBag { v: [1], n: 0 };
+  tmp: vector<integer> = [];
+  tmp += [7, 8];
+  b.v += tmp;
+  assert(len(b.v) == 3, "clean append: {b.v}");
+  assert((b.v[1] ?? 0) == 7, "clean append [1]: {b.v}");
+}

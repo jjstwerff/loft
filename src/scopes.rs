@@ -1659,7 +1659,7 @@ fn move_elide(data: &mut Data) {
             // retarget: the write would move ahead of that access.  See
             // `collect_move_disturbed`.
             let mut disturbed: HashSet<u16> = HashSet::new();
-            collect_move_disturbed(&code, &mo, &dest, &mut disturbed);
+            collect_move_disturbed(&code, &mo, mo.op_copy_record, 0, &dest, &mut disturbed);
             let ready: HashSet<u16> = dest
                 .keys()
                 .copied()
@@ -1693,6 +1693,7 @@ fn move_elide(data: &mut Data) {
                 &mut code,
                 &con_sources,
                 &co,
+                &mo,
                 &bad_containers,
                 &escaping,
                 &mut skip,
@@ -1823,6 +1824,12 @@ fn mentions_var(node: &Value, v: u16) -> bool {
 /// `held`'s build moves into `p.1`, so `p.0 = p.1` then copies the NEW value back and the swap
 /// answers `x|x` where it wants `y|x` — silently, on both backends.
 ///
+/// Read by BOTH move shapes — the Record copy (`OpCopyRecord(src, dst)`, source at arg 0) and
+/// the Construct append (`OpAppendVector(dst, src)`, source at arg 1) — because they had the
+/// same hole and two copies of one predicate is the shape loft#1006 was.  B1.3d already carried
+/// this guard for its own rewrite (`try_replace_one`: *"`base`'s BUILD must not read the
+/// destination container"*), which is what the other two were missing.
+///
 /// Conservative by BASE variable: any mention of the destination's base container between the
 /// two points disqualifies the move.  The source's own construction ops are excluded (they are
 /// what gets retargeted), so `o.f = T { x: o.g }` — building FROM the container into it — is
@@ -1831,6 +1838,8 @@ fn mentions_var(node: &Value, v: u16) -> bool {
 fn collect_move_disturbed(
     node: &Value,
     mo: &MoveOps,
+    copy_op: u32,
+    src_arg: usize,
     dest: &HashMap<u16, Value>,
     out: &mut HashSet<u16>,
 ) {
@@ -1839,10 +1848,10 @@ fn collect_move_disturbed(
             let Value::Call(d, args) = op.unspan() else {
                 continue;
             };
-            if *d != mo.op_copy_record {
+            if *d != copy_op {
                 continue;
             }
-            let Some(Value::Var(s)) = args.first().map(Value::unspan) else {
+            let Some(Value::Var(s)) = args.get(src_arg).map(Value::unspan) else {
                 continue;
             };
             let Some(slot) = dest.get(s) else { continue };
@@ -1882,7 +1891,7 @@ fn collect_move_disturbed(
         Value::Insert(ops) => scan(ops, out),
         _ => {}
     }
-    node.for_each_child(&mut |c| collect_move_disturbed(c, mo, dest, out));
+    node.for_each_child(&mut |c| collect_move_disturbed(c, mo, copy_op, src_arg, dest, out));
 }
 
 /// Vars defined by `OpNewRecord` (`_elm_N = OpNewRecord(…)`) — the transient element slots the
@@ -2073,6 +2082,7 @@ fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
+    mo: &MoveOps,
     bad_containers: &HashSet<u16>,
     escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
@@ -2097,6 +2107,14 @@ fn construct_move_rewrite(
         &mut container,
     );
 
+    // A destination TOUCHED between the source's build and the append cannot take the retarget:
+    // the append would move ahead of that access.  `escaping` above guards the SOURCE being read
+    // in between and this is its missing twin — measured, `seen = len(b.v); b.v += tmp` reported
+    // the POST-append length, and `for x in c.v { t2 += [...] } c.v += t2` retargeted the loop's
+    // appends onto the vector the loop was ITERATING and grew it without bound.
+    let mut disturbed: HashSet<u16> = HashSet::new();
+    collect_move_disturbed(code, mo, co.op_append, 1, &dest, &mut disturbed);
+
     // Ready = found a unique append destination + a backing wrapper, AND provably reorder-free.
     let ready: HashSet<u16> = con_sources
         .iter()
@@ -2108,6 +2126,7 @@ fn construct_move_rewrite(
                 // A source READ between its build and the move (or grown by appends) can't be built
                 // directly into the destination — leave it a copy.
                 && !escaping.contains(s)
+                && !disturbed.contains(s)
                 // B1.3b handles a PURE append (`x.field += src`). If the field is CLEARED anywhere
                 // it is a whole-vector REPLACE (`x.field = src`, an `OpClearVector` + append) — a
                 // simple retarget would leave the clear stranded after the retargeted build (empties

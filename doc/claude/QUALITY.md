@@ -775,6 +775,51 @@ pristine tree; the two that PASS there are `test_the_clean_move_still_elides` an
 disabled the elision passes every other cell in the file, which is exactly why the control is in
 it.
 
+### The same hole in the sibling rewrite — and one of them grew a vector without bound (2026-08-24)
+
+Two silent-wrongs in one day had come out of @PLN90 phase B, so the class was the MECHANISM
+rather than either bug: **a rewrite that MOVES a statement needs to say what may not sit between
+the two positions.**  There are four such rewrites in `scopes.rs`; the previous pass fixed one.
+Auditing the other three found the same hole in a second, and the audit is the whole result —
+neither of the two new defects would have been reached by pulling on the first bug's repro.
+
+| rewrite | shape | verdict |
+|---|---|---|
+| `move_rewrite` | Record, `OpCopyRecord` | fixed the previous pass |
+| `construct_move_rewrite` (B1.3b) | Construct, `OpAppendVector` | **the same hole — 2 defects, fixed** |
+| `construct_fresh_rewrite` (B1.3c) | fresh container built AFTER the source | clean, and structurally so: the destination does not EXIST between, so nothing can read it.  Probed anyway (3 shapes) |
+| `construct_replace_rewrite` (B1.3d) | whole-vector replace | **already had the guard** |
+
+**B1.3d is where the sentence was already written.**  `try_replace_one` carries it verbatim —
+*"`base`'s BUILD must not read the destination container `a` (a SELF-ASSIGN like `s.v = s.v[1..]`
+… moving the `OpClearVector` ahead of that read would empty `s.v` before the slice copies it)"* —
+and its two siblings in the same file did not.  That is the third time this month a carve-out
+comment turned out to be a map of where the same hole still is, and the first time the map was
+for a rewrite rather than for a type.
+
+**What the Construct shape did.**  It guards the SOURCE being read between its build and the
+move (`escaping` / `source_escapes`) and never guarded the DESTINATION — the identical asymmetry:
+
+```loft
+seen = len(b.v);  b.v += tmp;                        // seen reported 3 for a 2-element vector
+for x in c.v { doubled += [x * 10]; }  c.v += doubled;   // SIGABRT
+```
+
+The second is the one that matters: the retarget pointed the loop's appends at the vector the
+loop was ITERATING, so it grew without bound — `SIGABRT` on `--interpret`, and on `--native`
+a `store offset overflow: requested 2203149353 words`.  Under the test harness it trips the 2 GiB
+store ceiling at 1.7 GiB, which is how the guard fails on a pristine tree rather than taking the
+box down with it.  **A time bound does not bound memory**, and this is a compiler rewrite
+producing the unbounded allocation, not user code.
+
+**One predicate, both shapes.**  `collect_move_disturbed` is now parameterised by the copy op and
+which argument is the source — `OpCopyRecord(src, dst)` at arg 0, `OpAppendVector(dst, src)` at
+arg 1 — rather than copied per shape, because two copies of one rule is the shape loft#1006 was.
+
+**Cost measured, not asserted:** emitted IR byte-identical on **851 of 852** `tests/scripts`, the
+one difference being the guard's own file.  Both fixes together cost no legitimate elision
+anywhere in the corpus, which also says why these survived: the corpus never wrote the shapes.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
