@@ -166,7 +166,14 @@ jobs:
               sed 's/^/    /' dump.err
               rc=1
             fi
-          done < <(find tests -name '*.loft' 2>/dev/null)
+            # `-type f` is load-bearing: `loft --dump` WRITES a `tests/.loft` cache
+            # directory beside the file it compiles, and the glob `*.loft` matches that
+            # name.  `find` streams through the process substitution, so the directory
+            # THIS loop creates can be handed straight back to it, `--dump` fails on a
+            # directory, and a runtime/environment failure is then reported as
+            # "COMPILE-BREAK" — a shipped library falsely accused of a freeze violation.
+            # Reachable on any package with two or more test files.
+          done < <(find tests -type f -name '*.loft' 2>/dev/null)
           {
             echo "### ${{ matrix.name }} ${{ matrix.version }} — interpret suite FAILED against loft \`$loft_sha\`"
             echo "_re-classified as: $([ "$n" -eq 0 ] && echo 'no .loft to check' || { [ "$rc" -eq 0 ] && echo 'runtime failure, still COMPILES → best-effort PASS (VERIFY not a real regression)' || echo 'COMPILE break → hard FAIL'; })_"
