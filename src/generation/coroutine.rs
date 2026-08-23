@@ -142,6 +142,66 @@ fn tail_is_yield(v: &Value) -> bool {
     }
 }
 
+/// Move a dead temp's scope-exit free ABOVE the `yield` it trails, so the loop still reads
+/// as one the lazy lowering admits.
+///
+/// A loop body that ends `…; yield v; OpFreeText(_tmp)` is what a TEXT FIELD WRITE compiles
+/// to — `t.s += "x"` lifts the field into a temp, copies it back with `OpSetText`, and the
+/// temp's free is placed at block exit, which lands after the suspend.  [`detect_lazy_for`]
+/// then sees a statement after the yield and demotes the WHOLE generator to the eager
+/// buffer, whose side effects all happen before the consumer sees anything — where
+/// [`coroutines.md`](../../doc/claude/formal/coroutines.md) `(G-Next)` says they interleave.
+/// Measured: the same generator with an INTEGER field is lazy on both backends, because
+/// `OpSetInt` leaves nothing trailing.  The author wrote no statement after the yield; the
+/// compiler did, and the author has no way to remove it.
+///
+/// Hoisting is sound exactly when the yield does not READ what is being freed: the free
+/// then happens one statement earlier along a straight line, still once per iteration.  It
+/// is also strictly better for an ABANDONED generator, which used to strand the last
+/// iteration's temp.  A yield that reads the temp (`yield t.s`) keeps the eager path.
+///
+/// Returns the rewritten statement, or `None` when there is nothing to hoist — so a caller
+/// can tell "already fine" and "cannot be made fine" apart from "fixed".
+fn hoist_trailing_frees(v: &Value, data: &crate::data::Data) -> Option<Value> {
+    let Value::Block(bl) = v.unspan() else {
+        return None;
+    };
+    let last = bl.operators.last()?;
+    // Descend the same way `tail_is_yield` does, so the two agree about where the tail is.
+    if matches!(last.unspan(), Value::Block(_)) {
+        let fixed = hoist_trailing_frees(last, data)?;
+        let mut bl2 = bl.clone();
+        *bl2.operators.last_mut()? = fixed;
+        return Some(Value::Block(bl2));
+    }
+    // The tail must be a run of frees sitting directly after the yield — nothing else.
+    let at = bl
+        .operators
+        .iter()
+        .rposition(|op| matches!(op.unspan(), Value::Yield(_)))?;
+    if at + 1 == bl.operators.len() {
+        return None; // already ends in the yield
+    }
+    let Value::Yield(yielded) = bl.operators[at].unspan() else {
+        return None;
+    };
+    let mut freed = Vec::new();
+    for op in &bl.operators[at + 1..] {
+        let var = Output::free_op_var(op, data)?;
+        // The one unsound case: the suspended value still names the store being released.
+        if yielded.reads_var(var) {
+            return None;
+        }
+        freed.push(op.clone());
+    }
+    let mut ops = bl.operators[..at].to_vec();
+    ops.extend(freed);
+    ops.push(bl.operators[at].clone());
+    let mut bl2 = bl.clone();
+    bl2.operators = ops;
+    Some(Value::Block(bl2))
+}
+
 /// True when a coroutine slot of this type is a Rust `String`.
 ///
 /// @PLN25 — `Optional(τ)` shares τ's storage exactly, and loft's absent text IS a
@@ -185,7 +245,10 @@ fn lazy_yield_init(yield_tp: &Type) -> &'static str {
 /// * a `continue` — it would leave the iteration without yielding, which the wrapper reads
 ///   as "the loop ended";
 /// * a `return` — it would return from `next()` rather than from the generator.
-fn detect_lazy_for(val: &Value) -> Option<(Vec<Value>, Vec<Value>, Vec<Value>)> {
+fn detect_lazy_for(
+    val: &Value,
+    data: &crate::data::Data,
+) -> Option<(Vec<Value>, Vec<Value>, Vec<Value>)> {
     let Value::Block(bl) = val.unspan() else {
         return None;
     };
@@ -216,7 +279,16 @@ fn detect_lazy_for(val: &Value) -> Option<(Vec<Value>, Vec<Value>, Vec<Value>)> 
     if yields != 1 || disqualified {
         return None;
     }
-    if !lp.operators.last().is_some_and(tail_is_yield) {
+    // A trailing free is the compiler's statement, not the author's — hoist it above the
+    // suspend rather than reading it as "a statement after the yield" and giving up.
+    let mut body_ops = lp.operators.clone();
+    if !body_ops.last().is_some_and(tail_is_yield)
+        && let Some(tail) = body_ops.last()
+        && let Some(fixed) = hoist_trailing_frees(tail, data)
+    {
+        *body_ops.last_mut()? = fixed;
+    }
+    if !body_ops.last().is_some_and(tail_is_yield) {
         return None;
     }
     // The block's trailing `return` is the generator's implicit end, which the state machine
@@ -240,7 +312,7 @@ fn detect_lazy_for(val: &Value) -> Option<(Vec<Value>, Vec<Value>, Vec<Value>)> 
             _ => break,
         }
     }
-    Some((bl.operators[..at].to_vec(), lp.operators.clone(), post))
+    Some((bl.operators[..at].to_vec(), body_ops, post))
 }
 
 /// Try to recognise a `yield from` desugared block.
@@ -306,7 +378,7 @@ fn contains_yield(v: &Value) -> bool {
 /// the last yield vanished, and — because a generator's scope-exit `OpFreeRef`s live exactly
 /// there — every heap local a generator owned was leaked.  A dropped side effect is a wrong
 /// answer, not a missing optimisation, so the tail is now emitted in its own state.
-fn collect_segments(ops: &[Value]) -> (Vec<YieldSegment>, Vec<Value>) {
+fn collect_segments(ops: &[Value], data: &crate::data::Data) -> (Vec<YieldSegment>, Vec<Value>) {
     let mut segments = Vec::new();
     let mut pre: Vec<Value> = Vec::new();
     for op in ops {
@@ -361,7 +433,7 @@ fn collect_segments(ops: &[Value]) -> (Vec<YieldSegment>, Vec<Value>) {
             // lowered lazily — one iteration per advance — so its side effects interleave
             // with the consumer's exactly as they do on the interpreter.  Everything else
             // keeps the eager buffer.
-            if let Some((setup, body, post)) = detect_lazy_for(inner_op) {
+            if let Some((setup, body, post)) = detect_lazy_for(inner_op, data) {
                 segments.push(YieldSegment::ForLoopLazy {
                     pre: std::mem::take(&mut pre),
                     whole: inner_op.clone(),
@@ -1307,7 +1379,7 @@ impl Output<'_> {
             return Ok(());
         };
 
-        let (mut segments, tail) = collect_segments(&body_block.operators);
+        let (mut segments, tail) = collect_segments(&body_block.operators, self.data);
         let attrs: Vec<_> = def.attributes().to_vec();
         let yield_tp = match def.returned() {
             Type::Iterator(inner, _) => (**inner).clone(),

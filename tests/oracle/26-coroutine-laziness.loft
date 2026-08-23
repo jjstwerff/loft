@@ -13,16 +13,19 @@
 //
 //   - a `&text` parameter cannot do this job — a `&` parameter on a generator is rustc
 //     E0106 on `--native` (the frame is a heap value that can outlive the borrow);
-//   - the field must not be TEXT.  A generator that writes a TEXT field of a heap
-//     parameter runs EAGERLY on `--native` — the whole loop before the consumer sees
-//     anything — which is loft#836's symptom surviving in one narrow cell.  Recording
-//     the trace as text is what found that, and it is why this records DIGITS instead.
+//   - a TEXT field used to make the generator EAGER on `--native`, because the field
+//     write's temp is freed at block exit and that free lands after the yield, which the
+//     lazy recogniser read as "a statement after the yield".  Recording the trace as text
+//     is what found it; the free is now hoisted above the suspend and both spellings are
+//     lazy.  The DIGIT trace below stays as the primary because it depends on no text
+//     machinery at all, and `test_a_text_field_trace_is_lazy_too` carries the text one.
 //
 // The order is a decimal numeral read left to right: a leading 1 to keep the first digit,
 // then `i` for each value the generator produces and 9 for each one the consumer receives.
 // Lazy gives 1,0,9,1,9; running the generator to completion first would give
 // 1,0,1,2,3,4,9,9 — so the two answers are far apart rather than off by one.
 struct Trace { n: integer }
+struct Words { w: text }
 
 fn straight_line(t: Trace) -> iterator<integer> {
     print("a "); t.n = t.n * 10 + 1;
@@ -31,6 +34,13 @@ fn straight_line(t: Trace) -> iterator<integer> {
     yield 2;
     print("c "); t.n = t.n * 10 + 3;
     yield 3;
+}
+
+fn worded(t: Words) -> iterator<integer> {
+    for i in 0..5 {
+        print("q{i} "); t.w += "q{i} ";
+        yield i;
+    }
 }
 
 fn in_a_loop(t: Trace) -> iterator<integer> {
@@ -52,4 +62,11 @@ fn main() {
     for x in in_a_loop(t2) { print("g{x} "); t2.n = t2.n * 10 + 9; if x >= 1 { break; } }
     print("\n");
     assert(t2.n == 10919, "a `break` stops the generator's loop too — iterations 2..4 never run; got {t2.n}");
+    // The same claim through a TEXT field, which is the spelling that was eager on
+    // `--native` until the trailing free was hoisted above the suspend.  It is here rather
+    // than in place of the digits because it is the shape a regression would break first.
+    t3 = Words { w: "" };
+    for x in worded(t3) { print("w{x} "); t3.w += "w{x} "; if x >= 1 { break; } }
+    print("\n");
+    assert(t3.w == "q0 w0 q1 w1 ", "a text-field trace interleaves the same way; got `{t3.w}`");
 }

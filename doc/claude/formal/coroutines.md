@@ -168,32 +168,42 @@ a deviation — recorded here so it is not mistaken for a bug:
 > lowering it lazily would leak one record per yield. Those keep the eager buffer, and their
 > **values agree**; the observable difference stays side-effect interleaving.
 >
-> ⚠ **One of those reasons fires on code the author did not write, measured 2026-08-23.** A
-> generator that writes a **text field of a heap parameter** is eager:
+> ⚠ **One of those reasons was firing on code the author did not write — FIXED 2026-08-23.** A
+> generator that writes a **text field of a heap parameter** was eager:
 >
 > ```loft
 > struct T { s: text }
 > fn g(t: T) -> iterator<integer> { for i in 0..5 { print("p{i} "); t.s += "x"; yield i; } }
-> //  --interpret : p0 g0 p1 g1          --native : p0 p1 p2 p3 p4 g0 g1
+> //  --interpret : p0 g0 p1 g1     --native WAS : p0 p1 p2 p3 p4 g0 g1
 > ```
 >
-> It has ONE yield, and the yield IS the author's last statement — so it reads as a shape the
-> lazy lowering admits. In the IR it is not: a text field write allocates a temp and its
-> cleanup lands after the suspend —
-> `OpSetText(t, 0, _field_1); yield i; OpFreeText(_field_1);` — so `detect_lazy_for` sees
-> *"a statement AFTER the yield"* and demotes the whole generator. The same shape with an
-> **integer** field is lazy on both backends (`OpSetInt(…); yield i;` — nothing trails), as are
-> a text LOCAL written in the loop, a text-typed yield, and a text field READ.
+> It has ONE yield, and the yield IS the author's last statement, so it reads as a shape the
+> lazy lowering admits. In the IR it was not: a text field write lifts the field into a temp
+> whose free is placed at block exit, which lands after the suspend —
+> `OpSetText(t, 0, _field_1); yield i; OpFreeText(_field_1);` — so `detect_lazy_for` saw
+> *"a statement AFTER the yield"* and demoted the whole generator. The same shape with an
+> **integer** field was lazy (`OpSetInt(…); yield i;` — nothing trails), as were a text LOCAL
+> written in the loop, a text-typed yield, and a text field READ. The author had no way to
+> see the difference, and no way to remove the trailing statement.
 >
-> **This is the second time a generated cleanup op has silently demoted a generator**: the
+> `hoist_trailing_frees` now moves a dead temp's free ABOVE the suspend, which is sound
+> exactly when the yield does not read what is being freed — `_field_1` has already been
+> copied into the record by the preceding `OpSetText` — and is strictly better for a
+> generator the consumer ABANDONS, which used to strand the last iteration's temp. A yield
+> that does read it (`yield t.s`) keeps the eager path. Widening the recogniser to accept
+> arbitrary trailing statements would have been the wrong fix: the statement is not the
+> problem, its position is.
+>
+> **This was the second time a generated cleanup op silently demoted a generator**: the
 > `detect_yield_from` comment above records the first, where matching the op count exactly
 > *"silently pushed every `yield from` onto the eager path the moment that free appeared"*.
-> That site learned to tolerate a trailing free; this one has not. The fix the pair implies is
-> to hoist a dead temp's free above the suspend — `_field_1` is written into the record by the
-> preceding `OpSetText` and never read again, so freeing it before the yield is
-> semantics-preserving — rather than to widen the recogniser to accept arbitrary trailing
-> statements. Not implemented; it is coroutine-lowering work, and it belongs with the
-> remaining CL-9 slices under loft#836.
+> Both sites now tolerate a trailing free, by different means — that one ignores it, this one
+> moves it — which is worth knowing before adding a third recogniser.
+>
+> Guards: `tests/scripts/generator-lazy-through-a-text-field.loft` (in every CI run) and a
+> text-field cell in `tests/oracle/26-coroutine-laziness.loft` (the nightly cross-backend
+> sweep), the latter proven to fail on a pristine tree at `415e7ba8` with exactly the eager
+> trace `q0 q1 q2 q3 q4 w0 w1`.
 > Slices 2-4 of [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9)
 > close the rest. Tracked as [loft#836](https://github.com/loft-lang/loft/issues/836).
 
