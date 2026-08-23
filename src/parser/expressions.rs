@@ -3836,7 +3836,20 @@ use a separate collection or add after the loop"
     /// stdlib functions.  Two shapes bind, and before loft#756 only the first
     /// was recognised:
     ///
-    /// * `name = …` / `name: T = …` — the next token is `=` (never `==`).
+    /// * `name = …` — the next token is `=` (never `==`).
+    /// * the TYPED local `name: T = …`, where the next token is the `:` of the
+    ///   annotation.  loft#1079 — this arm was written into the doc above from
+    ///   the day loft#756 was closed, but only ONE of the three call sites
+    ///   actually peeked the `:` (@P392, in the bare-function-reference path of
+    ///   `parse_var`).  The site above it — the flat `def_nr(name)` lookup —
+    ///   never did, so a `both:` stdlib function, which registers a `Dynamic`
+    ///   definition under its RAW spelling as well as `n_<name>`, matched there
+    ///   and returned before the `:`-aware site was reached.  `exp: integer = 5`
+    ///   then left the `:` unconsumed and the user saw *"Expect token ;"* on a
+    ///   line whose syntax is correct.  A `self:` method (no `n_`/raw entry) and
+    ///   a plain global (no raw entry) both bound fine, which is why the failure
+    ///   read as "stdlib names are reserved" when the real axis is how the
+    ///   receiver is declared.
     /// * an element of a tuple destructuring, `(a, trim) = pair()`, where the
     ///   next token is the `,` or `)` of the LHS list.  Missing this made the
     ///   two assignment forms disagree about what a legal binding name is:
@@ -3846,8 +3859,17 @@ use a separate collection or add after the loop"
     ///
     /// `in_tuple_lhs` is only ever set for a `( … ) =` statement, so the `,`
     /// and `)` arms cannot fire on an ordinary parenthesised expression.
+    ///
+    /// The `:` arm excludes `::` and `:=`, which START with a colon and bind
+    /// nothing — the same pair [`crate::lexer::Lexer::peek_named_arg`] excludes
+    /// when it decides whether an `ident :` opens a named argument.  A named
+    /// argument is the other `ident :` that is not a binding, and it never
+    /// reaches here: the argument-list parser consumes the name first.
     pub(crate) fn at_binding_name(&self) -> bool {
         (self.lexer.peek_token("=") && !self.lexer.peek_token("=="))
+            || (self.lexer.peek_token(":")
+                && !self.lexer.peek_token("::")
+                && !self.lexer.peek_token(":="))
             || (self.in_tuple_lhs && (self.lexer.peek_token(",") || self.lexer.peek_token(")")))
     }
 

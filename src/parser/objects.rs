@@ -840,14 +840,19 @@ impl Parser {
             // The refusal was never a namespace rule, only this path: `for turn`
             // and `fn go(turn: integer)` accepted the name throughout.
             //
-            // The `:` peek is what @P392 added: without it the typed-local form
-            // produced a function-ref `Value::Int`, back in parse_assign the
-            // `if let Value::Var(_) = code` arm did not match, the `:` was never
-            // consumed, and the user saw a confusing `Expect token ;`.  Binding
-            // yields the `Value::Var` that arm needs, so the form parses.
+            // The typed local is what @P392 added: without it the form produced a
+            // function-ref `Value::Int`, back in parse_assign the `if let
+            // Value::Var(_) = code` arm did not match, the `:` was never consumed,
+            // and the user saw a confusing `Expect token ;`.  Binding yields the
+            // `Value::Var` that arm needs, so the form parses.  It lived here as a
+            // local `peek_token(":")` beside `at_binding_name` until loft#1079,
+            // where the flat-`def_nr` site ABOVE — which has only the one
+            // predicate — returned first for a `both:` function and reproduced the
+            // exact `Expect token ;` @P392 had cured here.  Now all three forms
+            // come from `at_binding_name`, so the sites cannot disagree again.
             if fn_d_nr != u32::MAX
                 && matches!(self.data.def_type(fn_d_nr), DefType::Function)
-                && !(self.at_binding_name() || self.lexer.peek_token(":"))
+                && !self.at_binding_name()
             {
                 *code = Value::Int(fn_d_nr as i32);
                 self.data.def_used(fn_d_nr);
