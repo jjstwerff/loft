@@ -57,29 +57,65 @@ fn test_mixed_scalar_and_text() {
   assert(v[0].1 == "nine", "text half: {v[0].1}");
 }
 
-// A STRUCT element's BIND copies — the half of the struct story that works.  Its
-// write-BACK does not (D-bind-12), so that cell is deliberately absent: a failing test
-// cannot land.
-fn test_struct_element_bind_copies() {
+// A STRUCT element off a BORROWED base is a VIEW, not a copy — `formal/binding.md`
+// B-View: "a STRUCT-typed PROJECTION is a VIEW that aliases WITHOUT `&`".  It used to be
+// the ONE of four projection cells that copied, because the stored-tuple element read took
+// the synthetic struct's attribute type verbatim and carried neither the base's deps nor
+// the base variable — so the bind typed as an OWNER while holding a handle into someone
+// else's record, and was handed an `OpFreeRef` to match.
+fn test_struct_element_is_a_view() {
   v: vector<(RtTag, integer)> = [(RtTag { name: "keep" }, 0)];
   for p in v {
     held = p.0;
     p.0 = RtTag { name: "over" };
-    assert(held.name == "keep", "B-Copy: the struct bind aliased, held={held.name}");
+    assert(held.name == "over", "B-View: the struct element must alias, held={held.name}");
   }
   assert(v[0].0.name == "over", "the write did not land: {v[0].0.name}");
 }
 
-// A COLLECTION element's WRITE-BACK lands — the half of the collection story that works.
-// Its BIND aliases (D-bind-12), so that cell is deliberately absent for the same reason.
-fn test_collection_element_writeback_lands() {
-  v: vector<(vector<integer>, vector<integer>)> = [([1, 2], [3, 4])];
+// And the view is BIDIRECTIONAL — a write THROUGH it reaches the container.  A read-only
+// alias would pass the cell above and still be wrong.
+fn test_struct_element_view_writes_through() {
+  v: vector<(RtTag, integer)> = [(RtTag { name: "a" }, 0)];
   for p in v {
     held = p.0;
+    held.name = "written";
+  }
+  assert(v[0].0.name == "written", "the view did not write through: {v[0].0.name}");
+}
+
+// The CONSEQUENCE, pinned so it stays a decision: a three-step swap through a bound
+// element does NOT swap, because `held` names the place rather than a value.  It reads
+// y|y, the same as its three sibling projections — which is the point.  Writing the swap
+// needs a value that is not a view (rebuild the element, below).
+fn test_swap_through_a_view_does_not_swap() {
+  v: vector<(RtTag, RtTag)> = [(RtTag { name: "x" }, RtTag { name: "y" })];
+  for p in v {
+    held = p.0;
+    p.0 = p.1;
     p.1 = held;
   }
-  assert(len(v[0].1) == 2, "write-back length: {len(v[0].1)}");
-  assert((v[0].1[0] ?? 0) == 1, "write-back .1[0]: {v[0].1[0] ?? 0}");
+  assert(v[0].0.name == "y", "swap .0: {v[0].0.name}");
+  assert(v[0].1.name == "y", "a view-based swap must NOT swap: {v[0].1.name}");
+}
+
+// The cure the cell above implies: hold the VALUE, not the place.  Binding the field to a
+// scalar/text local and rebuilding after the write swaps correctly.
+//
+// ⚠ The obvious spelling — `held = Tg { name: p.0.name }` BEFORE the write — does NOT work,
+// and it is not this rule's doing: the move-elide retargets `held`'s construction into
+// `p.1` at the CONSTRUCTION's position, which is before `p.0 = p.1` reads `p.1`, so the
+// program reads `x|x`.  That reproduces on `80a05a5c` (before the view fix) and is a
+// separate defect; `LOFT_NO_MOVE_ELIDE=1` is the bisect step that names it.
+fn test_swap_by_holding_the_value() {
+  v: vector<(RtTag, RtTag)> = [(RtTag { name: "x" }, RtTag { name: "y" })];
+  for p in v {
+    keep = p.0.name;
+    p.0 = p.1;
+    p.1 = RtTag { name: keep };
+  }
+  assert(v[0].0.name == "y", "value-hold swap .0: {v[0].0.name}");
+  assert(v[0].1.name == "x", "value-hold swap .1: {v[0].1.name}");
 }
 
 // D-bind-12's struct half, FIXED: writing back a value BOUND from a sibling element used
@@ -113,14 +149,15 @@ fn test_struct_writeback_direct_and_fresh_still_land() {
   assert(w[0].1.name == "z", "fresh-literal write: {w[0].1.name}");
 }
 
-// The full swap, which is what a reader would actually write.
-fn test_struct_elements_swap() {
-  v: vector<(RtTag, RtTag)> = [(RtTag { name: "x" }, RtTag { name: "y" })];
+
+// A COLLECTION element's write-BACK lands.  Pinned beside the struct one because the two
+// travel different paths and a fix to either must not trade one for the other.
+fn test_collection_element_writeback_lands() {
+  v: vector<(vector<integer>, vector<integer>)> = [([1, 2], [3, 4])];
   for p in v {
     held = p.0;
-    p.0 = p.1;
     p.1 = held;
   }
-  assert(v[0].0.name == "y", "swap .0: {v[0].0.name}");
-  assert(v[0].1.name == "x", "swap .1: {v[0].1.name}");
+  assert(len(v[0].1) == 2, "write-back length: {len(v[0].1)}");
+  assert((v[0].1[0] ?? 0) == 1, "write-back .1[0]: {v[0].1[0] ?? 0}");
 }

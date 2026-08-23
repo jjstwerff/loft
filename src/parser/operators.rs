@@ -1453,9 +1453,30 @@ impl Parser {
                                 crate::data::element_stack_offsets(&elems)[idx] as u32
                             };
                             let elem_tp = elems[idx].clone();
+                            // Carry the BASE's lifetime into the element, exactly as the
+                            // plain-tuple site above (P197) and the struct-field read in
+                            // `fields.rs` already do.  This was the one of the three that
+                            // took the synthetic struct's attribute type VERBATIM, so a
+                            // stored-tuple element bound off a BORROWED base came out with
+                            // NO deps — typed as an owner while holding a handle into
+                            // someone else's record, and handed an `OpFreeRef` to match.
+                            // That is why a struct-typed element read as a COPY while its
+                            // three sibling projections are views (`formal/binding.md`
+                            // B-View: a struct-typed projection aliases without `&`).
+                            let parent_deps = t.depend();
+                            let base_var = match code.unspan() {
+                                Value::Var(nr) => Some(*nr),
+                                _ => None,
+                            };
                             *code =
                                 self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
                             t = elem_tp;
+                            for on in parent_deps {
+                                t = t.depending(on);
+                            }
+                            if let Some(nr) = base_var {
+                                t = t.depending(nr);
+                            }
                         }
                     }
                 } else {

@@ -672,6 +672,55 @@ out was to complete the matrix (2×2 over construct × element type) rather than
 that was reported.  Had I "fixed" the alias, I would have deleted a documented idiom and
 walked back into a corruption bug closed months ago.
 
+### The last tuple-projection inconsistency — and the spec had already decided it (2026-08-23)
+
+The residual D-bind-12 recorded: off a BORROWED base, three of four projection cells are
+views and a STRUCT-typed TUPLE element copied.  I had written it up as a consistency question
+for the owner.  It was not — `B-View` says *"a STRUCT-typed PROJECTION is a VIEW that aliases
+WITHOUT `&`"*, so the direction was settled and only the code had to move.  **Consulting the
+rule turned a judgement call into a lookup**, which is the whole point of the register.
+
+**One site of three did not carry the base's lifetime.**  A stored-tuple element read took the
+synthetic struct's attribute type VERBATIM:
+
+```rust
+let elem_tp = elems[idx].clone();
+*code = self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
+t = elem_tp;                                   // no deps, no base var
+```
+
+Its two siblings already did it right, and one of them says why — the plain-tuple site's P197
+comment: *"propagate parent tuple's deps … without this, `a.v.0` returns a `Str` whose ptr
+points into a freed host"* — while `fields.rs`'s struct-field read carries the base deps AND
+`depending(base_var)`, which is exactly why `b = s.strf` typed `ref(In)["s"]` and `d = p.0`
+typed a bare `ref(In)`.  A bind typed as an OWNER while holding someone else's handle, with an
+`OpFreeRef` to match.  All four cells are views now, the dep is attached, the spurious free is
+gone, and emitted IR is unchanged on **80 of 80** tuple-bearing scripts.
+
+**Measuring the direction twice was necessary, and the first method was vacuous.**  The 2×2 was
+first read with `print`s inside the loop — the method already recorded as unreliable.  Re-run
+with asserts it gave the same answer, but a THIRD reading was needed before acting: a
+write-through test showed `e += [7]` not reaching the source while `e[0] = 7` did, because an
+append REALLOCATES.  Only `e[0] = 7` measures aliasing; the append measures something else.
+
+**The consequence is pinned, not left to be discovered:** a three-step swap through a bound
+element does not swap.  That is what the three sibling cells already did, and the cure —
+hold the VALUE (a scalar/text local), rebuild after the write — is a cell of its own.
+
+⚠ **A THIRD defect surfaced while writing that cure, and it is PRE-EXISTING** (reproduces on
+`80a05a5c`): the move-elide retargets a construction into its destination at the
+CONSTRUCTION's position, across a read of that destination.
+
+```loft
+for p in v { held = Tg { name: p.0.name }; p.0 = p.1; p.1 = held; }   // reads x|x, wants y|x
+```
+
+`held`'s build is moved into `p.1` before `p.0 = p.1` reads `p.1`.  `LOFT_NO_MOVE_ELIDE=1` is
+the bisect step that names it; the Record shape has `bad_containers`, `ambiguous` and
+`def_order` guards but nothing that asks whether the DESTINATION is read between the
+construction and the copy.  Not fixed here — a separate concern from the projection rule, and
+it belongs in its own change.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

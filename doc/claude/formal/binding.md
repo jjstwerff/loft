@@ -330,10 +330,24 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > decided here**, since widening `B-Copy` instead would delete p379's idiom and re-enter
 > #426.
 >
-> ⚠ **The one genuine inconsistency left is the fourth cell**, and it is recorded rather
-> than counted: a STRUCT-typed tuple element COPIES while its three siblings view. No cell
-> of it answers wrongly — a copy is the safer semantic — so it is a consistency question,
-> not a wrong result. Whichever way `B-View` is extended should settle it.
+> ⚠ **The fourth cell was the one deviation, and `B-View` already settled its direction —
+> FIXED the same day.** A STRUCT-typed tuple element copied while its three siblings viewed,
+> and `B-View` says a struct-typed projection IS a view, so there was no decision to make:
+> the code had to move. The stored-tuple element read took the synthetic struct's attribute
+> type VERBATIM, carrying neither the base's deps nor the base variable — so the bind typed
+> as an OWNER while holding a handle into someone else's record, and was handed an
+> `OpFreeRef` to match. Its two siblings already did it right and one says why: the
+> plain-tuple site's P197 comment (*"without this, `a.v.0` returns a `Str` whose ptr points
+> into a freed host"*), and `fields.rs`'s struct-field read, which carries the base deps AND
+> `depending(base_var)`. All four projection cells are now views, the bind carries `["p"]`,
+> and the spurious free is gone. Precisely scoped: emitted IR is unchanged on **80 of 80**
+> tuple-bearing scripts (the only file that differs is the guard's own).
+>
+> **The consequence is pinned rather than left to be discovered:** a three-step swap through
+> a bound element does NOT swap (`held` names the place), which is what its three siblings
+> already did. `test_swap_through_a_view_does_not_swap` asserts that, and
+> `test_swap_by_holding_the_value` shows the cure — hold the VALUE (a scalar/text local) and
+> rebuild after the write.
 >
 > Guards: `tests/scripts/reference-tuple-heap-element-through-a-record.loft` — 8 cells, the
 > two write-back ones proven to fail on a pristine worktree at `c3d18a5f` while the shapes
