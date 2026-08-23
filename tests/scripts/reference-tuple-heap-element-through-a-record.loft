@@ -1,0 +1,83 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// A RECORD-backed reference tuple reads AND writes heap elements — the evidence
+// `formal/binding.md` D-bind-11 rests on, which until now nothing guarded.
+//
+// D-bind-11 refuses `fn sw(p: &(text, text))` because a `&(…)` is STACK-backed, where a
+// `text` element is a 16-byte `Str` borrow (`{ptr, len}`) rather than the 4-byte record
+// handle the reference ops speak.  The entry names two ways out, one of them "backing a
+// `&(…)` carrying heap elements with a real record" — and that path is not hypothetical:
+// the loop variable over a `vector<(…)>` IS record-backed, and does the exact swap the
+// refusal declines.  No script exercised it, so the argument for the whole design option
+// was one refactor away from disappearing without a failing test.
+//
+// Scored against `formal/binding.md`:
+//   (B-Copy)  a plain bind copies a heap WHOLE-VALUE  — the `text` cells
+//   (B-View)  a STRUCT-typed projection is a VIEW and aliases WITHOUT `&`  — the struct
+//             cell, which is why its swap answers y|y and NOT y|x
+// The collection-element case is D-bind-12 (open) and is deliberately absent here: it
+// aliases where B-Copy says it copies, and a failing cell cannot land.
+
+struct RtTag { name: text }
+
+fn test_text_elements_swap_through_the_record() {
+  v: vector<(text, text)> = [("a1", "b1"), ("a2", "b2")];
+  for p in v {
+    t = p.0;
+    p.0 = p.1;
+    p.1 = t;
+  }
+  assert(v[0].0 == "b1", "elem 0 .0: {v[0].0}");
+  assert(v[0].1 == "a1", "elem 0 .1: {v[0].1}");
+  assert(v[1].0 == "b2", "elem 1 .0: {v[1].0}");
+  assert(v[1].1 == "a2", "elem 1 .1: {v[1].1}");
+}
+
+// The read half on its own: a `text` element bound out of the record COPIES (B-Copy), so
+// overwriting the source afterwards must not reach the bound value.
+fn test_text_element_bind_copies() {
+  v: vector<(text, integer)> = [("keep", 1)];
+  for p in v {
+    held = p.0;
+    p.0 = "overwritten";
+    assert(held == "keep", "B-Copy: the bind aliased, held={held}");
+  }
+  assert(v[0].0 == "overwritten", "the write did not land: {v[0].0}");
+}
+
+// Mixed scalar + heap, because the two travel on different element paths and a cell with
+// only one of them cannot show they agree about offsets.
+fn test_mixed_scalar_and_text() {
+  v: vector<(integer, text)> = [(1, "one")];
+  for p in v {
+    p.0 = 9;
+    p.1 = "nine";
+  }
+  assert(v[0].0 == 9, "scalar half: {v[0].0}");
+  assert(v[0].1 == "nine", "text half: {v[0].1}");
+}
+
+// A STRUCT element's BIND copies — the half of the struct story that works.  Its
+// write-BACK does not (D-bind-12), so that cell is deliberately absent: a failing test
+// cannot land.
+fn test_struct_element_bind_copies() {
+  v: vector<(RtTag, integer)> = [(RtTag { name: "keep" }, 0)];
+  for p in v {
+    held = p.0;
+    p.0 = RtTag { name: "over" };
+    assert(held.name == "keep", "B-Copy: the struct bind aliased, held={held.name}");
+  }
+  assert(v[0].0.name == "over", "the write did not land: {v[0].0.name}");
+}
+
+// A COLLECTION element's WRITE-BACK lands — the half of the collection story that works.
+// Its BIND aliases (D-bind-12), so that cell is deliberately absent for the same reason.
+fn test_collection_element_writeback_lands() {
+  v: vector<(vector<integer>, vector<integer>)> = [([1, 2], [3, 4])];
+  for p in v {
+    held = p.0;
+    p.1 = held;
+  }
+  assert(len(v[0].1) == 2, "write-back length: {len(v[0].1)}");
+  assert((v[0].1[0] ?? 0) == 1, "write-back .1[0]: {v[0].1[0] ?? 0}");
+}

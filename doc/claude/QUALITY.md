@@ -564,6 +564,61 @@ a narrower grep but an extra FIELD — *does the current token start on a later 
 consumed source ends* — which cut them to 25 raises across 13 sites, the same move as
 loft#1078's `arg=` flag.
 
+### Pulling on D-bind-11 found three tuple defects the register did not know about (2026-08-23)
+
+`formal/binding.md` D-bind-11 (`&(τ,…)` admits only scalar elements) records a blocker
+measured on 2026-08-19: adding the `text` arms SIGSEGVs.  D-tup-2 changed that
+representation on 2026-08-23 — a tuple local now joins the scalars at `OpCreateStack` — so
+the blocker was a claim to re-measure ([[filed-blocker-is-a-hypothesis]], the standing rule).
+
+**The blocker HOLDS, and the re-measurement moved its cause one level down.**  Re-adding the
+arms still corrupts (`rec=179867128`).  Not because "the ops speak different families", as the
+entry said, but because a `text` on the STACK is a 16-byte `Str` — `{ptr, len}`, a raw BORROW
+— while the record form is a 4-byte handle.  That also answers the question the entry never
+did: **why `fn f(s: &text)` works while `&(text, text)` cannot.**  The `&text` parameter writes
+into the caller's 24-byte owned `String` through `OpClearStackText`/`OpAppendStackText`, so the
+owner never changes; a tuple's text element has no owner of its own on the stack.
+
+**And the entry's second escape route is already running.**  It offers *"either an op family
+that writes the STACK form through a DbRef, or backing a `&(…)` with a real record"*.  A
+`for p in v` over `vector<(text, text)>` performs the EXACT swap the refusal declines,
+correctly, on both backends.  ⚠ **Nothing guarded it** — no script in the corpus wrote a text
+tuple element through the record path — so the evidence the whole design option rests on was
+one refactor from vanishing.  Now pinned by
+`tests/scripts/reference-tuple-heap-element-through-a-record.loft`.
+
+**Three defects fell out of the matrix, all `silent-wrong`, none of them in any register.**
+
+| # | shape | verdict |
+|---|---|---|
+| 1 | `v[0] ?? fb` where the tuple's FIRST element is a COLLECTION | **FIXED** — answered the FALLBACK for a PRESENT element, `--interpret` only |
+| 2 | `hv = p.0` where the element is a COLLECTION | **D-bind-12** — aliases where `B-Copy` says it copies; both backends |
+| 3 | `hs = p.0; p.1 = hs` where the element is a STRUCT | **D-bind-12** — the write-back is a NO-OP and leaks; both backends |
+
+**#1's fix is one line, and the code's own carve-out comment was the map.**  A tuple has no
+`.rec` discriminant, so the convention is *"a tuple is null when its FIRST field holds its
+type's null sentinel"*.  `coalesce_not_null` built that test with the GENERIC
+`convert(first_tp, Boolean)` — and the heap-DbRef branch **three lines below it** exists
+precisely because that generic path has no registered `OpConv*FromX → Boolean` for a
+collection: it hands back the bare Var, and the interpreter then tests raw BYTES instead of
+`.rec != 0`.  The comment describing the hole sat directly under the call falling into it
+([[carve-out-comment-is-a-map]] again).  The fix RECURSES into `coalesce_not_null` instead of
+asking `convert`, so the null test and the heap-DbRef branch cannot drift.  A `Reference`
+first element HID it — that type does have a generic path — which is why the axis had to be
+the first element's TYPE.  Guard: `tests/scripts/tuple-null-check-reads-its-first-element.loft`,
+proven to fail 3-of-7 on a pristine worktree at `aa8f02dd`; the 4 that pass there are exactly
+the cells that hid it.
+
+⚠⚠ **Two probes on the way here were VACUOUS, and it is the sharpest lesson of the pass.**  A
+`print` placed between the steps of the struct swap made it answer CORRECTLY (`y|x`) where the
+same loop without it answers `y|y` — **the observation materialised the value being measured**.
+Everything scored off those prints was wrong, including a confident reading that a preceding
+loop was corrupting a later one.  Re-scored with `assert` after the loop, the picture is the
+disjoint table above.  The same reading also mis-explained the struct cell as `B-View`
+*"aliasing by design"*, reaching for a rule to EXPLAIN an observation instead of to PREDICT
+one — the rule says view, the measurement says copy, and the measurement was never in doubt.
+In this subsystem: no `print` inside the loop under test.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
