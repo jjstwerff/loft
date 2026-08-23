@@ -18,8 +18,8 @@ needs that is not the frame: content in, sound out, native and browser alike. **
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**10 of 18 shipped** (`E1` · `W0` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
-**none blocked**, 8 open — and **arc F really is complete now**: `F7` was still blocked when
+**11 of 18 shipped** (`E1` · `W0` · `W1` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
+**none blocked**, 7 open — and **arc F really is complete now**: `F7` was still blocked when
 that sentence was first written, and it is the arc's last phase.  (Both tables below list 18
 phases; the "19" this line and the effort row carried was a miscount.) The pack exists, round-trips byte-identically on the
 interpreter, `--native` and wasm, pages over HTTP range at 9 % of the file per read, and takes
@@ -71,7 +71,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` 2026-08-23.**
+- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` + `W1` 2026-08-23.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -88,7 +88,7 @@ cut, not when it is implemented.
 | **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
 | *— arc **W**: sprite authoring, in loft —* | | | |
 | **W0** — the corpus and its oracle | probe only | every `.draw` scene in `crawler/assets/sprites/src/` and loft's `sketch/` renders under the **existing Python** `draw.py` to a committed golden. Red on a scene that will not parse — which is how the grammar the port owes gets *measured* rather than guessed | ✅ **Shipped** — [W0.md](W0.md), 37 scenes green |
-| **W1** — filled polygon in `graphics` | `graphics` | the one primitive genuinely missing (only `fill_triangle` exists today): hand-computed pixel counts for a convex, a concave and a self-intersecting polygon under even-odd, **and** a triangle drawn through the polygon path is pixel-identical to `fill_triangle` | Open |
+| **W1** — filled polygon in `graphics` | `graphics` | the one primitive genuinely missing (only `fill_triangle` exists today): hand-computed pixel counts for a convex, a concave and a self-intersecting polygon under even-odd, **and** a triangle drawn through the polygon path is pixel-identical to `fill_triangle` | ✅ **Shipped** — `graphics` 0.6.0. Counts hand-computed (60 / 112 / 60), even-odd pinned by the property that *distinguishes* it (a star's centre is crossed twice, so it is outside — non-zero would fill it), and the `fill_triangle` tie is a **sweep**: every triangle on a 5×5 lattice, 15 625 shapes, 0 pixels differ. Proven able to fail — leave the closing row half-open and 15 000 of them disagree. The agreement was the whole difficulty: a half-open edge rule is required for through-vertices and drops the polygon's lowest row, which is exactly and only where the two fills differed |
 | **W2** — parser + `size` / `Background` / `name` / `Line` / `Circle` / `Poly` | `drawing` | **pixel-identical to `draw.py`** over the corpus subset using only these. The Python renderer is the oracle, so this is a parallel run rather than a judgement | Open |
 | **W3** — fills: solid, linear gradient, radial gradient | `drawing` | pixel-identical over the corpus subset that uses them | Open |
 | **W4** — `Petals` and `Fronds` | `drawing` | pixel-identical over the corpus subset — **and the seeded field reproduces**: same seed, same pixels, on `--interpret` and `--native` alike, because a jittered array whose backends disagree is not a renderer | Open |
