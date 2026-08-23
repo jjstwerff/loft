@@ -424,9 +424,7 @@ fix-on-save applies.
 
    The corpus-wide re-measure is `scripts/diag_position_audit.py` (a report, not a gate — the
    position twin of `LOFT_TRACE_ASSERTS`): its sharp filter, *the caret sits on a line that is
-   nothing but a closing brace*, reads **19 before, 4 after**.  The 4 are whole-CONSTRUCT
-   judgements whose consumed source really does end at that brace; pointing inside the construct
-   is a per-site improvement, not something the chokepoint can guess.
+   nothing but a closing brace*, went **19 → 4 → 0** across two passes.
 
    Guards: `parse_errors.rs::a_diagnostic_names_its_own_line_{whatever_follows_it,
    with_no_terminator, across_blank_lines}` — one statement in three layouts, asserting
@@ -435,6 +433,33 @@ fix-on-save applies.
    in the file to show what hid the other two. `a_current_token_diagnostic_still_names_the_
    current_token` pins the opt-out direction. All proven able to fail by disabling
    `report_pos`.
+
+7. **A whole-CONSTRUCT check must still name the part it is about, and `report_pos` cannot
+   guess which part.** The default of item 6 is right and not enough for a check that can only
+   run once a whole construct is complete: its consumed source genuinely ends at the closing
+   brace, so the caret lands there. That is correct and useless — a struct has many fields, and
+   *"somewhere in this struct"* is not an answer. Each such site holds a better position:
+
+   | check | now points at | how |
+   |---|---|---|
+   | `circular init dependency` | the field the cycle STARTS from | the field name's position, threaded through `init_deps` |
+   | a generator's discarded tail value | the tail expression | `l[last].span_pos()` — a call is already span-wrapped at its `(` |
+   | a tail conversion (narrowing, `not null`) | the tail statement | `block_result`'s `tail_pos`, captured per statement by the block loop |
+
+   Two cost nothing to reach: `tail_pos` was already a parameter of `block_result` and used by
+   exactly one check, and the N-Store tail check next to it already read `span_pos()`. Only
+   `circular init` needed a new datum. Measure before widening a site: three of the four
+   narrowing POSITIONS (assignment, argument, struct-literal field) already named their own
+   line — only the return tail did not — so the fixture pins all four, or a later change could
+   move the working three unnoticed.
+
+   ⚠ **Seek with `Lexer::to`, end with `Lexer::end_seek` — never with a second `to`.** Seeking
+   back leaves `seek_return` pending, and `report_pos` reads a live seek as a deliberate choice
+   and stops attributing to the consumed source. So every diagnostic the pass raises AFTER the
+   seek silently reverts to the scan cursor. Measured: seeking around the block-tail conversion
+   that way sent `Not all code paths return a value — function 'classify'` back onto the
+   FOLLOWING function, which is the same defect item 6 had just removed. `missing_return_not_null`
+   is the guard that caught it.
 
 ## See also
 

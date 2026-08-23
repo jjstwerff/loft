@@ -515,13 +515,33 @@ disabling `report_pos` on the fixed tree rather than remembered.  The looser ide
 (*a message quoting a name must point at a line containing it*) reads 41 → 25, and the 25 that
 remain are its own false positives — the quoted name is a TYPE the line never spells.
 
-**The 4 that remain are the residue to expect, not a leftover bug.**  Each is a whole-CONSTRUCT
-judgement — `circular init dependency`, a generator's discarded tail, an `i32` narrowing — whose
-consumed source genuinely ENDS at that brace.  Pointing at the construct's own closing brace is
-right-by-construction for a check that needs the whole construct; pointing INSIDE it (at the
-offending field, at the tail expression) is a per-site improvement each of those sites could
-make with the position it already holds, and is not something the chokepoint can guess.  Before
-the fix all four named a following construct instead.
+**The 4 that remained were whole-CONSTRUCT judgements — and a second pass took them to 0.**
+`circular init dependency`, a generator's discarded tail and an `i32` narrowing each complete
+only when their construct does, so the consumed source genuinely ends at that brace.  That is
+right and useless: a struct has many fields, and *"somewhere in this struct"* is not an answer.
+The chokepoint cannot guess which part is meant, but each SITE holds a better position:
+
+| check | now names | the datum it already had |
+|---|---|---|
+| `circular init dependency` | the field the cycle STARTS from | none — the one that needed threading (`init_deps` gained the field name's position) |
+| a generator's discarded tail | the tail expression | `l[last].span_pos()` — a call is span-wrapped at its `(` on pass 2 |
+| a tail conversion (narrowing, `not null`) | the tail statement | `block_result`'s `tail_pos`, already a PARAMETER and read by exactly one check |
+
+**Measure before widening a site, because most of it already worked.**  Three of the four
+narrowing POSITIONS — assignment, argument, struct-literal field — already named their own line;
+only the return tail did not, because only it is checked after the block closes.  The guard pins
+all four so a later change cannot move the working three unnoticed.  Same for the field COUNT
+axis: the circular-init guard runs a `a -> b -> c -> a` cycle among four fields that are NOT in
+it, so a caret that merely picked the first field, the struct, or its brace is visible.
+
+⚠ **Seek with `Lexer::to`, end with `Lexer::end_seek` — never with a second `to`.**  Seeking
+back leaves `seek_return` pending, and `report_pos` reads a live seek as a deliberate choice and
+stops attributing to the consumed source, so every diagnostic the pass raises AFTER the seek
+reverts to the scan cursor.  Measured: seeking around the block-tail conversion that way sent
+*"Not all code paths return a value — function `classify`"* back onto the FOLLOWING function —
+re-introducing, three sites away, the exact defect the pass had just removed.  The existing
+`missing_return_not_null` fixture caught it, which is the argument for pinning the positions
+that already work.
 
 The instrument is `scripts/diag_position_audit.py` — a REPORT, never a gate, for the same reason
 `LOFT_TRACE_ASSERTS` is: both filters have false positives, and a gate over them would need a

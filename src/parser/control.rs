@@ -1429,13 +1429,18 @@ impl Parser {
             // one of its two construction sites, which is the shape loft#1006 already was.
             let is_generator = matches!(result, Type::Iterator(_, _));
             if is_generator && !self.first_pass && !matches!(*t, Type::Void | Type::Never) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "a generator's body produces values only through `yield`, so this tail \
-                     value is discarded — `for v in <generator>() {{ yield v; }}` forwards \
-                     another generator's values, and a bare statement ends the body"
-                );
+                let msg = "a generator's body produces values only through `yield`, so this \
+                           tail value is discarded — `for v in <generator>() { yield v; }` \
+                           forwards another generator's values, and a bare statement ends \
+                           the body";
+                // The tail is what the message is about, and a call already carries its own
+                // span (wrapped at the `(` on pass 2).  Prefer it: the block-tail check can
+                // only run once the block is closed, so the default lands on the `}`.
+                if let Some(tail) = l[last].span_pos().cloned() {
+                    self.lexer.pos_diagnostic(Level::Error, &tail, msg);
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "{msg}");
+                }
             }
             let ignore = is_generator
                 || (matches!(*t, Type::Void | Type::Never)
@@ -1579,13 +1584,27 @@ impl Parser {
                     .or_else(|| Some(self.data.def(self.context).position().clone()));
                 self.n_store_violation(t, result, "the return value", at.as_ref());
             }
-            if !tuple_rewritten
-                && !if_unified
-                && !vec_match_candidate
-                && !vec_arm_handled
-                && !self.convert(&mut l[last], t, result)
-                && !ignore
-            {
+            // A tail conversion is checked once the block is CLOSED, so `report_pos`
+            // would attribute anything it raises to the `}`.  `tail_pos` is the tail
+            // statement's own first token (captured per statement by the block loop), and
+            // a bare-var tail carries no span of its own — measured: `fn f(n: integer) ->
+            // i32 { n }` reported the narrowing on the closing brace while the same
+            // narrowing in an assignment, an argument and a struct-literal field all
+            // named their own line.  Seek for the duration and restore.
+            let needs_convert =
+                !tuple_rewritten && !if_unified && !vec_match_candidate && !vec_arm_handled;
+            let converted = if needs_convert {
+                self.lexer.to((tail_pos.line, tail_pos.pos));
+                let done = self.convert(&mut l[last], t, result);
+                // `end_seek`, not a second `to`: the diagnostics raised just below are
+                // block-tail checks too, and a seek left standing switches `report_pos`
+                // off for them.
+                self.lexer.end_seek();
+                done
+            } else {
+                true
+            };
+            if needs_convert && !converted && !ignore {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX

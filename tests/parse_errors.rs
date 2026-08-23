@@ -1688,8 +1688,8 @@ fn struct_name_clashes_with_type_variable() {
 #[test]
 fn circular_init_error() {
     code!("struct Bad {\n  a: integer init($.b),\n  b: integer init($.a),\n}\nfn test() {}")
-        .error("circular init dependency: a -> b -> a at circular_init_error:4:2")
-        .error("circular init dependency: b -> a -> b at circular_init_error:4:2");
+        .error("circular init dependency: a -> b -> a at circular_init_error:2:3")
+        .error("circular init dependency: b -> a -> b at circular_init_error:3:3");
 }
 
 // ── C42 — Unknown variable diagnostic ───────────────────────────────────────
@@ -1997,6 +1997,81 @@ fn a_current_token_diagnostic_still_names_the_current_token() {
         "'struct' definitions must be at file scope, not inside a function or block \
              at a_current_token_diagnostic_still_names_the_current_token:2:3",
     );
+}
+
+// ── A whole-CONSTRUCT check still names the part it is about ────────────────────
+//
+// These checks can only run once the construct is complete, so `report_pos`'s
+// consumed-source default lands on its closing brace — right, but not useful: a
+// struct has many fields and "somewhere in this struct" is not an answer. Each site
+// holds a better position and now uses it. `scripts/diag_position_audit.py --brace`
+// went 19 → 4 → 0 over the corpus across the two passes.
+#[test]
+fn each_circular_init_cycle_names_its_own_field() {
+    // The axis is field COUNT: the cycle runs a -> b -> c -> a among four fields that
+    // are not in it, so a caret that merely picked the first field, or the struct, or
+    // its brace would be visible here. Each message names its own head field first,
+    // and lands on that field's line.
+    code!(
+        "struct Many {
+  p: integer = 1,
+  a: integer = $.b,
+  q: integer = 2,
+  b: integer = $.c,
+  r: integer = 3,
+  c: integer = $.a,
+}
+fn test() { m = Many {}; assert(m.p == 1, \"\"); }"
+    )
+    .error("circular init dependency: a -> b -> c -> a at each_circular_init_cycle_names_its_own_field:3:3")
+    .error("circular init dependency: b -> c -> a -> b at each_circular_init_cycle_names_its_own_field:5:3")
+    .error("circular init dependency: c -> a -> b -> c at each_circular_init_cycle_names_its_own_field:7:3");
+}
+
+#[test]
+fn a_generator_tail_value_names_the_tail() {
+    code!(
+        "fn gsrc(n: integer) -> iterator<integer> { yield n; }
+fn gtail() -> iterator<integer> {
+  gsrc(1)
+}
+fn test() { for v in gtail() { assert(v == 1, \"\"); } }"
+    )
+    .error(
+        "a generator's body produces values only through `yield`, so this tail value is \
+         discarded — `for v in <generator>() { yield v; }` forwards another generator's \
+         values, and a bare statement ends the body \
+         at a_generator_tail_value_names_the_tail:3:9",
+    );
+}
+
+// All four narrowing POSITIONS, in one fixture, because three of them were already
+// right and only the return tail was not — a fixture with the broken one alone would
+// not show that the fix left the working three alone.
+#[test]
+fn a_narrowing_names_its_own_line_in_every_position() {
+    code!(
+        "struct NBox { f: i32 }
+fn takes(v: i32) -> integer { 1 }
+fn ret_tail(n: integer) -> i32 {
+  n
+}
+fn test() {
+  n = 5000000000;
+  a: i32 = n;
+  b = takes(n);
+  c = NBox { f: n };
+  d = ret_tail(n);
+  assert(a == 0 && b == 0 && c.f == 0 && d == 0, \"\");
+}"
+    )
+    // the return tail — the one that landed on the closing brace
+    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:4:3")
+    // the three that always worked, pinned so the fix cannot quietly move them
+    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:8:14")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:9:16")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:10:20")
+    .warning("Parameter v is never read at a_narrowing_names_its_own_line_in_every_position:2:30");
 }
 
 // ── P54 struct-enum blockers (BITING_PLAN § P54) ─────────────────────────

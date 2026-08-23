@@ -533,6 +533,27 @@ impl Lexer {
         self.position.pos = scope.1;
     }
 
+    /// Undo a [`to`](Self::to) seek NOW, restoring the read cursor's own position and
+    /// clearing the pending restore.
+    ///
+    /// For a pass that seeks around ONE call and then keeps raising diagnostics of its
+    /// own.  Seeking BACK with a second `to` does not do this: the pending
+    /// `seek_return` survives, and [`report_pos`](Self::report_pos) treats a live seek as
+    /// a deliberate choice and stops attributing to the consumed source — so every later
+    /// diagnostic in that pass silently reverts to the scan cursor.  Measured: seeking
+    /// around the block-tail conversion this way sent `Not all code paths return a value`
+    /// back onto the FOLLOWING function.
+    pub fn end_seek(&mut self) {
+        if let Some((line, pos)) = self.seek_return.take() {
+            lex_trace(format_args!(
+                "end_seek restore {}:{} -> {line}:{pos}",
+                self.position.line, self.position.pos
+            ));
+            self.position.line = line;
+            self.position.pos = pos;
+        }
+    }
+
     #[allow(clippy::too_many_lines)] // large lexer dispatch — splitting would obscure control flow
     fn next(&mut self) -> Option<LexResult> {
         if self.link < self.memory.len() {

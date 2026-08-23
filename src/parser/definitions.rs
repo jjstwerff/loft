@@ -3378,14 +3378,19 @@ impl Parser {
             self.data.value_structs.insert(d_nr);
         }
         self.lexer.token("{");
-        // #91: collect init field dependency info for circular detection.
-        let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
+        // #91: collect init field dependency info for circular detection, each with the
+        // position of the field NAME.  The check can only run once every field is known,
+        // by which time the construct — and `report_pos` with it — is at the closing `}`;
+        // a struct has many fields and "somewhere in this struct" is not an answer.
+        let mut init_deps: Vec<(String, Vec<String>, crate::lexer::Position)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
             // @PLN40 — a `const` field is write-once at construction.  Consume the
             // keyword (if present) and mark the field once it has parsed; see
             // doc/claude/plans/40-const-fields/.
             let is_const = self.lexer.has_keyword("const");
+            // The field name is the current token, so this is its START.
+            let field_pos = self.lexer.peek_pos().clone();
             let Some(a_name) = self.lexer.has_identifier() else {
                 diagnostic!(self.lexer, Level::Error, "Expect attribute");
                 self.context = context;
@@ -3406,7 +3411,11 @@ impl Parser {
                 self.mark_const_field(d_nr, &a_name);
             }
             if !self.init_field_deps.is_empty() {
-                init_deps.push((a_name.clone(), self.init_field_deps.clone()));
+                init_deps.push((
+                    a_name.clone(),
+                    self.init_field_deps.clone(),
+                    field_pos.clone(),
+                ));
             }
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
@@ -3924,21 +3933,28 @@ impl Parser {
     }
 
     /// #91: DFS cycle detection on init field dependencies.
-    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
-        let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();
-        for (start, deps) in init_deps {
+    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>, Position)]) {
+        let names: HashSet<String> = init_deps.iter().map(|(n, _, _)| n.clone()).collect();
+        for (start, deps, start_pos) in init_deps {
             let mut visited: Vec<String> = vec![start.clone()];
             let mut stack = deps.clone();
             while let Some(dep) = stack.pop() {
                 if dep == *start {
                     visited.push(start.clone());
                     let path = visited.join(" -> ");
-                    diagnostic!(self.lexer, Level::Error, "circular init dependency: {path}");
+                    // Each cycle is reported at the field it STARTS from, which is the
+                    // field the message names first — so two cycles through the same
+                    // fields land on two different lines, as they read.
+                    self.lexer.pos_diagnostic(
+                        Level::Error,
+                        start_pos,
+                        &format!("circular init dependency: {path}"),
+                    );
                     break;
                 }
                 if names.contains(&dep) && !visited.contains(&dep) {
                     visited.push(dep.clone());
-                    if let Some((_, subdeps)) = init_deps.iter().find(|(n, _)| *n == dep) {
+                    if let Some((_, subdeps, _)) = init_deps.iter().find(|(n, _, _)| *n == dep) {
                         stack.extend(subdeps.clone());
                     }
                 }
