@@ -451,6 +451,99 @@ is not the set it CONTAINS. The difference is invisible in every channel a suite
 exit code, pass count, output — so it has to be measured directly. Every mechanism found here
 was a file being SKIPPED for a good reason that quietly took a second thing with it.
 
+### The caret follows the CURSOR, and the cursor is one token past the code (2026-08-23)
+
+The assertion-line pass one level out again.  That pass found a whole-file line lag by reading
+the position the compiler INJECTED into `assert`; the position channel it read is the same one
+every diagnostic uses, and nothing in the suite compares it.  `check_diagnostics` matches an
+`@EXPECT_ERROR` / `@EXPECT_WARNING` by SUBSTRING — `diag.contains(pat)` — so the `file:line:col`
+each of the corpus's **272** annotations carries is captured and dropped, the exact shape
+loft#1063's stderr channel had.
+
+`tests/parse_errors.rs` DOES pin `line:col` exactly, on all 248 fixtures.  It was blind for the
+usual reason: **its corpus holds one axis fixed.**  Almost every fixture is a one-liner or a
+statement ending in `;`, and the `;` is what hides this.
+
+**The mechanism, and why `;` hides it.**  `Lexer::position` is the scan CURSOR — the end of the
+token the parser is *holding*, not of the code it has decided about.  A check that can only run
+once a construct is complete (a `const` write, a nullable reaching a non-null slot, a capture in
+a `parallel` arm) raises with the cursor already advanced.  A `;` keeps that next token on the
+statement's own line and the two answers agree; drop it — which loft invites, being
+expression-oriented — and the caret goes wherever the next token is:
+
+| written | caret landed on |
+|---|---|
+| `a = 42;` then `}` | line of `a = 42` — correct, **by luck** |
+| `a = 42` then `}` | the `}`, one line down |
+| `a = 42`, two blank lines, `}` | the `}`, **three lines down**, with a different statement under it |
+
+Same statement, three answers.  Corpus-wide the miss was not rare: an identifier-position oracle
+(*a message that quotes a name must point at a line containing that name*) reported **41
+suspects, 16 of them a caret sitting on a closing brace** — const writes, `parallel`-arm captures
+and the whole null-flow family.  And two diagnostics were naming an entirely **different
+construct**: `circular init dependency` landed on the `fn` after the struct, and *"Not all code
+paths return a value — function `classify`"* landed on the function after `classify`.
+
+**The fix is one place, and the measurement is what kept it there.**  `Lexer::report_pos`:
+a diagnostic goes to the end of the CONSUMED source (`prev_end`, captured in `cont()` before the
+cursor runs on) when the current token starts on a LATER line, and to the cursor otherwise, so
+the same-line column contract 248 fixtures pin is untouched.  A `Lexer::to` seek outranks both
+(that position was chosen — the item-5 rule), and the file must match.
+
+⚠ **The obvious wider fix is wrong, and one A/B settled it.**  Attributing *every* diagnostic to
+the consumed source moved **107 of 248** fixtures, and every one that moved was a syntax error
+about the token the parser is HOLDING — `Expect name in function definition` on `fn assert(…)`
+went from the `assert` to the `fn`.  So the class genuinely has two halves, and only the site
+knows which it is in.  **Three** sites say so explicitly now, each with a comment saying why:
+`'struct' definitions must be at file scope` and the `..hi` open-range refusal are both raised
+while LOOKING at the offending keyword, and `unreachable-code` is raised holding the first token
+of the unreachable statement.  That is the same shape as the 48 sites already reaching for
+`peek_pos`, and all three now put the caret ON the token rather than just past it.
+
+⚠ **`parse_errors.rs` did not find all of them — the whole suite is the position oracle, and it
+had to run `--no-fail-fast` to say so.**  Beyond the 11 fixtures parse_errors moved, three more
+turned up only in `tests/issues.rs` and one in the `error_messages` golden: `..hi` (the third
+opt-out), and two more instances of the defect that nothing had ever looked at — the deferred
+`OpMinInt` arity errors and `Unknown field Point.z` were BOTH being reported on the closing `}`
+of their function, and now land on the expression.  A max-fail run reports one per cycle and
+reads like a single stray fixture; `find_problems.sh --bg` is what showed the set.
+
+**Net over the corpus, measured in both directions.**  The sharp filter is *the caret sits on a
+line that is nothing but a closing brace*, which is the shape a cursor-following caret produces:
+**19 → 4** over the 773 diagnostics the 882-file corpus emits, the before-number taken by
+disabling `report_pos` on the fixed tree rather than remembered.  The looser identifier filter
+(*a message quoting a name must point at a line containing it*) reads 41 → 25, and the 25 that
+remain are its own false positives — the quoted name is a TYPE the line never spells.
+
+**The 4 that remain are the residue to expect, not a leftover bug.**  Each is a whole-CONSTRUCT
+judgement — `circular init dependency`, a generator's discarded tail, an `i32` narrowing — whose
+consumed source genuinely ENDS at that brace.  Pointing at the construct's own closing brace is
+right-by-construction for a check that needs the whole construct; pointing INSIDE it (at the
+offending field, at the tail expression) is a per-site improvement each of those sites could
+make with the position it already holds, and is not something the chokepoint can guess.  Before
+the fix all four named a following construct instead.
+
+The instrument is `scripts/diag_position_audit.py` — a REPORT, never a gate, for the same reason
+`LOFT_TRACE_ASSERTS` is: both filters have false positives, and a gate over them would need a
+line-numbered allow-list that rots.
+
+Guards: `a_diagnostic_names_its_own_line_{whatever_follows_it, with_no_terminator,
+across_blank_lines}` assert the three layouts AGREE rather than pinning a hand-picked line — a
+hand-picked expectation only ever pins the layout it was written for, which is how the corpus
+came to hold this axis fixed in the first place.  **The first cell is the one that always
+passed, and it is in the file to show what hid the other two.**
+`a_current_token_diagnostic_still_names_the_current_token` pins the opt-out direction so a later
+widening of the default cannot take it silently.  All proven able to fail by disabling
+`report_pos`.
+
+**The reusable half:** a suite that pins a channel is not the same as a suite that EXERCISES it.
+248 fixtures asserted `line:col` and none of them varied the one thing the position depends on —
+what follows the construct.  When an oracle reads clean, ask what its corpus never varies; here
+the answer was a single character.  And the detector that made 565 raise-sites readable was not
+a narrower grep but an extra FIELD — *does the current token start on a later line than the
+consumed source ends* — which cut them to 25 raises across 13 sites, the same move as
+loft#1078's `arg=` flag.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

@@ -382,6 +382,60 @@ fix-on-save applies.
    ([TESTING.md](TESTING.md#the-set-a-suite-runs-is-not-the-set-it-contains-loft_trace_asserts)),
    which reads exactly this injected line.
 
+6. **The cursor is one token AHEAD of what the parser has decided about, and `diagnostic!`
+   now attributes to the consumed source when that token has crossed a line.**
+   `Lexer::position` is the scan cursor: the END of the token the parser is *holding*. A
+   check that can only run once a construct is complete — a write to a `const` parameter, a
+   nullable reaching a non-null slot, a capture inside a `parallel` arm — raises with the
+   cursor already advanced to the next token. While that token is on the same line both
+   answers agree, which is exactly why this looked right for years: loft statements usually
+   end in `;`, and the `;` keeps the cursor on the statement's own line. Drop it — which the
+   language invites, being expression-oriented — and the caret follows the cursor to
+   wherever the next token happens to be:
+
+   ```loft
+   fn f(a: const integer) {
+     a = 42        // ← the error is here
+   }               // ← the caret was HERE, and blank lines between them moved it further
+   ```
+
+   `Lexer::report_pos` is the one place that decides this: a diagnostic goes to the end of
+   the CONSUMED source (`Lexer::prev_end`) whenever the current token starts on a later
+   line, and to the cursor otherwise, so the existing same-line column contract is
+   untouched. A deliberate `Lexer::to` seek (item 5) outranks both — that position was
+   chosen — and the position is only used when it belongs to the same file.
+
+   **A site that really is about the token the parser is HOLDING says so, at the site.**
+   Three do: `'struct' definitions must be at file scope` and the `..hi` open-range refusal
+   are raised while looking at the offending keyword, and `unreachable-code` is raised
+   holding the first token of the unreachable statement. All three now name their position
+   (`Lexer::specific` / `pos_diagnostic_coded`) with a comment saying why — the same shape as the 48 sites already reaching for
+   `Lexer::peek_pos`. That claim can only be made by the site; the default cannot guess it,
+   and measuring proved it: attributing *every* diagnostic to the consumed source moved 107
+   of 248 `parse_errors` fixtures, and the ones that moved were syntax errors about the
+   current token, all of them worse.
+
+   The gain was not only the missing line. Two diagnostics were pointing at an entirely
+   **different construct**: `circular init dependency` landed on the `fn` after the struct,
+   and `Not all code paths return a value — function 'classify'` landed on the function
+   *after* `classify`. Two more were on their function's closing `}` — the deferred
+   `OpMinInt` arity errors and `Unknown field Point.z` — and now land on the expression.
+   `Expect token ;` now points where the `;` belongs rather than at the line below it.
+
+   The corpus-wide re-measure is `scripts/diag_position_audit.py` (a report, not a gate — the
+   position twin of `LOFT_TRACE_ASSERTS`): its sharp filter, *the caret sits on a line that is
+   nothing but a closing brace*, reads **19 before, 4 after**.  The 4 are whole-CONSTRUCT
+   judgements whose consumed source really does end at that brace; pointing inside the construct
+   is a per-site improvement, not something the chokepoint can guess.
+
+   Guards: `parse_errors.rs::a_diagnostic_names_its_own_line_{whatever_follows_it,
+   with_no_terminator, across_blank_lines}` — one statement in three layouts, asserting
+   they AGREE rather than a hand-picked line, since a hand-picked expectation only ever
+   pins the layout it was written for. The first cell is the one that always passed; it is
+   in the file to show what hid the other two. `a_current_token_diagnostic_still_names_the_
+   current_token` pins the opt-out direction. All proven able to fail by disabling
+   `report_pos`.
+
 ## See also
 
 - [COPY_DIAGNOSTICS.md](COPY_DIAGNOSTICS.md) — the copy-vs-borrow model behind `avoidable-copy`.

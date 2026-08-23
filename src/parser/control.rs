@@ -701,10 +701,18 @@ impl Parser {
             };
             if let Some(kw) = bad_kw {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
+                    // About the token the parser is HOLDING, not about anything it has
+                    // consumed: the offending keyword is still the current token here
+                    // (`token(kw)` below is what consumes it).  So this site names its
+                    // position rather than taking `report_pos`'s consumed-source default,
+                    // which would put the caret on the line above.
+                    let at = self.lexer.peek();
+                    self.lexer.specific(
+                        &at,
                         Level::Error,
-                        "'{kw}' definitions must be at file scope, not inside a function or block"
+                        &format!(
+                            "'{kw}' definitions must be at file scope, not inside a function or block"
+                        ),
                     );
                 }
                 // Consume the offending declaration: skip until the matching
@@ -732,11 +740,16 @@ impl Parser {
             // Warn about unreachable code after an unconditional terminator.
             if let Some(kind) = terminated {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
+                    // About the token the parser is HOLDING — the first token of the
+                    // unreachable statement, which is what the caret should sit on.  So
+                    // this site names its position rather than taking `report_pos`'s
+                    // consumed-source default, which would point at the terminator above.
+                    let at = self.lexer.peek().position;
+                    self.lexer.pos_diagnostic_coded(
                         Level::Warning,
-                        code = "unreachable-code",
-                        "Unreachable code after {kind}"
+                        &at,
+                        "unreachable-code",
+                        &format!("Unreachable code after {kind}"),
                     );
                     self.lexer.fix_last(crate::diagnostics::Fix {
                         kind: crate::diagnostics::FixKind::Mechanical,
@@ -6797,12 +6810,17 @@ impl Parser {
         // silently encoded as Value::Null and either never match
         // (interpreter) or crash native codegen (E0308: `()` vs i32).
         if self.lexer.peek_token("..") {
-            diagnostic!(
-                self.lexer,
+            // About the token the parser is HOLDING — the `..` that opens the pattern,
+            // consumed just below.  So this site names its position rather than taking
+            // `report_pos`'s consumed-source default, which is the `{` of the `match`
+            // on the line above.
+            let at = self.lexer.peek();
+            self.lexer.specific(
+                &at,
                 Level::Error,
                 "open-ended range pattern `..hi` is not supported in match arms — \
                  write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
-                 or use a guard like `n if n < hi`"
+                 or use a guard like `n if n < hi`",
             );
             // Consume the `..` so the rest of the arm parses cleanly.
             self.lexer.token("..");

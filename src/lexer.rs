@@ -128,6 +128,11 @@ pub struct Lexer {
     /// Keep track of where we are in the current memory structure
     link: usize,
     position: Position,
+    /// End of the token BEFORE the current one — where the source the parser has
+    /// already consumed stops.  A diagnostic about a construct the parser has finished
+    /// belongs here rather than at the scan cursor, which has run on to the next token;
+    /// see [`report_pos`](Self::report_pos).
+    prev_end: Position,
     /// Where [`to`](Self::to) moved the reporting position away FROM, until the next
     /// token is scanned.
     ///
@@ -398,6 +403,11 @@ impl Default for Lexer {
         let cfg = LexConfig::default();
         Lexer {
             virtual_files: std::collections::HashMap::new(),
+            prev_end: Position {
+                file: String::new(),
+                line: 0,
+                pos: 0,
+            },
             lines: Box::new(Vec::new().into_iter()),
             peek: LexResult {
                 has: LexItem::None,
@@ -464,6 +474,11 @@ impl Lexer {
     ) -> Lexer {
         Lexer {
             virtual_files: std::collections::HashMap::new(),
+            prev_end: Position {
+                file: filename.to_string(),
+                line: 0,
+                pos: 0,
+            },
             lines: Box::new(lines),
             peek: LexResult {
                 has: LexItem::None,
@@ -698,16 +713,46 @@ impl Lexer {
         (self.position.line, self.position.pos)
     }
 
+    /// Where a diagnostic raised right now should point.
+    ///
+    /// [`position`](Self#structfield.position) is the scan cursor — the END of the token
+    /// the parser is currently holding.  Most diagnostics are about source already
+    /// CONSUMED: a write to a `const` parameter, a nullable flowing into a non-null slot,
+    /// a capture inside a parallel arm.  Those checks can only run once the construct is
+    /// complete, and by then the lexer has moved on to the next token.  While that token
+    /// is on the same line both answers agree, which is why the cursor looked right; when
+    /// it is on a LATER line the cursor attributes the diagnostic to a line the construct
+    /// does not occupy.  Measured: `a = 42` followed by `}` on its own line reported the
+    /// const write AT the `}`, and blank lines between them carried the caret further —
+    /// three lines from the code it names, with a different statement under it.
+    ///
+    /// So the report goes to the end of the consumed source whenever the current token
+    /// has crossed a line boundary.  A site that really is about the token the parser is
+    /// HOLDING — `'struct' definitions must be at file scope`, raised while looking at the
+    /// keyword — says so explicitly with [`specific`](Self::specific) or
+    /// [`pos_diagnostic`](Self::pos_diagnostic); that is a claim only the site can make,
+    /// and it is the same shape as the 48 sites already reaching for
+    /// [`peek_pos`](Self::peek_pos).
+    ///
+    /// A deliberate [`to`](Self::to) seek outranks both: that position was chosen.
+    fn report_pos(&self) -> (u32, u32) {
+        if self.seek_return.is_none()
+            && self.prev_end.line > 0
+            && self.prev_end.file == self.position.file
+            && self.peek.position.line > self.prev_end.line
+        {
+            (self.prev_end.line, self.prev_end.pos)
+        } else {
+            (self.position.line, self.position.pos)
+        }
+    }
+
     #[track_caller]
     pub fn diagnostic(&mut self, level: Level, message: &str) {
         crate::diagnostics::audit_site(std::panic::Location::caller());
-        self.diagnostics.add_at(
-            level,
-            message,
-            &self.position.file,
-            self.position.line,
-            self.position.pos,
-        );
+        let (line, pos) = self.report_pos();
+        self.diagnostics
+            .add_at(level, message, &self.position.file, line, pos);
     }
 
     /// Attach a machine-readable `suggestion` (a replacement token) to the
@@ -743,14 +788,9 @@ impl Lexer {
     #[track_caller]
     pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {
         crate::diagnostics::audit_site(std::panic::Location::caller());
-        self.diagnostics.add_at_coded(
-            level,
-            Some(code),
-            message,
-            &self.position.file,
-            self.position.line,
-            self.position.pos,
-        );
+        let (line, pos) = self.report_pos();
+        self.diagnostics
+            .add_at_coded(level, Some(code), message, &self.position.file, line, pos);
     }
 
     #[track_caller]
@@ -1847,6 +1887,9 @@ impl Lexer {
         // A pending reporting seek belongs to the file being left: restoring it after
         // the switch would stamp the OLD file's line onto the new one's first token.
         self.seek_return = None;
+        // Likewise the consumed-source position: `report_pos` also checks the file, so
+        // this is the second of two independent guards rather than the only one.
+        self.prev_end = self.position.clone();
         self.peek = LexResult {
             has: LexItem::None,
             position: self.position.clone(),
@@ -2047,6 +2090,9 @@ impl Lexer {
         // duplicate, so two look-aheads that start at the same position desynced the
         // real parse (guard `link_revert_repeatable_same_region`).
         let at_edge = self.link == self.memory.len();
+        // Where the source the parser has consumed stops, captured before the cursor
+        // runs on to the next token — see `report_pos`.
+        self.prev_end = self.position.clone();
         let Some(n) = self.next() else {
             self.end();
             return;

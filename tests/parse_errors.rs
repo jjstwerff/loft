@@ -740,7 +740,7 @@ fn unreachable_after_return() {
         "fn compute() -> integer { return 1; x = 2; x }
 fn test() { assert(compute() == 1, \"ok\"); }"
     )
-    .warning("Unreachable code after return at unreachable_after_return:1:38");
+    .warning("Unreachable code after return at unreachable_after_return:1:37");
 }
 
 /// Unreachable code after break.
@@ -755,7 +755,7 @@ fn unreachable_after_break() {
 }"
     )
     .warning("Variable i is never read at unreachable_after_break:2:20")
-    .warning("Unreachable code after break at unreachable_after_break:4:15");
+    .warning("Unreachable code after break at unreachable_after_break:4:9");
 }
 
 /// Unreachable code after continue.
@@ -770,7 +770,7 @@ fn unreachable_after_continue() {
 }"
     )
     .warning("Variable i is never read at unreachable_after_continue:2:20")
-    .warning("Unreachable code after continue at unreachable_after_continue:4:15");
+    .warning("Unreachable code after continue at unreachable_after_continue:4:9");
 }
 
 /// No warning: return inside an if branch does not terminate the block.
@@ -884,7 +884,7 @@ fn test() { classify(1); }"
         "`not null` is deprecated and has no effect — a type is non-null by default now at missing_return_not_null:1:43",
     )
     .warning(
-        "Not all code paths return a value — function 'classify' may return null at missing_return_not_null:4:3",
+        "Not all code paths return a value — function 'classify' may return null at missing_return_not_null:3:2",
     );
 }
 
@@ -1688,8 +1688,8 @@ fn struct_name_clashes_with_type_variable() {
 #[test]
 fn circular_init_error() {
     code!("struct Bad {\n  a: integer init($.b),\n  b: integer init($.a),\n}\nfn test() {}")
-        .error("circular init dependency: a -> b -> a at circular_init_error:5:3")
-        .error("circular init dependency: b -> a -> b at circular_init_error:5:3");
+        .error("circular init dependency: a -> b -> a at circular_init_error:4:2")
+        .error("circular init dependency: b -> a -> b at circular_init_error:4:2");
 }
 
 // ── C42 — Unknown variable diagnostic ───────────────────────────────────────
@@ -1776,7 +1776,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
 fn p85c_struct_inside_fn_emits_diagnostic() {
     code!("fn test() {\n  struct Inner { v: integer }\n  x = 5;\n}").error(
         "'struct' definitions must be at file scope, not inside a function or block \
-         at p85c_struct_inside_fn_emits_diagnostic:2:9",
+         at p85c_struct_inside_fn_emits_diagnostic:2:3",
     );
 }
 
@@ -1784,7 +1784,7 @@ fn p85c_struct_inside_fn_emits_diagnostic() {
 fn p85c_enum_inside_fn_emits_diagnostic() {
     code!("fn test() {\n  enum Inner { A, B }\n  x = 5;\n}").error(
         "'enum' definitions must be at file scope, not inside a function or block \
-         at p85c_enum_inside_fn_emits_diagnostic:2:7",
+         at p85c_enum_inside_fn_emits_diagnostic:2:3",
     );
 }
 
@@ -1792,7 +1792,7 @@ fn p85c_enum_inside_fn_emits_diagnostic() {
 fn p85c_named_fn_inside_fn_emits_diagnostic() {
     code!("fn test() {\n  fn inner() -> integer { 5 }\n  x = 5;\n}").error(
         "'fn' definitions must be at file scope, not inside a function or block \
-         at p85c_named_fn_inside_fn_emits_diagnostic:2:11",
+         at p85c_named_fn_inside_fn_emits_diagnostic:2:3",
     );
 }
 
@@ -1922,13 +1922,81 @@ fn l1_missing_semicolon_single_diagnostic() {
     // Missing `;` between `x = 1` and `y = 2;`. Should produce exactly one
     // error, not a cascade.
     code!("fn test() {\n  x = 1\n  y = 2;\n  assert(x + y == 3, \"\");\n}")
-        .error("Expect token ; at l1_missing_semicolon_single_diagnostic:3:4");
+        .error("Expect token ; at l1_missing_semicolon_single_diagnostic:2:8");
 }
 
 #[test]
 fn l1_missing_semicolon_in_body_single_diagnostic() {
     code!("fn foo(x: integer) -> integer {\n  y = x + 1\n  y * 2\n}\nfn test() {}")
-        .error("Expect token ; at l1_missing_semicolon_in_body_single_diagnostic:3:4");
+        .error("Expect token ; at l1_missing_semicolon_in_body_single_diagnostic:2:12");
+}
+
+// ── Diagnostic position: the caret belongs to the construct, not to the cursor ──
+//
+// `Lexer::position` is the scan cursor — the END of the token the parser is HOLDING.
+// A check that can only run once a construct is complete (a `const` write, a nullable
+// reaching a non-null slot, a capture in a parallel arm) therefore raises with the
+// cursor already on the NEXT token, and when that token is on a later line the caret
+// lands on a line the construct does not occupy.  Measured before the fix: `a = 42`
+// with `}` on its own line reported the const write AT the `}`, and blank lines
+// between them carried it further still — the same statement, three different
+// answers.  `Lexer::report_pos` attributes such a diagnostic to where the consumed
+// source stops instead, so the three layouts below agree.
+//
+// The assertion is LAYOUT-INDEPENDENCE, not a hand-picked line: all three write the
+// offending statement on line 2, so all three must report line 2.  A hand-guessed
+// expectation would only pin the layout it was written for.
+#[test]
+fn a_diagnostic_names_its_own_line_whatever_follows_it() {
+    // Terminated on its own line — the `;` kept the cursor on line 2 by luck, which
+    // is why this cell always passed and the two below did not exist.
+    code!("fn f(a: const integer) {\n  a = 42;\n}\nfn test() { f(1); }")
+        .error(
+            "Cannot modify const parameter 'a'; remove 'const' or use a local copy \
+             at a_diagnostic_names_its_own_line_whatever_follows_it:2:10",
+        )
+        .warning(
+            "Parameter a is never read at a_diagnostic_names_its_own_line_whatever_follows_it:1:25",
+        );
+}
+
+#[test]
+fn a_diagnostic_names_its_own_line_with_no_terminator() {
+    code!("fn f(a: const integer) {\n  a = 42\n}\nfn test() { f(1); }")
+        .error(
+            "Cannot modify const parameter 'a'; remove 'const' or use a local copy \
+             at a_diagnostic_names_its_own_line_with_no_terminator:2:9",
+        )
+        .warning(
+            "Parameter a is never read at a_diagnostic_names_its_own_line_with_no_terminator:1:25",
+        );
+}
+
+#[test]
+fn a_diagnostic_names_its_own_line_across_blank_lines() {
+    // The distance is unbounded: whatever the parser must skip to find the next token
+    // is how far the caret used to drift.
+    code!("fn f(a: const integer) {\n  a = 42\n\n\n}\nfn test() { f(1); }")
+        .error(
+            "Cannot modify const parameter 'a'; remove 'const' or use a local copy \
+             at a_diagnostic_names_its_own_line_across_blank_lines:2:9",
+        )
+        .warning(
+            "Parameter a is never read at a_diagnostic_names_its_own_line_across_blank_lines:1:25",
+        );
+}
+
+// A diagnostic that IS about the token the parser is holding keeps that token's
+// position, and says so at the site.  These two are the opt-outs, pinned here so a
+// later widening of the consumed-source default cannot take them silently: the
+// keyword is still the current token when the refusal is raised, and the first token
+// of the unreachable statement is what "unreachable code" is about.
+#[test]
+fn a_current_token_diagnostic_still_names_the_current_token() {
+    code!("fn test() {\n  struct Inner { a: integer }\n}").error(
+        "'struct' definitions must be at file scope, not inside a function or block \
+             at a_current_token_diagnostic_still_names_the_current_token:2:3",
+    );
 }
 
 // ── P54 struct-enum blockers (BITING_PLAN § P54) ─────────────────────────
