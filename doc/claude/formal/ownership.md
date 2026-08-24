@@ -104,10 +104,53 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **0** (2026-08-23) — **D-own-7 opened and closed the same day**, and D-own-6 before it;
-the five original D-own deviations remain resolved.  Read both entries for what their oracles
-vary before treating this zero as a measurement: each rested on a Join corpus that pinned one
-axis, and moving that axis found a fresh family every time.
+OPEN: **1** (D-own-8, 2026-08-24) — D-own-7 opened and closed 2026-08-23, and D-own-6 before
+it; the five original D-own deviations remain resolved.  Read those entries for what their
+oracles vary before treating any zero here as a measurement: each rested on a Join corpus that
+pinned one axis, and moving that axis found a fresh family every time — which is exactly how
+D-own-8 arrived, from a consumer rather than from an oracle at all.
+
+### D-own-8 — OPEN (2026-08-24, loft#1082): a Join's ownership fact is true on one path only
+
+`(O-Complete)` requires the fact PER BINDING, PER PATH — "every binding, including every
+`match`/`if` arm".  A join whose arms disagree about ownership produces ONE fact for BOTH
+paths, and the one it produces is the borrow:
+
+```loft
+line = if len(pts) > 2 { smooth_pts(pts, flags, false) } else { pts };
+```
+
+The then-arm is a call returning a freshly-owned vector; the else-arm is a bare local.
+`LOFT_VAR_TABLE` shows the binding typed `def deps=[pts]` — a BORROW — so on the owning path
+the fact is false, and a borrow-typed binding owns no store for that path's value to land in.
+The whole-value assignment then targets nothing:
+
+```
+VarVector(var[1224]) -> null
+ClearVector(r=ref(65535,0,0))
+AppendVector(r=ref(65535,0,0), other=ref(26,1,8), tp=3)   ← panic
+```
+
+`store_nr == u16::MAX` is `DbRef::NULL`, against `keys.rs`'s stated contract that "every store
+accessor consults it before dereferencing".  The `debug_assert!` that would name the variable
+is compiled out of a release build, so the shipped failure is a bare index panic.
+
+**What is NOT the cause, each eliminated by its own run.**  Reassigning over a field view;
+passing local copies instead of field views; `LOFT_NO_CONF_RECOVER=1` (store confinement); and
+loft2's move-elide / DbRef-set work (`812aac5d` fixed the INVERSE — a borrow read as an owned
+store — and the panic survives it unchanged).  A `Type::joined_deps` change making an owning
+arm win the union looked implied by the rule and did NOT fix it when measured, so the union is
+suspicious but is not the producer of the null `DbRef`.
+
+**The oracle gap.**  Three constructed reductions failed to reproduce it — an if-expression
+assigned then appended to, the same consumed by a struct literal, and a hand-written
+Catmull-Rom over a struct field of a loop variable — so the minimal repro is still open and the
+trigger needs something those lack.  It reproduces reliably in the `drawing` package's `Fronds`
+path (`bow=0.16`, parse only, no render); `bow` is the sole trigger because it is what makes a
+frond three control points and routes it into the smoothing.
+
+The next step is the PRODUCER, not another hypothesis: instrument the write of a `DbRef` whose
+`store_nr` is `u16::MAX` into a vector-typed local, which names the emit site directly.
 
 ### D-own-7 — CLOSED (2026-08-23, loft#1078): every arm of a Join that OWNS a store is a candidate the free must name
 

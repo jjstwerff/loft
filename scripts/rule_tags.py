@@ -63,14 +63,46 @@ CITE = re.compile(r"@FR-([A-Z][A-Za-z0-9-]{1,40})(?![-A-Za-z0-9])")
 
 
 def defined_rules():
-    """{tag: [defining files]} — a rule defined twice is a bug the check reports."""
+    """{tag: [defining files]} — a rule defined twice is a bug the check reports.
+
+    RULES ONLY.  A deviation heading (`D-own-7`, `DN3-Float`) is a defect REPORT —
+    a thing that was once true of the code — and a rule is a thing that must always
+    be true of it.  They are not the same kind and only one is quotable from a code
+    site: citing `@FR-D-own-7` would pin a closed bug's id as if it were law, and
+    `dups` would then police it as one.  See `defined_deviations`.
+    """
     out = collections.defaultdict(list)
     for path in sorted(glob.glob(FORMAL + "/*.md")):
-        text = open(path, encoding="utf-8").read()
-        fenced = "\n".join(_fenced_lines(text))
-        devs = {m.group("h") or m.group("q") for m in DEF_DEV.finditer(text)}
-        for name in set(DEF_INLINE.findall(fenced)) | devs:
+        fenced = "\n".join(_fenced_lines(open(path, encoding="utf-8").read()))
+        for name in set(DEF_INLINE.findall(fenced)):
             out[name].append(os.path.basename(path))
+    return out
+
+
+def defined_deviations():
+    """{tag: (files, status)} — the deviation register's entries, OPEN or CLOSED.
+
+    The status is what decides whether a code site may cite one, and the two
+    answers are opposite:
+
+    * an **OPEN** deviation is a LIVE fact about the code.  A site that implements
+      the shortfall should say so — `ref_tuple_element_ok`'s "the heap half is
+      refused under @FR-D-bind-11" is how you find every site that has to change
+      when D-bind-11 closes.  That citation is worth more than the rule's would be,
+      because the site does NOT enforce the rule.
+    * a **CLOSED** deviation is HISTORY.  Citing one pins a defect id as if it were
+      law, and the site's real subject is the rule the deviation was measured
+      against — which is still true, where the deviation no longer is.
+    """
+    out = {}
+    for path in sorted(glob.glob(FORMAL + "/*.md")):
+        text = open(path, encoding="utf-8").read()
+        for m in DEF_DEV.finditer(text):
+            tag = m.group("h") or m.group("q")
+            tail = text[m.end():m.end() + 120]
+            status = "CLOSED" if "CLOSED" in tail else "OPEN" if "OPEN" in tail else "?"
+            files, prev = out.get(tag, ([], "?"))
+            out[tag] = (files + [os.path.basename(path)], status if prev == "?" else prev)
     return out
 
 
@@ -99,17 +131,34 @@ def citations():
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
     rules = defined_rules()
+    devs = defined_deviations()
 
     if cmd == "list":
-        for tag in sorted(rules):
-            print(f"@FR-{tag:<28} {', '.join(sorted(set(rules[tag])))}")
-        print(f"\n{len(rules)} defined rules")
+        want_devs = "--deviations" in sys.argv
+        table = devs if want_devs else rules
+        for tag in sorted(table):
+            print(f"@FR-{tag:<28} {', '.join(sorted(set(table[tag])))}")
+        kind = "deviation entries (NOT citable)" if want_devs else "defined rules"
+        print(f"\n{len(table)} {kind}")
         return 0
 
     cites = citations()
 
     if cmd == "sites":
         tag = sys.argv[2].removeprefix("@FR-").lstrip("@")
+        if tag in devs:
+            files, status = devs[tag]
+            print(f"@FR-{tag} is an {status} DEVIATION entry ({', '.join(sorted(set(files)))}), "
+                  "not a rule.")
+            if status == "CLOSED":
+                print("A closed deviation is history — cite the RULE it was measured against.")
+            else:
+                print("An OPEN deviation is a live limitation; a site that IMPLEMENTS the "
+                      "shortfall may cite it, and these are the sites that must change when "
+                      "it closes:")
+                for f, n in cites.get(tag, []):
+                    print(f"  {f}:{n}")
+            return 0 if status == "OPEN" else 1
         if tag not in rules:
             print(f"@FR-{tag} is not a defined rule")
             return 1
@@ -129,15 +178,27 @@ def main():
 
     # check
     problems = []
+    implementing = 0
     for tag, files in rules.items():
         if len(files) > 1:
             problems.append(f"@FR-{tag} defined in {len(files)} docs: {', '.join(files)}")
     for tag, where in sorted(cites.items()):
-        if tag not in rules:
+        if tag in devs:
+            if devs[tag][1] == "CLOSED":
+                for f, n in where:
+                    problems.append(
+                        f"{f}:{n}: cites @FR-{tag}, a CLOSED deviation — that is history, not "
+                        "law.  Cite the rule it was measured against.")
+            else:
+                implementing += len(where)
+        elif tag not in rules:
             for f, n in where:
                 problems.append(f"{f}:{n}: cites @FR-{tag}, which is not a defined rule")
     cited = sum(1 for t in cites if t in rules)
-    print(f"{len(rules)} defined rules · {cited} cited · {sum(len(v) for v in cites.values())} citation sites")
+    n_open = sum(1 for v in devs.values() if v[1] == "OPEN")
+    print(f"{len(rules)} defined rules · {cited} cited · "
+          f"{sum(len(v) for v in cites.values())} citation sites · "
+          f"{len(devs)} deviations ({n_open} open), {implementing} site(s) implementing one")
     if problems:
         print(f"\n{len(problems)} problem(s):")
         for p in problems:

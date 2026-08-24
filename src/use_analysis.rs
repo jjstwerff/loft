@@ -2236,6 +2236,9 @@ pub enum HeapDelivery {
 /// — the leak stays for that shape rather than risking a free of a store the caller
 /// still reaches.
 #[must_use]
+/// The witness @FR-O-Move needs at a call: when a return BORROWS a parameter the caller must
+/// copy, so the bracket has to name the argument's store.  D-own-6 is the register entry for
+/// what this missed when the witness was not total.
 pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
     let Value::Call(fn_nr, args) = call.unspan() else {
         return (Vec::new(), false);
@@ -2512,6 +2515,8 @@ pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
 /// every own-vs-borrow chokepoint READS instead of re-deriving — the unification
 /// entry point (the OWNERSHIP_MODEL north star).
 #[must_use]
+/// Answers @FR-O-Owner for one value: which single thing owns this store.  Every heap store
+/// has exactly one owner at any moment, and this is where that is decided.
 pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
     ownership_of_with(data, d_nr, value, &function_defs(data, d_nr))
 }

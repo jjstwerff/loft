@@ -1283,6 +1283,9 @@ impl Deps {
     /// OWNED — no borrow, either space.  The most load-bearing convention
     /// in the codebase (`is_empty()` gates the free logic).
     #[must_use]
+    /// Carries @FR-O-Borrow's representation: EMPTY means owned, non-empty names what the
+    /// value aliases.  The distinction the whole model rests on — `is_empty()` is what
+    /// @FR-O-Derived reads to place a free.
     pub fn none() -> Deps {
         #[cfg(debug_assertions)]
         {
@@ -2114,6 +2117,10 @@ impl Type {
     }
 
     #[must_use]
+    /// The single fact @FR-O-Deps names: every store-lifetime decision — free placement,
+    /// adopt-vs-copy, move-vs-clone, drop — reads THIS, and re-deriving any of them from a
+    /// codegen condition instead is what that rule calls the bug.  Both backends read it,
+    /// which is @FR-O-NoDiverge.
     pub fn depend(&self) -> Vec<u16> {
         let mut v = Vec::new();
         match self {

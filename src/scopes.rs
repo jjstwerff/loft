@@ -4802,6 +4802,9 @@ impl Scopes {
                 .is_some_and(|&a| data.def(self.d_nr).attributes()[a].hidden)
     }
 
+    /// Enforces @FR-O-Derived: free placement is DERIVED, not decided — a local is freed
+    /// iff it owns its store and does not transfer it out, once, at scope exit.  A
+    /// per-site heuristic anywhere else in codegen is the bug that rule names.
     fn free_vars(
         &mut self,
         is_return: bool,
