@@ -137,18 +137,24 @@ needs no store" about a value that OWNS on the path that runs.  Conservative for
 liveness is anti-conservative for allocation.  Two named hazards meet here: an empty dep
 list read as *owned*, and one derived fact with two homes.
 
-**Face A — the destination that does not exist (loft#1082, OPEN).**  A borrow-typed slot
-owns no store, so a whole-value assignment into it targets nothing:
+**Face A — the allocation answer (OPEN).**  A borrow-typed slot owns no store, so a
+whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
+`for` over a vector of structs whose vector fields are copied into locals, then the mixed join
+— reproducing `pf_line def deps=[pf_cp]` and `pf_wids def deps=[pf_cw]` exactly as filed.
 
-```
-VarVector(var[1224]) -> null
-ClearVector(r=ref(65535,0,0))
-AppendVector(r=ref(65535,0,0), other=ref(26,1,8), tp=3)   ← panic
-```
-
-`store_nr == u16::MAX` is `DbRef::NULL`, against `keys.rs`'s stated contract that "every
-store accessor consults it before dereferencing".  The `debug_assert!` that would name the
-variable is compiled out of a release build, so the shipped failure is a bare index panic.
+⚠ **loft#1082's PANIC is not this.**  Measured in a scratchpad copy of the `drawing` package:
+replacing BOTH joins with imperative `for`-append loops — either alone, or both — leaves
+`index out of bounds: … index is 65535` exactly where it was, and so does binding each call to
+a plain fresh local with no join at all.  Markers pin the fault inside `smooth_vals`, AFTER
+its loop has built all 21 elements, i.e. on return delivery; and spelling the return
+(`return sv_out` in place of the bare tail `sv_out`) makes the whole program run clean.
+Bisected inside that function, the minimal crashing body is *append to a local vector inside a
+LOOP, then hand it back as a bare tail* — a single append is clean, seeding from the parameter
+is clean, `LOFT_NO_NATIVE_LIBS=1` crashes identically, and the `const` parameter is not it.
+loft#918's `tail_bare_var` claims both return spellings reach the same promotion; here they
+demonstrably do not.  So the join's wrong ALLOCATION answer stays a real deviation and the
+panic has a different producer — a reminder that a mechanism which explains the var table is
+not thereby the cause.
 
 **Face B — the store freed on the path that returns it (loft#1081, CLOSED 2026-08-24).**
 The same one-path fact, at a join BOUND to a local the function then returns:
@@ -189,8 +195,8 @@ says why in its own comment; the arm case is the same conditional `OpDatabase` a
 covered).  A leak is the safe direction from a use-after-free that answers wrong, and it
 is what D-own-7 traded for too — but it is a trade, not a closure.
 
-**The cure Face A needs is a rule decision, and it is the same one.**  A binding whose
-value OWNS on some path must own a store on every path.  That means a mixed-ownership
+**The cure Face A needs is a rule decision.**  A binding whose value OWNS on some path
+must own a store on every path.  That means a mixed-ownership
 join types as OWNED and the borrowing arm MATERIALISES a copy — which is not a new rule
 but `(O-Move)`'s existing sentence for the callee case ("if the return *borrows* a
 parameter … the caller COPIES to obtain its own store"), and the model's own doctrine that
@@ -208,13 +214,12 @@ allocation, which ALSO relocates the null-init and broke the tail-`if` return pr
 marker that changes alloc-vs-sentinel WITHOUT changing init order.
 
 **Reductions.**  Face B reduces to nine lines (above).  Face A's false FACT reduces to
-~55 lines — a `for` over a vector of structs whose vector fields are copied into locals,
-then the mixed join — reproducing `pf_line def deps=[pf_cp]` and `pf_wids def
-deps=[pf_cw]` exactly as filed; the PANIC needs one ingredient that reduction still lacks
-(there the join lowers as a bind, not as the `ClearVector`+`AppendVector` copy the crash
-tail shows).  It reproduces reliably in the `drawing` package's `Fronds` path
-(`bow=0.16`, parse only, no render), reachable read-only from a scratchpad program via
-`--lib`.
+~55 lines.  loft#1082's PANIC does not reduce yet: the same tail-return-out-of-a-loop shape
+written out on its own runs clean on BOTH backends, with the `const` parameter, the nested
+caller loop and the struct-with-vector-field source all present — four constructed reductions
+now.  The reliable oracle is a scratchpad COPY of the `drawing` package driven through `--lib`
+(`Fronds … bow=0.16`, parse only, no render), which bisects freely and is how the tail-return
+boundary was found; their tree stays untouched.
 
 
 ### D-own-7 — CLOSED (2026-08-23, loft#1078): every arm of a Join that OWNS a store is a candidate the free must name
