@@ -4428,7 +4428,8 @@ pub(crate) fn populate_struct_from_jsonvalue(
             stores.types[content_kt as usize].parts,
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
-            // A narrow integer.  This arm did not exist: every such field fell to the
+            // A narrow integer (@FR-L-Narrow decides the width set).  This arm did not exist:
+            // every such field fell to the
             // catch-all below and kept its zero-init bytes, so `T.parse(json_parse(t))`
             // dropped the value the document gave it — `u8?` 42 read back `0`, `u16?`
             // 300 read back `null`.  The encodings live in `write_narrow_value`.
@@ -4820,7 +4821,7 @@ fn populate_vector_from_jarray(
             elem_parts,
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
-            // A narrow-integer element had no arm at all, so every element of a
+            // A narrow-integer element (@FR-L-Narrow) had no arm at all, so every element of a
             // `vector<u8?>` kept the freshly-appended zero bytes: `[1,null,3]` read
             // back `[0,0,0]`, losing the values the document did give.
             match unwrap_long(stores, &item, item_discr, "vector", &elem_name) {

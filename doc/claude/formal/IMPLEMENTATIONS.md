@@ -91,9 +91,45 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `collections.md` Col-Hash / Col-Index / Col-Sorted / Col-Trie | **12** | ☐ no named home; the catch-all audit already found these as "only a keyed collection has keys" guards |
 | 4 | **is this a collection** (keyed `+ Vector`) | `collections.md` Col-Store | **10** | ☐ differs from #3 by exactly `Vector` — confirm the two are genuinely different questions and not one drifted list |
 | 5 | **is this a DbRef-represented type** (`+Radix\|Trie` over #2) | `layout.md`; `element_stack_size`'s DbRef group | **8** | ☐ `coalesce_not_null`'s heap-DbRef branch is one of these — the branch loft#1065 recursed into |
-| 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `layout.md` L-Null; `types.md` narrow widths | **7** | ☐ partial homes exist (`write_narrow_value` / `narrow_is_null`); the remaining sites still spell the list |
+| 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `@FR-L-Narrow` (width set) · `@FR-L-Null` (the encoding) | 6 → **5 cited, 1 excluded** | ✅ **evaluated — and only 3 of them are the same question.** See § The narrow widths below. |
 | 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | `calls.md` F-Drop / F-Block | **9 + 13** | ☐ two variants; establish whether `BreakWith` belongs to the same question |
 | 8 | **which `Value` shapes hold a statement list** (`Insert\|Parallel\|Tuple`) | `operational.md` | **8** | ☐ a `Value` list rather than a `Type` list; the audit script only reads `Type::` today |
+
+## The narrow widths, evaluated with the tags (checklist #6, 2026-08-24)
+
+The first family worked through with `@FR-` citations rather than shape-matching, and the
+result is the case that makes the exercise worth doing: **a shared type list, three different
+questions.**
+
+| sites | question | verdict |
+|---|---|---|
+| `native.rs` ×2, `database/structures.rs` | dispatch on width, then delegate to `write_narrow_value` | **one rule, already merged** — the shared home carries `@FR-L-Null`; these are its dispatch guards |
+| `state/io.rs` ×2 | same width classification, **raw i64 in a variable slot** | **must NOT be folded** |
+| `database/allocation.rs::is_inline_scalar` | inline-vs-relocated for the paged store | **not this family** — its list is a superset (`+ Parts::Base`) asking a different question |
+
+**The `io.rs` pair is the interesting one, and the code already said so.** Its own comment
+reads *"stored raw as i64 (OpPutInt), **not** via the +1-encoded `Parts::Byte/Short` encoding
+that structs use (nor the `i32::MIN` null sentinel of `Parts::Int`)"* — the same four types,
+the deliberately opposite encoding. A shape-matcher ranks it identical to the three that DO
+merge; only reading what each site asks separates them. Both now carry `@FR-L-Narrow` for the
+width classification plus an explicit note that they are not fold candidates, so the next
+reader does not have to re-derive it.
+
+⚠ **A rules GAP this surfaced, recorded rather than filled.** `@FR-L-Narrow` states the STORED
+width (`u8 → 1 B, u16/i16 → 2 B, i32 → 4 B, else 8 B`) and `@FR-L-Null` the field encoding.
+Neither says that a narrow value in a VARIABLE slot is a raw `i64` — the very fact the `io.rs`
+pair depends on and comments at length. The rules cannot currently express the distinction the
+code is built on, which per [README](README.md) means the RULE wants extending; minting one is
+a spec decision and is not taken here.
+
+**What the citations buy immediately:** `idx tag:@FR-L-Narrow` (or
+`scripts/rule_tags.py sites L-Narrow`) lists every site that must be revisited if a width is
+ever added to the set — which was previously a grep for four `Parts::` names that also returned
+`is_inline_scalar`, a site that must NOT change with them.
+
+⚠ The audit script needed widening to see this family at all: it read `Type::` only, and the
+narrow widths live in `Parts::` — the LAYOUT view. An instrument that cannot represent half the
+vocabulary reports a clean sweep of the half it can see.
 
 ## Not mergeable — recorded so the question is not reopened
 

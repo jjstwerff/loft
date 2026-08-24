@@ -1004,8 +1004,8 @@ impl Stores {
                 }
                 Ok(())
             }
-            // The four narrow-integer encodings live in `write_narrow_value`, so this
-            // walker and the `JsonValue` one spell a narrow slot's bytes the same way.
+            // The four narrow-integer encodings (@FR-L-Narrow) live in `write_narrow_value`,
+            // so this walker and the `JsonValue` one spell a narrow slot's bytes the same way.
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _) => {
                 let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());

@@ -26,7 +26,10 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 MATCHES = re.compile(r"matches!\s*\(([^;]{0,600}?)\)\s*(?:\{|,|;|\)|$)", re.S)
-VARIANT = re.compile(r"\bType::([A-Za-z_][A-Za-z0-9_]*)")
+# `Type` is the surface type; `Parts` is the LAYOUT view of it (the narrow integer widths
+# live there, not in `Type`).  A rule can be spelled over either, so both are scanned —
+# reading only `Type::` made the whole narrow-width family invisible to this instrument.
+VARIANT = re.compile(r"\b(?:Type|Parts)::([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def collect(min_len):
