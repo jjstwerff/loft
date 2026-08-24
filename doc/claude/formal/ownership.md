@@ -143,20 +143,20 @@ list read as *owned*, and one derived fact with two homes.
 whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
 `for` over a vector of structs whose vector fields are copied into locals, then the mixed join
 — reproducing `pf_line def deps=[pf_cp]` and `pf_wids def deps=[pf_cw]` exactly as filed.
+No wrong answer or crash is yet attributed to it; it is a false FACT looking for its symptom.
 
-⚠ **loft#1082's PANIC is not this.**  Measured in a scratchpad copy of the `drawing` package:
-replacing BOTH joins with imperative `for`-append loops — either alone, or both — leaves
-`index out of bounds: … index is 65535` exactly where it was, and so does binding each call to
-a plain fresh local with no join at all.  Markers pin the fault inside `smooth_vals`, AFTER
-its loop has built all 21 elements, i.e. on return delivery; and spelling the return
-(`return sv_out` in place of the bare tail `sv_out`) makes the whole program run clean.
-Bisected inside that function, the minimal crashing body is *append to a local vector inside a
-LOOP, then hand it back as a bare tail* — a single append is clean, seeding from the parameter
-is clean, `LOFT_NO_NATIVE_LIBS=1` crashes identically, and the `const` parameter is not it.
-loft#918's `tail_bare_var` claims both return spellings reach the same promotion; here they
-demonstrably do not.  So the join's wrong ALLOCATION answer stays a real deviation and the
-panic has a different producer — a reminder that a mechanism which explains the var table is
-not thereby the cause.
+⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
+copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either
+alone, or both — left `index out of bounds … 65535` exactly where it was.  The cause was a
+two-pass work-ref collision with nothing to do with ownership at a join: `ref_return`'s
+`Bind { substitute: true }` unregisters a substituted-away `__ref_N` (which also sets
+`skip_free`), the `__ref_N` numbering DRIFTS between passes when a callee declared later in the
+file mints a buffer on pass 2 that pass 1 did not, and `work_refs` re-minting that name
+re-registered the ref while leaving `skip_free` standing.  `gen_set_first_vector_null` reads
+`skip_free` as "do not allocate", so the buffer reached the callee as `DbRef::NULL`.  Fixed by
+clearing the flag on re-mint; guard
+`tests/scripts/1082-a-re-minted-work-ref-is-not-the-one-substituted-away.loft`.
+A mechanism that explains the var table is not thereby the cause.
 
 **Face B — a returned local the promotion should never have renamed (loft#1081, CLOSED
 2026-08-24).**  The same one-path fact, at a join BOUND to a local the function returns:
