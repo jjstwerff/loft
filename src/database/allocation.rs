@@ -860,8 +860,8 @@ impl Stores {
         // about to be handed out while someone still holds it.  Reading the
         // allocation trace alone cannot tell that apart from an ordinary reuse.
         if crate::keys::trace_db() {
-            let was_free = (al as usize) < self.allocations.len()
-                && self.allocations[al as usize].free;
+            let was_free =
+                (al as usize) < self.allocations.len() && self.allocations[al as usize].free;
             eprintln!("[db] free #{al} name={name} already_free={was_free}");
         }
         // #405 — a wrong/stale free can carry an out-of-range store_nr (e.g. a

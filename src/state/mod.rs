@@ -2415,7 +2415,18 @@ impl State {
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref(&mut self) {
         let pos = self.code::<u16>();
-        let null_ref = self.database.null();
+        // A ref local's null-init ALLOCATES an empty store.  `--native` writes the
+        // NULL sentinel instead (`let mut var_x: DbRef = DbRef::NULL`), and that
+        // difference is the root of loft#1085: it makes a call-site return buffer
+        // (`__ref_N`) a real store the caller keeps and frees at scope exit, while
+        // the callee — which cannot tell a caller-supplied buffer from one the
+        // runtime handed it (`CallRef`, the cdylib bridge) — frees it as well.
+        // `LOFT_SENTINEL_INIT_REF=1` takes the native spelling; see that switch.
+        let null_ref = if crate::keys::sentinel_init_ref() {
+            DbRef::NULL
+        } else {
+            self.database.null()
+        };
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
