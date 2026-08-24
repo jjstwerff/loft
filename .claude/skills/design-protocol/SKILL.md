@@ -19,8 +19,11 @@ description: >-
   especially when PORTING or RE-TARGETING something that already works (a new backend, a
   new output format, a standalone or single-file version, a different language). That
   case does not feel like new work, which is exactly why it is where duplicate and
-  subtly-wrong reimplementations come from; the skill covers how to find the existing
-  implementation before you write a second one.
+  subtly-wrong reimplementations come from. The skill covers how to find the existing
+  implementation before you write a second one, and — as a system grows past what fits in
+  one head — how to anchor that question on NAMED RULES cited at each enforcement site,
+  so "does this already exist?" becomes a lookup instead of a search, and so two sites
+  that implement one rule are distinguishable from two that merely look alike today.
 user-invocable: true
 ---
 
@@ -307,10 +310,44 @@ the code rather than after. What such a tool looks for:
 - for the outer radius: the dependency manifest, the package index, the library catalogue
 
 That is minutes of scripting, and it pays twice if you **keep it and re-run it** — a
-one-off answer rots, an instrument does not. Prefer **meaning** over **shape** where you
-can: two sites that cite the same rule are two implementations of it even when the code
-looks nothing alike, and a shape-matcher cannot see that. A convention where each
-enforcement site names the rule it obeys turns the search into a lookup.
+one-off answer rots, an instrument does not. But such a tool searches by **shape**, and
+shape is the weaker anchor; the next section is the stronger one.
+
+### As the system grows, anchor the question on the RULE, not on the code
+
+Searching by shape has a **rising false-negative rate**. Early on, two implementations of
+one rule tend to look alike — the same list, the same few lines — and a grep finds them. As
+the system grows the same rule gets expressed in more ways: one site checks a type list,
+another takes an early return, a third consults a table. They implement one rule and share
+no text. A shape-matcher cannot see that, and neither can you, because by then the whole
+picture no longer fits in one head — which is the condition the search was supposed to
+compensate for.
+
+What survives that growth is **the rule itself, named**. So write down what you design as a
+named rule — the invariant, spelled once, somewhere that is not the code — and have every
+site that enforces it *say which rule it obeys*. A citation costs a comment, and it is
+written at the only moment the fact is reliably known: while you are making that site obey
+the rule. Later, nobody has to reconstruct it.
+
+Three things fall out, and the third is not available any other way:
+
+- **the search becomes a lookup** — *does this already exist?* is answered by grepping the
+  rule's name, instead of guessing which shape someone else chose;
+- **step 2's count comes for free** — an invariant's re-assertion sites *are* its citations,
+  so the number you were told to count is a query rather than an audit, and it stays correct
+  as the code moves;
+- **the merge question gets arbitrated.** Above: *equality is evidence; sameness-of-rule is
+  the claim.* A rule name **is** that claim, written down and reviewable. Two sites citing
+  one rule are candidates to merge. Two sites citing different rules stay apart however
+  identical their code looks today — so when one of them later has to change, there is
+  nothing to untangle, and the too-early-abstraction trap is closed by construction rather
+  than by taste.
+
+Keep the citations **honest rather than complete**: a citation naming a rule that does not
+exist is worth failing on from the first day, while *every rule has at least one citation*
+can tighten slowly as coverage grows. And generate any index **from** the citations rather
+than maintaining one beside them — a second copy of where the rules live is the same defect
+this section is about, one level up.
 
 **The symmetric error is the over-unification already named above**, arriving by a
 different road. Do not merge two sites because their lists are equal *today*. Equality is
