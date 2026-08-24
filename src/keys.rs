@@ -1588,17 +1588,19 @@ pub fn mut_store<'a>(r: &DbRef, stores: &'a mut [Store]) -> &'a mut Store {
     }
 }
 
-/// The store accessors' out-of-range path, split out so the hot path keeps exactly the
-/// bounds branch it already had and this never inlines into it.
+/// Reports a `DbRef` a store accessor cannot resolve, and never returns.
 ///
-/// It exists because the raw index panic named nothing.  `DbRef::NULL` is `store_nr ==
-/// u16::MAX` and [`DbRef::is_null`] is documented as the single home for the null test —
-/// "every store accessor consults it before dereferencing, so an absent value never
-/// indexes `stores[u16::MAX]`".  When one does, the contract has been broken UPSTREAM by
-/// whatever handed the accessor an absent reference, and the reader needs to be told that
-/// rather than left with `index out of bounds: the len is 25 but the index is 65535`.
-/// The `debug_assert!` that used to carry the numbers is compiled out of every release
-/// build, which is the only build a user runs (loft#1082).
+/// Reaching it is always a COMPILER bug, never a user one, so the message says so and
+/// names which of the two shapes it is.  A null `store_nr` is the interesting one:
+/// `DbRef::NULL` means an ABSENT value, and [`DbRef::is_null`] is the single home for
+/// testing it — "every store accessor consults it before dereferencing, so an absent
+/// value never indexes `stores[u16::MAX]`".  So a null arriving HERE places the fault
+/// upstream, on whatever published an absent value where a real store was required, and
+/// the message points the reader there.
+///
+/// Split out and `#[cold]` so the accessors keep exactly the bounds branch they already
+/// had.  It carries the numbers in every build: a `debug_assert!` would say nothing in
+/// the only build a user runs (loft#1082).
 #[cold]
 #[inline(never)]
 fn bad_store_nr(r: &DbRef, len: usize) -> ! {

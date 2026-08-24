@@ -9700,27 +9700,23 @@ impl Parser {
     /// exit, so a tail viewing it must be materialised (copied) rather than
     /// escaping as a borrow. False ⇒ `v` is defined in an enclosing scope (an
     /// outer local / param returned by the block) — a genuine borrow to keep.
-    /// loft#1081 / D-own-8 — is `v` BOUND to a branch join (`v = if c { … } else { … }`)?
+    /// Is `v` BOUND to a branch join (`v = if c { … } else { … }`)?  Ask before renaming a
+    /// local onto the caller's return buffer: a local this answers `true` for may not be.
     ///
-    /// Such a local must not be NRVO-RENAMED onto the caller's return buffer.  The rename
-    /// makes the buffer the assignment's destination, and a join does not BUILD into its
-    /// destination — each arm mints its own backing and the assignment REBINDS the slot
-    /// (`PutRef`).  So the caller's buffer is abandoned the moment the join runs, and the
-    /// arm store is handed back with no owner: one leaked vector per call, on both
-    /// backends.  The same join written at the function TAIL is clean, because there every
-    /// arm materialises into `__retbuf` and frees its own backing — the BOUND spelling
-    /// simply never reaches that path.  Refusing the rename drops it to `Bind`, which
-    /// keeps the local and copies it into a separate buffer at the return.
+    /// Enforces @FR-O-Owner / @FR-O-Move.  The rename is sound only where the local's value
+    /// is BUILT INTO the buffer, as a literal is.  A join is not: each arm mints its own
+    /// backing and the assignment REBINDS the slot (`PutRef`), so the buffer ends up with
+    /// no owner and the arm's store is handed back to a caller whose binding does not name
+    /// it — two stores with no owner, from one return.  Refusing the rename leaves the
+    /// candidate on `Bind`, which keeps the local and copies it into a separate `__retbuf`;
+    /// that is the delivery a join written at the function TAIL already takes.
     ///
-    /// Enforces @FR-O-Owner and @FR-O-Move: the rebind leaves the caller's buffer with no
-    /// owner AND hands back a store the caller's binding does not name, so a single return
-    /// produces two zero-owner stores where the rule allows none.
-    ///
-    /// Structural, not ownership-based, because the verdict is needed on PASS 1: `vector_db`
-    /// runs only on pass 2, so on pass 1 the binding's deps are still empty and the arms
-    /// have not minted anything yet.  A verdict that differed across passes would move the
-    /// ABI (the hidden buffer argument) between them.  `match` lowers to nested `If`, so
-    /// one shape covers both spellings.
+    /// The question is STRUCTURAL rather than a reading of `deps` because the answer is
+    /// needed on pass 1, where the deps are still empty (`vector_db` runs only on pass 2).
+    /// The two passes must agree here — the verdict decides whether the function takes a
+    /// hidden buffer argument, so a verdict that differed would move the ABI between them.
+    /// `match` lowers to nested `If`, so one shape covers both spellings.  (loft#1081,
+    /// D-own-8 in `formal/ownership.md`.)
     fn var_bound_to_branch(l: &[Value], v: u16) -> bool {
         fn rhs_is_branch(node: &Value) -> bool {
             match node.unspan() {
@@ -11536,10 +11532,10 @@ impl Parser {
         // projection), so this is field-projection-of-a-local only.
         let returns_own_field =
             self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(v);
-        // loft#1081 / D-own-8 — see `var_bound_to_branch`: a vector local bound to a
-        // branch join is REBOUND, not built into, so renaming it onto the caller's
-        // buffer abandons that buffer.  Vector only: a record return re-mints its
-        // destination through `materialize_return_into` and was measured clean here.
+        // A vector local bound to a branch join is REBOUND, not built into, so it cannot
+        // carry the rename — `var_bound_to_branch` states the rule.  Vector only: a record
+        // return re-mints its destination through `materialize_return_into`, so the rebind
+        // has nothing to abandon there.
         let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
             && Self::var_bound_to_branch(body, v);
         let allow_rename = !(bound_already

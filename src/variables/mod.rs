@@ -2805,22 +2805,18 @@ impl Function {
             self.variables[nr as usize].source = lexer.at();
             break nr;
         };
-        // loft#1082 — minting from a name PASS 1 already used means this `__ref_N`
-        // denotes a DIFFERENT SITE now.  `add_variable` says so in its own comment and
-        // lets pass 2 win on the TYPE; the per-site FLAGS need the same treatment, and
-        // `skip_free` is the one that bites.  `ref_return`'s `Bind { substitute: true }`
-        // calls `unregister_work_ref`, which both drops the registry entry and sets
-        // `skip_free` — sound for the pass that substituted every use away.  Re-minting
-        // re-registers the ref (`work_refs.insert` below) and so undoes half of it, while
-        // `skip_free` rode into pass 2 on a name that now names a LIVE buffer.
+        // A `__ref_N` name identifies a SITE, and only within one pass.  The two passes
+        // claim the names in different orders — a callee declared later in the file has
+        // no known return type on pass 1, so the call mints no buffer, and on pass 2 it
+        // does — so the same name is a different site each time.  `add_variable` states
+        // the same thing for the TYPE and lets pass 2 win; the per-site FLAGS follow the
+        // same rule, and this mint is where the new site claims them.
         //
-        // `skip_free` is a free-time fact, but `gen_set_first_vector_null` also reads it
-        // as "borrows, do not allocate" — so the buffer was passed to the callee as
-        // `DbRef::NULL`, and the callee's `OpAppendVector(__retbuf, …)` indexed
-        // `stores[u16::MAX]`.  (The keyed twin `gen_set_first_keyed_null` de-conflated
-        // that read for its own case and recorded that no owned-VECTOR case had needed
-        // it yet; this was that case, and it is repaired at the source instead: a
-        // re-minted work-ref is simply not the ref that was substituted away.)
+        // `skip_free` is the one that carries: `unregister_work_ref` sets it to record
+        // that a ref has no uses left, and a freshly minted buffer is by definition a ref
+        // that has one.  Leaving it set says "borrows, needs no store" to
+        // `gen_set_first_vector_null`, and the callee then receives `DbRef::NULL` where
+        // its return buffer belongs (loft#1082).
         self.variables[v as usize].skip_free = false;
         self.trace_work_ref(v, tp);
         self.work_refs.insert(v);

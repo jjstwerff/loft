@@ -1442,18 +1442,16 @@ impl State {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
             _ => Deps::none(),
         };
-        // A `__vdb_N` vector backing is never allocated HERE: the `OpDatabase` that
-        // fills it sits at the BUILD site, which may be CONDITIONAL — an
-        // `if c { v = [..] }` rebind, and equally a vector literal that is one ARM of a
-        // branch (`v = if c { [a] } else { [b] }`, loft#1081).  On the path not taken the
-        // eagerly-allocated store is never named again and is never typed, so it is the
-        // `kt=65535 ?` the leak report cannot even name — the same interp-only shape the
-        // `skip_free` note below describes, from the other direction.  It buys nothing on
-        // the path that IS taken either: `alloc_record_at` allocates fresh from a null
-        // sentinel.  The function prologue already sentinel-inits every `__vdb` slot
-        // (#260 Fix B, `def_code` above), so this is the one site that undid it.
-        // @FR-O-Derived: free placement is derived from the ownership fact, and a store
-        // no binding's fact ever names has no derivable free.
+        // A `__vdb_N` vector backing allocates at its BUILD site, never here.  That site
+        // can be conditional — an `if c { v = [..] }` rebind, or a literal that is one ARM
+        // of a branch — and an eager store on the path not taken is never named again and
+        // never typed, so nothing can free it and the leak report cannot even say what it
+        // held (`kt=65535 ?`).  Enforces @FR-O-Derived: a free is derived from the
+        // ownership fact, so a store no binding's fact ever names has no derivable free.
+        //
+        // The eager store buys nothing on the taken path either — `alloc_record_at`
+        // allocates fresh from a null sentinel — and the function prologue already
+        // sentinel-inits every `__vdb` slot (`def_code` above).  (loft#1081.)
         let vdb_backing = stack.function.name(v).starts_with("__vdb");
         if dep.is_empty() {
             if vdb_backing || stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
