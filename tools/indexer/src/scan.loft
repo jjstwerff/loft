@@ -110,6 +110,16 @@ fn is_segment_char_b(b: integer) -> boolean {
 // True for an ASCII uppercase letter — the acronym class in the
 // worked-example `@AAA-###` tag family (@PLN141).
 fn is_upper_b(b: integer) -> boolean { b >= 65 && b <= 90 }
+// True for a byte that can CONTINUE an `@FR-<Rule>` citation: a letter, a digit,
+// or the interior hyphen of a sub-rule (`@FR-B-View-Base`).  This same class is the
+// trailing boundary — a tag ends exactly where the class does, which is what stops
+// `@FR-B-View` matching inside `@FR-B-View-Base`.  A `\b` check cannot do it: `-` is
+// already a word boundary, so 21 of the defined rules would match their own
+// refinements.  See doc/claude/formal/README.md § Rule tags.
+fn is_rule_char_b(b: integer) -> boolean {
+    if is_word_char_b(b) { return true; }
+    b == BYTE_HYPHEN
+}
 
 // Build the set of valid P-issue numbers from PROBLEMS.md.
 // Each row starts `| <num> | **@P<num>** — ...`; the leading
@@ -361,6 +371,7 @@ const BYTE_P_UPPER  = 80;   // 'P'
 const BYTE_G_UPPER  = 71;   // 'G'
 const BYTE_H_UPPER  = 72;   // 'H'
 const BYTE_F_UPPER  = 70;   // 'F'  (@F<n> — loft-lang/features feature)
+const BYTE_R_UPPER  = 82;   // 'R'  (@FR-<Rule> — a formal-rule citation)
 const BYTE_I_UPPER  = 73;   // 'I'  (@I<n> — loft-lang/features infrastructure)
 const BYTE_P_LOWER  = 112;  // 'p'
 const BYTE_L        = 76;   // 'L'
@@ -479,6 +490,28 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             }
             // Trailing boundary failed; skip past `@GH` and resume.
             i = i + 3;
+            continue;
+        }
+        // @FR-<Rule> — a FORMAL-RULE citation (CLAUDE.md § Tracker tags;
+        // doc/claude/formal/README.md § Rule tags).  A code site that enforces a rule
+        // cites it, so `idx tag:@FR-L-Null` answers "which sites enforce this rule?"
+        // and the duplication question becomes a lookup rather than a search.
+        //
+        // Checked before `@F<digits>`, though the order is not load-bearing: that
+        // branch needs a DIGIT at i+2 and here it is `R`.  The scan consumes
+        // `is_rule_char_b`, so the trailing boundary is implicit — j stops where the
+        // rule name does, and no separate `\b` test is needed (nor would one work,
+        // the hyphen being a word boundary already).
+        if i + 5 <= n && line.byte_at(i + 1) == BYTE_F_UPPER
+            && line.byte_at(i + 2) == BYTE_R_UPPER
+            && line.byte_at(i + 3) == BYTE_HYPHEN
+            && is_upper_b(line.byte_at(i + 4)) {
+            j = i + 4;
+            while j < n && is_rule_char_b(line.byte_at(j)) { j = j + 1; }
+            tag = line[i..j];
+            if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+            out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
+            i = j;
             continue;
         }
         // @F<digits> / @I<digits> — loft-lang/features catalogue refs

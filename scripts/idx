@@ -8,6 +8,11 @@
 #   idx tag:@P259                 — exact tag match
 #   idx tag:@GH247                — GitHub Issue/PR ref (prints its URL too)
 #   idx gh:247                    — same, from a bare number
+#   idx tag:@FR-B-Copy            — a FORMAL-RULE citation: every code site that
+#                                   enforces that rule, so "which sites implement
+#                                   this?" is a lookup.  Boundary-exact, so
+#                                   @FR-B-View does not return @FR-B-View-Base.
+#                                   See doc/claude/formal/README.md § Rule tags.
 #   idx tag:legacy:P259           — bare-name (legacy) lookup
 #   idx prefix:@PLAN22            — all tags starting with prefix
 #   idx file:doc/.../PROBLEMS.md  — all tags referenced in a file
