@@ -62,7 +62,7 @@ from an instrument that cannot yet represent what it counts is not a measurement
 lesson this file keeps producing, here applied to the file itself.
 
 The convention is written up in [README.md § Rule tags](README.md) and
-[CLAUDE.md § Tracker tags](../../CLAUDE.md). Until citations are widespread the site counts in
+[CLAUDE.md § Tracker tags](../../../CLAUDE.md). Until citations are widespread the site counts in
 the checklist below are lower bounds, and `scripts/rule_predicate_audit.py`'s shape-matching is
 the complementary instrument — it finds duplicates that share code, `rule_tags.py dups` finds
 those that share a RULE.
@@ -88,8 +88,8 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 |---|---|---|---|---|
 | 1 | **is this a scalar** (`Integer\|Float\|Single\|Character\|Boolean\|Enum(_,false,_)`) | `types.md` scalar/heap split; the `&(…)` admitted-element rule | 8 → **3 merged**, 5 left | ✅ **merged + drift FIXED.** `generation/`'s two copies included `Enum(_, false, _)`; `ref_tuple_element_ok` did not — so `&(Col, Col)` was refused while `&(boolean, boolean)` was admitted, on an identical 1-byte layout. One home: `data::is_scalar`. The 5 remaining sites (`scopes.rs:3898`, `generation/emit.rs`, `parser/operators.rs:47` = `Const-ScalarCollapse`, `parser/mod.rs:4932`, +1) spell the BARE five, so adopting them ADDS value enums at each — a behaviour change per site needing its own probe. Left open deliberately. |
 | 2 | **does this own a store** (`Reference\|Vector\|Enum(_,true,_)`) | `heap.md` H-Alloc; `ownership.md` O-Owner | **30** | ☐ largest single list; check whether all 30 ask the same question before touching |
-| 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `collections.md` Col-Hash / Col-Index / Col-Sorted / Col-Trie | **12** | ☐ no named home; the catch-all audit already found these as "only a keyed collection has keys" guards |
-| 4 | **is this a collection** (keyed `+ Vector`) | `collections.md` Col-Store | **10** | ☐ differs from #3 by exactly `Vector` — confirm the two are genuinely different questions and not one drifted list |
+| 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `@FR-Col-Hash` · `-Sorted` · `-Index` · `-Spatial` · `-Trie` | 16 → **1** | ✅ **merged onto `vectors::is_keyed`** — see § The keyed collections below |
+| 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` | 10 | ☐ home EXISTS (`vectors::is_collection`, now cited) and is literally `is_keyed(tp) \|\| Vector` — so #3 and #4 differ by that variant BY DESIGN, not by drift. The inline copies remain to convert. |
 | 5 | **is this a DbRef-represented type** (`+Radix\|Trie` over #2) | `layout.md`; `element_stack_size`'s DbRef group | **8** | ☐ `coalesce_not_null`'s heap-DbRef branch is one of these — the branch loft#1065 recursed into |
 | 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `@FR-L-Narrow` (width set) · `@FR-L-Null` (the encoding) | 6 → **5 cited, 1 excluded** | ✅ **evaluated — and only 3 of them are the same question.** See § The narrow widths below. |
 | 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | `calls.md` F-Drop / F-Block | **9 + 13** | ☐ two variants; establish whether `BreakWith` belongs to the same question |
@@ -130,6 +130,36 @@ ever added to the set — which was previously a grep for four `Parts::` names t
 ⚠ The audit script needed widening to see this family at all: it read `Type::` only, and the
 narrow widths live in `Parts::` — the LAYOUT view. An instrument that cannot represent half the
 vocabulary reports a clean sweep of the half it can see.
+
+## The keyed collections, merged (checklist #3, 2026-08-24)
+
+The clearest instance so far of *structure that already exists, with several implementations
+inside it*. The predicate **"is this a keyed collection"** was spelled **16 times**:
+
+- `vectors::is_keyed` — `pub(crate)`, documented, reachable from everywhere;
+- `objects::is_keyed_collection` — a PRIVATE second helper holding the same five variants in a
+  different order;
+- **14 inline `matches!` copies** across `collections.rs`, `expressions.rs` (×5), `mod.rs` (×2),
+  `operators.rs`, `scopes.rs` (×3) and `state/codegen.rs` (×2).
+
+Adding a sixth keyed kind meant finding sixteen places, and nothing connected them. All now
+call `is_keyed`; `is_keyed_collection` delegates to it rather than restating it.
+
+**Behaviour-preserving, proven rather than asserted:** emitted IR is byte-identical on
+**853 of 853** `tests/scripts`. The predicate was already identical everywhere — which is why
+this one is a pure merge and not a bug hunt, and it is the honest opposite outcome to the
+narrow widths, where three sites that looked the same were three different questions.
+
+⚠ **A rules gap, recorded not filled — and larger than the narrow-slot one.**
+`Col-Hash` / `Col-Sorted` / `Col-Index` / `Col-Spatial` / `Col-Trie` each define ONE kind. **No
+rule names the KEYED FAMILY as a category**, yet that category is exactly what sixteen sites
+were testing. `is_keyed` therefore cites all five, which is accurate rather than tidy: a sixth
+keyed kind must update it, so `idx tag:@FR-Col-Spatial` has to return it.
+
+Checklist #4 (`is_collection`) resolves in the same breath: its home exists and is literally
+`is_keyed(tp) || Vector`, so #3 and #4 differ by that one variant **by design**. The near-dup
+detector flagged them as a candidate drift pair; reading them shows a deliberate pair. That is
+the detector working as intended — it proposes, the reading disposes.
 
 ## Not mergeable — recorded so the question is not reopened
 

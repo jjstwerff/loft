@@ -347,17 +347,7 @@ impl Parser {
         op: &str,
         var_nr: u16,
     ) -> bool {
-        if op != "="
-            || var_nr == u16::MAX
-            || !matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        {
+        if op != "=" || var_nr == u16::MAX || !crate::parser::vectors::is_keyed(f_type) {
             return false;
         }
         let is_empty_insert = matches!(code, Value::Insert(ls) if ls.is_empty());

@@ -1534,14 +1534,7 @@ use a separate collection or add after the loop"
         // deliberately not `is_equal`, and `convert` has no arm for the pair, so the
         // carve-out is named here rather than widened into either of them.
         if let Type::Vector(src_elem, _) = s_type
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && f_type.content().is_equal(src_elem)
         {
             return false;
@@ -1837,14 +1830,7 @@ use a separate collection or add after the loop"
         // before reaching it.
         if op == "+="
             && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && self.lexer.peek_token("[")
         {
             let elm_tp = f_type.content();
@@ -1909,14 +1895,7 @@ use a separate collection or add after the loop"
         //    do not correspond and the transparent-construction path owns that shape.
         if op == "+="
             && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && let elm_tp = f_type.content()
             && let Type::Reference(elm_d, _) = &elm_tp
             && !self.data.def(*elm_d).name.starts_with("__nullable<")
@@ -2433,17 +2412,7 @@ use a separate collection or add after the loop"
         // the LHS type).  Strict rule: vector push MUST use `+= [elem]`
         // (explicit brackets).  Falls through to the diagnostic below
         // when the RHS doesn't match the concat shape.
-        if op == "+="
-            && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        {
+        if op == "+=" && var_nr != u16::MAX && crate::parser::vectors::is_keyed(f_type) {
             let elm_tp = f_type.content();
             if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
                 if !self.first_pass {
@@ -3196,14 +3165,7 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         if let Some(kt) = keyed_kt
-            && matches!(
-                s_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(&s_type)
             && !matches!(code, Value::Insert(_) | Value::Null)
         {
             // `s = s` self-assign — emit nothing rather than clear+recopy

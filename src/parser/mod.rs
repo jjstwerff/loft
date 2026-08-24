@@ -4095,14 +4095,7 @@ impl Parser {
                 return true;
             }
             check_type = &r;
-        } else if matches!(
-            is_type,
-            Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        } else if crate::parser::vectors::is_keyed(is_type) {
             // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
             // `reference` parameter unchanged — no conversion op.  Used by
             // `store_persist_bind`, whose `bind_path` snapshots the whole
@@ -4452,14 +4445,7 @@ impl Parser {
             // `store_persist_bind`.
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
-                && matches!(
-                    test_type,
-                    Type::Hash(_, _, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                && crate::parser::vectors::is_keyed(test_type)
             {
                 return true;
             }

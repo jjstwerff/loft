@@ -2575,15 +2575,9 @@ use #count instead"
                 // doesn't know how to walk the tree/hashmap layout.
                 // Pre-materialise into a `vector<reference<T>>` and
                 // re-route par() to use the materialised vector.
-                if matches!(
-                    in_type,
-                    Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
-                    self.materialise_keyed_for_par(&in_type, &expr)
+                if crate::parser::vectors::is_keyed(&in_type)
+                    && let Some((mat_fill_ir, mat_var, mat_in_type)) =
+                        self.materialise_keyed_for_par(&in_type, &expr)
                 {
                     let combined_fill = if fill == Value::Null {
                         mat_fill_ir

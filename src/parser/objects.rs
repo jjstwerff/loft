@@ -3818,14 +3818,7 @@ impl Parser {
     /// Whether this collection kind is KEYED, which is what makes a group form at all — a
     /// pair of plain `vector` fields over one element type stays two collections.
     fn is_keyed_collection(tp: &Type) -> bool {
-        matches!(
-            tp,
-            Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        )
+        crate::parser::vectors::is_keyed(tp)
     }
 
     /// Advise when ONE literal fills two members of a linked collection group (loft#926).

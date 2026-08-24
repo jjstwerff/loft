@@ -3530,17 +3530,7 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
     // rather than a borrow (@P302).
     let tp = function.tp(v);
     let dep = tp.depend();
-    dep.is_empty()
-        || (dep.len() == 1
-            && dep[0] == v
-            && matches!(
-                tp,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            ))
+    dep.is_empty() || (dep.len() == 1 && dep[0] == v && crate::parser::vectors::is_keyed(tp))
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
@@ -4117,14 +4107,7 @@ impl Scopes {
         // through so codegen's keyed reassign arm clears in place.
         if self.var_scope.contains_key(&v)
             && *value == Value::Null
-            && !matches!(
-                function.tp(v),
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && !crate::parser::vectors::is_keyed(function.tp(v))
         {
             return Value::Insert(Vec::new());
         }
@@ -5727,13 +5710,7 @@ impl Scopes {
                 let owns = dep.is_empty()
                     || (dep.len() == 1
                         && dep[0] == v
-                        && matches!(
-                            function.tp(v),
-                            Type::Sorted(_, _, _)
-                                | Type::Hash(_, _, _)
-                                | Type::Index(_, _, _)
-                                | Type::Radix(_, _, _) | Type::Trie(_, _, _)
-                        ));
+                        && crate::parser::vectors::is_keyed(function.tp(v)));
                 // Plan-57 Phase B (Mechanism B), widened by #323: a
                 // Reference-typed capture — a boxed `__cell_<T>` AND, per
                 // P260's storage rule, any plain struct capture — is OWNED

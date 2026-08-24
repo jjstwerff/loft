@@ -4024,6 +4024,16 @@ impl Parser {
 /// loft#703: a `[…]` literal infers `vector<T>`, and a keyed type is not a wider or
 /// narrower version of that but a DIFFERENT container, so the two are never
 /// interchangeable and every site that builds a literal has to ask which it is.
+///
+/// **The one home for this question** — 14 sites spelled the list inline and a second helper
+/// (`objects.rs::is_keyed_collection`) held a reordered copy of it, so adding a keyed kind
+/// meant finding sixteen places.  It is the union of the five kind rules, and citing them all
+/// is deliberate: `idx tag:@FR-Col-Spatial` has to return this function, because a sixth
+/// keyed kind must update it.
+///
+/// Enforces @FR-Col-Hash · @FR-Col-Sorted · @FR-Col-Index · @FR-Col-Spatial · @FR-Col-Trie.
+/// ⚠ No rule names the KEYED FAMILY as a category, though this predicate is what 16 sites
+/// depended on — see doc/claude/formal/IMPLEMENTATIONS.md.
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,
@@ -4036,6 +4046,11 @@ pub(crate) fn is_keyed(tp: &Type) -> bool {
 }
 
 /// Does this type name any collection a `[…]` literal can build — keyed or vector?
+///
+/// Enforces @FR-Col-Store, whose store-backed set is exactly
+/// `Parts::{Vector, Hash, Sorted, Radix, Trie}`.  Checklist #4 in
+/// doc/claude/formal/IMPLEMENTATIONS.md: this is the `is_keyed` set plus `Vector`, and the
+/// two differ by that one variant BY DESIGN — not a drifted copy of each other.
 pub(crate) fn is_collection(tp: &Type) -> bool {
     is_keyed(tp) || matches!(tp, Type::Vector(_, _))
 }
