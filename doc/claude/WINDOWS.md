@@ -116,10 +116,34 @@ unix-gated lifecycle suite leaves open.  Warm-cache round time: ~40 s.
   (the Windows leg — VALIDATED on windows-latest 2026-06-11, run
   27380012429: parse_str + use + serve all green).
 
-**Remaining unprobed**: process-group-free cleanup (`stop_game` orphans
-the `--native` grandchild on Windows — Job Objects / `taskkill /T` is the
-shape); the full flip/reload/rebuild lifecycle (gated on the virtual-name
-fix); UDP same-port behavior beside the listener.
+**Round 2 — PROBED 2026-08-24** (`tuxedo-windows-probes`; dispatch with
+`gh workflow run windows-probe.yml --ref <branch> -f tests="--test windows_probe"`
+— run 32749933258, 7/7 green in 10.5 s).  Two of the three remaining questions
+are answered, and one of them named a defect:
+
+- **The grandchild IS orphaned — FIXED 2026-08-24.**  `stop_game` reaches a
+  `--native` game's real server through `killpg`, which is `cfg(unix)`; the
+  Windows path had only `child.kill()`.  Measured: after the child is killed the
+  grandchild still holds its port (`probe_child_kill_reaches_the_grandchild`).
+  So a stopped game kept serving, and the next launch met its own port taken.
+- **`taskkill /T` is the cure, and no Job Object is needed** — it walks the
+  parent link and terminates the grandchild (`SUCCESS: The process with PID N
+  (child process of PID M) has been terminated`), releasing the port
+  (`probe_taskkill_tree_reaches_the_grandchild`).  **The ordering is the
+  finding**: it needs the child ALIVE to walk from, so it runs BEFORE
+  `child.kill()`.  Run it after and there is no tree left to walk.
+- **UDP beside TCP on one port: BOUND** — the 05a auto-path's shape works.  A
+  SECOND UDP bind on that port is `AddrInUse`, and the TCP listener keeps
+  accepting throughout (`probe_udp_beside_tcp_on_one_port`).  Different
+  protocols do not contend, so nothing is owed here.
+
+**Remaining unprobed**: the full flip/reload/rebuild lifecycle (its virtual-name
+blocker is fixed, so it is now reachable).  And one NEIGHBOUR of the orphan
+class, deliberately not fixed alongside it because it was not measured: the swap
+ROLLBACK in `engine_host.rs` kills its handover target with a bare
+`child.kill()`, which orphans that target's own grandchild the same way — on
+BOTH platforms, since the target is put in its own process group precisely so a
+group kill cannot reach it.
 
 
 ### ~~G5~~ — LSP `file://` URIs built with backslashes are invalid JSON — FIXED 2026-07-25
