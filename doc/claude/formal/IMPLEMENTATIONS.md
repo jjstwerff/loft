@@ -200,10 +200,30 @@ backends with no leak.
 Probed: a `spatial` yield is correct anyway, so it does not bite. The guard now carries a
 spatial cell to keep it that way rather than leaving the discrepancy unattended.
 
-**41 sites still to read.** They are not automatically the same question: the coroutine ones
-wanted all eight, but a site that genuinely cannot see a keyed collection may be right with
-three. Each needs the reading the narrow widths got — which is exactly why this family was
-predicted to split rather than merge, and did.
+**The other 40 were cleared by a SENTINEL, not by reading them.** Reading forty sites is the
+kind of task that produces a confident wrong answer; the cheap instrument is better. Each
+short-list site was temporarily rewritten as a probe returning the same answer while reporting
+when the FULL `is_dbref` set would have said yes — a divergence is exactly *"a keyed collection
+reached a site that does not list it"*. Over `tests/scripts` + `tests/docs`:
+
+| | |
+|---|---|
+| sites instrumented | **38** (2 sit nested inside another `matches!` and were read by hand) |
+| sites that EVER diverge | **4** |
+| sites that never see a keyed collection | **34** |
+
+The four are all return-buffer / owned-ref FREE decisions — `scopes.rs:4390` (the
+`OpFreeRefIfDistinct` witness pair, 492 divergences), `state/codegen.rs:2064` (the loft#615
+`??`-subject free, 136), and the two return-buffer promotion gates (`parser/mod.rs:2223`,
+`parser/definitions.rs:1601`). Each was then probed against **its own comment's documented
+failure mode**, including under `LOFT_POISON=1` — which those comments name as the instrument
+for the silent case: a keyed `??` subject in a loop, and a keyed return-buffer adopted in a
+loop. Both answer correctly, with no leak. A keyed return simply does not get a buffer, and the
+path it takes instead is right.
+
+So the short list is **not** wrong at the remaining 40: three sites were, and they are fixed.
+The sentinel is what makes that a measurement rather than an opinion, and it cost a fraction of
+what reading forty sites would have.
 
 ## Not mergeable — recorded so the question is not reopened
 

@@ -89,9 +89,9 @@ two of the three families done so far split rather than merged.
 
 | # | family | sites | next action |
 |---|---|---|---|
-| 2 | **does this own a store** (`Reference\|Vector\|Enum(_,true,_)`) | **30** | ☐ the biggest. Read before touching — expect it to SPLIT like #6 did, not merge like #3 |
+| 2 | **is this carried as a DbRef** | 43 | ✅ **closed** — 3 sites wrong (2 real bugs, both fixed), the other 40 cleared by a corpus-wide SENTINEL rather than by reading. Only 4 ever see a keyed collection, and all 4 probe correct against their own documented failure modes |
 | 4 | **is this a collection** (keyed `+ Vector`) | 10 | ☐ home exists (`vectors::is_collection`, cited). Convert the inline copies — mechanical, the #3 pattern |
-| 5 | **is this DbRef-represented** | 8 | ☐ overlaps #2; do them together or #2 first |
+| 5 | **is this DbRef-represented** | 8 | ☐ `data::is_dbref` is now the home — these 8 spell the FULL list inline and are a mechanical conversion, unlike #2 |
 | 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | 9 + 13 | ☐ two variants — settle whether `BreakWith` is the same question before citing |
 | 8 | **which `Value` shapes hold a statement list** | 8 | ☐ a `Value` list, not `Type`/`Parts` — widen `rule_predicate_audit.py` again first |
 | 1 | scalar — the 5 remaining BARE sites | 5 | ⚠ adopting `is_scalar` ADDS value enums at each: a behaviour change per site, one probe each. Not a sweep |
