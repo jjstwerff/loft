@@ -9735,6 +9735,9 @@ impl Parser {
     ///
     /// Only the CONTRIBUTED side is filtered. The arm the result type is taken from
     /// keeps its own marker, because that is what says which store the result owns.
+    /// Enforces @FR-O-Complete for the arm side: what an arm CONTRIBUTES to the
+    /// join's borrow set.  The join's own owned-vs-borrowed reconciliation lives in
+    /// [`Type::joined_deps`], which cites the same rule.
     fn arm_join_type(&self, arm: &Value, tp: &Type) -> Type {
         let Some(deps) = tp.borrow_deps() else {
             return tp.clone();
