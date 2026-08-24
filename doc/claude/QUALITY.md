@@ -76,6 +76,49 @@ un-ignored and passing).  See CHANGELOG.md.
 
 Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
 
+### OPEN WORK — the rule-tag / duplication thread (2026-08-24)
+
+The concrete queue for the thread that runs from `formal/IMPLEMENTATIONS.md`.  Each row names
+the next ACTION, not the topic.  Status: ☐ open · ⚠ needs a decision · ✅ done.
+
+#### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
+
+12 of 285 rules cited, across 19 sites.  Each row is one family from the checklist; the work is
+*read each site, decide which rule it enforces, cite it* — and the reading is the point, since
+two of the three families done so far split rather than merged.
+
+| # | family | sites | next action |
+|---|---|---|---|
+| 2 | **does this own a store** (`Reference\|Vector\|Enum(_,true,_)`) | **30** | ☐ the biggest. Read before touching — expect it to SPLIT like #6 did, not merge like #3 |
+| 4 | **is this a collection** (keyed `+ Vector`) | 10 | ☐ home exists (`vectors::is_collection`, cited). Convert the inline copies — mechanical, the #3 pattern |
+| 5 | **is this DbRef-represented** | 8 | ☐ overlaps #2; do them together or #2 first |
+| 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | 9 + 13 | ☐ two variants — settle whether `BreakWith` is the same question before citing |
+| 8 | **which `Value` shapes hold a statement list** | 8 | ☐ a `Value` list, not `Type`/`Parts` — widen `rule_predicate_audit.py` again first |
+| 1 | scalar — the 5 remaining BARE sites | 5 | ⚠ adopting `is_scalar` ADDS value enums at each: a behaviour change per site, one probe each. Not a sweep |
+
+#### B — rules gaps found by citing (spec decisions, not code)
+
+| gap | found by | state |
+|---|---|---|
+| **no rule names the KEYED FAMILY** as a category — `Col-Hash`/`-Sorted`/`-Index`/`-Spatial`/`-Trie` define one kind each, yet 16 sites tested the category | checklist #3 | ⚠ `is_keyed` cites all five as a stand-in. Minting a family rule is a spec decision |
+| **no rule says a narrow value in a VARIABLE slot is a raw `i64`** — `L-Narrow` states the stored width, `L-Null` the field encoding; the `io.rs` pair depends on neither | checklist #6 | ⚠ the code comments the distinction at length; the rules cannot express it |
+| `formal/binding.md` **OPEN: 1** — D-bind-11's heap-element half | pre-existing | ⚠ needs a representation choice; the record-backed path is proven to work (see the entry) |
+
+#### C — process / skills
+
+| item | state |
+|---|---|
+| a duplication trigger line in `engineering-rigor` + `loft-codegen` pointing at `design-protocol` | ☐ **not done** — both already route there for *load-bearing design*, which is the recognition that fails on a one-line edit |
+| `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
+| `rule_tags.py` in a gate (`make ci`) rather than run by hand | ☐ it already exits non-zero; wiring it costs one line and stops citation rot |
+
+#### D — carried, unchanged by this thread
+
+`STABILITY_ROADMAP.md` still owns these: Plan-53 cluster 2 S4 (parked WIP, M), @PLN130's 504
+uncovered copy sites (L, cost unestablished), gate 4 durability (@PLN43, needs an in-or-out
+decision), H6 `i32::MIN` (deferred).  **The branch is 34 commits ahead of `origin/main` with no
+PR**, so none of the above is on main.
+
 ### The catch-all audit — every type-driven op choice, classified (2026-08-22)
 
 Two defects in one week had the same shape: a `match` on a TYPE that picks an **op**,
