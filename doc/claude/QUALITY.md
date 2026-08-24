@@ -403,6 +403,46 @@ take their zero (a fix that nulled everything would pass every other cell).
 `nullable` too. Consistent between both paths, so not a divergence, but it is the one base
 where the rule cannot be observed.
 
+#### B4f — the catch-all walkers, measured (2026-08-24)
+
+B2 asked the honest question and it is now answered: **for each catch-all walker, which
+omitted edges are REACHABLE?**
+
+**Raw omission counts are noise.** 130 walkers descend into some child-bearing `Value`
+variant and not all, and ranking by (walkers omitting × corpus frequency) puts `Call`,
+`Set`, `Span` and `Block` on top — but most of those omissions are deliberate. The useful
+question hid inside one of them.
+
+**`Span` is different, because there is a RULE about it.** `Value::unspan`'s own doc:
+*"Every second-pass site that pattern-matches a specific Value variant must call
+`code.unspan()` first. Without this, the per-site wraps silently break optimisations that
+rely on the unwrapped shape."* That turns a vague worry into a checkable predicate:
+
+| sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
+|---:|---:|---:|
+| 246 | 205 | **41** |
+
+`scripts/ir_walker_audit.py unspan` re-measures it.
+
+**Instrumented, not argued.** One env-gated line in `scopes::find_assigned_vars`'s
+catch-all, over 200 corpus programs: the path is reached **10 208 times**, of which
+**2 dropped a Span-wrapped `Set`** — a genuinely missed assignment — and **8 dropped a
+whole Span-wrapped `Block`**, whose statements then go unscanned. So the mechanism is real
+and reachable, not theoretical.
+
+⚠ **And then it changes nothing.** Adding the peel leaves the IR byte-identical on all six
+affected programs. The variables were already covered another way. **So: reachable,
+latent.** The peel stays — it is one word, it obeys the documented rule, and the
+reachability is exactly what makes it a trap, since Span placement has moved before and the
+failure mode is a missing initialisation with nothing to report it. But no defect was
+found, and saying otherwise would be the dressed-up version of this result.
+
+**What that settles.** The catch-all concern is no longer unmeasured, and the answer is
+milder than it looked: the shape is real, the damage is not demonstrated. The 41 remaining
+sites are a ranked backlog to *measure* — several are display and host helpers where a
+`Span` cannot arrive — and the tool now says plainly that a hit is a measurement to make,
+not a defect found.
+
 #### C — process / skills
 
 | item | state |
@@ -417,7 +457,7 @@ where the rule cannot be observed.
 | decision | evidence | why it is not mine to take |
 |---|---|---|
 | ~~remove `Value::BreakWith` and `Value::ParFor`~~ | — | ✅ **DONE** — see B3 below |
-| **the 127 catch-all walkers** | each silently absorbs a `Value` edge it does not name; the mechanism has fired twice in walkers written years apart, unnoticed by build, tests and review | ⚠ **but both firings were on the unreachable `BreakWith`, so neither cost anything** — the damage is UNMEASURED. The next step is not a conversion but a query: for each of the 127, which omitted edges are REACHABLE? Do that before proposing a sweep |
+| ~~the 127 catch-all walkers~~ | — | ✅ **MEASURED** (2026-08-24) — see B4f below. Reachable, and so far latent |
 | **`Parallel` is reached 4 times in 854 programs** | corpus census | a coverage gap in the suite, not a defect — but `par` is the construct with the least IR-level exercise of anything still alive |
 
 #### D — carried, unchanged by this thread

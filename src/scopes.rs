@@ -4672,8 +4672,22 @@ impl Scopes {
         Value::Insert(stmts)
     }
 
+    /// Collect the variables an `if` branch ASSIGNS, so the caller can emit their
+    /// null-init before the `If` — a variable written in one arm and read after it must
+    /// hold null rather than an uninitialised slot.
+    ///
+    /// ⚠ `unspan()` first — the requirement `Value::unspan`'s own doc states for every site
+    /// that pattern-matches a specific variant.  Without it a `Span` wrapping a `Set` falls
+    /// to the catch-all, the assignment is not collected, and the variable loses its init.
+    ///
+    /// That path is REACHED: instrumented over 200 corpus programs, the catch-all dropped
+    /// 2 Span-wrapped `Set`s and 8 whole Span-wrapped `Block`s.  No program's IR changes
+    /// when the peel is added, so nothing observable was riding on it — the vars in
+    /// question were already covered another way.  The peel stays because the reachability
+    /// is what makes it a trap: Span placement has moved before, and the failure mode is a
+    /// missing initialisation with nothing to report it.
     fn find_assigned_vars(val: &Value, mapping: &HashMap<u16, u16>, result: &mut Vec<u16>) {
-        match val {
+        match val.unspan() {
             Value::Set(v, inner) => {
                 let resolved = *mapping.get(v).unwrap_or(v);
                 if !result.contains(&resolved) {
