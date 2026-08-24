@@ -2045,13 +2045,15 @@ pub(crate) fn stage_native_dlls(exe_dir: &std::path::Path, data: &crate::data::D
     }
 }
 
-/// loft-lang/loft#638 — the stdlib must be findable from EVERY cargo layout, not
-/// just `target/{release,debug}`.  A `--target <triple>` build nests the profile
-/// dir one level deeper; before the fix that resolved the project root to the
-/// binary's own directory, so `default/` was never found and every stdlib load
-/// died with "cannot load default library".  It surfaced as the nightly ASan
-/// sweep (the one job that builds with `--target`) failing a sandbox-admission
-/// test — a symptom three steps removed from the cause.
+/// The stdlib must be findable from EVERY cargo layout, not just
+/// `target/{release,debug}`.  A `--target <triple>` build nests the profile directory
+/// one level deeper, so the project root cannot be derived by assuming a fixed depth
+/// above the binary.
+///
+/// ⚠ Getting this wrong fails far from its cause: `default/` is simply not found, every
+/// stdlib load dies with "cannot load default library", and the only job that builds with
+/// `--target` is the nightly ASan sweep — so it surfaces there, as an unrelated
+/// sandbox-admission test. (loft#638)
 #[cfg(test)]
 mod project_root_layouts {
     use super::*;

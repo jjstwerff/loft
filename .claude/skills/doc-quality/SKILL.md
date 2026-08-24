@@ -9,9 +9,13 @@ description: >-
   as it is NOW, not its history), makes a function's description about *why to use
   it* (not why it was written), strips dead plan-tag/date stamps while keeping live
   pointers to issues/plans, and keeps prose readable for entry-level and
-  non-native-English readers. Reach for it even when the user only says "document
+  non-native-English readers. It also decides what a comment is ABOUT: documentation
+  states the timeless contract — the rule, the invariant, the domain — and never retells
+  the bug that prompted the code. Reach for it even when the user only says "document
   this", "add comments", "write the docstring", "explain this function", "write up
-  the README", or "clean up the comments" — it applies to all of those.
+  the README", or "clean up the comments"; and reach for it whenever you are about to
+  write "this used to", "the bug was", or a fix narrative into a comment, or you are
+  documenting an algorithm right after fixing one.
 user-invocable: false
 ---
 
@@ -65,6 +69,72 @@ gate on every edit.
    user-facing or on-ramp doc): common words over fancy ones, short one-idea
    sentences, no idioms or metaphors, explain a term on first use, lead with a
    concrete example. Plain and short — not long and simple. *(Goal B.)*
+8. **Document the CONTRACT, not the INCIDENT.** The body of a comment says what the
+   code computes and what a caller may rely on — the rule it enforces, the domain it
+   is defined over, the invariant it holds, the trade-off it takes. A bug may be
+   *cited*; it is never the *subject*. One clause or a link, at the edge — never the
+   organising idea. *(Goal E: a feature and a rule are meant to be timeless; an
+   incident is true at a moment and stops being the reader's question once it is
+   fixed.)*
+
+   This is a different axis from rules 1 and 2, and a comment can pass both and still
+   fail this one: present-tense, no date stamp, and still built around "the bug we
+   hit". Rules 1–2 are about tense and bookkeeping; rule 8 is about **what the
+   documentation is about**. Evidence, a worked rewrite, and why the detector for it
+   deliberately under-reports: `DOC_QUALITY.md` § B2 (rule **9** in that document's own
+   list). `scripts/lint_comments.sh incident` finds the loud cases only — the deletion
+   test below is the real check.
+
+## Rule 8 in practice: the deletion test, and the conversion
+
+**The test.** Delete every sentence about the incident. Does what remains still say
+what the code does and what a caller may rely on? If not, the comment was documenting
+history, not code — and a reader who arrives with a question about the *present* code
+leaves without an answer.
+
+**Do not delete — CONVERT.** Most incident narration is a timeless fact wearing a
+story's clothes, and throwing it away loses real knowledge. The story almost always
+contains a rule; extract the rule and drop the story around it.
+
+```text
+BEFORE (incident): "The seventh gate outlived that sweep because it asks about the
+                    returned VALUE rather than the return TYPE — so the tail intercept
+                    never fired and the arm handed back its own store."
+
+AFTER  (contract):  "Every gate here asks the shape question about the return TYPE.
+                     Asking it about the returned VALUE is wrong: `v = src(i); return v;`
+                     types `v` as `Optional(Vector)`, so a gate reading the local's own
+                     type sees a shape the return type never had."
+```
+
+Same knowledge. The first tells you what happened once; the second tells you what to do
+every time. Only the second survives the next reader.
+
+**A regression test is the near-exception, and still not an exception.** Its doc SHOULD
+name what it guards — that is its whole purpose — but the thing it guards is a *property*,
+not an episode. Write the property, then cite the issue:
+
+```text
+BEFORE: "Before the fix the generic-instantiation block was gated on `!self.default`,
+         so a stdlib-internal generic call resolved to Unknown function."
+AFTER:  "Generic instantiation is caller-source-agnostic: a stdlib fn can call a generic
+         stdlib fn exactly as a user program can. (loft#653)"
+```
+
+The second tells a reader what breaking the test would MEAN. The first only tells them
+what someone once typed.
+
+**Where the story goes instead.** The commit message and the issue — they exist for it,
+and `git blame` reaches both. A mechanism that genuinely teaches beyond its own fix
+belongs in `doc/claude/` (the plan, `PROBLEMS.md`, a `STABILITY_*` doc), and the comment
+carries a *pointer* to it. That is rule 2's stamp-vs-pointer distinction again.
+
+**When a formal rule exists, cite it.** `doc/claude/formal/` is the timeless statement by
+construction, and `@FR-<Rule>` is its name — so *"Enforces `@FR-L-Null` for the narrow
+widths"* is the ideal rule-8 comment: it says what the code guarantees, and it resolves
+(`scripts/rule_tags.py sites @FR-L-Null`) to every other site guaranteeing the same
+thing. If the invariant you are about to narrate has no rule yet, that is a signal the
+rule is missing — not that the story should stay.
 
 ## Two layers, and the prose exception
 

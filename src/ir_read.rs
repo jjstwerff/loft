@@ -1857,12 +1857,10 @@ mod tests {
     }
 
     #[test]
-    /// @PLN102 arc C — a stdlib fn (parsed under `self.default`, i.e. `STD_SOURCE`)
-    /// can call a GENERIC stdlib fn.  Before the fix the generic-instantiation block
-    /// in `parse_call` was gated on `!self.default`, so a stdlib-internal generic
-    /// call resolved to "Unknown function" (surfaced by the step-6 dogfood: folding
-    /// `sum_of` onto the generic `sum` failed at stdlib load, though `sum(v, 0)`
-    /// worked from a user program).  Generic instantiation is now caller-source-agnostic.
+    /// Generic instantiation is caller-source-agnostic: a stdlib fn (parsed under
+    /// `self.default`, i.e. `STD_SOURCE`) can call a GENERIC stdlib fn, exactly as a user
+    /// program can.  Gating `parse_call`'s generic-instantiation block on the caller's
+    /// source resolves a stdlib-internal generic call to "Unknown function". (loft#653)
     fn stdlib_fn_can_call_a_generic() {
         let mut p = crate::parser::Parser::new();
         p.parse_dir("default", true, false).expect("parse stdlib");

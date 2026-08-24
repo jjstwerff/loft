@@ -4428,11 +4428,14 @@ pub(crate) fn populate_struct_from_jsonvalue(
             stores.types[content_kt as usize].parts,
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
-            // A narrow integer (@FR-L-Narrow decides the width set).  This arm did not exist:
-            // every such field fell to the
-            // catch-all below and kept its zero-init bytes, so `T.parse(json_parse(t))`
-            // dropped the value the document gave it — `u8?` 42 read back `0`, `u16?`
-            // 300 read back `null`.  The encodings live in `write_narrow_value`.
+            // A narrow-integer field.  @FR-L-Narrow is the authority on which widths
+            // belong in this set, and `write_narrow_value` owns their encodings.
+            //
+            // ⚠ Keep this set in step with that rule.  A width missing from it falls to
+            // the catch-all below, which leaves the field's zero-init bytes in place — so
+            // the value the document supplied is dropped with no error at all (`u8?` 42
+            // reads back `0`, `u16?` 300 reads back `null`).  The failure here is always
+            // silent, which is why the set is spelled out rather than defaulted.
             match unwrap_long(stores, &sub, item_discr, &struct_name, &field.name) {
                 Some(n) => {
                     stores.write_narrow_value(content_kt, n, &slot);
@@ -4821,9 +4824,12 @@ fn populate_vector_from_jarray(
             elem_parts,
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
-            // A narrow-integer element (@FR-L-Narrow) had no arm at all, so every element of a
-            // `vector<u8?>` kept the freshly-appended zero bytes: `[1,null,3]` read
-            // back `[0,0,0]`, losing the values the document did give.
+            // A narrow-integer element — the element twin of the field arm above, and
+            // @FR-L-Narrow is the authority on the width set for both.
+            //
+            // ⚠ Same silent-loss hazard, one level down: a width missing here leaves the
+            // freshly-appended zero bytes, so `vector<u8?>` `[1,null,3]` reads back
+            // `[0,0,0]` without an error.
             match unwrap_long(stores, &item, item_discr, "vector", &elem_name) {
                 Some(n) => {
                     stores.write_narrow_value(elem_kt, n, &elm);

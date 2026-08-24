@@ -1289,10 +1289,11 @@ impl Stores {
     /// consult.  A target that is not a declared field — a top-level cast target, a
     /// collection element — carries `field == u16::MAX` and takes the nullable answer.
     ///
-    /// Both JSON walkers ask here.  The `JsonValue` walker used to answer per type on its
-    /// own and drifted from this one on every count: it ignored declared defaults, wrote
-    /// `i64::MIN` into non-null integers, and left one-byte widths at their zero code, so
-    /// an absent `u8?` read back `0` and an absent `boolean?` read back `false`.
+    /// ⚠ Both JSON walkers must ask HERE rather than answer for themselves.  Four things
+    /// have to agree for an absent field to read back correctly — the declared default, the
+    /// not-null integer sentinel, the one-byte width's absence code, and the boolean's —
+    /// and a second implementation gets to disagree on each of them independently, with no
+    /// error at any of the four.
     ///
     /// [`formal/layout.md`]: ../../../doc/claude/formal/layout.md
     /// Enforces @FR-L-Null: a nullable field has the SAME bytes as its not-null form, so
@@ -1314,9 +1315,9 @@ impl Stores {
     /// The four encodings disagree about where the null code sits: `Byte` and `Short`
     /// store `value - min + 1` and reserve the raw code for absence, `ShortRaw` stores
     /// `value - min` directly, and `Int` is a raw `i32` whose null is `i32::MIN`.  That
-    /// makes the encoding part of the slot's layout, so it lives at one address: a second
-    /// writer re-deriving it is how the `JsonValue` walker came to drop every narrow field
-    /// it was handed, present values included.
+    /// makes the encoding part of the slot's LAYOUT, so it lives at one address.  A second
+    /// writer re-deriving it does not fail loudly: it writes plausible bytes that decode to
+    /// the wrong value, or to absence, for present input.
     /// Enforces @FR-L-Null for the narrow widths — the write twin of `narrow_is_null`.
     pub fn write_narrow_value(&mut self, tp: u16, n: i64, slot: &DbRef) -> bool {
         enum Enc {

@@ -305,22 +305,20 @@ impl PartialOrd<Str> for &str {
 pub struct Key {
     pub type_nr: i8,
     pub position: u16,
-    /// The field's storage START — the `min` of a `Parts::Byte` / `Parts::Short`, which
-    /// is what those two widths subtract when they store a value and must add back when
-    /// they read one (loft#812).
+    /// The field's storage START: the `min` a `Parts::Byte` / `Parts::Short` subtracts
+    /// when it stores a value and adds back when it reads one.
     ///
-    /// It has to travel WITH the key because the comparison happens in `compare_key` /
-    /// `hash_ref` / `get_key`, none of which can see the type table. Before this field
-    /// they passed a literal `0`, so the record side decoded `val - min` while the lookup
-    /// side had the user's `val`: the two differed by exactly `min` and never compared
-    /// Equal. A key declared `i8`, `i16` or `integer limit(min, max)` with a non-zero
-    /// `min` therefore inserted fine, counted fine, and could never be looked up. Ordering
-    /// survived, because subtracting a constant is monotonic — only equality was wrong,
-    /// which is why it read as "the record is missing" rather than as a decode bug.
+    /// It travels WITH the key because the comparison happens in `compare_key` /
+    /// `hash_ref` / `get_key`, none of which can see the type table — so without it a
+    /// narrow key cannot be decoded from the key alone.
     ///
     /// `0` for every width that stores raw (`integer`, `long`, `text`, `float`, `single`,
-    /// `Parts::Int`, `Parts::ShortRaw`) — for those it is inert, and it is also the
-    /// correct value for a `u8` / `u16` whose range starts at zero.
+    /// `Parts::Int`, `Parts::ShortRaw`) — inert there, and also the correct value for a
+    /// `u8` / `u16` whose range starts at zero.
+    ///
+    /// ⚠ A wrong `start` breaks EQUALITY only. Ordering survives it, because subtracting
+    /// a constant is monotonic — so the symptom is "the record is missing" from a lookup
+    /// whose insert and count both worked, not a decode error. (loft#812)
     pub start: i32,
 }
 
@@ -699,10 +697,12 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///
 /// # What it is for
 ///
-/// Without it `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller
-/// inherits whatever store the callee allocated — a fresh one per loop turn against a single
-/// scope-exit free. That is loft#938's leak. The NON-nullable twin of the same function is
-/// clean because its callee normalises every arm into the caller's buffer:
+/// The buffer is what makes ownership INVARIANT at the call site. With one, the callee
+/// normalises every arm into the caller's buffer and the caller always owns the result;
+/// without one, `-> vector<T>?` has nothing to deliver into, so the caller inherits
+/// whatever store the callee happened to allocate — a fresh one per loop turn against a
+/// single scope-exit free, which leaks. The ABI removes the variance rather than deciding
+/// it. The non-nullable twin has always been clean for exactly this reason:
 ///
 /// ```text
 /// if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);       __retbuf }
@@ -710,20 +710,19 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///             OpFreeRef(__vdb_1);                                            __retbuf }
 /// ```
 ///
-/// So ownership never varies at the call site, and it does not need to: the ABI removes the
-/// variance rather than deciding it. `Optional` was simply blind at every gate on the way.
+/// # The shape question, and where it must be asked
 ///
-/// # Why it took seven gates
+/// `Optional(Vector)` and `Vector` share one runtime layout, so **a bare `matches!` on
+/// `Type::Vector` silently excludes the nullable form**. Every gate on the delivery path has
+/// to peel first — [`Type::ret_promo_base`] / [`Type::ret_promo_peels`] do it, and are the
+/// identity when this is off, which is what makes the opt-out exact.
 ///
-/// `Optional(Vector)` and `Vector` share one runtime layout, so every gate that asked the
-/// shape question with a bare `matches!` silently excluded the nullable form. Six were peeled
-/// when the mechanism was built ([`Type::ret_promo_base`] / [`Type::ret_promo_peels`], still
-/// the identity when this is off, so the opt-out is exact). The seventh outlived that sweep
-/// because it asks about the returned VALUE rather than the return TYPE:
-/// `fresh_owned_vector_deps` matched `Type::Vector` on the returned LOCAL's own type, and
-/// `v = src(i); return v;` types `v` as `Optional(Vector)`. So `block_result`'s tail intercept
-/// never fired, `ref_return` was never called for that function at all, and the arm handed
-/// back its own store while the caller's buffer stayed untouched and was freed empty.
+/// ⚠ Peeling is not enough on its own: a gate must also ask about the **return TYPE**, not
+/// the returned VALUE. `v = src(i); return v;` types the local `v` as `Optional(Vector)`, so
+/// a gate reading the local's own type (as `fresh_owned_vector_deps` does) sees a shape the
+/// return type never had. When that gate misses, `block_result`'s tail intercept does not
+/// fire and `ref_return` is never called for the function at all — the arm hands back its own
+/// store while the caller's buffer stays untouched and is freed empty. Nothing reports it.
 ///
 /// It needed [`optional_dep_peel`] with it, and neither alone is an improvement — see there.
 ///
@@ -740,9 +739,10 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 /// the `Bind` leg in `ref_return` deliberately does NOT peel.
 ///
 /// Reach for [`trace_ret_promotion`] first — it prints an ENTER line per `ref_return` call and
-/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" is
-/// which of the two upstream gates you are looking at. Then `LOFT_STRICT_STORES=1`: every
-/// value here is correct in every state of the bug, so a green run without it is not evidence.
+/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" tells
+/// you which of the two gates above you are looking at. Then `LOFT_STRICT_STORES=1`: every
+/// VALUE this path produces is correct whether or not delivery worked, so a green run without
+/// it is not evidence — only the store census distinguishes the two.
 #[must_use]
 pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

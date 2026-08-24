@@ -4025,11 +4025,10 @@ impl Parser {
 /// narrower version of that but a DIFFERENT container, so the two are never
 /// interchangeable and every site that builds a literal has to ask which it is.
 ///
-/// **The one home for this question** — 14 sites spelled the list inline and a second helper
-/// (`objects.rs::is_keyed_collection`) held a reordered copy of it, so adding a keyed kind
-/// meant finding sixteen places.  It is the union of the five kind rules, and citing them all
-/// is deliberate: `idx tag:@FR-Col-Spatial` has to return this function, because a sixth
-/// keyed kind must update it.
+/// **The one home for this question.**  It is the union of the five kind rules, and all five
+/// are cited on purpose: a sixth keyed kind must update exactly this function, so
+/// `idx tag:@FR-Col-Spatial` has to return it.  Spelled inline at a call site instead, the
+/// list drifts — there is nothing to keep the copies in step.
 ///
 /// Enforces @FR-Col-Hash · @FR-Col-Sorted · @FR-Col-Index · @FR-Col-Spatial · @FR-Col-Trie.
 /// ⚠ No rule names the KEYED FAMILY as a category, though this predicate is what 16 sites

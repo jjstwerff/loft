@@ -169,6 +169,84 @@ normal sentences ("used to size the gutter" means *is used to*). The real
 warning sign is **past tense about the code's own structure** — *removed*,
 *used to misroute*, *previously inlined* — not "used to &lt;verb&gt;".
 
+### B2. Comments whose SUBJECT is the bug, not the code
+
+Section B is about *tense* — a comment describing something deleted. This one is about
+*subject*, and it is the harder half: a comment can be present-tense, stamp-free, and
+about code that genuinely exists, and still be organised around the incident that
+produced it rather than the thing it documents.
+
+**Why it matters.** A feature and a formal rule are meant to be timeless — that is what
+they are for. A bug is true at a moment and stops being true once it is fixed. So an
+algorithm documented as *"the fix for the double-free"* answers a question nobody has
+any more, while the reader's actual question — *what does this compute, and what may I
+rely on?* — goes unanswered. The bug may still be worth **linking**; it must not be the
+main body.
+
+**How much of it there is — and why the number is soft.** A first sweep of the 7 967
+doc-comment blocks in `src/` matched 1 023 on a broad failure vocabulary, only 236 of
+which the existing history-stamp / change-narration checks could see. That 1 023 does
+**not** survive inspection, and the reason is the useful part: this axis is *semantic*
+("is the bug the subject?"), not lexical. `SIGSEGV` is what `crash_report.rs` installs a
+handler for. `the hole` is Robin Hood hashing, and the lexer's unclosed brace.
+`silently dropped` describes a live spoof-check. `never reported` is a contract. And
+`loft#885's hoisted element reads` names a mechanism by its issue — a *pointer*, which
+rule 2 explicitly keeps.
+
+So the check is deliberately a strong **under-approximation** (12 lines at the time of
+writing) and the honest position is: the prevalence is real and high, but it is not
+reliably countable by grep. **The detector finds the loud cases; the deletion test below
+is the actual check**, run on the comment in front of you.
+
+**The test.** Delete every sentence about the incident. Does what remains still say what
+the code does and what a caller may rely on? If not, the comment was documenting history.
+
+**The move is CONVERSION, not deletion.** Most incident narration is a timeless fact
+wearing a story's clothes; deleting it loses real knowledge. Extract the rule, drop the
+story.
+
+#### Worked rewrite — `Key::start` (`src/keys.rs`)
+
+The field carries a `min` so that `compare_key` / `hash_ref` / `get_key` can decode a
+narrow width without reaching the type table. Its comment spent fifteen lines on how the
+absence of that field behaved:
+
+```text
+BEFORE — the subject is the failure
+    Before this field they passed a literal `0`, so the record side decoded `val - min`
+    while the lookup side had the user's `val`: the two differed by exactly `min` and
+    never compared Equal.  A key declared `i8`, `i16` or `integer limit(min, max)` with
+    a non-zero `min` therefore inserted fine, counted fine, and could never be looked
+    up.  Ordering survived, because subtracting a constant is monotonic — only equality
+    was wrong, which is why it read as "the record is missing" rather than a decode bug.
+
+AFTER — the subject is the contract
+    The field's storage START: the `min` a `Parts::Byte` / `Parts::Short` subtracts when
+    it stores a value and adds back when it reads one.
+
+    It travels WITH the key because the comparison happens in `compare_key` / `hash_ref`
+    / `get_key`, none of which can see the type table — so a key cannot be decoded from
+    the key alone without it.
+
+    `0` for every width that stores raw (`integer`, `long`, `text`, `float`, `single`,
+    `Parts::Int`, `Parts::ShortRaw`), and also the correct value for a `u8` / `u16`
+    whose range starts at zero.
+
+    ⚠ A wrong `start` breaks EQUALITY only. Ordering survives it, because subtracting a
+    constant is monotonic — so the symptom is "the record is missing" from a lookup that
+    inserted and counted fine, not a decode error.  (loft#812)
+```
+
+Nothing is lost. The monotonicity fact and the "reads as missing" symptom were the two
+genuinely useful things in the original, and both survive — as a **standing warning to
+whoever changes this**, which applies every time, instead of as a report of one Tuesday.
+
+**When a formal rule exists, cite it.** `doc/claude/formal/` is timeless by construction
+and `@FR-<Rule>` is its name, so *"Enforces `@FR-L-Null` for the narrow widths"* is the
+ideal form: it states the guarantee and resolves to every other site making it
+(`scripts/rule_tags.py sites @FR-L-Null`). An invariant you are about to narrate that has
+**no** rule yet is a signal the rule is missing, not that the story should stay.
+
 ### C. Comments that just repeat the code
 
 `// increment i` above `i += 1`. It adds nothing. See
@@ -337,6 +415,15 @@ let g = (raw ^ (raw >> 13)).wrapping_mul(0x9E37_79B1);
    the fix is not only to delete the row — check whether the row is what a reader
    would *reach for*, and if it is, make the name real. And when a capability has two
    spellings, name the other one in both entries, so either search lands.
+9. **Document the contract, not the incident.** The body says what the code computes
+   and what a caller may rely on — the rule, the domain, the invariant, the trade-off.
+   A bug may be *cited*; it is never the *subject*. A feature and a formal rule are
+   meant to be timeless, and an incident stops being the reader's question once it is
+   fixed. This is a different axis from rules 1–2: a comment can be present-tense and
+   stamp-free and still be built around the bug. The move is CONVERSION — extract the
+   rule the story contains — not deletion. See
+   [§ B2. Comments whose SUBJECT is the bug](#b2-comments-whose-subject-is-the-bug-not-the-code),
+   and cite `@FR-<Rule>` wherever `doc/claude/formal/` already states the invariant.
 
 ---
 
@@ -348,10 +435,11 @@ advice. It is a thermometer (a count to watch), the same shape as
 `LOFT_STORE_GUARD` for Goal E:
 
 ```bash
-scripts/lint_comments.sh        # full report, both patterns
+scripts/lint_comments.sh        # full report, all three patterns
 scripts/lint_comments.sh -c     # counts only (the thermometer)
 scripts/lint_comments.sh tags   # only history stamps
 scripts/lint_comments.sh history  # only change-narration
+scripts/lint_comments.sh incident # only incident-subject (§ B2, rule 9)
 ```
 
 It flags comment lines that match:

@@ -871,10 +871,11 @@ impl State {
                     Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                     // `OpPutText`, like every sibling here and like the three other
                     // element-write matches in this file — NOT `OpAppendText`, which pops a
-                    // different amount and made a text-element write land one index high
-                    // (loft#1004): `t.0 = "X"` on a `(text, text)` wrote `.1`, a write to the
-                    // LAST element fell off the end and was silently lost, and a write onto a
-                    // non-text neighbour segfaulted the interpreter.
+                    // DIFFERENT amount, so every text-element write lands one index high.
+                    //
+                    // ⚠ That misalignment is mostly silent: on a `(text, text)`, `t.0 = "X"`
+                    // writes `.1`, a write to the LAST element falls off the end with nothing
+                    // reported, and only a write onto a non-text neighbour faults. (loft#1004)
                     Type::Text(_) => stack.add_op("OpPutText", self),
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         stack.add_op("OpPutRef", self);

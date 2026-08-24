@@ -172,32 +172,57 @@ edit and a silently wrong store layout is whether someone happens to regenerate.
 awkward because regeneration needs a built `loft`, which is circular in CI; the honest options are
 a nightly job or a `make` target that the release checklist names. **Open.**
 
-#### B4 — QUEUED: in-code docs should state the FEATURE, not retell the BUG (2026-08-24)
+#### B4 — DONE: in-code docs state the CONTRACT, not the INCIDENT (2026-08-24)
 
-**The owner's framing.** A feature and a formal rule are meant to be *timeless*; a bug is relevant
-in the moment and stops being so. loft's in-code documentation has drifted to the second kind —
-comments whose main body is the incident that produced the code. An algorithm should be documented
-**as an algorithm**: what it computes, over what domain, under which invariant. The bug that caused
-its rewrite may still be *linked*, but as a **side note, never the main body**.
+**The owner's framing.** A feature and a formal rule are meant to be *timeless*; a bug is
+relevant in the moment and stops being so. An algorithm should be documented **as an
+algorithm** — what it computes, over what domain, under which invariant. The bug that
+caused its rewrite may be *linked*, but it is a side effect, never the main body.
 
-**The route in is the tags.** `@FR-<Rule>` already ties a code site to the rule it enforces, so the
-citations are the worklist: a cited site should read as *"this enforces `@FR-X`; here is how"*, and
-where the comment instead reads *"loft#1006 was two copies of a list disagreeing"*, that is the
-rewrite. `python3 scripts/rule_tags.py sites <tag>` enumerates them; `list` gives the 285 rules,
-13 of which are cited so far. Uncited sites that carry a long incident narrative are the second
-wave — and the narrative usually names the invariant, which is what makes the rule findable.
+**Shipped:**
 
-**Scope: the docs AND the doc skill.** `doc-quality` (and `DOC_QUALITY.md`) currently do not
-distinguish the two registers, so the pattern regenerates every time a bug is fixed. The skill
-needs the rule: *state the contract; cite the rule; link the incident, do not narrate it.*
+| where | what |
+|---|---|
+| `.claude/skills/doc-quality` | **rule 8** — document the contract, not the incident — plus the deletion test, the CONVERSION move, the regression-test carve-out, and a description that fires on "this used to" / "the bug was" / documenting right after a fix |
+| `DOC_QUALITY.md` § B2 + **rule 9** | the reference: why the axis is distinct from rules 1–2, the worked `Key::start` rewrite, and an honest account of how countable it is |
+| `scripts/lint_comments.sh` | a third pattern, `incident`, with its own report mode and thermometer line |
 
-⚠ **This is being written from the wrong side already.** The comments added to `src/data.rs` in
-this very session — *"⚠ NO PRODUCER … Measured: 0 nodes across the 854 programs … which is why the
-same defect was found twice"* — are exactly the register being retired. They are also about to be
-deleted with the variants (B3), so they are not the place to start; they are the example of what
-the guidance must prevent.
+**The axis is distinct, and that is the point.** Rules 1–2 already ban past tense and
+provenance stamps. A comment can pass both — present-tense, no date, about code that
+exists — and still be organised around the bug that produced it. Rules 1–2 are about
+*tense and bookkeeping*; this one is about *what the documentation is about*.
 
-**Not started.** Sequence it after B3 lands, so the two do not collide in the same files.
+**The move is CONVERSION, not deletion.** Most incident narration is a timeless fact
+wearing a story's clothes, and deleting it loses real knowledge. Extract the rule the
+story contains. Worked through on ten sites: `Key::start`, both `@FR-L-Narrow` arms in
+`native.rs`, `is_keyed`, `is_dbref`, `ref_tuple_element_ok`, `write_absent_value`,
+`write_narrow_value`, and four the detector flagged. In every case the useful content
+survived and got *more* useful — "`u8?` 42 read back `0`" became "a width missing from
+this set falls to the catch-all, which leaves zero-init bytes, so the failure here is
+always silent".
+
+⚠ **The detector deliberately under-reports, and finding that out was the work.** The
+first version matched a broad failure vocabulary: 1 023 of 7 967 doc blocks, 787 of them
+invisible to the existing checks. That number does not survive inspection — `SIGSEGV` is
+what `crash_report.rs` installs a handler for, `the hole` is Robin Hood hashing and the
+lexer's unclosed brace, `silently dropped` describes a live spoof-check, `never reported`
+is a contract, and `loft#885's hoisted reads` names a mechanism by its issue, which rule 2
+explicitly KEEPS. The axis is semantic, not lexical. So the shipped pattern is narrow
+(12 lines, now 8) and the doc says plainly that **the detector finds the loud cases and
+the deletion test is the real check**. A noisy thermometer gets ignored, which is the
+failure mode that matters here.
+
+**Baseline handling worth knowing:** adding a pattern to `collect_raw` would have made
+`--check` report ~490 "new" flags and drowned the signal. Baselining only the new axis
+kept the **180 genuine old-pattern flags that have accumulated since the 2026-08-19
+baseline** visible instead of silently absorbing them. Those 180 are unfixed and still
+reported — the ratchet only works if someone prunes.
+
+**Open:** the wider surface is not swept, by design (`doc-quality` says not to sweep a
+file during unrelated work). The route stays the one the owner named — **follow the
+`@FR-` citations**: a cited site should read *"this enforces `@FR-X`, here is how"*, and
+`scripts/rule_tags.py sites <tag>` enumerates them. 13 of 285 rules are cited so far, so
+adoption is the rate limiter, not the rewriting.
 
 #### C — process / skills
 

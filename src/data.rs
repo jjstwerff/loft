@@ -4241,18 +4241,15 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
 ///
 /// A reference tuple's element is read and written through the tuple's stored DbRef with
 /// the same `(ref, offset)` opcodes an ordinary struct FIELD uses, so the admitted set is
-/// exactly the set those opcode pairs are laid out for.  This is the ONE list: the
-/// signature guard and both `RefTupleGet` / `RefTuplePut` arms read it, because loft#1006
-/// was three lists disagreeing — the guard admitted `single` and a function reference that
-/// codegen then died on, and refused `boolean`, which every layer could always have
-/// handled.
+/// exactly the set those opcode pairs are laid out for.  This is the ONE list — the
+/// signature guard and both `RefTupleGet` / `RefTuplePut` arms read it, so the set the
+/// compiler ADMITS and the set codegen can EMIT cannot disagree.
 ///
-/// `text` is refused, and the opcode pair is not what it is missing: `OpGetText` /
-/// `OpSetText` exist and take the same `(ref, offset)`, but a reference tuple's storage is
-/// not a record with a text SLOT the way a struct is, so wiring them up read out of bounds
-/// on the interpreter (SIGSEGV) and would not compile on `--native`.  Implementing it is
-/// layout work; until then the signature says so and names the element type.  A struct
-/// takes its place — its fields of any type write through a `&` parameter.
+/// `text` is refused, and the missing piece is not the opcode pair: `OpGetText` /
+/// `OpSetText` exist and take the same `(ref, offset)`.  A reference tuple's storage is not
+/// a record with a text SLOT the way a struct is, so those opcodes would address memory the
+/// tuple does not own.  Admitting `text` is layout work, not a guard change.  Until then a
+/// struct takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
 /// The admitted-element set for a `&(…)`; the heap half is refused under @FR-D-bind-11.
 pub fn ref_tuple_element_ok(tp: &Type) -> bool {
@@ -4263,19 +4260,17 @@ pub fn ref_tuple_element_ok(tp: &Type) -> bool {
 ///
 /// The authority is the layout: [`element_stack_size`] gives exactly these eight
 /// `size_of::<DbRef>()`, and any site deciding "does this travel as a handle?" is asking
-/// that same question.  Spelled inline it drifts SHORT — the three obvious ones
+/// that same question.
+///
+/// ⚠ Spelled inline, this list drifts SHORT in one specific way: the three obvious kinds
 /// (`Reference` / `Vector` / struct-`Enum`) get written and the five keyed collections are
 /// forgotten, because they are reached by key and do not look like references at the call
-/// site.  Measured: `coroutine.rs`'s two `is_dbref` tests spelled the short form, so a
-/// generator yielding `hash` / `sorted` / `index` picked the `next_i64` channel for a
-/// handle — `BUG (#306)` on `--interpret` and a raw rustc `E0605` on `--native`, while the
-/// same generator over a `vector` was fine.
+/// site.  A short list is not a compile error anywhere — it routes a handle down the
+/// scalar path — so call this function rather than restating it.
 ///
 /// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
 ///
-/// `Parser::is_heap_handle` is the same question with a `.base()` peel and delegates here;
-/// it predates this function, which was added without checking whether the FULL list already
-/// had a home — the search was made for the SHORT one and stopped there.
+/// `Parser::is_heap_handle` is the same question with a `.base()` peel, and delegates here.
 #[must_use]
 pub fn is_dbref(tp: &Type) -> bool {
     matches!(
