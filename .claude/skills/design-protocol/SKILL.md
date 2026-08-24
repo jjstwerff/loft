@@ -13,7 +13,14 @@ description: >-
   the constructive instrument — plot a concrete instance of the ANSWER and read the
   invariant off it. Reach for it when a design feels too clean, when you keep reaching
   for an approximation, or whenever you catch yourself about to build the first
-  coherent design without probing it.
+  coherent design without probing it. ALSO reach for it BEFORE writing any routine,
+  predicate, helper, or type-list that might already exist somewhere else — in another
+  module of this project, or in a library or package the project can already use — and
+  especially when PORTING or RE-TARGETING something that already works (a new backend, a
+  new output format, a standalone or single-file version, a different language). That
+  case does not feel like new work, which is exactly why it is where duplicate and
+  subtly-wrong reimplementations come from; the skill covers how to find the existing
+  implementation before you write a second one.
 user-invocable: true
 ---
 
@@ -256,6 +263,63 @@ information) that lets the broken path *adapt* while the producers stay untouche
 *correct* universal story is exactly what suppresses that look; the cue to run it is the
 scope ballooning past the size of the failing domain — universal stays the right default,
 but special circumstances still occur and have to be looked for, not assumed away.
+
+---
+
+## Before you write it — the sites you have to count include the ones you cannot see
+
+Step 2 asks you to count an invariant's re-assertion sites. That presumes you can *find*
+them, and the ones that matter most are the ones you have no reason to open: another
+module, another file, a library the project already depends on. A duplicate
+implementation is rarely a decision made badly. It is a decision **never made** — nothing
+in the local task raised the question, so the choice was never on the table.
+
+This is why more care does not help. Care operates on what is in front of you, and the
+second implementation is not in front of you. The failure is not carelessness, and
+resolving to be more careful next time does not touch it.
+
+Two radii, asked *before* writing rather than reviewed after:
+
+- **inside this codebase** — does this predicate, list, constant, or routine already exist?
+- **outside it** — does a dependency, a library, or the package index already do this?
+
+**Two implementations of one rule is a defect with a delay, not untidiness.** The copies
+drift, and a drifted copy is worse than a copy: it looks like the thing it is not, so it
+passes review and reads as authoritative while answering differently. Every site you leave
+behind is a place the invariant can quietly stop holding.
+
+**The case that gets missed is "same functionality, new target"** — porting to another
+backend, another output format, a single self-contained artifact — because it does not
+*feel* like new functionality. It feels like moving something that already exists, so the
+question "does this exist?" reads as already answered. Notice what the constraint actually
+forbids: it forbids *depending* on the original, and that is not a licence to *re-derive*
+it. Port it, or generate the new form from it. Rewriting from the idea throws away every
+correction the original accumulated — which is how a reimplementation comes out not merely
+duplicated but **wrong**, and wrong in ways the original already knew about.
+
+**You cannot answer either question from memory, and reading for it does not scale.** So
+reach for an instrument; if the project has none, build the cheap one *before* you write
+the code rather than after. What such a tool looks for:
+
+- the same set of names in a membership test or match arm, at two or more sites
+- one symbol name defined in more than one module
+- near-duplicate bodies — the same call sequence under different local names
+- for the outer radius: the dependency manifest, the package index, the library catalogue
+
+That is minutes of scripting, and it pays twice if you **keep it and re-run it** — a
+one-off answer rots, an instrument does not. Prefer **meaning** over **shape** where you
+can: two sites that cite the same rule are two implementations of it even when the code
+looks nothing alike, and a shape-matcher cannot see that. A convention where each
+enforcement site names the rule it obeys turns the search into a lookup.
+
+**The symmetric error is the over-unification already named above**, arriving by a
+different road. Do not merge two sites because their lists are equal *today*. Equality is
+evidence; sameness-of-rule is the claim, and only the second licenses the merge. A merge
+that couples two rules which must stay free to diverge is worse than the duplication —
+that is the too-early-abstraction failure relocated, and it is expensive to undo precisely
+because later work has to fight it. Duplication is cheap to undo once you can find it;
+that asymmetry is what makes the instrument the right investment and the reflex to merge
+the wrong one.
 
 ---
 
