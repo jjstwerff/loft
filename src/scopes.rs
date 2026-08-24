@@ -5827,7 +5827,44 @@ impl Scopes {
                         {
                             ls.push(hook);
                         }
-                        ls.push(call("OpFreeRef", v, data));
+                        // @FR-O-Owner / @FR-O-Move (loft#1081, D-own-8): a scope-exit free
+                        // must never release the store this return is HANDING OVER.  The
+                        // three `in_ret` legs above read the returned value's `deps`, and a
+                        // JOIN carries ONE arm's marker for BOTH paths — so the sibling arm
+                        // of `v = if c { [a] } else { [b] }; v` is not named there and is
+                        // freed on the very path that returns it.  The caller then reads a
+                        // freed store, and the next call's allocator hands that slot straight
+                        // back: three calls to one such function answered the THIRD one's
+                        // values for all three bindings on `--native`, with no diagnostic.
+                        //
+                        // Which arm ran is a run-time fact a flow-insensitive `deps` cannot
+                        // hold, and `(O-Complete)` accepts the Join as inherently run-time
+                        // (D-own-6's @P290 bracket is the same shape).  So the witness is the
+                        // returned var itself: free `v` unless it IS what we are returning.
+                        // Conservative in the safe direction — on the path where the sibling
+                        // arm ran, `v` is a distinct store and the free happens as before.
+                        //
+                        // Scoped to a returned value delivered through the NRVO buffer —
+                        // `ret_var` is then a function ARGUMENT, in scope wherever a free
+                        // is emitted.  An ordinary block-local `ret_var` is not: the native
+                        // generator declares it with `let mut` inside the arm block, so
+                        // naming it from a function-scope free is `E0425: cannot find value
+                        // var__vec_1` (651_return_local_viewing_enum_payload).  The buffer
+                        // case is the one the defect needs anyway: it takes a join BOUND to
+                        // a local that the function then returns.
+                        let returns_this_store = ret_var != u16::MAX
+                            && v != ret_var
+                            && function.is_argument(ret_var)
+                            && crate::data::is_dbref(function.tp(v))
+                            && crate::data::is_dbref(function.tp(ret_var));
+                        if returns_this_store {
+                            ls.push(Value::Call(
+                                data.def_nr("OpFreeRefIfDistinct"),
+                                vec![Value::Var(v), Value::Var(ret_var)],
+                            ));
+                        } else {
+                            ls.push(call("OpFreeRef", v, data));
+                        }
                     }
                 }
             }

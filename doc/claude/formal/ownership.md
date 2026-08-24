@@ -104,26 +104,41 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24) — D-own-7 opened and closed 2026-08-23, and D-own-6 before
-it; the five original D-own deviations remain resolved.  Read those entries for what their
-oracles vary before treating any zero here as a measurement: each rested on a Join corpus that
-pinned one axis, and moving that axis found a fresh family every time — which is exactly how
-D-own-8 arrived, from a consumer rather than from an oracle at all.
+OPEN: **1** (D-own-8, 2026-08-24; its Face B closed the same day, Face A open) — D-own-7
+opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
+remain resolved.  Read those entries for what their oracles vary before treating any zero
+here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
+axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
+rather than from an oracle at all, and how its second face (a use-after-free answering wrong
+on the DEFAULT backend) was found by varying the position of the same join.
 
-### D-own-8 — OPEN (2026-08-24, loft#1082): a Join's ownership fact is true on one path only
+### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
 `(O-Complete)` requires the fact PER BINDING, PER PATH — "every binding, including every
-`match`/`if` arm".  A join whose arms disagree about ownership produces ONE fact for BOTH
-paths, and the one it produces is the borrow:
+`match`/`if` arm".  A join whose arms disagree produces ONE fact for BOTH paths:
 
 ```loft
 line = if len(pts) > 2 { smooth_pts(pts, flags, false) } else { pts };
 ```
 
 The then-arm is a call returning a freshly-owned vector; the else-arm is a bare local.
-`LOFT_VAR_TABLE` shows the binding typed `def deps=[pts]` — a BORROW — so on the owning path
-the fact is false, and a borrow-typed binding owns no store for that path's value to land in.
-The whole-value assignment then targets nothing:
+`arm_join_type` strips only the deps an arm MINTED (loft#978), and `joined_deps` then
+UNIONS, so `{} ∪ {pts}` = `{pts}` and `LOFT_VAR_TABLE` shows the binding typed
+`def deps=[pts]` — a BORROW.  On the owning path the fact is false.
+
+**One fact, two questions — and it is only right for one of them.**  `joined_deps`'
+own doc-comment justifies the union as the reading "no arm can contradict: it can only
+keep a store alive longer than one arm needed, never free one another arm still holds."
+That is true of the question the union was written for — *what must stay alive?*  It is
+false of the OTHER question the same `deps` list answers — *does this binding need a
+backing store of its own?*  `vectors.rs::vector_needs_db` asks it as
+`self.vars.tp(vec).depend().is_empty()`, so a union that is non-empty says "borrows,
+needs no store" about a value that OWNS on the path that runs.  Conservative for
+liveness is anti-conservative for allocation.  Two named hazards meet here: an empty dep
+list read as *owned*, and one derived fact with two homes.
+
+**Face A — the destination that does not exist (loft#1082, OPEN).**  A borrow-typed slot
+owns no store, so a whole-value assignment into it targets nothing:
 
 ```
 VarVector(var[1224]) -> null
@@ -131,26 +146,76 @@ ClearVector(r=ref(65535,0,0))
 AppendVector(r=ref(65535,0,0), other=ref(26,1,8), tp=3)   ← panic
 ```
 
-`store_nr == u16::MAX` is `DbRef::NULL`, against `keys.rs`'s stated contract that "every store
-accessor consults it before dereferencing".  The `debug_assert!` that would name the variable
-is compiled out of a release build, so the shipped failure is a bare index panic.
+`store_nr == u16::MAX` is `DbRef::NULL`, against `keys.rs`'s stated contract that "every
+store accessor consults it before dereferencing".  The `debug_assert!` that would name the
+variable is compiled out of a release build, so the shipped failure is a bare index panic.
+
+**Face B — the store freed on the path that returns it (loft#1081, CLOSED 2026-08-24).**
+The same one-path fact, at a join BOUND to a local the function then returns:
+
+```loft
+fn pick(m: boolean, a: float, b: float) -> vector<float> {
+  v: vector<float> = if m { [a, b] } else { [a] };
+  v
+}
+```
+
+Each arm mints its own backing (`__vdb_1`, `__vdb_2`); the join's fact names ONE of them,
+and `get_free_vars`' three `in_ret` legs all read that fact — so the sibling arm is freed
+unconditionally at scope exit, on the very path that returns it.  The caller then holds a
+freed store, and the allocator hands the slot straight back on the next call: **three calls
+answered the THIRD call's values for all three bindings on `--native`**, with no
+diagnostic.  The interpreter answered correctly, because there the same defect LEAKS
+instead of recycling — the leak was hiding the use-after-free, and `--native` is the
+default backend.
+
+Closed by the witness `(O-Complete)` already licenses for a Join (D-own-6's @P290 bracket
+is the same shape): a scope-exit free of a `DbRef` local at a returning exit is emitted as
+`OpFreeRefIfDistinct(v, ret_var)` — free `v` unless it IS what this return is handing
+over.  Which arm ran is a run-time fact a flow-insensitive `deps` cannot hold, so the
+returned value witnesses it.  Conservative in the safe direction: where the sibling arm
+ran, the two are distinct stores and the free happens exactly as before.  Site:
+`scopes.rs::get_free_vars`, citing `@FR-O-Owner` / `@FR-O-Move`.  Guard:
+`tests/scripts/1081-join-arm-freed-on-the-path-that-returns-it.loft`.
+
+**What Face B's closure does NOT fix, and says so.**  The store is no longer freed while
+live — it is now not freed at all.  The callee's join REBINDS the promoted return buffer
+(`PutRef`) instead of building into it, so the caller frees the buffer it allocated
+(`__ref_1`) and never frees the store it actually received.  Measured on the same probe:
+one leaked `main_vector<float>` per call, plus one untyped `kt=65535` store per call —
+the un-taken arm's `__vdb_N`, eagerly allocated by `gen_set_first_ref_null`'s `OpInitRef`
+and never named again (`vector_db` already cures exactly this for a REBIND param and
+says why in its own comment; the arm case is the same conditional `OpDatabase` and is not
+covered).  A leak is the safe direction from a use-after-free that answers wrong, and it
+is what D-own-7 traded for too — but it is a trade, not a closure.
+
+**The cure Face A needs is a rule decision, and it is the same one.**  A binding whose
+value OWNS on some path must own a store on every path.  That means a mixed-ownership
+join types as OWNED and the borrowing arm MATERIALISES a copy — which is not a new rule
+but `(O-Move)`'s existing sentence for the callee case ("if the return *borrows* a
+parameter … the caller COPIES to obtain its own store"), and the model's own doctrine that
+the compiler always finds a lowering, "copying when it cannot prove an alias is safe".
+Half of it has been tried and measured to fail: making the owning arm win the union types
+the binding owned but emits no `OpDatabase` for it, so the destination is still absent.
+Both halves have to land together.
 
 **What is NOT the cause, each eliminated by its own run.**  Reassigning over a field view;
-passing local copies instead of field views; `LOFT_NO_CONF_RECOVER=1` (store confinement); and
-loft2's move-elide / DbRef-set work (`812aac5d` fixed the INVERSE — a borrow read as an owned
-store — and the panic survives it unchanged).  A `Type::joined_deps` change making an owning
-arm win the union looked implied by the rule and did NOT fix it when measured, so the union is
-suspicious but is not the producer of the null `DbRef`.
+passing local copies instead of field views; `LOFT_NO_CONF_RECOVER=1` (store confinement);
+loft2's move-elide / DbRef-set work (`812aac5d` fixed the INVERSE — a borrow read as an
+owned store); and blanket `mark_inline_ref` on every `__vdb_N` to stop the eager
+allocation, which ALSO relocates the null-init and broke the tail-`if` return promotion
+(a tail join answered `0` instead of `5`).  The eager-allocation fix therefore needs a
+marker that changes alloc-vs-sentinel WITHOUT changing init order.
 
-**The oracle gap.**  Three constructed reductions failed to reproduce it — an if-expression
-assigned then appended to, the same consumed by a struct literal, and a hand-written
-Catmull-Rom over a struct field of a loop variable — so the minimal repro is still open and the
-trigger needs something those lack.  It reproduces reliably in the `drawing` package's `Fronds`
-path (`bow=0.16`, parse only, no render); `bow` is the sole trigger because it is what makes a
-frond three control points and routes it into the smoothing.
+**Reductions.**  Face B reduces to nine lines (above).  Face A's false FACT reduces to
+~55 lines — a `for` over a vector of structs whose vector fields are copied into locals,
+then the mixed join — reproducing `pf_line def deps=[pf_cp]` and `pf_wids def
+deps=[pf_cw]` exactly as filed; the PANIC needs one ingredient that reduction still lacks
+(there the join lowers as a bind, not as the `ClearVector`+`AppendVector` copy the crash
+tail shows).  It reproduces reliably in the `drawing` package's `Fronds` path
+(`bow=0.16`, parse only, no render), reachable read-only from a scratchpad program via
+`--lib`.
 
-The next step is the PRODUCER, not another hypothesis: instrument the write of a `DbRef` whose
-`store_nr` is `u16::MAX` into a vector-typed local, which names the emit site directly.
 
 ### D-own-7 — CLOSED (2026-08-23, loft#1078): every arm of a Join that OWNS a store is a candidate the free must name
 
