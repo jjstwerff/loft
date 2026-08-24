@@ -89,7 +89,7 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | 1 | **is this a scalar** (`Integer\|Float\|Single\|Character\|Boolean\|Enum(_,false,_)`) | `types.md` scalar/heap split; the `&(…)` admitted-element rule | 8 → **3 merged**, 5 left | ✅ **merged + drift FIXED.** `generation/`'s two copies included `Enum(_, false, _)`; `ref_tuple_element_ok` did not — so `&(Col, Col)` was refused while `&(boolean, boolean)` was admitted, on an identical 1-byte layout. One home: `data::is_scalar`. The 5 remaining sites (`scopes.rs:3898`, `generation/emit.rs`, `parser/operators.rs:47` = `Const-ScalarCollapse`, `parser/mod.rs:4932`, +1) spell the BARE five, so adopting them ADDS value enums at each — a behaviour change per site needing its own probe. Left open deliberately. |
 | 2 | **is this carried as a DbRef** (`Reference\|Vector\|Enum(_,true,_)`) | `@FR-Col-Store` — home is `data::is_dbref` | 43 → **3 fixed**, 40 to read | ⚠ **the short list is a BUG source** — see § The DbRef set below. Home exists now; the remaining 41 each need reading, since some may legitimately want only three |
 | 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `@FR-Col-Hash` · `-Sorted` · `-Index` · `-Spatial` · `-Trie` | 16 → **1** | ✅ **merged onto `vectors::is_keyed`** — see § The keyed collections below |
-| 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` | 10 | ☐ home EXISTS (`vectors::is_collection`, now cited) and is literally `is_keyed(tp) \|\| Vector` — so #3 and #4 differ by that variant BY DESIGN, not by drift. The inline copies remain to convert. |
+| 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` — home is `vectors::is_collection` | 13 → **1** | ✅ **merged**, IR byte-identical on 854/854. THREE homes existed, not one — see below |
 | 5 | **is this a DbRef-represented type** | `@FR-Col-Store` — home is `data::is_dbref` | 11 → **1** | ✅ **merged**, IR byte-identical on 854/854. And it found a duplicate home I had just created myself — see below |
 | 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `@FR-L-Narrow` (width set) · `@FR-L-Null` (the encoding) | 6 → **5 cited, 1 excluded** | ✅ **evaluated — and only 3 of them are the same question.** See § The narrow widths below. |
 | 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | `calls.md` F-Drop / F-Block | **9 + 13** | ☐ two variants; establish whether `BreakWith` belongs to the same question |
@@ -248,6 +248,30 @@ was creating**, not about the list I was replacing.
 `is_heap_handle` now delegates to `is_dbref`, keeping its name and the `.base()` peel its
 null-check callers rely on; both ends carry a note saying which came first and why the search
 missed it.
+
+## Checklist #4 — three homes for one predicate (2026-08-24)
+
+"Is this a collection" had **three** named homes and ten inline copies:
+
+- `vectors::is_collection` — `pub(crate)`, and the only one that DERIVES the answer
+  (`is_keyed(tp) || Vector`) instead of restating the six variants;
+- `generation::is_collection_field` — restated;
+- `objects::is_collection_type` — restated.
+
+All three held the identical set. The two restaters now delegate and the ten inline copies
+call the derived one, so adding a collection kind touches `is_keyed` and nothing else. IR is
+**byte-identical on 854 of 854** `tests/scripts`.
+
+**The pattern across the four merged families is worth stating.** #3 had two homes + 14 inline,
+#5 had two homes + 9, #4 had three homes + 10. In every case a home already existed — often
+documented as *"one home"* — and the copies accumulated beside it anyway. The duplication is
+not a failure to CREATE the abstraction; it is a failure to FIND one that is already there,
+which is why the instrument matters more than the discipline.
+
+⚠ Derivation beats restatement, and this family shows why: `vectors::is_collection` is the
+only one of the three that cannot drift from `is_keyed`, because it is defined in terms of it.
+The other two would have needed updating by hand had a keyed kind been added — the exact
+maintenance the merge removes.
 
 ## Not mergeable — recorded so the question is not reopened
 

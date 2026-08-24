@@ -183,15 +183,8 @@ impl Parser {
     }
 
     pub(crate) fn is_collection_type(tp: &Type) -> bool {
-        matches!(
-            tp,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        )
+        // One home: `vectors::is_collection` (formal/IMPLEMENTATIONS.md #4).
+        crate::parser::vectors::is_collection(tp)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3272,15 +3265,7 @@ impl Parser {
             // the canonical `[]`.
             // Filled by the brace scan below when `{}` is what stands here.
             let mut braces_span: Option<(u32, u32, u32)> = None;
-            let empty_braces = matches!(
-                td_base,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-                    | Type::Index(_, _, _)
-            ) && {
+            let empty_braces = crate::parser::vectors::is_collection(&td_base) && {
                 let link = self.lexer.link();
                 // loft#1003 — each brace's own position, taken before it is consumed, so the
                 // fix can spell `{}` -> `[]` as an edit.  Both are needed: `{ }` is the same
@@ -4099,15 +4084,7 @@ impl Parser {
             // Prime it here too, and note this covers keyed collections as well: a
             // `hash<T[k]> = []` failed identically, and `text` never did because it is not
             // header-shaped.
-            if matches!(
-                &tp,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            ) {
+            if crate::parser::vectors::is_collection(&tp) {
                 // loft#924 — a group member's header was already zeroed with its
                 // siblings', ahead of every fill. Writing it again here is what made
                 // an OMITTED view field lose the records the primary already holds:
@@ -4371,15 +4348,7 @@ impl Parser {
             list.push(v_if(not_null, Value::Insert(present), Value::Null));
             return;
         }
-        if matches!(
-            td_base,
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Index(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(&td_base) {
             // loft#917 — `H { xs: null }` on a field declared `?`.  The header prime in
             // `parse_object` has already zeroed the slot, and zero is the EMPTY collection;
             // leaving it there is what made `xs: null` and `xs: []` byte-identical and

@@ -1369,15 +1369,7 @@ impl Parser {
             ops.push(write);
             return v_block(ops, Type::Void, "fn_ref_slot_set");
         }
-        if matches!(
-            *f_type,
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(f_type) {
             if let Value::Var(nr) = to.unspan() {
                 if self.const_write_blocked(*nr, op) {
                     diagnostic!(

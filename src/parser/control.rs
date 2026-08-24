@@ -2140,15 +2140,7 @@ impl Parser {
         ls.iter().all(|&v| {
             v >= self.vars.count()
                 || attr_names.contains_key(self.vars.name(v))
-                || !matches!(
-                    self.vars.tp(v),
-                    Type::Vector(_, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                || !crate::parser::vectors::is_collection(self.vars.tp(v))
         })
     }
 

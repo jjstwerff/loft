@@ -7423,15 +7423,7 @@ impl Parser {
     /// (a standalone `[]` leaks).  Here that position IS this parse, so the same
     /// sub-parse route serves both.
     fn monomorph_default(&mut self, concrete: &Type) -> Option<(Value, Type)> {
-        if matches!(
-            concrete,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(concrete) {
             return Some(self.subparse_default("[]", concrete));
         }
         self.build_default(concrete)

@@ -713,15 +713,7 @@ impl Parser {
         }
         // Only the shapes `lift_owned_return` does NOT lift — a collection return, whose
         // hidden buffer IS what the call answers.
-        if !matches!(
-            self.data.def(fn_nr).returned().base(),
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if !crate::parser::vectors::is_collection(self.data.def(fn_nr).returned().base()) {
             return false;
         }
         args.iter()
@@ -2688,15 +2680,7 @@ impl Parser {
         // be parsed IN the coalesce's right-operand context (its ownership view-model
         // depends on that context — a standalone `[]` leaks), so route it as a SOURCE
         // that `build_null_coalesce_default` parses at its own parse site.
-        if matches!(
-            base,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(&base) {
             *ctp = base;
             let lhs_type = ctp.clone();
             self.pending_default_src = Some("[]".to_string());

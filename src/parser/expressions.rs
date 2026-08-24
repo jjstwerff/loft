@@ -3327,15 +3327,7 @@ use a separate collection or add after the loop"
             && var_nr == u16::MAX
             && op == "+="
             && dbref_append_target
-            && matches!(
-                f_type,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_collection(f_type)
             && matches!(code, Value::Insert(_))
         {
             let elm_tp = f_type.content();

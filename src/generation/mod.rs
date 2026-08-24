@@ -1287,15 +1287,9 @@ enum FieldPhase {
 fn is_collection_field(tp: &Type) -> bool {
     // Radix backs `spatial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
     // reference shape as Hash, so it is classified alongside the family.
-    matches!(
-        tp,
-        Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-    )
+    // One home: `vectors::is_collection`, which DERIVES this as `is_keyed(tp) || Vector`
+    // rather than restating the six variants (formal/IMPLEMENTATIONS.md #4).
+    crate::parser::vectors::is_collection(tp)
 }
 
 /// A "bare" runtime type (no loft definition) that `output_init` must

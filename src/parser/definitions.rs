@@ -2625,15 +2625,7 @@ impl Parser {
         // wrapper was a loophole around that decision.  Checked in
         // pass 2 (layout complete).
         if !self.first_pass
-            && matches!(
-                tp,
-                Type::Vector(_, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_collection(&tp)
             && self.type_carries_closure(&tp)
         {
             diagnostic!(
