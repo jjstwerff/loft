@@ -864,6 +864,47 @@ The cells existed before, scattered across four files (`294-vector-element-view-
 C86 field cells) and no single one said what the rule WAS.  Ask that file rather than re-deriving
 it from the code.
 
+### One rule, how many implementations? — the checklist, and its first entry was drifted (2026-08-24)
+
+A rule in `formal/` is usually enforced by a **membership test over `Type` variants** — *is this
+a scalar*, *is this a keyed collection*, *does this own a store*.  Written inline at each site,
+the copies drift, and a drifted copy is a defect rather than untidiness: loft#1006 was two
+spellings of one tuple-element list disagreeing.
+
+`scripts/rule_predicate_audit.py` measures it: **32 distinct type-lists of 3+ variants; 30 appear
+at 2 or more sites.**  `--near` reports the pairs differing by exactly ONE variant, which is the
+drift that is already there rather than the drift that might happen.  The verdicts live in
+[formal/IMPLEMENTATIONS.md](formal/IMPLEMENTATIONS.md) — a checklist, because most entries need a
+judgement the script cannot make.
+
+**Entry #1 was already wrong.**  "Is this a scalar" is spelled 8 times in three variants, and the
+variants matter: `generation/`'s two copies include `Type::Enum(_, false, _)` and
+`data::ref_tuple_element_ok` did not.  A value enum and a `boolean` have the SAME 1-byte slot
+(`element_stack_size`: `Boolean | Enum(_, false, _) => 1`), so:
+
+```loft
+fn sw(p: &(boolean, boolean)) { … }   // admitted
+fn sw(p: &(Col, Col)) { … }           // "may only hold scalar elements, and this one holds `Col`"
+```
+
+The refusal read as a rule because the boolean case works.  It was drift.  Adding the value-enum
+arms to `RefTupleGet`/`RefTuplePut` makes the swap answer correctly on **both backends** first
+try — no representation question, unlike D-bind-11's `text` (a 16-byte `Str` borrow against a
+4-byte record handle), which stays refused.
+
+**The merge, and what was deliberately NOT merged.**  `data::is_scalar` is the one home;
+`ref_tuple_element_ok` delegates and `generation`'s two copies are gone.  Emitted IR is
+**byte-identical on 852 of 853** scripts (the one difference is the guard file's own new cells),
+so the `generation` half is a proven behaviour-preserving refactor and the only semantic change
+is the intended admission.
+
+The **5 remaining sites spell the BARE five** — `scopes.rs`'s return-type check,
+`generation/emit.rs`'s RefVar inner, `parser/operators.rs`'s `Const-ScalarCollapse`,
+`parser/mod.rs`'s `size` receiver.  Adopting them would ADD value enums at each, which is a
+behaviour change per site and needs its own probe.  They stay on the checklist rather than being
+swept, because "these lists are equal today" is not the same claim as "these are one rule" — and
+a merge that couples two rules which must stay free to differ is worse than the duplication.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

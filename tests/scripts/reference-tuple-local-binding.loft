@@ -121,3 +121,42 @@ fn test_a_for_loop_over_tuples_is_untouched() {
   for t in w { t.0 = 9; }
   assert(w[0].0 == 9, "a for-loop tuple element still writes through, got {w[0].0}");
 }
+
+// A VALUE ENUM is a scalar, so a `&(…)` admits it — it was refused purely because two
+// spellings of "is this a scalar" had drifted.  `generation`'s own `is_scalar` included
+// `Enum(_, false, _)`; `data::ref_tuple_element_ok` did not; and `element_stack_size` gives
+// a value enum and a `boolean` the SAME 1-byte slot.  So `&(boolean, boolean)` worked while
+// `&(Col, Col)` was refused with "may only hold scalar elements".  Both now read one
+// predicate, `data::is_scalar` (formal/IMPLEMENTATIONS.md #1).
+//
+// The boolean cell is the control: it is what made the refusal read as a rule rather than a
+// gap.  A `text` element stays refused — that is D-bind-11, a real representation difference
+// (a 16-byte `Str` borrow against a 4-byte record handle), not drift.
+
+enum RtlCol { RtlRed, RtlGreen }
+
+fn rtl_swap_value_enum(p: &(RtlCol, RtlCol)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}
+
+fn test_a_value_enum_is_admitted_as_a_reference_tuple_element() {
+  a = (RtlCol.RtlRed, RtlCol.RtlGreen);
+  rtl_swap_value_enum(a);
+  assert(a.0 == RtlCol.RtlGreen, "value-enum .0 after swap");
+  assert(a.1 == RtlCol.RtlRed, "value-enum .1 after swap");
+}
+
+fn rtl_swap_boolean(p: &(boolean, boolean)) {
+  t = p.0;
+  p.0 = p.1;
+  p.1 = t;
+}
+
+fn test_the_boolean_control_still_works() {
+  b = (true, false);
+  rtl_swap_boolean(b);
+  assert(!b.0, "boolean .0 after swap");
+  assert(b.1, "boolean .1 after swap");
+}

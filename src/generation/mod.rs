@@ -4712,16 +4712,8 @@ extern crate loft;"
                     continue;
                 }
                 let tp = vars.tp(v);
-                let is_scalar = matches!(
-                    tp,
-                    Type::Integer(_)
-                        | Type::Float
-                        | Type::Single
-                        | Type::Boolean
-                        | Type::Character
-                        | Type::Enum(_, false, _)
-                );
-                if !is_scalar {
+                // One home: `data::is_scalar` (formal/IMPLEMENTATIONS.md #1).
+                if !crate::data::is_scalar(tp) {
                     continue;
                 }
                 let tp_str = rust_type(tp, &Context::Variable);

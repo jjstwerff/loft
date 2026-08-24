@@ -4306,9 +4306,36 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
 /// takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
 pub fn ref_tuple_element_ok(tp: &Type) -> bool {
+    is_scalar(tp.base())
+}
+
+/// Is `tp` a SCALAR — a value that lives inline in its slot and owns no store?
+///
+/// The one home for a membership test written at several sites and already drifted between
+/// them: `generation`'s two copies included `Enum(_, false, _)` and
+/// [`ref_tuple_element_ok`] did not, so `&(Col, Col)` over a value enum was refused while
+/// `&(boolean, boolean)` was admitted — with an identical 1-byte layout
+/// (`element_stack_size`: `Boolean | Enum(_, false, _) => 1`).  Two spellings of one list
+/// disagreeing is the shape loft#1006 was.
+///
+/// A value enum is a scalar; a STRUCT-enum (`Enum(_, true, _)`) is not — it carries a
+/// `DbRef` like a `Reference`.  `text` is not: its stack form is a 16-byte `Str` borrow
+/// against a 4-byte record handle, which is the whole of `binding.md` D-bind-11.
+///
+/// See [formal/types.md](../doc/claude/formal/types.md) for the scalar/heap split and
+/// [formal/IMPLEMENTATIONS.md](../doc/claude/formal/IMPLEMENTATIONS.md) for the other sites
+/// still spelling this list inline — adopting them changes behaviour per site and each needs
+/// its own probe, which is why they are a checklist and not a sweep.
+#[must_use]
+pub fn is_scalar(tp: &Type) -> bool {
     matches!(
-        tp.base(),
-        Type::Integer(_) | Type::Float | Type::Single | Type::Character | Type::Boolean
+        tp,
+        Type::Integer(_)
+            | Type::Float
+            | Type::Single
+            | Type::Character
+            | Type::Boolean
+            | Type::Enum(_, false, _)
     )
 }
 

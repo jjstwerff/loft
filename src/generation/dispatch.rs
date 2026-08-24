@@ -1001,17 +1001,8 @@ impl Output<'_> {
         // (emitted by scope analysis against the table type) must keep
         // seeing a DbRef — re-typing it scalar there orphaned the store (a
         // leak, crawler's hex/sim libs).
-        fn is_scalar(t: &Type) -> bool {
-            matches!(
-                t,
-                Type::Integer(_)
-                    | Type::Float
-                    | Type::Single
-                    | Type::Boolean
-                    | Type::Character
-                    | Type::Enum(_, false, _)
-            )
-        }
+        // One home: `data::is_scalar` (formal/IMPLEMENTATIONS.md #1).
+        use crate::data::is_scalar;
         let discard_loop_var = variables.name(var) == "_"
             && is_scalar(variables.tp(var))
             && matches!(to.unspan(), Value::Block(bl) if is_scalar(&bl.result));

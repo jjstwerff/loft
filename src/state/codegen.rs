@@ -696,6 +696,7 @@ impl State {
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
                         Type::Boolean => stack.add_op("OpGetBoolean", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpGetEnum", self),
                         // Unreachable: `ref_tuple_element_ok` refuses anything this
                         // match cannot emit, at the signature, with a message naming the
                         // element type.  The two lists are one list on purpose —
@@ -808,6 +809,7 @@ impl State {
                         Type::Single => stack.add_op("OpSetSingle", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
                         Type::Boolean => stack.add_op("OpSetBoolean", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpSetEnum", self),
                         // Unreachable — see the RefTupleGet arm above.
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
                     }
