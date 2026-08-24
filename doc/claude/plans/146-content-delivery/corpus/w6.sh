@@ -18,7 +18,10 @@ HERE=$(pwd)
 WORKSPACE=$(cd "$HERE/../../../../../.." && pwd)
 DRAWING=${W6_DRAWING:-$WORKSPACE/loft-libs-graphics/drawing/src}
 GRAPHICS=${W6_GRAPHICS:-$WORKSPACE/loft-libs-graphics/graphics/src}
-ASSETS=${W6_ASSETS:-}
+# The pack side: a working checkout by default, so the gate follows an unpublished
+# `assets` the way it follows an unpublished `graphics`.  Point it at an empty
+# directory to measure the registry copy instead.
+ASSETS=${W6_ASSETS:-$WORKSPACE/loft-libs-assets/assets/src}
 LOFT=${LOFT:-$HERE/../../../../../target/release/loft}
 LIST=${W6_LIST:-"ammo sword potion"}
 BACKEND=${W6_BACKEND:---native}
@@ -37,7 +40,7 @@ mkdir -p "$out/a" "$out/b"
 
 libargs=(--lib "$DRAWING")
 [ -d "$GRAPHICS" ] && libargs+=(--lib "$GRAPHICS")
-[ -n "$ASSETS" ] && libargs+=(--lib "$ASSETS")
+[ -d "$ASSETS" ] && libargs+=(--lib "$ASSETS")
 [ "$BACKEND" = "--interpret" ] && export LOFT_NO_NATIVE_LIBS=1
 
 W6_SCENES="$HERE/scenes" W6_OUT="$out" W6_LIST="$LIST" W6_CONTROL="$control" \
