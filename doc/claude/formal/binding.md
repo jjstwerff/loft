@@ -140,6 +140,21 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   and the author is told — so writes through it stop reaching the
                   container (@PLN130 F2/F4/F8).  A plain bind already copies, so this
                   is consistent with what it meant; a `&` gets B-Ref-Reshape instead.
+  (B-View-Base)   a projection off a BORROWED base is a VIEW at EVERY element type — not only
+                  a struct-typed one.  `for b in bv { c = b.vecf; … }` aliases exactly as
+                  `c = b.strf` does, and so does a tuple element.  Ownership of the BASE is the
+                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`)
+                  while a STRUCT projection views (B-View); off a BORROWED base everything
+                  views.  `classify_vec_bind`'s `depend().is_empty()` is where the parser asks
+                  it, and @PLN25 p379 depends on the write-through (`cells = sc.v;
+                  cells[i] = h`).
+  (B-View-Depth)  a vector INDEX read (`a = vv[0]`) and a NESTED field read
+                  (`c = o.inner.v`) are VIEWS whatever the element type — #426's RESOLUTION,
+                  whose FILED premise (*"these must COPY"*) was recorded as the wrong read:
+                  under the reference-default model a binding to a heap value aliases the
+                  source, in-place mutation writes through, and the view survives a source
+                  realloc.  Guarded by `85-store-lifetime-reference-default-views.loft` and
+                  `294-vector-element-view-semantics.loft`.
   (B-Disturb)     three events END the place a reference names, and they are the same
                   three for every rule below: REMOVING from the container (`v.remove(i)`
                   renumbers every later position — collections.md Col-Remove),
@@ -168,9 +183,21 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 **In words.** Binding copies by default — a scalar and a whole vector alike (`d = v`
 gives you an independent copy). Writing `&` at the bind turns it into a live link, so
 `d = &self.data; d[i] = x` writes through to the source (a game can grab a sub-vector and
-mutate it in place). The one exception is reading a *struct-typed* field or element
-(`o.inner`, `v[i]`): that is a view onto the interior, and mutating it is already
-visible — no `&` needed there.
+mutate it in place).
+
+**The exceptions are not one but three, and stating only the first is what made three separate
+correct behaviours read as bugs in one week** (D-bind-12's collection half, a nested field read,
+a vector index read — all three filed against `B-Copy` and all three correct).  A projection is
+a VIEW when *any* of these holds: its type is a STRUCT (`o.inner`, B-View); its base is
+BORROWED, at every element type (B-View-Base); or the read is an INDEX or NESTED one
+(B-View-Depth, #426).  What is left for `B-Copy` is a whole VALUE, a scalar, and a one-level
+COLLECTION projection off an OWNED base — which is exactly `OWNERSHIP_MODEL § The law`'s
+`af = bx.v`.
+
+**The whole boundary is pinned in one place:**
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, eleven cells, measured identical on
+both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
+files, and no single one said what the rule was.
 
 Both kinds of alias last exactly as long as the place they name, and the three things
 that end a place are the same for both (B-Disturb). What differs is the answer. A plain
@@ -306,7 +333,15 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > `857`'s own allocation count is unchanged at 27, so the pointer-bind it protects is
 > untouched.
 >
-> **Half two — NOT a code deviation; `B-View` is under-stated.** `hv = p.0` on a
+> **Half two — RESOLVED (2026-08-24): `B-View` was under-stated, and the missing clauses are
+> now written as `B-View-Base` and `B-View-Depth`.** It is NOT the owner question this entry
+> first called it: `OWNERSHIP_MODEL § The law` and #426's RESOLUTION had already decided it,
+> and #426 records that its own filed premise (*"an index / nested read must COPY"*) was the
+> wrong read. So the code was right and the rules doc was incomplete. The whole boundary — 11
+> cells, both backends — is pinned by
+> `tests/scripts/bind-copies-or-views-the-whole-boundary.loft`.
+>
+> **Original reading, kept because the mistake is the useful part:** `hv = p.0` on a
 > COLLECTION element aliases, and the first reading scored that against `B-Copy`. Measured
 > across the 2×2 off a BORROWED base, three of four projection cells are views:
 >

@@ -820,6 +820,50 @@ arg 1 — rather than copied per shape, because two copies of one rule is the sh
 one difference being the guard's own file.  Both fixes together cost no legitimate elision
 anywhere in the corpus, which also says why these survived: the corpus never wrote the shapes.
 
+### The rules doc stated three of five clauses, and I filed correct behaviour as a bug three times (2026-08-24)
+
+Closing the statement-moving audit: the FIFTH member of the family — the borrow elision
+(`elide_borrows` / `idiom_drop` / `elide_rewrite`) — is **clean**.  Twelve cells across the axes
+the previous sweeps had held fixed (what mutates the source between: `+=` / element write /
+whole-field reassign / a `&`-call / `remove`; the use: print / len / argument / return; position:
+straight-line / loop / branch arm).  Do not re-run it.
+
+**Two cells DID alias, and chasing them is the actual result.**  A NESTED field read
+(`c = o.inner.v`) and a vector INDEX read both aliased where I read `B-Copy` as promising a copy.
+Both survive `LOFT_NO_BORROW_ELIDE=1`, so neither was the elision — and
+`tests/scripts/85-store-lifetime-reference-default-views.loft` turned out to carry the answer in
+its header: *"#426's premise — that `a = vv[0]` / `c = o.inner.v` must COPY — was the **WRONG
+read**."*  Both are decided VIEWS, guarded green, citing `OWNERSHIP_MODEL § The law`.
+
+**So the defect is in `formal/binding.md`, and it is load-bearing.**  It states `B-Copy` plus ONE
+exception (a *struct-typed* projection views).  Measured, there are three, and the boundary over
+11 cells — identical on both backends — is:
+
+| bind | result |
+|---|---|
+| a whole VALUE (`d = v`, `p = o`), and every scalar | COPY |
+| a one-level **collection** projection off an **OWNED** base (`af = bx.v`) | COPY |
+| a one-level **struct** projection off an OWNED base | VIEW — `B-View` |
+| a vector **INDEX** read · a **NESTED** field read | VIEW — #426's resolution |
+| **ANY** projection off a **BORROWED** base, at every element type | VIEW |
+
+The two missing clauses are now written as **`B-View-Base`** (ownership of the BASE is the axis,
+not the element type) and **`B-View-Depth`** (index and nested reads, with #426's premise
+recorded as the wrong read so the next reader does not re-file it).
+
+**The cost of the omission is measured, and I paid it three times in one week** — D-bind-12's
+collection half, then a nested field read, then an index read: three correct behaviours filed
+against `B-Copy`, each costing a full investigation.  Two of the three I recorded as "an owner
+question"; neither was.  A rules doc that is incomplete does not fail loudly — it produces
+confident, well-evidenced wrong conclusions, which is more expensive than a doc that says
+nothing.
+
+**The boundary now has ONE home:** `tests/scripts/bind-copies-or-views-the-whole-boundary.loft`.
+The cells existed before, scattered across four files (`294-vector-element-view-semantics`,
+`85-store-lifetime-reference-default-views`, `reference-tuple-heap-element-through-a-record`, the
+C86 field cells) and no single one said what the rule WAS.  Ask that file rather than re-deriving
+it from the code.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
