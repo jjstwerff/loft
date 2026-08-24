@@ -1,0 +1,15 @@
+# Every way a check can fail to RESOLVE, which is a different thing from failing.
+size 40x30
+Background transparent
+name a
+Poly (0.10,0.10) (0.30,0.10) (0.30,0.30) (0.10,0.30) rgb=200,10,10
+name ghost
+landmark mid = 0.5
+check ghost.cx ~ 0.5
+check nobody.cx ~ 0.5
+check a.middle ~ 0.5
+check somewhere ~ 0.5
+check a.cx
+check a.cx ~ what
+check a.cx ~ mid + oops
+check a.cx ~ 0.5 tol

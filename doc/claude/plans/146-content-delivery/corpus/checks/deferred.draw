@@ -1,0 +1,8 @@
+# A mark the oracle draws and this build does not.  The two DELIBERATELY disagree:
+# the oracle renders the petals and passes, and a renderer that is short a mark
+# has to say so rather than answer "fine".
+size 40x30
+Background transparent
+name p
+Petals (0.5,0.5) n=6 r=0.1 len=0.2 w=0.1 rgb=200,120,10
+check p.cx ~ 0.5

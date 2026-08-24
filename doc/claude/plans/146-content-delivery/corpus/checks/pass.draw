@@ -1,0 +1,12 @@
+# The same scene with the failing row removed: the gate's proof that a non-zero
+# exit is a verdict and not a constant.
+size 40x30
+Background transparent
+name a
+Poly (0.10,0.10) (0.30,0.10) (0.30,0.30) (0.10,0.30) rgb=200,10,10
+name b
+Poly (0.50,0.50) (0.90,0.50) (0.90,0.70) (0.50,0.70) rgb=10,200,10
+landmark mid = 0.5
+check a.cx ~ 0.2
+check a.left < b.left
+check b.bottom >= mid

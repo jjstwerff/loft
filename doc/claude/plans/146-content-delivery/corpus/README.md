@@ -16,6 +16,12 @@ census); `W2` renders it in loft and diffs ([../W2.md](../W2.md)).
 
 ./w2.sh            # render the W2 subset through LOFT and diff it against golden/
 ./w2.sh --control  # …with a one-pixel error injected; the diff must see it
+
+./w5.sh            # measure every scene's CHECKS in loft and diff the report + exit code
+./w5.sh --control  # …with the default tolerance widened; the diff must see it
+
+./w6.sh            # build one atlas page from a scene both with and without a PNG
+./w6.sh --control  # …with one texel moved; the diff must see it
 ```
 
 `w0.sh` is the oracle's gate — it says `golden/` is still what `draw.py` renders.
@@ -31,6 +37,16 @@ default: the same run takes minutes on the interpreter and 30 seconds compiled).
 edits belong there. It is here so the gate has an oracle that cannot move under it, and so
 arc W can be diffed against the renderer it replaces. Refresh it by copying again — never
 by editing in place.
+
+`w5.sh` is W5's, and it is the only gate here with a corpus of its own:
+`checks/` holds six scenes written for it, because exactly one scene in `scenes/` carries
+`check` lines at all and a grammar cannot be measured by the one form that happens to be
+in use.  It compares the loft package's report against the oracle's `stats.txt` blocks
+byte for byte, and its exit status against `draw.py --once`'s.
+
+`w6.sh` is W6's: it builds one atlas page out of the same scenes twice — once through a
+PNG on disk, once straight from the rendered canvas — and compares the cells that come
+back out of a written pack.
 
 `scenes/` is likewise a copy: 36 sprites from `crawler/assets/sprites/src/` and loft's own
 `sketch/scene.draw` as `old_woman.draw`.
