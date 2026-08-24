@@ -4305,6 +4305,7 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
 /// layout work; until then the signature says so and names the element type.  A struct
 /// takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
+/// The admitted-element set for a `&(…)`; the heap half is refused under @FR-D-bind-11.
 pub fn ref_tuple_element_ok(tp: &Type) -> bool {
     is_scalar(tp.base())
 }

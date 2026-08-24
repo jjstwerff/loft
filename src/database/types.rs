@@ -2381,6 +2381,7 @@ impl Stores {
     ///
     /// [STABILITY_REDFLAGS]: ../../../doc/claude/STABILITY_REDFLAGS.md
     #[must_use]
+    /// Enforces @FR-L-Null for the narrow widths — the read twin of `write_narrow_value`.
     pub fn narrow_is_null(
         &self,
         store: &crate::store::Store,

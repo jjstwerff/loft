@@ -1295,6 +1295,8 @@ impl Stores {
     /// an absent `u8?` read back `0` and an absent `boolean?` read back `false`.
     ///
     /// [`formal/layout.md`]: ../../../doc/claude/formal/layout.md
+    /// Enforces @FR-L-Null: a nullable field has the SAME bytes as its not-null form, so
+    /// "what does an absent field hold?" is the DECLARATION's question, not the type's.
     pub fn write_absent_value(&mut self, tp: u16, rec_tp: u16, field: u16, slot: &DbRef) {
         if let Some(f) = self.declared_field(rec_tp, field)
             && self.write_declared_default(&f, rec_tp, field, slot)
@@ -1315,6 +1317,7 @@ impl Stores {
     /// makes the encoding part of the slot's layout, so it lives at one address: a second
     /// writer re-deriving it is how the `JsonValue` walker came to drop every narrow field
     /// it was handed, present values included.
+    /// Enforces @FR-L-Null for the narrow widths — the write twin of `narrow_is_null`.
     pub fn write_narrow_value(&mut self, tp: u16, n: i64, slot: &DbRef) -> bool {
         enum Enc {
             Byte(i32),

@@ -25,45 +25,47 @@ rules that must stay free to diverge. The verdict column is the judgement the sc
 > same set of types — they are not the same question, and the merge below only holds because
 > both derive from ONE deeper fact (the layout), which is what the shared home names.
 
-## Prerequisite — rule TAGS, and what the measurement actually said
+## Rule tags — `@FR-<Rule>`, and what the count cost to get right
 
-The checklist below, and any generated rule→site index, rests on being able to grep a rule and
-get exactly its sites. Measured 2026-08-24:
+The checklist below rests on being able to ask *which sites enforce this rule?* and get an exact
+answer. `scripts/rule_tags.py` is that tool — `list` · `check` · `sites <tag>` · `dups` — and
+`check` is a gate: every citation resolves, no rule is defined twice.
 
 | | |
 |---|---|
-| rules with a definition line in `formal/` | **356** |
-| rule-like names appearing anywhere | 361 |
-| **prefix collisions among DEFINED rules** | **23** |
-| family prefixes used in prose that are NOT rules | 5 — `B-Ref`, `D-op`, `D-own`, `D-cap`, `D-op-null` |
-| rules mentioned anywhere in `src/` | **83 of 361**, across 185 file-hits (a mention, not yet a citation) |
+| defined rules (fenced `(Name)` blocks + deviation entries) | **285** |
+| prefix pairs (`@FR-B-View` ⊂ `@FR-B-View-Base`) | **21** |
+| family prefixes used in prose, NOT rules | `B-Ref`, `D-op`, `D-own`, `D-cap`, `D-op-null` |
+| cited from code today | 5 rules, 7 sites |
 
-The real collisions are between a rule and its own sub-rules: `@B-View` / `@B-View-Base`,
-`@T-Ref` / `@T-Ref-El`, `@P-Cap` / `@P-Cap-Fresh`, `@F-Target` / `@F-Target-Pos`. A plain
-`grep B-View` sweeps in its sub-rules, and `\b` does not help — `-` is already a word boundary.
+**Two things the check found before a single citation was written, and neither was reachable by
+reading:**
 
-⚠⚠ **Two corrections to earlier numbers in this file, both measurement artifacts of mine, and
-the second is the more embarrassing one.**
+- **`L-Ref` was two different rules.** `closures.md` defined it as *a bare function name is a
+  fn-ref value*, `layout.md` as *a stored reference / collection field* — both docs use `L-` as
+  their prefix, one for Lambda and one for Layout. Renamed to `L-FnRef` in `closures.md` (the
+  side with one reference, and the more accurate name).
+- **`D-bind-11`'s entry had been silently DELETED.** Its register line still read `OPEN: 1
+  (D-bind-11)` while the entry itself was gone — removed on 2026-08-23 by an edit whose slice
+  anchor sat inside its body while rewriting D-bind-12. The doc still read plausibly; nothing
+  else would have caught it. It surfaced as an unresolvable `@FR-D-bind-11` citation, and the
+  entry is restored.
 
-1. The first pass reported **0** prefix collisions. The rule-name regex could not span a second
-   hyphen, so it split `B-Ref-Alias` into `B-Ref` + `Ref-Alias` and never saw a multi-hyphen
-   name. A zero from an instrument that cannot represent the thing it is counting is not a
-   measurement.
-2. The corrected pass then reported **33**, headlined by *"`grep B-Ref` returns ten other
-   rules"*. `B-Ref` **is not a rule** — it is a family prefix that only ever appears in prose,
-   with no definition line. Counting mentions instead of definitions inflated 23 to 33 and put
-   a non-rule at the top of the evidence. Separating DEFINED from MENTIONED is what fixed it,
-   and it is the same lesson as the rest of this file: the instrument has to know what it is
-   counting.
+⚠ **The count moved five times, and every move was the instrument learning what it was
+counting** — 361 → 356 → 251 → 268 → 285, and collisions 0 → 33 → 23 → 2 → 1 → 0. Each step was
+a false positive with a diagnosis, not a guess: a regex that could not span a second hyphen
+reported 0 collisions; markdown section headers (`## Rules`, `## Notation`) counted as rule
+definitions; a parenthesised MENTION in prose counted as a definition; deviations turned out to
+have TWO spellings in use (`### D-own-7 —` and `> **D-bind-11 —`) so only half were registered;
+and a blockquote cross-reference (`> **D-bind-10**:`) read as a second definition. **A number
+from an instrument that cannot yet represent what it counts is not a measurement** — the same
+lesson this file keeps producing, here applied to the file itself.
 
-**The convention** is written up in [README.md § Rule tags](README.md) and
-[CLAUDE.md § Tracker tags](../../CLAUDE.md): `@`-tag every rule, cite the tag at each
-enforcing site, match with an explicit boundary (`@Name` not followed by `[-A-Za-z0-9]`) rather
-than renaming the 23, and treat only a DEFINED rule as a citation target.
-
-Until the citations exist, the site counts in the checklist below are **lower bounds you cannot
-size**, and `scripts/rule_predicate_audit.py`'s shape-matching is the only working instrument —
-which is precisely the weaker anchor the convention replaces.
+The convention is written up in [README.md § Rule tags](README.md) and
+[CLAUDE.md § Tracker tags](../../CLAUDE.md). Until citations are widespread the site counts in
+the checklist below are lower bounds, and `scripts/rule_predicate_audit.py`'s shape-matching is
+the complementary instrument — it finds duplicates that share code, `rule_tags.py dups` finds
+those that share a RULE.
 
 ## Already merged — do not redo
 

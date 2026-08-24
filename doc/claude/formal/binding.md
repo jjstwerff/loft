@@ -389,6 +389,21 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > that always worked (`p.1 = p.0`, a fresh literal) pass there, which is what made this read
 > as *"writes to `p.1` are fine"*.
 
+> **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
+> B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
+> binding — scalar OR heap — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
+> exactly like a `τ` one. A reference TUPLE obeys neither once an element is not a scalar:
+>
+> ```loft
+> fn sw(p: &(text, text)) { t = p.0; p.0 = p.1; p.1 = t; }   // refused at the signature
+> fn sw(p: &(integer, integer)) { … }                        // fine, both backends
+> ```
+>
+> Since 2026-08-24 the admitted set also contains a VALUE ENUM, which has a `boolean`'s exact
+> 1-byte layout and was excluded only because two spellings of "is this a scalar" had drifted
+> (`data::is_scalar` is now the one home). The refusal for a heap element stands and names the
+> element type.
+>
 > ⚠ **Re-measured 2026-08-23, and the SECOND of the two named options is already running.**
 > This entry says closing it needs *"either an op family that writes the STACK form through a
 > DbRef, or backing a `&(…)` carrying heap elements with a real record"* — and the

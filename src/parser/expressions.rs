@@ -1411,6 +1411,8 @@ use a separate collection or add after the loop"
     /// `parse_assign_op`'s copy branch — rule rationale on the `VecBind`
     /// variants; the branch applies mechanics only.  Fires on BOTH passes
     /// (`change_var` re-types per pass; emission is pass-2).
+    /// Decides @FR-B-Copy vs @FR-B-View / @FR-B-View-Base for a whole-value vector bind:
+    /// off an OWNED base a collection projection copies, off a BORROWED one it views.
     fn classify_vec_bind(
         &self,
         code: &Value,
