@@ -111,7 +111,8 @@ PR**.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
-13 of 285 rules cited, across 24 sites (`python3 scripts/rule_tags.py check`).  Each row is one
+13 of 285 rules cited, across 24 sites at the time of writing (`python3 scripts/rule_tags.py
+check`; see the note under B4c — the DENOMINATOR has since changed).  Each row is one
 family from the checklist; the work is *read each site, decide which rule it enforces, cite it* —
 and the reading is the point: **four of the eight families split rather than merged**, and each
 split is a merge that would have coupled two rules that must stay free to differ.
@@ -290,11 +291,18 @@ it is easy to skip precisely when writing the citation feels like documentation 
 analysis. Two claims about `**` right-associativity and `as` were checked the same way and
 held (`operators.rs:3513` states it outright).
 
-**Open:** the wider surface is still not swept, by design. **39 of 285 rules cited.** The
-remaining families are the big ones — `types.md` (56), `binding.md` (30), `matching.md`
-(22), `heap.md` (21), `collections.md` (21), `operational.md` (20) — where a rule usually
-has many enforcement sites rather than one, so the work per rule is larger and the payoff
-(a `sites <tag>` query that returns everything enforcing it) is bigger.
+**Open:** the wider surface is still not swept, by design. The remaining families are the
+big ones — `types.md`, `binding.md`, `matching.md`, `heap.md`, `collections.md`,
+`operational.md` — where a rule usually has many enforcement sites rather than one, so the
+work per rule is larger and the payoff (a `sites <tag>` query that returns everything
+enforcing it) is bigger.
+
+⚠ **The counts in B4a–B4c are DELTAS, and their denominator moved.** Those sections were
+written against a `rule_tags.py` that reported **285** defined rules; `main` has since
+extended the script (deviation tracking) and it now reports **251**, with the citations
+from this thread merged in at **45 cited · 74 sites · 35 deviations (2 open)**. The
+13 → 21 → 39 progression is still the record of what this thread cited; the ratio to a
+fixed total is not, so re-run the tool rather than reading a number off this page.
 
 #### C — process / skills
 
