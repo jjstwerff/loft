@@ -321,9 +321,15 @@ fn probe_child_kill_reaches_the_grandchild() {
     }
 }
 
-/// Probe 4b — the FIX shape.  `taskkill /T` walks the process tree, so it should reach
-/// the grandchild while the child is still alive to be walked from.  Ordering is the
-/// whole finding: run it AFTER `child.kill()` and there is no tree left to walk.
+/// Probe 4b — the sequence `Repl::stop_game` runs on Windows, in its exact order:
+/// `taskkill /T /F` on the child, then `child.kill()`, then `child.wait()`.  Asserting
+/// the port is released after the first step is what guards the fix, and the ordering is
+/// the whole finding: `taskkill /T` walks the tree by parent link, so the child must
+/// still be ALIVE to be walked from.  Run it after the kill and there is nothing left to
+/// walk — which is why 4a, the same experiment without this step, still reports an orphan.
+///
+/// 4a stays as the PLATFORM fact (a bare `child.kill()` orphans the grandchild); this
+/// cell is the one that goes red if the cure stops working.
 #[test]
 fn probe_taskkill_tree_reaches_the_grandchild() {
     let port = 18204u16;
