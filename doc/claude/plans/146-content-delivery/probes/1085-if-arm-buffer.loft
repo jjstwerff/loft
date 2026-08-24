@@ -1,0 +1,16 @@
+struct Pt { x: float, y: float }
+
+fn pt(px: float, py: float) -> Pt { Pt { x: px, y: py } }
+
+/// A call whose own tail is a constructor call — the "smooth" arm's shape.
+fn other(v: float) -> Pt { pt(v, v) }
+
+fn main() {
+  out: vector<Pt> = [];
+  for i in 0..4 {
+    a = if i % 2 == 1 { other(1.0) } else { pt(1.0, 1.0) };
+    b = if i % 2 == 1 { other(2.0) } else { pt(2.0, 2.0) };
+    out += [pt(a.x + b.x, 0.0)];
+    println("i={i}  a.x={a.x} (want 1)  b.x={b.x} (want 2)");
+  }
+}

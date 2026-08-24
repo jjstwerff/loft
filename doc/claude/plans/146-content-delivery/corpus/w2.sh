@@ -13,7 +13,14 @@
 #
 #   W2 shipped the marks and solid fills   -> 28 of 37 scenes
 #   W3 shipped `grad=` / `radial=`         -> 29 (player joins)
-#   W4 will ship `Fronds` / `Petals`       -> 37, and UNBUILT goes empty
+#   W4 shipped `Fronds`                    -> 37.  `Petals` stays in UNBUILT
+#                                             because no scene uses it (W0).
+#
+# A `use`d library resolves to its compiled `native-auto/` cdylib EVEN UNDER
+# `--interpret` — the flag picks the backend for the PROGRAM, not for the
+# libraries it loads.  So `W2_BACKEND=--interpret` alone ran compiled `drawing`
+# and reported a second green for the same binary.  `LOFT_NO_NATIVE_LIBS=1` is
+# what separates the two lanes, and this gate sets it with the backend.
 #
 # `golden/` is the oracle's own output, gated by `w0.sh`; the comparison is on
 # DECODED PIXELS rather than file bytes, because two PNG encoders agreeing byte
@@ -28,7 +35,7 @@ DRAWING=${W2_DRAWING:-$WORKSPACE/loft-libs-graphics/drawing/src}
 # that needs an unpublished `graphics` (W3 needed `resize_bicubic`).  Point it at
 # an empty directory to force the registry copy instead.
 GRAPHICS=${W2_GRAPHICS:-$WORKSPACE/loft-libs-graphics/graphics/src}
-UNBUILT=${W2_UNBUILT:-'^[[:space:]]*(Fronds|Petals)'}
+UNBUILT=${W2_UNBUILT:-'^[[:space:]]*Petals'}
 LOFT=${LOFT:-$HERE/../../../../../target/release/loft}
 BACKEND=${W2_BACKEND:---native}
 
@@ -70,6 +77,11 @@ if [ "$control" = 1 ]; then
   sed -i 's|round_down(pg_xx\[pg_p\]? as float), ink);|round_down(pg_xx[pg_p]? as float) - 1, ink);|' \
     "$src/raster.loft"
   echo "control: every filled span is one pixel short"
+fi
+
+# The interpret lane must actually interpret the LIBRARY too (see the header).
+if [ "$BACKEND" = "--interpret" ]; then
+  export LOFT_NO_NATIVE_LIBS=1
 fi
 
 libargs=(--lib "$src")
