@@ -994,6 +994,26 @@ Proven able to refuse, on the live index: an unasked-for version, a
 rewritten description, a deleted package and a wrong version number
 each turn the run red, and the named version alone signs.
 
+`--yes` additionally **refuses when stdin is not a terminal**.  It means
+"a human decided and is not here to type it", and the second half is
+only true at a terminal — with no TTY the flag asserts a human who
+cannot be present, which is exactly the shape a script has.  That is
+also what lets the signer be allow-listed in a permission config
+without the allow-list widening anything: a permission rule cannot tell
+`--expect drawing@0.1.0` from `--yes`, and the script can.
+
+**For a batch, `registry_maintain.sh --only <pkg>[,<pkg>]`** does the
+whole publish — package, tag, release, index entry — for exactly the
+named libraries, and hands the signer an `--expect` for each one it
+actually published.  The filter is applied before the pre-flight (which
+runs each worklist lib's suite, so filtering afterwards would spend
+minutes on libraries nobody asked for), foreign PRs and staged
+submissions are reported but **not acted on** — merging one would put a
+version in the index the signer then refuses, *after* the merge landed
+on the remote — and a name with nothing to publish is an error rather
+than a quiet no-op.  So four library versions cost one command and no
+prompt, with the signature bound to all four.
+
 ### Why laptop signing, not CI
 
 Two reasons the maintainer signs locally instead of in GitHub
