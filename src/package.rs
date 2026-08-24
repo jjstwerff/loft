@@ -205,9 +205,14 @@ pub struct PackageOutput {
     /// Package version (from `[package] version`).
     pub version: String,
     /// Publishing repository (from `[package] repository`), if set.  Present →
-    /// monorepo (`<name>-v<version>` release tags); absent → legacy
-    /// one-repo-per-package fallback.  See `print_summary`.
+    /// the release lives at that repo.  See [`release_url`].
     pub repository: Option<String>,
+    /// `owner/repo` read from `git remote get-url origin` in the package
+    /// directory, when there is one.  The fallback `[package] repository` does
+    /// not have to be declared for, and the SAME fact `loft publish` derives —
+    /// so the two commands cannot disagree about where a release lives
+    /// (loft#1083).
+    pub origin_repo: Option<String>,
     /// The three declared compatibility levels, when the manifest declares all
     /// of them (see [`declared_levels`]).  `None` → the package has not entered
     /// the contract, and `print_summary` refuses to emit a registry entry for it.
@@ -303,8 +308,74 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
         name,
         version,
         repository: manifest.repository,
+        origin_repo: git_remote_org_repo(pkg_dir).map(|(o, r)| format!("{o}/{r}")),
         levels,
     })
+}
+
+/// Parse `git remote get-url origin` in `pkg_path` for the GitHub `owner/repo`.
+/// Handles `https://github.com/<org>/<repo>(.git)?` and
+/// `git@github.com:<org>/<repo>(.git)?`; `None` when the remote is absent or is
+/// not a GitHub URL.
+///
+/// The ONE home for that derivation: `loft publish` reads it for the release
+/// lookup and the homepage, and [`release_url`] reads it as the fallback when
+/// `[package] repository` is undeclared.  They used to derive the release url
+/// independently and disagreed for every package in a monorepo that declares no
+/// `repository` — `loft package` guessed a `loft-<name>` repo that does not
+/// exist (loft#1083).
+#[must_use]
+pub fn git_remote_org_repo(pkg_path: &Path) -> Option<(String, String)> {
+    let out = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(pkg_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    let stripped = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))?;
+    let stripped = stripped.strip_suffix(".git").unwrap_or(stripped);
+    let (org, repo) = stripped.split_once('/')?;
+    if org.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((org.to_string(), repo.to_string()))
+}
+
+/// Where the release tarball for `out` will live — the `url` of its registry
+/// index entry.
+///
+/// The tag is always `<name>-v<version>`, which is what `loft publish` tags and
+/// what the registry's published entries carry; a bare `[package] repository`
+/// is org-relative under `loft-lang`, a value with a `/` is `owner/repo`.  When
+/// the manifest declares no `repository` the package's own `origin` remote
+/// answers, so a monorepo package needs no extra manifest line to get a correct
+/// url.
+///
+/// `None` when neither source can name a repo.  That is a REFUSAL, not a guess:
+/// the previous fallback invented `loft-lang/loft-<name>`, a repo that exists
+/// for no package in any `loft-libs-*` monorepo, and the registry's own
+/// `validate.py` only caught it by fetching the url and failing (loft#1083).
+#[must_use]
+pub fn release_url(out: &PackageOutput) -> Option<String> {
+    let tarball_name = out
+        .tarball
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let owner_repo = match out.repository.as_deref() {
+        Some(repo) if repo.contains('/') => repo.to_string(),
+        Some(repo) => format!("loft-lang/{repo}"),
+        None => out.origin_repo.clone()?,
+    };
+    Some(format!(
+        "https://github.com/{owner_repo}/releases/download/{}-v{}/{tarball_name}",
+        out.name, out.version
+    ))
 }
 
 /// Recursively add the contents of `src_dir` to `builder`, prefixing each entry with
@@ -433,32 +504,15 @@ pub fn print_summary(out: &PackageOutput, w: &mut dyn Write) -> io::Result<()> {
         "Index entry to paste into loft-lang/registry/index.json (PKG_REGISTRY.md schema):"
     )?;
     writeln!(w, "  \"{}\": {{", out.version)?;
-    let tarball_name = out
-        .tarball
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    // `[package] repository` set → the package ships from a monorepo, so the
-    // release tag is `<name>-v<version>` (disambiguates packages sharing one
-    // repo) at the named repo.  Absent → the legacy one-repo-per-package form
-    // (`loft-<name>` repo, bare `v<version>` tag).  A bare repository value is
-    // an org-relative repo under `loft-lang`; a value with `/` is `owner/repo`.
-    let url = match out.repository.as_deref() {
-        Some(repo) => {
-            let owner_repo = if repo.contains('/') {
-                repo.to_string()
-            } else {
-                format!("loft-lang/{repo}")
-            };
-            format!(
-                "https://github.com/{owner_repo}/releases/download/{}-v{}/{tarball_name}",
-                out.name, out.version
-            )
-        }
-        None => format!(
-            "https://github.com/loft-lang/loft-{}/releases/download/v{}/{tarball_name}",
-            out.name, out.version
-        ),
+    // ONE derivation, shared with `loft publish` — see `release_url`.
+    let Some(url) = release_url(out) else {
+        writeln!(
+            w,
+            "Cannot name the release url: `[package] repository` is undeclared and this\n\
+             directory has no GitHub `origin` remote.  Add `repository = \"<repo>\"` to\n\
+             [package], or run `loft publish --dry-run` from the checkout."
+        )?;
+        return Ok(());
     };
     writeln!(w, "    \"url\": \"{url}\",")?;
     writeln!(w, "    \"sha256\": \"{}\",", out.sha256)?;
@@ -608,6 +662,7 @@ mod tests {
             name: "crypto".to_string(),
             version: "0.2.1".to_string(),
             repository: Some("loft-libs-core".to_string()),
+            origin_repo: None,
             levels: Some(DeclaredLevels {
                 loft: ">=2026.7".to_string(),
                 api: "0.2.0".to_string(),
@@ -652,37 +707,51 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// The generated registry URL follows `[package] repository`: a monorepo
-    /// uses the `<name>-v<version>` tag at the named repo; absence falls back to
-    /// the legacy one-repo-per-package `loft-<name>` + `v<version>` form.
+    /// loft#1083 — `loft package` and `loft publish` must not name different
+    /// urls for the same package.  `[package] repository` answers first; with no
+    /// `repository` the `origin` remote answers, in the SAME `<name>-v<version>`
+    /// form `loft publish` tags; with neither, the url is REFUSED rather than
+    /// guessed as `loft-lang/loft-<name>` (a repo no monorepo package has).
     #[test]
-    fn index_url_monorepo_vs_legacy() {
-        let mk = |repo: Option<&str>| PackageOutput {
+    fn index_url_repository_then_origin_then_refusal() {
+        let mk = |repo: Option<&str>, origin: Option<&str>| PackageOutput {
             tarball: PathBuf::from("crypto-0.2.1.tar.gz"),
             size: 1,
             sha256: "00".to_string(),
             name: "crypto".to_string(),
             version: "0.2.1".to_string(),
             repository: repo.map(str::to_string),
+            origin_repo: origin.map(str::to_string),
             levels: None,
         };
-        let url_of = |o: &PackageOutput| {
-            let mut buf = Vec::new();
-            print_summary(o, &mut buf).unwrap();
-            String::from_utf8(buf).unwrap()
-        };
         // monorepo (bare repo → org-relative under loft-lang)
-        assert!(url_of(&mk(Some("loft-libs-core"))).contains(
-            "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
-        ));
+        assert_eq!(
+            release_url(&mk(Some("loft-libs-core"), None)).as_deref(),
+            Some("https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+        );
         // explicit owner/repo
-        assert!(url_of(&mk(Some("acme/widgets"))).contains(
-            "https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
-        ));
-        // legacy fallback (no repository)
-        assert!(url_of(&mk(None)).contains(
-            "https://github.com/loft-lang/loft-crypto/releases/download/v0.2.1/crypto-0.2.1.tar.gz"
-        ));
+        assert_eq!(
+            release_url(&mk(Some("acme/widgets"), None)).as_deref(),
+            Some("https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+        );
+        // no `repository` — the origin remote answers, and it answers the same
+        // url `loft publish` emits from the same remote.
+        assert_eq!(
+            release_url(&mk(None, Some("loft-lang/loft-libs-world"))).as_deref(),
+            Some("https://github.com/loft-lang/loft-libs-world/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+        );
+        // `repository` outranks the remote (a package released from elsewhere).
+        assert_eq!(
+            release_url(&mk(Some("acme/widgets"), Some("loft-lang/loft-libs-world"))).as_deref(),
+            Some("https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+        );
+        // neither: a refusal, and the summary says so instead of printing a url.
+        assert_eq!(release_url(&mk(None, None)), None);
+        let mut buf = Vec::new();
+        print_summary(&mk(None, None), &mut buf).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(!text.contains("\"url\""), "{text}");
+        assert!(text.contains("Cannot name the release url"), "{text}");
     }
 
     #[test]
