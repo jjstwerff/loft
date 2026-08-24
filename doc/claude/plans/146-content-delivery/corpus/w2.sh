@@ -5,10 +5,15 @@
 #   ./w2.sh --control    inject a one-pixel error first, and require the diff to see it
 #
 # The subset is COMPUTED from the scenes, not listed: a scene qualifies when it
-# uses only what W2 owes (`size`, `Background`, `name`, `Line`, `Circle`, `Poly`
-# with solid fills).  So a scene that gains a `Fronds` line leaves the gate by
-# itself, and one that loses its last gradient joins it — neither needs an edit
-# here, and the gate cannot quietly stop covering something.
+# uses nothing from UNBUILT below — the constructs arc W has not landed yet.  So
+# a scene that gains a `Fronds` line leaves the gate by itself, and one that
+# loses its last such line joins it; neither needs an edit here, and the gate
+# cannot quietly stop covering something.  Landing a phase is one edit to that
+# one pattern.
+#
+#   W2 shipped the marks and solid fills   -> 28 of 37 scenes
+#   W3 shipped `grad=` / `radial=`         -> 29 (player joins)
+#   W4 will ship `Fronds` / `Petals`       -> 37, and UNBUILT goes empty
 #
 # `golden/` is the oracle's own output, gated by `w0.sh`; the comparison is on
 # DECODED PIXELS rather than file bytes, because two PNG encoders agreeing byte
@@ -18,6 +23,12 @@ cd "$(dirname "$0")"
 HERE=$(pwd)
 WORKSPACE=$(cd "$HERE/../../../../../.." && pwd)
 DRAWING=${W2_DRAWING:-$WORKSPACE/loft-libs-graphics/drawing/src}
+# A second --lib so the gate can run against a WORKING graphics checkout rather
+# than the installed release — which is the only way to test a `drawing` change
+# that needs an unpublished `graphics` (W3 needed `resize_bicubic`).  Point it at
+# an empty directory to force the registry copy instead.
+GRAPHICS=${W2_GRAPHICS:-$WORKSPACE/loft-libs-graphics/graphics/src}
+UNBUILT=${W2_UNBUILT:-'^[[:space:]]*(Fronds|Petals)'}
 LOFT=${LOFT:-$HERE/../../../../../target/release/loft}
 BACKEND=${W2_BACKEND:---native}
 
@@ -38,7 +49,7 @@ list=""
 skipped=""
 for scene in scenes/*.draw; do
   name=$(basename "$scene" .draw)
-  if grep -qiE '^[[:space:]]*(Fronds|Petals)|grad=|radial=|fill=' "$scene"; then
+  if grep -qiE "$UNBUILT" "$scene"; then
     skipped="$skipped $name"
   else
     list="$list $name"
@@ -61,8 +72,10 @@ if [ "$control" = 1 ]; then
   echo "control: every filled span is one pixel short"
 fi
 
+libargs=(--lib "$src")
+[ -d "$GRAPHICS" ] && libargs+=(--lib "$GRAPHICS")
 W2_SCENES="$HERE/scenes" W2_OUT="$out" W2_LIST="$list" \
-  "$LOFT" $BACKEND --lib "$src" "$HERE/w2.loft" 2>"$out/stderr" | tee "$out/render.log"
+  "$LOFT" $BACKEND "${libargs[@]}" "$HERE/w2.loft" 2>"$out/stderr" | tee "$out/render.log"
 if grep -q "^RED" "$out/render.log"; then
   echo "RED  the parser did not accept every line of the subset"
   exit 1
@@ -95,7 +108,7 @@ for n in names:
         if worst is None or d > worst[1]:
             worst = (n, d)
 if skipped.split():
-    print(f"outside the W2 grammar, not rendered: {' '.join(sorted(skipped.split()))}")
+    print(f"outside the grammar this build covers, not rendered: {' '.join(sorted(skipped.split()))}")
 if control:
     if bad:
         print(f"control fired: {bad} of {len(names)} scene(s) went red, as they must")
