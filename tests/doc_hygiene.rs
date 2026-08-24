@@ -1510,3 +1510,42 @@ fn no_source_file_is_invisible_to_grep() {
         bad.join("\n  ")
     );
 }
+
+/// Every `@FR-<Rule>` citation resolves to a rule `doc/claude/formal/` actually defines, and
+/// no rule is defined twice.
+///
+/// The citations are what make "which sites enforce this rule?" a lookup instead of an
+/// archaeology (CLAUDE.md § Tracker tags; `formal/README.md` § Rule tags).  That only holds
+/// while they resolve, and a citation rots silently: the rule gets renamed, or its entry is
+/// edited away, and the comment still reads correctly.  Both failure modes were REAL before
+/// this gate existed — `L-Ref` was two different rules in two docs, and `D-bind-11`'s entry
+/// had been deleted by an edit whose slice anchor sat inside it while its register line still
+/// said `OPEN: 1`.  Nothing else noticed either; a failed citation is what surfaced them.
+///
+/// `scripts/rule_tags.py check` is the same command a person runs by hand, so the gate and
+/// the tool cannot drift.  Skipped (not failed) where `python3` is unavailable — this is a
+/// consistency check, not a capability the build depends on.
+#[test]
+fn every_rule_citation_resolves() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/rule_tags.py"))
+        .arg("check")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("SKIP every_rule_citation_resolves: python3 unavailable ({e})");
+            return;
+        }
+    };
+    assert!(
+        out.status.success(),
+        "rule-tag citations are inconsistent:\n{}{}\n\
+         Run `python3 scripts/rule_tags.py check` to reproduce; \
+         `list` shows every defined rule and `sites <tag>` the citations of one.",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

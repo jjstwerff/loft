@@ -108,9 +108,9 @@ two of the three families done so far split rather than merged.
 
 | item | state |
 |---|---|
-| a duplication trigger line in `engineering-rigor` + `loft-codegen` pointing at `design-protocol` | ☐ **not done** — both already route there for *load-bearing design*, which is the recognition that fails on a one-line edit |
+| a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
-| `rule_tags.py` in a gate (`make ci`) rather than run by hand | ☐ it already exits non-zero; wiring it costs one line and stops citation rot |
+| `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
 
 #### D — carried, unchanged by this thread
 
