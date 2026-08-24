@@ -1657,6 +1657,19 @@ ci-miri:  ## @PLAN53: run the loft interpreter under Miri (hard-UB gate). SLOW (
 		cargo +nightly miri test --test issues -- --exact \
 		p213_struct_field_basic_int
 
+.PHONY: ir-schema-check ir-schema-regen
+ir-schema-check:  ## Is src/ir_schema_gen.rs still what tools/ir_schema/ir.loft generates?
+	@# The generated file IS the store layout (record sizes, field offsets, the Node
+	@# discriminants data_store.rs bakes into DISC_*).  It drifted once already — Key
+	@# gained a `start` field, the generated file was updated, ir.loft was not — and a
+	@# wrong layout is a wrong byte offset, not a build error.  Gated by
+	@# `doc_hygiene::ir_schema_gen_matches_its_loft_source`, which runs this same script.
+	@scripts/ir_schema_check.sh
+
+ir-schema-regen:  ## Rewrite src/ir_schema_gen.rs from tools/ir_schema/ir.loft
+	@scripts/ir_schema_check.sh --fix
+	@echo "now run: cargo test --lib baked_layout_mirrors_loft_schema"
+
 .PHONY: check-rlib
 check-rlib:  ## One-second pre-flight: is target/release/libloft.rlib present and current?
 	@# The native path (`build_shared_cdylib`) links `libloft.rlib`, and NOTHING in an

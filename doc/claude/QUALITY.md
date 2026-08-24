@@ -166,12 +166,19 @@ Fixed by adding `start` to `ir.loft` (the source), then regenerating; a name-key
 the regenerated schema against the committed one now differs by exactly the three removed types
 and nothing else.
 
-⚠ **The gap this exposes is not fixed: nothing gates that `ir_schema_gen.rs` is a faithful
-regeneration of `ir.loft`.** The `@F` catalogue has `features-check` for precisely this shape of
-generated shadow, and the IR schema has no equivalent — so the only thing standing between a hand
-edit and a silently wrong store layout is whether someone happens to regenerate. A check is
-awkward because regeneration needs a built `loft`, which is circular in CI; the honest options are
-a nightly job or a `make` target that the release checklist names. **Open.**
+✅ **The gap this exposed is now CLOSED (2026-08-24).** `scripts/ir_schema_check.sh` runs the
+pipeline for real and byte-compares the result against the committed file — ~0.1 s — gated by
+`doc_hygiene::ir_schema_gen_matches_its_loft_source`, which shells out to the same script so the
+gate and the tool cannot drift apart.  `make ir-schema-check` reports; `make ir-schema-regen`
+rewrites the generated file.
+
+The circularity turned out not to bite.  The check needs a built `loft`, but whatever state the
+generated file is in, the binary compiled from it still parses `ir.loft` the same way — so a
+hand-edit shows up as a diff, and an un-regenerated source edit shows up as one too.  **Both
+directions were probed deliberately** (delete a `db.field` line from the generated file; add a
+field to `ir.loft` without regenerating) and both fail with the offending line named.  Where
+there is no binary or no `python3` it SKIPS with a line saying so, and the test surfaces that
+line — a check that quietly did not run must not read as one that passed.
 
 #### B4 — DONE: in-code docs state the CONTRACT, not the INCIDENT (2026-08-24)
 

@@ -1549,3 +1549,46 @@ fn every_rule_citation_resolves() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// `src/ir_schema_gen.rs` must be what `tools/ir_schema/ir.loft` generates.
+///
+/// The generated file IS the store layout — record sizes, field byte offsets, the `Node`
+/// discriminants that `data_store.rs` mirrors in its baked `DISC_*` constants — and it
+/// carries a `DO NOT EDIT — regenerate` header that nothing enforced. It drifted: `Key`
+/// gained a `start` field in loft#812, the generated file was updated to match, `ir.loft`
+/// — the source — was not, and the next regeneration silently dropped the field and took
+/// `KEY_STRIDE` from 24 to 16. A wrong layout is not a build error; it is a wrong byte
+/// offset, found later and elsewhere.
+///
+/// Shells out to the same script a person runs, so the gate and the tool cannot drift.
+/// The script SKIPS (exit 0, with a line saying so) when there is no built `loft` to
+/// regenerate with, or no `python3`; that line is surfaced here, because a check that
+/// quietly did not run must not read as a check that passed.
+#[test]
+fn ir_schema_gen_matches_its_loft_source() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new(root.join("scripts/ir_schema_check.sh"))
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("SKIP ir_schema_gen_matches_its_loft_source: cannot run the script ({e})");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stdout.starts_with("SKIP ") {
+        eprintln!(
+            "SKIP ir_schema_gen_matches_its_loft_source: {}",
+            stdout.trim()
+        );
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "the generated IR schema does not match its source:\n{}{}",
+        stdout,
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
