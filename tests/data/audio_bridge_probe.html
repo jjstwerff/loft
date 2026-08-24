@@ -14,6 +14,18 @@
 // through an OfflineAudioContext and measure SAMPLES.  A fix that returns a
 // plausible handle and plays nothing still fails.
 const ctrl = { ac: null, assets: {} };
+// `audio_load` is synchronous and `decodeAudioData` is not, so every check here
+// has to wait for the samples.  POLLING rather than sleeping a fixed 400 ms: the
+// page runs a dozen renders now, and a gate that costs its own wait time twelve
+// times over is one nobody keeps.  A zero-volume play is the readiness question —
+// it answers -1 until the buffer lands, and contributes nothing to a render.
+async function ready(g, clip) {
+  for (let i = 0; i < 60; i++) {
+    if (g.loft_audio_play(clip, 0, false, 0, 0) >= 0) return true;
+    await new Promise(r => setTimeout(r, 20));
+  }
+  return false;
+}
 const fail = [];
 function ck(name, cond, extra) {
   if (!cond) fail.push(name + (extra === undefined ? '' : ' (' + extra + ')'));
@@ -39,7 +51,7 @@ async function peakFor(volume) {
   // audio_load is SYNCHRONOUS and decodeAudioData is not: the handle comes back
   // now and the samples land later, so a play before the decode is expected to
   // drop.  Wait for it rather than asserting the race away.
-  await new Promise(r => setTimeout(r, 400));   // let decodeAudioData land
+  await ready(g, clip);
   const sink = g.loft_audio_play(clip, volume);
   const buf = await off.startRendering();
   const d = buf.getChannelData(0);
@@ -73,7 +85,7 @@ async function peakFor(volume) {
                                 document.getElementById('out'), () => mem, ctrl).loft_gl;
     const [mp, ml] = put('/tests/data/definitely_not_here.wav');
     const missing = gM.loft_audio_load(mp, ml);
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 400));   // a fixed wait: this one never lands
     const mSink = gM.loft_audio_play(missing, 1.0);
     const mBuf = await offM.startRendering();
     const mD = mBuf.getChannelData(0);
@@ -89,13 +101,118 @@ async function peakFor(volume) {
                                document.getElementById('out'), () => mem, ctrl).loft_gl;
     const [pp2, pl2] = put('/tests/data/tone440.wav');
     const c2 = g.loft_audio_load(pp2, pl2);
-    await new Promise(r => setTimeout(r, 400));
+    await ready(g, c2);
     const s1 = g.loft_audio_play(c2, 1.0);
     g.loft_audio_stop(s1);
     const s2 = g.loft_audio_play(c2, 1.0);
     ck('a second play is a second sink', s2 >= 0 && s2 !== s1, s1 + '/' + s2);
     g.loft_audio_set_volume(s2, 0.5);   // must not throw
     g.loft_audio_stop(s2);
+
+    // ── E2 — loop, pan, seek, stop-all ──────────────────────────────────
+    //
+    // Each is measured the way E1's checks are: RENDERED SAMPLES, and each with
+    // the control that fails if the flag is ignored.  A bridge that accepts a
+    // `looping` argument and drops it passes every arity check ever written.
+
+    // Where in a rendered buffer the sound is — the only question these ask.
+    function peakOf(d, from, to) {
+      let p = 0;
+      for (let i = Math.max(0, from | 0); i < Math.min(d.length, to | 0); i++) {
+        const a = Math.abs(d[i]);
+        if (a > p) p = a;
+      }
+      return p;
+    }
+    // One offline render, one clip, and whatever the caller does with the sink.
+    // 22050 frames = one second, and the clips are a tenth of that, so "the tail"
+    // is a real question rather than a rounding one.
+    async function render(channels, file, act) {
+      const off = new OfflineAudioContext(channels, 22050, 22050);
+      window._loftAudioCtx = off;
+      const g = buildLoftImports(document.getElementById('gl'),
+                                 document.getElementById('out'), () => mem, ctrl).loft_gl;
+      const [p, l] = put(file);
+      const clip = g.loft_audio_load(p, l);
+      await ready(g, clip);
+      const sink = act(g, clip);
+      const buf = await off.startRendering();
+      const chans = [];
+      for (let c = 0; c < channels; c++) chans.push(buf.getChannelData(c));
+      return { g: g, sink: sink, chans: chans };
+    }
+    const TONE = '/tests/data/tone440.wav';       // 0.12 s, all sound
+    const HALF = '/tests/data/half_tone.wav';     // 0.15 s silence, then 0.15 s tone
+
+    // 5 — LOOP.  A 0.12 s clip has nothing in the last half-second of a one-second
+    //     render unless it repeats.
+    const looped = await render(1, TONE, (g, c) => g.loft_audio_play(c, 1.0, true, 0, 0));
+    ck('a looping clip fills the tail', peakOf(looped.chans[0], 11025, 22050) > 0.1,
+       peakOf(looped.chans[0], 11025, 22050).toFixed(4));
+    const once = await render(1, TONE, (g, c) => g.loft_audio_play(c, 1.0, false, 0, 0));
+    ck('and one that does not loop stops', peakOf(once.chans[0], 11025, 22050) === 0,
+       peakOf(once.chans[0], 11025, 22050).toFixed(4));
+
+    // 6 — PAN, at play time and while playing.  Rendered in STEREO, because the
+    //     whole claim is about which side the sound comes out of.
+    const left = await render(2, TONE, (g, c) => g.loft_audio_play(c, 1.0, false, -1, 0));
+    ck('pan -1 is on the left', peakOf(left.chans[0], 0, 22050) > 0.1,
+       peakOf(left.chans[0], 0, 22050).toFixed(4));
+    ck('pan -1 is silent on the right', peakOf(left.chans[1], 0, 22050) < 0.001,
+       peakOf(left.chans[1], 0, 22050).toFixed(4));
+    const right = await render(2, TONE, (g, c) => g.loft_audio_play(c, 1.0, false, 1, 0));
+    ck('pan 1 is on the right', peakOf(right.chans[1], 0, 22050) > 0.1,
+       peakOf(right.chans[1], 0, 22050).toFixed(4));
+    ck('pan 1 is silent on the left', peakOf(right.chans[0], 0, 22050) < 0.001,
+       peakOf(right.chans[0], 0, 22050).toFixed(4));
+    const centred = await render(2, TONE, (g, c) => g.loft_audio_play(c, 1.0, false, 0, 0));
+    const cl = peakOf(centred.chans[0], 0, 22050), cr = peakOf(centred.chans[1], 0, 22050);
+    ck('centre is both sides', cl > 0.1 && Math.abs(cl - cr) < 0.001, cl.toFixed(4) + '/' + cr.toFixed(4));
+    const moved = await render(2, TONE, (g, c) => {
+      const s = g.loft_audio_play(c, 1.0, false, 0, 0);
+      g.loft_audio_set_pan(s, -1);        // …after it started
+      return s;
+    });
+    ck('set_pan moves a sound already playing', peakOf(moved.chans[1], 0, 22050) < 0.001,
+       peakOf(moved.chans[1], 0, 22050).toFixed(4));
+
+    // 7 — START OFFSET.  The clip is silent for its first 0.15 s, so starting
+    //     0.16 s in is audible IMMEDIATELY and starting at 0 is not.
+    const late = await render(1, HALF, (g, c) => g.loft_audio_play(c, 1.0, false, 0, 0.16));
+    ck('a late start is heard at once', peakOf(late.chans[0], 0, 441) > 0.1,
+       peakOf(late.chans[0], 0, 441).toFixed(4));
+    const early = await render(1, HALF, (g, c) => g.loft_audio_play(c, 1.0, false, 0, 0));
+    ck('and starting at zero is not', peakOf(early.chans[0], 0, 441) === 0,
+       peakOf(early.chans[0], 0, 441).toFixed(4));
+
+    // 8 — SEEK.  Same clip, same question, but moved AFTER the sound started —
+    //     which in a browser means the source is rebuilt behind the same handle.
+    let seekAnswer = -1;
+    const sought = await render(1, HALF, (g, c) => {
+      const s = g.loft_audio_play(c, 1.0, false, 0, 0);
+      seekAnswer = g.loft_audio_seek(s, 0.16);
+      return s;
+    });
+    ck('seek answers that it moved', seekAnswer === 1, seekAnswer);
+    ck('and the sound is there at once', peakOf(sought.chans[0], 0, 441) > 0.1,
+       peakOf(sought.chans[0], 0, 441).toFixed(4));
+
+    // 9 — STOP-ALL.  Two sounds, one call, and nothing left in the render.
+    const stopped = await render(1, TONE, (g, c) => {
+      g.loft_audio_play(c, 1.0, true, 0, 0);
+      g.loft_audio_play(c, 1.0, true, 0, 0);
+      g.loft_audio_stop_all();
+      return 0;
+    });
+    ck('stop_all silences everything', peakOf(stopped.chans[0], 0, 22050) === 0,
+       peakOf(stopped.chans[0], 0, 22050).toFixed(4));
+    const running = await render(1, TONE, (g, c) => {
+      g.loft_audio_play(c, 1.0, true, 0, 0);
+      g.loft_audio_play(c, 1.0, true, 0, 0);
+      return 0;
+    });
+    ck('…and without it they play', peakOf(running.chans[0], 0, 22050) > 0.1,
+       peakOf(running.chans[0], 0, 22050).toFixed(4));
 
     const out = document.getElementById('out');
     if (fail.length) { console.error('AUDIO-BRIDGE FAIL: ' + fail.join(' | ')); out.textContent = 'FAIL ' + fail.join(' | '); }

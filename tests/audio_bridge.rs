@@ -125,9 +125,18 @@ fn audio_bridge_produces_real_samples() {
     let out = Command::new("node")
         .arg(&harness)
         .arg(&url)
-        // Decode plus two offline renders; the probe polls rather than sleeping,
-        // so this is a ceiling and not a delay it spends.
+        // Decode plus fifteen offline renders; the probe polls for each decode
+        // rather than sleeping, so this is a ceiling and not a delay it spends.
         .args(["--wait-ms", "6000"])
+        // ⚠ WITHOUT THIS the gate is vacuous.  The harness fails on a
+        // `console.error`, so a page that never REACHES its checks — one that
+        // threw somewhere the catch does not cover, or simply ran past the wait —
+        // passes by saying nothing.  Measured: dropping the `looping` flag in the
+        // bridge left this test green until the assertion below was added.
+        .args([
+            "--assert",
+            "document.getElementById('out').textContent === 'audio bridge ok'",
+        ])
         .args(["--port", &port.wrapping_add(1).to_string()])
         .output()
         .expect("invoke node harness");
