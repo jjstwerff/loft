@@ -1573,24 +1573,48 @@ pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> 
 #[must_use]
 #[inline]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
-    debug_assert!(
-        (r.store_nr as usize) < stores.len(),
-        "DbRef store_nr {} out of bounds (allocations.len() = {})",
-        r.store_nr,
-        stores.len()
-    );
-    &stores[r.store_nr as usize]
+    match stores.get(r.store_nr as usize) {
+        Some(s) => s,
+        None => bad_store_nr(r, stores.len()),
+    }
 }
 
 #[must_use]
 pub fn mut_store<'a>(r: &DbRef, stores: &'a mut [Store]) -> &'a mut Store {
-    debug_assert!(
-        (r.store_nr as usize) < stores.len(),
-        "DbRef store_nr {} out of bounds (allocations.len() = {})",
-        r.store_nr,
-        stores.len()
+    let len = stores.len();
+    match stores.get_mut(r.store_nr as usize) {
+        Some(s) => s,
+        None => bad_store_nr(r, len),
+    }
+}
+
+/// The store accessors' out-of-range path, split out so the hot path keeps exactly the
+/// bounds branch it already had and this never inlines into it.
+///
+/// It exists because the raw index panic named nothing.  `DbRef::NULL` is `store_nr ==
+/// u16::MAX` and [`DbRef::is_null`] is documented as the single home for the null test —
+/// "every store accessor consults it before dereferencing, so an absent value never
+/// indexes `stores[u16::MAX]`".  When one does, the contract has been broken UPSTREAM by
+/// whatever handed the accessor an absent reference, and the reader needs to be told that
+/// rather than left with `index out of bounds: the len is 25 but the index is 65535`.
+/// The `debug_assert!` that used to carry the numbers is compiled out of every release
+/// build, which is the only build a user runs (loft#1082).
+#[cold]
+#[inline(never)]
+fn bad_store_nr(r: &DbRef, len: usize) -> ! {
+    assert!(
+        !r.is_null(),
+        "compiler bug: a NULL DbRef reached a store accessor (rec={}, pos={}; {len} \
+         stores).  `DbRef::NULL` means an ABSENT value and every accessor is contracted \
+         to test `is_null()` first — so the producer of this reference published an \
+         absent value where a real store was required.",
+        r.rec,
+        r.pos
     );
-    &mut stores[r.store_nr as usize]
+    panic!(
+        "compiler bug: DbRef store_nr {} is out of range ({len} stores; rec={}, pos={})",
+        r.store_nr, r.rec, r.pos
+    );
 }
 
 #[must_use]

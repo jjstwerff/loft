@@ -2805,6 +2805,23 @@ impl Function {
             self.variables[nr as usize].source = lexer.at();
             break nr;
         };
+        // loft#1082 — minting from a name PASS 1 already used means this `__ref_N`
+        // denotes a DIFFERENT SITE now.  `add_variable` says so in its own comment and
+        // lets pass 2 win on the TYPE; the per-site FLAGS need the same treatment, and
+        // `skip_free` is the one that bites.  `ref_return`'s `Bind { substitute: true }`
+        // calls `unregister_work_ref`, which both drops the registry entry and sets
+        // `skip_free` — sound for the pass that substituted every use away.  Re-minting
+        // re-registers the ref (`work_refs.insert` below) and so undoes half of it, while
+        // `skip_free` rode into pass 2 on a name that now names a LIVE buffer.
+        //
+        // `skip_free` is a free-time fact, but `gen_set_first_vector_null` also reads it
+        // as "borrows, do not allocate" — so the buffer was passed to the callee as
+        // `DbRef::NULL`, and the callee's `OpAppendVector(__retbuf, …)` indexed
+        // `stores[u16::MAX]`.  (The keyed twin `gen_set_first_keyed_null` de-conflated
+        // that read for its own case and recorded that no owned-VECTOR case had needed
+        // it yet; this was that case, and it is repaired at the source instead: a
+        // re-minted work-ref is simply not the ref that was substituted away.)
+        self.variables[v as usize].skip_free = false;
         self.trace_work_ref(v, tp);
         self.work_refs.insert(v);
         v
