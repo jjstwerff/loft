@@ -25,7 +25,14 @@
 #     --no-push           sign + commit locally but do NOT push (keeps the clone)
 #     --message MSG       commit message (default: "sign: …"; registry_maintain
 #                         passes "publish: <libs>")
-#     --yes               skip the confirm prompt (scripted use)
+#     --expect P@V        sign ONLY this — repeatable.  The diff must introduce
+#                         exactly the named versions, remove nothing, and leave
+#                         every other package untouched, or the run REFUSES.
+#                         This is the agent-safe confirmation: it replaces the
+#                         typed 'yes' with a check, and it is stricter than the
+#                         prompt it replaces (a 'yes' verifies nothing).
+#     --yes               skip the confirm prompt (scripted use).  Prefer
+#                         --expect: --yes asserts nothing about WHAT is signed.
 #
 # If a run fails, re-run THIS script against the same checkout
 # (`--registry-dir <that dir>`) rather than the whole registry_maintain.sh cycle:
@@ -43,6 +50,12 @@
 #   2. If the card is absent / the tool is missing / it times out, FALL BACK to the
 #      local key file (`--key`) when present.
 #   --yubikey disables the fallback; LOFT_REGISTRY_SIGNER=file disables the card.
+# `--expect P@V` is the third route and the one to reach for from a script or an
+# agent: no prompt, no touch, and the signature is BOUND to the versions named on
+# the command line — anything else in the diff refuses the run.  It answers the
+# doctrine's actual concern (PKG_REGISTRY.md § Why laptop signing: "CI signing
+# would sign whatever lands in main — no human gate") by making "whatever lands"
+# impossible, while the key still never leaves this machine.
 # `--yes` skips the confirmation.  The TRUST GATE always runs: whatever was signed
 # must verify under a key in src/registry_keys.rs::TRUSTED_PUBLIC_KEYS or it is
 # NOT committed/pushed — so a wrong key/module fails safe.
@@ -56,7 +69,7 @@
 # at the prompt.  Needs: python3, gh (for notes), and target/release/loft-keygen.
 set -euo pipefail
 
-REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
+REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""; EXPECT=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 YUBIKEY=0; [ "${LOFT_REGISTRY_SIGNER:-}" = yubikey ] && YUBIKEY=1  # set -e safe: file/unset/other => 0 (local-key path)
 while [ $# -gt 0 ]; do
@@ -70,6 +83,7 @@ while [ $# -gt 0 ]; do
         --no-download)  DOWNLOAD=0;;
         --no-push)      PUSH=0;;
         --message)      MSG="$2"; shift;;
+        --expect)       EXPECT="${EXPECT:+$EXPECT }$2"; shift;;
         --yes)          YES=1;;
         -h|--help)      sed -n '2,33p' "$0"; exit 0;;
         *) echo "unknown argument: $1" >&2; exit 2;;
@@ -211,6 +225,16 @@ if [ -z "$SINCE" ]; then
 fi
 git -C "$REG_DIR" rev-parse "$SINCE" >/dev/null 2>&1 || SINCE=""   # no such ref / no git
 
+# `--expect` is a claim about what CHANGED, so it is meaningless without something
+# to have changed FROM.  With no diff base every version reads as new, and the
+# check would either refuse everything or — worse — be satisfied by an index that
+# happens to hold only the expected package.  Refuse instead of guessing.
+if [ -n "$EXPECT" ] && [ -z "$SINCE" ]; then
+    echo "!! --expect needs a diff base, and this checkout has no usable git history." >&2
+    echo "   Pass --since <ref>, or sign without --expect." >&2
+    exit 2
+fi
+
 echo "================  WHAT YOU ARE SIGNING  ================"
 echo "registry : $REG_DIR"
 echo "index    : $(wc -c < "$INDEX") bytes   sha256 $(sha256sum "$INDEX" | cut -d' ' -f1)"
@@ -235,7 +259,7 @@ else
 fi
 
 set +e
-NOTES="$NOTES" DOWNLOAD="$DOWNLOAD" python3 - "$PREV" "$INDEX" <<'PY'
+NOTES="$NOTES" DOWNLOAD="$DOWNLOAD" EXPECT="$EXPECT" python3 - "$PREV" "$INDEX" <<'PY'
 import json, sys, os, re, hashlib, shutil, tempfile, time, urllib.request, urllib.error, subprocess
 def load(p):
     try:
@@ -340,6 +364,55 @@ for name in sorted(cp):
 
 if not changes:
     print("  (no added or changed versions vs the diff base)")
+
+# ---- --expect: bind the signature to the versions the maintainer NAMED --------
+#
+# The typed 'yes' this replaces asserts that a human looked; it checks nothing.
+# This checks — and it catches the thing the looking demonstrably missed: a run
+# that published four packages ALSO rewrote four unrelated descriptions, losing
+# `ssh`'s "Native-only", and every gate stayed green because none of them read a
+# description (§ The first-`description` gotcha in the publish runbook).
+#
+# So the check is deliberately wider than "is my package here": the diff must
+# introduce exactly the named versions, remove nothing, and leave every other
+# package byte-for-byte alone.
+expect = set((os.environ.get("EXPECT") or "").split())
+if expect:
+    got = {f"{n}@{v}" for n, v, _, _ in changes}
+    removed_pkgs = sorted(set(pp) - set(cp))
+    removed_vers = sorted(
+        f"{n}@{v}" for n in set(pp) & set(cp)
+        for v in (pp[n].get("versions") or {}) if v not in (cp[n].get("versions") or {}))
+    drift = sorted(
+        n for n in set(pp) & set(cp)
+        if {k: x for k, x in pp[n].items() if k != "versions"}
+        != {k: x for k, x in cp[n].items() if k != "versions"})
+    problems = []
+    if got - expect:
+        problems.append(("not asked for", sorted(got - expect)))
+    if expect - got:
+        problems.append(("asked for but ABSENT from the diff", sorted(expect - got)))
+    if removed_pkgs:
+        problems.append(("packages REMOVED", removed_pkgs))
+    if removed_vers:
+        problems.append(("versions REMOVED", removed_vers))
+    if drift:
+        problems.append(("other packages' metadata changed (description / homepage / "
+                         "categories / yanked)", drift))
+    print("----  scope  ----")
+    if problems:
+        print("!!  --expect MISMATCH — NOT signing.")
+        print(f"    asked to sign: {', '.join(sorted(expect)) or '(nothing)'}")
+        for label, items in problems:
+            print(f"      {label}:")
+            for it in items:
+                print(f"        - {it}")
+        print()
+        print("    Nothing was signed.  Either the index carries more than the publish")
+        print("    you asked for, or --expect names the wrong version.")
+        sys.exit(1)
+    print(f"  exactly {', '.join(sorted(expect))} — nothing else added, removed or altered")
+    print()
 failures = []  # (name, ver, reason) — collected so the end-of-run summary names each
 for name, ver, meta, is_new in changes:
     url, sha, size = meta.get("url", ""), meta.get("sha256", ""), meta.get("size")
@@ -480,7 +553,12 @@ if [ "$USE_CARD" = 1 ]; then
     fi
 fi
 if [ -z "$SIGNED_VIA" ]; then
-    if [ "$YES" != 1 ]; then
+    if [ -n "$EXPECT" ]; then
+        # The review block above already refused anything but the named versions,
+        # so the decision this would prompt for has been made and CHECKED.  Not a
+        # skipped confirmation — a mechanical one.
+        echo "  --expect satisfied: signing exactly $EXPECT with $(basename "$KEY")."
+    elif [ "$YES" != 1 ]; then
         printf "  sign with the local key %s? type 'yes': " "$(basename "$KEY")"
         read -r ans
         case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
