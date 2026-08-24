@@ -304,6 +304,48 @@ from this thread merged in at **45 cited · 74 sites · 35 deviations (2 open)**
 13 → 21 → 39 progression is still the record of what this thread cited; the ratio to a
 fixed total is not, so re-run the tool rather than reading a number off this page.
 
+#### B4d — types.md and binding.md, and a rule the code contradicts on purpose (2026-08-24)
+
+**45 → 60 rules cited, 74 → 92 citation sites.** The two biggest families, worked by
+sub-family rather than rule by rule: `D-*` (defaults), `Const-*` (the const model),
+`B-Disturb` / `B-Ref-Reshape`.
+
+**The find: `(D-Opt)` says a nullable's default is `null`. It is not.** Measured on both
+backends, so it is a rule/code divergence and not a backend split:
+
+```loft
+struct S { a: integer?, b: text?, c: boolean?, d: Colour? }
+s = S {};                       // a=0   b=''   c=false   d=null
+```
+
+`data::to_default` answers the BASE type's zero and says so outright — base-zero is *"the
+settled design call"* (@PLN25), because a bare `null` renders as native unit into a scalar
+slot (E0308). So a decision was taken in code and the rule was never updated to match.
+
+⚠ **This one I did not resolve, and that is the point.** `L-Tuple` (B4b) was a stale
+implementation NAME — semantics unchanged, so correcting it made the rule say what it
+always meant. `D-Opt` is a SEMANTIC disagreement, which is exactly where the doctrine says
+the code yields and the rule stands. Editing the rule to match the code would have been the
+same act as `L-Tuple` in form and the opposite in substance. Recorded instead as
+`formal/types.md` § `D-Opt-Zero`, **flipping that doc's `OPEN: 0` to `OPEN: 1`**, with the
+two admissible resolutions named and neither taken. The register already carried the lesson
+from last time: *"the answer to the 'OPEN: 0' line above having been too strong"*.
+
+**A near-miss worth recording.** `B-Disturb` is about what invalidates a `&` reference —
+remove, re-key, reassign the container. I was about to cite it on `scopes::collect_move_
+disturbed`, which is a DIFFERENT question that shares the word "disturb". Reading the rule
+before writing the citation is what caught it; the name similarity is the whole trap. It
+went to `collect_views_to_materialise`'s remove-detector instead, and `B-Ref-Reshape` to the
+tuple-place refusal in `parser/expressions.rs`.
+
+**Also undocumented at a rule site:** `data::to_default` — the one home for
+`construct_default`, six rules — had no doc comment at all. Same shape as
+`try_generic_instantiation` in B4c.
+
+**Open:** `types.md` still has ~43 uncited rules (the `N-*` nullability family alone is 17)
+and `binding.md` ~17 (the `B-Ref-*` family is 11). Both are worth doing by sub-family the
+same way; both are larger than a single sitting.
+
 #### C — process / skills
 
 | item | state |

@@ -18,7 +18,15 @@ fn int_literal(n: i64) -> Value {
 
 impl Parser {
     /// Whether a DIRECT write (`nr = …` / `nr += …`) with operator `op` to binding
-    /// `nr` must be rejected.  The two const axes reject opposite operations:
+    /// `nr` must be rejected.
+    ///
+    /// Enforces @FR-Const-Bind and @FR-Const-Value — the two axes of the const model —
+    /// for the case where the write TARGET is the bare variable.  @FR-Const-ScalarCollapse
+    /// falls out of it: a by-value scalar has no interior distinct from its binding, so
+    /// both axes reject and either spelling freezes it fully.  @FR-Const-Compose is the
+    /// two axes together, and needs no arm of its own: each rejects its own operation.
+    ///
+    /// The two const axes reject opposite operations:
     /// - **binding-const** (`const x`, prefix): the slot is write-once — reject a
     ///   rebind (`=`); allow contents mutation (`+=`).
     /// - **value-const** (`p: const T`, type-qualifier): the value is read-only —

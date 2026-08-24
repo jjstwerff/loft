@@ -191,7 +191,12 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
     }
 }
 
-/// @PLN130 F2 — every container variable `code` REMOVES from.
+/// Every container variable `code` REMOVES from.
+///
+/// Detects one of @FR-B-Disturb's three place-ending events — REMOVING from a container.
+/// (The other two are RE-KEYING an element and REASSIGNING the container itself; note that
+/// OVERWRITING a place does not disturb it, since the write lands in the place the view
+/// already points at.)
 ///
 /// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` (container = arg 0) and the
 /// in-loop `e#remove` to `OpRemove(index, container, …)` (container = arg 1). Both renumber

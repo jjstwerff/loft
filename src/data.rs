@@ -1049,6 +1049,21 @@ impl Value {
     }
 }
 
+/// The value a type takes when nothing chooses one — `S {}`'s omitted fields, a
+/// default-initialised local, a struct literal that names only some fields.
+///
+/// This is `construct_default` from `formal/types.md`, and the one home for it: enforces
+/// @FR-D-Scalar (every integer width, float and single are zero), @FR-D-Text (`""`),
+/// @FR-D-Coll (`[]`, likewise every keyed collection), @FR-D-Enum and @FR-D-Rec (a record
+/// is its fields' defaults, recursively).  [`Data::has_default`] is the twin that answers
+/// whether a default EXISTS at all — @FR-D-NoRef and @FR-D-NoEnumF are refusals and live
+/// there, not here.
+///
+/// ⚠ **@FR-D-Opt is NOT what this does**, and the divergence is deliberate: the rule says a
+/// nullable's default is `null`, and the `Optional` arm below answers the BASE type's zero
+/// instead (`integer?` → `0`, `text?` → `""`).  Both backends agree with each other and
+/// disagree with the rule — recorded as the open deviation `D-Opt-Zero` in
+/// `formal/types.md`, whose resolution is a design call rather than an edit.
 #[must_use]
 pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
@@ -5372,6 +5387,14 @@ impl Data {
     /// `= expr`, is nullable, or its own type has a default — recursively.  Cycles
     /// self-resolve: value-recursion is illegal (infinite size) and ref-recursion
     /// bottoms out at a reference, which has no default.
+    ///
+    /// Enforces @FR-D-NoRef — a bare reference has NO default, because a language whose
+    /// storage is non-null by default has no "the null pointer" to hand back — and
+    /// @FR-D-NoEnumF: a bare (non-optional) enum FIELD carrying no `= expr` has none
+    /// either, since an enum's `0` is its null and its variants are 1-based.
+    ///
+    /// The refusal twin of [`crate::data::to_default`], which builds the value once this
+    /// says one exists.
     ///
     /// # Errors
     /// Returns `Err(reason)` — a message naming the culprit field/type — when `tp`
